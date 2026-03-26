@@ -1,8 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog } from "electron";
 import path from "path";
 import { spawn, ChildProcess } from "child_process";
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const Store = require("electron-store");
+import Store from "electron-store";
 
 const store = new Store({
   encryptionKey: "filament-db-secure-key",
