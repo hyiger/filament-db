@@ -1,0 +1,109 @@
+import sharp from "sharp";
+import path from "path";
+import fs from "fs";
+
+// Generate a filament spool icon as SVG, then convert to PNG at multiple sizes
+const SVG = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#16213e"/>
+    </linearGradient>
+    <linearGradient id="spool" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4a4a5a"/>
+      <stop offset="100%" stop-color="#2a2a3a"/>
+    </linearGradient>
+    <linearGradient id="filament" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#FF8C00"/>
+      <stop offset="50%" stop-color="#FF6600"/>
+      <stop offset="100%" stop-color="#E85D00"/>
+    </linearGradient>
+    <linearGradient id="hub" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#5a5a6a"/>
+      <stop offset="100%" stop-color="#3a3a4a"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background rounded square -->
+  <rect x="0" y="0" width="1024" height="1024" rx="200" fill="url(#bg)"/>
+
+  <!-- Spool side view - outer ring (filament wrapped) -->
+  <ellipse cx="512" cy="512" rx="340" ry="340" fill="url(#filament)" opacity="0.95"/>
+
+  <!-- Filament wrap lines for texture -->
+  <ellipse cx="512" cy="512" rx="340" ry="340" fill="none" stroke="#FF9933" stroke-width="6" opacity="0.4"/>
+  <ellipse cx="512" cy="512" rx="310" ry="310" fill="none" stroke="#FF7700" stroke-width="4" opacity="0.3"/>
+  <ellipse cx="512" cy="512" rx="280" ry="280" fill="none" stroke="#FF9933" stroke-width="5" opacity="0.3"/>
+  <ellipse cx="512" cy="512" rx="250" ry="250" fill="none" stroke="#FF7700" stroke-width="4" opacity="0.25"/>
+  <ellipse cx="512" cy="512" rx="220" ry="220" fill="none" stroke="#FF9933" stroke-width="3" opacity="0.2"/>
+
+  <!-- Inner spool hub -->
+  <ellipse cx="512" cy="512" rx="180" ry="180" fill="url(#hub)"/>
+  <ellipse cx="512" cy="512" rx="180" ry="180" fill="none" stroke="#6a6a7a" stroke-width="4"/>
+
+  <!-- Center hole -->
+  <ellipse cx="512" cy="512" rx="70" ry="70" fill="url(#bg)"/>
+  <ellipse cx="512" cy="512" rx="70" ry="70" fill="none" stroke="#5a5a6a" stroke-width="3"/>
+
+  <!-- Spool flange rings -->
+  <ellipse cx="512" cy="512" rx="350" ry="350" fill="none" stroke="#5a5a6a" stroke-width="8" opacity="0.6"/>
+  <ellipse cx="512" cy="512" rx="185" ry="185" fill="none" stroke="#5a5a6a" stroke-width="6" opacity="0.5"/>
+
+  <!-- Highlight/shine effect -->
+  <ellipse cx="420" cy="400" rx="120" ry="80" fill="white" opacity="0.06" transform="rotate(-30 420 400)"/>
+
+  <!-- Loose filament end trailing off the spool -->
+  <path d="M 852 512 Q 900 480 920 420 Q 940 360 910 310" fill="none" stroke="url(#filament)" stroke-width="14" stroke-linecap="round" opacity="0.9"/>
+
+  <!-- Spokes on hub -->
+  <line x1="512" y1="340" x2="512" y2="440" stroke="#5a5a6a" stroke-width="6" opacity="0.4"/>
+  <line x1="512" y1="584" x2="512" y2="684" stroke="#5a5a6a" stroke-width="6" opacity="0.4"/>
+  <line x1="340" y1="512" x2="440" y2="512" stroke="#5a5a6a" stroke-width="6" opacity="0.4"/>
+  <line x1="584" y1="512" x2="684" y2="512" stroke="#5a5a6a" stroke-width="6" opacity="0.4"/>
+</svg>
+`;
+
+async function generate() {
+  const assetsDir = path.join(__dirname, "..", "assets");
+  const publicDir = path.join(__dirname, "..", "public");
+
+  // Save SVG
+  fs.writeFileSync(path.join(assetsDir, "icon.svg"), SVG.trim());
+
+  // Generate PNGs at various sizes
+  const sizes = [16, 32, 48, 64, 128, 256, 512, 1024];
+  for (const size of sizes) {
+    await sharp(Buffer.from(SVG))
+      .resize(size, size)
+      .png()
+      .toFile(path.join(assetsDir, `icon-${size}.png`));
+    console.log(`  ✓ icon-${size}.png`);
+  }
+
+  // Generate favicon.ico (use 256px as source)
+  await sharp(Buffer.from(SVG))
+    .resize(256, 256)
+    .png()
+    .toFile(path.join(publicDir, "icon-256.png"));
+
+  // Generate the main icon.png for electron-builder (1024px)
+  await sharp(Buffer.from(SVG))
+    .resize(1024, 1024)
+    .png()
+    .toFile(path.join(assetsDir, "icon.png"));
+
+  // Generate .ico for Windows (256px PNG works as ico input)
+  await sharp(Buffer.from(SVG))
+    .resize(256, 256)
+    .png()
+    .toFile(path.join(assetsDir, "icon.ico.png"));
+
+  // Generate macOS .icns source (1024px is fine, electron-builder handles conversion)
+
+  console.log("\nIcon generation complete!");
+  console.log("Assets saved to: assets/");
+  console.log("Favicon saved to: public/icon-256.png");
+}
+
+generate().catch(console.error);

@@ -5,6 +5,9 @@ artifactName: "FilamentDB-${version}-${os}-${arch}.${ext}"
 
 directories:
   output: dist-electron
+  buildResources: assets
+
+icon: assets/icon.png
 
 asar: false
 

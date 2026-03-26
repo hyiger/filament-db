@@ -30,6 +30,7 @@ function createWindow(urlPath = "/") {
     minWidth: 800,
     minHeight: 600,
     title: "Filament DB",
+    icon: path.join(__dirname, "..", "assets", "icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

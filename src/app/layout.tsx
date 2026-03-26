@@ -15,6 +15,9 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "Filament DB",
   description: "Manage your 3D printing filament profiles",
+  icons: {
+    icon: "/favicon.png",
+  },
 };
 
 export default function RootLayout({
