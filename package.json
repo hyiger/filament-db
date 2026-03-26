@@ -1,6 +1,11 @@
 {
   "name": "filament-db",
   "version": "0.1.0",
+  "description": "Desktop and web app for managing 3D printing filament profiles",
+  "author": {
+    "name": "hyiger",
+    "email": "hyiger@users.noreply.github.com"
+  },
   "private": true,
   "main": "electron-dist/main.js",
   "scripts": {
