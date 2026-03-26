@@ -22,6 +22,7 @@
     "electron:pack": "electron-builder --config electron-builder.yml"
   },
   "dependencies": {
+    "electron-store": "^11.0.2",
     "ini": "^6.0.0",
     "mongoose": "^9.3.3",
     "next": "16.2.1",
@@ -37,7 +38,6 @@
     "concurrently": "^9.2.1",
     "electron": "^41.0.4",
     "electron-builder": "^26.8.1",
-    "electron-store": "^11.0.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.1",
     "mongodb-memory-server": "^11.0.1",
