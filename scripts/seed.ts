@@ -3,13 +3,15 @@ import * as path from "path";
 import mongoose from "mongoose";
 import { parseIniFilaments } from "../src/lib/parseIni";
 
-const MONGODB_URI = process.env.MONGODB_URI;
-
-if (!MONGODB_URI) {
-  console.error("Error: MONGODB_URI environment variable is not set.");
-  console.error("Set it in .env.local or pass it inline: MONGODB_URI=... npx tsx scripts/seed.ts");
-  process.exit(1);
-}
+const MONGODB_URI: string = (() => {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) {
+    console.error("Error: MONGODB_URI environment variable is not set.");
+    console.error("Set it in .env.local or pass it inline: MONGODB_URI=... npx tsx scripts/seed.ts");
+    process.exit(1);
+  }
+  return uri;
+})();
 
 interface NozzleSpec {
   diameter: number;

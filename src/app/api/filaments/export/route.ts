@@ -43,7 +43,7 @@ export async function GET() {
 
   for (const filament of filaments) {
     const settings = (filament.settings || {}) as Record<string, string | null>;
-    const calibrations = filament.calibrations as Array<{
+    const calibrations = filament.calibrations as unknown as Array<{
       nozzle: { _id: string; name: string; diameter: number } | null;
       extrusionMultiplier: number | null;
       maxVolumetricSpeed: number | null;
