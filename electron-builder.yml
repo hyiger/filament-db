@@ -1,6 +1,7 @@
 appId: com.filamentdb.app
 productName: Filament DB
 copyright: Copyright 2026
+artifactName: "FilamentDB-${version}-${os}-${arch}.${ext}"
 
 directories:
   output: dist-electron
@@ -52,6 +53,7 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  artifactName: "FilamentDB-${version}-windows-${arch}-setup.${ext}"
 
 linux:
   category: Utility
