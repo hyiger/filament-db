@@ -41,6 +41,30 @@ jobs:
       - name: Build Next.js
         run: npm run build
 
+      - name: Resolve symlinks in standalone output
+        if: runner.os != 'Windows'
+        run: |
+          # Next.js standalone output contains symlinks that break Electron packaging on macOS
+          cd .next/standalone
+          find . -type l | while read link; do
+            target=$(readlink "$link")
+            rm "$link"
+            cp -a "$target" "$link" 2>/dev/null || cp -r "$target" "$link"
+          done
+
+      - name: Resolve symlinks in standalone output (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Windows standalone output shouldn't have symlinks, but resolve any just in case
+          Get-ChildItem -Path ".next/standalone" -Recurse -Force |
+            Where-Object { $_.LinkType -eq 'SymbolicLink' } |
+            ForEach-Object {
+              $target = $_.Target
+              Remove-Item $_.FullName -Force
+              Copy-Item -Path $target -Destination $_.FullName -Recurse -Force
+            }
+
       - name: Compile Electron
         run: npm run electron:compile
 
