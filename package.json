@@ -2,6 +2,7 @@
   "name": "filament-db",
   "version": "0.1.0",
   "private": true,
+  "main": "electron-dist/main.js",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,7 +10,11 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "electron:compile": "tsc -p tsconfig.electron.json",
+    "electron:dev": "npm run electron:compile && concurrently \"next dev\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:build": "npm run build && npm run electron:compile && npm run electron:pack",
+    "electron:pack": "electron-builder --config electron-builder.yml"
   },
   "dependencies": {
     "ini": "^6.0.0",
@@ -24,12 +29,17 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitest/coverage-v8": "^4.1.1",
+    "concurrently": "^9.2.1",
+    "electron": "^41.0.4",
+    "electron-builder": "^26.8.1",
+    "electron-store": "^11.0.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.1",
     "mongodb-memory-server": "^11.0.1",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
     "typescript": "^5",
-    "vitest": "^4.1.1"
+    "vitest": "^4.1.1",
+    "wait-on": "^9.0.4"
   }
 }

@@ -1,0 +1,62 @@
+appId: com.filamentdb.app
+productName: Filament DB
+copyright: Copyright 2026
+
+directories:
+  output: dist-electron
+
+files:
+  - electron-dist/**/*
+  - "!node_modules"
+  - "!src"
+  - "!tests"
+  - "!scripts"
+  - "!electron"
+  - "!.next"
+  - "!.github"
+  - "!docs"
+  - "!coverage"
+
+extraResources:
+  - from: .next/standalone
+    to: standalone
+    filter:
+      - "**/*"
+  - from: .next/static
+    to: standalone/.next/static
+    filter:
+      - "**/*"
+  - from: public
+    to: standalone/public
+    filter:
+      - "**/*"
+
+mac:
+  category: public.app-category.utilities
+  target:
+    - target: dmg
+      arch:
+        - universal
+    - target: zip
+      arch:
+        - universal
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+linux:
+  category: Utility
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
