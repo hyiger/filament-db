@@ -18,7 +18,8 @@
     "test:coverage": "vitest run --coverage",
     "electron:compile": "esbuild electron/main.ts --bundle --platform=node --outfile=electron-dist/main.js --external:electron && esbuild electron/preload.ts --bundle --platform=node --outfile=electron-dist/preload.js --external:electron",
     "electron:dev": "npm run electron:compile && concurrently \"next dev\" \"wait-on http://localhost:3000 && electron .\"",
-    "electron:build": "npm run build && npm run electron:compile && npm run electron:pack",
+    "electron:build": "npm run build && npm run electron:fixlinks && npm run electron:compile && npm run electron:pack",
+    "electron:fixlinks": "node -e \"const fs=require('fs'),path=require('path');function fix(d){fs.readdirSync(d,{withFileTypes:true}).forEach(e=>{const f=path.join(d,e.name);if(e.isSymbolicLink()){const t=fs.realpathSync(f);fs.rmSync(f);fs.cpSync(t,f,{recursive:true})}else if(e.isDirectory())fix(f)})}fix('.next/standalone');fs.cpSync('.next/standalone','standalone',{recursive:true});fs.cpSync('.next/static','standalone/.next/static',{recursive:true});fs.cpSync('public','standalone/public',{recursive:true})\"",
     "electron:pack": "electron-builder --config electron-builder.yml"
   },
   "dependencies": {

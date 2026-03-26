@@ -6,9 +6,12 @@ artifactName: "FilamentDB-${version}-${os}-${arch}.${ext}"
 directories:
   output: dist-electron
 
+asar: false
+
 files:
   - electron-dist/**/*
-  - "!node_modules"
+  - standalone/**/*
+  - package.json
   - "!src"
   - "!tests"
   - "!scripts"
@@ -17,20 +20,7 @@ files:
   - "!.github"
   - "!docs"
   - "!coverage"
-
-extraResources:
-  - from: .next/standalone
-    to: standalone
-    filter:
-      - "**/*"
-  - from: .next/static
-    to: standalone/.next/static
-    filter:
-      - "**/*"
-  - from: public
-    to: standalone/public
-    filter:
-      - "**/*"
+  - "!node_modules"
 
 mac:
   category: public.app-category.utilities

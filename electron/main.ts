@@ -68,7 +68,10 @@ function waitForServer(port: number, timeoutMs = 30000): Promise<void> {
 function startProductionServer(mongoUri?: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const uri = mongoUri || (store.get("mongodbUri") as string);
-    const serverPath = path.join(process.resourcesPath, "standalone", "server.js");
+    const appPath = isDev
+      ? path.join(__dirname, "..")
+      : path.join(__dirname, "..");
+    const serverPath = path.join(appPath, "standalone", "server.js");
 
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
