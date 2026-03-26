@@ -4,9 +4,10 @@
 
 Download the latest installer for your platform from [GitHub Releases](https://github.com/hyiger/filament-db/releases):
 
-- **macOS**: `Filament.DB-x.x.x.dmg`
-- **Windows**: `Filament.DB-Setup-x.x.x.exe`
-- **Linux**: `Filament.DB-x.x.x.AppImage` or `.deb`
+- **macOS (Apple Silicon)**: `FilamentDB-x.x.x-mac-arm64.dmg`
+- **macOS (Intel)**: `FilamentDB-x.x.x-mac-x64.dmg`
+- **Windows**: `FilamentDB-x.x.x-windows-x64-setup.exe`
+- **Linux**: `FilamentDB-x.x.x-linux-x64.AppImage` or `FilamentDB-x.x.x-linux-amd64.deb`
 
 On first launch, you'll be prompted to enter your MongoDB Atlas connection string. The app validates the connection and stores it securely on your machine. See [Setting Up MongoDB Atlas](#setting-up-mongodb-atlas-free-tier) below if you don't have an account yet.
 

@@ -57,21 +57,25 @@ See the [Setup Guide](docs/setup.md) for detailed instructions.
 
 ```
 filament-db/
-├── docs/                    # Documentation
-├── electron/                # Electron main process + preload
+├── docs/                    # Documentation (setup, usage, API, desktop, testing, troubleshooting)
+├── electron/                # Electron main process + preload (bundled by esbuild)
 ├── scripts/seed.ts          # CLI import with nozzle extraction
 ├── src/
 │   ├── app/
 │   │   ├── api/filaments/   # Filament REST API (CRUD, import, export)
 │   │   ├── api/nozzles/     # Nozzle REST API (CRUD)
-│   │   ├── api/setup/       # Connection test endpoint
+│   │   ├── api/setup/       # Connection test endpoint (for desktop setup wizard)
 │   │   ├── setup/           # First-launch setup wizard
 │   │   ├── filaments/       # Filament pages (list, detail, edit, new)
 │   │   └── nozzles/         # Nozzle pages (list, edit, new)
 │   ├── lib/                 # DB connection, INI parser
 │   └── models/              # Mongoose schemas (Filament, Nozzle)
-├── tests/                   # Vitest unit tests (100% coverage)
-└── .github/workflows/       # CI: tests + desktop app releases
+├── tests/                   # Vitest unit tests (44 tests, 100% coverage)
+├── .github/workflows/
+│   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
+│   └── release.yml          # CD: build desktop installers on version tags
+├── electron-builder.yml     # Electron packaging config (macOS, Windows, Linux)
+└── vitest.config.ts         # Test config with 100% coverage thresholds
 ```
 
 ## License

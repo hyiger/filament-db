@@ -54,7 +54,15 @@ The MongoDB connection string may not be saving. Check that the config directory
 
 ## Desktop app: blank screen after setup
 
-The internal server may not have started. Try quitting and reopening the app. If the issue persists, check that your MongoDB Atlas IP whitelist includes your current IP address.
+The internal Next.js server may not have started. Try these steps:
+
+1. Quit and reopen the app
+2. Check that your MongoDB Atlas IP whitelist includes your current IP address
+3. Run the app from a terminal to see error output:
+   - **macOS**: `"/Applications/Filament DB.app/Contents/MacOS/Filament DB"`
+   - **Linux**: run the AppImage directly from terminal
+   - **Windows**: run from Command Prompt
+4. If you see "Cannot find module" errors, the build may be incomplete -- download the latest release
 
 ## Desktop app: "electron:dev" fails on Windows
 

@@ -85,3 +85,23 @@ Update a nozzle. Send a JSON body with the fields to update.
 ### DELETE /api/nozzles/:id
 
 Delete a nozzle by ID. Returns `{ message: "Deleted" }`.
+
+---
+
+## Setup
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/setup` | Test a MongoDB connection string |
+
+### POST /api/setup
+
+Tests a MongoDB Atlas connection. Send a JSON body:
+
+```json
+{
+  "mongodbUri": "mongodb+srv://user:pass@cluster.mongodb.net/filament-db"
+}
+```
+
+Returns `{ success: true, message: "Connection successful" }` on success, or a 400 error with the failure reason. Used by the desktop app's setup wizard to validate the connection before saving.

@@ -28,6 +28,8 @@ tests/
 └── mongodb.test.ts       # DB connection tests (6 tests)
 ```
 
+**Total: 44 tests, 100% coverage**
+
 ## Coverage Thresholds
 
 The Vitest config (`vitest.config.ts`) enforces 100% thresholds for:
@@ -40,11 +42,17 @@ Tests will fail if coverage drops below 100% on any metric for files in `src/lib
 
 ## CI / GitHub Actions
 
-A workflow at `.github/workflows/test.yml` runs tests automatically on:
+### Test Workflow (`.github/workflows/test.yml`)
+
+Runs automatically on:
 - Push to `main`
 - Pull requests targeting `main`
 
 Tests run against Node.js 20 and 22. Coverage reports are uploaded as artifacts on the Node 22 run.
+
+### Release Workflow (`.github/workflows/release.yml`)
+
+Runs automatically on version tags (`v*`). Tests are run on all three platforms (macOS, Windows, Linux) before building the Electron installers. If tests fail, the build is skipped for that platform.
 
 ## Test Setup
 
@@ -52,3 +60,5 @@ The `tests/setup.ts` file manages the mongodb-memory-server lifecycle:
 - **beforeAll**: Starts an in-memory MongoDB instance and connects Mongoose
 - **afterEach**: Clears all collections and cached models between tests
 - **afterAll**: Disconnects Mongoose and stops the in-memory server
+
+No external MongoDB connection is needed to run tests.

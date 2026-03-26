@@ -9,9 +9,9 @@
 
 ---
 
-## Option 1: Web UI (recommended)
+## Option 1: Web / Desktop UI (recommended)
 
-1. Start the application (`npm run dev`)
+1. Open Filament DB (desktop app or web at `http://localhost:3000`)
 2. Click **"Import INI"** in the top right of the home page
 3. Select your PrusaSlicer config bundle `.ini` file
 4. Filaments are parsed and upserted into the database

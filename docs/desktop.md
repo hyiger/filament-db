@@ -8,10 +8,11 @@ Download the latest release for your platform from [GitHub Releases](https://git
 
 | Platform | File | Notes |
 |----------|------|-------|
-| macOS | `.dmg` | Universal binary (Intel + Apple Silicon) |
-| Windows | `.exe` | NSIS installer, allows custom install directory |
-| Linux | `.AppImage` | Universal, no installation needed -- just make executable and run |
-| Linux | `.deb` | For Ubuntu/Debian -- install with `sudo dpkg -i` |
+| macOS (Apple Silicon) | `FilamentDB-x.x.x-mac-arm64.dmg` | For M1/M2/M3/M4 Macs |
+| macOS (Intel) | `FilamentDB-x.x.x-mac-x64.dmg` | For older Intel Macs |
+| Windows | `FilamentDB-x.x.x-windows-x64-setup.exe` | NSIS installer, allows custom install directory |
+| Linux | `FilamentDB-x.x.x-linux-x64.AppImage` | Universal, no installation needed -- just make executable and run |
+| Linux | `FilamentDB-x.x.x-linux-amd64.deb` | For Ubuntu/Debian -- install with `sudo dpkg -i` |
 
 ## First Launch
 
@@ -32,7 +33,7 @@ Run the desktop app in development mode with hot-reload:
 npm run electron:dev
 ```
 
-This starts Next.js dev server and Electron concurrently.
+This starts the Next.js dev server and Electron concurrently. The app loads `http://localhost:3000`.
 
 ### Production Build
 
@@ -42,10 +43,11 @@ Build an installer for your current platform:
 npm run electron:build
 ```
 
-This runs three steps:
+This runs four steps:
 1. `npm run build` -- builds Next.js in standalone mode
-2. `npm run electron:compile` -- compiles Electron TypeScript to JavaScript
-3. `npm run electron:pack` -- packages everything with electron-builder
+2. `npm run electron:fixlinks` -- resolves symlinks in the standalone output and copies it with static assets
+3. `npm run electron:compile` -- bundles Electron TypeScript with esbuild
+4. `npm run electron:pack` -- packages everything with electron-builder
 
 The output installer will be in `dist-electron/`.
 
@@ -54,21 +56,24 @@ The output installer will be in `dist-electron/`.
 A GitHub Actions workflow (`.github/workflows/release.yml`) builds installers for all three platforms automatically when you push a version tag:
 
 ```bash
-# Create a release
-git tag v0.1.0
-git push --tags
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin v0.2.0
 ```
 
-This triggers parallel builds on macOS, Windows, and Ubuntu runners. The resulting installers are uploaded to a GitHub Release automatically.
+Then create a release on GitHub:
+
+```bash
+gh release create v0.2.0 --title "v0.2.0" --generate-notes
+```
+
+The workflow runs `npm run electron:build` on macOS, Windows, and Ubuntu runners in parallel. Each platform's installers are uploaded to the GitHub Release automatically.
 
 ### What the workflow does:
 1. Checks out the code
 2. Installs dependencies
 3. Runs tests
-4. Builds Next.js (standalone output)
-5. Compiles Electron TypeScript
-6. Packages with electron-builder
-7. Uploads installers to GitHub Releases
+4. Runs `npm run electron:build` (builds Next.js, resolves symlinks, bundles Electron, packages installer)
+5. Uploads installers to GitHub Releases
 
 ## Architecture
 
@@ -78,12 +83,14 @@ The desktop app wraps the Next.js application in Electron:
 ┌─ Electron Shell ────────────────────────────┐
 │                                             │
 │  ┌─ Main Process ────────────────────────┐  │
-│  │ electron/main.ts                      │  │
+│  │ electron/main.ts (bundled by esbuild) │  │
 │  │ - App lifecycle                       │  │
 │  │ - BrowserWindow management            │  │
 │  │ - Spawns Next.js standalone server    │  │
+│  │   via ELECTRON_RUN_AS_NODE=1          │  │
 │  │ - Encrypted config storage            │  │
 │  │ - IPC handlers (save/load config)     │  │
+│  │ - HTTP polling for server readiness   │  │
 │  └───────────────────────────────────────┘  │
 │                                             │
 │  ┌─ Renderer (BrowserWindow) ────────────┐  │
@@ -108,7 +115,7 @@ The desktop app wraps the Next.js application in Electron:
 
 In **development mode**: Electron loads `http://localhost:3000` (Next.js dev server).
 
-In **production mode**: Electron spawns the standalone Next.js server from bundled resources and loads `http://localhost:3456`.
+In **production mode**: Electron uses `ELECTRON_RUN_AS_NODE=1` to run the standalone Next.js server as a child process on `http://localhost:3456`, then loads it in the BrowserWindow.
 
 ## Resetting Configuration
 
