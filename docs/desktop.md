@@ -11,8 +11,10 @@ Download the latest release for your platform from [GitHub Releases](https://git
 | macOS (Apple Silicon) | `FilamentDB-x.x.x-mac-arm64.dmg` | For M1/M2/M3/M4 Macs |
 | macOS (Intel) | `FilamentDB-x.x.x-mac-x64.dmg` | For older Intel Macs |
 | Windows | `FilamentDB-x.x.x-windows-x64-setup.exe` | NSIS installer, allows custom install directory |
-| Linux | `FilamentDB-x.x.x-linux-x64.AppImage` | Universal, no installation needed -- just make executable and run |
-| Linux | `FilamentDB-x.x.x-linux-amd64.deb` | For Ubuntu/Debian -- install with `sudo dpkg -i` |
+| Linux x64 | `FilamentDB-x.x.x-linux-x86_64.AppImage` | Universal, no installation needed -- just make executable and run |
+| Linux x64 | `FilamentDB-x.x.x-linux-amd64.deb` | For Ubuntu/Debian -- install with `sudo dpkg -i` |
+| Linux arm64 | `FilamentDB-x.x.x-linux-arm64.AppImage` | For Raspberry Pi 5 and other arm64 boards |
+| Linux arm64 | `FilamentDB-x.x.x-linux-arm64.deb` | For arm64 Ubuntu/Debian -- install with `sudo dpkg -i` |
 
 ## First Launch
 
@@ -53,20 +55,20 @@ The output installer will be in `dist-electron/`.
 
 ## Automated Releases via GitHub Actions
 
-A GitHub Actions workflow (`.github/workflows/release.yml`) builds installers for all three platforms automatically when you push a version tag:
+A GitHub Actions workflow (`.github/workflows/release.yml`) builds installers for all platforms automatically when you push a version tag:
 
 ```bash
-git tag -a v0.2.0 -m "v0.2.0"
-git push origin v0.2.0
+git tag -a v0.3.0 -m "v0.3.0"
+git push origin v0.3.0
 ```
 
 Then create a release on GitHub:
 
 ```bash
-gh release create v0.2.0 --title "v0.2.0" --generate-notes
+gh release create v0.3.0 --title "v0.3.0" --generate-notes
 ```
 
-The workflow runs `npm run electron:build` on macOS, Windows, and Ubuntu runners in parallel. Each platform's installers are uploaded to the GitHub Release automatically.
+The workflow runs builds on macOS, Windows, and Ubuntu runners in parallel (Linux builds both x64 and arm64 via cross-compilation). Each platform's installers are uploaded to the GitHub Release automatically.
 
 ### What the workflow does:
 1. Checks out the code

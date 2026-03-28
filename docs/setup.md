@@ -7,7 +7,8 @@ Download the latest installer for your platform from [GitHub Releases](https://g
 - **macOS (Apple Silicon)**: `FilamentDB-x.x.x-mac-arm64.dmg`
 - **macOS (Intel)**: `FilamentDB-x.x.x-mac-x64.dmg`
 - **Windows**: `FilamentDB-x.x.x-windows-x64-setup.exe`
-- **Linux**: `FilamentDB-x.x.x-linux-x64.AppImage` or `FilamentDB-x.x.x-linux-amd64.deb`
+- **Linux x64**: `FilamentDB-x.x.x-linux-x86_64.AppImage` or `FilamentDB-x.x.x-linux-amd64.deb`
+- **Linux arm64** (Raspberry Pi 5): `FilamentDB-x.x.x-linux-arm64.AppImage` or `FilamentDB-x.x.x-linux-arm64.deb`
 
 On first launch, you'll be prompted to enter your MongoDB Atlas connection string. The app validates the connection and stores it securely on your machine. See [Setting Up MongoDB Atlas](#setting-up-mongodb-atlas-free-tier) below if you don't have an account yet.
 
@@ -15,7 +16,7 @@ On first launch, you'll be prompted to enter your MongoDB Atlas connection strin
 
 ### Prerequisites
 
-- **Node.js** v18 or later
+- **Node.js** v20 or later
 - **npm** (included with Node.js)
 - **Git**
 - A **MongoDB Atlas** account (free tier works)

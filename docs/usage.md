@@ -2,7 +2,7 @@
 
 ## Browsing Filaments
 
-The home page displays all filaments in a sortable table with columns for color, name, vendor, type, nozzle temperature, bed temperature, and cost.
+The home page displays all filaments in a sortable table with columns for color, name, vendor, type, nozzle temperature, bed temperature, cost, and remaining spool percentage.
 
 - **Search**: Type in the search box to filter filaments by name
 - **Filter by Type**: Use the type dropdown to show only specific material types (PLA, PETG, ASA, etc.)

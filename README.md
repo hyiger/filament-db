@@ -4,7 +4,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 ## Features
 
-- **Desktop app** -- installable on macOS (.dmg), Windows (.exe), and Linux (.AppImage, .deb)
+- **Desktop app** -- installable on macOS (.dmg), Windows (.exe), and Linux (.AppImage, .deb) including arm64 for Raspberry Pi
 - **Import/Export** -- PrusaSlicer INI config bundles via browser upload or CLI
 - **Browse** -- searchable, filterable, sortable table with color swatches
 - **Full CRUD** -- create, view, edit, and delete filament profiles
@@ -12,6 +12,9 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Per-nozzle calibration** -- store different EM, max volumetric speed, pressure advance, and retraction values per nozzle
 - **Technical Data Sheets** -- link vendor TDS documents with inline preview pane and auto-suggestions from same-vendor filaments
 - **Advanced settings** -- temperatures, fan settings, shrinkage, retraction, pressure advance, abrasive/soluble flags, notes
+- **Presets** -- named parameter variants per filament (e.g., shore hardness profiles with different temps and extrusion multiplier)
+- **Color variants** -- clone a filament as a color variant; inherited settings resolve automatically from the parent
+- **Spool tracking** -- track remaining filament by weight with computed length in meters from density and diameter
 - **NFC tag read/write** -- read and write [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags directly from the desktop app using an ACR1552U reader
 - **OpenPrintTag export** -- download OpenPrintTag binary files for any filament
 
@@ -22,7 +25,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - [MongoDB Atlas](https://www.mongodb.com/atlas) (free tier)
 - [Mongoose](https://mongoosejs.com/) ODM
 - [Tailwind CSS](https://tailwindcss.com/)
-- [Vitest](https://vitest.dev/) (100% coverage on `src/lib/` and `src/models/`)
+- [Vitest](https://vitest.dev/) (coverage enforced on `src/lib/` and `src/models/`)
 
 ## Quick Start
 
@@ -63,10 +66,10 @@ See the [Setup Guide](docs/setup.md) for detailed instructions.
 filament-db/
 ├── docs/                    # Documentation (setup, usage, API, desktop, testing, troubleshooting)
 ├── electron/                # Electron main process + preload (bundled by esbuild)
-├── scripts/seed.ts          # CLI import with nozzle extraction
+├── scripts/                 # CLI tools (seed import, icon generator, filament merge)
 ├── src/
 │   ├── app/
-│   │   ├── api/filaments/   # Filament REST API (CRUD, import, export)
+│   │   ├── api/filaments/   # Filament REST API (CRUD, import, export, match, types, vendors, parents)
 │   │   ├── api/nozzles/     # Nozzle REST API (CRUD)
 │   │   ├── api/setup/       # Connection test endpoint (for desktop setup wizard)
 │   │   ├── setup/           # First-launch setup wizard
@@ -79,9 +82,9 @@ filament-db/
 ├── tests/                   # Vitest unit tests (204 tests)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
-│   └── release.yml          # CD: build desktop installers on version tags
-├── electron-builder.yml     # Electron packaging config (macOS, Windows, Linux)
-└── vitest.config.ts         # Test config with 100% coverage thresholds
+│   └── release.yml          # CD: build desktop installers on version tags (4 platforms)
+├── electron-builder.yml     # Electron packaging config (macOS, Windows, Linux x64/arm64)
+└── vitest.config.ts         # Test config with coverage thresholds
 ```
 
 ## License

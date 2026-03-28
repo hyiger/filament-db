@@ -13,6 +13,8 @@
 | `POST` | `/api/filaments/import` | Upload an INI file to import filament profiles |
 | `GET` | `/api/filaments/match` | Match an NFC tag against existing filaments. Query params: `name`, `vendor`, `type` |
 | `GET` | `/api/filaments/types` | List all distinct filament types |
+| `GET` | `/api/filaments/vendors` | List all distinct vendor names |
+| `GET` | `/api/filaments/parents` | List filaments that can be used as parents. Query params: `search`, `exclude` |
 | `GET` | `/api/filaments/:id/openprinttag` | Download OpenPrintTag binary for a filament |
 
 ### GET /api/filaments
@@ -78,6 +80,19 @@ Matching priority: exact name match > vendor+type > vendor-only. If no exact mat
 ### GET /api/filaments/types
 
 Returns an array of distinct filament type strings (e.g., `["ABS", "ASA", "PCTG", "PETG", "PLA"]`).
+
+### GET /api/filaments/vendors
+
+Returns a sorted array of distinct vendor name strings (e.g., `["Bambu Lab", "Polymaker", "Prusament"]`). Used by the vendor dropdown in the filament form.
+
+### GET /api/filaments/parents
+
+Returns filaments that can serve as parents for color variants. Supports optional query parameters:
+
+- `search` -- filter by name (case-insensitive regex)
+- `exclude` -- filament ID to exclude from results (e.g., the current filament being edited)
+
+Returns an array of `{ _id, name, vendor, type, color }` objects.
 
 ### GET /api/filaments/:id/openprinttag
 

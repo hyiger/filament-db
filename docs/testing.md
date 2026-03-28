@@ -2,7 +2,7 @@
 
 ## Overview
 
-The project uses [Vitest](https://vitest.dev/) with [mongodb-memory-server](https://github.com/typegoose/mongodb-memory-server) for in-memory database testing. Tests enforce 100% code coverage on all library and model files.
+The project uses [Vitest](https://vitest.dev/) with [mongodb-memory-server](https://github.com/typegoose/mongodb-memory-server) for in-memory database testing. Tests enforce coverage thresholds on all library and model files.
 
 ## Running Tests
 
@@ -37,13 +37,14 @@ tests/
 
 ## Coverage Thresholds
 
-The Vitest config (`vitest.config.ts`) enforces 100% thresholds for:
-- Statements
-- Branches
-- Functions
-- Lines
+The Vitest config (`vitest.config.ts`) enforces the following minimum thresholds for files in `src/lib/` and `src/models/`:
 
-Tests will fail if coverage drops below 100% on any metric for files in `src/lib/` and `src/models/`.
+- **Statements**: 80%
+- **Branches**: 75%
+- **Functions**: 90%
+- **Lines**: 80%
+
+Tests will fail if coverage drops below these thresholds.
 
 ## CI / GitHub Actions
 
@@ -57,7 +58,7 @@ Tests run against Node.js 20 and 22. Coverage reports are uploaded as artifacts 
 
 ### Release Workflow (`.github/workflows/release.yml`)
 
-Runs automatically on version tags (`v*`). Tests are run on all three platforms (macOS, Windows, Linux) before building the Electron installers. If tests fail, the build is skipped for that platform.
+Runs automatically on version tags (`v*`). Tests are run on all four build configurations (macOS, Windows, Linux x64, Linux arm64) before building the Electron installers. If tests fail, the build is skipped for that platform.
 
 ## Test Setup
 
