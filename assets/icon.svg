@@ -4,55 +4,85 @@
       <stop offset="0%" stop-color="#1a1a2e"/>
       <stop offset="100%" stop-color="#16213e"/>
     </linearGradient>
-    <linearGradient id="spool" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#4a4a5a"/>
-      <stop offset="100%" stop-color="#2a2a3a"/>
-    </linearGradient>
     <linearGradient id="filament" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0%" stop-color="#FF8C00"/>
       <stop offset="50%" stop-color="#FF6600"/>
       <stop offset="100%" stop-color="#E85D00"/>
     </linearGradient>
-    <linearGradient id="hub" x1="0" y1="0" x2="0" y2="1">
+    <linearGradient id="flange" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0%" stop-color="#5a5a6a"/>
       <stop offset="100%" stop-color="#3a3a4a"/>
+    </linearGradient>
+    <linearGradient id="db-body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4ECDC4"/>
+      <stop offset="100%" stop-color="#2AB7AD"/>
+    </linearGradient>
+    <linearGradient id="db-top" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6EE7DF"/>
+      <stop offset="100%" stop-color="#4ECDC4"/>
     </linearGradient>
   </defs>
 
   <!-- Background rounded square -->
   <rect x="0" y="0" width="1024" height="1024" rx="200" fill="url(#bg)"/>
 
-  <!-- Spool side view - outer ring (filament wrapped) -->
-  <ellipse cx="512" cy="512" rx="340" ry="340" fill="url(#filament)" opacity="0.95"/>
+  <!-- Outer flange ring -->
+  <circle cx="512" cy="512" r="390" fill="url(#flange)" opacity="0.5"/>
+  <circle cx="512" cy="512" r="390" fill="none" stroke="#6a6a7a" stroke-width="6" opacity="0.6"/>
 
-  <!-- Filament wrap lines for texture -->
-  <ellipse cx="512" cy="512" rx="340" ry="340" fill="none" stroke="#FF9933" stroke-width="6" opacity="0.4"/>
-  <ellipse cx="512" cy="512" rx="310" ry="310" fill="none" stroke="#FF7700" stroke-width="4" opacity="0.3"/>
-  <ellipse cx="512" cy="512" rx="280" ry="280" fill="none" stroke="#FF9933" stroke-width="5" opacity="0.3"/>
-  <ellipse cx="512" cy="512" rx="250" ry="250" fill="none" stroke="#FF7700" stroke-width="4" opacity="0.25"/>
-  <ellipse cx="512" cy="512" rx="220" ry="220" fill="none" stroke="#FF9933" stroke-width="3" opacity="0.2"/>
+  <!-- Filament wrap band -->
+  <circle cx="512" cy="512" r="370" fill="url(#filament)" opacity="0.95"/>
 
-  <!-- Inner spool hub -->
-  <ellipse cx="512" cy="512" rx="180" ry="180" fill="url(#hub)"/>
-  <ellipse cx="512" cy="512" rx="180" ry="180" fill="none" stroke="#6a6a7a" stroke-width="4"/>
+  <!-- Filament wrap texture rings -->
+  <circle cx="512" cy="512" r="360" fill="none" stroke="#FF9933" stroke-width="5" opacity="0.35"/>
+  <circle cx="512" cy="512" r="340" fill="none" stroke="#FF7700" stroke-width="4" opacity="0.3"/>
+  <circle cx="512" cy="512" r="320" fill="none" stroke="#FF9933" stroke-width="5" opacity="0.25"/>
+  <circle cx="512" cy="512" r="300" fill="none" stroke="#FF7700" stroke-width="4" opacity="0.2"/>
+  <circle cx="512" cy="512" r="280" fill="none" stroke="#FF9933" stroke-width="3" opacity="0.15"/>
 
-  <!-- Center hole -->
-  <ellipse cx="512" cy="512" rx="70" ry="70" fill="url(#bg)"/>
-  <ellipse cx="512" cy="512" rx="70" ry="70" fill="none" stroke="#5a5a6a" stroke-width="3"/>
+  <!-- Inner flange ring -->
+  <circle cx="512" cy="512" r="260" fill="url(#flange)" opacity="0.7"/>
+  <circle cx="512" cy="512" r="260" fill="none" stroke="#6a6a7a" stroke-width="5" opacity="0.5"/>
 
-  <!-- Spool flange rings -->
-  <ellipse cx="512" cy="512" rx="350" ry="350" fill="none" stroke="#5a5a6a" stroke-width="8" opacity="0.6"/>
-  <ellipse cx="512" cy="512" rx="185" ry="185" fill="none" stroke="#5a5a6a" stroke-width="6" opacity="0.5"/>
+  <!-- Hub background -->
+  <circle cx="512" cy="512" r="240" fill="url(#bg)" opacity="0.9"/>
 
-  <!-- Highlight/shine effect -->
-  <ellipse cx="420" cy="400" rx="120" ry="80" fill="white" opacity="0.06" transform="rotate(-30 420 400)"/>
+  <!-- === Database icon in the center hub === -->
+
+  <!-- DB cylinder body -->
+  <path d="M 392 420 L 392 610 Q 392 660 512 660 Q 632 660 632 610 L 632 420"
+        fill="url(#db-body)" opacity="0.9"/>
+
+  <!-- DB cylinder body side strokes -->
+  <line x1="392" y1="420" x2="392" y2="610" stroke="#2AB7AD" stroke-width="3" opacity="0.6"/>
+  <line x1="632" y1="420" x2="632" y2="610" stroke="#2AB7AD" stroke-width="3" opacity="0.6"/>
+
+  <!-- DB bottom ellipse -->
+  <ellipse cx="512" cy="610" rx="120" ry="50" fill="url(#db-body)" opacity="0.8"/>
+  <ellipse cx="512" cy="610" rx="120" ry="50" fill="none" stroke="#2AB7AD" stroke-width="3" opacity="0.5"/>
+
+  <!-- DB middle disk (data tier line) -->
+  <ellipse cx="512" cy="515" rx="120" ry="40" fill="url(#db-body)" opacity="0.5"/>
+  <ellipse cx="512" cy="515" rx="120" ry="40" fill="none" stroke="#6EE7DF" stroke-width="2.5" opacity="0.7"/>
+
+  <!-- DB top ellipse (lid) -->
+  <ellipse cx="512" cy="420" rx="120" ry="50" fill="url(#db-top)" opacity="0.95"/>
+  <ellipse cx="512" cy="420" rx="120" ry="50" fill="none" stroke="#6EE7DF" stroke-width="3" opacity="0.6"/>
+
+  <!-- Data dots on DB face for detail -->
+  <circle cx="460" cy="470" r="8" fill="#6EE7DF" opacity="0.6"/>
+  <circle cx="490" cy="470" r="8" fill="#6EE7DF" opacity="0.6"/>
+  <circle cx="520" cy="470" r="8" fill="#6EE7DF" opacity="0.4"/>
+
+  <circle cx="460" cy="560" r="8" fill="#6EE7DF" opacity="0.5"/>
+  <circle cx="490" cy="560" r="8" fill="#6EE7DF" opacity="0.5"/>
+  <circle cx="520" cy="560" r="8" fill="#6EE7DF" opacity="0.3"/>
+  <circle cx="550" cy="560" r="8" fill="#6EE7DF" opacity="0.5"/>
 
   <!-- Loose filament end trailing off the spool -->
-  <path d="M 852 512 Q 900 480 920 420 Q 940 360 910 310" fill="none" stroke="url(#filament)" stroke-width="14" stroke-linecap="round" opacity="0.9"/>
+  <path d="M 852 512 Q 900 470 915 400 Q 930 340 900 290"
+        fill="none" stroke="url(#filament)" stroke-width="14" stroke-linecap="round" opacity="0.85"/>
 
-  <!-- Spokes on hub -->
-  <line x1="512" y1="340" x2="512" y2="440" stroke="#5a5a6a" stroke-width="6" opacity="0.4"/>
-  <line x1="512" y1="584" x2="512" y2="684" stroke="#5a5a6a" stroke-width="6" opacity="0.4"/>
-  <line x1="340" y1="512" x2="440" y2="512" stroke="#5a5a6a" stroke-width="6" opacity="0.4"/>
-  <line x1="584" y1="512" x2="684" y2="512" stroke="#5a5a6a" stroke-width="6" opacity="0.4"/>
+  <!-- Subtle highlight/shine on the spool -->
+  <ellipse cx="420" cy="380" rx="100" ry="60" fill="white" opacity="0.05" transform="rotate(-30 420 380)"/>
 </svg>
