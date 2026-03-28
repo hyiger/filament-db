@@ -9,11 +9,15 @@ export default function EditNozzle() {
   const params = useParams();
   const router = useRouter();
   const [nozzle, setNozzle] = useState(null);
+  const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
     fetch(`/api/nozzles/${params.id}`)
-      .then((r) => r.json())
-      .then(setNozzle);
+      .then((r) => {
+        if (!r.ok) { setNotFound(true); return null; }
+        return r.json();
+      })
+      .then((data) => { if (data) setNozzle(data); });
   }, [params.id]);
 
   const handleSubmit = async (data: Record<string, unknown>) => {
@@ -27,6 +31,7 @@ export default function EditNozzle() {
     }
   };
 
+  if (notFound) return <p className="p-8 text-red-500">Nozzle not found. It may have been deleted.</p>;
   if (!nozzle) return <p className="p-8 text-gray-500">Loading...</p>;
 
   return (

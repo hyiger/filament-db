@@ -38,8 +38,9 @@ The seed script requires `MONGODB_URI` to be set. Either:
 
 Check the browser console for errors. Common causes:
 - MongoDB Atlas connection is down or credentials are wrong
-- The filament ID in the URL doesn't exist in the database
 - Network access is restricted in MongoDB Atlas
+
+If the filament ID in the URL doesn't exist, the page will show "Filament not found" instead of loading forever.
 
 ## INI export is missing some filaments
 

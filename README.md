@@ -22,7 +22,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - [MongoDB Atlas](https://www.mongodb.com/atlas) (free tier)
 - [Mongoose](https://mongoosejs.com/) ODM
 - [Tailwind CSS](https://tailwindcss.com/)
-- [Vitest](https://vitest.dev/) (100% test coverage)
+- [Vitest](https://vitest.dev/) (100% coverage on `src/lib/` and `src/models/`)
 
 ## Quick Start
 
@@ -75,7 +75,7 @@ filament-db/
 │   ├── hooks/               # Custom hooks (useNfc)
 │   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder
 │   └── models/              # Mongoose schemas (Filament, Nozzle)
-├── tests/                   # Vitest unit tests (190 tests)
+├── tests/                   # Vitest unit tests (204 tests)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   └── release.yml          # CD: build desktop installers on version tags

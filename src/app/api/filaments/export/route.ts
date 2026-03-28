@@ -84,12 +84,21 @@ export async function GET() {
           overrides.filament_retract_speed = cal.retractSpeed.toString();
         if (cal.retractLift != null)
           overrides.filament_retract_lift = cal.retractLift.toString();
-        if (cal.pressureAdvance != null && settings.start_filament_gcode) {
-          const gcode = settings.start_filament_gcode as string;
-          overrides.start_filament_gcode = gcode.replace(
-            /M572\s+S[\d.]+/,
-            `M572 S${cal.pressureAdvance}`
-          );
+        if (cal.pressureAdvance != null) {
+          if (settings.start_filament_gcode) {
+            const gcode = settings.start_filament_gcode as string;
+            if (/M572\s+S[\d.]+/.test(gcode)) {
+              overrides.start_filament_gcode = gcode.replace(
+                /M572\s+S[\d.]+/,
+                `M572 S${cal.pressureAdvance}`
+              );
+            } else {
+              // Append PA command when not already present
+              overrides.start_filament_gcode = `${gcode}\\nM572 S${cal.pressureAdvance}`;
+            }
+          } else {
+            overrides.start_filament_gcode = `M572 S${cal.pressureAdvance}`;
+          }
         }
 
         writeSection(lines, sectionName, settings, overrides);

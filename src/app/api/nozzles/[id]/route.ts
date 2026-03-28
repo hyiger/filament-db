@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
+import Filament from "@/models/Filament";
 
 export async function GET(
   _request: NextRequest,
@@ -38,6 +39,23 @@ export async function DELETE(
 ) {
   await dbConnect();
   const { id } = await params;
+
+  // Prevent deleting a nozzle that is referenced by any filament
+  const referencingCount = await Filament.countDocuments({
+    $or: [
+      { compatibleNozzles: id },
+      { "calibrations.nozzle": id },
+    ],
+  });
+  if (referencingCount > 0) {
+    return NextResponse.json(
+      {
+        error: `Cannot delete this nozzle — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}. Remove it from those filaments first.`,
+      },
+      { status: 400 },
+    );
+  }
+
   const nozzle = await Nozzle.findByIdAndDelete(id).lean();
   if (!nozzle) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });

@@ -31,7 +31,12 @@ export default function NozzlesPage() {
 
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Delete nozzle "${name}"?`)) return;
-    await fetch(`/api/nozzles/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/nozzles/${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      alert(body?.error || "Failed to delete nozzle");
+      return;
+    }
     fetchNozzles();
   };
 

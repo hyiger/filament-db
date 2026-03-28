@@ -407,7 +407,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                           ...form,
                           parentId: p._id,
                           vendor: form.vendor || p.vendor,
-                          type: form.type || p.type,
+                          type: (!form.type || form.type === "PLA") ? p.type : form.type,
                         });
                         setParentSearch("");
                         setParentDropdownOpen(false);

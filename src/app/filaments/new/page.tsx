@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
@@ -47,10 +47,23 @@ function NewFilamentContent() {
 
   // Support creating a variant from a parent via ?parentId=
   const parentId = searchParams.get("parentId");
+  const [parentData, setParentData] = useState<Record<string, unknown> | null>(null);
+
+  useEffect(() => {
+    if (parentId) {
+      fetch(`/api/filaments/${parentId}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then(setParentData)
+        .catch(() => {});
+    }
+  }, [parentId]);
+
   if (parentId) {
     initialData = {
       ...(initialData || {}),
       parentId,
+      vendor: parentData?.vendor || "",
+      type: parentData?.type || "",
     };
   }
 

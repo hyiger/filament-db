@@ -21,14 +21,19 @@ npm run test:coverage
 
 ```
 tests/
-├── setup.ts              # Test setup (mongodb-memory-server lifecycle)
-├── parseIni.test.ts      # INI parser tests (17 tests)
-├── Filament.test.ts      # Filament model tests (11 tests)
-├── Nozzle.test.ts        # Nozzle model tests (9 tests)
-└── mongodb.test.ts       # DB connection tests (6 tests)
+├── setup.ts                    # Test setup (mongodb-memory-server lifecycle)
+├── openprinttag.test.ts        # OpenPrintTag encoder tests (110 tests)
+├── openprinttag-decode.test.ts # OpenPrintTag decoder tests (15 tests)
+├── ndef.test.ts                # NDEF wrap/parse tests (15 tests)
+├── nfc-roundtrip.test.ts       # NFC encode→decode roundtrip tests (6 tests)
+├── resolveFilament.test.ts     # Parent/variant resolution tests (14 tests)
+├── parseIni.test.ts            # INI parser tests (18 tests)
+├── Filament.test.ts            # Filament model tests (11 tests)
+├── Nozzle.test.ts              # Nozzle model tests (9 tests)
+└── mongodb.test.ts             # DB connection tests (6 tests)
 ```
 
-**Total: 44 tests, 100% coverage**
+**Total: 204 tests across 9 test files**
 
 ## Coverage Thresholds
 

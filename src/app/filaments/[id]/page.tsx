@@ -66,10 +66,15 @@ export default function FilamentDetail() {
   const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag } = useNfcContext();
   const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
 
+  const [notFound, setNotFound] = useState(false);
+
   useEffect(() => {
     fetch(`/api/filaments/${params.id}`)
-      .then((r) => r.json())
-      .then(setFilament);
+      .then((r) => {
+        if (!r.ok) { setNotFound(true); return null; }
+        return r.json();
+      })
+      .then((data) => { if (data) setFilament(data); });
   }, [params.id]);
 
   const handleNfcWrite = async () => {
@@ -100,6 +105,7 @@ export default function FilamentDetail() {
     }
   };
 
+  if (notFound) return <p className="p-8 text-red-500">Filament not found. It may have been deleted.</p>;
   if (!filament) return <p className="p-8 text-gray-500">Loading...</p>;
 
   const inherited = new Set(filament._inherited || []);
