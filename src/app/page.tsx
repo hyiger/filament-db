@@ -136,10 +136,20 @@ export default function Home() {
       }
     }
 
-    // Second pass: build groups
+    // Second pass: build groups, resolving inherited fields for variants
     for (const f of filaments) {
       if (f.parentId) continue; // variants are handled by their parent
-      const variants = variantsByParent.get(f._id) || [];
+      const variants = (variantsByParent.get(f._id) || []).map((v) => ({
+        ...v,
+        temperatures: {
+          nozzle: v.temperatures?.nozzle ?? f.temperatures?.nozzle,
+          bed: v.temperatures?.bed ?? f.temperatures?.bed,
+        },
+        cost: v.cost ?? f.cost,
+        density: v.density ?? f.density,
+        spoolWeight: v.spoolWeight ?? f.spoolWeight,
+        netFilamentWeight: v.netFilamentWeight ?? f.netFilamentWeight,
+      }));
       if (variants.length > 0) {
         parentMap.set(f._id, { parent: f, variants });
       } else {
