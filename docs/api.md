@@ -16,6 +16,7 @@
 | `GET` | `/api/filaments/vendors` | List all distinct vendor names |
 | `GET` | `/api/filaments/parents` | List filaments that can be used as parents. Query params: `search`, `exclude` |
 | `POST` | `/api/filaments/parse-ini` | Parse an INI file and return filament profiles without saving |
+| `POST` | `/api/filaments/import-atlas` | Connect to a remote MongoDB Atlas database and import filaments |
 | `GET` | `/api/filaments/:id/openprinttag` | Download OpenPrintTag binary for a filament |
 
 ### GET /api/filaments
@@ -98,6 +99,32 @@ Returns an array of `{ _id, name, vendor, type, color }` objects.
 ### POST /api/filaments/parse-ini
 
 Parse a PrusaSlicer INI config bundle and return the extracted filament profiles without saving them to the database. Upload via `multipart/form-data` with a `file` field. Returns `{ filaments: [...] }` with the same shape as the Filament model.
+
+### POST /api/filaments/import-atlas
+
+Connect to a remote MongoDB Atlas database and import filaments. This endpoint serves two purposes depending on the request body:
+
+**List filaments** — send `{ uri }` to connect and retrieve all filaments from the remote database:
+```json
+{ "uri": "mongodb+srv://user:pass@cluster.mongodb.net/" }
+```
+Returns `{ filaments: [...] }` with projected fields: `_id`, `name`, `vendor`, `type`, `color`, `parentId`, `temperatures`.
+
+**Import filaments** — send `{ uri, filamentIds: [...] }` to import selected filaments into the local database:
+```json
+{ "uri": "mongodb+srv://user:pass@cluster.mongodb.net/", "filamentIds": ["id1", "id2"] }
+```
+Returns:
+```json
+{
+  "message": "Imported 5 filaments (3 new, 2 updated)",
+  "total": 5,
+  "created": 3,
+  "updated": 2
+}
+```
+
+Existing filaments with the same name are updated; new filaments are created. Parent-variant relationships from the remote database are not preserved.
 
 ### GET /api/filaments/:id/openprinttag
 

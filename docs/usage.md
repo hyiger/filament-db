@@ -47,6 +47,21 @@ Click **"Delete"** next to any filament in the list. You will be prompted to con
 
 ---
 
+## Importing from MongoDB Atlas
+
+You can import filaments from another Filament DB instance hosted on MongoDB Atlas:
+
+1. Click **"Import from Atlas"** on the home page
+2. Enter the MongoDB Atlas connection string (e.g., `mongodb+srv://user:pass@cluster.mongodb.net/`)
+3. Click **"Connect"** — the app will retrieve all filaments from the remote database
+4. Select which filaments to import (all are selected by default). Use **"Select All"** / **"Deselect All"** to toggle
+5. Click **"Import"** then **"Confirm Import"**
+6. Existing filaments with the same name will be updated; new filaments will be created
+
+Parent-variant relationships from the remote database are not preserved — all imported filaments are standalone.
+
+---
+
 ## Managing Nozzles
 
 Click **"Manage Nozzles"** on the home page to view, create, edit, and delete nozzle profiles.
