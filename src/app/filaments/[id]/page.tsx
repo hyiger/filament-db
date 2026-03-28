@@ -111,13 +111,17 @@ export default function FilamentDetail() {
   const [weightSaving, setWeightSaving] = useState(false);
   const weightRef = useRef<HTMLInputElement>(null);
 
+  const [fetchError, setFetchError] = useState<string | null>(null);
+
   useEffect(() => {
     fetch(`/api/filaments/${params.id}`)
       .then((r) => {
-        if (!r.ok) { setNotFound(true); return null; }
+        if (r.status === 404) { setNotFound(true); return null; }
+        if (!r.ok) { setFetchError("Failed to load filament. Please try again."); return null; }
         return r.json();
       })
-      .then((data) => { if (data) setFilament(data); });
+      .then((data) => { if (data) setFilament(data); })
+      .catch(() => setFetchError("Could not connect to the server."));
   }, [params.id]);
 
   const handleNfcWrite = async () => {
@@ -177,6 +181,7 @@ export default function FilamentDetail() {
   };
 
   if (notFound) return <p className="p-8 text-red-500">Filament not found. It may have been deleted.</p>;
+  if (fetchError) return <p className="p-8 text-red-500">{fetchError}</p>;
   if (!filament) return <p className="p-8 text-gray-500">Loading...</p>;
 
   const inherited = new Set(filament._inherited || []);

@@ -17,11 +17,13 @@ export default function SetupPage() {
   const [mongoUri, setMongoUri] = useState("");
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState("");
+  const [success, setSuccess] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setTesting(true);
     setError("");
+    setSuccess("");
 
     try {
       // Test the connection via API
@@ -44,8 +46,13 @@ export default function SetupPage() {
         await window.electronAPI.saveConfig({ mongodbUri: mongoUri });
         // Electron will redirect to home
       } else {
-        // Running in browser — set env and redirect
-        window.location.href = "/";
+        // Running in browser — connection test passed but URI must be set
+        // via .env.local (MONGODB_URI) since there's no persistent storage
+        setSuccess(
+          "Connection successful! To use the web app, add this URI as MONGODB_URI in your .env.local file and restart the server."
+        );
+        setTesting(false);
+        return;
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Connection failed");
@@ -86,6 +93,12 @@ export default function SetupPage() {
           {error && (
             <div className="p-3 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 rounded text-sm text-red-700 dark:text-red-300">
               {error}
+            </div>
+          )}
+
+          {success && (
+            <div className="p-3 bg-green-100 dark:bg-green-900/30 border border-green-300 dark:border-green-800 rounded text-sm text-green-700 dark:text-green-300">
+              {success}
             </div>
           )}
 

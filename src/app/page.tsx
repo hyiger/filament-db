@@ -88,6 +88,11 @@ export default function Home() {
     if (vendorFilter) params.set("vendor", vendorFilter);
 
     const res = await fetch(`/api/filaments?${params}`);
+    if (!res.ok) {
+      toast("Failed to load filaments", "error");
+      setLoading(false);
+      return;
+    }
     const data = await res.json();
     setFilaments(data);
     setLoading(false);
@@ -99,13 +104,17 @@ export default function Home() {
 
   useEffect(() => {
     fetch("/api/filaments")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error("Failed to fetch");
+        return r.json();
+      })
       .then((data: Filament[]) => {
         const t = [...new Set(data.map((f) => f.type))].sort();
         const v = [...new Set(data.map((f) => f.vendor))].sort();
         setTypes(t);
         setVendors(v);
-      });
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {

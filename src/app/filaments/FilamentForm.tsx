@@ -338,31 +338,48 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       return isNaN(num) ? null : num;
     };
 
-    // Merge form fields back into settings
+    // Merge form fields back into settings — explicit empty string clears the value
     const settings = { ...(initialData?.settings || {}) };
-    settings.extrusion_multiplier = form.extrusionMultiplier || settings.extrusion_multiplier;
-    settings.filament_shrinkage_compensation_xy = form.shrinkageXY || settings.filament_shrinkage_compensation_xy;
-    settings.filament_shrinkage_compensation_z = form.shrinkageZ || settings.filament_shrinkage_compensation_z;
+    settings.extrusion_multiplier = form.extrusionMultiplier || undefined;
+    settings.filament_shrinkage_compensation_xy = form.shrinkageXY || undefined;
+    settings.filament_shrinkage_compensation_z = form.shrinkageZ || undefined;
     settings.filament_abrasive = form.abrasive ? "1" : "0";
     settings.filament_soluble = form.soluble ? "1" : "0";
-    settings.chamber_temperature = form.temperatures.chamber || settings.chamber_temperature;
-    settings.min_fan_speed = form.fanMinSpeed || settings.min_fan_speed;
-    settings.max_fan_speed = form.fanMaxSpeed || settings.max_fan_speed;
-    settings.bridge_fan_speed = form.fanBridgeSpeed || settings.bridge_fan_speed;
-    settings.disable_fan_first_layers = form.fanDisableFirstLayers || settings.disable_fan_first_layers;
-    settings.filament_retract_length = form.retractLength || settings.filament_retract_length;
-    if (form.retractSpeed) settings.filament_retract_speed = form.retractSpeed;
-    settings.filament_retract_lift = form.retractLift || settings.filament_retract_lift;
-    settings.filament_notes = form.notes ? `"${form.notes}"` : settings.filament_notes;
+    settings.chamber_temperature = form.temperatures.chamber || undefined;
+    settings.min_fan_speed = form.fanMinSpeed || undefined;
+    settings.max_fan_speed = form.fanMaxSpeed || undefined;
+    settings.bridge_fan_speed = form.fanBridgeSpeed || undefined;
+    settings.disable_fan_first_layers = form.fanDisableFirstLayers || undefined;
+    settings.filament_retract_length = form.retractLength || undefined;
+    settings.filament_retract_speed = form.retractSpeed || undefined;
+    settings.filament_retract_lift = form.retractLift || undefined;
+    settings.filament_notes = form.notes ? `"${form.notes}"` : undefined;
 
-    // Update pressure advance in start_filament_gcode if a simple M572 line
-    if (form.pressureAdvance && settings.start_filament_gcode) {
+    // Update pressure advance in start_filament_gcode
+    if (form.pressureAdvance) {
+      if (settings.start_filament_gcode) {
+        const gcode = settings.start_filament_gcode as string;
+        if (gcode.match(/M572\s+S[\d.]+/) && !gcode.includes("{if")) {
+          // Update existing M572 line
+          settings.start_filament_gcode = gcode.replace(
+            /M572\s+S[\d.]+/,
+            `M572 S${form.pressureAdvance}`
+          );
+        } else if (!gcode.match(/M572/) && !gcode.includes("{if")) {
+          // Append M572 to existing gcode
+          const trimmed = gcode.replace(/^"|"$/g, "");
+          settings.start_filament_gcode = `"${trimmed}\\nM572 S${form.pressureAdvance}"`;
+        }
+      } else {
+        // No gcode yet — create it
+        settings.start_filament_gcode = `"M572 S${form.pressureAdvance}"`;
+      }
+    } else if (settings.start_filament_gcode) {
+      // PA cleared — remove M572 line if it's a simple one
       const gcode = settings.start_filament_gcode as string;
-      if (gcode.match(/^"?M572\s+S[\d.]+/) && !gcode.includes("{if")) {
-        settings.start_filament_gcode = gcode.replace(
-          /M572\s+S[\d.]+/,
-          `M572 S${form.pressureAdvance}`
-        );
+      if (gcode.match(/M572\s+S[\d.]+/) && !gcode.includes("{if")) {
+        const cleaned = gcode.replace(/\\n?M572\s+S[\d.]+/, "").replace(/^"\\n/, '"');
+        settings.start_filament_gcode = cleaned === '""' ? undefined : cleaned;
       }
     }
 

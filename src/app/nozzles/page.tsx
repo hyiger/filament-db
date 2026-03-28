@@ -22,10 +22,15 @@ export default function NozzlesPage() {
   const fetchNozzles = useCallback(async () => {
     setLoading(true);
     const res = await fetch("/api/nozzles");
+    if (!res.ok) {
+      toast("Failed to load nozzles", "error");
+      setLoading(false);
+      return;
+    }
     const data = await res.json();
     setNozzles(data);
     setLoading(false);
-  }, []);
+  }, [toast]);
 
   useEffect(() => {
     fetchNozzles();
