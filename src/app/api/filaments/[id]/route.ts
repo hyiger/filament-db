@@ -30,7 +30,7 @@ export async function GET(
   }
 
   // If this is a parent, include its variants
-  const variants = await Filament.find({ parentId: id })
+  const variants = await Filament.find({ parentId: id, _deletedAt: null })
     .select("name color cost")
     .sort({ name: 1 })
     .lean();
@@ -90,7 +90,11 @@ export async function DELETE(
     );
   }
 
-  const filament = await Filament.findByIdAndDelete(id).lean();
+  const filament = await Filament.findByIdAndUpdate(
+    id,
+    { _deletedAt: new Date() },
+    { new: true }
+  ).lean();
   if (!filament) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

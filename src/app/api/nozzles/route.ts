@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
   const type = searchParams.get("type");
   const highFlow = searchParams.get("highFlow");
 
-  const filter: Record<string, unknown> = {};
+  const filter: Record<string, unknown> = { _deletedAt: null };
   if (diameter) filter.diameter = parseFloat(diameter);
   if (type) filter.type = type;
   if (highFlow) filter.highFlow = highFlow === "true";

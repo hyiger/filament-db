@@ -42,6 +42,7 @@ export interface IFilament extends Document {
   inherits: string | null;
   parentId: mongoose.Types.ObjectId | null;
   settings: Record<string, string | null>;
+  _deletedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -93,6 +94,7 @@ const FilamentSchema = new Schema<IFilament>(
     inherits: { type: String, default: null },
     parentId: { type: Schema.Types.ObjectId, ref: "Filament", default: null, index: true },
     settings: { type: Schema.Types.Mixed, default: {} },
+    _deletedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

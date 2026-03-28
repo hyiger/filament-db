@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 interface MongooseCache {
   conn: typeof mongoose | null;
   promise: Promise<typeof mongoose> | null;
+  uri: string | null;
 }
 
 declare global {
@@ -22,10 +23,19 @@ export default async function dbConnect() {
   const cached: MongooseCache = global.mongoose ?? {
     conn: null,
     promise: null,
+    uri: null,
   };
 
   if (!global.mongoose) {
     global.mongoose = cached;
+  }
+
+  // If URI changed (e.g., switched from local to Atlas), reconnect
+  if (cached.conn && cached.uri !== MONGODB_URI) {
+    await mongoose.disconnect();
+    cached.conn = null;
+    cached.promise = null;
+    cached.uri = null;
   }
 
   if (cached.conn) {
@@ -33,6 +43,7 @@ export default async function dbConnect() {
   }
 
   if (!cached.promise) {
+    cached.uri = MONGODB_URI;
     cached.promise = mongoose.connect(MONGODB_URI);
   }
 

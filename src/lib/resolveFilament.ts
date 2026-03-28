@@ -133,6 +133,6 @@ export async function hasVariants(
   FilamentModel: any,
   parentId: string,
 ): Promise<boolean> {
-  const count = await FilamentModel.countDocuments({ parentId });
+  const count = await FilamentModel.countDocuments({ parentId, _deletedAt: null });
   return count > 0;
 }

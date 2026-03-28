@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
   const vendor = searchParams.get("vendor");
   const search = searchParams.get("search");
 
-  const filter: Record<string, unknown> = {};
+  const filter: Record<string, unknown> = { _deletedAt: null };
   if (type) filter.type = type;
   if (vendor) filter.vendor = vendor;
   if (search) filter.name = { $regex: search, $options: "i" };

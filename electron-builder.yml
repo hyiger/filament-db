@@ -17,6 +17,7 @@ files:
   - package.json
   - node_modules/nfc-pcsc/**/*
   - node_modules/@pokusew/pcsclite/**/*
+  - node_modules/mongodb-memory-server-core/**/*
   - "!src"
   - "!tests"
   - "!scripts"

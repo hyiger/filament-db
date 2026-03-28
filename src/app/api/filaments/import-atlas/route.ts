@@ -47,7 +47,7 @@ export async function POST(request: NextRequest) {
         // Strip parent references (they won't exist in the local DB)
         delete filamentData.parentId;
 
-        const existing = await Filament.findOne({ name: filamentData.name });
+        const existing = await Filament.findOne({ name: filamentData.name, _deletedAt: null });
         if (existing) {
           await Filament.updateOne({ name: filamentData.name }, filamentData);
           updated++;

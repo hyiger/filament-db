@@ -4,11 +4,17 @@ import { spawn, ChildProcess } from "child_process";
 import Store from "electron-store";
 import http from "http";
 import { NfcService } from "./nfc-service";
+import { startLocalMongo, stopLocalMongo, getLocalMongoUri } from "./local-mongo";
+import { SyncService, SyncStatus } from "./sync-service";
+
+export type ConnectionMode = "atlas" | "offline" | "hybrid";
 
 const store = new Store({
   encryptionKey: "filament-db-secure-key",
   defaults: {
     mongodbUri: "",
+    connectionMode: "" as ConnectionMode, // empty = not yet configured
+    atlasUri: "",
   },
 });
 
@@ -16,6 +22,7 @@ const isDev = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
 let nfcService: NfcService | null = null;
+let syncService: SyncService | null = null;
 const PORT = 3456;
 
 function getAppURL(urlPath = "/") {
@@ -118,22 +125,138 @@ function stopServer() {
   }
 }
 
-// IPC handlers for setup wizard
+/**
+ * Resolve which MongoDB URI to use based on connection mode.
+ * For offline/hybrid, starts local MongoDB.
+ * For hybrid, also initializes sync service.
+ * Returns the URI to pass to the Next.js server.
+ */
+async function resolveMongoUri(): Promise<string | null> {
+  const mode = store.get("connectionMode") as ConnectionMode;
+  const atlasUri = store.get("atlasUri") as string;
+
+  if (mode === "offline") {
+    // Pure local mode
+    const localUri = await startLocalMongo();
+    store.set("mongodbUri", localUri);
+    return localUri;
+  }
+
+  if (mode === "hybrid") {
+    // Start local, sync with Atlas when available
+    const localUri = await startLocalMongo();
+    store.set("mongodbUri", localUri);
+
+    if (atlasUri) {
+      initSyncService(localUri, atlasUri);
+    }
+
+    return localUri;
+  }
+
+  if (mode === "atlas") {
+    if (!atlasUri) return null;
+
+    // Test Atlas connectivity — fall back to local if unreachable
+    try {
+      const { MongoClient } = await import("mongodb");
+      const client = new MongoClient(atlasUri, {
+        serverSelectionTimeoutMS: 5000,
+        connectTimeoutMS: 5000,
+      });
+      await client.connect();
+      await client.db("filament-db").command({ ping: 1 });
+      await client.close();
+
+      store.set("mongodbUri", atlasUri);
+      return atlasUri;
+    } catch {
+      console.log("Atlas unreachable, falling back to local MongoDB...");
+      const localUri = await startLocalMongo();
+      store.set("mongodbUri", localUri);
+
+      // Start sync so it'll push/pull once Atlas is reachable
+      initSyncService(localUri, atlasUri);
+
+      // Notify renderer of the fallback
+      mainWindow?.webContents.send("connection-mode-fallback", {
+        intended: "atlas",
+        actual: "local-fallback",
+      });
+
+      return localUri;
+    }
+  }
+
+  // Not configured yet
+  return store.get("mongodbUri") as string || null;
+}
+
+function initSyncService(localUri: string, atlasUri: string) {
+  if (syncService) {
+    syncService.destroy();
+  }
+
+  syncService = new SyncService(localUri, atlasUri);
+
+  syncService.on("statusChange", (status: SyncStatus) => {
+    mainWindow?.webContents.send("sync-status-changed", status);
+  });
+
+  syncService.on("syncComplete", () => {
+    console.log("Sync completed");
+  });
+
+  syncService.on("syncError", (err: string) => {
+    console.error("Sync error:", err);
+  });
+
+  // Start periodic sync (every 5 minutes)
+  syncService.startPeriodicSync();
+}
+
+// ── IPC handlers ──
+
+// Config
 ipcMain.handle("get-config", () => {
   return {
     mongodbUri: store.get("mongodbUri") as string,
+    connectionMode: store.get("connectionMode") as string,
+    atlasUri: store.get("atlasUri") as string,
   };
 });
 
-ipcMain.handle("save-config", async (_event, config: { mongodbUri: string }) => {
-  store.set("mongodbUri", config.mongodbUri);
-  process.env.MONGODB_URI = config.mongodbUri;
+ipcMain.handle("save-config", async (_event, config: {
+  mongodbUri?: string;
+  connectionMode?: ConnectionMode;
+  atlasUri?: string;
+}) => {
+  // Update individual fields
+  if (config.connectionMode !== undefined) {
+    store.set("connectionMode", config.connectionMode);
+  }
+  if (config.atlasUri !== undefined) {
+    store.set("atlasUri", config.atlasUri);
+  }
+
+  // Legacy: if only mongodbUri is sent (old atlas-only flow)
+  if (config.mongodbUri && !config.connectionMode) {
+    store.set("mongodbUri", config.mongodbUri);
+    store.set("connectionMode", "atlas");
+    store.set("atlasUri", config.mongodbUri);
+  }
+
+  // Resolve the actual URI based on mode
+  const uri = await resolveMongoUri();
+  if (uri) {
+    process.env.MONGODB_URI = uri;
+  }
 
   if (!isDev) {
     // Restart the production server with the new URI
     stopServer();
     try {
-      await startProductionServer(config.mongodbUri);
+      await startProductionServer(uri || undefined);
     } catch (err) {
       console.error("Failed to start server after config save:", err);
     }
@@ -149,6 +272,14 @@ ipcMain.handle("save-config", async (_event, config: { mongodbUri: string }) => 
 
 ipcMain.handle("reset-config", async () => {
   store.delete("mongodbUri");
+  store.delete("connectionMode");
+  store.delete("atlasUri");
+
+  if (syncService) {
+    syncService.destroy();
+    syncService = null;
+  }
+
   if (mainWindow) {
     mainWindow.loadURL(getAppURL("/setup"));
   }
@@ -163,6 +294,38 @@ ipcMain.handle("show-message", async (_event, options: { type: string; title: st
       message: options.message,
     });
   }
+});
+
+// Sync
+ipcMain.handle("get-sync-status", () => {
+  return syncService?.getStatus() ?? {
+    state: "idle",
+    lastSyncAt: null,
+    error: null,
+    progress: null,
+  };
+});
+
+ipcMain.handle("trigger-sync", async () => {
+  if (!syncService) {
+    return { error: "Sync not available in current mode" };
+  }
+  const results = await syncService.sync();
+  return { results };
+});
+
+ipcMain.handle("check-atlas-connectivity", async () => {
+  if (!syncService) {
+    // Try a direct check
+    const atlasUri = store.get("atlasUri") as string;
+    if (!atlasUri) return { connected: false };
+    const tempSync = new SyncService("", atlasUri);
+    const connected = await tempSync.checkAtlasConnectivity();
+    tempSync.destroy();
+    return { connected };
+  }
+  const connected = await syncService.checkAtlasConnectivity();
+  return { connected };
 });
 
 // NFC IPC handlers
@@ -186,13 +349,40 @@ ipcMain.handle("nfc-write-tag", async (_event, payload: number[]) => {
   return { success: true };
 });
 
+// ── App lifecycle ──
+
 app.whenReady().then(async () => {
-  const mongoUri = store.get("mongodbUri") as string;
+  const connectionMode = store.get("connectionMode") as ConnectionMode;
+
+  let mongoUri: string | null = null;
+
+  if (connectionMode) {
+    // Already configured — resolve URI based on mode
+    try {
+      mongoUri = await resolveMongoUri();
+    } catch (err) {
+      console.error("Failed to resolve MongoDB URI:", err);
+    }
+  } else {
+    // Check legacy config (pre-offline-mode)
+    const legacyUri = store.get("mongodbUri") as string;
+    if (legacyUri) {
+      // Migrate: treat existing config as atlas mode
+      store.set("connectionMode", "atlas");
+      store.set("atlasUri", legacyUri);
+      try {
+        mongoUri = await resolveMongoUri();
+      } catch (err) {
+        console.error("Failed to resolve MongoDB URI:", err);
+        mongoUri = legacyUri;
+      }
+    }
+  }
 
   if (!isDev) {
     // Always start the server — even without mongoUri, the setup page needs it
     try {
-      await startProductionServer(mongoUri);
+      await startProductionServer(mongoUri || undefined);
     } catch (err) {
       console.error("Failed to start server:", err);
     }
@@ -203,15 +393,13 @@ app.whenReady().then(async () => {
     nfcService = new NfcService();
     let prevTagPresent = false;
     let lastAutoReadAt = 0;
-    const AUTO_READ_COOLDOWN_MS = 4000; // suppress re-read during tag removal transient
+    const AUTO_READ_COOLDOWN_MS = 4000;
     nfcService.on("statusChange", (status) => {
       mainWindow?.webContents.send("nfc-status-changed", status);
 
-      // Auto-read when a tag is placed on the reader
       if (status.tagPresent && !prevTagPresent && nfcService) {
         const now = Date.now();
         if (now - lastAutoReadAt < AUTO_READ_COOLDOWN_MS) {
-          // Skip — likely a stale "present" event from the other driver during tag removal
           prevTagPresent = status.tagPresent;
           return;
         }
@@ -233,17 +421,19 @@ app.whenReady().then(async () => {
     console.error("NFC initialization failed (reader may not be available):", err);
   }
 
-  if (!mongoUri) {
+  if (!connectionMode && !store.get("mongodbUri")) {
     createWindow("/setup");
   } else {
-    process.env.MONGODB_URI = mongoUri;
+    if (mongoUri) {
+      process.env.MONGODB_URI = mongoUri;
+    }
     createWindow("/");
   }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
-      const uri = store.get("mongodbUri") as string;
-      createWindow(uri ? "/" : "/setup");
+      const mode = store.get("connectionMode") as string;
+      createWindow(mode ? "/" : "/setup");
     }
   });
 });
@@ -255,10 +445,18 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", async () => {
   stopServer();
+
+  if (syncService) {
+    syncService.destroy();
+    syncService = null;
+  }
+
   if (nfcService) {
     nfcService.destroy();
     nfcService = null;
   }
+
+  await stopLocalMongo();
 });

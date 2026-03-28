@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
   if (name) {
     const exact = await Filament.findOne({
       name: { $regex: `^${escapeRegex(name)}$`, $options: "i" },
+      _deletedAt: null,
     }).lean();
     if (exact) {
       return NextResponse.json({ match: exact, candidates: [] });
@@ -26,6 +27,7 @@ export async function GET(request: NextRequest) {
     const vendorTypeMatches = await Filament.find({
       vendor: { $regex: escapeRegex(vendor), $options: "i" },
       type: { $regex: `^${escapeRegex(type)}$`, $options: "i" },
+      _deletedAt: null,
     })
       .sort({ name: 1 })
       .limit(5)
@@ -37,6 +39,7 @@ export async function GET(request: NextRequest) {
   if (candidates.length === 0 && vendor) {
     const vendorMatches = await Filament.find({
       vendor: { $regex: escapeRegex(vendor), $options: "i" },
+      _deletedAt: null,
     })
       .sort({ name: 1 })
       .limit(5)

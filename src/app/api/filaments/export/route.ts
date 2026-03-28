@@ -33,7 +33,7 @@ function writeSection(
 export async function GET() {
   await dbConnect();
 
-  const filaments = await Filament.find()
+  const filaments = await Filament.find({ _deletedAt: null })
     .sort({ name: 1 })
     .populate("calibrations.nozzle")
     .lean();

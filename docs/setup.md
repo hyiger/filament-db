@@ -10,7 +10,13 @@ Download the latest installer for your platform from [GitHub Releases](https://g
 - **Linux x64**: `FilamentDB-x.x.x-linux-x86_64.AppImage` or `FilamentDB-x.x.x-linux-amd64.deb`
 - **Linux arm64** (Raspberry Pi 5): `FilamentDB-x.x.x-linux-arm64.AppImage` or `FilamentDB-x.x.x-linux-arm64.deb`
 
-On first launch, you'll be prompted to enter your MongoDB Atlas connection string. The app validates the connection and stores it securely on your machine. See [Setting Up MongoDB Atlas](#setting-up-mongodb-atlas-free-tier) below if you don't have an account yet.
+On first launch, you'll be prompted to choose a connection mode:
+
+- **MongoDB Atlas (Cloud)** — connect to a cloud database. Requires a MongoDB Atlas account and internet connection.
+- **Hybrid (Local + Cloud Sync)** — store data locally with automatic background sync to Atlas. Works offline and syncs when internet is available. *Recommended for most users.*
+- **Local Only (Offline)** — all data stored on your computer. No cloud account or internet needed. You can switch to hybrid mode later.
+
+For Atlas and Hybrid modes, you'll need a MongoDB Atlas connection string. See [Setting Up MongoDB Atlas](#setting-up-mongodb-atlas-free-tier) below if you don't have an account yet.
 
 ## Option 2: Run from Source
 
@@ -19,7 +25,7 @@ On first launch, you'll be prompted to enter your MongoDB Atlas connection strin
 - **Node.js** v20 or later
 - **npm** (included with Node.js)
 - **Git**
-- A **MongoDB Atlas** account (free tier works)
+- A **MongoDB** database (Atlas free tier, or local MongoDB installation)
 
 ### Installing Node.js
 
@@ -93,7 +99,7 @@ cp .env.example .env.local
 Copy-Item .env.example .env.local
 ```
 
-Then edit `.env.local` with your MongoDB Atlas connection string:
+Then edit `.env.local` with your MongoDB connection string:
 
 ```
 MONGODB_URI=mongodb+srv://youruser:yourpassword@yourcluster.mongodb.net/filament-db?appName=Filaments
@@ -101,7 +107,7 @@ MONGODB_URI=mongodb+srv://youruser:yourpassword@yourcluster.mongodb.net/filament
 
 > **Note:** If your password contains special characters (`@`, `#`, `%`, etc.), you must URL-encode them. For example, `p@ssword` becomes `p%40ssword`.
 
-> **Note:** The desktop app does not use `.env.local` -- it prompts for the connection string on first launch and stores it securely via the OS keychain.
+> **Note:** The desktop app does not use `.env.local` -- it prompts for the connection string on first launch and stores it securely via the OS keychain. In offline and hybrid modes, the desktop app runs an embedded local MongoDB instance automatically.
 
 ### Running
 
@@ -118,6 +124,33 @@ npm run build && npm start    # production
 npm run electron:dev          # development mode
 npm run electron:build        # build installer for your platform
 ```
+
+---
+
+## Connection Modes (Desktop App)
+
+The desktop app supports three connection modes:
+
+### Atlas (Cloud)
+
+- All data stored in MongoDB Atlas
+- Requires internet connection at all times
+- If Atlas is unreachable on startup, the app automatically falls back to a local database and syncs when the connection is restored
+
+### Hybrid (Local + Cloud Sync)
+
+- Data stored locally in an embedded MongoDB instance
+- Automatic bidirectional sync with Atlas when connected
+- Works fully offline — syncs automatically when internet returns
+- Sync uses last-write-wins conflict resolution based on timestamps
+- Manual "Sync Now" button available in the status indicator
+- Sync runs every 5 minutes when Atlas is reachable
+
+### Local Only (Offline)
+
+- All data stored locally, no cloud connection
+- No MongoDB Atlas account needed
+- Can be upgraded to Hybrid mode later from settings
 
 ---
 

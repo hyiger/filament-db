@@ -1,6 +1,6 @@
 # Filament DB
 
-A desktop and web application for managing 3D printing filament profiles. Import filament configurations from PrusaSlicer, store them in MongoDB Atlas, and manage them through a clean interface. Available as an installable desktop app for macOS, Windows, and Linux, or run as a web app.
+A desktop and web application for managing 3D printing filament profiles. Import filament configurations from PrusaSlicer, store them in MongoDB or MongoDB Atlas, and manage them through a clean interface. Available as an installable desktop app for macOS, Windows, and Linux, or run as a web app. The desktop app supports offline mode with an embedded local database, hybrid mode with automatic cloud sync, or direct Atlas cloud mode.
 
 ## Features
 
@@ -17,12 +17,15 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Spool tracking** -- track remaining filament by weight with computed length in meters from density and diameter
 - **NFC tag read/write** -- read and write [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags directly from the desktop app using an ACR1552U reader
 - **OpenPrintTag export** -- download OpenPrintTag binary files for any filament
+- **Offline mode** -- works without internet using an embedded local MongoDB; choose cloud-only, hybrid (local + sync), or fully offline
+- **Atlas sync** -- in hybrid mode, automatic bidirectional sync with MongoDB Atlas using last-write-wins conflict resolution
+- **Import from Atlas** -- connect to a remote MongoDB Atlas database and selectively import filaments
 
 ## Tech Stack
 
 - [Electron](https://www.electronjs.org/) (desktop packaging)
 - [Next.js](https://nextjs.org/) (App Router, TypeScript)
-- [MongoDB Atlas](https://www.mongodb.com/atlas) (free tier)
+- [MongoDB Atlas](https://www.mongodb.com/atlas) (cloud, optional) / embedded local MongoDB (offline/hybrid)
 - [Mongoose](https://mongoosejs.com/) ODM
 - [Tailwind CSS](https://tailwindcss.com/)
 - [Vitest](https://vitest.dev/) (coverage enforced on `src/lib/` and `src/models/`)
@@ -31,7 +34,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 ### Desktop App (recommended)
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/hyiger/filament-db/releases). On first launch, the app will prompt you for your MongoDB Atlas connection string.
+Download the latest release for your platform from [GitHub Releases](https://github.com/hyiger/filament-db/releases). On first launch, the app will prompt you to choose a connection mode (cloud, hybrid, or offline). No MongoDB Atlas account is needed for offline mode.
 
 ### From Source
 

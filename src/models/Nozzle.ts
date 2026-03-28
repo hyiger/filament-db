@@ -7,6 +7,7 @@ export interface INozzle extends Document {
   highFlow: boolean;
   hardened: boolean;
   notes: string;
+  _deletedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -19,6 +20,7 @@ const NozzleSchema = new Schema<INozzle>(
     highFlow: { type: Boolean, default: false },
     hardened: { type: Boolean, default: false },
     notes: { type: String, default: "" },
+    _deletedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

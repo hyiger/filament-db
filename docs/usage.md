@@ -62,6 +62,21 @@ Parent-variant relationships from the remote database are not preserved — all 
 
 ---
 
+## Sync Status (Desktop App — Hybrid Mode)
+
+When running in hybrid mode, a sync status indicator appears next to the "Filament DB" title:
+
+- **Green pill** ("Synced 2m ago") — last sync completed successfully
+- **Blue pulsing pill** ("Syncing...") — sync is in progress
+- **Amber pill** ("Offline") — Atlas is unreachable; the app is using local data
+- **Red pill** ("Sync error") — last sync failed
+
+Click the indicator to see details and a **"Sync Now"** button for manual sync. Automatic sync runs every 5 minutes when Atlas is reachable.
+
+Sync uses **last-write-wins** conflict resolution: if the same filament was edited on both sides, the most recently updated version wins.
+
+---
+
 ## Managing Nozzles
 
 Click **"Manage Nozzles"** on the home page to view, create, edit, and delete nozzle profiles.

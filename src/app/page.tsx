@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from "react"
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import ImportAtlasDialog from "@/components/ImportAtlasDialog";
+import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 
 interface Filament {
   _id: string;
@@ -548,7 +549,10 @@ export default function Home() {
       )}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold">Filament DB</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl font-bold">Filament DB</h1>
+            <SyncStatusIndicator />
+          </div>
           <Link href="/nozzles" className="text-blue-600 hover:underline text-sm">
             Manage Nozzles
           </Link>

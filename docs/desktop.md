@@ -18,12 +18,20 @@ Download the latest release for your platform from [GitHub Releases](https://git
 
 ## First Launch
 
-On first launch, the app shows a setup wizard asking for your MongoDB Atlas connection string. Enter it and click **Connect** -- the app validates the connection before saving.
+On first launch, the app shows a setup wizard where you choose a connection mode:
 
-Your connection string is stored encrypted on your local machine:
+- **MongoDB Atlas (Cloud)** — connect to a cloud database (requires internet)
+- **Hybrid (Local + Cloud Sync)** — data stored locally, synced to Atlas when connected (recommended)
+- **Local Only (Offline)** — all data stored locally, no cloud account needed
+
+For Atlas and Hybrid modes, you'll be asked for a MongoDB Atlas connection string. Enter it and click **Connect** -- the app validates the connection before saving.
+
+Your configuration is stored encrypted on your local machine:
 - **macOS**: `~/Library/Application Support/filament-db/config.json`
 - **Windows**: `%APPDATA%/filament-db/config.json`
 - **Linux**: `~/.config/filament-db/config.json`
+
+In offline and hybrid modes, the local database files are stored under the same directory in a `mongodb-data/` subfolder.
 
 ## Building from Source
 
@@ -95,6 +103,8 @@ The desktop app wraps the Next.js application in Electron:
 │  │ - HTTP polling for server readiness   │  │
 │  │ - NFC reader/writer service (PC/SC)   │  │
 │  │   via @pokusew/pcsclite               │  │
+│  │ - Embedded local MongoDB (mongod)     │  │
+│  │ - Bidirectional Atlas sync service    │  │
 │  └───────────────────────────────────────┘  │
 │                                             │
 │  ┌─ Renderer (BrowserWindow) ────────────┐  │
@@ -110,13 +120,14 @@ The desktop app wraps the Next.js application in Electron:
 │  │ - Exposes: getConfig, saveConfig,     │  │
 │  │   resetConfig, showMessage,           │  │
 │  │   nfcGetStatus, nfcReadTag,           │  │
-│  │   nfcWriteTag, event listeners        │  │
+│  │   nfcWriteTag, sync status/trigger,   │  │
+│  │   event listeners                     │  │
 │  └───────────────────────────────────────┘  │
 │                                             │
 └─────────────────────────────────────────────┘
          │
          ▼
-   MongoDB Atlas (cloud)
+   Local MongoDB (embedded) ←→ MongoDB Atlas (cloud, optional)
 ```
 
 In **development mode**: Electron loads `http://localhost:3000` (Next.js dev server).

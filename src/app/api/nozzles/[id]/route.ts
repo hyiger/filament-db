@@ -42,6 +42,7 @@ export async function DELETE(
 
   // Prevent deleting a nozzle that is referenced by any filament
   const referencingCount = await Filament.countDocuments({
+    _deletedAt: null,
     $or: [
       { compatibleNozzles: id },
       { "calibrations.nozzle": id },
@@ -56,7 +57,11 @@ export async function DELETE(
     );
   }
 
-  const nozzle = await Nozzle.findByIdAndDelete(id).lean();
+  const nozzle = await Nozzle.findByIdAndUpdate(
+    id,
+    { _deletedAt: new Date() },
+    { new: true }
+  ).lean();
   if (!nozzle) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

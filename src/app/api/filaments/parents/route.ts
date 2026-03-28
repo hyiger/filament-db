@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
 
   const filter: Record<string, unknown> = {
     parentId: null, // only standalone/parent filaments can be parents
+    _deletedAt: null,
   };
   if (search) {
     filter.name = { $regex: search, $options: "i" };

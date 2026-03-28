@@ -4,6 +4,6 @@ import Filament from "@/models/Filament";
 
 export async function GET() {
   await dbConnect();
-  const types: string[] = await Filament.distinct("type");
+  const types: string[] = await Filament.distinct("type", { _deletedAt: null });
   return NextResponse.json(types.sort());
 }

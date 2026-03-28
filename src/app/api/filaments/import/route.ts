@@ -27,7 +27,7 @@ export async function POST(request: NextRequest) {
   let updated = 0;
 
   for (const filament of filaments) {
-    const existing = await Filament.findOne({ name: filament.name });
+    const existing = await Filament.findOne({ name: filament.name, _deletedAt: null });
     if (existing) {
       await Filament.updateOne({ name: filament.name }, filament);
       updated++;

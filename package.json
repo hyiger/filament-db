@@ -16,7 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "electron:compile": "esbuild electron/main.ts --bundle --platform=node --outfile=electron-dist/main.js --external:electron --external:nfc-pcsc --external:@pokusew/pcsclite && esbuild electron/preload.ts --bundle --platform=node --outfile=electron-dist/preload.js --external:electron",
+    "electron:compile": "esbuild electron/main.ts --bundle --platform=node --outfile=electron-dist/main.js --external:electron --external:nfc-pcsc --external:@pokusew/pcsclite --external:mongodb-memory-server-core && esbuild electron/preload.ts --bundle --platform=node --outfile=electron-dist/preload.js --external:electron",
     "electron:rebuild": "electron-rebuild -f -w @pokusew/pcsclite",
     "electron:dev": "npm run electron:rebuild && npm run electron:compile && concurrently \"next dev\" \"wait-on http://localhost:3000 && electron .\"",
     "electron:build": "npm run build && npm run electron:fixlinks && npm run electron:rebuild && npm run electron:compile && npm run electron:pack",
@@ -26,6 +26,7 @@
   "dependencies": {
     "electron-store": "^11.0.2",
     "ini": "^6.0.0",
+    "mongodb-memory-server-core": "^11.0.1",
     "mongoose": "^9.3.3",
     "next": "16.2.1",
     "nfc-pcsc": "^0.8.1",
