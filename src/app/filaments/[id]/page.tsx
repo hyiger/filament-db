@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+import NfcStatus from "@/components/NfcStatus";
+import { useNfcContext } from "@/components/NfcProvider";
+import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
 
 interface Filament {
   _id: string;
@@ -50,12 +53,42 @@ export default function FilamentDetail() {
   const [filament, setFilament] = useState<Filament | null>(null);
   const [showAllSettings, setShowAllSettings] = useState(false);
   const [showTdsPreview, setShowTdsPreview] = useState(false);
+  const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag } = useNfcContext();
+  const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
 
   useEffect(() => {
     fetch(`/api/filaments/${params.id}`)
       .then((r) => r.json())
       .then(setFilament);
   }, [params.id]);
+
+  const handleNfcWrite = async () => {
+    if (!filament) return;
+    setNfcWriteSuccess(null);
+    try {
+      const payload = generateOpenPrintTagBinary({
+        materialName: filament.name,
+        brandName: filament.vendor,
+        materialType: filament.type,
+        color: filament.color,
+        density: filament.density,
+        diameter: filament.diameter,
+        nozzleTemp: filament.temperatures?.nozzle,
+        nozzleTempFirstLayer: filament.temperatures?.nozzleFirstLayer,
+        bedTemp: filament.temperatures?.bed,
+        bedTempFirstLayer: filament.temperatures?.bedFirstLayer,
+        chamberTemp: filament.settings?.chamber_temperature
+          ? Number(filament.settings.chamber_temperature)
+          : null,
+      });
+      await writeTag(payload);
+      setNfcWriteSuccess(true);
+      setTimeout(() => setNfcWriteSuccess(null), 3000);
+    } catch {
+      setNfcWriteSuccess(false);
+      setTimeout(() => setNfcWriteSuccess(null), 5000);
+    }
+  };
 
   if (!filament) return <p className="p-8 text-gray-500">Loading...</p>;
 
@@ -67,23 +100,66 @@ export default function FilamentDetail() {
         </Link>
       </div>
 
-      <div className="flex items-center gap-4 mb-6">
+      <div className="flex flex-wrap items-center gap-4 mb-6">
         <div
-          className="w-10 h-10 rounded-full border-2 border-gray-300"
+          className="w-10 h-10 rounded-full border-2 border-gray-300 flex-shrink-0"
           style={{ backgroundColor: filament.color }}
         />
-        <div>
+        <div className="min-w-0">
           <h1 className="text-2xl font-bold">{filament.name}</h1>
           <p className="text-gray-500">
             {filament.vendor} &middot; {filament.type}
           </p>
         </div>
-        <Link
-          href={`/filaments/${filament._id}/edit`}
-          className="ml-auto px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
-        >
-          Edit
-        </Link>
+        <div className="ml-auto flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+          {isElectron && <NfcStatus />}
+          {isElectron && nfcStatus.tagPresent && (
+            <button
+              onClick={handleNfcWrite}
+              disabled={nfcWriting}
+              className={`px-4 py-2 text-sm text-white rounded inline-flex items-center gap-1.5 ${
+                nfcWriteSuccess === true
+                  ? "bg-green-600"
+                  : nfcWriteSuccess === false
+                    ? "bg-red-600"
+                    : "bg-purple-600 hover:bg-purple-700"
+              } disabled:opacity-50`}
+              title="Write OpenPrintTag data to NFC tag"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0" />
+              </svg>
+              {nfcWriting
+                ? "Writing..."
+                : nfcWriteSuccess === true
+                  ? "Written!"
+                  : nfcWriteSuccess === false
+                    ? "Write Failed"
+                    : "Write NFC"}
+            </button>
+          )}
+          <button
+            onClick={() => {
+              const a = document.createElement("a");
+              a.href = `/api/filaments/${filament._id}/openprinttag`;
+              a.download = "";
+              a.click();
+            }}
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm inline-flex items-center gap-1.5"
+            title="Download OpenPrintTag NFC binary (.bin)"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Export OPT
+          </button>
+          <Link
+            href={`/filaments/${filament._id}/edit`}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
+          >
+            Edit
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">

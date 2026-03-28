@@ -81,3 +81,28 @@ On the detail page:
 
 - Click **"View Technical Data Sheet"** to open an inline preview pane
 - Click **"Open in new tab"** to view the full document in a new browser tab
+
+---
+
+## NFC Tags (Desktop App Only)
+
+The desktop app supports reading and writing OpenPrintTag NFC-V tags. See the [NFC documentation](nfc.md) for hardware requirements and setup.
+
+### Reading Tags
+
+Place a tag on the reader -- the app auto-reads it and shows a dialog:
+
+- **Match found**: Shows the matching filament with a link to view it
+- **No match**: Shows the decoded data with an option to create a new filament (form pre-filled with tag data)
+
+### Writing Tags
+
+On any filament's detail page:
+
+1. Place a tag on the reader (status turns green)
+2. Click **"Write NFC"**
+3. Wait for the write to complete (button shows "Written!" on success)
+
+### Exporting OpenPrintTag Binary
+
+Click **"Export OPT"** on any filament's detail page to download the binary as a `.bin` file for use with external NFC tools.

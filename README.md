@@ -12,6 +12,8 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Per-nozzle calibration** -- store different EM, max volumetric speed, pressure advance, and retraction values per nozzle
 - **Technical Data Sheets** -- link vendor TDS documents with inline preview pane and auto-suggestions from same-vendor filaments
 - **Advanced settings** -- temperatures, fan settings, shrinkage, retraction, pressure advance, abrasive/soluble flags, notes
+- **NFC tag read/write** -- read and write [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags directly from the desktop app using an ACR1552U reader
+- **OpenPrintTag export** -- download OpenPrintTag binary files for any filament
 
 ## Tech Stack
 
@@ -49,6 +51,7 @@ See the [Setup Guide](docs/setup.md) for detailed instructions.
 | [Desktop App](docs/desktop.md) | Electron desktop app: building, packaging, and releasing |
 | [Importing & Exporting](docs/importing.md) | PrusaSlicer config export, web UI import, CLI seed script, INI export |
 | [Usage Guide](docs/usage.md) | Browsing, filtering, sorting, editing filaments, nozzle management, calibrations, TDS links |
+| [NFC Tags](docs/nfc.md) | Reading and writing OpenPrintTag NFC tags with the ACR1552U reader |
 | [API Reference](docs/api.md) | REST API endpoints for filaments and nozzles |
 | [Testing](docs/testing.md) | Running tests, coverage thresholds, CI/CD with GitHub Actions |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and solutions |
@@ -68,9 +71,11 @@ filament-db/
 │   │   ├── setup/           # First-launch setup wizard
 │   │   ├── filaments/       # Filament pages (list, detail, edit, new)
 │   │   └── nozzles/         # Nozzle pages (list, edit, new)
-│   ├── lib/                 # DB connection, INI parser
+│   ├── components/          # React components (NFC status, dialogs, providers)
+│   ├── hooks/               # Custom hooks (useNfc)
+│   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder
 │   └── models/              # Mongoose schemas (Filament, Nozzle)
-├── tests/                   # Vitest unit tests (44 tests, 100% coverage)
+├── tests/                   # Vitest unit tests (190 tests)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   └── release.yml          # CD: build desktop installers on version tags

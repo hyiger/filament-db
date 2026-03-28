@@ -15,6 +15,8 @@ files:
   - electron-dist/**/*
   - standalone/**/*
   - package.json
+  - node_modules/nfc-pcsc/**/*
+  - node_modules/@pokusew/pcsclite/**/*
   - "!src"
   - "!tests"
   - "!scripts"
@@ -23,7 +25,6 @@ files:
   - "!.github"
   - "!docs"
   - "!coverage"
-  - "!node_modules"
 
 mac:
   category: public.app-category.utilities

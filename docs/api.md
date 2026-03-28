@@ -11,6 +11,9 @@
 | `DELETE` | `/api/filaments/:id` | Delete a filament by ID |
 | `GET` | `/api/filaments/export` | Download all filaments as a PrusaSlicer INI file |
 | `POST` | `/api/filaments/import` | Upload an INI file to import filament profiles |
+| `GET` | `/api/filaments/match` | Match an NFC tag against existing filaments. Query params: `name`, `vendor`, `type` |
+| `GET` | `/api/filaments/types` | List all distinct filament types |
+| `GET` | `/api/filaments/:id/openprinttag` | Download OpenPrintTag binary for a filament |
 
 ### GET /api/filaments
 
@@ -53,6 +56,32 @@ Returns:
   "updated": 2
 }
 ```
+
+### GET /api/filaments/match
+
+Match an NFC tag's decoded data against existing filaments. Used internally by the NFC read workflow.
+
+- `name` -- material name (exact match, case-insensitive)
+- `vendor` -- brand name (substring match, case-insensitive)
+- `type` -- material type (exact match, case-insensitive)
+
+Returns:
+```json
+{
+  "match": { "_id": "...", "name": "...", "vendor": "...", "type": "...", "color": "..." },
+  "candidates": []
+}
+```
+
+Matching priority: exact name match > vendor+type > vendor-only. If no exact match, returns up to 5 candidates.
+
+### GET /api/filaments/types
+
+Returns an array of distinct filament type strings (e.g., `["ABS", "ASA", "PCTG", "PETG", "PLA"]`).
+
+### GET /api/filaments/:id/openprinttag
+
+Downloads the filament as an OpenPrintTag CBOR binary (`.bin` file). The binary can be written to an NFC-V (ISO 15693) tag or used with other OpenPrintTag-compatible tools.
 
 ---
 

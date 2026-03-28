@@ -1,6 +1,6 @@
 {
   "name": "filament-db",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Desktop and web app for managing 3D printing filament profiles",
   "author": {
     "name": "hyiger",
@@ -16,9 +16,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "electron:compile": "esbuild electron/main.ts --bundle --platform=node --outfile=electron-dist/main.js --external:electron && esbuild electron/preload.ts --bundle --platform=node --outfile=electron-dist/preload.js --external:electron",
-    "electron:dev": "npm run electron:compile && concurrently \"next dev\" \"wait-on http://localhost:3000 && electron .\"",
-    "electron:build": "npm run build && npm run electron:fixlinks && npm run electron:compile && npm run electron:pack",
+    "electron:compile": "esbuild electron/main.ts --bundle --platform=node --outfile=electron-dist/main.js --external:electron --external:nfc-pcsc --external:@pokusew/pcsclite && esbuild electron/preload.ts --bundle --platform=node --outfile=electron-dist/preload.js --external:electron",
+    "electron:rebuild": "electron-rebuild -f -w @pokusew/pcsclite",
+    "electron:dev": "npm run electron:rebuild && npm run electron:compile && concurrently \"next dev\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:build": "npm run build && npm run electron:fixlinks && npm run electron:rebuild && npm run electron:compile && npm run electron:pack",
     "electron:fixlinks": "node -e \"const fs=require('fs'),path=require('path');function fix(d){fs.readdirSync(d,{withFileTypes:true}).forEach(e=>{const f=path.join(d,e.name);if(e.isSymbolicLink()){const t=fs.realpathSync(f);fs.rmSync(f);fs.cpSync(t,f,{recursive:true})}else if(e.isDirectory())fix(f)})}fix('.next/standalone');fs.cpSync('.next/standalone','standalone',{recursive:true});fs.cpSync('.next/static','standalone/.next/static',{recursive:true});fs.cpSync('public','standalone/public',{recursive:true})\"",
     "electron:pack": "electron-builder --config electron-builder.yml"
   },
@@ -27,10 +28,12 @@
     "ini": "^6.0.0",
     "mongoose": "^9.3.3",
     "next": "16.2.1",
+    "nfc-pcsc": "^0.8.1",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

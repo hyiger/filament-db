@@ -91,6 +91,8 @@ The desktop app wraps the Next.js application in Electron:
 │  │ - Encrypted config storage            │  │
 │  │ - IPC handlers (save/load config)     │  │
 │  │ - HTTP polling for server readiness   │  │
+│  │ - NFC reader/writer service (PC/SC)   │  │
+│  │   via @pokusew/pcsclite               │  │
 │  └───────────────────────────────────────┘  │
 │                                             │
 │  ┌─ Renderer (BrowserWindow) ────────────┐  │
@@ -104,7 +106,9 @@ The desktop app wraps the Next.js application in Electron:
 │  │ electron/preload.ts                   │  │
 │  │ - Secure IPC bridge (contextBridge)   │  │
 │  │ - Exposes: getConfig, saveConfig,     │  │
-│  │   resetConfig, showMessage            │  │
+│  │   resetConfig, showMessage,           │  │
+│  │   nfcGetStatus, nfcReadTag,           │  │
+│  │   nfcWriteTag, event listeners        │  │
 │  └───────────────────────────────────────┘  │
 │                                             │
 └─────────────────────────────────────────────┘

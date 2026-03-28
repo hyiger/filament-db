@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 
 interface FilamentFormData {
   name: string;
@@ -60,7 +60,7 @@ interface Props {
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
 }
 
-const FILAMENT_TYPES = [
+const DEFAULT_FILAMENT_TYPES = [
   "PLA", "PETG", "PCTG", "ABS", "ASA", "PA", "PC", "TPU", "FLEX",
   "POM", "PP", "HIPS", "PVA", "PET-GF", "PPA", "IGLIDUR",
 ];
@@ -129,6 +129,32 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
   });
   const [saving, setSaving] = useState(false);
   const [tdsSuggestions, setTdsSuggestions] = useState<{ name: string; tdsUrl: string }[]>([]);
+  const [filamentTypes, setFilamentTypes] = useState<string[]>(DEFAULT_FILAMENT_TYPES);
+  const [typeDropdownOpen, setTypeDropdownOpen] = useState(false);
+  const [typeFilter, setTypeFilter] = useState("");
+  const typeRef = useRef<HTMLDivElement>(null);
+
+  // Fetch distinct filament types from DB and merge with defaults
+  useEffect(() => {
+    fetch("/api/filaments/types")
+      .then((r) => r.json())
+      .then((dbTypes: string[]) => {
+        const merged = Array.from(new Set([...DEFAULT_FILAMENT_TYPES, ...dbTypes])).sort();
+        setFilamentTypes(merged);
+      })
+      .catch(() => {});
+  }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (typeRef.current && !typeRef.current.contains(e.target as Node)) {
+        setTypeDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, []);
 
   // Fetch TDS suggestions from other filaments with same vendor
   useEffect(() => {
@@ -303,19 +329,58 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             required
           />
         </div>
-        <div>
+        <div ref={typeRef} className="relative">
           <label className={labelClass}>Type *</label>
-          <select
+          <input
             className={inputClass}
-            value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value })}
-          >
-            {FILAMENT_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
+            value={typeDropdownOpen ? typeFilter : form.type}
+            onChange={(e) => {
+              const val = e.target.value.toUpperCase();
+              setTypeFilter(val);
+              setForm({ ...form, type: val });
+              setTypeDropdownOpen(true);
+            }}
+            onFocus={() => {
+              setTypeFilter("");
+              setTypeDropdownOpen(true);
+            }}
+            placeholder="Select or type..."
+            required
+          />
+          {typeDropdownOpen && (
+            <ul className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
+              {filamentTypes
+                .filter((t) => !typeFilter || t.includes(typeFilter))
+                .map((t) => (
+                  <li
+                    key={t}
+                    className={`px-3 py-1.5 cursor-pointer text-gray-100 hover:bg-gray-700 ${t === form.type ? "bg-gray-700 font-semibold" : ""}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setForm({ ...form, type: t });
+                      setTypeFilter("");
+                      setTypeDropdownOpen(false);
+                    }}
+                  >
+                    {t}
+                  </li>
+                ))}
+              {typeFilter && !filamentTypes.includes(typeFilter) && (
+                <li
+                  className="px-3 py-1.5 cursor-pointer text-green-400 hover:bg-gray-700 border-t border-gray-600"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setFilamentTypes((prev) => Array.from(new Set([...prev, typeFilter])).sort());
+                    setForm({ ...form, type: typeFilter });
+                    setTypeFilter("");
+                    setTypeDropdownOpen(false);
+                  }}
+                >
+                  + Add &quot;{typeFilter}&quot;
+                </li>
+              )}
+            </ul>
+          )}
         </div>
       </div>
 

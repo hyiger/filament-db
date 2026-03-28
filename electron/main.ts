@@ -3,6 +3,7 @@ import path from "path";
 import { spawn, ChildProcess } from "child_process";
 import Store from "electron-store";
 import http from "http";
+import { NfcService } from "./nfc-service";
 
 const store = new Store({
   encryptionKey: "filament-db-secure-key",
@@ -14,6 +15,7 @@ const store = new Store({
 const isDev = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: ChildProcess | null = null;
+let nfcService: NfcService | null = null;
 const PORT = 3456;
 
 function getAppURL(urlPath = "/") {
@@ -163,6 +165,27 @@ ipcMain.handle("show-message", async (_event, options: { type: string; title: st
   }
 });
 
+// NFC IPC handlers
+ipcMain.handle("nfc-get-status", () => {
+  return nfcService?.getStatus() ?? {
+    readerConnected: false,
+    readerName: null,
+    tagPresent: false,
+    tagUid: null,
+  };
+});
+
+ipcMain.handle("nfc-read-tag", async () => {
+  if (!nfcService) throw new Error("NFC not initialized");
+  return nfcService.readTag();
+});
+
+ipcMain.handle("nfc-write-tag", async (_event, payload: number[]) => {
+  if (!nfcService) throw new Error("NFC not initialized");
+  await nfcService.writeTag(new Uint8Array(payload));
+  return { success: true };
+});
+
 app.whenReady().then(async () => {
   const mongoUri = store.get("mongodbUri") as string;
 
@@ -173,6 +196,32 @@ app.whenReady().then(async () => {
     } catch (err) {
       console.error("Failed to start server:", err);
     }
+  }
+
+  // Initialize NFC service
+  try {
+    nfcService = new NfcService();
+    let prevTagPresent = false;
+    nfcService.on("statusChange", (status) => {
+      mainWindow?.webContents.send("nfc-status-changed", status);
+
+      // Auto-read when a tag is placed on the reader
+      if (status.tagPresent && !prevTagPresent && nfcService) {
+        nfcService.readTag()
+          .then((data) => {
+            mainWindow?.webContents.send("nfc-tag-detected", { data });
+          })
+          .catch((err) => {
+            mainWindow?.webContents.send("nfc-tag-detected", { error: err.message });
+          });
+      }
+      prevTagPresent = status.tagPresent;
+    });
+    nfcService.on("error", (err) => {
+      console.error("NFC error:", err.message);
+    });
+  } catch (err) {
+    console.error("NFC initialization failed (reader may not be available):", err);
   }
 
   if (!mongoUri) {
@@ -199,4 +248,8 @@ app.on("window-all-closed", () => {
 
 app.on("before-quit", () => {
   stopServer();
+  if (nfcService) {
+    nfcService.destroy();
+    nfcService = null;
+  }
 });
