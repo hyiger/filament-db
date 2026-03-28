@@ -58,14 +58,14 @@ The output installer will be in `dist-electron/`.
 A GitHub Actions workflow (`.github/workflows/release.yml`) builds installers for all platforms automatically when you push a version tag:
 
 ```bash
-git tag -a v0.3.0 -m "v0.3.0"
-git push origin v0.3.0
+git tag -a v1.0.0 -m "v1.0.0"
+git push origin v1.0.0
 ```
 
 Then create a release on GitHub:
 
 ```bash
-gh release create v0.3.0 --title "v0.3.0" --generate-notes
+gh release create v1.0.0 --title "v1.0.0" --generate-notes
 ```
 
 The workflow runs builds on macOS, Windows, and Ubuntu runners in parallel (Linux builds both x64 and arm64 via cross-compilation). Each platform's installers are uploaded to the GitHub Release automatically.
