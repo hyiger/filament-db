@@ -11,6 +11,7 @@ interface Filament {
   color: string;
   cost: number | null;
   density: number | null;
+  parentId: string | null;
   temperatures: {
     nozzle: number | null;
     bed: number | null;
@@ -47,6 +48,11 @@ function SortIcon({ column, sortKey, sortDir }: { column: SortKey; sortKey: Sort
   );
 }
 
+interface GroupedFilament {
+  parent: Filament;
+  variants: Filament[];
+}
+
 export default function Home() {
   const [filaments, setFilaments] = useState<Filament[]>([]);
   const [loading, setLoading] = useState(true);
@@ -59,6 +65,7 @@ export default function Home() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [importing, setImporting] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchFilaments = useCallback(async () => {
@@ -93,16 +100,67 @@ export default function Home() {
     fetchFilaments();
   }, [fetchFilaments]);
 
-  const sortedFilaments = useMemo(() => {
-    const sorted = [...filaments].sort((a, b) => {
-      const aVal = getSortValue(a, sortKey);
-      const bVal = getSortValue(b, sortKey);
+  // Group filaments: parents with their variants, standalone filaments as-is
+  const groupedFilaments = useMemo(() => {
+    const parentMap = new Map<string, GroupedFilament>();
+    const standalone: Filament[] = [];
+    const variantsByParent = new Map<string, Filament[]>();
+
+    // First pass: collect variants
+    for (const f of filaments) {
+      if (f.parentId) {
+        const variants = variantsByParent.get(f.parentId) || [];
+        variants.push(f);
+        variantsByParent.set(f.parentId, variants);
+      }
+    }
+
+    // Second pass: build groups
+    for (const f of filaments) {
+      if (f.parentId) continue; // variants are handled by their parent
+      const variants = variantsByParent.get(f._id) || [];
+      if (variants.length > 0) {
+        parentMap.set(f._id, { parent: f, variants });
+      } else {
+        standalone.push(f);
+      }
+    }
+
+    // Also include orphaned variants (parent not in current filter results)
+    for (const [parentId, variants] of variantsByParent) {
+      if (!parentMap.has(parentId)) {
+        // Parent wasn't in the results — show variants as standalone
+        standalone.push(...variants);
+      }
+    }
+
+    // Combine and sort
+    const all: (Filament | GroupedFilament)[] = [
+      ...parentMap.values(),
+      ...standalone.map((f) => f),
+    ];
+
+    all.sort((a, b) => {
+      const fa = "parent" in a ? a.parent : a;
+      const fb = "parent" in b ? b.parent : b;
+      const aVal = getSortValue(fa, sortKey);
+      const bVal = getSortValue(fb, sortKey);
       if (aVal < bVal) return sortDir === "asc" ? -1 : 1;
       if (aVal > bVal) return sortDir === "asc" ? 1 : -1;
       return 0;
     });
-    return sorted;
+
+    return all;
   }, [filaments, sortKey, sortDir]);
+
+  const toggleExpanded = (parentId: string) => {
+    setExpandedParents((prev) => {
+      const next = new Set(prev);
+      if (next.has(parentId)) next.delete(parentId);
+      else next.add(parentId);
+      return next;
+    });
+  };
 
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
@@ -115,7 +173,12 @@ export default function Home() {
 
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Delete "${name}"?`)) return;
-    await fetch(`/api/filaments/${id}`, { method: "DELETE" });
+    const res = await fetch(`/api/filaments/${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const data = await res.json();
+      alert(data.error || "Delete failed");
+      return;
+    }
     fetchFilaments();
   };
 
@@ -136,7 +199,6 @@ export default function Home() {
       if (res.ok) {
         alert(data.message);
         fetchFilaments();
-        // Re-fetch filter options
         const allRes = await fetch("/api/filaments");
         const allData = await allRes.json();
         setTypes([...new Set(allData.map((f: Filament) => f.type))].sort() as string[]);
@@ -153,6 +215,157 @@ export default function Home() {
   };
 
   const thClass = "py-3 px-2 cursor-pointer select-none hover:text-blue-500 transition-colors";
+
+  const renderRow = (f: Filament, isVariant = false) => (
+    <tr
+      key={f._id}
+      className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${isVariant ? "bg-gray-50/50 dark:bg-gray-950/50" : ""}`}
+    >
+      <td className="py-2 px-2">
+        <div className="flex items-center gap-1">
+          {isVariant && <span className="text-gray-400 text-xs ml-2">&#8627;</span>}
+          <div
+            className={`${isVariant ? "w-5 h-5" : "w-6 h-6"} rounded-full border border-gray-300`}
+            style={{ backgroundColor: f.color }}
+            title={f.color}
+          />
+        </div>
+      </td>
+      <td className="py-2 px-2">
+        <Link
+          href={`/filaments/${f._id}`}
+          className="text-blue-600 hover:underline"
+        >
+          {f.name}
+        </Link>
+        {isVariant && (
+          <span className="ml-1.5 text-[10px] text-gray-400 bg-gray-200 dark:bg-gray-800 px-1 py-0.5 rounded">
+            variant
+          </span>
+        )}
+      </td>
+      <td className="py-2 px-2">{f.vendor}</td>
+      <td className="py-2 px-2">
+        <span className="px-2 py-0.5 bg-gray-200 dark:bg-gray-800 rounded text-xs">
+          {f.type}
+        </span>
+      </td>
+      <td className="py-2 px-2 text-right">
+        {f.temperatures.nozzle ? `${f.temperatures.nozzle}°C` : "—"}
+      </td>
+      <td className="py-2 px-2 text-right">
+        {f.temperatures.bed ? `${f.temperatures.bed}°C` : "—"}
+      </td>
+      <td className="py-2 px-2 text-right">
+        {f.cost != null ? `$${f.cost.toFixed(2)}` : "—"}
+      </td>
+      <td className="py-2 px-2 text-right">
+        <Link
+          href={`/filaments/${f._id}/edit`}
+          className="text-blue-600 hover:underline mr-3 text-xs"
+        >
+          Edit
+        </Link>
+        <button
+          onClick={() => handleDelete(f._id, f.name)}
+          className="text-red-600 hover:underline text-xs"
+        >
+          Delete
+        </button>
+      </td>
+    </tr>
+  );
+
+  const renderParentRow = (group: GroupedFilament) => {
+    const f = group.parent;
+    const isExpanded = expandedParents.has(f._id);
+    return (
+      <>
+        <tr
+          key={f._id}
+          className="border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900"
+        >
+          <td className="py-2 px-2">
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => toggleExpanded(f._id)}
+                className="text-gray-400 hover:text-gray-600 text-xs w-4 flex-shrink-0"
+                title={isExpanded ? "Collapse variants" : "Expand variants"}
+              >
+                {isExpanded ? "▾" : "▸"}
+              </button>
+              <div
+                className="w-6 h-6 rounded-full border border-gray-300"
+                style={{ backgroundColor: f.color }}
+                title={f.color}
+              />
+            </div>
+          </td>
+          <td className="py-2 px-2">
+            <Link
+              href={`/filaments/${f._id}`}
+              className="text-blue-600 hover:underline"
+            >
+              {f.name}
+            </Link>
+            <span className="ml-1.5 text-[10px] text-gray-500 bg-gray-200 dark:bg-gray-800 px-1 py-0.5 rounded">
+              {group.variants.length} color{group.variants.length !== 1 ? "s" : ""}
+            </span>
+          </td>
+          <td className="py-2 px-2">{f.vendor}</td>
+          <td className="py-2 px-2">
+            <span className="px-2 py-0.5 bg-gray-200 dark:bg-gray-800 rounded text-xs">
+              {f.type}
+            </span>
+          </td>
+          <td className="py-2 px-2 text-right">
+            {f.temperatures.nozzle ? `${f.temperatures.nozzle}°C` : "—"}
+          </td>
+          <td className="py-2 px-2 text-right">
+            {f.temperatures.bed ? `${f.temperatures.bed}°C` : "—"}
+          </td>
+          <td className="py-2 px-2 text-right">
+            {f.cost != null ? `$${f.cost.toFixed(2)}` : "—"}
+          </td>
+          <td className="py-2 px-2 text-right">
+            <Link
+              href={`/filaments/${f._id}/edit`}
+              className="text-blue-600 hover:underline mr-3 text-xs"
+            >
+              Edit
+            </Link>
+            <button
+              onClick={() => handleDelete(f._id, f.name)}
+              className="text-red-600 hover:underline text-xs"
+            >
+              Delete
+            </button>
+          </td>
+        </tr>
+        {isExpanded && group.variants.map((v) => renderRow(v, true))}
+        {!isExpanded && (
+          <tr key={`${f._id}-colors`} className="border-b border-gray-200">
+            <td colSpan={8} className="py-1 px-2 pl-10">
+              <div className="flex items-center gap-1.5">
+                {group.variants.map((v) => (
+                  <Link
+                    key={v._id}
+                    href={`/filaments/${v._id}`}
+                    title={v.name}
+                  >
+                    <div
+                      className="w-4 h-4 rounded-full border border-gray-400 hover:ring-2 hover:ring-blue-400 transition-all"
+                      style={{ backgroundColor: v.color }}
+                    />
+                  </Link>
+                ))}
+              </div>
+            </td>
+          </tr>
+        )}
+      </>
+    );
+  };
 
   return (
     <main className="max-w-7xl mx-auto px-4 py-8">
@@ -261,57 +474,12 @@ export default function Home() {
               </tr>
             </thead>
             <tbody>
-              {sortedFilaments.map((f) => (
-                <tr
-                  key={f._id}
-                  className="border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900"
-                >
-                  <td className="py-2 px-2">
-                    <div
-                      className="w-6 h-6 rounded-full border border-gray-300"
-                      style={{ backgroundColor: f.color }}
-                      title={f.color}
-                    />
-                  </td>
-                  <td className="py-2 px-2">
-                    <Link
-                      href={`/filaments/${f._id}`}
-                      className="text-blue-600 hover:underline"
-                    >
-                      {f.name}
-                    </Link>
-                  </td>
-                  <td className="py-2 px-2">{f.vendor}</td>
-                  <td className="py-2 px-2">
-                    <span className="px-2 py-0.5 bg-gray-200 dark:bg-gray-800 rounded text-xs">
-                      {f.type}
-                    </span>
-                  </td>
-                  <td className="py-2 px-2 text-right">
-                    {f.temperatures.nozzle ? `${f.temperatures.nozzle}°C` : "—"}
-                  </td>
-                  <td className="py-2 px-2 text-right">
-                    {f.temperatures.bed ? `${f.temperatures.bed}°C` : "—"}
-                  </td>
-                  <td className="py-2 px-2 text-right">
-                    {f.cost != null ? `$${f.cost.toFixed(2)}` : "—"}
-                  </td>
-                  <td className="py-2 px-2 text-right">
-                    <Link
-                      href={`/filaments/${f._id}/edit`}
-                      className="text-blue-600 hover:underline mr-3 text-xs"
-                    >
-                      Edit
-                    </Link>
-                    <button
-                      onClick={() => handleDelete(f._id, f.name)}
-                      className="text-red-600 hover:underline text-xs"
-                    >
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {groupedFilaments.map((item) => {
+                if ("parent" in item) {
+                  return renderParentRow(item);
+                }
+                return renderRow(item);
+              })}
             </tbody>
           </table>
         </div>

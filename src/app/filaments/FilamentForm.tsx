@@ -35,6 +35,15 @@ interface FilamentFormData {
   tdsUrl: string;
   compatibleNozzles: string[];
   inherits: string;
+  parentId: string;
+}
+
+interface ParentOption {
+  _id: string;
+  name: string;
+  vendor: string;
+  type: string;
+  color: string;
 }
 
 interface NozzleOption {
@@ -85,6 +94,10 @@ function extractPressureAdvance(data: Record<string, unknown> | undefined): stri
 
 export default function FilamentForm({ initialData, onSubmit }: Props) {
   const [nozzles, setNozzles] = useState<NozzleOption[]>([]);
+  const [parentOptions, setParentOptions] = useState<ParentOption[]>([]);
+  const [parentSearch, setParentSearch] = useState("");
+  const [parentDropdownOpen, setParentDropdownOpen] = useState(false);
+  const parentRef = useRef<HTMLDivElement>(null);
 
   const getInitialNozzleIds = (): string[] => {
     if (!initialData?.compatibleNozzles) return [];
@@ -126,6 +139,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     tdsUrl: initialData?.tdsUrl || "",
     compatibleNozzles: getInitialNozzleIds(),
     inherits: initialData?.inherits || "",
+    parentId: initialData?.parentId?._id || initialData?.parentId || "",
   });
   const [saving, setSaving] = useState(false);
   const [tdsSuggestions, setTdsSuggestions] = useState<{ name: string; tdsUrl: string }[]>([]);
@@ -145,11 +159,23 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       .catch(() => {});
   }, []);
 
-  // Close dropdown on outside click
+  // Fetch potential parent filaments
+  useEffect(() => {
+    const exclude = initialData?._id || "";
+    fetch(`/api/filaments/parents${exclude ? `?exclude=${exclude}` : ""}`)
+      .then((r) => r.json())
+      .then(setParentOptions)
+      .catch(() => {});
+  }, [initialData?._id]);
+
+  // Close dropdowns on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (typeRef.current && !typeRef.current.contains(e.target as Node)) {
         setTypeDropdownOpen(false);
+      }
+      if (parentRef.current && !parentRef.current.contains(e.target as Node)) {
+        setParentDropdownOpen(false);
       }
     }
     document.addEventListener("mousedown", handleClick);
@@ -297,6 +323,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         }),
       tdsUrl: form.tdsUrl || null,
       inherits: form.inherits || null,
+      parentId: form.parentId || null,
       settings,
     });
 
@@ -317,6 +344,100 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           onChange={(e) => setForm({ ...form, name: e.target.value })}
           required
         />
+      </div>
+
+      <div ref={parentRef} className="relative">
+        <label className={labelClass}>
+          Parent Filament
+          <span className="text-gray-400 font-normal ml-1">(optional — for color variants)</span>
+        </label>
+        {form.parentId ? (
+          <div className="flex items-center gap-2 px-3 py-2 border border-blue-400 bg-blue-50 dark:bg-blue-950 rounded text-sm">
+            {(() => {
+              const p = parentOptions.find((o) => o._id === form.parentId);
+              return p ? (
+                <>
+                  <div
+                    className="w-4 h-4 rounded-full border border-gray-300 flex-shrink-0"
+                    style={{ backgroundColor: p.color }}
+                  />
+                  <span className="flex-1">{p.name}</span>
+                  <span className="text-gray-500 text-xs">{p.vendor} &middot; {p.type}</span>
+                </>
+              ) : (
+                <span className="text-gray-500">Loading...</span>
+              );
+            })()}
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, parentId: "" })}
+              className="text-red-500 hover:text-red-700 text-xs ml-2"
+            >
+              Remove
+            </button>
+          </div>
+        ) : (
+          <>
+            <input
+              className={inputClass}
+              value={parentSearch}
+              onChange={(e) => {
+                setParentSearch(e.target.value);
+                setParentDropdownOpen(true);
+              }}
+              onFocus={() => setParentDropdownOpen(true)}
+              placeholder="Search for a parent filament..."
+            />
+            {parentDropdownOpen && (
+              <ul className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
+                {parentOptions
+                  .filter((p) =>
+                    !parentSearch ||
+                    p.name.toLowerCase().includes(parentSearch.toLowerCase()) ||
+                    p.vendor.toLowerCase().includes(parentSearch.toLowerCase())
+                  )
+                  .slice(0, 20)
+                  .map((p) => (
+                    <li
+                      key={p._id}
+                      className="px-3 py-2 cursor-pointer text-gray-100 hover:bg-gray-700 flex items-center gap-2"
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        setForm({
+                          ...form,
+                          parentId: p._id,
+                          vendor: form.vendor || p.vendor,
+                          type: form.type || p.type,
+                        });
+                        setParentSearch("");
+                        setParentDropdownOpen(false);
+                      }}
+                    >
+                      <div
+                        className="w-4 h-4 rounded-full border border-gray-500 flex-shrink-0"
+                        style={{ backgroundColor: p.color }}
+                      />
+                      <span className="flex-1 truncate">{p.name}</span>
+                      <span className="text-gray-400 text-xs flex-shrink-0">{p.vendor} &middot; {p.type}</span>
+                    </li>
+                  ))}
+                {parentOptions.filter((p) =>
+                  !parentSearch ||
+                  p.name.toLowerCase().includes(parentSearch.toLowerCase()) ||
+                  p.vendor.toLowerCase().includes(parentSearch.toLowerCase())
+                ).length === 0 && (
+                  <li className="px-3 py-2 text-gray-500 text-sm">No matching filaments</li>
+                )}
+              </ul>
+            )}
+          </>
+        )}
+        {form.parentId && (
+          <p className="text-xs text-gray-500 mt-1">
+            This filament will inherit shared settings (temps, density, retraction, etc.) from its parent.
+            Only color, name, and cost need to be set here.
+          </p>
+        )}
       </div>
 
       <div className="grid grid-cols-2 gap-4">

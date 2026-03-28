@@ -27,6 +27,7 @@ export interface IFilament extends Document {
   }[];
   tdsUrl: string | null;
   inherits: string | null;
+  parentId: mongoose.Types.ObjectId | null;
   settings: Record<string, string | null>;
   createdAt: Date;
   updatedAt: Date;
@@ -62,6 +63,7 @@ const FilamentSchema = new Schema<IFilament>(
     ],
     tdsUrl: { type: String, default: null },
     inherits: { type: String, default: null },
+    parentId: { type: Schema.Types.ObjectId, ref: "Filament", default: null, index: true },
     settings: { type: Schema.Types.Mixed, default: {} },
   },
   { timestamps: true }

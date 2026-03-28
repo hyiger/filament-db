@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import "@/models/Nozzle";
+import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
 
 export async function GET(
   _request: NextRequest,
@@ -16,7 +17,25 @@ export async function GET(
   if (!filament) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-  return NextResponse.json(filament);
+
+  // If this is a variant, resolve inherited values from parent
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let resolved: any = filament;
+  if (filament.parentId) {
+    const parent = await Filament.findById(filament.parentId)
+      .populate("compatibleNozzles")
+      .populate("calibrations.nozzle")
+      .lean();
+    resolved = resolveFilament(filament, parent);
+  }
+
+  // If this is a parent, include its variants
+  const variants = await Filament.find({ parentId: id })
+    .select("name color cost")
+    .sort({ name: 1 })
+    .lean();
+
+  return NextResponse.json({ ...resolved, _variants: variants });
 }
 
 export async function PUT(
@@ -26,6 +45,26 @@ export async function PUT(
   await dbConnect();
   const { id } = await params;
   const body = await request.json();
+
+  // Validate parentId if provided
+  if (body.parentId) {
+    const parent = await Filament.findById(body.parentId).lean();
+    if (!parent) {
+      return NextResponse.json({ error: "Parent filament not found" }, { status: 400 });
+    }
+    // Prevent circular references
+    if (parent.parentId) {
+      return NextResponse.json(
+        { error: "Cannot set a variant as parent (no nested inheritance)" },
+        { status: 400 },
+      );
+    }
+    // Prevent self-reference
+    if (body.parentId === id) {
+      return NextResponse.json({ error: "Cannot be your own parent" }, { status: 400 });
+    }
+  }
+
   const filament = await Filament.findByIdAndUpdate(id, body, {
     new: true,
     runValidators: true,
@@ -42,6 +81,15 @@ export async function DELETE(
 ) {
   await dbConnect();
   const { id } = await params;
+
+  // Prevent deleting a parent that has variants
+  if (await hasVariants(Filament, id)) {
+    return NextResponse.json(
+      { error: "Cannot delete a filament that has color variants. Delete the variants first." },
+      { status: 400 },
+    );
+  }
+
   const filament = await Filament.findByIdAndDelete(id).lean();
   if (!filament) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });

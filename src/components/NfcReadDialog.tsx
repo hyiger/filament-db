@@ -37,6 +37,17 @@ export default function NfcReadDialog() {
     router.push(`/filaments/new?${params}`);
   };
 
+  const handleCreateAsVariant = (parentId: string) => {
+    if (!data) return;
+    const params = new URLSearchParams();
+    params.set("from_nfc", "1");
+    params.set("parentId", parentId);
+    if (data.materialName) params.set("name", data.materialName);
+    if (data.color) params.set("color", data.color);
+    dismissTagRead();
+    router.push(`/filaments/new?${params}`);
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
       <div className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-md w-full mx-4 p-6">
@@ -129,24 +140,34 @@ export default function NfcReadDialog() {
 
             <TagDataGrid data={data} />
 
-            {/* Similar filaments */}
+            {/* Similar filaments — offer to create as variant */}
             {candidates && candidates.length > 0 && (
               <div className="mt-4">
-                <div className="text-xs text-gray-400 mb-2">Similar filaments:</div>
+                <div className="text-xs text-gray-400 mb-2">Similar filaments — add as color variant?</div>
                 <div className="space-y-1">
                   {candidates.map((c) => (
-                    <button
+                    <div
                       key={c._id}
-                      onClick={() => handleGoToFilament(c._id)}
-                      className="w-full flex items-center gap-2 px-3 py-2 bg-gray-800 rounded hover:bg-gray-750 text-left text-sm"
+                      className="flex items-center gap-2 px-3 py-2 bg-gray-800 rounded text-sm"
                     >
                       <div
                         className="w-4 h-4 rounded-full border border-gray-600 flex-shrink-0"
                         style={{ backgroundColor: c.color || "#808080" }}
                       />
-                      <span className="text-white truncate">{c.name}</span>
-                      <span className="text-gray-500 text-xs ml-auto flex-shrink-0">{c.vendor}</span>
-                    </button>
+                      <span className="text-white truncate flex-1">{c.name}</span>
+                      <button
+                        onClick={() => handleGoToFilament(c._id)}
+                        className="text-blue-400 hover:text-blue-300 text-xs flex-shrink-0"
+                      >
+                        View
+                      </button>
+                      <button
+                        onClick={() => handleCreateAsVariant(c._id)}
+                        className="text-amber-400 hover:text-amber-300 text-xs flex-shrink-0"
+                      >
+                        + Variant
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>

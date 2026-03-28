@@ -45,6 +45,21 @@ function NewFilamentContent() {
     };
   }
 
+  // Support creating a variant from a parent via ?parentId=
+  const parentId = searchParams.get("parentId");
+  if (parentId) {
+    initialData = {
+      ...(initialData || {}),
+      parentId,
+    };
+  }
+
+  const title = searchParams.get("from_nfc")
+    ? "New Filament from NFC Tag"
+    : parentId
+      ? "Add Color Variant"
+      : "Add New Filament";
+
   return (
     <main className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
@@ -52,9 +67,7 @@ function NewFilamentContent() {
           &larr; Back to list
         </Link>
       </div>
-      <h1 className="text-2xl font-bold mb-6">
-        {searchParams.get("from_nfc") ? "New Filament from NFC Tag" : "Add New Filament"}
-      </h1>
+      <h1 className="text-2xl font-bold mb-6">{title}</h1>
       <FilamentForm initialData={initialData} onSubmit={handleSubmit} />
     </main>
   );

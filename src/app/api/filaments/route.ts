@@ -23,6 +23,22 @@ export async function POST(request: NextRequest) {
   await dbConnect();
 
   const body = await request.json();
+
+  // Validate parentId if provided
+  if (body.parentId) {
+    const parent = await Filament.findById(body.parentId).lean();
+    if (!parent) {
+      return NextResponse.json({ error: "Parent filament not found" }, { status: 400 });
+    }
+    // Prevent nested inheritance (parent cannot itself be a variant)
+    if (parent.parentId) {
+      return NextResponse.json(
+        { error: "Cannot set a variant as parent (no nested inheritance)" },
+        { status: 400 },
+      );
+    }
+  }
+
   const filament = await Filament.create(body);
   return NextResponse.json(filament, { status: 201 });
 }
