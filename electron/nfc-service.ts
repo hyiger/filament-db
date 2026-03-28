@@ -29,6 +29,7 @@ const DEFAULT_BLOCK_COUNT = 80;
 export class NfcService extends EventEmitter {
   private pcsc: any;
   private readers: Map<string, any> = new Map();
+  private readerPresent: Map<string, boolean> = new Map();
   private activeReader: any = null;
   private status: NfcStatus = {
     readerConnected: false,
@@ -54,13 +55,15 @@ export class NfcService extends EventEmitter {
         if (!changes) return;
         const isPresent = !!(status.state & reader.SCARD_STATE_PRESENT);
         const isEmpty = !!(status.state & reader.SCARD_STATE_EMPTY);
+
+        // Track each reader's presence independently
+        this.readerPresent.set(reader.name, isPresent && !isEmpty);
+
         if (isPresent && !this.status.tagPresent) {
           this.updateStatus({ tagPresent: true, tagUid: null });
         } else if (isEmpty) {
           // Only mark empty if no reader reports present
-          const anyPresent = [...this.readers.values()].some(r => {
-            try { return !!(r._statusState & r.SCARD_STATE_PRESENT); } catch { return false; }
-          });
+          const anyPresent = [...this.readerPresent.values()].some(Boolean);
           if (!anyPresent) {
             this.updateStatus({ tagPresent: false, tagUid: null });
           }
@@ -69,6 +72,7 @@ export class NfcService extends EventEmitter {
 
       reader.on("end", () => {
         this.readers.delete(reader.name);
+        this.readerPresent.delete(reader.name);
         if (this.activeReader === reader) this.activeReader = null;
         if (this.readers.size === 0) {
           this.updateStatus({ readerConnected: false, readerName: null, tagPresent: false, tagUid: null });

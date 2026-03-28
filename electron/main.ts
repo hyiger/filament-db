@@ -202,11 +202,20 @@ app.whenReady().then(async () => {
   try {
     nfcService = new NfcService();
     let prevTagPresent = false;
+    let lastAutoReadAt = 0;
+    const AUTO_READ_COOLDOWN_MS = 4000; // suppress re-read during tag removal transient
     nfcService.on("statusChange", (status) => {
       mainWindow?.webContents.send("nfc-status-changed", status);
 
       // Auto-read when a tag is placed on the reader
       if (status.tagPresent && !prevTagPresent && nfcService) {
+        const now = Date.now();
+        if (now - lastAutoReadAt < AUTO_READ_COOLDOWN_MS) {
+          // Skip — likely a stale "present" event from the other driver during tag removal
+          prevTagPresent = status.tagPresent;
+          return;
+        }
+        lastAutoReadAt = now;
         nfcService.readTag()
           .then((data) => {
             mainWindow?.webContents.send("nfc-tag-detected", { data });
