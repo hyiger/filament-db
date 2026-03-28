@@ -171,13 +171,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
   const [tdsSuggestions, setTdsSuggestions] = useState<{ name: string; tdsUrl: string }[]>([]);
   const [filamentTypes, setFilamentTypes] = useState<string[]>(DEFAULT_FILAMENT_TYPES);
   const [typeDropdownOpen, setTypeDropdownOpen] = useState(false);
-  const [typeFilter, setTypeFilter] = useState("");
   const [typeHighlight, setTypeHighlight] = useState(-1);
   const [parentHighlight, setParentHighlight] = useState(-1);
   const typeRef = useRef<HTMLDivElement>(null);
   const [vendorOptions, setVendorOptions] = useState<string[]>([]);
   const [vendorDropdownOpen, setVendorDropdownOpen] = useState(false);
-  const [vendorFilter, setVendorFilter] = useState("");
   const [vendorHighlight, setVendorHighlight] = useState(-1);
   const vendorRef = useRef<HTMLDivElement>(null);
 
@@ -491,6 +489,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             <input
               className={inputClass}
               value={parentSearch}
+              role="combobox"
+              aria-expanded={parentDropdownOpen}
+              aria-controls="parent-listbox"
+              aria-autocomplete="list"
+              aria-activedescendant={parentHighlight >= 0 ? `parent-opt-${parentHighlight}` : undefined}
               onChange={(e) => {
                 setParentSearch(e.target.value);
                 setParentDropdownOpen(true);
@@ -519,7 +522,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               placeholder="Search for a parent filament..."
             />
             {parentDropdownOpen && (
-              <ul className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
+              <ul id="parent-listbox" role="listbox" className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
                 {parentOptions
                   .filter((p) =>
                     !parentSearch ||
@@ -530,6 +533,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                   .map((p, i) => (
                     <li
                       key={p._id}
+                      id={`parent-opt-${i}`}
+                      role="option"
+                      aria-selected={p._id === form.parentId}
                       className={`px-3 py-2 cursor-pointer text-gray-100 hover:bg-gray-700 flex items-center gap-2 ${i === parentHighlight ? "bg-gray-600" : ""}`}
                       onMouseDown={(e) => {
                         e.preventDefault();
@@ -574,31 +580,34 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div ref={vendorRef} className="relative">
-          <label className={labelClass}>Vendor *</label>
+          <label className={labelClass} id="vendor-label">Vendor *</label>
           <input
             className={inputClass}
-            value={vendorDropdownOpen ? vendorFilter : form.vendor}
+            value={form.vendor}
+            role="combobox"
+            aria-expanded={vendorDropdownOpen}
+            aria-controls="vendor-listbox"
+            aria-labelledby="vendor-label"
+            aria-autocomplete="list"
+            aria-activedescendant={vendorHighlight >= 0 ? `vendor-opt-${vendorHighlight}` : undefined}
             onChange={(e) => {
               const val = e.target.value;
-              setVendorFilter(val);
               setForm({ ...form, vendor: val });
               setVendorDropdownOpen(true);
               setVendorHighlight(-1);
             }}
             onFocus={() => {
-              setVendorFilter("");
               setVendorDropdownOpen(true);
               setVendorHighlight(-1);
             }}
             onKeyDown={(e) => {
               if (!vendorDropdownOpen) return;
-              const filtered = vendorOptions.filter((v) => !vendorFilter || v.toLowerCase().includes(vendorFilter.toLowerCase()));
+              const filtered = vendorOptions.filter((v) => !form.vendor || v.toLowerCase().includes(form.vendor.toLowerCase()));
               if (e.key === "ArrowDown") { e.preventDefault(); setVendorHighlight((h) => Math.min(h + 1, filtered.length - 1)); }
               else if (e.key === "ArrowUp") { e.preventDefault(); setVendorHighlight((h) => Math.max(h - 1, 0)); }
               else if (e.key === "Enter" && vendorHighlight >= 0 && filtered[vendorHighlight]) {
                 e.preventDefault();
                 setForm({ ...form, vendor: filtered[vendorHighlight] });
-                setVendorFilter("");
                 setVendorDropdownOpen(false);
                 setVendorHighlight(-1);
               } else if (e.key === "Escape") {
@@ -610,66 +619,71 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             required
           />
           {vendorDropdownOpen && (
-            <ul className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
+            <ul id="vendor-listbox" role="listbox" aria-labelledby="vendor-label" className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
               {vendorOptions
-                .filter((v) => !vendorFilter || v.toLowerCase().includes(vendorFilter.toLowerCase()))
+                .filter((v) => !form.vendor || v.toLowerCase().includes(form.vendor.toLowerCase()))
                 .map((v, i) => (
                   <li
                     key={v}
+                    id={`vendor-opt-${i}`}
+                    role="option"
+                    aria-selected={v === form.vendor}
                     className={`px-3 py-1.5 cursor-pointer text-gray-100 hover:bg-gray-700 ${i === vendorHighlight ? "bg-gray-600" : ""} ${v === form.vendor ? "bg-gray-700 font-semibold" : ""}`}
                     onMouseDown={(e) => {
                       e.preventDefault();
                       setForm({ ...form, vendor: v });
-                      setVendorFilter("");
                       setVendorDropdownOpen(false);
                     }}
                   >
                     {v}
                   </li>
                 ))}
-              {vendorFilter && !vendorOptions.some((v) => v.toLowerCase() === vendorFilter.toLowerCase()) && (
+              {form.vendor && !vendorOptions.some((v) => v.toLowerCase() === form.vendor.toLowerCase()) && (
                 <li
+                  role="option"
+                  aria-selected={false}
                   className="px-3 py-1.5 cursor-pointer text-green-400 hover:bg-gray-700 border-t border-gray-600"
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    setVendorOptions((prev) => Array.from(new Set([...prev, vendorFilter])).sort());
-                    setForm({ ...form, vendor: vendorFilter });
-                    setVendorFilter("");
+                    setVendorOptions((prev) => Array.from(new Set([...prev, form.vendor])).sort());
                     setVendorDropdownOpen(false);
                   }}
                 >
-                  + Add &quot;{vendorFilter}&quot;
+                  + Add &quot;{form.vendor}&quot;
                 </li>
               )}
             </ul>
           )}
         </div>
         <div ref={typeRef} className="relative">
-          <label className={labelClass}>Type *</label>
+          <label className={labelClass} id="type-label">Type *</label>
           <input
             className={inputClass}
-            value={typeDropdownOpen ? typeFilter : form.type}
+            value={form.type}
+            role="combobox"
+            aria-expanded={typeDropdownOpen}
+            aria-controls="type-listbox"
+            aria-labelledby="type-label"
+            aria-autocomplete="list"
+            aria-activedescendant={typeHighlight >= 0 ? `type-opt-${typeHighlight}` : undefined}
             onChange={(e) => {
               const val = e.target.value.toUpperCase();
-              setTypeFilter(val);
               setForm({ ...form, type: val });
               setTypeDropdownOpen(true);
               setTypeHighlight(-1);
             }}
             onFocus={() => {
-              setTypeFilter("");
               setTypeDropdownOpen(true);
               setTypeHighlight(-1);
             }}
             onKeyDown={(e) => {
               if (!typeDropdownOpen) return;
-              const filtered = filamentTypes.filter((t) => !typeFilter || t.includes(typeFilter));
+              const filtered = filamentTypes.filter((t) => !form.type || t.includes(form.type));
               if (e.key === "ArrowDown") { e.preventDefault(); setTypeHighlight((h) => Math.min(h + 1, filtered.length - 1)); }
               else if (e.key === "ArrowUp") { e.preventDefault(); setTypeHighlight((h) => Math.max(h - 1, 0)); }
               else if (e.key === "Enter" && typeHighlight >= 0 && filtered[typeHighlight]) {
                 e.preventDefault();
                 setForm({ ...form, type: filtered[typeHighlight] });
-                setTypeFilter("");
                 setTypeDropdownOpen(false);
                 setTypeHighlight(-1);
               } else if (e.key === "Escape") {
@@ -681,35 +695,37 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             required
           />
           {typeDropdownOpen && (
-            <ul className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
+            <ul id="type-listbox" role="listbox" aria-labelledby="type-label" className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
               {filamentTypes
-                .filter((t) => !typeFilter || t.includes(typeFilter))
+                .filter((t) => !form.type || t.includes(form.type))
                 .map((t, i) => (
                   <li
                     key={t}
+                    id={`type-opt-${i}`}
+                    role="option"
+                    aria-selected={t === form.type}
                     className={`px-3 py-1.5 cursor-pointer text-gray-100 hover:bg-gray-700 ${i === typeHighlight ? "bg-gray-600" : ""} ${t === form.type ? "bg-gray-700 font-semibold" : ""}`}
                     onMouseDown={(e) => {
                       e.preventDefault();
                       setForm({ ...form, type: t });
-                      setTypeFilter("");
                       setTypeDropdownOpen(false);
                     }}
                   >
                     {t}
                   </li>
                 ))}
-              {typeFilter && !filamentTypes.includes(typeFilter) && (
+              {form.type && !filamentTypes.includes(form.type) && (
                 <li
+                  role="option"
+                  aria-selected={false}
                   className="px-3 py-1.5 cursor-pointer text-green-400 hover:bg-gray-700 border-t border-gray-600"
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    setFilamentTypes((prev) => Array.from(new Set([...prev, typeFilter])).sort());
-                    setForm({ ...form, type: typeFilter });
-                    setTypeFilter("");
+                    setFilamentTypes((prev) => Array.from(new Set([...prev, form.type])).sort());
                     setTypeDropdownOpen(false);
                   }}
                 >
-                  + Add &quot;{typeFilter}&quot;
+                  + Add &quot;{form.type}&quot;
                 </li>
               )}
             </ul>

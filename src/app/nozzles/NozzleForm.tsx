@@ -29,7 +29,7 @@ const NOZZLE_TYPES = [
   "Other",
 ];
 
-const COMMON_DIAMETERS = ["0.25", "0.4", "0.5", "0.6", "0.8", "1.0"];
+const COMMON_DIAMETERS = ["0.1", "0.15", "0.2", "0.25", "0.3", "0.35", "0.4", "0.5", "0.6", "0.7", "0.8", "1.0", "1.2", "1.4", "1.6", "1.8", "2.0"];
 
 export default function NozzleForm({ initialData, onSubmit }: Props) {
   const [form, setForm] = useState<NozzleFormData>({
@@ -46,9 +46,15 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
     e.preventDefault();
     setSaving(true);
 
+    const diameter = parseFloat(form.diameter);
+    if (isNaN(diameter) || diameter <= 0) {
+      setSaving(false);
+      return;
+    }
+
     await onSubmit({
       name: form.name,
-      diameter: parseFloat(form.diameter),
+      diameter,
       type: form.type,
       highFlow: form.highFlow,
       hardened: form.hardened,
@@ -78,17 +84,23 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
       <div className="grid grid-cols-2 gap-4">
         <div>
           <label className={labelClass}>Diameter (mm) *</label>
-          <select
+          <input
             className={inputClass}
+            type="number"
+            step="any"
+            min="0.01"
+            max="10"
+            list="common-diameters"
             value={form.diameter}
             onChange={(e) => setForm({ ...form, diameter: e.target.value })}
-          >
+            placeholder="e.g. 0.4"
+            required
+          />
+          <datalist id="common-diameters">
             {COMMON_DIAMETERS.map((d) => (
-              <option key={d} value={d}>
-                {d}mm
-              </option>
+              <option key={d} value={d} />
             ))}
-          </select>
+          </datalist>
         </div>
         <div>
           <label className={labelClass}>Type *</label>

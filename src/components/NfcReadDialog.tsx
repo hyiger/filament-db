@@ -20,11 +20,34 @@ export default function NfcReadDialog() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [tagReadResult, dismissTagRead]);
 
-  // Focus trap: focus the dialog when it appears
+  // Focus trap: focus the dialog when it appears and trap tab within it
   useEffect(() => {
-    if (tagReadResult && dialogRef.current) {
-      dialogRef.current.focus();
-    }
+    if (!tagReadResult || !dialogRef.current) return;
+    dialogRef.current.focus();
+
+    const dialog = dialogRef.current;
+    const handleTab = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const focusable = dialog.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey) {
+        if (document.activeElement === first || document.activeElement === dialog) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else {
+        if (document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", handleTab);
+    return () => document.removeEventListener("keydown", handleTab);
   }, [tagReadResult]);
 
   if (!tagReadResult) return null;
@@ -75,6 +98,7 @@ export default function NfcReadDialog() {
       <div
         ref={dialogRef}
         role="dialog"
+        aria-modal="true"
         aria-labelledby="nfc-dialog-title"
         tabIndex={-1}
         className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-md w-full mx-4 p-6 pointer-events-auto outline-none"
