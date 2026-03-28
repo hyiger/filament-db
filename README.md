@@ -47,6 +47,7 @@ See the [Setup Guide](docs/setup.md) for detailed instructions.
 
 | Document | Description |
 |----------|-------------|
+| [Tutorial](docs/tutorial.md) | Step-by-step walkthrough of every feature, from first launch to NFC |
 | [Setup Guide](docs/setup.md) | Installation, MongoDB Atlas setup, running as web or desktop app |
 | [Desktop App](docs/desktop.md) | Electron desktop app: building, packaging, and releasing |
 | [Importing & Exporting](docs/importing.md) | PrusaSlicer config export, web UI import, CLI seed script, INI export |
