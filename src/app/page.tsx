@@ -64,6 +64,109 @@ interface GroupedFilament {
   variants: Filament[];
 }
 
+function FilamentStats({ filaments }: { filaments: Filament[] }) {
+  const byType = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const f of filaments) {
+      counts.set(f.type, (counts.get(f.type) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [filaments]);
+
+  const byVendor = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const f of filaments) {
+      counts.set(f.vendor, (counts.get(f.vendor) || 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [filaments]);
+
+  const colorGroups = useMemo(() => {
+    const counts = new Map<string, { color: string; count: number }>();
+    for (const f of filaments) {
+      const hex = (f.color || "#808080").toLowerCase();
+      const existing = counts.get(hex);
+      if (existing) {
+        existing.count++;
+      } else {
+        counts.set(hex, { color: hex, count: 1 });
+      }
+    }
+    return [...counts.values()].sort((a, b) => b.count - a.count);
+  }, [filaments]);
+
+  const maxType = byType.length > 0 ? byType[0][1] : 1;
+  const maxVendor = byVendor.length > 0 ? byVendor[0][1] : 1;
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-800">
+      {/* By Type */}
+      <div>
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">By Type</h3>
+        <div className="space-y-1.5">
+          {byType.map(([type, count]) => (
+            <div key={type} className="flex items-center gap-2 text-sm">
+              <span className="w-16 truncate text-gray-300 font-medium">{type}</span>
+              <div className="flex-1 bg-gray-200 dark:bg-gray-800 rounded-full h-3">
+                <div
+                  className="h-3 rounded-full bg-blue-500"
+                  style={{ width: `${(count / maxType) * 100}%` }}
+                />
+              </div>
+              <span className="text-xs text-gray-500 w-6 text-right">{count}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* By Vendor */}
+      <div>
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">By Vendor</h3>
+        <div className="space-y-1.5">
+          {byVendor.map(([vendor, count]) => (
+            <div key={vendor} className="flex items-center gap-2 text-sm">
+              <span className="w-24 truncate text-gray-300 font-medium">{vendor}</span>
+              <div className="flex-1 bg-gray-200 dark:bg-gray-800 rounded-full h-3">
+                <div
+                  className="h-3 rounded-full bg-amber-500"
+                  style={{ width: `${(count / maxVendor) * 100}%` }}
+                />
+              </div>
+              <span className="text-xs text-gray-500 w-6 text-right">{count}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* By Color */}
+      <div>
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+          Colors ({colorGroups.length})
+        </h3>
+        <div className="flex flex-wrap gap-1.5">
+          {colorGroups.map(({ color, count }) => (
+            <div
+              key={color}
+              className="relative group"
+              title={`${color} (${count})`}
+            >
+              <div
+                className="w-6 h-6 rounded-full border border-gray-400 dark:border-gray-600"
+                style={{ backgroundColor: color }}
+              />
+              {count > 1 && (
+                <span className="absolute -top-1.5 -right-1.5 bg-gray-700 text-white text-[9px] w-3.5 h-3.5 rounded-full flex items-center justify-center leading-none">
+                  {count}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [filaments, setFilaments] = useState<Filament[]>([]);
   const [loading, setLoading] = useState(true);
@@ -72,6 +175,7 @@ export default function Home() {
   const [vendorFilter, setVendorFilter] = useState("");
   const [types, setTypes] = useState<string[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
+  const [showStats, setShowStats] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [importing, setImporting] = useState(false);
@@ -469,6 +573,24 @@ export default function Home() {
           </Link>
         </div>
       </div>
+
+      {/* Statistics summary */}
+      {filaments.length > 0 && (
+        <div className="mb-4">
+          <button
+            onClick={() => setShowStats((s) => !s)}
+            className="text-sm text-gray-500 hover:text-gray-300 flex items-center gap-1 mb-2"
+          >
+            <span>{showStats ? "▾" : "▸"}</span>
+            <span>{filaments.length} filament{filaments.length !== 1 ? "s" : ""}</span>
+            <span className="text-gray-600">·</span>
+            <span>{types.length} type{types.length !== 1 ? "s" : ""}</span>
+            <span className="text-gray-600">·</span>
+            <span>{vendors.length} vendor{vendors.length !== 1 ? "s" : ""}</span>
+          </button>
+          {showStats && <FilamentStats filaments={filaments} />}
+        </div>
+      )}
 
       <div className="flex gap-3 mb-4 flex-wrap">
         <input
