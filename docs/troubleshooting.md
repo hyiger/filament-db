@@ -72,3 +72,19 @@ Make sure `concurrently` and `wait-on` are installed. Run `npm install` to ensur
 ## Desktop app: how to reset the saved connection string
 
 Delete the config file at the paths listed above, or open the developer console in the Electron window (View > Toggle Developer Tools) and run `window.electronAPI.resetConfig()`.
+
+## Desktop app: status indicator shows "Offline" even though I have internet
+
+The status indicator uses the browser's `navigator.onLine` API, which can occasionally report false negatives (e.g., on captive portal networks). In hybrid mode, click the status pill and try **Sync Now** to manually test the Atlas connection.
+
+## Desktop app: sync conflicts — wrong version won
+
+Sync uses **last-write-wins** based on the `updatedAt` timestamp. If you edited the same filament on two devices, the most recent save wins. There is no per-field merge — the entire document is replaced. To avoid conflicts, try to edit a given filament on only one device at a time.
+
+## Desktop app: "Offline — using local data" in Atlas mode
+
+Atlas was unreachable when the app started, so it automatically fell back to an embedded local database. Your data is safe locally. Once Atlas becomes reachable, the app will sync automatically. You can also click the status pill and use **Sync Now** to trigger a manual sync.
+
+## Desktop app: how to switch connection modes
+
+Run `window.electronAPI.resetConfig()` in the developer console (View > Toggle Developer Tools). This returns you to the setup wizard where you can choose a different mode.

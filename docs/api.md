@@ -41,7 +41,7 @@ Update a filament. Send a JSON body with the fields to update. Supports partial 
 
 ### DELETE /api/filaments/:id
 
-Delete a filament by ID. Returns `{ message: "Deleted" }`.
+Soft-delete a filament by ID (sets `_deletedAt` timestamp). The filament is hidden from all queries but retained for sync propagation in hybrid mode. Returns `{ message: "Deleted" }`.
 
 ### GET /api/filaments/export
 
@@ -160,7 +160,7 @@ Update a nozzle. Send a JSON body with the fields to update.
 
 ### DELETE /api/nozzles/:id
 
-Delete a nozzle by ID. Returns `{ message: "Deleted" }`.
+Soft-delete a nozzle by ID (sets `_deletedAt` timestamp). Cannot delete a nozzle that is referenced by filaments. Returns `{ message: "Deleted" }`.
 
 ---
 

@@ -62,18 +62,42 @@ Parent-variant relationships from the remote database are not preserved — all 
 
 ---
 
-## Sync Status (Desktop App — Hybrid Mode)
+## Connection Status Indicator
 
-When running in hybrid mode, a sync status indicator appears next to the "Filament DB" title:
+A status pill appears next to the "Filament DB" title on the home page, showing the current connection state:
 
-- **Green pill** ("Synced 2m ago") — last sync completed successfully
-- **Blue pulsing pill** ("Syncing...") — sync is in progress
-- **Amber pill** ("Offline") — Atlas is unreachable; the app is using local data
-- **Red pill** ("Sync error") — last sync failed
+### Web App
 
-Click the indicator to see details and a **"Sync Now"** button for manual sync. Automatic sync runs every 5 minutes when Atlas is reachable.
+| Indicator | Meaning |
+|-----------|---------|
+| 🟢 **Connected** | Browser has network connectivity |
+| 🔴 **Offline** | No network connection |
 
-Sync uses **last-write-wins** conflict resolution: if the same filament was edited on both sides, the most recently updated version wins.
+### Desktop App — Atlas Mode
+
+| Indicator | Meaning |
+|-----------|---------|
+| 🟢 **Connected** | Atlas is reachable |
+| 🟡 **No Connection** | Network is down; using local fallback if Atlas was unreachable on startup |
+
+### Desktop App — Hybrid Mode
+
+| Indicator | Meaning |
+|-----------|---------|
+| 🟢 **Synced 2m ago** | Last sync completed successfully |
+| 🔵 **Syncing...** | Sync in progress (pulsing dot) |
+| 🟡 **Offline** | No network; using local data, will sync when reconnected |
+| 🔴 **Sync error** | Last sync attempt failed |
+
+Click the pill to open a tooltip with mode, network status, last sync timestamp, error details, and a **"Sync Now"** button for manual sync. Automatic sync runs every 5 minutes when Atlas is reachable.
+
+Sync uses **last-write-wins** conflict resolution: if the same filament was edited on both sides, the most recently updated version wins (per-document, based on `updatedAt` timestamp).
+
+### Desktop App — Offline Mode
+
+| Indicator | Meaning |
+|-----------|---------|
+| ⚪ **Local** | All data stored locally (always shown) |
 
 ---
 

@@ -4,7 +4,7 @@ A step-by-step tutorial covering every feature of the app -- from first launch t
 
 ---
 
-## Step 1: Install and Connect
+## Step 1: Install and Choose a Connection Mode
 
 ### Desktop App (recommended)
 
@@ -12,11 +12,18 @@ A step-by-step tutorial covering every feature of the app -- from first launch t
    - **macOS**: `.dmg`
    - **Windows**: `.exe`
    - **Linux**: `.AppImage` or `.deb`
-2. Open the app. On first launch the **Setup Wizard** appears.
-3. Paste your **MongoDB Atlas connection string** into the URI field.
-   - Don't have one? Click the Atlas link in the wizard, create a free cluster, then copy the connection string from **Connect > Drivers**.
+2. Open the app. On first launch the **Setup Wizard** appears with three connection mode options:
+
+| Mode | Description | Needs Atlas? | Needs Internet? |
+|------|-------------|:------------:|:---------------:|
+| **MongoDB Atlas (Cloud)** | All data in the cloud. If Atlas is unreachable on startup, automatically falls back to a local database. | Yes | Yes (with fallback) |
+| **Hybrid (Local + Cloud Sync)** | Data stored locally, synced to Atlas when connected. *Recommended.* | Yes | No (works offline) |
+| **Local Only (Offline)** | Everything stored on this computer. No account needed. | No | No |
+
+3. **For Atlas or Hybrid**: paste your MongoDB Atlas connection string and click **Connect**. The app validates it before saving.
+   - Don't have one? Click the Atlas link in the wizard, create a free cluster, then copy the connection string from **Connect > Drivers**. See the [Setup Guide](setup.md#setting-up-mongodb-atlas-free-tier) for details.
    - The string looks like `mongodb+srv://user:pass@cluster0.abc123.mongodb.net/filament-db`
-4. Click **Test Connection**. When the check passes, click **Save & Continue**.
+4. **For Offline**: click **Local Only**, then **Start Offline**. No connection string needed.
 
 ### From Source (web app)
 
@@ -28,9 +35,53 @@ cp .env.example .env.local   # edit with your MongoDB Atlas URI
 npm run dev                   # opens http://localhost:3000
 ```
 
+> **Note:** The web app always requires a `MONGODB_URI` in `.env.local`. Offline and hybrid modes are desktop-app-only features.
+
 ---
 
-## Step 2: Create Your First Nozzle
+## Step 2: Understand the Connection Status Indicator
+
+After setup, a small status pill appears next to the "Filament DB" title on the home page. It shows your current connection state at a glance:
+
+### Web App
+
+| Indicator | Meaning |
+|-----------|---------|
+| 🟢 **Connected** | Browser has network connectivity |
+| 🔴 **Offline** | No network connection detected |
+
+### Desktop App — Atlas Mode
+
+| Indicator | Meaning |
+|-----------|---------|
+| 🟢 **Connected** | Atlas is reachable |
+| 🟡 **No Connection** | Network is down; if Atlas was unreachable on startup, the app is using a local fallback database |
+
+### Desktop App — Hybrid Mode
+
+| Indicator | Meaning |
+|-----------|---------|
+| 🟢 **Synced 2m ago** | Last sync completed successfully (relative time updates automatically) |
+| 🔵 **Syncing...** | Sync in progress (pulsing dot) |
+| 🟡 **Offline** | No network; app is using local data and will sync when reconnected |
+| 🔴 **Sync error** | Last sync attempt failed |
+
+**Click the pill** to open a tooltip with:
+- Current connection mode
+- Network status (Online / Offline)
+- Last sync timestamp
+- Error details (if any)
+- **Sync Now** button for manual sync (disabled when offline)
+
+### Desktop App — Offline Mode
+
+| Indicator | Meaning |
+|-----------|---------|
+| ⚪ **Local** | All data stored locally (always shown) |
+
+---
+
+## Step 3: Create Your First Nozzle
 
 Before adding filaments you need at least one nozzle profile so you can assign per-nozzle calibrations later.
 
@@ -38,7 +89,7 @@ Before adding filaments you need at least one nozzle profile so you can assign p
 2. Click **+ Add Nozzle**.
 3. Fill in the form:
    - **Name** -- a short label, e.g. `0.4 Brass`
-   - **Diameter** -- pick from the dropdown (0.25, 0.4, 0.5, 0.6, 0.8, 1.0)
+   - **Diameter** -- type a value or pick from the dropdown (0.1 to 2.0mm)
    - **Type** -- Brass, Hardened Steel, Stainless Steel, Copper, ObXidian, Diamondback, etc.
    - **High Flow** -- check if this is a high-flow nozzle
    - **Hardened** -- check if it can print abrasive materials
@@ -48,7 +99,9 @@ Before adding filaments you need at least one nozzle profile so you can assign p
 
 ---
 
-## Step 3: Add a Filament Manually
+## Step 4: Add a Filament
+
+### Option A: Add Manually
 
 1. From the home page, click **+ Add Filament**.
 2. Fill in the required fields:
@@ -69,25 +122,41 @@ Before adding filaments you need at least one nozzle profile so you can assign p
 7. Under **TDS Link**, paste a URL to the vendor's Technical Data Sheet. If you've already added filaments from the same vendor, suggestion buttons appear -- click one to auto-fill.
 8. Click **Create Filament**.
 
+### Option B: Populate from an Existing Source
+
+On the **Add New Filament** page, the **"Populate from"** toolbar offers three shortcuts:
+
+- **NFC Tag** (desktop only) -- place a tagged spool on the reader. The form auto-populates with material, vendor, temps, density, and color from the OpenPrintTag data.
+- **Load from INI** -- upload a PrusaSlicer `.ini` config bundle. If it contains one filament profile, the form fills automatically. If multiple profiles are found, a picker dialog lets you choose which one.
+- **Clone Existing** -- search your library and select a filament. All settings are copied into the form (with the name cleared so you can enter a new one).
+
+After populating, review and adjust any fields before clicking **Create Filament**.
+
 ---
 
-## Step 4: Import Filaments from PrusaSlicer
+## Step 5: Import Filaments in Bulk
+
+### From PrusaSlicer
 
 If you already have profiles in PrusaSlicer, bulk-import them instead of entering each one by hand.
 
-### Export from PrusaSlicer
+1. In PrusaSlicer, go to **File > Export > Export Config Bundle** and save the `.ini` file.
+2. On the Filament DB home page, click **Import INI**.
+3. Select the `.ini` file.
+4. A toast confirms how many filaments were imported: `Imported 42 filaments (38 new, 4 updated)`.
 
-1. Open PrusaSlicer.
-2. Go to **File > Export > Export Config Bundle**.
-3. Save the `.ini` file (e.g. `PrusaSlicer_config_bundle.ini`).
+### From Another Filament DB (Atlas Import)
 
-### Import via the Web UI
+You can import filaments from another Filament DB instance hosted on MongoDB Atlas:
 
-1. On the home page, click **Import INI**.
-2. Select the `.ini` file you exported.
-3. A toast confirms how many filaments were imported: `Imported 42 filaments (38 new, 4 updated)`.
+1. On the home page, click **Import from Atlas**.
+2. Enter the MongoDB Atlas connection string for the remote database.
+3. Click **Connect** -- the app retrieves all filaments from the remote database.
+4. A list appears with checkboxes for each filament. Parent/variant hierarchy is indicated with indentation and arrow markers. Use **Select All** / **Deselect All** to toggle.
+5. Click **Import X Filaments**, then **Confirm Import**.
+6. Existing filaments with the same name are updated; new filaments are created. Parent-variant relationships from the remote database are not preserved.
 
-### Import via CLI (alternative)
+### Via CLI (alternative)
 
 ```bash
 # Default path (~/Downloads/PrusaSlicer_config_bundle.ini)
@@ -101,7 +170,7 @@ The CLI also auto-creates nozzle profiles from `compatible_printers_condition` i
 
 ---
 
-## Step 5: Browse and Filter Your Library
+## Step 6: Browse and Filter Your Library
 
 The home page shows all filaments in a sortable table.
 
@@ -110,6 +179,7 @@ The home page shows all filaments in a sortable table.
 - **Filter by Vendor** -- use the vendor dropdown to show only one manufacturer
 - **Sort** -- click any column header (Name, Vendor, Type, Nozzle Temp, Bed Temp, Cost) to sort ascending or descending. The active sort shows a blue arrow.
 - **Color swatches** -- each row shows the filament's color as a dot
+- **Statistics** -- click the summary line (e.g. "18 filaments · 8 types · 5 vendors") to expand bar charts by type and vendor, plus a color swatch grid
 
 ### Parent/Variant Grouping
 
@@ -117,7 +187,7 @@ If you have color variants, parent filaments show a count badge (e.g. "5 colors"
 
 ---
 
-## Step 6: View Filament Details
+## Step 7: View Filament Details
 
 Click any filament name to open its detail page. You'll see:
 
@@ -134,7 +204,7 @@ Click any filament name to open its detail page. You'll see:
 
 ---
 
-## Step 7: Edit a Filament
+## Step 8: Edit a Filament
 
 1. From the detail page, click **Edit** (blue button).
 2. Change any fields. The form is identical to the create form, pre-filled with current values.
@@ -145,7 +215,7 @@ You can also click the **Edit** button directly from the home page table row.
 
 ---
 
-## Step 8: Create Color Variants
+## Step 9: Create Color Variants
 
 Variants share a parent's settings (temperatures, density, retraction, calibrations) and only store what's different: name, color, and cost.
 
@@ -164,7 +234,7 @@ To turn an existing standalone filament into a variant:
 
 ---
 
-## Step 9: Export to PrusaSlicer
+## Step 10: Export to PrusaSlicer
 
 1. On the home page, click **Export INI**.
 2. A `.ini` file downloads containing all your filaments as `[filament:Name]` sections.
@@ -174,7 +244,7 @@ To turn an existing standalone filament into a variant:
 
 ---
 
-## Step 10: Manage Nozzles
+## Step 11: Manage Nozzles
 
 From the home page, click **Manage Nozzles**.
 
@@ -184,7 +254,7 @@ From the home page, click **Manage Nozzles**.
 
 ---
 
-## Step 11: NFC Tags (Desktop App Only)
+## Step 12: NFC Tags (Desktop App Only)
 
 NFC features require the Electron desktop app plus hardware. Skip this section if you only use the web app.
 
@@ -233,12 +303,44 @@ If you prefer using external NFC tools:
 
 ---
 
-## Step 12: Delete a Filament
+## Step 13: Sync and Offline Workflow (Desktop App — Hybrid Mode)
+
+If you chose **Hybrid** mode during setup, your data lives locally and syncs to Atlas automatically. Here's how it works day-to-day:
+
+### Automatic Sync
+
+- The app syncs with Atlas every **5 minutes** when connected.
+- Changes made locally are pushed to Atlas; changes made remotely (e.g., from the web app or another device) are pulled down.
+- The sync status pill next to "Filament DB" shows the current state — see [Step 2](#step-2-understand-the-connection-status-indicator) for the full legend.
+
+### Working Offline
+
+- If you lose internet, the app continues working normally against the local database.
+- The status pill turns amber ("Offline").
+- When connectivity returns, the next sync cycle picks up all changes from both sides.
+
+### Manual Sync
+
+- Click the status pill to open the tooltip, then click **Sync Now** to trigger an immediate sync.
+
+### Conflict Resolution
+
+If the same filament was edited on both sides since the last sync, the version with the most recent `updatedAt` timestamp wins (**last-write-wins**). This is per-document, not per-field.
+
+### Atlas Fallback (Atlas Mode)
+
+Even in pure **Atlas mode**, if Atlas is unreachable when the app starts, it automatically starts a local database and shows an amber "Offline — using local data" pill. Once Atlas becomes reachable again, a sync reconciles both sides.
+
+---
+
+## Step 14: Delete a Filament
 
 1. On the home page, click **Delete** next to any filament.
 2. Confirm the deletion in the popup.
 
 **Note**: Parent filaments with color variants cannot be deleted. Delete the variants first.
+
+In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted filaments are soft-deleted internally (marked with a timestamp) so the deletion propagates correctly across devices.
 
 ---
 
@@ -247,7 +349,9 @@ If you prefer using external NFC tools:
 | Action | Where |
 |--------|-------|
 | Add filament | Home > + Add Filament |
+| Populate from NFC / INI / Clone | Add Filament > Populate from toolbar |
 | Import from PrusaSlicer | Home > Import INI |
+| Import from Atlas | Home > Import from Atlas |
 | Export to PrusaSlicer | Home > Export INI |
 | View filament details | Home > click filament name |
 | Edit filament | Detail page > Edit |
@@ -255,6 +359,8 @@ If you prefer using external NFC tools:
 | Manage nozzles | Home > Manage Nozzles |
 | Write NFC tag | Detail page > Write NFC (desktop app) |
 | Export NFC binary | Detail page > Export OPT |
+| Manual sync | Click status pill > Sync Now (desktop hybrid mode) |
+| Check connection status | Status pill next to "Filament DB" title |
 
 ---
 
