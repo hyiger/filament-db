@@ -204,10 +204,10 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
         <Stat label="Bed Temp" value={`${data.bedTempMin ?? "?"}–${data.bedTemp}°C`} />
       )}
       {data.density != null && (
-        <Stat label="Density" value={`${data.density} g/cm³`} />
+        <Stat label="Density" value={`${data.density.toFixed(2)} g/cm³`} />
       )}
       {data.diameter != null && (
-        <Stat label="Diameter" value={`${data.diameter} mm`} />
+        <Stat label="Diameter" value={`${data.diameter.toFixed(2)} mm`} />
       )}
       {data.weightGrams != null && (
         <Stat label="Weight" value={`${data.weightGrams}g`} />
