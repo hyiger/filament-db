@@ -1,11 +1,31 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useNfcContext, type NfcTagReadResult } from "./NfcProvider";
 
 export default function NfcReadDialog() {
   const router = useRouter();
   const { tagReadResult, dismissTagRead } = useNfcContext();
+
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Escape key handler
+  useEffect(() => {
+    if (!tagReadResult) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") dismissTagRead();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [tagReadResult, dismissTagRead]);
+
+  // Focus trap: focus the dialog when it appears
+  useEffect(() => {
+    if (tagReadResult && dialogRef.current) {
+      dialogRef.current.focus();
+    }
+  }, [tagReadResult]);
 
   if (!tagReadResult) return null;
 
@@ -49,12 +69,20 @@ export default function NfcReadDialog() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-md w-full mx-4 p-6">
+    <>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" aria-hidden="true" onClick={dismissTagRead} />
+    <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-labelledby="nfc-dialog-title"
+        tabIndex={-1}
+        className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-md w-full mx-4 p-6 pointer-events-auto outline-none"
+      >
         {/* Error state */}
         {error ? (
           <>
-            <h2 className="text-xl font-bold text-white mb-4">NFC Read Error</h2>
+            <h2 id="nfc-dialog-title" className="text-xl font-bold text-white mb-4">NFC Read Error</h2>
             <div className="text-red-400 mb-6">{error}</div>
             <div className="flex justify-end">
               <button
@@ -72,7 +100,7 @@ export default function NfcReadDialog() {
               <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <h2 className="text-xl font-bold text-white">Found in Database</h2>
+              <h2 id="nfc-dialog-title" className="text-xl font-bold text-white">Found in Database</h2>
             </div>
 
             <div className="flex items-center gap-3 bg-gray-800 rounded-lg p-4 mb-4">
@@ -118,7 +146,7 @@ export default function NfcReadDialog() {
               <svg className="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0" />
               </svg>
-              <h2 className="text-xl font-bold text-white">Unknown Filament</h2>
+              <h2 id="nfc-dialog-title" className="text-xl font-bold text-white">Unknown Filament</h2>
             </div>
 
             <div className="flex items-center gap-3 mb-4">
@@ -191,6 +219,7 @@ export default function NfcReadDialog() {
         ) : null}
       </div>
     </div>
+    </>
   );
 }
 

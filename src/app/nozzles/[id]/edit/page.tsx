@@ -4,10 +4,12 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import NozzleForm from "@/app/nozzles/NozzleForm";
+import { useToast } from "@/components/Toast";
 
 export default function EditNozzle() {
   const params = useParams();
   const router = useRouter();
+  const { toast } = useToast();
   const [nozzle, setNozzle] = useState(null);
   const [notFound, setNotFound] = useState(false);
 
@@ -27,7 +29,11 @@ export default function EditNozzle() {
       body: JSON.stringify(data),
     });
     if (res.ok) {
+      toast("Nozzle updated");
       router.push("/nozzles");
+    } else {
+      const body = await res.json().catch(() => null);
+      toast(body?.error || "Failed to update nozzle", "error");
     }
   };
 

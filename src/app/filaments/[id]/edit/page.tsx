@@ -4,10 +4,12 @@ import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
+import { useToast } from "@/components/Toast";
 
 export default function EditFilament() {
   const params = useParams();
   const router = useRouter();
+  const { toast } = useToast();
   const [filament, setFilament] = useState(null);
   const [notFound, setNotFound] = useState(false);
 
@@ -27,7 +29,11 @@ export default function EditFilament() {
       body: JSON.stringify(data),
     });
     if (res.ok) {
+      toast("Filament updated");
       router.push(`/filaments/${params.id}`);
+    } else {
+      const body = await res.json().catch(() => null);
+      toast(body?.error || "Failed to update filament", "error");
     }
   };
 

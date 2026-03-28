@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
+import { useToast } from "@/components/Toast";
 
 interface Filament {
   _id: string;
@@ -41,9 +42,9 @@ function getSortValue(f: Filament, key: SortKey): string | number {
 function SortIcon({ column, sortKey, sortDir }: { column: SortKey; sortKey: SortKey; sortDir: SortDir }) {
   const isActive = column === sortKey;
   return (
-    <span className="inline-flex flex-col ml-1 leading-none -mb-0.5">
-      <span className={`text-[10px] leading-none ${isActive && sortDir === "asc" ? "text-blue-500" : "text-gray-400"}`}>&#9650;</span>
-      <span className={`text-[10px] leading-none ${isActive && sortDir === "desc" ? "text-blue-500" : "text-gray-400"}`}>&#9660;</span>
+    <span className="inline-flex flex-col ml-1 leading-none -mb-0.5" aria-hidden="true">
+      <span className={`text-xs leading-none ${isActive && sortDir === "asc" ? "text-blue-500" : "text-gray-400"}`}>&#9650;</span>
+      <span className={`text-xs leading-none ${isActive && sortDir === "desc" ? "text-blue-500" : "text-gray-400"}`}>&#9660;</span>
     </span>
   );
 }
@@ -67,6 +68,7 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
 
   const fetchFilaments = useCallback(async () => {
     setLoading(true);
@@ -175,10 +177,11 @@ export default function Home() {
     if (!confirm(`Delete "${name}"?`)) return;
     const res = await fetch(`/api/filaments/${id}`, { method: "DELETE" });
     if (!res.ok) {
-      const data = await res.json();
-      alert(data.error || "Delete failed");
+      const data = await res.json().catch(() => null);
+      toast(data?.error || "Delete failed", "error");
       return;
     }
+    toast(`Deleted "${name}"`);
     fetchFilaments();
   };
 
@@ -197,17 +200,17 @@ export default function Home() {
       });
       const data = await res.json();
       if (res.ok) {
-        alert(data.message);
+        toast(data.message);
         fetchFilaments();
         const allRes = await fetch("/api/filaments");
         const allData = await allRes.json();
         setTypes([...new Set(allData.map((f: Filament) => f.type))].sort() as string[]);
         setVendors([...new Set(allData.map((f: Filament) => f.vendor))].sort() as string[]);
       } else {
-        alert(`Import failed: ${data.error}`);
+        toast(`Import failed: ${data.error}`, "error");
       }
     } catch {
-      alert("Import failed: network error");
+      toast("Import failed: network error", "error");
     } finally {
       setImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -452,24 +455,21 @@ export default function Home() {
             <thead>
               <tr className="border-b border-gray-300">
                 <th className="text-left py-3 px-2">Color</th>
-                <th className={`text-left ${thClass}`} onClick={() => handleSort("name")}>
-                  Name <SortIcon column="name" sortKey={sortKey} sortDir={sortDir} />
-                </th>
-                <th className={`text-left ${thClass}`} onClick={() => handleSort("vendor")}>
-                  Vendor <SortIcon column="vendor" sortKey={sortKey} sortDir={sortDir} />
-                </th>
-                <th className={`text-left ${thClass}`} onClick={() => handleSort("type")}>
-                  Type <SortIcon column="type" sortKey={sortKey} sortDir={sortDir} />
-                </th>
-                <th className={`text-right ${thClass}`} onClick={() => handleSort("nozzle")}>
-                  Nozzle <SortIcon column="nozzle" sortKey={sortKey} sortDir={sortDir} />
-                </th>
-                <th className={`text-right ${thClass}`} onClick={() => handleSort("bed")}>
-                  Bed <SortIcon column="bed" sortKey={sortKey} sortDir={sortDir} />
-                </th>
-                <th className={`text-right ${thClass}`} onClick={() => handleSort("cost")}>
-                  Cost <SortIcon column="cost" sortKey={sortKey} sortDir={sortDir} />
-                </th>
+                {(["name", "vendor", "type", "nozzle", "bed", "cost"] as SortKey[]).map((col) => (
+                  <th
+                    key={col}
+                    className={`${["nozzle", "bed", "cost"].includes(col) ? "text-right" : "text-left"} ${thClass}`}
+                    onClick={() => handleSort(col)}
+                    role="columnheader"
+                    tabIndex={0}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort(col); } }}
+                    title={`Sort by ${col === "nozzle" ? "nozzle temp" : col === "bed" ? "bed temp" : col}`}
+                    aria-sort={sortKey === col ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+                  >
+                    {col === "nozzle" ? "Nozzle" : col === "bed" ? "Bed" : col.charAt(0).toUpperCase() + col.slice(1)}{" "}
+                    <SortIcon column={col} sortKey={sortKey} sortDir={sortDir} />
+                  </th>
+                ))}
                 <th className="text-right py-3 px-2">Actions</th>
               </tr>
             </thead>

@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
+import { useToast } from "@/components/Toast";
 
 interface Nozzle {
   _id: string;
@@ -16,6 +17,7 @@ interface Nozzle {
 export default function NozzlesPage() {
   const [nozzles, setNozzles] = useState<Nozzle[]>([]);
   const [loading, setLoading] = useState(true);
+  const { toast } = useToast();
 
   const fetchNozzles = useCallback(async () => {
     setLoading(true);
@@ -34,9 +36,10 @@ export default function NozzlesPage() {
     const res = await fetch(`/api/nozzles/${id}`, { method: "DELETE" });
     if (!res.ok) {
       const body = await res.json().catch(() => null);
-      alert(body?.error || "Failed to delete nozzle");
+      toast(body?.error || "Failed to delete nozzle", "error");
       return;
     }
+    toast(`Deleted "${name}"`);
     fetchNozzles();
   };
 

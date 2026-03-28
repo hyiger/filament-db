@@ -4,10 +4,12 @@ import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
+import { useToast } from "@/components/Toast";
 
 function NewFilamentContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { toast } = useToast();
 
   const handleSubmit = async (data: Record<string, unknown>) => {
     const res = await fetch("/api/filaments", {
@@ -17,7 +19,11 @@ function NewFilamentContent() {
     });
     if (res.ok) {
       const created = await res.json();
+      toast("Filament created");
       router.push(`/filaments/${created._id}`);
+    } else {
+      const body = await res.json().catch(() => null);
+      toast(body?.error || "Failed to create filament", "error");
     }
   };
 

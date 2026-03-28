@@ -94,7 +94,9 @@ function extractPressureAdvance(data: Record<string, unknown> | undefined): stri
 
 export default function FilamentForm({ initialData, onSubmit }: Props) {
   const [nozzles, setNozzles] = useState<NozzleOption[]>([]);
+  const [nozzlesLoading, setNozzlesLoading] = useState(true);
   const [parentOptions, setParentOptions] = useState<ParentOption[]>([]);
+  const [parentsLoading, setParentsLoading] = useState(true);
   const [parentSearch, setParentSearch] = useState("");
   const [parentDropdownOpen, setParentDropdownOpen] = useState(false);
   const parentRef = useRef<HTMLDivElement>(null);
@@ -142,10 +144,21 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     parentId: initialData?.parentId?._id || initialData?.parentId || "",
   });
   const [saving, setSaving] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(() => {
+    // Auto-expand if any advanced fields have values
+    return !!(
+      form.shrinkageXY || form.shrinkageZ ||
+      form.fanMinSpeed || form.fanMaxSpeed || form.fanBridgeSpeed || form.fanDisableFirstLayers ||
+      form.retractLength || form.retractSpeed || form.retractLift ||
+      form.abrasive || form.soluble
+    );
+  });
   const [tdsSuggestions, setTdsSuggestions] = useState<{ name: string; tdsUrl: string }[]>([]);
   const [filamentTypes, setFilamentTypes] = useState<string[]>(DEFAULT_FILAMENT_TYPES);
   const [typeDropdownOpen, setTypeDropdownOpen] = useState(false);
   const [typeFilter, setTypeFilter] = useState("");
+  const [typeHighlight, setTypeHighlight] = useState(-1);
+  const [parentHighlight, setParentHighlight] = useState(-1);
   const typeRef = useRef<HTMLDivElement>(null);
 
   // Fetch distinct filament types from DB and merge with defaults
@@ -165,7 +178,8 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     fetch(`/api/filaments/parents${exclude ? `?exclude=${exclude}` : ""}`)
       .then((r) => r.json())
       .then(setParentOptions)
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setParentsLoading(false));
   }, [initialData?._id]);
 
   // Close dropdowns on outside click
@@ -238,7 +252,8 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
   useEffect(() => {
     fetch("/api/nozzles")
       .then((r) => r.json())
-      .then(setNozzles);
+      .then(setNozzles)
+      .finally(() => setNozzlesLoading(false));
   }, []);
 
   const toggleNozzle = (id: string) => {
@@ -384,8 +399,28 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               onChange={(e) => {
                 setParentSearch(e.target.value);
                 setParentDropdownOpen(true);
+                setParentHighlight(-1);
               }}
-              onFocus={() => setParentDropdownOpen(true)}
+              onFocus={() => { setParentDropdownOpen(true); setParentHighlight(-1); }}
+              onKeyDown={(e) => {
+                if (!parentDropdownOpen) return;
+                const filtered = parentOptions
+                  .filter((p) => !parentSearch || p.name.toLowerCase().includes(parentSearch.toLowerCase()) || p.vendor.toLowerCase().includes(parentSearch.toLowerCase()))
+                  .slice(0, 20);
+                if (e.key === "ArrowDown") { e.preventDefault(); setParentHighlight((h) => Math.min(h + 1, filtered.length - 1)); }
+                else if (e.key === "ArrowUp") { e.preventDefault(); setParentHighlight((h) => Math.max(h - 1, 0)); }
+                else if (e.key === "Enter" && parentHighlight >= 0 && filtered[parentHighlight]) {
+                  e.preventDefault();
+                  const p = filtered[parentHighlight];
+                  setForm({ ...form, parentId: p._id, vendor: form.vendor || p.vendor, type: (!form.type || form.type === "PLA") ? p.type : form.type });
+                  setParentSearch("");
+                  setParentDropdownOpen(false);
+                  setParentHighlight(-1);
+                } else if (e.key === "Escape") {
+                  setParentDropdownOpen(false);
+                  setParentHighlight(-1);
+                }
+              }}
               placeholder="Search for a parent filament..."
             />
             {parentDropdownOpen && (
@@ -397,10 +432,10 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                     p.vendor.toLowerCase().includes(parentSearch.toLowerCase())
                   )
                   .slice(0, 20)
-                  .map((p) => (
+                  .map((p, i) => (
                     <li
                       key={p._id}
-                      className="px-3 py-2 cursor-pointer text-gray-100 hover:bg-gray-700 flex items-center gap-2"
+                      className={`px-3 py-2 cursor-pointer text-gray-100 hover:bg-gray-700 flex items-center gap-2 ${i === parentHighlight ? "bg-gray-600" : ""}`}
                       onMouseDown={(e) => {
                         e.preventDefault();
                         setForm({
@@ -426,7 +461,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                   p.name.toLowerCase().includes(parentSearch.toLowerCase()) ||
                   p.vendor.toLowerCase().includes(parentSearch.toLowerCase())
                 ).length === 0 && (
-                  <li className="px-3 py-2 text-gray-500 text-sm">No matching filaments</li>
+                  <li className="px-3 py-2 text-gray-500 text-sm">
+                    {parentsLoading ? "Loading..." : "No matching filaments"}
+                  </li>
                 )}
               </ul>
             )}
@@ -440,7 +477,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={labelClass}>Vendor *</label>
           <input
@@ -460,10 +497,28 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               setTypeFilter(val);
               setForm({ ...form, type: val });
               setTypeDropdownOpen(true);
+              setTypeHighlight(-1);
             }}
             onFocus={() => {
               setTypeFilter("");
               setTypeDropdownOpen(true);
+              setTypeHighlight(-1);
+            }}
+            onKeyDown={(e) => {
+              if (!typeDropdownOpen) return;
+              const filtered = filamentTypes.filter((t) => !typeFilter || t.includes(typeFilter));
+              if (e.key === "ArrowDown") { e.preventDefault(); setTypeHighlight((h) => Math.min(h + 1, filtered.length - 1)); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); setTypeHighlight((h) => Math.max(h - 1, 0)); }
+              else if (e.key === "Enter" && typeHighlight >= 0 && filtered[typeHighlight]) {
+                e.preventDefault();
+                setForm({ ...form, type: filtered[typeHighlight] });
+                setTypeFilter("");
+                setTypeDropdownOpen(false);
+                setTypeHighlight(-1);
+              } else if (e.key === "Escape") {
+                setTypeDropdownOpen(false);
+                setTypeHighlight(-1);
+              }
             }}
             placeholder="Select or type..."
             required
@@ -472,10 +527,10 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             <ul className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
               {filamentTypes
                 .filter((t) => !typeFilter || t.includes(typeFilter))
-                .map((t) => (
+                .map((t, i) => (
                   <li
                     key={t}
-                    className={`px-3 py-1.5 cursor-pointer text-gray-100 hover:bg-gray-700 ${t === form.type ? "bg-gray-700 font-semibold" : ""}`}
+                    className={`px-3 py-1.5 cursor-pointer text-gray-100 hover:bg-gray-700 ${i === typeHighlight ? "bg-gray-600" : ""} ${t === form.type ? "bg-gray-700 font-semibold" : ""}`}
                     onMouseDown={(e) => {
                       e.preventDefault();
                       setForm({ ...form, type: t });
@@ -505,7 +560,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
           <label className={labelClass}>Color</label>
           <input
@@ -520,6 +575,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           <input
             type="number"
             step="0.01"
+            min="0"
             className={inputClass}
             value={form.cost}
             onChange={(e) => setForm({ ...form, cost: e.target.value })}
@@ -537,7 +593,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
           <label className={labelClass}>Extrusion Multiplier</label>
           <input
@@ -574,7 +630,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
       <fieldset className="border border-gray-300 rounded p-4">
         <legend className="text-sm font-medium px-2">Temperatures (°C)</legend>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className={labelClass}>Nozzle</label>
             <input
@@ -648,9 +704,22 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         </div>
       </fieldset>
 
+      <div>
+        <button
+          type="button"
+          onClick={() => setShowAdvanced(!showAdvanced)}
+          className="text-sm text-blue-600 hover:underline flex items-center gap-1"
+        >
+          <span className="text-xs">{showAdvanced ? "▾" : "▸"}</span>
+          {showAdvanced ? "Hide" : "Show"} advanced settings
+          <span className="text-gray-400 font-normal">(shrinkage, fan, retraction, flags)</span>
+        </button>
+      </div>
+
+      {showAdvanced && (<>
       <fieldset className="border border-gray-300 rounded p-4">
         <legend className="text-sm font-medium px-2">Shrinkage Compensation</legend>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className={labelClass}>XY (%)</label>
             <input
@@ -676,7 +745,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
       <fieldset className="border border-gray-300 rounded p-4">
         <legend className="text-sm font-medium px-2">Fan Settings</legend>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className={labelClass}>Min Speed (%)</label>
             <input
@@ -718,7 +787,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
       <fieldset className="border border-gray-300 rounded p-4">
         <legend className="text-sm font-medium px-2">Retraction</legend>
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label className={labelClass}>Length (mm)</label>
             <input
@@ -777,15 +846,37 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           </label>
         </div>
       </div>
+      </>)}
 
       <fieldset className="border border-gray-300 rounded p-4">
         <legend className="text-sm font-medium px-2">Compatible Nozzles</legend>
-        {nozzles.length === 0 ? (
+        {nozzlesLoading ? (
+          <p className="text-sm text-gray-400">Loading nozzles...</p>
+        ) : nozzles.length > 0 && (
+          <div className="flex gap-2 mb-2">
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, compatibleNozzles: nozzles.map((n) => n._id) })}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              Select All
+            </button>
+            <button
+              type="button"
+              onClick={() => setForm({ ...form, compatibleNozzles: [] })}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              Clear All
+            </button>
+          </div>
+        )}
+        {!nozzlesLoading && nozzles.length === 0 && (
           <p className="text-sm text-gray-500">
             No nozzles defined yet. <a href="/nozzles/new" className="text-blue-600 hover:underline">Add one first.</a>
           </p>
-        ) : (
-          <div className="grid grid-cols-2 gap-2">
+        )}
+        {nozzles.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {nozzles.map((n) => (
               <label
                 key={n._id}
@@ -846,9 +937,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                       </span>
                     )}
                   </p>
-                  <div className="grid grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">EM</label>
+                      <label className="block text-xs text-gray-500 mb-1" title="Extrusion Multiplier — flow rate scaling factor (e.g. 0.95)">EM</label>
                       <input
                         type="number"
                         step="0.01"
@@ -861,7 +952,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Max Vol (mm³/s)</label>
+                      <label className="block text-xs text-gray-500 mb-1" title="Maximum Volumetric Speed in mm³/s">Max Vol (mm³/s)</label>
                       <input
                         type="number"
                         step="0.1"
@@ -874,7 +965,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">PA</label>
+                      <label className="block text-xs text-gray-500 mb-1" title="Pressure Advance — compensates for filament compression (e.g. 0.053)">PA</label>
                       <input
                         type="number"
                         step="0.001"
@@ -887,7 +978,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Retract (mm)</label>
+                      <label className="block text-xs text-gray-500 mb-1" title="Retraction Length in mm">Retract (mm)</label>
                       <input
                         type="number"
                         step="0.1"
@@ -900,7 +991,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Retract Speed (mm/s)</label>
+                      <label className="block text-xs text-gray-500 mb-1" title="Retraction Speed in mm/s">Retract Speed (mm/s)</label>
                       <input
                         type="number"
                         className={inputClass}
@@ -912,7 +1003,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1">Z Lift (mm)</label>
+                      <label className="block text-xs text-gray-500 mb-1" title="Z Lift — nozzle raises by this amount during retraction">Z Lift (mm)</label>
                       <input
                         type="number"
                         step="0.01"
@@ -932,7 +1023,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         </fieldset>
       )}
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label className={labelClass}>Diameter (mm)</label>
           <input

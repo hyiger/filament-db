@@ -3,12 +3,15 @@
 import type { ReactNode } from "react";
 import NfcProvider from "./NfcProvider";
 import NfcReadDialog from "./NfcReadDialog";
+import ToastProvider from "./Toast";
 
 export default function ClientProviders({ children }: { children: ReactNode }) {
   return (
-    <NfcProvider>
-      {children}
-      <NfcReadDialog />
-    </NfcProvider>
+    <ToastProvider>
+      <NfcProvider>
+        {children}
+        <NfcReadDialog />
+      </NfcProvider>
+    </ToastProvider>
   );
 }

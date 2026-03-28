@@ -3,9 +3,11 @@
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import NozzleForm from "@/app/nozzles/NozzleForm";
+import { useToast } from "@/components/Toast";
 
 export default function NewNozzle() {
   const router = useRouter();
+  const { toast } = useToast();
 
   const handleSubmit = async (data: Record<string, unknown>) => {
     const res = await fetch("/api/nozzles", {
@@ -14,7 +16,11 @@ export default function NewNozzle() {
       body: JSON.stringify(data),
     });
     if (res.ok) {
+      toast("Nozzle created");
       router.push("/nozzles");
+    } else {
+      const body = await res.json().catch(() => null);
+      toast(body?.error || "Failed to create nozzle", "error");
     }
   };
 
