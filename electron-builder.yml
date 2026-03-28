@@ -28,6 +28,7 @@ files:
 
 mac:
   category: public.app-category.utilities
+  x64ArchFiles: "Contents/Resources/app/node_modules/@img/*-darwin-x64/**/*,Contents/Resources/app/node_modules/@img/*-libvips-darwin-x64/**/*,Contents/Resources/app/node_modules/@pokusew/pcsclite/build/**/*"
   target:
     - target: dmg
       arch:
