@@ -6,7 +6,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 - **Desktop app** -- installable on macOS (.dmg), Windows (.exe), and Linux (.AppImage, .deb) including arm64 for Raspberry Pi
 - **Import/Export** -- PrusaSlicer INI config bundles via browser upload or CLI
-- **Browse** -- searchable, filterable, sortable table with color swatches
+- **Browse** -- searchable, filterable, sortable table with color swatches and collapsible statistics summary (by type, vendor, color)
 - **Full CRUD** -- create, view, edit, and delete filament profiles
 - **Nozzle management** -- define nozzles by diameter, type, high-flow, and hardened attributes
 - **Per-nozzle calibration** -- store different EM, max volumetric speed, pressure advance, and retraction values per nozzle

@@ -4,6 +4,7 @@
 
 The home page displays all filaments in a sortable table with columns for color, name, vendor, type, nozzle temperature, bed temperature, cost, and remaining spool percentage.
 
+- **Statistics**: Click the summary line (e.g. "18 filaments · 8 types · 5 vendors") to expand a panel with bar charts by type and vendor, plus a color swatch grid
 - **Search**: Type in the search box to filter filaments by name
 - **Filter by Type**: Use the type dropdown to show only specific material types (PLA, PETG, ASA, etc.)
 - **Filter by Vendor**: Use the vendor dropdown to show only filaments from a specific manufacturer
