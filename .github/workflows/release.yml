@@ -46,13 +46,25 @@ jobs:
         if: matrix.platform == 'linux-arm64'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libpcsclite-dev
+          sudo apt-get install -y libpcsclite-dev gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
           sudo dpkg --add-architecture arm64
-          sudo sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list.d/*.list || true
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ $(lsb_release -cs) main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ $(lsb_release -cs)-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          # Pin existing sources to amd64 only using DEB822 overrides
+          for f in /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$f" ] && ! grep -q "Architectures:" "$f"; then
+              sudo sed -i '/^Types:/a Architectures: amd64' "$f"
+            fi
+          done
+          # Also handle traditional .list files
+          for f in /etc/apt/sources.list.d/*.list; do
+            if [ -f "$f" ]; then
+              sudo sed -i 's|^deb http|deb [arch=amd64] http|' "$f"
+            fi
+          done
+          # Add arm64 ports repository
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ $(lsb_release -cs) main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64-ports.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ $(lsb_release -cs)-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64-ports.list
           sudo apt-get update
-          sudo apt-get install -y libpcsclite-dev:arm64 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          sudo apt-get install -y libpcsclite-dev:arm64
 
       - name: Install dependencies
         run: npm ci
@@ -84,6 +96,10 @@ jobs:
           CC: aarch64-linux-gnu-gcc
           CXX: aarch64-linux-gnu-g++
           PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
+
+      - name: Remove blockmap files
+        shell: bash
+        run: rm -f dist-electron/*.blockmap
 
       - name: Upload release artifacts
         uses: softprops/action-gh-release@v2

@@ -10,7 +10,6 @@ directories:
 icon: assets/icon.png
 
 asar: false
-generateBlockmap: false
 
 files:
   - electron-dist/**/*
