@@ -15,6 +15,7 @@
 | `GET` | `/api/filaments/types` | List all distinct filament types |
 | `GET` | `/api/filaments/vendors` | List all distinct vendor names |
 | `GET` | `/api/filaments/parents` | List filaments that can be used as parents. Query params: `search`, `exclude` |
+| `POST` | `/api/filaments/parse-ini` | Parse an INI file and return filament profiles without saving |
 | `GET` | `/api/filaments/:id/openprinttag` | Download OpenPrintTag binary for a filament |
 
 ### GET /api/filaments
@@ -93,6 +94,10 @@ Returns filaments that can serve as parents for color variants. Supports optiona
 - `exclude` -- filament ID to exclude from results (e.g., the current filament being edited)
 
 Returns an array of `{ _id, name, vendor, type, color }` objects.
+
+### POST /api/filaments/parse-ini
+
+Parse a PrusaSlicer INI config bundle and return the extracted filament profiles without saving them to the database. Upload via `multipart/form-data` with a `file` field. Returns `{ filaments: [...] }` with the same shape as the Filament model.
 
 ### GET /api/filaments/:id/openprinttag
 

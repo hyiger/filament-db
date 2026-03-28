@@ -25,11 +25,15 @@ Click any filament name in the table to see its full details:
 ## Adding a New Filament
 
 1. Click **"+ Add Filament"** in the top right
-2. Fill in the required fields (name, vendor, type)
-3. Optionally set temperatures, cost, density, color, fan settings, retraction, shrinkage, pressure advance, and other properties
-4. Select compatible nozzles and enter per-nozzle calibration overrides
-5. Add a TDS link (suggestions from other filaments by the same vendor appear automatically)
-6. Click **"Create Filament"**
+2. Optionally use the **"Populate from"** toolbar to pre-fill the form:
+   - **Place an NFC tag** on the reader to auto-populate from OpenPrintTag data (desktop only)
+   - **Load from INI** to pick a profile from a PrusaSlicer config bundle
+   - **Clone Existing** to copy all settings from another filament in your library
+3. Fill in the required fields (name, vendor, type)
+4. Optionally set temperatures, cost, density, color, fan settings, retraction, shrinkage, pressure advance, and other properties
+5. Select compatible nozzles and enter per-nozzle calibration overrides
+6. Add a TDS link (suggestions from other filaments by the same vendor appear automatically)
+7. Click **"Create Filament"**
 
 ## Editing a Filament
 
