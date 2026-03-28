@@ -83,6 +83,18 @@
   <path d="M 852 512 Q 900 470 915 400 Q 930 340 900 290"
         fill="none" stroke="url(#filament)" stroke-width="14" stroke-linecap="round" opacity="0.85"/>
 
+  <!-- NFC icon (bottom-right corner): card with radio waves above -->
+  <g transform="translate(770, 720)">
+    <!-- NFC card/tag rectangle -->
+    <rect x="0" y="60" width="160" height="105" rx="16" fill="#6EE7DF" opacity="0.95"/>
+    <!-- NFC text on card -->
+    <text x="80" y="128" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="bold" font-size="52" fill="#1a1a2e" opacity="0.9">NFC</text>
+    <!-- Radio waves above the card -->
+    <path d="M 55 50 Q 80 30 105 50" fill="none" stroke="#6EE7DF" stroke-width="10" stroke-linecap="round" opacity="0.95"/>
+    <path d="M 38 30 Q 80 -2 122 30" fill="none" stroke="#6EE7DF" stroke-width="10" stroke-linecap="round" opacity="0.7"/>
+    <path d="M 20 10 Q 80 -35 140 10" fill="none" stroke="#6EE7DF" stroke-width="10" stroke-linecap="round" opacity="0.45"/>
+  </g>
+
   <!-- Subtle highlight/shine on the spool -->
   <ellipse cx="420" cy="380" rx="100" ry="60" fill="white" opacity="0.05" transform="rotate(-30 420 380)"/>
 </svg>
