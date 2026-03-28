@@ -25,6 +25,19 @@ export interface IFilament extends Document {
     retractSpeed: number | null;
     retractLift: number | null;
   }[];
+  presets: {
+    label: string;
+    extrusionMultiplier: number | null;
+    temperatures: {
+      nozzle: number | null;
+      nozzleFirstLayer: number | null;
+      bed: number | null;
+      bedFirstLayer: number | null;
+    };
+  }[];
+  spoolWeight: number | null;
+  netFilamentWeight: number | null;
+  totalWeight: number | null;
   tdsUrl: string | null;
   inherits: string | null;
   parentId: mongoose.Types.ObjectId | null;
@@ -61,6 +74,21 @@ const FilamentSchema = new Schema<IFilament>(
         retractLift: { type: Number, default: null },
       },
     ],
+    presets: [
+      {
+        label: { type: String, required: true },
+        extrusionMultiplier: { type: Number, default: null },
+        temperatures: {
+          nozzle: { type: Number, default: null },
+          nozzleFirstLayer: { type: Number, default: null },
+          bed: { type: Number, default: null },
+          bedFirstLayer: { type: Number, default: null },
+        },
+      },
+    ],
+    spoolWeight: { type: Number, default: null },
+    netFilamentWeight: { type: Number, default: null },
+    totalWeight: { type: Number, default: null },
     tdsUrl: { type: String, default: null },
     inherits: { type: String, default: null },
     parentId: { type: Schema.Types.ObjectId, ref: "Filament", default: null, index: true },

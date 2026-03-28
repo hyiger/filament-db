@@ -67,41 +67,84 @@ export async function GET() {
       retractLift: number | null;
     }>;
 
+    const presets = (resolved.presets || []) as Array<{
+      label: string;
+      extrusionMultiplier: number | null;
+      temperatures: {
+        nozzle: number | null;
+        nozzleFirstLayer: number | null;
+        bed: number | null;
+        bedFirstLayer: number | null;
+      };
+    }>;
+
     if (calibrations && calibrations.length > 0) {
       for (const cal of calibrations) {
         if (!cal.nozzle) continue;
         const nozzleSuffix = cal.nozzle.name;
-        const sectionName = `${resolved.name} ${nozzleSuffix}`;
 
-        const overrides: Record<string, string> = {};
+        const calOverrides: Record<string, string> = {};
         if (cal.extrusionMultiplier != null)
-          overrides.extrusion_multiplier = cal.extrusionMultiplier.toString();
+          calOverrides.extrusion_multiplier = cal.extrusionMultiplier.toString();
         if (cal.maxVolumetricSpeed != null)
-          overrides.filament_max_volumetric_speed = cal.maxVolumetricSpeed.toString();
+          calOverrides.filament_max_volumetric_speed = cal.maxVolumetricSpeed.toString();
         if (cal.retractLength != null)
-          overrides.filament_retract_length = cal.retractLength.toString();
+          calOverrides.filament_retract_length = cal.retractLength.toString();
         if (cal.retractSpeed != null)
-          overrides.filament_retract_speed = cal.retractSpeed.toString();
+          calOverrides.filament_retract_speed = cal.retractSpeed.toString();
         if (cal.retractLift != null)
-          overrides.filament_retract_lift = cal.retractLift.toString();
+          calOverrides.filament_retract_lift = cal.retractLift.toString();
         if (cal.pressureAdvance != null) {
           if (settings.start_filament_gcode) {
             const gcode = settings.start_filament_gcode as string;
             if (/M572\s+S[\d.]+/.test(gcode)) {
-              overrides.start_filament_gcode = gcode.replace(
+              calOverrides.start_filament_gcode = gcode.replace(
                 /M572\s+S[\d.]+/,
                 `M572 S${cal.pressureAdvance}`
               );
             } else {
-              // Append PA command when not already present
-              overrides.start_filament_gcode = `${gcode}\\nM572 S${cal.pressureAdvance}`;
+              calOverrides.start_filament_gcode = `${gcode}\\nM572 S${cal.pressureAdvance}`;
             }
           } else {
-            overrides.start_filament_gcode = `M572 S${cal.pressureAdvance}`;
+            calOverrides.start_filament_gcode = `M572 S${cal.pressureAdvance}`;
           }
         }
 
-        writeSection(lines, sectionName, settings, overrides);
+        if (presets.length > 0) {
+          // Combine nozzle calibrations × presets
+          for (const preset of presets) {
+            const combined = { ...calOverrides };
+            if (preset.extrusionMultiplier != null)
+              combined.extrusion_multiplier = preset.extrusionMultiplier.toString();
+            if (preset.temperatures?.nozzle != null)
+              combined.temperature = preset.temperatures.nozzle.toString();
+            if (preset.temperatures?.nozzleFirstLayer != null)
+              combined.first_layer_temperature = preset.temperatures.nozzleFirstLayer.toString();
+            if (preset.temperatures?.bed != null)
+              combined.bed_temperature = preset.temperatures.bed.toString();
+            if (preset.temperatures?.bedFirstLayer != null)
+              combined.first_layer_bed_temperature = preset.temperatures.bedFirstLayer.toString();
+            writeSection(lines, `${resolved.name} ${nozzleSuffix} ${preset.label}`, settings, combined);
+          }
+        } else {
+          writeSection(lines, `${resolved.name} ${nozzleSuffix}`, settings, calOverrides);
+        }
+      }
+    } else if (presets.length > 0) {
+      // Presets only (no nozzle calibrations)
+      for (const preset of presets) {
+        const presetOverrides: Record<string, string> = {};
+        if (preset.extrusionMultiplier != null)
+          presetOverrides.extrusion_multiplier = preset.extrusionMultiplier.toString();
+        if (preset.temperatures?.nozzle != null)
+          presetOverrides.temperature = preset.temperatures.nozzle.toString();
+        if (preset.temperatures?.nozzleFirstLayer != null)
+          presetOverrides.first_layer_temperature = preset.temperatures.nozzleFirstLayer.toString();
+        if (preset.temperatures?.bed != null)
+          presetOverrides.bed_temperature = preset.temperatures.bed.toString();
+        if (preset.temperatures?.bedFirstLayer != null)
+          presetOverrides.first_layer_bed_temperature = preset.temperatures.bedFirstLayer.toString();
+        writeSection(lines, `${resolved.name} ${preset.label}`, settings, presetOverrides);
       }
     } else {
       writeSection(lines, resolved.name, settings);

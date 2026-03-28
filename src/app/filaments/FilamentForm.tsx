@@ -31,6 +31,9 @@ interface FilamentFormData {
   retractSpeed: string;
   retractLift: string;
   pressureAdvance: string;
+  spoolWeight: string;
+  netFilamentWeight: string;
+  totalWeight: string;
   notes: string;
   tdsUrl: string;
   compatibleNozzles: string[];
@@ -61,6 +64,15 @@ interface CalibrationEntry {
   retractLength: string;
   retractSpeed: string;
   retractLift: string;
+}
+
+interface PresetEntry {
+  label: string;
+  extrusionMultiplier: string;
+  nozzle: string;
+  nozzleFirstLayer: string;
+  bed: string;
+  bedFirstLayer: string;
 }
 
 interface Props {
@@ -137,6 +149,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     retractSpeed: getSettingVal(initialData, "filament_retract_speed") === "nil" ? "" : getSettingVal(initialData, "filament_retract_speed"),
     retractLift: getSettingVal(initialData, "filament_retract_lift"),
     pressureAdvance: extractPressureAdvance(initialData),
+    spoolWeight: initialData?.spoolWeight?.toString() || "",
+    netFilamentWeight: initialData?.netFilamentWeight?.toString() || "",
+    totalWeight: initialData?.totalWeight?.toString() || "",
     notes: getSettingVal(initialData, "filament_notes").replace(/^"|"$/g, ""),
     tdsUrl: initialData?.tdsUrl || "",
     compatibleNozzles: getInitialNozzleIds(),
@@ -160,6 +175,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
   const [typeHighlight, setTypeHighlight] = useState(-1);
   const [parentHighlight, setParentHighlight] = useState(-1);
   const typeRef = useRef<HTMLDivElement>(null);
+  const [vendorOptions, setVendorOptions] = useState<string[]>([]);
+  const [vendorDropdownOpen, setVendorDropdownOpen] = useState(false);
+  const [vendorFilter, setVendorFilter] = useState("");
+  const [vendorHighlight, setVendorHighlight] = useState(-1);
+  const vendorRef = useRef<HTMLDivElement>(null);
 
   // Fetch distinct filament types from DB and merge with defaults
   useEffect(() => {
@@ -169,6 +189,14 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         const merged = Array.from(new Set([...DEFAULT_FILAMENT_TYPES, ...dbTypes])).sort();
         setFilamentTypes(merged);
       })
+      .catch(() => {});
+  }, []);
+
+  // Fetch distinct vendors from DB
+  useEffect(() => {
+    fetch("/api/filaments/vendors")
+      .then((r) => r.json())
+      .then((v: string[]) => setVendorOptions(v))
       .catch(() => {});
   }, []);
 
@@ -187,6 +215,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     function handleClick(e: MouseEvent) {
       if (typeRef.current && !typeRef.current.contains(e.target as Node)) {
         setTypeDropdownOpen(false);
+      }
+      if (vendorRef.current && !vendorRef.current.contains(e.target as Node)) {
+        setVendorDropdownOpen(false);
       }
       if (parentRef.current && !parentRef.current.contains(e.target as Node)) {
         setParentDropdownOpen(false);
@@ -231,6 +262,38 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
   const [calibrations, setCalibrations] = useState<Record<string, CalibrationEntry>>(
     getInitialCalibrations
   );
+
+  const getInitialPresets = (): PresetEntry[] => {
+    if (!initialData?.presets) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return initialData.presets.map((p: any) => ({
+      label: p.label || "",
+      extrusionMultiplier: p.extrusionMultiplier?.toString() || "",
+      nozzle: p.temperatures?.nozzle?.toString() || "",
+      nozzleFirstLayer: p.temperatures?.nozzleFirstLayer?.toString() || "",
+      bed: p.temperatures?.bed?.toString() || "",
+      bedFirstLayer: p.temperatures?.bedFirstLayer?.toString() || "",
+    }));
+  };
+
+  const [presets, setPresets] = useState<PresetEntry[]>(getInitialPresets);
+
+  const addPreset = () => {
+    setPresets((prev) => [
+      ...prev,
+      { label: "", extrusionMultiplier: "", nozzle: "", nozzleFirstLayer: "", bed: "", bedFirstLayer: "" },
+    ]);
+  };
+
+  const removePreset = (index: number) => {
+    setPresets((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const updatePreset = (index: number, field: keyof PresetEntry, value: string) => {
+    setPresets((prev) =>
+      prev.map((p, i) => (i === index ? { ...p, [field]: value } : p))
+    );
+  };
 
   const updateCalibration = (nozzleId: string, field: keyof CalibrationEntry, value: string) => {
     setCalibrations((prev) => ({
@@ -336,6 +399,21 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             retractLift: parseNum(cal.retractLift),
           };
         }),
+      spoolWeight: parseNum(form.spoolWeight),
+      netFilamentWeight: parseNum(form.netFilamentWeight),
+      totalWeight: parseNum(form.totalWeight),
+      presets: presets
+        .filter((p) => p.label.trim() !== "")
+        .map((p) => ({
+          label: p.label.trim(),
+          extrusionMultiplier: parseNum(p.extrusionMultiplier),
+          temperatures: {
+            nozzle: parseNum(p.nozzle),
+            nozzleFirstLayer: parseNum(p.nozzleFirstLayer),
+            bed: parseNum(p.bed),
+            bedFirstLayer: parseNum(p.bedFirstLayer),
+          },
+        })),
       tdsUrl: form.tdsUrl || null,
       inherits: form.inherits || null,
       parentId: form.parentId || null,
@@ -478,14 +556,76 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
+        <div ref={vendorRef} className="relative">
           <label className={labelClass}>Vendor *</label>
           <input
             className={inputClass}
-            value={form.vendor}
-            onChange={(e) => setForm({ ...form, vendor: e.target.value })}
+            value={vendorDropdownOpen ? vendorFilter : form.vendor}
+            onChange={(e) => {
+              const val = e.target.value;
+              setVendorFilter(val);
+              setForm({ ...form, vendor: val });
+              setVendorDropdownOpen(true);
+              setVendorHighlight(-1);
+            }}
+            onFocus={() => {
+              setVendorFilter("");
+              setVendorDropdownOpen(true);
+              setVendorHighlight(-1);
+            }}
+            onKeyDown={(e) => {
+              if (!vendorDropdownOpen) return;
+              const filtered = vendorOptions.filter((v) => !vendorFilter || v.toLowerCase().includes(vendorFilter.toLowerCase()));
+              if (e.key === "ArrowDown") { e.preventDefault(); setVendorHighlight((h) => Math.min(h + 1, filtered.length - 1)); }
+              else if (e.key === "ArrowUp") { e.preventDefault(); setVendorHighlight((h) => Math.max(h - 1, 0)); }
+              else if (e.key === "Enter" && vendorHighlight >= 0 && filtered[vendorHighlight]) {
+                e.preventDefault();
+                setForm({ ...form, vendor: filtered[vendorHighlight] });
+                setVendorFilter("");
+                setVendorDropdownOpen(false);
+                setVendorHighlight(-1);
+              } else if (e.key === "Escape") {
+                setVendorDropdownOpen(false);
+                setVendorHighlight(-1);
+              }
+            }}
+            placeholder="Select or type..."
             required
           />
+          {vendorDropdownOpen && (
+            <ul className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
+              {vendorOptions
+                .filter((v) => !vendorFilter || v.toLowerCase().includes(vendorFilter.toLowerCase()))
+                .map((v, i) => (
+                  <li
+                    key={v}
+                    className={`px-3 py-1.5 cursor-pointer text-gray-100 hover:bg-gray-700 ${i === vendorHighlight ? "bg-gray-600" : ""} ${v === form.vendor ? "bg-gray-700 font-semibold" : ""}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setForm({ ...form, vendor: v });
+                      setVendorFilter("");
+                      setVendorDropdownOpen(false);
+                    }}
+                  >
+                    {v}
+                  </li>
+                ))}
+              {vendorFilter && !vendorOptions.some((v) => v.toLowerCase() === vendorFilter.toLowerCase()) && (
+                <li
+                  className="px-3 py-1.5 cursor-pointer text-green-400 hover:bg-gray-700 border-t border-gray-600"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setVendorOptions((prev) => Array.from(new Set([...prev, vendorFilter])).sort());
+                    setForm({ ...form, vendor: vendorFilter });
+                    setVendorFilter("");
+                    setVendorDropdownOpen(false);
+                  }}
+                >
+                  + Add &quot;{vendorFilter}&quot;
+                </li>
+              )}
+            </ul>
+          )}
         </div>
         <div ref={typeRef} className="relative">
           <label className={labelClass}>Type *</label>
@@ -592,6 +732,48 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           />
         </div>
       </div>
+
+      <fieldset className="border border-gray-300 rounded p-4">
+        <legend className="text-sm font-medium px-2">Spool Weight</legend>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label className={labelClass}>Net Filament (g)</label>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              className={inputClass}
+              value={form.netFilamentWeight}
+              onChange={(e) => setForm({ ...form, netFilamentWeight: e.target.value })}
+              placeholder="e.g. 1000"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Empty Spool (g)</label>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              className={inputClass}
+              value={form.spoolWeight}
+              onChange={(e) => setForm({ ...form, spoolWeight: e.target.value })}
+              placeholder="e.g. 250"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Current Total (g)</label>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              className={inputClass}
+              value={form.totalWeight}
+              onChange={(e) => setForm({ ...form, totalWeight: e.target.value })}
+              placeholder="Weigh spool on scale"
+            />
+          </div>
+        </div>
+      </fieldset>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
@@ -1022,6 +1204,105 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           </div>
         </fieldset>
       )}
+
+      <fieldset className="border border-gray-300 rounded p-4">
+        <legend className="text-sm font-medium px-2">
+          Presets
+          <span className="text-gray-400 font-normal ml-1">(e.g., shore hardness variants)</span>
+        </legend>
+        <p className="text-xs text-gray-500 mb-3">
+          Define named presets with different temperature and extrusion multiplier settings.
+        </p>
+        {presets.length > 0 && (
+          <div className="space-y-3">
+            {presets.map((preset, idx) => (
+              <div
+                key={idx}
+                className="border border-gray-200 dark:border-gray-700 rounded p-3"
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <input
+                    type="text"
+                    className={inputClass}
+                    value={preset.label}
+                    onChange={(e) => updatePreset(idx, "label", e.target.value)}
+                    placeholder="e.g. Shore 85A"
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removePreset(idx)}
+                    className="text-red-500 hover:text-red-700 text-sm flex-shrink-0 px-2"
+                    title="Remove preset"
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1" title="Extrusion Multiplier">EM</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      className={inputClass}
+                      value={preset.extrusionMultiplier}
+                      onChange={(e) => updatePreset(idx, "extrusionMultiplier", e.target.value)}
+                      placeholder={form.extrusionMultiplier || "base"}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Nozzle (°C)</label>
+                    <input
+                      type="number"
+                      className={inputClass}
+                      value={preset.nozzle}
+                      onChange={(e) => updatePreset(idx, "nozzle", e.target.value)}
+                      placeholder={form.temperatures.nozzle || "base"}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Nozzle 1st (°C)</label>
+                    <input
+                      type="number"
+                      className={inputClass}
+                      value={preset.nozzleFirstLayer}
+                      onChange={(e) => updatePreset(idx, "nozzleFirstLayer", e.target.value)}
+                      placeholder={form.temperatures.nozzleFirstLayer || "base"}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Bed (°C)</label>
+                    <input
+                      type="number"
+                      className={inputClass}
+                      value={preset.bed}
+                      onChange={(e) => updatePreset(idx, "bed", e.target.value)}
+                      placeholder={form.temperatures.bed || "base"}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Bed 1st (°C)</label>
+                    <input
+                      type="number"
+                      className={inputClass}
+                      value={preset.bedFirstLayer}
+                      onChange={(e) => updatePreset(idx, "bedFirstLayer", e.target.value)}
+                      placeholder={form.temperatures.bedFirstLayer || "base"}
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={addPreset}
+          className="mt-2 text-sm text-blue-600 hover:underline"
+        >
+          + Add Preset
+        </button>
+      </fieldset>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>

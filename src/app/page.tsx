@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
 
@@ -13,13 +13,21 @@ interface Filament {
   cost: number | null;
   density: number | null;
   parentId: string | null;
+  spoolWeight: number | null;
+  netFilamentWeight: number | null;
+  totalWeight: number | null;
   temperatures: {
     nozzle: number | null;
     bed: number | null;
   };
 }
 
-type SortKey = "name" | "vendor" | "type" | "nozzle" | "bed" | "cost";
+function getRemainingPct(f: Filament): number | null {
+  if (f.totalWeight == null || f.spoolWeight == null || f.netFilamentWeight == null || f.netFilamentWeight <= 0) return null;
+  return Math.min(100, Math.max(0, Math.round(((f.totalWeight - f.spoolWeight) / f.netFilamentWeight) * 100)));
+}
+
+type SortKey = "name" | "vendor" | "type" | "nozzle" | "bed" | "cost" | "remaining";
 type SortDir = "asc" | "desc";
 
 function getSortValue(f: Filament, key: SortKey): string | number {
@@ -36,6 +44,8 @@ function getSortValue(f: Filament, key: SortKey): string | number {
       return f.temperatures.bed ?? -1;
     case "cost":
       return f.cost ?? -1;
+    case "remaining":
+      return getRemainingPct(f) ?? -1;
   }
 }
 
@@ -263,6 +273,21 @@ export default function Home() {
         {f.cost != null ? `$${f.cost.toFixed(2)}` : "—"}
       </td>
       <td className="py-2 px-2 text-right">
+        {(() => {
+          const pct = getRemainingPct(f);
+          if (pct == null) return <span className="text-gray-400">—</span>;
+          const color = pct > 25 ? "bg-green-500" : pct > 10 ? "bg-yellow-500" : "bg-red-500";
+          return (
+            <div className="flex items-center gap-1.5 justify-end" title={`${pct}% remaining`}>
+              <div className="w-12 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                <div className={`h-2 rounded-full ${color}`} style={{ width: `${pct}%` }} />
+              </div>
+              <span className="text-xs text-gray-500 w-8 text-right">{pct}%</span>
+            </div>
+          );
+        })()}
+      </td>
+      <td className="py-2 px-2 text-right">
         <Link
           href={`/filaments/${f._id}/edit`}
           className="text-blue-600 hover:underline mr-3 text-xs"
@@ -331,6 +356,21 @@ export default function Home() {
             {f.cost != null ? `$${f.cost.toFixed(2)}` : "—"}
           </td>
           <td className="py-2 px-2 text-right">
+            {(() => {
+              const pct = getRemainingPct(f);
+              if (pct == null) return <span className="text-gray-400">—</span>;
+              const color = pct > 25 ? "bg-green-500" : pct > 10 ? "bg-yellow-500" : "bg-red-500";
+              return (
+                <div className="flex items-center gap-1.5 justify-end" title={`${pct}% remaining`}>
+                  <div className="w-12 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                    <div className={`h-2 rounded-full ${color}`} style={{ width: `${pct}%` }} />
+                  </div>
+                  <span className="text-xs text-gray-500 w-8 text-right">{pct}%</span>
+                </div>
+              );
+            })()}
+          </td>
+          <td className="py-2 px-2 text-right">
             <Link
               href={`/filaments/${f._id}/edit`}
               className="text-blue-600 hover:underline mr-3 text-xs"
@@ -348,7 +388,7 @@ export default function Home() {
         {isExpanded && group.variants.map((v) => renderRow(v, true))}
         {!isExpanded && (
           <tr key={`${f._id}-colors`} className="border-b border-gray-200">
-            <td colSpan={8} className="py-1 px-2 pl-10">
+            <td colSpan={9} className="py-1 px-2 pl-10">
               <div className="flex items-center gap-1.5">
                 {group.variants.map((v) => (
                   <Link
@@ -455,18 +495,18 @@ export default function Home() {
             <thead>
               <tr className="border-b border-gray-300">
                 <th className="text-left py-3 px-2">Color</th>
-                {(["name", "vendor", "type", "nozzle", "bed", "cost"] as SortKey[]).map((col) => (
+                {(["name", "vendor", "type", "nozzle", "bed", "cost", "remaining"] as SortKey[]).map((col) => (
                   <th
                     key={col}
-                    className={`${["nozzle", "bed", "cost"].includes(col) ? "text-right" : "text-left"} ${thClass}`}
+                    className={`${["nozzle", "bed", "cost", "remaining"].includes(col) ? "text-right" : "text-left"} ${thClass}`}
                     onClick={() => handleSort(col)}
                     role="columnheader"
                     tabIndex={0}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort(col); } }}
-                    title={`Sort by ${col === "nozzle" ? "nozzle temp" : col === "bed" ? "bed temp" : col}`}
+                    title={`Sort by ${col === "nozzle" ? "nozzle temp" : col === "bed" ? "bed temp" : col === "remaining" ? "remaining filament" : col}`}
                     aria-sort={sortKey === col ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
                   >
-                    {col === "nozzle" ? "Nozzle" : col === "bed" ? "Bed" : col.charAt(0).toUpperCase() + col.slice(1)}{" "}
+                    {col === "nozzle" ? "Nozzle" : col === "bed" ? "Bed" : col === "remaining" ? "Spool" : col.charAt(0).toUpperCase() + col.slice(1)}{" "}
                     <SortIcon column={col} sortKey={sortKey} sortDir={sortDir} />
                   </th>
                 ))}
@@ -476,7 +516,7 @@ export default function Home() {
             <tbody>
               {groupedFilaments.map((item) => {
                 if ("parent" in item) {
-                  return renderParentRow(item);
+                  return <React.Fragment key={item.parent._id}>{renderParentRow(item)}</React.Fragment>;
                 }
                 return renderRow(item);
               })}

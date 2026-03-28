@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import NfcStatus from "@/components/NfcStatus";
 import { useNfcContext } from "@/components/NfcProvider";
 import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
+import { useToast } from "@/components/Toast";
 
 interface Variant {
   _id: string;
@@ -50,12 +51,48 @@ interface Filament {
     retractSpeed: number | null;
     retractLift: number | null;
   }[];
+  presets: {
+    label: string;
+    extrusionMultiplier: number | null;
+    temperatures: {
+      nozzle: number | null;
+      nozzleFirstLayer: number | null;
+      bed: number | null;
+      bedFirstLayer: number | null;
+    };
+  }[];
+  spoolWeight: number | null;
+  netFilamentWeight: number | null;
+  totalWeight: number | null;
   tdsUrl: string | null;
   inherits: string | null;
   parentId: string | null;
   settings: Record<string, string | null>;
   _inherited?: string[];
   _variants?: Variant[];
+}
+
+function computeRemaining(filament: Filament) {
+  const { spoolWeight, netFilamentWeight, totalWeight, density, diameter } = filament;
+  if (totalWeight == null || spoolWeight == null) return null;
+
+  const remainingWeight = Math.max(0, totalWeight - spoolWeight);
+  const pct = netFilamentWeight && netFilamentWeight > 0
+    ? Math.min(100, Math.round((remainingWeight / netFilamentWeight) * 100))
+    : null;
+
+  let lengthMeters: number | null = null;
+  if (density && density > 0 && diameter && diameter > 0) {
+    // Volume in cm³ = weight(g) / density(g/cm³)
+    const volumeCm3 = remainingWeight / density;
+    // Cross-section area in cm² = π * (diameter_mm / 20)²
+    const radiusCm = diameter / 20;
+    const areaCm2 = Math.PI * radiusCm * radiusCm;
+    // Length in cm, convert to meters
+    lengthMeters = volumeCm3 / areaCm2 / 100;
+  }
+
+  return { remainingWeight, pct, lengthMeters };
 }
 
 export default function FilamentDetail() {
@@ -65,8 +102,14 @@ export default function FilamentDetail() {
   const [showTdsPreview, setShowTdsPreview] = useState(false);
   const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag } = useNfcContext();
   const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
+  const { toast } = useToast();
 
   const [notFound, setNotFound] = useState(false);
+
+  // Inline weight update
+  const [weightInput, setWeightInput] = useState("");
+  const [weightSaving, setWeightSaving] = useState(false);
+  const weightRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     fetch(`/api/filaments/${params.id}`)
@@ -102,6 +145,34 @@ export default function FilamentDetail() {
     } catch {
       setNfcWriteSuccess(false);
       setTimeout(() => setNfcWriteSuccess(null), 5000);
+    }
+  };
+
+  const handleWeightUpdate = async () => {
+    if (!filament) return;
+    const val = parseFloat(weightInput);
+    if (isNaN(val) || val < 0) {
+      toast("Enter a valid weight in grams", "error");
+      return;
+    }
+    setWeightSaving(true);
+    try {
+      const res = await fetch(`/api/filaments/${filament._id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ totalWeight: val }),
+      });
+      if (res.ok) {
+        setFilament({ ...filament, totalWeight: val });
+        toast("Weight updated");
+        setWeightInput("");
+      } else {
+        toast("Failed to update weight", "error");
+      }
+    } catch {
+      toast("Failed to update weight", "error");
+    } finally {
+      setWeightSaving(false);
     }
   };
 
@@ -183,13 +254,16 @@ export default function FilamentDetail() {
             </svg>
             Export OPT
           </button>
-          {isParent && (
+          {!isVariant && (
             <Link
               href={`/filaments/new?parentId=${filament._id}`}
               className="px-4 py-2 bg-amber-600 text-white rounded hover:bg-amber-700 text-sm inline-flex items-center gap-1.5"
-              title="Add a new color variant of this filament"
+              title="Clone this filament as a new color variant"
             >
-              + Add Color
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              Clone
             </Link>
           )}
           <Link
@@ -248,6 +322,69 @@ export default function FilamentDetail() {
         <InfoCard label="Diameter" value={`${filament.diameter.toFixed(2)} mm`} inherited={inherited.has("diameter")} />
         <InfoCard label="Max Vol. Speed" value={filament.maxVolumetricSpeed ? `${filament.maxVolumetricSpeed} mm³/s` : "—"} inherited={inherited.has("maxVolumetricSpeed")} />
       </div>
+
+      {/* Spool Tracker */}
+      {(filament.spoolWeight != null || filament.totalWeight != null || filament.netFilamentWeight != null) && (() => {
+        const remaining = computeRemaining(filament);
+        return (
+          <div className="mb-8 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+            <h2 className="text-sm font-medium text-gray-500 mb-3">Spool Tracker</h2>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+              {filament.netFilamentWeight != null && (
+                <InfoCard label="Net Filament" value={`${filament.netFilamentWeight}g`} inherited={inherited.has("netFilamentWeight")} />
+              )}
+              {filament.spoolWeight != null && (
+                <InfoCard label="Spool Weight" value={`${filament.spoolWeight}g`} inherited={inherited.has("spoolWeight")} />
+              )}
+              {remaining && (
+                <InfoCard label="Remaining" value={`${Math.round(remaining.remainingWeight)}g${remaining.pct != null ? ` (${remaining.pct}%)` : ""}`} />
+              )}
+              {remaining?.lengthMeters != null && (
+                <InfoCard label="Length Left" value={`${remaining.lengthMeters.toFixed(1)}m`} />
+              )}
+            </div>
+
+            {/* Progress bar */}
+            {remaining?.pct != null && (
+              <div className="mb-4">
+                <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
+                  <div
+                    className={`h-3 rounded-full transition-all ${
+                      remaining.pct > 25 ? "bg-green-500" : remaining.pct > 10 ? "bg-yellow-500" : "bg-red-500"
+                    }`}
+                    style={{ width: `${remaining.pct}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Inline weight update */}
+            {filament.spoolWeight != null && (
+              <div className="flex items-center gap-2">
+                <label className="text-sm text-gray-500 flex-shrink-0">Update scale weight:</label>
+                <input
+                  ref={weightRef}
+                  type="number"
+                  step="1"
+                  min="0"
+                  className="w-28 px-2 py-1 border border-gray-300 rounded text-sm bg-transparent"
+                  value={weightInput}
+                  onChange={(e) => setWeightInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleWeightUpdate(); }}
+                  placeholder={filament.totalWeight != null ? `${filament.totalWeight}g` : "grams"}
+                />
+                <button
+                  onClick={handleWeightUpdate}
+                  disabled={weightSaving || !weightInput}
+                  className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {weightSaving ? "..." : "Save"}
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {filament.compatibleNozzles && filament.compatibleNozzles.length > 0 && (
         <div className="mb-6">
@@ -327,6 +464,56 @@ export default function FilamentDetail() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {filament.presets && filament.presets.length > 0 && (
+        <div className="mb-6">
+          <h2 className="text-sm font-medium text-gray-500 mb-2">
+            Presets
+            {inherited.has("presets") && (
+              <span className="ml-1 text-xs text-blue-500">(inherited)</span>
+            )}
+          </h2>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="border-b border-gray-300">
+                  <th className="text-left py-2 px-2">Label</th>
+                  <th className="text-right py-2 px-2">EM</th>
+                  <th className="text-right py-2 px-2">Nozzle</th>
+                  <th className="text-right py-2 px-2">Nozzle 1st</th>
+                  <th className="text-right py-2 px-2">Bed</th>
+                  <th className="text-right py-2 px-2">Bed 1st</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filament.presets.map((preset, i) => (
+                  <tr
+                    key={i}
+                    className="border-b border-gray-200 dark:border-gray-800"
+                  >
+                    <td className="py-2 px-2 font-medium">{preset.label}</td>
+                    <td className="py-2 px-2 text-right">
+                      {preset.extrusionMultiplier ?? "—"}
+                    </td>
+                    <td className="py-2 px-2 text-right">
+                      {preset.temperatures?.nozzle ? `${preset.temperatures.nozzle}°C` : "—"}
+                    </td>
+                    <td className="py-2 px-2 text-right">
+                      {preset.temperatures?.nozzleFirstLayer ? `${preset.temperatures.nozzleFirstLayer}°C` : "—"}
+                    </td>
+                    <td className="py-2 px-2 text-right">
+                      {preset.temperatures?.bed ? `${preset.temperatures.bed}°C` : "—"}
+                    </td>
+                    <td className="py-2 px-2 text-right">
+                      {preset.temperatures?.bedFirstLayer ? `${preset.temperatures.bedFirstLayer}°C` : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 

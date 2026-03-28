@@ -23,6 +23,8 @@ const INHERITABLE_FIELDS = [
   "density",
   "diameter",
   "maxVolumetricSpeed",
+  "spoolWeight",
+  "netFilamentWeight",
   "tdsUrl",
   "inherits",
 ];
@@ -97,6 +99,16 @@ export function resolveFilament(
     resolved.calibrations = parent.calibrations || [];
     if (parent.calibrations?.length > 0) {
       inherited.push("calibrations");
+    }
+  }
+
+  // Resolve presets — use variant's if it has any, otherwise parent's
+  if (filament.presets?.length > 0) {
+    resolved.presets = filament.presets;
+  } else {
+    resolved.presets = parent.presets || [];
+    if (parent.presets?.length > 0) {
+      inherited.push("presets");
     }
   }
 
