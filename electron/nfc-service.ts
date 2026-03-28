@@ -1,9 +1,10 @@
 /**
  * NFC reader/writer service for ACR1552U via PC/SC.
  *
- * On macOS, SCardConnect SHARED mode fails for ISO 15693/NFC-V tags.
- * We use SCARD_SHARE_DIRECT mode and send pseudo-APDUs via SCardTransmit
- * with SCARD_PROTOCOL_UNDEFINED (protocol=0).
+ * On macOS, the built-in ifd-ccid.bundle and the ACS ifd-acsccid.bundle both
+ * claim the reader, creating two PC/SC reader instances (e.g. "Reader(1)" and
+ * "Reader(2)"). Only the ACS driver supports ISO 15693/NFC-V, so we try
+ * SHARED connect on each reader instance and use whichever one succeeds.
  *
  * The ACR1552U's Pass Through command (FF FB) wraps ISO 15693 commands.
  *
@@ -27,7 +28,8 @@ const DEFAULT_BLOCK_COUNT = 80;
 
 export class NfcService extends EventEmitter {
   private pcsc: any;
-  private pcscReader: any = null;
+  private readers: Map<string, any> = new Map();
+  private activeReader: any = null;
   private status: NfcStatus = {
     readerConnected: false,
     readerName: null,
@@ -40,8 +42,12 @@ export class NfcService extends EventEmitter {
     this.pcsc = pcsclite();
 
     this.pcsc.on("reader", (reader: any) => {
-      this.pcscReader = reader;
-      this.updateStatus({ readerConnected: true, readerName: reader.name });
+      this.readers.set(reader.name, reader);
+      console.log(`[NFC] Reader discovered: ${reader.name} (${this.readers.size} total)`);
+
+      if (this.readers.size === 1) {
+        this.updateStatus({ readerConnected: true, readerName: reader.name });
+      }
 
       reader.on("status", (status: any) => {
         const changes = reader.state ^ status.state;
@@ -50,14 +56,23 @@ export class NfcService extends EventEmitter {
         const isEmpty = !!(status.state & reader.SCARD_STATE_EMPTY);
         if (isPresent && !this.status.tagPresent) {
           this.updateStatus({ tagPresent: true, tagUid: null });
-        } else if (isEmpty && this.status.tagPresent) {
-          this.updateStatus({ tagPresent: false, tagUid: null });
+        } else if (isEmpty) {
+          // Only mark empty if no reader reports present
+          const anyPresent = [...this.readers.values()].some(r => {
+            try { return !!(r._statusState & r.SCARD_STATE_PRESENT); } catch { return false; }
+          });
+          if (!anyPresent) {
+            this.updateStatus({ tagPresent: false, tagUid: null });
+          }
         }
       });
 
       reader.on("end", () => {
-        this.pcscReader = null;
-        this.updateStatus({ readerConnected: false, readerName: null, tagPresent: false, tagUid: null });
+        this.readers.delete(reader.name);
+        if (this.activeReader === reader) this.activeReader = null;
+        if (this.readers.size === 0) {
+          this.updateStatus({ readerConnected: false, readerName: null, tagPresent: false, tagUid: null });
+        }
       });
 
       reader.on("error", (err: Error) => this.emit("error", err));
@@ -79,101 +94,83 @@ export class NfcService extends EventEmitter {
 
   // ── Connection helpers ──────────────────────────────────────────
 
-  /**
-   * Connect to the reader. Tries multiple strategies:
-   * 1. SHARED mode (works on Windows/Linux)
-   * 2. DIRECT mode with protocol 0 (macOS fallback for ISO 15693)
-   *
-   * Returns the protocol to use for transmit.
-   */
-  private async connect(): Promise<number> {
-    const reader = this.pcscReader;
-    if (!reader) throw new Error("No NFC reader connected");
-
-    // Strategy 1: SHARED mode
-    try {
-      const protocol: number = await new Promise((resolve, reject) => {
-        reader.connect(
-          { share_mode: reader.SCARD_SHARE_SHARED },
-          (err: any, proto: number) => err ? reject(err) : resolve(proto),
-        );
-      });
-      if (protocol != null && protocol > 0) return protocol;
-    } catch {
-      // Fall through to DIRECT
-    }
-
-    // Strategy 2: DIRECT mode (protocol=0 for pseudo-APDU via transmit)
-    await new Promise<void>((resolve, reject) => {
+  private trySharedConnect(reader: any): Promise<number | null> {
+    return new Promise((resolve) => {
       reader.connect(
-        { share_mode: reader.SCARD_SHARE_DIRECT },
-        (err: any) => err ? reject(new Error(`Connect failed: ${err.message}`)) : resolve(),
+        { share_mode: reader.SCARD_SHARE_SHARED },
+        (err: any, protocol: number) => {
+          if (err || protocol == null || protocol <= 0) return resolve(null);
+          resolve(protocol);
+        },
       );
     });
+  }
 
-    return 0; // SCARD_PROTOCOL_UNDEFINED
+  private disconnectReader(reader: any): Promise<void> {
+    return new Promise((resolve) => {
+      reader.disconnect(reader.SCARD_LEAVE_CARD, () => resolve());
+    });
+  }
+
+  /**
+   * Try SHARED connect on each reader instance. On macOS, the built-in
+   * ifd-ccid driver and ifd-acsccid both claim the ACR1552U, but only
+   * the ACS driver handles ISO 15693. We try each and use whichever works.
+   */
+  private async connect(): Promise<number> {
+    if (this.readers.size === 0) throw new Error("No NFC reader connected");
+
+    const readerList = [...this.readers.values()];
+
+    // Try each reader instance with SHARED mode
+    for (const reader of readerList) {
+      const protocol = await this.trySharedConnect(reader);
+      if (protocol) {
+        this.activeReader = reader;
+        console.log(`[NFC] Connected via ${reader.name}, protocol=${protocol}`);
+        return protocol;
+      }
+    }
+
+    // Retry with delays — the working driver may need time to enumerate the tag
+    for (const delay of [500, 1000, 2000]) {
+      await new Promise(r => setTimeout(r, delay));
+      for (const reader of readerList) {
+        const protocol = await this.trySharedConnect(reader);
+        if (protocol) {
+          this.activeReader = reader;
+          console.log(`[NFC] Connected via ${reader.name} after ${delay}ms, protocol=${protocol}`);
+          return protocol;
+        }
+      }
+    }
+
+    throw new Error(
+      "Cannot connect to tag — the reader detected the tag but no driver supports ISO 15693. " +
+      "Try removing and replacing the tag.",
+    );
   }
 
   private disconnect(): Promise<void> {
     return new Promise((resolve) => {
-      if (!this.pcscReader) return resolve();
-      this.pcscReader.disconnect(this.pcscReader.SCARD_LEAVE_CARD, () => resolve());
+      if (!this.activeReader) return resolve();
+      this.activeReader.disconnect(this.activeReader.SCARD_LEAVE_CARD, () => resolve());
     });
   }
 
   /**
-   * Transmit APDU. For protocol=0 (DIRECT mode), we try both
-   * SCardTransmit with protocol 0 and SCardControl with escape code.
+   * Transmit APDU via SCardTransmit on the active reader.
    */
-  private async transmit(data: Buffer, maxLen: number, protocol: number): Promise<Buffer> {
-    const reader = this.pcscReader;
+  private transmit(data: Buffer, maxLen: number, protocol: number): Promise<Buffer> {
+    const reader = this.activeReader;
+    if (!reader) throw new Error("No active reader connection");
 
-    if (protocol > 0) {
-      // Normal SCardTransmit
-      return new Promise((resolve, reject) => {
-        reader.transmit(data, maxLen, protocol, (err: any, resp: Buffer) => {
-          if (err) return reject(new Error(`Transmit: ${err.message}`));
-          resolve(resp);
-        });
+    return new Promise((resolve, reject) => {
+      reader.transmit(data, maxLen, protocol, (err: any, resp: Buffer) => {
+        if (err) return reject(new Error(`Transmit: ${err.message}`));
+        resolve(resp);
       });
-    }
-
-    // DIRECT mode: try SCardTransmit with protocol 0
-    try {
-      const resp: Buffer = await new Promise((resolve, reject) => {
-        reader.transmit(data, maxLen, 0, (err: any, resp: Buffer) => {
-          if (err) return reject(err);
-          resolve(resp);
-        });
-      });
-      return resp;
-    } catch {
-      // Fall back to SCardControl
-    }
-
-    // Try SCardControl with multiple control codes
-    const controlCodes = [
-      reader.SCARD_CTL_CODE(3500),     // Standard escape
-      reader.SCARD_CTL_CODE(2079),     // IOCTL_SMARTCARD_VENDOR_IFD_EXCHANGE (some drivers)
-      0x42000DAC,                       // macOS: 0x42000000 + 3500
-      0x42000000 + 2079,               // macOS: vendor IFD exchange
-    ];
-
-    for (const ctlCode of controlCodes) {
-      try {
-        const resp: Buffer = await new Promise((resolve, reject) => {
-          reader.control(data, ctlCode, maxLen, (err: any, resp: Buffer) => {
-            if (err) return reject(err);
-            resolve(resp);
-          });
-        });
-        return resp;
-      } catch {
-        continue;
-      }
-    }
-
-    throw new Error("All transmit methods failed — reader may not support this command in DIRECT mode");
+    });
   }
 
   private checkSW(response: Buffer): boolean {
@@ -184,7 +181,7 @@ export class NfcService extends EventEmitter {
   // ── Connection-scoped operations ────────────────────────────────
 
   private async withConnection<T>(fn: (protocol: number) => Promise<T>): Promise<T> {
-    if (!this.pcscReader) throw new Error("No NFC reader connected");
+    if (this.readers.size === 0) throw new Error("No NFC reader connected");
 
     const protocol = await this.connect();
 
@@ -197,114 +194,27 @@ export class NfcService extends EventEmitter {
 
   // ── ISO 15693 block operations ──────────────────────────────────
 
-  /**
-   * Build a PCSC 2.0 Part 3 Transparent Exchange APDU for ISO 15693.
-   *
-   * Format: FF C2 00 01 <Lc> <TLVs> 00
-   * TLVs:
-   *   90 02 00 00  — Transceive flags (CRC handled by reader)
-   *   5F 46 04 <timeout_us_le32> — Timeout
-   *   95 <len> <ISO15693 frame>  — Data to transceive
-   */
-  private buildTransparentExchange(iso15693Frame: Buffer): Buffer {
-    const flagsTlv = Buffer.from([0x90, 0x02, 0x00, 0x00]);
-    const timerTlv = Buffer.from([0x5f, 0x46, 0x04, 0xa0, 0x86, 0x01, 0x00]); // 100ms
-
-    const transceiveTlv = Buffer.alloc(2 + iso15693Frame.length);
-    transceiveTlv[0] = 0x95;
-    transceiveTlv[1] = iso15693Frame.length;
-    iso15693Frame.copy(transceiveTlv, 2);
-
-    const cmdData = Buffer.concat([flagsTlv, timerTlv, transceiveTlv]);
-
-    const apdu = Buffer.alloc(5 + cmdData.length + 1);
-    apdu[0] = 0xff;
-    apdu[1] = 0xc2;
-    apdu[2] = 0x00;
-    apdu[3] = 0x01; // Transparent Exchange
-    apdu[4] = cmdData.length;
-    cmdData.copy(apdu, 5);
-    apdu[apdu.length - 1] = 0x00; // Le
-
-    return apdu;
-  }
-
-  /**
-   * Parse Transparent Exchange response.
-   * Looks for TLV tag 0x97 (response data).
-   * ISO 15693 response: flags(1) + data(N)
-   */
-  private parseTransparentResponse(response: Buffer): Buffer {
-    let offset = 0;
-    while (offset < response.length) {
-      const tag = response[offset++];
-      if (offset >= response.length) break;
-
-      let len = response[offset++];
-      if (len === 0x81) {
-        len = response[offset++];
-      }
-
-      if (tag === 0x97 && offset + len <= response.length) {
-        const value = response.subarray(offset, offset + len);
-        // First byte of ISO 15693 response is flags — skip it
-        if (value.length > 1 && (value[0] & 0x01) === 0) {
-          // No error — return data after flags byte
-          return Buffer.from(value.subarray(1));
-        } else if (value.length > 0 && (value[0] & 0x01) !== 0) {
-          throw new Error(`ISO 15693 error flag: 0x${value[0].toString(16)}`);
-        }
-        return Buffer.from(value);
-      }
-
-      offset += len;
-    }
-
-    throw new Error(`No response data in transparent exchange`);
-  }
-
   private async readBlock(protocol: number, blockNum: number): Promise<Buffer> {
+    // Pass Through: FF FB 00 00 <Lc> <ISO15693 cmd>
     // ISO 15693 Read Single Block: flags(02) cmd(20) block_num
-    const iso15693Frame = Buffer.from([0x02, 0x20, blockNum]);
-
-    // Pass Through via SCardTransmit (works when SHARED connect succeeded)
-    if (protocol > 0) {
-      const cmd = Buffer.from([0xff, 0xfb, 0x00, 0x00, 0x02, 0x20, blockNum]);
-      const response = await this.transmit(cmd, BLOCK_SIZE + 10, protocol);
-      if (this.checkSW(response)) {
-        return response.subarray(0, response.length - 2);
-      }
-      throw new Error(`Read block ${blockNum} failed: SW=${response.toString("hex")}`);
+    const cmd = Buffer.from([0xff, 0xfb, 0x00, 0x00, 0x02, 0x20, blockNum]);
+    const response = await this.transmit(cmd, BLOCK_SIZE + 10, protocol);
+    if (this.checkSW(response)) {
+      return response.subarray(0, response.length - 2);
     }
-
-    // DIRECT mode fallback: Transparent Exchange
-    const teCmd = this.buildTransparentExchange(iso15693Frame);
-    const response = await this.transmit(teCmd, 50, protocol);
-    return this.parseTransparentResponse(response);
+    throw new Error(`Read block ${blockNum} failed: SW=${response.toString("hex")}`);
   }
 
   private async writeBlock(protocol: number, blockNum: number, data: Buffer): Promise<void> {
+    // Pass Through: FF FB 00 00 <Lc> <ISO15693 cmd>
     // ISO 15693 Write Single Block: flags(02) cmd(21) block_num data(4)
-    const iso15693Frame = Buffer.from([
-      0x02, 0x21, blockNum,
+    const cmd = Buffer.from([
+      0xff, 0xfb, 0x00, 0x00, 0x06, 0x21, blockNum,
       data[0], data[1], data[2], data[3],
     ]);
-
-    // Pass Through via SCardTransmit (works when SHARED connect succeeded)
-    if (protocol > 0) {
-      const cmd = Buffer.from([
-        0xff, 0xfb, 0x00, 0x00, 0x06, 0x21, blockNum,
-        data[0], data[1], data[2], data[3],
-      ]);
-      const response = await this.transmit(cmd, 10, protocol);
-      if (this.checkSW(response)) return;
-      throw new Error(`Write block ${blockNum} failed: SW=${response.toString("hex")}`);
-    }
-
-    // DIRECT mode fallback: Transparent Exchange
-    const teCmd = this.buildTransparentExchange(iso15693Frame);
-    const response = await this.transmit(teCmd, 50, protocol);
-    this.parseTransparentResponse(response);
+    const response = await this.transmit(cmd, 10, protocol);
+    if (this.checkSW(response)) return;
+    throw new Error(`Write block ${blockNum} failed: SW=${response.toString("hex")}`);
   }
 
   // ── High-level operations ───────────────────────────────────────
@@ -371,7 +281,9 @@ export class NfcService extends EventEmitter {
   }
 
   destroy(): void {
-    if (this.pcscReader) { try { this.pcscReader.close(); } catch { /* */ } }
+    for (const reader of this.readers.values()) {
+      try { reader.close(); } catch { /* */ }
+    }
     if (this.pcsc) { try { this.pcsc.close(); } catch { /* */ } }
   }
 }
