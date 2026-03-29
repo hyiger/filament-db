@@ -12,6 +12,7 @@ describe("Filament Model", () => {
     // Dynamic import to re-evaluate the module
     const mod = await import("@/models/Filament");
     Filament = mod.default;
+    await Filament.syncIndexes();
   });
 
   it("creates a filament with required fields", async () => {

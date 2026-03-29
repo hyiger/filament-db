@@ -9,6 +9,7 @@ describe("Nozzle Model", () => {
     delete mongoose.models.Nozzle;
     const mod = await import("@/models/Nozzle");
     Nozzle = mod.default;
+    await Nozzle.syncIndexes();
   });
 
   it("creates a nozzle with required fields", async () => {

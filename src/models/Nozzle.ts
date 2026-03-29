@@ -15,7 +15,7 @@ export interface INozzle extends Document {
 
 const NozzleSchema = new Schema<INozzle>(
   {
-    name: { type: String, required: true, index: true },
+    name: { type: String, required: true },
     syncId: { type: String, unique: true, sparse: true, index: true },
     diameter: { type: Number, required: true, index: true },
     type: { type: String, required: true, index: true },

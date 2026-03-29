@@ -14,7 +14,7 @@ beforeAll(async () => {
 afterEach(async () => {
   const collections = mongoose.connection.collections;
   for (const key in collections) {
-    await collections[key].deleteMany({});
+    await collections[key].drop().catch(() => {});
   }
   // Clear cached models so schemas are fresh each test
   for (const modelName of Object.keys(mongoose.models)) {

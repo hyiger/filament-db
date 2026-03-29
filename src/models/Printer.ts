@@ -14,7 +14,7 @@ export interface IPrinter extends Document {
 
 const PrinterSchema = new Schema<IPrinter>(
   {
-    name: { type: String, required: true, index: true },
+    name: { type: String, required: true },
     syncId: { type: String, unique: true, sparse: true, index: true },
     manufacturer: { type: String, required: true, index: true },
     printerModel: { type: String, required: true },

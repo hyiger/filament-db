@@ -51,7 +51,7 @@ export interface IFilament extends Document {
 
 const FilamentSchema = new Schema<IFilament>(
   {
-    name: { type: String, required: true, index: true },
+    name: { type: String, required: true },
     syncId: { type: String, unique: true, sparse: true, index: true },
     vendor: { type: String, required: true, index: true },
     type: { type: String, required: true, index: true },
