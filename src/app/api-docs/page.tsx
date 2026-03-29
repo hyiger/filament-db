@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import "swagger-ui-react/swagger-ui.css";
@@ -7,6 +8,15 @@ import "swagger-ui-react/swagger-ui.css";
 const SwaggerUI = dynamic(() => import("swagger-ui-react"), { ssr: false });
 
 export default function ApiDocsPage() {
+  // Suppress UNSAFE_componentWillReceiveProps warnings from swagger-ui-react internals
+  useEffect(() => {
+    const origWarn = console.error;
+    console.error = (...args: unknown[]) => {
+      if (typeof args[0] === "string" && args[0].includes("UNSAFE_componentWillReceiveProps")) return;
+      origWarn.apply(console, args);
+    };
+    return () => { console.error = origWarn; };
+  }, []);
   return (
     <div className="min-h-screen">
       <div className="max-w-7xl mx-auto px-4 pt-6 pb-2">
