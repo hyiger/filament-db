@@ -29,7 +29,7 @@ export default function ApiDocsPage() {
         </Link>
       </div>
       <div className="swagger-wrapper">
-        <SwaggerUI url="/openapi.json" />
+        <SwaggerUI url="/api/openapi" />
       </div>
       <style jsx global>{`
         .swagger-wrapper .swagger-ui .wrapper {

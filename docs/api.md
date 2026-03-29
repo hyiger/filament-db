@@ -62,7 +62,7 @@ Soft-delete a filament by ID (sets `_deletedAt` timestamp). The filament is hidd
 
 ### GET /api/filaments/export
 
-Downloads all filaments as a PrusaSlicer-compatible INI file. Filaments with calibrations are exported as separate sections with overrides merged into the base settings. Section names follow the pattern `[filament:Name PrinterName NozzleSize]` when printer-specific calibrations exist, `[filament:Name NozzleSize]` for default/any-printer calibrations, or `[filament:Name PrinterName NozzleSize PresetLabel]` when presets are defined.
+Downloads all filaments as a PrusaSlicer-compatible INI file. Filaments with calibrations are exported as separate sections with overrides merged into the base settings. Section names follow the pattern `[filament:Name PrinterName NozzleName]` when printer-specific calibrations exist, `[filament:Name NozzleName]` for default/any-printer calibrations, or `[filament:Name PrinterName NozzleName PresetLabel]` when presets are defined.
 
 ### POST /api/filaments/import
 
