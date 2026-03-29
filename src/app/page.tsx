@@ -210,7 +210,9 @@ export default function Home() {
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const [showAtlasImport, setShowAtlasImport] = useState(false);
   const [showPrusamentImport, setShowPrusamentImport] = useState(false);
+  const [showImportExport, setShowImportExport] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const importExportRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
   const fetchFilamentsRef = useRef<AbortController | null>(null);
@@ -261,6 +263,18 @@ export default function Home() {
       })
       .catch(() => {});
   }, []);
+
+  // Close import/export dropdown on outside click
+  useEffect(() => {
+    if (!showImportExport) return;
+    const handleClick = (e: MouseEvent) => {
+      if (importExportRef.current && !importExportRef.current.contains(e.target as Node)) {
+        setShowImportExport(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [showImportExport]);
 
   useEffect(() => {
     fetchFilaments();
@@ -606,32 +620,54 @@ export default function Home() {
           </div>
         </div>
         <div className="flex gap-2">
-          <button
-            onClick={() => setShowPrusamentImport(true)}
-            className="px-4 py-2 bg-orange-600 text-white rounded hover:bg-orange-700 text-sm"
-          >
-            Prusament QR
-          </button>
-          <button
-            onClick={() => setShowAtlasImport(true)}
-            className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 text-sm"
-          >
-            Import from Atlas
-          </button>
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={importing}
-            className="px-4 py-2 bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50 text-sm"
-          >
-            {importing ? "Importing..." : "Import INI"}
-          </button>
-          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-          <a
-            href="/api/filaments/export"
-            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm"
-          >
-            Export INI
-          </a>
+          {/* Import / Export dropdown */}
+          <div className="relative" ref={importExportRef}>
+            <button
+              onClick={() => setShowImportExport((s) => !s)}
+              className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm flex items-center gap-1.5"
+            >
+              Import / Export
+              <svg className={`w-3.5 h-3.5 transition-transform ${showImportExport ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+              </svg>
+            </button>
+            {showImportExport && (
+              <div className="absolute right-0 top-full mt-1 w-52 bg-gray-800 border border-gray-600 rounded-lg shadow-xl z-50 py-1">
+                <button
+                  onClick={() => { setShowImportExport(false); setShowPrusamentImport(true); }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                >
+                  <span className="w-2 h-2 rounded-full bg-orange-500" />
+                  Prusament QR
+                </button>
+                <button
+                  onClick={() => { setShowImportExport(false); setShowAtlasImport(true); }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                >
+                  <span className="w-2 h-2 rounded-full bg-purple-500" />
+                  Import from Atlas
+                </button>
+                <button
+                  onClick={() => { setShowImportExport(false); fileInputRef.current?.click(); }}
+                  disabled={importing}
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-50 flex items-center gap-2"
+                >
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  {importing ? "Importing..." : "Import INI"}
+                </button>
+                <div className="border-t border-gray-600 my-1" />
+                {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+                <a
+                  href="/api/filaments/export"
+                  className="block px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  onClick={() => setShowImportExport(false)}
+                >
+                  <span className="w-2 h-2 rounded-full bg-green-500" />
+                  Export INI
+                </a>
+              </div>
+            )}
+          </div>
           <Link
             href="/filaments/new"
             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
