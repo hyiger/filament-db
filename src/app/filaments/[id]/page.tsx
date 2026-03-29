@@ -7,6 +7,7 @@ import NfcStatus from "@/components/NfcStatus";
 import { useNfcContext } from "@/components/NfcProvider";
 import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
 import { useToast } from "@/components/Toast";
+import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 
 interface Variant {
   _id: string;
@@ -123,6 +124,7 @@ export default function FilamentDetail() {
   const weightRef = useRef<HTMLInputElement>(null);
 
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [showPrusamentImport, setShowPrusamentImport] = useState(false);
 
   useEffect(() => {
     fetch(`/api/filaments/${params.id}`)
@@ -534,12 +536,21 @@ export default function FilamentDetail() {
                     onRemove={() => handleRemoveSpool(spool._id)}
                   />
                 ))}
-                <button
-                  onClick={() => handleAddSpool()}
-                  className="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
-                >
-                  + Add Spool
-                </button>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleAddSpool()}
+                    className="flex-1 py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                  >
+                    + Add Spool
+                  </button>
+                  <button
+                    onClick={() => setShowPrusamentImport(true)}
+                    className="py-2 px-3 border-2 border-dashed border-orange-300 dark:border-orange-700 rounded-lg text-sm text-orange-500 hover:border-orange-400 hover:text-orange-600 transition-colors"
+                    title="Import spool from Prusament QR code"
+                  >
+                    + Prusament QR
+                  </button>
+                </div>
               </div>
             )}
 
@@ -768,6 +779,22 @@ export default function FilamentDetail() {
           </div>
         )}
       </div>
+
+      {showPrusamentImport && (
+        <PrusamentImportDialog
+          onClose={() => setShowPrusamentImport(false)}
+          targetFilamentId={filament?._id}
+          onImported={(message) => {
+            toast(message, "success");
+            // Refresh filament data
+            fetch(`/api/filaments/${params.id}`)
+              .then((r) => r.json())
+              .then((data) => setFilament(data))
+              .catch(() => {});
+            setShowPrusamentImport(false);
+          }}
+        />
+      )}
     </main>
   );
 }

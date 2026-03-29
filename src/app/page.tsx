@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback, useMemo, useRef } from "react"
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import ImportAtlasDialog from "@/components/ImportAtlasDialog";
+import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 
 interface Filament {
@@ -208,6 +209,7 @@ export default function Home() {
   const [mounted, setMounted] = useState(false);
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const [showAtlasImport, setShowAtlasImport] = useState(false);
+  const [showPrusamentImport, setShowPrusamentImport] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
@@ -593,6 +595,12 @@ export default function Home() {
         </div>
         <div className="flex gap-2">
           <button
+            onClick={() => setShowPrusamentImport(true)}
+            className="px-4 py-2 bg-orange-600 text-white rounded hover:bg-orange-700 text-sm"
+          >
+            Prusament QR
+          </button>
+          <button
             onClick={() => setShowAtlasImport(true)}
             className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 text-sm"
           >
@@ -720,6 +728,17 @@ export default function Home() {
             toast(message, "success");
             fetchFilaments();
             setShowAtlasImport(false);
+          }}
+        />
+      )}
+
+      {showPrusamentImport && (
+        <PrusamentImportDialog
+          onClose={() => setShowPrusamentImport(false)}
+          onImported={(message) => {
+            toast(message, "success");
+            fetchFilaments();
+            setShowPrusamentImport(false);
           }}
         />
       )}
