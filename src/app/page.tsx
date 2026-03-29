@@ -560,6 +560,9 @@ export default function Home() {
             <Link href="/printers" className="text-blue-600 hover:underline text-sm">
               Manage Printers
             </Link>
+            <Link href="/api-docs" className="text-blue-600 hover:underline text-sm">
+              API Docs
+            </Link>
           </div>
         </div>
         <div className="flex gap-2">

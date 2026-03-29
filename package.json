@@ -31,7 +31,8 @@
     "next": "16.2.1",
     "nfc-pcsc": "^0.8.1",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "swagger-ui-react": "^5.32.1"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
@@ -39,6 +40,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "@types/swagger-ui-react": "^5.18.0",
     "@vitest/coverage-v8": "^4.1.1",
     "concurrently": "^9.2.1",
     "electron": "^41.0.4",

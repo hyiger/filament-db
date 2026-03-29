@@ -1,0 +1,1164 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Filament DB API",
+    "description": "REST API for managing 3D printing filament profiles, nozzles, and printers. Supports filament inheritance (parent/variant), per-printer per-nozzle calibrations, INI profile export/import, and OpenPrintTag NFC binary generation.",
+    "version": "1.1.0",
+    "license": {
+      "name": "MIT"
+    }
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current server"
+    }
+  ],
+  "tags": [
+    { "name": "Filaments", "description": "CRUD and bulk operations for filament profiles" },
+    { "name": "Nozzles", "description": "Manage nozzle definitions" },
+    { "name": "Printers", "description": "Manage printer profiles" },
+    { "name": "Setup", "description": "Database connectivity" }
+  ],
+  "paths": {
+    "/api/filaments": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "List filaments",
+        "description": "Returns all non-deleted filaments, optionally filtered by type, vendor, or search term.",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Filter by filament type (e.g. PLA, PETG)"
+          },
+          {
+            "name": "vendor",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Filter by vendor name"
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Case-insensitive regex search on filament name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of filament objects sorted by name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Filament" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Filaments"],
+        "summary": "Create filament",
+        "description": "Create a new filament profile. If parentId is provided, the filament becomes a color variant inheriting settings from its parent.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/FilamentInput" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created filament",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Filament" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parent reference",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/filaments/{id}": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "Get filament by ID",
+        "description": "Returns a single filament with resolved inherited values (for variants), populated nozzle/printer references, and any child variants.",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Filament with _variants array",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Filament" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "_variants": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "_id": { "type": "string" },
+                              "name": { "type": "string" },
+                              "color": { "type": "string" },
+                              "cost": { "type": "number", "nullable": true }
+                            }
+                          }
+                        },
+                        "_inherited": {
+                          "type": "array",
+                          "items": { "type": "string" },
+                          "description": "List of field names inherited from parent"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Filament not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": ["Filaments"],
+        "summary": "Update filament",
+        "description": "Update filament fields. Validates parentId references to prevent circular or nested inheritance.",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/FilamentInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated filament",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Filament" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid parent reference",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "404": {
+            "description": "Filament not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Filaments"],
+        "summary": "Delete filament",
+        "description": "Soft-deletes a filament by setting _deletedAt. Cannot delete a parent that still has variants.",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion confirmed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Deleted" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cannot delete — has variants",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "404": {
+            "description": "Filament not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/filaments/{id}/openprinttag": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "Generate OpenPrintTag binary",
+        "description": "Generates a CBOR-encoded OpenPrintTag binary for NFC writing. Contains filament name, brand, type, color, density, diameter, and temperatures.",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "OpenPrintTag binary file",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Filament not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/filaments/export": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "Export filaments as INI",
+        "description": "Exports all filaments as a PrusaSlicer/OrcaSlicer-compatible INI file. Generates sections per filament with calibration overrides per printer/nozzle combination and preset variants.",
+        "responses": {
+          "200": {
+            "description": "INI file download",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string",
+                  "example": "# generated by Filament DB\n\n[filament:Prusament PLA 0.4mm Brass]\nextrusion_multiplier = 0.95\n"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/filaments/import": {
+      "post": {
+        "tags": ["Filaments"],
+        "summary": "Import filaments from INI",
+        "description": "Imports filament profiles from an uploaded INI file. Creates new filaments or updates existing ones matched by name.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "INI file containing [filament:Name] sections"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string" },
+                    "total": { "type": "integer" },
+                    "created": { "type": "integer" },
+                    "updated": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No file provided or no profiles found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/filaments/import-atlas": {
+      "post": {
+        "tags": ["Filaments"],
+        "summary": "Import from MongoDB Atlas",
+        "description": "Connect to a remote MongoDB Atlas instance to list or import filaments. Send only `uri` to list available filaments; send `uri` + `filamentIds` to import selected ones.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["uri"],
+                "properties": {
+                  "uri": {
+                    "type": "string",
+                    "description": "MongoDB connection URI",
+                    "example": "mongodb+srv://user:pass@cluster.mongodb.net/filament-db"
+                  },
+                  "filamentIds": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "IDs of filaments to import. Omit to list all available filaments."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "List of remote filaments (no filamentIds) or import result (with filamentIds)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "filaments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "_id": { "type": "string" },
+                              "name": { "type": "string" },
+                              "vendor": { "type": "string" },
+                              "type": { "type": "string" },
+                              "color": { "type": "string" },
+                              "parentId": { "type": "string", "nullable": true }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "message": { "type": "string" },
+                        "created": { "type": "integer" },
+                        "updated": { "type": "integer" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing URI",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "500": {
+            "description": "Connection failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/filaments/match": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "Match filament by name/vendor/type",
+        "description": "Finds the best-matching filament by exact name, vendor+type, or vendor-only. Returns a primary match and up to 5 candidates.",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Exact name match (case-insensitive)"
+          },
+          {
+            "name": "vendor",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Vendor partial match (case-insensitive)"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Exact type match (case-insensitive)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Match result with candidates",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "match": {
+                      "nullable": true,
+                      "allOf": [{ "$ref": "#/components/schemas/Filament" }]
+                    },
+                    "candidates": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Filament" },
+                      "maxItems": 5
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/filaments/parents": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "List parent filaments",
+        "description": "Returns filaments that can be used as parents for color variants (those without a parentId themselves).",
+        "parameters": [
+          {
+            "name": "search",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Case-insensitive name search"
+          },
+          {
+            "name": "exclude",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Filament ID to exclude (e.g. when editing)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of parent filaments (name, vendor, type, color)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "_id": { "type": "string" },
+                      "name": { "type": "string" },
+                      "vendor": { "type": "string" },
+                      "type": { "type": "string" },
+                      "color": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/filaments/parse-ini": {
+      "post": {
+        "tags": ["Filaments"],
+        "summary": "Parse INI file (preview)",
+        "description": "Parses an uploaded INI file and returns the extracted filament profiles without saving them to the database.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "INI file to parse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Parsed filament profiles",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "filaments": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/FilamentInput" }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No file or no profiles found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/filaments/types": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "List filament types",
+        "description": "Returns all distinct filament type values (e.g. PLA, PETG, ABS).",
+        "responses": {
+          "200": {
+            "description": "Sorted array of type strings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "example": ["ABS", "ASA", "PA", "PCTG", "PETG", "PLA", "TPU"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/filaments/vendors": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "List vendors",
+        "description": "Returns all distinct vendor names.",
+        "responses": {
+          "200": {
+            "description": "Sorted array of vendor strings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "example": ["Bambu Lab", "Polymaker", "Prusament"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/nozzles": {
+      "get": {
+        "tags": ["Nozzles"],
+        "summary": "List nozzles",
+        "description": "Returns all non-deleted nozzles, optionally filtered by diameter, type, or high-flow flag.",
+        "parameters": [
+          {
+            "name": "diameter",
+            "in": "query",
+            "schema": { "type": "number" },
+            "description": "Filter by nozzle diameter in mm"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Filter by nozzle type (e.g. Brass, Hardened Steel)"
+          },
+          {
+            "name": "highFlow",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["true", "false"] },
+            "description": "Filter by high-flow capability"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of nozzles sorted by diameter then type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Nozzle" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Nozzles"],
+        "summary": "Create nozzle",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NozzleInput" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created nozzle",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Nozzle" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/nozzles/{id}": {
+      "get": {
+        "tags": ["Nozzles"],
+        "summary": "Get nozzle by ID",
+        "parameters": [
+          { "$ref": "#/components/parameters/NozzleId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Nozzle object",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Nozzle" }
+              }
+            }
+          },
+          "404": {
+            "description": "Nozzle not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": ["Nozzles"],
+        "summary": "Update nozzle",
+        "parameters": [
+          { "$ref": "#/components/parameters/NozzleId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/NozzleInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated nozzle",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Nozzle" }
+              }
+            }
+          },
+          "404": {
+            "description": "Nozzle not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Nozzles"],
+        "summary": "Delete nozzle",
+        "description": "Soft-deletes a nozzle. Blocked if any filament references it in compatibleNozzles or calibrations.",
+        "parameters": [
+          { "$ref": "#/components/parameters/NozzleId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion confirmed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Deleted" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cannot delete — referenced by filaments",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "404": {
+            "description": "Nozzle not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/printers": {
+      "get": {
+        "tags": ["Printers"],
+        "summary": "List printers",
+        "description": "Returns all non-deleted printers with populated installed nozzles.",
+        "parameters": [
+          {
+            "name": "manufacturer",
+            "in": "query",
+            "schema": { "type": "string" },
+            "description": "Filter by manufacturer name"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Array of printers sorted by manufacturer then name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Printer" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Printers"],
+        "summary": "Create printer",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PrinterInput" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created printer",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Printer" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/printers/{id}": {
+      "get": {
+        "tags": ["Printers"],
+        "summary": "Get printer by ID",
+        "parameters": [
+          { "$ref": "#/components/parameters/PrinterId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Printer with populated nozzles",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Printer" }
+              }
+            }
+          },
+          "404": {
+            "description": "Printer not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": ["Printers"],
+        "summary": "Update printer",
+        "parameters": [
+          { "$ref": "#/components/parameters/PrinterId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PrinterInput" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated printer",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Printer" }
+              }
+            }
+          },
+          "404": {
+            "description": "Printer not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Printers"],
+        "summary": "Delete printer",
+        "description": "Soft-deletes a printer. Blocked if any filament calibration references it.",
+        "parameters": [
+          { "$ref": "#/components/parameters/PrinterId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deletion confirmed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Deleted" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Cannot delete — referenced by filament calibrations",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "404": {
+            "description": "Printer not found",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/setup": {
+      "post": {
+        "tags": ["Setup"],
+        "summary": "Test MongoDB connection",
+        "description": "Tests connectivity to a MongoDB URI. Used during initial setup to validate the connection string.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["mongodbUri"],
+                "properties": {
+                  "mongodbUri": {
+                    "type": "string",
+                    "example": "mongodb+srv://user:pass@cluster.mongodb.net/filament-db"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Connection successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean", "example": true },
+                    "message": { "type": "string", "example": "Connection successful" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing URI or connection failed",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "FilamentId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "MongoDB ObjectId of the filament"
+      },
+      "NozzleId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "MongoDB ObjectId of the nozzle"
+      },
+      "PrinterId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string" },
+        "description": "MongoDB ObjectId of the printer"
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": { "type": "string" }
+        },
+        "required": ["error"]
+      },
+      "Temperatures": {
+        "type": "object",
+        "properties": {
+          "nozzle": { "type": "number", "nullable": true, "description": "Nozzle temperature in °C" },
+          "nozzleFirstLayer": { "type": "number", "nullable": true, "description": "First layer nozzle temperature" },
+          "bed": { "type": "number", "nullable": true, "description": "Bed temperature in °C" },
+          "bedFirstLayer": { "type": "number", "nullable": true, "description": "First layer bed temperature" }
+        }
+      },
+      "Calibration": {
+        "type": "object",
+        "properties": {
+          "printer": { "type": "string", "nullable": true, "description": "Printer ObjectId (null = default/any printer)" },
+          "nozzle": { "type": "string", "description": "Nozzle ObjectId" },
+          "extrusionMultiplier": { "type": "number", "nullable": true, "example": 0.95 },
+          "maxVolumetricSpeed": { "type": "number", "nullable": true, "description": "mm³/s", "example": 15.0 },
+          "pressureAdvance": { "type": "number", "nullable": true, "example": 0.053 },
+          "retractLength": { "type": "number", "nullable": true, "description": "mm", "example": 0.8 },
+          "retractSpeed": { "type": "number", "nullable": true, "description": "mm/s", "example": 35 },
+          "retractLift": { "type": "number", "nullable": true, "description": "mm", "example": 0.2 }
+        },
+        "required": ["nozzle"]
+      },
+      "Preset": {
+        "type": "object",
+        "properties": {
+          "label": { "type": "string", "description": "Preset name (e.g. Shore 85A)", "example": "Shore 85A" },
+          "extrusionMultiplier": { "type": "number", "nullable": true },
+          "temperatures": { "$ref": "#/components/schemas/Temperatures" }
+        },
+        "required": ["label"]
+      },
+      "Filament": {
+        "type": "object",
+        "properties": {
+          "_id": { "type": "string" },
+          "name": { "type": "string", "example": "Prusament PLA Galaxy Black" },
+          "vendor": { "type": "string", "example": "Prusament" },
+          "type": { "type": "string", "example": "PLA" },
+          "color": { "type": "string", "example": "#1a1a2e" },
+          "cost": { "type": "number", "nullable": true, "description": "$/kg" },
+          "density": { "type": "number", "nullable": true, "description": "g/cm³" },
+          "diameter": { "type": "number", "default": 1.75, "description": "mm" },
+          "temperatures": { "$ref": "#/components/schemas/Temperatures" },
+          "maxVolumetricSpeed": { "type": "number", "nullable": true, "description": "mm³/s" },
+          "compatibleNozzles": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Array of Nozzle ObjectIds"
+          },
+          "calibrations": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Calibration" }
+          },
+          "presets": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Preset" }
+          },
+          "spoolWeight": { "type": "number", "nullable": true, "description": "Empty spool weight in grams" },
+          "netFilamentWeight": { "type": "number", "nullable": true, "description": "Net filament weight in grams" },
+          "totalWeight": { "type": "number", "nullable": true, "description": "Current total weight (spool + filament) in grams" },
+          "tdsUrl": { "type": "string", "nullable": true, "description": "Technical data sheet URL" },
+          "inherits": { "type": "string", "nullable": true, "description": "Name of the slicer base profile this inherits from" },
+          "parentId": { "type": "string", "nullable": true, "description": "Parent filament ID for color variants" },
+          "settings": {
+            "type": "object",
+            "additionalProperties": { "type": "string", "nullable": true },
+            "description": "Raw slicer key-value settings (e.g. extrusion_multiplier, start_filament_gcode)"
+          },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["name", "vendor", "type"]
+      },
+      "FilamentInput": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "vendor": { "type": "string" },
+          "type": { "type": "string" },
+          "color": { "type": "string" },
+          "cost": { "type": "number", "nullable": true },
+          "density": { "type": "number", "nullable": true },
+          "diameter": { "type": "number" },
+          "temperatures": { "$ref": "#/components/schemas/Temperatures" },
+          "maxVolumetricSpeed": { "type": "number", "nullable": true },
+          "compatibleNozzles": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "calibrations": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Calibration" }
+          },
+          "presets": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Preset" }
+          },
+          "spoolWeight": { "type": "number", "nullable": true },
+          "netFilamentWeight": { "type": "number", "nullable": true },
+          "totalWeight": { "type": "number", "nullable": true },
+          "tdsUrl": { "type": "string", "nullable": true },
+          "inherits": { "type": "string", "nullable": true },
+          "parentId": { "type": "string", "nullable": true },
+          "settings": {
+            "type": "object",
+            "additionalProperties": { "type": "string", "nullable": true }
+          }
+        },
+        "required": ["name", "vendor", "type"]
+      },
+      "Nozzle": {
+        "type": "object",
+        "properties": {
+          "_id": { "type": "string" },
+          "name": { "type": "string", "example": "0.4mm Brass" },
+          "diameter": { "type": "number", "example": 0.4 },
+          "type": { "type": "string", "example": "Brass" },
+          "highFlow": { "type": "boolean", "default": false },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["name", "diameter", "type"]
+      },
+      "NozzleInput": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "diameter": { "type": "number" },
+          "type": { "type": "string" },
+          "highFlow": { "type": "boolean" }
+        },
+        "required": ["name", "diameter", "type"]
+      },
+      "Printer": {
+        "type": "object",
+        "properties": {
+          "_id": { "type": "string" },
+          "name": { "type": "string", "example": "Prusa Core One" },
+          "manufacturer": { "type": "string", "example": "Prusa" },
+          "printerModel": { "type": "string", "example": "Core One" },
+          "installedNozzles": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Nozzle" },
+            "description": "Populated nozzle objects"
+          },
+          "notes": { "type": "string" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["name", "manufacturer", "printerModel"]
+      },
+      "PrinterInput": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "manufacturer": { "type": "string" },
+          "printerModel": { "type": "string" },
+          "installedNozzles": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Array of Nozzle ObjectIds"
+          },
+          "notes": { "type": "string" }
+        },
+        "required": ["name", "manufacturer", "printerModel"]
+      }
+    }
+  }
+}
