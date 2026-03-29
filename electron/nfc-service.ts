@@ -138,37 +138,42 @@ export class NfcService extends EventEmitter {
     if (this.readers.size === 0) throw new Error("No NFC reader connected");
 
     // On hot-plug, macOS registers two reader instances sequentially. If a reader
-    // was just discovered, wait briefly so both driver instances (ifd-ccid and
-    // ifd-acsccid) have time to register before we try to connect.
+    // was just discovered, wait for both driver instances (ifd-ccid and
+    // ifd-acsccid) to register before we try to connect.
     const msSinceDiscovery = Date.now() - this.lastReaderDiscoveredAt;
-    if (msSinceDiscovery < 2000) {
-      const settleDelay = Math.max(500, 2000 - msSinceDiscovery);
+    if (msSinceDiscovery < 3000) {
+      const settleDelay = Math.max(1000, 3000 - msSinceDiscovery);
       console.log(`[NFC] Reader recently discovered, waiting ${settleDelay}ms for drivers to settle`);
       await new Promise(r => setTimeout(r, settleDelay));
     }
 
-    const readerList = [...this.readers.values()];
-
-    // Try each reader instance with SHARED mode
-    for (const reader of readerList) {
-      const protocol = await this.trySharedConnect(reader);
-      if (protocol) {
-        this.activeReader = reader;
-        console.log(`[NFC] Connected via ${reader.name}, protocol=${protocol}`);
-        return protocol;
-      }
-    }
-
-    // Retry with delays — the working driver may need time to enumerate the tag
-    for (const delay of [500, 1000, 2000]) {
-      await new Promise(r => setTimeout(r, delay));
-      for (const reader of readerList) {
+    // Try each reader instance with SHARED mode.
+    // Re-read this.readers on each attempt since new readers may register during waits.
+    const tryAllReaders = async (): Promise<number | null> => {
+      for (const reader of this.readers.values()) {
         const protocol = await this.trySharedConnect(reader);
         if (protocol) {
           this.activeReader = reader;
-          console.log(`[NFC] Connected via ${reader.name} after ${delay}ms, protocol=${protocol}`);
           return protocol;
         }
+      }
+      return null;
+    };
+
+    const protocol = await tryAllReaders();
+    if (protocol) {
+      console.log(`[NFC] Connected via ${this.activeReader!.name}, protocol=${protocol}`);
+      return protocol;
+    }
+
+    // Retry with delays — the working driver may need time to enumerate the tag.
+    // Re-read the reader list each time since new instances may appear mid-retry.
+    for (const delay of [1000, 2000, 3000]) {
+      await new Promise(r => setTimeout(r, delay));
+      const p = await tryAllReaders();
+      if (p) {
+        console.log(`[NFC] Connected via ${this.activeReader!.name} after ${delay}ms, protocol=${p}`);
+        return p;
       }
     }
 

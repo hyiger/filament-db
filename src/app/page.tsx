@@ -6,6 +6,7 @@ import { useToast } from "@/components/Toast";
 import ImportAtlasDialog from "@/components/ImportAtlasDialog";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
+import NfcStatus from "@/components/NfcStatus";
 
 interface Filament {
   _id: string;
@@ -612,6 +613,7 @@ export default function Home() {
             <h1 className="text-3xl font-bold">Filament DB</h1>
             <span className="text-sm text-gray-500 font-mono self-end mb-0.5">v{process.env.APP_VERSION}</span>
             <SyncStatusIndicator />
+            <NfcStatus />
           </div>
           <div className="flex gap-3">
             <Link href="/settings" className="text-gray-400 hover:text-gray-200 text-sm flex items-center gap-1">

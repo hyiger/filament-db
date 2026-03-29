@@ -22,8 +22,8 @@ export default function NfcStatus() {
   }
 
   return (
-    <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-full text-sm text-gray-300">
-      <span className={`w-2 h-2 rounded-full ${dotColor}`} />
+    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-800 border border-gray-700 rounded-full text-xs text-gray-300">
+      <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
       {label}
     </div>
   );
