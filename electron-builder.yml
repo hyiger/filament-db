@@ -15,6 +15,11 @@ npmRebuild: false
 files:
   - electron-dist/**/*
   - standalone/**/*
+  # Turbopack places hashed external modules in .next/node_modules/ (e.g.
+  # mongoose-8b99e611e7552af3). electron-builder auto-inserts
+  # "!**/node_modules/**" when it sees node_modules include patterns, which
+  # strips this directory.  Re-include it explicitly.
+  - standalone/.next/node_modules/**/*
   - package.json
   - node_modules/nfc-pcsc/**/*
   - node_modules/@pokusew/pcsclite/**/*
