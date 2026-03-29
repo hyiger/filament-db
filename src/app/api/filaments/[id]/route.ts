@@ -24,7 +24,7 @@ export async function GET(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let resolved: any = filament;
   if (filament.parentId) {
-    const parent = await Filament.findById(filament.parentId)
+    const parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
       .populate("compatibleNozzles")
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")
@@ -51,7 +51,7 @@ export async function PUT(
 
   // Validate parentId if provided
   if (body.parentId) {
-    const parent = await Filament.findById(body.parentId).lean();
+    const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null }).lean();
     if (!parent) {
       return NextResponse.json({ error: "Parent filament not found" }, { status: 400 });
     }

@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
 
   // Validate parentId if provided
   if (body.parentId) {
-    const parent = await Filament.findById(body.parentId).lean();
+    const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null }).lean();
     if (!parent) {
       return NextResponse.json({ error: "Parent filament not found" }, { status: 400 });
     }

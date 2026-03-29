@@ -12,7 +12,7 @@ export async function GET(
   await dbConnect();
   const { id } = await params;
 
-  const filament = await Filament.findById(id).lean();
+  const filament = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
   if (!filament) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -21,7 +21,7 @@ export async function GET(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let resolved: any = filament;
   if (filament.parentId) {
-    const parent = await Filament.findById(filament.parentId).lean();
+    const parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null }).lean();
     resolved = resolveFilament(filament, parent);
   }
 

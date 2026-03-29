@@ -271,7 +271,7 @@ Update a nozzle. Send a JSON body with the fields to update.
 
 ### DELETE /api/nozzles/:id
 
-Soft-delete a nozzle by ID (sets `_deletedAt` timestamp). Cannot delete a nozzle that is referenced by filaments. Returns `{ message: "Deleted" }`.
+Soft-delete a nozzle by ID (sets `_deletedAt` timestamp). Cannot delete a nozzle that is referenced by filaments or installed on any printer. Returns `{ message: "Deleted" }`.
 
 ---
 
