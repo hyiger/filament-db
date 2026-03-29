@@ -296,7 +296,8 @@ export class SyncService extends EventEmitter {
    * Strip _id and __v for transfer between databases.
    */
   private stripForTransfer(doc: Document): Document {
-    const { _id, __v, ...rest } = doc;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { _id: _stripId, __v: _stripV, ...rest } = doc;
     return rest;
   }
 

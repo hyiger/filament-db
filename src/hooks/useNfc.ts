@@ -20,7 +20,7 @@ export function useNfc() {
   const [isElectron] = useState(
     () =>
       typeof window !== "undefined" &&
-      !!(window as any).electronAPI?.nfcGetStatus,
+      !!window.electronAPI?.nfcGetStatus,
   );
   const [status, setStatus] = useState<NfcStatus>(DEFAULT_STATUS);
   const [writing, setWriting] = useState(false);
@@ -29,7 +29,7 @@ export function useNfc() {
   useEffect(() => {
     if (!isElectron) return;
 
-    const api = (window as any).electronAPI;
+    const api = window.electronAPI!;
 
     // Get initial status
     api.nfcGetStatus().then(setStatus).catch(() => {});
@@ -48,9 +48,10 @@ export function useNfc() {
     if (!isElectron) throw new Error("NFC only available in Electron");
     setError(null);
     try {
-      return await (window as any).electronAPI.nfcReadTag();
-    } catch (err: any) {
-      setError(err.message);
+      return await window.electronAPI!.nfcReadTag();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
       throw err;
     }
   }, [isElectron]);
@@ -61,9 +62,10 @@ export function useNfc() {
       setError(null);
       setWriting(true);
       try {
-        await (window as any).electronAPI.nfcWriteTag(Array.from(payload));
-      } catch (err: any) {
-        setError(err.message);
+        await window.electronAPI!.nfcWriteTag(Array.from(payload));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        setError(message);
         throw err;
       } finally {
         setWriting(false);

@@ -43,13 +43,14 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
       .catch(() => {});
   }, []);
 
-  // Auto-generate name from manufacturer + model
-  useEffect(() => {
+  // Auto-generate name from manufacturer + model (for new printers only)
+  const autoGenerateName = (manufacturer: string, printerModel: string) => {
     if (!initialData) {
-      const auto = [form.manufacturer, form.printerModel].filter(Boolean).join(" ");
-      if (auto) setForm((f) => ({ ...f, name: auto }));
+      const auto = [manufacturer, printerModel].filter(Boolean).join(" ");
+      if (auto) return auto;
     }
-  }, [form.manufacturer, form.printerModel, initialData]);
+    return null;
+  };
 
   const toggleNozzle = (id: string) => {
     setForm((f) => ({
@@ -87,7 +88,11 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
           <input
             className={inputClass}
             value={form.manufacturer}
-            onChange={(e) => setForm({ ...form, manufacturer: e.target.value })}
+            onChange={(e) => {
+              const manufacturer = e.target.value;
+              const autoName = autoGenerateName(manufacturer, form.printerModel);
+              setForm({ ...form, manufacturer, ...(autoName != null ? { name: autoName } : {}) });
+            }}
             placeholder="e.g. Prusa, Bambu Lab"
             required
           />
@@ -97,7 +102,11 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
           <input
             className={inputClass}
             value={form.printerModel}
-            onChange={(e) => setForm({ ...form, printerModel: e.target.value })}
+            onChange={(e) => {
+              const printerModel = e.target.value;
+              const autoName = autoGenerateName(form.manufacturer, printerModel);
+              setForm({ ...form, printerModel, ...(autoName != null ? { name: autoName } : {}) });
+            }}
             placeholder="e.g. Core One, X1C"
             required
           />

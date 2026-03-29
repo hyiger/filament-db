@@ -23,14 +23,25 @@ export interface NfcStatus {
   tagUid: string | null;
 }
 
+type PCSCLite = ReturnType<typeof pcsclite>;
+
+/** Extract the CardReader type from the pcsclite "reader" event listener. */
+type CardReader = Parameters<Extract<Parameters<PCSCLite["on"]>[1], (reader: unknown) => void>>[0];
+
+/** Status payload from CardReader "status" event. */
+interface CardReaderStatus {
+  atr?: Buffer;
+  state: number;
+}
+
 const BLOCK_SIZE = 4;
 const DEFAULT_BLOCK_COUNT = 80;
 
 export class NfcService extends EventEmitter {
-  private pcsc: any;
-  private readers: Map<string, any> = new Map();
+  private pcsc: PCSCLite;
+  private readers: Map<string, CardReader> = new Map();
   private readerPresent: Map<string, boolean> = new Map();
-  private activeReader: any = null;
+  private activeReader: CardReader | null = null;
   private status: NfcStatus = {
     readerConnected: false,
     readerName: null,
@@ -42,7 +53,7 @@ export class NfcService extends EventEmitter {
     super();
     this.pcsc = pcsclite();
 
-    this.pcsc.on("reader", (reader: any) => {
+    this.pcsc.on("reader", (reader: CardReader) => {
       this.readers.set(reader.name, reader);
       console.log(`[NFC] Reader discovered: ${reader.name} (${this.readers.size} total)`);
 
@@ -50,7 +61,7 @@ export class NfcService extends EventEmitter {
         this.updateStatus({ readerConnected: true, readerName: reader.name });
       }
 
-      reader.on("status", (status: any) => {
+      reader.on("status", (status: CardReaderStatus) => {
         const changes = reader.state ^ status.state;
         if (!changes) return;
         const isPresent = !!(status.state & reader.SCARD_STATE_PRESENT);
@@ -98,11 +109,11 @@ export class NfcService extends EventEmitter {
 
   // ── Connection helpers ──────────────────────────────────────────
 
-  private trySharedConnect(reader: any): Promise<number | null> {
+  private trySharedConnect(reader: CardReader): Promise<number | null> {
     return new Promise((resolve) => {
       reader.connect(
         { share_mode: reader.SCARD_SHARE_SHARED },
-        (err: any, protocol: number) => {
+        (err: unknown, protocol: number) => {
           if (err || protocol == null || protocol <= 0) return resolve(null);
           resolve(protocol);
         },
@@ -110,7 +121,7 @@ export class NfcService extends EventEmitter {
     });
   }
 
-  private disconnectReader(reader: any): Promise<void> {
+  private disconnectReader(reader: CardReader): Promise<void> {
     return new Promise((resolve) => {
       reader.disconnect(reader.SCARD_LEAVE_CARD, () => resolve());
     });
@@ -170,8 +181,8 @@ export class NfcService extends EventEmitter {
     if (!reader) throw new Error("No active reader connection");
 
     return new Promise((resolve, reject) => {
-      reader.transmit(data, maxLen, protocol, (err: any, resp: Buffer) => {
-        if (err) return reject(new Error(`Transmit: ${err.message}`));
+      reader.transmit(data, maxLen, protocol, (err: unknown, resp: Buffer) => {
+        if (err) return reject(new Error(`Transmit: ${err instanceof Error ? err.message : String(err)}`));
         resolve(resp);
       });
     });

@@ -33,7 +33,7 @@ export default function NozzlesPage() {
   }, [toast]);
 
   useEffect(() => {
-    fetchNozzles();
+    fetchNozzles(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetching on mount
   }, [fetchNozzles]);
 
   const handleDelete = async (id: string, name: string) => {

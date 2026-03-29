@@ -31,7 +31,7 @@ export default function SyncStatusIndicator() {
 
   // Avoid hydration mismatch — only render after mount
   useEffect(() => {
-    setOnline(navigator.onLine);
+    setOnline(navigator.onLine); // eslint-disable-line react-hooks/set-state-in-effect -- mount-only initialization to avoid hydration mismatch
     setMounted(true);
   }, []);
 

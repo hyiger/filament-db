@@ -1,4 +1,23 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+
+interface SyncStatus {
+  state: "idle" | "syncing" | "error" | "offline";
+  lastSyncAt: string | null;
+  error: string | null;
+  progress: string | null;
+}
+
+interface ConnectionModeFallback {
+  intended: string;
+  actual: string;
+}
+
+interface NfcStatus {
+  readerConnected: boolean;
+  readerName: string | null;
+  tagPresent: boolean;
+  tagUid: string | null;
+}
 
 contextBridge.exposeInMainWorld("electronAPI", {
   // Config
@@ -13,15 +32,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getSyncStatus: () => ipcRenderer.invoke("get-sync-status"),
   triggerSync: () => ipcRenderer.invoke("trigger-sync"),
   checkAtlasConnectivity: () => ipcRenderer.invoke("check-atlas-connectivity"),
-  onSyncStatusChange: (callback: (status: any) => void) => {
-    const handler = (_event: any, status: any) => callback(status);
+  onSyncStatusChange: (callback: (status: SyncStatus) => void) => {
+    const handler = (_event: IpcRendererEvent, status: SyncStatus) => callback(status);
     ipcRenderer.on("sync-status-changed", handler);
     return () => {
       ipcRenderer.removeListener("sync-status-changed", handler);
     };
   },
-  onConnectionModeFallback: (callback: (info: any) => void) => {
-    const handler = (_event: any, info: any) => callback(info);
+  onConnectionModeFallback: (callback: (info: ConnectionModeFallback) => void) => {
+    const handler = (_event: IpcRendererEvent, info: ConnectionModeFallback) => callback(info);
     ipcRenderer.on("connection-mode-fallback", handler);
     return () => {
       ipcRenderer.removeListener("connection-mode-fallback", handler);
@@ -32,15 +51,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
   nfcGetStatus: () => ipcRenderer.invoke("nfc-get-status"),
   nfcReadTag: () => ipcRenderer.invoke("nfc-read-tag"),
   nfcWriteTag: (payload: number[]) => ipcRenderer.invoke("nfc-write-tag", payload),
-  onNfcStatusChange: (callback: (status: any) => void) => {
-    const handler = (_event: any, status: any) => callback(status);
+  onNfcStatusChange: (callback: (status: NfcStatus) => void) => {
+    const handler = (_event: IpcRendererEvent, status: NfcStatus) => callback(status);
     ipcRenderer.on("nfc-status-changed", handler);
     return () => {
       ipcRenderer.removeListener("nfc-status-changed", handler);
     };
   },
-  onNfcTagRead: (callback: (data: any) => void) => {
-    const handler = (_event: any, data: any) => callback(data);
+  onNfcTagRead: (callback: (data: unknown) => void) => {
+    const handler = (_event: IpcRendererEvent, data: unknown) => callback(data);
     ipcRenderer.on("nfc-tag-detected", handler);
     return () => {
       ipcRenderer.removeListener("nfc-tag-detected", handler);

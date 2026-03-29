@@ -39,7 +39,7 @@ export default function PrintersPage() {
   }, [toast]);
 
   useEffect(() => {
-    fetchPrinters();
+    fetchPrinters(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetching on mount
   }, [fetchPrinters]);
 
   const handleDelete = async (id: string, name: string) => {

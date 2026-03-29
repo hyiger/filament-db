@@ -4,7 +4,7 @@ import { spawn, ChildProcess } from "child_process";
 import Store from "electron-store";
 import http from "http";
 import { NfcService } from "./nfc-service";
-import { startLocalMongo, stopLocalMongo, getLocalMongoUri } from "./local-mongo";
+import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import { SyncService, SyncStatus } from "./sync-service";
 
 export type ConnectionMode = "atlas" | "offline" | "hybrid";

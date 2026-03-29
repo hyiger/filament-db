@@ -203,7 +203,7 @@ export default function Home() {
     const data = await res.json();
     setFilaments(data);
     setLoading(false);
-  }, [search, typeFilter, vendorFilter]);
+  }, [search, typeFilter, vendorFilter, toast]);
 
   useEffect(() => {
     setMounted(true);
@@ -579,6 +579,7 @@ export default function Home() {
           >
             {importing ? "Importing..." : "Import INI"}
           </button>
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
           <a
             href="/api/filaments/export"
             className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm"

@@ -55,8 +55,9 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
   // Listen for auto-read events from the main process
   useEffect(() => {
     if (!isElectron) return;
-    const api = (window as any).electronAPI;
-    const unsub = api.onNfcTagRead(async (event: { data?: DecodedOpenPrintTag; error?: string }) => {
+    const api = window.electronAPI!;
+    const unsub = api.onNfcTagRead(async (raw: unknown) => {
+      const event = raw as { data?: DecodedOpenPrintTag; error?: string };
       if (event.error) {
         setTagReadResult({ error: event.error });
         return;

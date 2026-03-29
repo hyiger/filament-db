@@ -42,7 +42,8 @@ export async function POST(request: NextRequest) {
 
       for (const remote of remoteFilaments) {
         // Strip MongoDB internal fields
-        const { _id, __v, createdAt, updatedAt, ...filamentData } = remote;
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { _id: _remoteId, __v: _remoteV, createdAt: _createdAt, updatedAt: _updatedAt, ...filamentData } = remote;
 
         // Strip parent references (they won't exist in the local DB)
         delete filamentData.parentId;

@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
@@ -57,6 +57,7 @@ function NewFilamentContent() {
   };
 
   // Initialize from NFC query params
+  /* eslint-disable react-hooks/set-state-in-effect -- initializes form state from URL search params on mount */
   useEffect(() => {
     if (searchParams.get("from_nfc")) {
       const nozzleMax = searchParams.get("nozzle") ? Number(searchParams.get("nozzle")) : null;
@@ -92,11 +93,11 @@ function NewFilamentContent() {
       setFormKey((k) => k + 1);
     }
   }, [searchParams]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Initialize from ?parentId= query param
   useEffect(() => {
     if (parentId) {
-      setParentLoading(true);
       fetch(`/api/filaments/${parentId}`)
         .then((r) => (r.ok ? r.json() : null))
         .then((parent) => {
@@ -135,6 +136,7 @@ function NewFilamentContent() {
   }, []);
 
   // Handle NFC tag read while on this page
+  /* eslint-disable react-hooks/set-state-in-effect -- reacts to external NFC tag read event */
   useEffect(() => {
     if (!tagReadResult?.data) return;
     const data = tagReadResult.data;
@@ -162,6 +164,7 @@ function NewFilamentContent() {
     dismissTagRead();
     toast("Form populated from NFC tag");
   }, [tagReadResult, dismissTagRead, toast]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Handle INI file selection
   const handleIniFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -190,13 +193,13 @@ function NewFilamentContent() {
     }
   };
 
-  const applyIniFilament = useCallback((f: Record<string, unknown>) => {
+  const applyIniFilament = (f: Record<string, unknown>) => {
     setInitialData(f);
     setTitle("New Filament from INI");
     setFormKey((k) => k + 1);
     setIniFilaments(null);
     toast("Form populated from INI profile");
-  }, [toast]);
+  };
 
   // Handle clone selection
   const handleClone = async (id: string) => {
@@ -209,6 +212,7 @@ function NewFilamentContent() {
     }
     const filament = await res.json();
     // Strip identity fields — keep everything else as a template
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { _id, _variants, _inherited, parentId: _pid, createdAt, updatedAt, __v, ...rest } = filament;
     setInitialData({ ...rest, name: `${rest.name} (copy)` });
     setTitle("Clone Filament");
