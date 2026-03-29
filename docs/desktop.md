@@ -16,6 +16,14 @@ Download the latest release for your platform from [GitHub Releases](https://git
 | Linux arm64 | `FilamentDB-x.x.x-linux-arm64.AppImage` | For Raspberry Pi 5 and other arm64 boards |
 | Linux arm64 | `FilamentDB-x.x.x-linux-arm64.deb` | For arm64 Ubuntu/Debian -- install with `sudo dpkg -i` |
 
+> **macOS Gatekeeper:** The app is not notarized with an Apple Developer ID. After installing, macOS may block the app from opening. To fix this, run the following command in Terminal:
+>
+> ```bash
+> xattr -cr "/Applications/Filament DB.app"
+> ```
+>
+> This removes the quarantine flag that macOS applies to downloaded apps. You only need to do this once after installation.
+
 ## First Launch
 
 On first launch, the app shows a setup wizard where you choose a connection mode:
@@ -99,7 +107,7 @@ The desktop app wraps the Next.js application in Electron:
 │  │ - App lifecycle                       │  │
 │  │ - BrowserWindow management            │  │
 │  │ - Spawns Next.js standalone server    │  │
-│  │   via ELECTRON_RUN_AS_NODE=1          │  │
+│  │   via Electron utilityProcess        │  │
 │  │ - Encrypted config storage            │  │
 │  │ - IPC handlers (save/load config)     │  │
 │  │ - HTTP polling for server readiness   │  │
@@ -134,7 +142,7 @@ The desktop app wraps the Next.js application in Electron:
 
 In **development mode**: Electron loads `http://localhost:3000` (Next.js dev server).
 
-In **production mode**: Electron uses `ELECTRON_RUN_AS_NODE=1` to run the standalone Next.js server as a child process on `http://localhost:3456`, then loads it in the BrowserWindow.
+In **production mode**: Electron uses `utilityProcess.fork()` to run the standalone Next.js server on `http://localhost:3456`, then loads it in the BrowserWindow.
 
 ## Resetting Configuration
 

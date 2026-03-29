@@ -1,6 +1,5 @@
-import { app, BrowserWindow, ipcMain, dialog } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, utilityProcess, UtilityProcess } from "electron";
 import path from "path";
-import { spawn, ChildProcess } from "child_process";
 import Store from "electron-store";
 import http from "http";
 import { NfcService } from "./nfc-service";
@@ -20,7 +19,7 @@ const store = new Store({
 
 const isDev = !app.isPackaged;
 let mainWindow: BrowserWindow | null = null;
-let serverProcess: ChildProcess | null = null;
+let serverProcess: UtilityProcess | null = null;
 let nfcService: NfcService | null = null;
 let syncService: SyncService | null = null;
 const PORT = 3456;
@@ -155,16 +154,16 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
       PORT: String(PORT),
       HOSTNAME: "localhost",
       NODE_ENV: "production",
-      ELECTRON_RUN_AS_NODE: "1",
     };
 
     if (uri) {
       env.MONGODB_URI = uri;
     }
 
-    serverProcess = spawn(process.execPath, [serverPath], {
+    serverProcess = utilityProcess.fork(serverPath, [], {
       env,
       stdio: "pipe",
+      serviceName: "next-server",
     });
 
     serverProcess.stdout?.on("data", (data: Buffer) => {
@@ -175,13 +174,16 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
       console.error("Server error:", data.toString().trim());
     });
 
-    serverProcess.on("error", (err) => {
-      console.error("Failed to spawn server:", err);
-      reject(err);
+    serverProcess.on("spawn", () => {
+      // Wait for the server to respond to HTTP requests
+      waitForServer(PORT).then(resolve).catch(reject);
     });
 
-    // Wait for the server to respond to HTTP requests
-    waitForServer(PORT).then(resolve).catch(reject);
+    serverProcess.on("exit", (code) => {
+      if (code !== 0) {
+        reject(new Error(`Server exited with code ${code}`));
+      }
+    });
   });
 }
 

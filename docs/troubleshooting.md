@@ -50,6 +50,16 @@ If the filament ID in the URL doesn't exist, the page will show "Filament not fo
 
 Filaments with per-nozzle calibrations are exported as separate sections per nozzle (e.g., `[filament:Name 0.4mm]`). The original filament name without a nozzle suffix will not appear if it has calibrations. Filaments without calibrations export normally.
 
+## Desktop app: macOS app hangs or won't open after installation
+
+macOS Gatekeeper blocks the app because it is not notarized with an Apple Developer ID. Remove the quarantine flag by running in Terminal:
+
+```bash
+xattr -cr "/Applications/Filament DB.app"
+```
+
+You only need to do this once after installing or updating the app.
+
 ## Desktop app: setup wizard keeps appearing
 
 The MongoDB connection string may not be saving. Check that the config directory is writable:
