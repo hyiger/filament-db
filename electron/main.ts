@@ -75,9 +75,67 @@ function waitForServer(port: number, timeoutMs = 30000): Promise<void> {
   });
 }
 
-function startProductionServer(mongoUri?: string): Promise<void> {
+/**
+ * Resolve a mongodb+srv:// URI to a standard mongodb:// URI.
+ * The standalone Next.js server's bundled mongodb driver cannot do DNS SRV
+ * resolution, so we resolve it here in the main process and pass the
+ * standard URI to the child process.
+ */
+async function resolveSrvUri(uri: string): Promise<string> {
+  if (!uri.startsWith("mongodb+srv://")) return uri;
+
+  const { MongoClient } = await import("mongodb");
+  const client = new MongoClient(uri, {
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 5000,
+  });
+
+  try {
+    await client.connect();
+    // Extract the resolved topology from the client's options
+    const options = client.options;
+    const hosts = options.hosts.map((h: { host: string; port: number }) =>
+      `${h.host}:${h.port}`
+    ).join(",");
+
+    // Parse the original URI to preserve credentials and options
+    const parsed = new URL(uri.replace("mongodb+srv://", "http://"));
+    const auth = parsed.username
+      ? `${parsed.username}:${parsed.password}@`
+      : "";
+    const db = parsed.pathname || "/";
+    const params = parsed.search || "";
+
+    // Build standard mongodb:// URI with tls=true (SRV implies TLS)
+    const searchParams = new URLSearchParams(params.replace("?", ""));
+    if (!searchParams.has("tls") && !searchParams.has("ssl")) {
+      searchParams.set("tls", "true");
+    }
+    // authSource is typically "admin" for Atlas
+    if (!searchParams.has("authSource")) {
+      searchParams.set("authSource", "admin");
+    }
+
+    const resolvedUri = `mongodb://${auth}${hosts}${db}?${searchParams.toString()}`;
+    return resolvedUri;
+  } finally {
+    await client.close().catch(() => {});
+  }
+}
+
+async function startProductionServer(mongoUri?: string): Promise<void> {
+  let uri = mongoUri || (store.get("mongodbUri") as string);
+
+  // Resolve mongodb+srv:// to standard mongodb:// for the standalone server
+  if (uri) {
+    try {
+      uri = await resolveSrvUri(uri);
+    } catch (err) {
+      console.error("Failed to resolve SRV URI, using original:", err);
+    }
+  }
+
   return new Promise((resolve, reject) => {
-    const uri = mongoUri || (store.get("mongodbUri") as string);
     const appPath = isDev
       ? path.join(__dirname, "..")
       : path.join(__dirname, "..");
