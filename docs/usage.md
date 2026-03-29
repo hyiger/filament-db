@@ -17,7 +17,7 @@ Click any filament name in the table to see its full details:
 - Temperature settings (nozzle, bed, chamber, first layer variants)
 - Physical properties (cost, density, diameter)
 - Performance settings (max volumetric speed, extrusion multiplier, pressure advance)
-- Compatible nozzles and per-nozzle calibration values (EM, max vol speed, PA, retraction)
+- Compatible nozzles and per-printer per-nozzle calibration values (EM, max vol speed, PA, retraction)
 - Technical Data Sheet -- click "View Technical Data Sheet" to open an inline preview, or "Open in new tab" for full-screen
 - Inheritance information (base profile reference)
 - All raw PrusaSlicer settings (click "Show all PrusaSlicer settings" to expand)
@@ -114,9 +114,24 @@ Each nozzle has:
 
 ---
 
-## Per-Nozzle Calibrations
+## Managing Printers
 
-When editing a filament, the **"Nozzle Calibrations"** section appears below the compatible nozzles checkboxes. For each selected nozzle, you can enter override values for:
+Click **"Manage Printers"** on the home page to view, create, edit, and delete printer profiles.
+
+Each printer has:
+- **Manufacturer** (e.g. Prusa, Bambu Lab)
+- **Model** (e.g. Core One, X1C)
+- **Name** -- auto-generated from manufacturer + model, but editable
+- **Installed Nozzles** -- select which nozzles are available on this printer
+- **Notes**
+
+Printers cannot be deleted if they are referenced by any filament calibrations. The error message tells you how many filaments reference the printer.
+
+---
+
+## Calibrations
+
+When editing a filament, the **"Calibrations"** section appears below the compatible nozzles checkboxes. For each selected nozzle, you can enter override values for:
 
 - Extrusion Multiplier (EM)
 - Max Volumetric Speed (mm³/s)
@@ -125,7 +140,16 @@ When editing a filament, the **"Nozzle Calibrations"** section appears below the
 - Retraction Speed (mm/s)
 - Z Lift (mm)
 
-Leave fields blank to use the filament's base defaults. When exporting to INI, filaments with calibrations generate one `[filament:Name NozzleSize]` section per nozzle with the overrides merged.
+### Per-Printer Calibrations
+
+If you have defined printers, **printer tabs** appear above the calibration fields. Each tab represents a printer (plus a "Default (any printer)" tab for values that apply to all printers).
+
+- **Default tab** -- calibration values that apply when no printer-specific override exists
+- **Printer tabs** -- calibration values specific to that printer. Placeholder values show the default calibration value so you can see what you're overriding.
+
+This lets you store different PA, EM, and retraction values for the same filament on different printers (e.g., a Prusa Core One vs. a Bambu H2D).
+
+Leave fields blank to use the filament's base defaults. When exporting to INI, filaments with printer-specific calibrations generate sections like `[filament:Name PrinterName NozzleSize]`, while default calibrations generate `[filament:Name NozzleSize]`.
 
 ---
 
@@ -165,3 +189,9 @@ On any filament's detail page:
 ### Exporting OpenPrintTag Binary
 
 Click **"Export OPT"** on any filament's detail page to download the binary as a `.bin` file for use with external NFC tools.
+
+---
+
+## API Documentation
+
+Click **"API Docs"** on the home page to open the interactive Swagger UI at `/api-docs`. This provides a browsable, testable interface for all REST API endpoints with full request/response schemas. The underlying OpenAPI 3.0 spec is available at `/openapi.json`.

@@ -9,7 +9,8 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Browse** -- searchable, filterable, sortable table with color swatches and collapsible statistics summary (by type, vendor, color)
 - **Full CRUD** -- create, view, edit, and delete filament profiles
 - **Nozzle management** -- define nozzles by diameter, type, high-flow, and hardened attributes
-- **Per-nozzle calibration** -- store different EM, max volumetric speed, pressure advance, and retraction values per nozzle
+- **Printer management** -- define printers with manufacturer, model, and installed nozzles
+- **Per-printer per-nozzle calibration** -- store different EM, max volumetric speed, pressure advance, and retraction values per printer and nozzle combination
 - **Technical Data Sheets** -- link vendor TDS documents with inline preview pane and auto-suggestions from same-vendor filaments
 - **Advanced settings** -- temperatures, fan settings, shrinkage, retraction, pressure advance, abrasive/soluble flags, notes
 - **Presets** -- named parameter variants per filament (e.g., shore hardness profiles with different temps and extrusion multiplier)
@@ -20,6 +21,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Offline mode** -- works without internet using an embedded local MongoDB; choose cloud-only, hybrid (local + sync), or fully offline
 - **Atlas sync** -- in hybrid mode, automatic bidirectional sync with MongoDB Atlas using last-write-wins conflict resolution
 - **Import from Atlas** -- connect to a remote MongoDB Atlas database and selectively import filaments
+- **API documentation** -- interactive Swagger UI at `/api-docs` with full OpenAPI 3.0 spec
 
 ## Tech Stack
 
@@ -59,7 +61,7 @@ See the [Setup Guide](docs/setup.md) for detailed instructions.
 | [Importing & Exporting](docs/importing.md) | PrusaSlicer config export, web UI import, CLI seed script, INI export |
 | [Usage Guide](docs/usage.md) | Browsing, filtering, sorting, editing filaments, nozzle management, calibrations, TDS links |
 | [NFC Tags](docs/nfc.md) | Reading and writing OpenPrintTag NFC tags with the ACR1552U reader |
-| [API Reference](docs/api.md) | REST API endpoints for filaments and nozzles |
+| [API Reference](docs/api.md) | REST API endpoints for filaments, nozzles, and printers (also available as [interactive Swagger UI](/api-docs)) |
 | [Testing](docs/testing.md) | Running tests, coverage thresholds, CI/CD with GitHub Actions |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and solutions |
 
@@ -74,14 +76,17 @@ filament-db/
 │   ├── app/
 │   │   ├── api/filaments/   # Filament REST API (CRUD, import, export, match, types, vendors, parents)
 │   │   ├── api/nozzles/     # Nozzle REST API (CRUD)
+│   │   ├── api/printers/    # Printer REST API (CRUD)
 │   │   ├── api/setup/       # Connection test endpoint (for desktop setup wizard)
+│   │   ├── api-docs/        # Interactive Swagger UI (OpenAPI 3.0)
 │   │   ├── setup/           # First-launch setup wizard
 │   │   ├── filaments/       # Filament pages (list, detail, edit, new)
-│   │   └── nozzles/         # Nozzle pages (list, edit, new)
+│   │   ├── nozzles/         # Nozzle pages (list, edit, new)
+│   │   └── printers/        # Printer pages (list, edit, new)
 │   ├── components/          # React components (NFC status, dialogs, providers)
 │   ├── hooks/               # Custom hooks (useNfc)
 │   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder
-│   └── models/              # Mongoose schemas (Filament, Nozzle)
+│   └── models/              # Mongoose schemas (Filament, Nozzle, Printer)
 ├── tests/                   # Vitest unit tests (204 tests)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)

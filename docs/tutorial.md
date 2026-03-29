@@ -81,7 +81,23 @@ After setup, a small status pill appears next to the "Filament DB" title on the 
 
 ---
 
-## Step 3: Create Your First Nozzle
+## Step 3: Set Up Your Printers
+
+If you have multiple printers (e.g. a Prusa Core One and a Bambu H2D), define them now so you can store per-printer calibrations later. If you only have one printer or want to skip this, jump to Step 4.
+
+1. From the home page, click **Manage Printers**.
+2. Click **+ Add Printer**.
+3. Fill in:
+   - **Manufacturer** -- e.g. `Prusa`
+   - **Model** -- e.g. `Core One`
+   - The **Name** auto-generates as `Prusa Core One` (editable)
+4. Under **Installed Nozzles**, check the nozzles available on this printer (you can come back to this after creating nozzles in Step 4).
+5. Click **Create Printer**.
+6. Repeat for each printer you own.
+
+---
+
+## Step 4: Create Your First Nozzle
 
 Before adding filaments you need at least one nozzle profile so you can assign per-nozzle calibrations later.
 
@@ -99,7 +115,7 @@ Before adding filaments you need at least one nozzle profile so you can assign p
 
 ---
 
-## Step 4: Add a Filament
+## Step 5: Add a Filament
 
 ### Option A: Add Manually
 
@@ -134,7 +150,7 @@ After populating, review and adjust any fields before clicking **Create Filament
 
 ---
 
-## Step 5: Import Filaments in Bulk
+## Step 6: Import Filaments in Bulk
 
 ### From PrusaSlicer
 
@@ -170,7 +186,7 @@ The CLI also auto-creates nozzle profiles from `compatible_printers_condition` i
 
 ---
 
-## Step 6: Browse and Filter Your Library
+## Step 7: Browse and Filter Your Library
 
 The home page shows all filaments in a sortable table.
 
@@ -187,13 +203,13 @@ If you have color variants, parent filaments show a count badge (e.g. "5 colors"
 
 ---
 
-## Step 7: View Filament Details
+## Step 8: View Filament Details
 
 Click any filament name to open its detail page. You'll see:
 
 - **Header** -- color swatch, name, vendor, type, and badges for "variant" or "3 colors"
 - **Info cards** -- nozzle temp, bed temp, cost, density, diameter, max volumetric speed. Cards with a blue background and "(inherited)" label show values inherited from a parent filament.
-- **Nozzle Calibrations** -- a table with per-nozzle values for EM, Max Vol Speed, PA, Retract Length, Retract Speed, and Z Lift. If no calibrations exist, compatible nozzles are shown as simple badges.
+- **Calibrations** -- tables grouped by printer (when multiple printers have data) showing per-nozzle values for EM, Max Vol Speed, PA, Retract Length, Retract Speed, and Z Lift. If no calibrations exist, compatible nozzles are shown as simple badges.
 - **TDS preview** -- click "View Technical Data Sheet" to open an inline preview, or "Open in new tab" for full-screen.
 - **PrusaSlicer settings** -- click "Show all PrusaSlicer settings" to expand every raw key-value pair.
 
@@ -204,18 +220,18 @@ Click any filament name to open its detail page. You'll see:
 
 ---
 
-## Step 8: Edit a Filament
+## Step 9: Edit a Filament
 
 1. From the detail page, click **Edit** (blue button).
 2. Change any fields. The form is identical to the create form, pre-filled with current values.
-3. To add per-nozzle calibrations: check a nozzle under "Compatible Nozzles", then fill in the calibration fields that appear below it.
+3. To add calibrations: check a nozzle under "Compatible Nozzles", then fill in the calibration fields that appear below. If you have printers defined, use the printer tabs to enter printer-specific values.
 4. Click **Update Filament**.
 
 You can also click the **Edit** button directly from the home page table row.
 
 ---
 
-## Step 9: Create Color Variants
+## Step 10: Create Color Variants
 
 Variants share a parent's settings (temperatures, density, retraction, calibrations) and only store what's different: name, color, and cost.
 
@@ -234,17 +250,19 @@ To turn an existing standalone filament into a variant:
 
 ---
 
-## Step 10: Export to PrusaSlicer
+## Step 11: Export to PrusaSlicer
 
 1. On the home page, click **Export INI**.
 2. A `.ini` file downloads containing all your filaments as `[filament:Name]` sections.
 3. In PrusaSlicer, go to **File > Import > Import Config Bundle** and select the file.
 
-**How calibrations export**: Filaments with per-nozzle calibrations generate one section per nozzle (e.g. `[filament:Prusament PLA 0.4mm]`) with overrides merged in. Pressure advance is written as `M572 S<value>` in `start_filament_gcode`.
+**How calibrations export**: Filaments with calibrations generate one section per printer/nozzle combination (e.g. `[filament:Prusament PLA Prusa Core One 0.4mm]` for printer-specific or `[filament:Prusament PLA 0.4mm]` for default) with overrides merged in. Pressure advance is written as `M572 S<value>` in `start_filament_gcode`.
 
 ---
 
-## Step 11: Manage Nozzles
+## Step 12: Manage Nozzles and Printers
+
+### Nozzles
 
 From the home page, click **Manage Nozzles**.
 
@@ -252,9 +270,17 @@ From the home page, click **Manage Nozzles**.
 - **Delete** -- click Delete to remove a nozzle. If any filaments reference it, deletion is blocked and a message tells you how many filaments to update first.
 - **Create** -- click + Add Nozzle to add a new one.
 
+### Printers
+
+From the home page, click **Manage Printers**.
+
+- **Edit** -- click Edit next to any printer to change its properties or update installed nozzles.
+- **Delete** -- click Delete to remove a printer. If any filament calibrations reference it, deletion is blocked.
+- **Create** -- click + Add Printer to add a new one.
+
 ---
 
-## Step 12: NFC Tags (Desktop App Only)
+## Step 13: NFC Tags (Desktop App Only)
 
 NFC features require the Electron desktop app plus hardware. Skip this section if you only use the web app.
 
@@ -303,7 +329,7 @@ If you prefer using external NFC tools:
 
 ---
 
-## Step 13: Sync and Offline Workflow (Desktop App — Hybrid Mode)
+## Step 14: Sync and Offline Workflow (Desktop App — Hybrid Mode)
 
 If you chose **Hybrid** mode during setup, your data lives locally and syncs to Atlas automatically. Here's how it works day-to-day:
 
@@ -311,7 +337,7 @@ If you chose **Hybrid** mode during setup, your data lives locally and syncs to 
 
 - The app syncs with Atlas every **5 minutes** when connected.
 - Changes made locally are pushed to Atlas; changes made remotely (e.g., from the web app or another device) are pulled down.
-- The sync status pill next to "Filament DB" shows the current state — see [Step 2](#step-2-understand-the-connection-status-indicator) for the full legend.
+- The sync status pill next to "Filament DB" shows the current state — see [Step 2](#step-2-understand-the-connection-status-indicator).
 
 ### Working Offline
 
@@ -333,7 +359,7 @@ Even in pure **Atlas mode**, if Atlas is unreachable when the app starts, it aut
 
 ---
 
-## Step 14: Delete a Filament
+## Step 15: Delete a Filament
 
 1. On the home page, click **Delete** next to any filament.
 2. Confirm the deletion in the popup.
@@ -357,6 +383,8 @@ In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted fi
 | Edit filament | Detail page > Edit |
 | Add color variant | Detail page > + Add Color |
 | Manage nozzles | Home > Manage Nozzles |
+| Manage printers | Home > Manage Printers |
+| Browse API docs | Home > API Docs (or navigate to `/api-docs`) |
 | Write NFC tag | Detail page > Write NFC (desktop app) |
 | Export NFC binary | Detail page > Export OPT |
 | Manual sync | Click status pill > Sync Now (desktop hybrid mode) |

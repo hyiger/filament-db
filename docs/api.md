@@ -1,5 +1,7 @@
 # API Reference
 
+> **Interactive docs**: Browse and test all endpoints in the [Swagger UI](/api-docs) — an interactive OpenAPI 3.0 explorer built into the app.
+
 ## Filaments
 
 | Method | Endpoint | Description |
@@ -33,7 +35,7 @@ Create a new filament. Send a JSON body with at minimum `name`, `vendor`, and `t
 
 ### GET /api/filaments/:id
 
-Returns a single filament with `compatibleNozzles` and `calibrations.nozzle` populated with full nozzle documents.
+Returns a single filament with `compatibleNozzles`, `calibrations.nozzle`, and `calibrations.printer` populated with full documents.
 
 ### PUT /api/filaments/:id
 
@@ -45,7 +47,7 @@ Soft-delete a filament by ID (sets `_deletedAt` timestamp). The filament is hidd
 
 ### GET /api/filaments/export
 
-Downloads all filaments as a PrusaSlicer-compatible INI file. Filaments with per-nozzle calibrations are exported as separate `[filament:Name NozzleSize]` sections with overrides merged into the base settings.
+Downloads all filaments as a PrusaSlicer-compatible INI file. Filaments with calibrations are exported as separate sections with overrides merged into the base settings. Section names follow the pattern `[filament:Name PrinterName NozzleSize]` when printer-specific calibrations exist, or `[filament:Name NozzleSize]` for default/any-printer calibrations.
 
 ### POST /api/filaments/import
 
@@ -161,6 +163,40 @@ Update a nozzle. Send a JSON body with the fields to update.
 ### DELETE /api/nozzles/:id
 
 Soft-delete a nozzle by ID (sets `_deletedAt` timestamp). Cannot delete a nozzle that is referenced by filaments. Returns `{ message: "Deleted" }`.
+
+---
+
+## Printers
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/printers` | List all printers. Query params: `manufacturer` |
+| `POST` | `/api/printers` | Create a new printer |
+| `GET` | `/api/printers/:id` | Get a single printer by ID (populates installed nozzles) |
+| `PUT` | `/api/printers/:id` | Update a printer by ID |
+| `DELETE` | `/api/printers/:id` | Delete a printer by ID |
+
+### GET /api/printers
+
+Returns an array of printer documents sorted by manufacturer then name, with `installedNozzles` populated. Supports optional query parameters:
+
+- `manufacturer` -- filter by manufacturer name
+
+### POST /api/printers
+
+Create a new printer. Required fields: `name`, `manufacturer`, `printerModel`.
+
+### GET /api/printers/:id
+
+Returns a single printer with `installedNozzles` populated with full nozzle documents.
+
+### PUT /api/printers/:id
+
+Update a printer. Send a JSON body with the fields to update.
+
+### DELETE /api/printers/:id
+
+Soft-delete a printer by ID (sets `_deletedAt` timestamp). Cannot delete a printer that is referenced by filament calibrations. Returns `{ message: "Deleted" }`.
 
 ---
 
