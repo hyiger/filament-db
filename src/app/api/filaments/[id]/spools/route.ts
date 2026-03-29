@@ -10,18 +10,21 @@ export async function POST(
   const { id } = await params;
   const body = await request.json();
 
-  const filament = await Filament.findOne({ _id: id, _deletedAt: null });
+  const filament = await Filament.findOneAndUpdate(
+    { _id: id, _deletedAt: null },
+    {
+      $push: {
+        spools: {
+          label: body.label || "",
+          totalWeight: body.totalWeight ?? null,
+        },
+      },
+    },
+    { new: true }
+  ).lean();
+
   if (!filament) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-
-  filament.spools.push({
-    label: body.label || "",
-    totalWeight: body.totalWeight ?? null,
-  });
-
-  await filament.save();
-
-  const updated = await Filament.findById(id).lean();
-  return NextResponse.json(updated);
+  return NextResponse.json(filament);
 }

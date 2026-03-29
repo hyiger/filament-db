@@ -10,23 +10,20 @@ export async function PUT(
   const { id, spoolId } = await params;
   const body = await request.json();
 
-  const filament = await Filament.findOne({ _id: id, _deletedAt: null });
+  const update: Record<string, unknown> = {};
+  if (body.totalWeight !== undefined) update["spools.$.totalWeight"] = body.totalWeight;
+  if (body.label !== undefined) update["spools.$.label"] = body.label;
+
+  const filament = await Filament.findOneAndUpdate(
+    { _id: id, _deletedAt: null, "spools._id": spoolId },
+    { $set: update },
+    { new: true }
+  ).lean();
+
   if (!filament) {
-    return NextResponse.json({ error: "Filament not found" }, { status: 404 });
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-
-  const spool = filament.spools.id(spoolId);
-  if (!spool) {
-    return NextResponse.json({ error: "Spool not found" }, { status: 404 });
-  }
-
-  if (body.totalWeight !== undefined) spool.totalWeight = body.totalWeight;
-  if (body.label !== undefined) spool.label = body.label;
-
-  await filament.save();
-
-  const updated = await Filament.findById(id).lean();
-  return NextResponse.json(updated);
+  return NextResponse.json(filament);
 }
 
 export async function DELETE(
@@ -36,19 +33,14 @@ export async function DELETE(
   await dbConnect();
   const { id, spoolId } = await params;
 
-  const filament = await Filament.findOne({ _id: id, _deletedAt: null });
+  const filament = await Filament.findOneAndUpdate(
+    { _id: id, _deletedAt: null },
+    { $pull: { spools: { _id: spoolId } } },
+    { new: true }
+  ).lean();
+
   if (!filament) {
-    return NextResponse.json({ error: "Filament not found" }, { status: 404 });
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-
-  const spool = filament.spools.id(spoolId);
-  if (!spool) {
-    return NextResponse.json({ error: "Spool not found" }, { status: 404 });
-  }
-
-  spool.deleteOne();
-  await filament.save();
-
-  const updated = await Filament.findById(id).lean();
-  return NextResponse.json(updated);
+  return NextResponse.json(filament);
 }
