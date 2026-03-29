@@ -286,6 +286,25 @@ ipcMain.handle("reset-config", async () => {
   return { success: true };
 });
 
+ipcMain.handle("test-connection", async (_event, uri: string) => {
+  const { MongoClient } = await import("mongodb");
+  const client = new MongoClient(uri, {
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 5000,
+  });
+  try {
+    await client.connect();
+    await client.db().command({ ping: 1 });
+    return { success: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Connection failed";
+    const safe = message.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
+    return { success: false, error: safe };
+  } finally {
+    await client.close().catch(() => {});
+  }
+});
+
 ipcMain.handle("show-message", async (_event, options: { type: string; title: string; message: string }) => {
   if (mainWindow) {
     await dialog.showMessageBox(mainWindow, {

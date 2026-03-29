@@ -23,35 +23,43 @@ export default function SetupPage() {
     setSuccess("");
 
     try {
-      // Test the connection via API
-      const res = await fetch("/api/setup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mongodbUri: mongoUri }),
-      });
+      if (window.electronAPI?.testConnection) {
+        // Electron: test via IPC (main process has full MongoDB driver)
+        const result = await window.electronAPI.testConnection(mongoUri);
+        if (!result.success) {
+          setError(result.error || "Connection failed");
+          setTesting(false);
+          return;
+        }
 
-      let data;
-      try {
-        data = await res.json();
-      } catch {
-        setError("Server error — check that the connection string is valid");
-        setTesting(false);
-        return;
-      }
-
-      if (!res.ok) {
-        setError(data.error || "Connection failed");
-        setTesting(false);
-        return;
-      }
-
-      if (window.electronAPI) {
         await window.electronAPI.saveConfig({
           connectionMode: mode === "hybrid" ? "hybrid" : "atlas",
           atlasUri: mongoUri,
         });
         // Electron will redirect to home
       } else {
+        // Web app: test via API route
+        const res = await fetch("/api/setup", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mongodbUri: mongoUri }),
+        });
+
+        let data;
+        try {
+          data = await res.json();
+        } catch {
+          setError("Server error — check that the connection string is valid");
+          setTesting(false);
+          return;
+        }
+
+        if (!res.ok) {
+          setError(data.error || "Connection failed");
+          setTesting(false);
+          return;
+        }
+
         setSuccess(
           "Connection successful! To use the web app, add this URI as MONGODB_URI in your .env.local file and restart the server."
         );

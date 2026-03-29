@@ -25,6 +25,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string }) =>
     ipcRenderer.invoke("save-config", config),
   resetConfig: () => ipcRenderer.invoke("reset-config"),
+  testConnection: (uri: string) => ipcRenderer.invoke("test-connection", uri),
   showMessage: (options: { type: string; title: string; message: string }) =>
     ipcRenderer.invoke("show-message", options),
 
