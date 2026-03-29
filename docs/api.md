@@ -8,9 +8,9 @@
 |--------|----------|-------------|
 | `GET` | `/api/filaments` | List all filaments. Query params: `search`, `type`, `vendor` |
 | `POST` | `/api/filaments` | Create a new filament |
-| `GET` | `/api/filaments/:id` | Get a single filament by ID (populates nozzles and calibrations) |
+| `GET` | `/api/filaments/:id` | Get a single filament by ID (populates nozzles, calibrations, variants) |
 | `PUT` | `/api/filaments/:id` | Update a filament by ID |
-| `DELETE` | `/api/filaments/:id` | Delete a filament by ID |
+| `DELETE` | `/api/filaments/:id` | Soft-delete a filament (blocked if it has variants) |
 | `GET` | `/api/filaments/export` | Download all filaments as a PrusaSlicer INI file |
 | `POST` | `/api/filaments/import` | Upload an INI file to import filament profiles |
 | `GET` | `/api/filaments/match` | Match an NFC tag against existing filaments. Query params: `name`, `vendor`, `type` |
@@ -20,6 +20,14 @@
 | `POST` | `/api/filaments/parse-ini` | Parse an INI file and return filament profiles without saving |
 | `POST` | `/api/filaments/import-atlas` | Connect to a remote MongoDB Atlas database and import filaments |
 | `GET` | `/api/filaments/:id/openprinttag` | Download OpenPrintTag binary for a filament |
+
+### Spools
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/filaments/:id/spools` | Add a spool to a filament |
+| `PUT` | `/api/filaments/:id/spools/:spoolId` | Update a spool's weight or label |
+| `DELETE` | `/api/filaments/:id/spools/:spoolId` | Remove a spool from a filament |
 
 ### GET /api/filaments
 
@@ -31,23 +39,30 @@ Returns an array of filament documents. Supports optional query parameters:
 
 ### POST /api/filaments
 
-Create a new filament. Send a JSON body with at minimum `name`, `vendor`, and `type`.
+Create a new filament. Send a JSON body with at minimum `name`, `vendor`, and `type`. Validates `parentId` if provided (must exist and must not itself be a variant).
+
+If `totalWeight` is provided but no `spools` array, an initial spool entry is automatically created from the weight value.
 
 ### GET /api/filaments/:id
 
-Returns a single filament with `compatibleNozzles`, `calibrations.nozzle`, and `calibrations.printer` populated with full documents.
+Returns a single filament with `compatibleNozzles`, `calibrations.nozzle`, and `calibrations.printer` populated with full documents. Also includes:
+
+- `_variants` -- array of child variant filaments (`_id`, `name`, `color`, `cost`)
+- Inherited field resolution when the filament has a `parentId` -- fields not set on the variant are inherited from the parent, and an `_inherited` array lists which fields were inherited
 
 ### PUT /api/filaments/:id
 
-Update a filament. Send a JSON body with the fields to update. Supports partial updates.
+Update a filament. Send a JSON body with the fields to update. Supports partial updates. Validates `parentId` changes (prevents circular references, nested inheritance, and self-reference).
 
 ### DELETE /api/filaments/:id
 
 Soft-delete a filament by ID (sets `_deletedAt` timestamp). The filament is hidden from all queries but retained for sync propagation in hybrid mode. Returns `{ message: "Deleted" }`.
 
+**Cannot delete a filament that has color variants.** Returns 400: `"Cannot delete a filament that has color variants. Delete the variants first."`.
+
 ### GET /api/filaments/export
 
-Downloads all filaments as a PrusaSlicer-compatible INI file. Filaments with calibrations are exported as separate sections with overrides merged into the base settings. Section names follow the pattern `[filament:Name PrinterName NozzleSize]` when printer-specific calibrations exist, or `[filament:Name NozzleSize]` for default/any-printer calibrations.
+Downloads all filaments as a PrusaSlicer-compatible INI file. Filaments with calibrations are exported as separate sections with overrides merged into the base settings. Section names follow the pattern `[filament:Name PrinterName NozzleSize]` when printer-specific calibrations exist, `[filament:Name NozzleSize]` for default/any-printer calibrations, or `[filament:Name PrinterName NozzleSize PresetLabel]` when presets are defined.
 
 ### POST /api/filaments/import
 
@@ -79,7 +94,7 @@ Returns:
 }
 ```
 
-Matching priority: exact name match > vendor+type > vendor-only. If no exact match, returns up to 5 candidates.
+Matching priority: exact name match > vendor+type > vendor-only. If a single vendor+type match is found it is returned as the match. Otherwise, returns up to 5 candidates.
 
 ### GET /api/filaments/types
 
@@ -91,7 +106,7 @@ Returns a sorted array of distinct vendor name strings (e.g., `["Bambu Lab", "Po
 
 ### GET /api/filaments/parents
 
-Returns filaments that can serve as parents for color variants. Supports optional query parameters:
+Returns filaments that can serve as parents for color variants, sorted by vendor then name. Supports optional query parameters:
 
 - `search` -- filter by name (case-insensitive regex)
 - `exclude` -- filament ID to exclude from results (e.g., the current filament being edited)
@@ -110,7 +125,7 @@ Connect to a remote MongoDB Atlas database and import filaments. This endpoint s
 ```json
 { "uri": "mongodb+srv://user:pass@cluster.mongodb.net/" }
 ```
-Returns `{ filaments: [...] }` with projected fields: `_id`, `name`, `vendor`, `type`, `color`, `parentId`, `temperatures`.
+Returns `{ filaments: [...] }` with projected fields: `_id`, `name`, `vendor`, `type`, `color`, `temperatures.nozzle`, `temperatures.bed`.
 
 **Import filaments** — send `{ uri, filamentIds: [...] }` to import selected filaments into the local database:
 ```json
@@ -132,6 +147,100 @@ Existing filaments with the same name are updated; new filaments are created. Pa
 
 Downloads the filament as an OpenPrintTag CBOR binary (`.bin` file). The binary can be written to an NFC-V (ISO 15693) tag or used with other OpenPrintTag-compatible tools.
 
+### POST /api/filaments/:id/spools
+
+Add a new spool to a filament. Send a JSON body:
+
+```json
+{ "label": "Spool #2", "totalWeight": 1236 }
+```
+
+Both fields are optional (`label` defaults to `""`, `totalWeight` defaults to `null`). Returns the updated filament document with the new spool in the `spools` array.
+
+### PUT /api/filaments/:id/spools/:spoolId
+
+Update a spool's weight or label. Send a JSON body with any combination of:
+
+```json
+{ "totalWeight": 850, "label": "Opened 2025-03-15" }
+```
+
+Returns the updated filament document.
+
+### DELETE /api/filaments/:id/spools/:spoolId
+
+Remove a spool from a filament. Returns the updated filament document.
+
+---
+
+## Prusament
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/prusament` | Scrape a Prusament spool page by spool ID |
+| `POST` | `/api/prusament/import` | Import a scraped spool as a filament |
+
+### GET /api/prusament
+
+Fetches a Prusament spool detail page (from the QR code on the spool) and extracts the embedded spool data. Query parameter:
+
+- `spoolId` -- the spool identifier (e.g., `c6974284da`) or the full URL
+
+Returns:
+```json
+{
+  "spoolId": "c6974284da",
+  "productName": "Prusament PETG Prusa Galaxy Black 1kg - v1",
+  "material": "PETG",
+  "colorName": "Prusa Galaxy Black",
+  "colorHex": "#292929",
+  "diameter": 1.75,
+  "diameterAvg": 1.748,
+  "diameterStdDev": 2.5183,
+  "ovality": 0.971,
+  "netWeight": 1050,
+  "spoolWeight": 186,
+  "totalWeight": 1236,
+  "lengthMeters": 345,
+  "nozzleTempMin": 240,
+  "nozzleTempMax": 260,
+  "bedTempMin": 70,
+  "bedTempMax": 90,
+  "manufactureDate": "2025-01-05 08:21:40",
+  "country": "CZ",
+  "goodsId": 4715,
+  "priceUsd": 29.99,
+  "priceEur": 29.99,
+  "photoUrl": "https://...",
+  "pageUrl": "https://prusament.com/spool/?spoolId=c6974284da"
+}
+```
+
+### POST /api/prusament/import
+
+Imports a scraped Prusament spool into the database. Send a JSON body:
+
+```json
+{
+  "spool": { "...scraped data from GET /api/prusament..." },
+  "action": "create",
+  "filamentId": null
+}
+```
+
+**`action: "create"`** -- Creates a new filament named `"Prusament {material} {colorName}"` with all specs populated (temperatures, density, weights, spool). If a filament with that name already exists, the spool is added to it instead.
+
+**`action: "add-spool"`** -- Adds the spool to an existing filament specified by `filamentId`.
+
+Returns:
+```json
+{
+  "action": "create",
+  "filament": { "...full filament document..." },
+  "message": "Created \"Prusament PETG Prusa Galaxy Black\" with spool c6974284da"
+}
+```
+
 ---
 
 ## Nozzles
@@ -142,7 +251,7 @@ Downloads the filament as an OpenPrintTag CBOR binary (`.bin` file). The binary 
 | `POST` | `/api/nozzles` | Create a new nozzle |
 | `GET` | `/api/nozzles/:id` | Get a single nozzle by ID |
 | `PUT` | `/api/nozzles/:id` | Update a nozzle by ID |
-| `DELETE` | `/api/nozzles/:id` | Delete a nozzle by ID |
+| `DELETE` | `/api/nozzles/:id` | Soft-delete a nozzle (blocked if referenced by filaments) |
 
 ### GET /api/nozzles
 
@@ -174,7 +283,7 @@ Soft-delete a nozzle by ID (sets `_deletedAt` timestamp). Cannot delete a nozzle
 | `POST` | `/api/printers` | Create a new printer |
 | `GET` | `/api/printers/:id` | Get a single printer by ID (populates installed nozzles) |
 | `PUT` | `/api/printers/:id` | Update a printer by ID |
-| `DELETE` | `/api/printers/:id` | Delete a printer by ID |
+| `DELETE` | `/api/printers/:id` | Soft-delete a printer (blocked if referenced by calibrations) |
 
 ### GET /api/printers
 

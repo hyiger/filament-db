@@ -63,11 +63,12 @@ Build an installer for your current platform:
 npm run electron:build
 ```
 
-This runs four steps:
+This runs five steps:
 1. `npm run build` -- builds Next.js in standalone mode
 2. `npm run electron:fixlinks` -- resolves symlinks in the standalone output and copies it with static assets
-3. `npm run electron:compile` -- bundles Electron TypeScript with esbuild
-4. `npm run electron:pack` -- packages everything with electron-builder
+3. `npm run electron:rebuild` -- rebuilds native modules (PC/SC) for Electron's Node.js
+4. `npm run electron:compile` -- bundles Electron TypeScript with esbuild
+5. `npm run electron:pack` -- packages everything with electron-builder
 
 The output installer will be in `dist-electron/`.
 

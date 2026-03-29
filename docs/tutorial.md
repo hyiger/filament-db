@@ -172,6 +172,18 @@ You can import filaments from another Filament DB instance hosted on MongoDB Atl
 5. Click **Import X Filaments**, then **Confirm Import**.
 6. Existing filaments with the same name are updated; new filaments are created. Parent-variant relationships from the remote database are not preserved.
 
+### From a Prusament Spool QR Code
+
+Prusament spools have a QR code linking to a detail page with full specifications (material, color, temperatures, weight, diameter tolerances, pricing).
+
+1. On the home page, click **Prusament QR**.
+2. Enter the spool ID (e.g., `c6974284da`) or paste the full URL from the QR code.
+3. The app fetches and displays the spool data -- material, color swatch, temperatures, weights, pricing.
+4. Choose **"New filament"** to create a fully-populated filament entry, or **"Add spool to existing"** to add the spool to a matching filament in your library.
+5. Click **Import**.
+
+You can also click **"+ Prusament QR"** on a filament's detail page (in the Spool Tracker section) to add another spool of the same material.
+
 ### Via CLI (alternative)
 
 ```bash
@@ -359,7 +371,20 @@ Even in pure **Atlas mode**, if Atlas is unreachable when the app starts, it aut
 
 ---
 
-## Step 15: Delete a Filament
+## Step 15: Track Spools
+
+Each filament can track multiple physical spools with individual weights.
+
+1. On a filament's detail page, scroll to the **Spool Tracker** section.
+2. Click **"+ Add Spool"** to add a new spool with an optional label and weight.
+3. Each spool shows its label, total weight, and a delete button.
+4. The tracker aggregates stats across all spools (total weight, computed length from density and diameter).
+
+If a filament has a single `totalWeight` but no spools yet, click **"Migrate to spool tracking"** to convert it.
+
+---
+
+## Step 16: Delete a Filament
 
 1. On the home page, click **Delete** next to any filament.
 2. Confirm the deletion in the popup.
@@ -377,6 +402,7 @@ In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted fi
 | Add filament | Home > + Add Filament |
 | Populate from NFC / INI / Clone | Add Filament > Populate from toolbar |
 | Import from PrusaSlicer | Home > Import INI |
+| Import Prusament spool | Home > Prusament QR |
 | Import from Atlas | Home > Import from Atlas |
 | Export to PrusaSlicer | Home > Export INI |
 | View filament details | Home > click filament name |
@@ -387,6 +413,7 @@ In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted fi
 | Browse API docs | Home > API Docs (or navigate to `/api-docs`) |
 | Write NFC tag | Detail page > Write NFC (desktop app) |
 | Export NFC binary | Detail page > Export OPT |
+| Track spools | Detail page > Spool Tracker > + Add Spool |
 | Manual sync | Click status pill > Sync Now (desktop hybrid mode) |
 | Check connection status | Status pill next to "Filament DB" title |
 

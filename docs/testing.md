@@ -26,14 +26,15 @@ tests/
 ├── openprinttag-decode.test.ts # OpenPrintTag decoder tests (15 tests)
 ├── ndef.test.ts                # NDEF wrap/parse tests (15 tests)
 ├── nfc-roundtrip.test.ts       # NFC encode→decode roundtrip tests (6 tests)
-├── resolveFilament.test.ts     # Parent/variant resolution tests (14 tests)
+├── resolveFilament.test.ts     # Parent/variant resolution + spool inheritance tests (19 tests)
 ├── parseIni.test.ts            # INI parser tests (18 tests)
-├── Filament.test.ts            # Filament model tests (11 tests)
+├── prusament.test.ts           # Prusament spool data extraction tests (8 tests)
+├── Filament.test.ts            # Filament model + spool CRUD tests (17 tests)
 ├── Nozzle.test.ts              # Nozzle model tests (9 tests)
 └── mongodb.test.ts             # DB connection tests (6 tests)
 ```
 
-**Total: 204 tests across 9 test files**
+**Total: 223 tests across 10 test files**
 
 ## Coverage Thresholds
 

@@ -192,6 +192,43 @@ Click **"Export OPT"** on any filament's detail page to download the binary as a
 
 ---
 
+## Spool Tracking
+
+Each filament can track multiple physical spools with individual weights.
+
+### Adding Spools
+
+On a filament's detail page, the **Spool Tracker** section appears when weight data exists. Click **"+ Add Spool"** to add a new spool entry with an optional label and weight.
+
+### Managing Spools
+
+Each spool row shows:
+- **Label** -- editable text (e.g., "Opened 2025-03-15" or a Prusament spool ID)
+- **Total Weight** -- weight in grams (including the empty spool)
+- **Delete** button to remove the spool entry
+
+The tracker aggregates stats across all spools, showing total remaining weight and computed length (from density and diameter).
+
+### Migrating from Single Weight
+
+If a filament has a `totalWeight` value but no spools array, a **"Migrate to spool tracking"** button converts the single weight into a spool entry.
+
+---
+
+## Prusament Spool Import
+
+Prusament filament spools have a QR code linking to a detail page with full specifications.
+
+1. Click **"Prusament QR"** on the home page, or **"+ Prusament QR"** on a filament's spool tracker
+2. Enter the spool ID (e.g., `c6974284da`) or paste the full URL
+3. Review the extracted data (material, color, temperatures, weights, pricing, diameter tolerances)
+4. Choose **"New filament"** to create a fully-populated entry, or **"Add spool to existing"** to add the spool to a matching filament
+5. Click **Import**
+
+This also works from a filament's detail page to add another spool of the same material.
+
+---
+
 ## API Documentation
 
 Click **"API Docs"** on the home page to open the interactive Swagger UI at `/api-docs`. This provides a browsable, testable interface for all REST API endpoints with full request/response schemas. The underlying OpenAPI 3.0 spec is available at `/openapi.json`.

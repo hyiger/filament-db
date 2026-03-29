@@ -15,11 +15,12 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Advanced settings** -- temperatures, fan settings, shrinkage, retraction, pressure advance, abrasive/soluble flags, notes
 - **Presets** -- named parameter variants per filament (e.g., shore hardness profiles with different temps and extrusion multiplier)
 - **Color variants** -- clone a filament as a color variant; inherited settings resolve automatically from the parent
-- **Spool tracking** -- track remaining filament by weight with computed length in meters from density and diameter
+- **Spool tracking** -- track multiple spools per filament with individual weights and computed length in meters from density and diameter
 - **NFC tag read/write** -- read and write [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags directly from the desktop app using an ACR1552U reader
 - **OpenPrintTag export** -- download OpenPrintTag binary files for any filament
 - **Offline mode** -- works without internet using an embedded local MongoDB; choose cloud-only, hybrid (local + sync), or fully offline (first launch downloads the database engine, then works fully offline)
 - **Atlas sync** -- in hybrid mode, automatic bidirectional sync with MongoDB Atlas using last-write-wins conflict resolution
+- **Prusament QR import** -- scan a Prusament spool QR code (or enter the spool ID) to auto-import filament specs, temperatures, weights, and pricing
 - **Import from Atlas** -- connect to a remote MongoDB Atlas database and selectively import filaments
 - **API documentation** -- interactive Swagger UI at `/api-docs` with full OpenAPI 3.0 spec
 
@@ -77,6 +78,7 @@ filament-db/
 │   │   ├── api/filaments/   # Filament REST API (CRUD, import, export, match, types, vendors, parents)
 │   │   ├── api/nozzles/     # Nozzle REST API (CRUD)
 │   │   ├── api/printers/    # Printer REST API (CRUD)
+│   │   ├── api/prusament/    # Prusament spool scraping and import
 │   │   ├── api/setup/       # Connection test endpoint (for desktop setup wizard)
 │   │   ├── api-docs/        # Interactive Swagger UI (OpenAPI 3.0)
 │   │   ├── setup/           # First-launch setup wizard
@@ -87,7 +89,7 @@ filament-db/
 │   ├── hooks/               # Custom hooks (useNfc)
 │   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder
 │   └── models/              # Mongoose schemas (Filament, Nozzle, Printer)
-├── tests/                   # Vitest unit tests (204 tests)
+├── tests/                   # Vitest unit tests (223 tests across 10 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   └── release.yml          # CD: build desktop installers on version tags (4 platforms)

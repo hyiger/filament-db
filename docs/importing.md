@@ -70,6 +70,22 @@ Running the seed script again will update existing filaments (matched by name) w
 
 ---
 
+## Prusament Spool Import
+
+Prusament filament spools have a QR code that links to a detail page with specifications (material, color, temperatures, weight, manufacturing date, diameter tolerances, pricing).
+
+1. Scan the QR code on the spool or find the spool ID printed on the label
+2. Click **"Prusament QR"** on the home page (or **"+ Prusament QR"** on a filament's spool tracker)
+3. Enter the spool ID (e.g., `c6974284da`) or paste the full URL
+4. Review the extracted data and choose:
+   - **New filament** -- creates a fully-populated filament entry
+   - **Add spool to existing** -- adds the spool to a matching filament
+5. Click **Import**
+
+This also works from a filament's detail page to add another spool of the same material.
+
+---
+
 ## Exporting to PrusaSlicer INI
 
 Click **"Export INI"** in the top right to download all filaments as a PrusaSlicer-compatible INI file. This file contains all stored settings for each filament and can be imported back into PrusaSlicer via **File > Import > Import Config Bundle...**
