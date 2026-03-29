@@ -126,10 +126,19 @@ async function resolveSrvUri(uri: string): Promise<string> {
 async function startProductionServer(mongoUri?: string): Promise<void> {
   let uri = mongoUri || (store.get("mongodbUri") as string);
 
+  // Log the URI scheme for debugging (never log full URI)
+  if (uri) {
+    const scheme = uri.startsWith("mongodb+srv://") ? "mongodb+srv" : "mongodb";
+    console.log(`Starting production server with ${scheme}:// URI`);
+  } else {
+    console.log("Starting production server without MongoDB URI");
+  }
+
   // Resolve mongodb+srv:// to standard mongodb:// for the standalone server
   if (uri) {
     try {
       uri = await resolveSrvUri(uri);
+      console.log("SRV resolution completed, URI scheme:", uri.substring(0, 10));
     } catch (err) {
       console.error("Failed to resolve SRV URI, using original:", err);
     }

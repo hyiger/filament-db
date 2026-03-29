@@ -3,7 +3,16 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 
 export async function GET(request: NextRequest) {
-  await dbConnect();
+  try {
+    await dbConnect();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("dbConnect failed in GET /api/filaments:", message);
+    return NextResponse.json(
+      { error: "Database connection failed", detail: message },
+      { status: 500 },
+    );
+  }
 
   const searchParams = request.nextUrl.searchParams;
   const type = searchParams.get("type");

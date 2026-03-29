@@ -5,7 +5,19 @@ export async function GET() {
   const info: Record<string, unknown> = {
     hasUri: !!uri,
     uriPrefix: uri ? uri.substring(0, 20) + "..." : null,
+    uriScheme: uri
+      ? uri.startsWith("mongodb+srv://")
+        ? "mongodb+srv"
+        : uri.startsWith("mongodb://")
+          ? "mongodb"
+          : "unknown"
+      : null,
     nodeVersion: process.version,
+    platform: process.platform,
+    arch: process.arch,
+    execPath: process.execPath,
+    cwd: process.cwd(),
+    pid: process.pid,
   };
 
   if (!uri) {
@@ -15,6 +27,7 @@ export async function GET() {
   try {
     const mongoose = await import("mongoose");
     info.mongooseVersion = mongoose.version;
+    info.mongooseReadyState = mongoose.connection.readyState;
 
     const conn = await mongoose.createConnection(uri, {
       serverSelectionTimeoutMS: 5000,
