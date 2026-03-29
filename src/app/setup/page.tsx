@@ -30,7 +30,14 @@ export default function SetupPage() {
         body: JSON.stringify({ mongodbUri: mongoUri }),
       });
 
-      const data = await res.json();
+      let data;
+      try {
+        data = await res.json();
+      } catch {
+        setError("Server error — check that the connection string is valid");
+        setTesting(false);
+        return;
+      }
 
       if (!res.ok) {
         setError(data.error || "Connection failed");
