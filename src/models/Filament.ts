@@ -1,5 +1,12 @@
 import mongoose, { Schema, Document, Model } from "mongoose";
 
+export interface ISpool {
+  _id: mongoose.Types.ObjectId;
+  label: string;
+  totalWeight: number | null;
+  createdAt: Date;
+}
+
 export interface IFilament extends Document {
   name: string;
   syncId: string | null;
@@ -37,6 +44,7 @@ export interface IFilament extends Document {
       bedFirstLayer: number | null;
     };
   }[];
+  spools: ISpool[];
   spoolWeight: number | null;
   netFilamentWeight: number | null;
   totalWeight: number | null;
@@ -89,6 +97,13 @@ const FilamentSchema = new Schema<IFilament>(
           bed: { type: Number, default: null },
           bedFirstLayer: { type: Number, default: null },
         },
+      },
+    ],
+    spools: [
+      {
+        label: { type: String, default: "" },
+        totalWeight: { type: Number, default: null },
+        createdAt: { type: Date, default: Date.now },
       },
     ],
     spoolWeight: { type: Number, default: null },

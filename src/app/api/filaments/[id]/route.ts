@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import "@/models/Nozzle";
+import "@/models/Printer";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
 
 export async function GET(

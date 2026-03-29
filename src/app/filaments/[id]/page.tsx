@@ -65,6 +65,12 @@ interface Filament {
       bedFirstLayer: number | null;
     };
   }[];
+  spools: {
+    _id: string;
+    label: string;
+    totalWeight: number | null;
+    createdAt: string;
+  }[];
   spoolWeight: number | null;
   netFilamentWeight: number | null;
   totalWeight: number | null;
@@ -76,8 +82,9 @@ interface Filament {
   _variants?: Variant[];
 }
 
-function computeRemaining(filament: Filament) {
-  const { spoolWeight, netFilamentWeight, totalWeight, density, diameter } = filament;
+function computeRemaining(filament: Filament, overrideTotalWeight?: number | null) {
+  const { spoolWeight, netFilamentWeight, density, diameter } = filament;
+  const totalWeight = overrideTotalWeight !== undefined ? overrideTotalWeight : filament.totalWeight;
   if (totalWeight == null || spoolWeight == null) return null;
 
   const remainingWeight = Math.max(0, totalWeight - spoolWeight);
@@ -110,7 +117,7 @@ export default function FilamentDetail() {
 
   const [notFound, setNotFound] = useState(false);
 
-  // Inline weight update
+  // Legacy single-spool inline weight update
   const [weightInput, setWeightInput] = useState("");
   const [weightSaving, setWeightSaving] = useState(false);
   const weightRef = useRef<HTMLInputElement>(null);
@@ -181,6 +188,91 @@ export default function FilamentDetail() {
       toast("Failed to update weight", "error");
     } finally {
       setWeightSaving(false);
+    }
+  };
+
+  const handleAddSpool = async (label = "", totalWeight: number | null = null) => {
+    if (!filament) return;
+    try {
+      const res = await fetch(`/api/filaments/${filament._id}/spools`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, totalWeight }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setFilament({ ...filament, spools: updated.spools });
+        toast("Spool added");
+      } else {
+        toast("Failed to add spool", "error");
+      }
+    } catch {
+      toast("Failed to add spool", "error");
+    }
+  };
+
+  const handleUpdateSpool = async (spoolId: string, data: { totalWeight?: number; label?: string }) => {
+    if (!filament) return;
+    try {
+      const res = await fetch(`/api/filaments/${filament._id}/spools/${spoolId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setFilament({ ...filament, spools: updated.spools });
+        toast("Spool updated");
+      } else {
+        toast("Failed to update spool", "error");
+      }
+    } catch {
+      toast("Failed to update spool", "error");
+    }
+  };
+
+  const handleRemoveSpool = async (spoolId: string) => {
+    if (!filament) return;
+    if (!confirm("Remove this spool?")) return;
+    try {
+      const res = await fetch(`/api/filaments/${filament._id}/spools/${spoolId}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setFilament({ ...filament, spools: updated.spools });
+        toast("Spool removed");
+      } else {
+        toast("Failed to remove spool", "error");
+      }
+    } catch {
+      toast("Failed to remove spool", "error");
+    }
+  };
+
+  const handleMigrateToSpools = async () => {
+    if (!filament || filament.totalWeight == null) return;
+    try {
+      // Create a spool from the legacy totalWeight
+      const addRes = await fetch(`/api/filaments/${filament._id}/spools`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label: "", totalWeight: filament.totalWeight }),
+      });
+      if (!addRes.ok) { toast("Failed to migrate", "error"); return; }
+      // Clear the legacy totalWeight
+      const clearRes = await fetch(`/api/filaments/${filament._id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ totalWeight: null }),
+      });
+      if (clearRes.ok) {
+        const added = await addRes.json();
+        setFilament({ ...filament, spools: added.spools, totalWeight: null });
+        toast("Migrated to spool tracking");
+      }
+    } catch {
+      toast("Failed to migrate", "error");
     }
   };
 
@@ -333,11 +425,38 @@ export default function FilamentDetail() {
       </div>
 
       {/* Spool Tracker */}
-      {(filament.spoolWeight != null || filament.totalWeight != null || filament.netFilamentWeight != null) && (() => {
-        const remaining = computeRemaining(filament);
+      {(filament.spools?.length > 0 || filament.spoolWeight != null || filament.totalWeight != null || filament.netFilamentWeight != null) && (() => {
+        const hasSpools = filament.spools?.length > 0;
+        const legacyRemaining = !hasSpools ? computeRemaining(filament) : null;
+
+        // Aggregate stats across all spools
+        let aggregateRemaining = 0;
+        let aggregateTotal = 0;
+        let validSpoolCount = 0;
+        if (hasSpools && filament.spoolWeight != null) {
+          for (const spool of filament.spools) {
+            if (spool.totalWeight != null) {
+              aggregateRemaining += Math.max(0, spool.totalWeight - filament.spoolWeight);
+              validSpoolCount++;
+            }
+          }
+          aggregateTotal = (filament.netFilamentWeight ?? 0) * validSpoolCount;
+        }
+        const aggregatePct = aggregateTotal > 0 ? Math.min(100, Math.round((aggregateRemaining / aggregateTotal) * 100)) : null;
+
         return (
           <div className="mb-8 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-            <h2 className="text-sm font-medium text-gray-500 mb-3">Spool Tracker</h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-medium text-gray-500">Spool Tracker</h2>
+              {hasSpools && (
+                <span className="text-xs text-gray-400">
+                  {filament.spools.length} spool{filament.spools.length !== 1 ? "s" : ""}
+                  {aggregatePct != null && ` · ${Math.round(aggregateRemaining)}g total (${aggregatePct}%)`}
+                </span>
+              )}
+            </div>
+
+            {/* Filament-level info cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
               {filament.netFilamentWeight != null && (
                 <InfoCard label="Net Filament" value={`${filament.netFilamentWeight}g`} inherited={inherited.has("netFilamentWeight")} />
@@ -345,31 +464,31 @@ export default function FilamentDetail() {
               {filament.spoolWeight != null && (
                 <InfoCard label="Spool Weight" value={`${filament.spoolWeight}g`} inherited={inherited.has("spoolWeight")} />
               )}
-              {remaining && (
-                <InfoCard label="Remaining" value={`${Math.round(remaining.remainingWeight)}g${remaining.pct != null ? ` (${remaining.pct}%)` : ""}`} />
+              {/* Legacy single-spool remaining */}
+              {!hasSpools && legacyRemaining && (
+                <InfoCard label="Remaining" value={`${Math.round(legacyRemaining.remainingWeight)}g${legacyRemaining.pct != null ? ` (${legacyRemaining.pct}%)` : ""}`} />
               )}
-              {remaining?.lengthMeters != null && (
-                <InfoCard label="Length Left" value={`${remaining.lengthMeters.toFixed(1)}m`} />
+              {!hasSpools && legacyRemaining?.lengthMeters != null && (
+                <InfoCard label="Length Left" value={`${legacyRemaining.lengthMeters.toFixed(1)}m`} />
               )}
             </div>
 
-            {/* Progress bar */}
-            {remaining?.pct != null && (
+            {/* Legacy single-spool progress bar & update */}
+            {!hasSpools && legacyRemaining?.pct != null && (
               <div className="mb-4">
                 <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-3">
                   <div
                     className={`h-3 rounded-full transition-all ${
-                      remaining.pct > 25 ? "bg-green-500" : remaining.pct > 10 ? "bg-yellow-500" : "bg-red-500"
+                      legacyRemaining.pct > 25 ? "bg-green-500" : legacyRemaining.pct > 10 ? "bg-yellow-500" : "bg-red-500"
                     }`}
-                    style={{ width: `${remaining.pct}%` }}
+                    style={{ width: `${legacyRemaining.pct}%` }}
                   />
                 </div>
               </div>
             )}
 
-            {/* Inline weight update */}
-            {filament.spoolWeight != null && (
-              <div className="flex items-center gap-2">
+            {!hasSpools && filament.spoolWeight != null && (
+              <div className="flex items-center gap-2 mb-3">
                 <label className="text-sm text-gray-500 flex-shrink-0">Update scale weight:</label>
                 <input
                   ref={weightRef}
@@ -390,6 +509,48 @@ export default function FilamentDetail() {
                   {weightSaving ? "..." : "Save"}
                 </button>
               </div>
+            )}
+
+            {/* Migrate legacy to spool tracking */}
+            {!hasSpools && filament.totalWeight != null && (
+              <button
+                onClick={handleMigrateToSpools}
+                className="text-xs text-blue-600 hover:underline"
+              >
+                Track multiple spools &rarr;
+              </button>
+            )}
+
+            {/* Multi-spool cards */}
+            {hasSpools && (
+              <div className="space-y-3">
+                {filament.spools.map((spool) => (
+                  <SpoolCard
+                    key={spool._id}
+                    spool={spool}
+                    filament={filament}
+                    onUpdateWeight={(weight) => handleUpdateSpool(spool._id, { totalWeight: weight })}
+                    onUpdateLabel={(label) => handleUpdateSpool(spool._id, { label })}
+                    onRemove={() => handleRemoveSpool(spool._id)}
+                  />
+                ))}
+                <button
+                  onClick={() => handleAddSpool()}
+                  className="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                >
+                  + Add Spool
+                </button>
+              </div>
+            )}
+
+            {/* Add first spool button when no weight data exists yet */}
+            {!hasSpools && filament.totalWeight == null && filament.spoolWeight != null && (
+              <button
+                onClick={() => handleAddSpool()}
+                className="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
+              >
+                + Add Spool
+              </button>
             )}
           </div>
         );
@@ -608,6 +769,127 @@ export default function FilamentDetail() {
         )}
       </div>
     </main>
+  );
+}
+
+interface SpoolCardProps {
+  spool: Filament["spools"][number];
+  filament: Filament;
+  onUpdateWeight: (weight: number) => void;
+  onUpdateLabel: (label: string) => void;
+  onRemove: () => void;
+}
+
+function SpoolCard({ spool, filament, onUpdateWeight, onUpdateLabel, onRemove }: SpoolCardProps) {
+  const [weightInput, setWeightInput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelInput, setLabelInput] = useState(spool.label);
+
+  const remaining = computeRemaining(filament, spool.totalWeight);
+
+  const handleSave = async () => {
+    const val = parseFloat(weightInput);
+    if (isNaN(val) || val < 0) return;
+    setSaving(true);
+    await onUpdateWeight(val);
+    setWeightInput("");
+    setSaving(false);
+  };
+
+  const handleLabelSave = () => {
+    if (labelInput !== spool.label) {
+      onUpdateLabel(labelInput);
+    }
+    setEditingLabel(false);
+  };
+
+  return (
+    <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          {editingLabel ? (
+            <input
+              type="text"
+              className="px-2 py-0.5 border border-gray-300 rounded text-sm bg-transparent w-40"
+              value={labelInput}
+              onChange={(e) => setLabelInput(e.target.value)}
+              onBlur={handleLabelSave}
+              onKeyDown={(e) => { if (e.key === "Enter") handleLabelSave(); if (e.key === "Escape") { setLabelInput(spool.label); setEditingLabel(false); } }}
+              autoFocus
+              placeholder="Spool label"
+            />
+          ) : (
+            <button
+              onClick={() => setEditingLabel(true)}
+              className="text-sm font-medium hover:text-blue-600 transition-colors"
+              title="Click to rename"
+            >
+              {spool.label || "Unnamed spool"}
+            </button>
+          )}
+        </div>
+        <button
+          onClick={onRemove}
+          className="text-gray-400 hover:text-red-500 transition-colors"
+          title="Remove spool"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      {/* Progress bar */}
+      {remaining?.pct != null && (
+        <div className="mb-2">
+          <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+            <div
+              className={`h-2 rounded-full transition-all ${
+                remaining.pct > 25 ? "bg-green-500" : remaining.pct > 10 ? "bg-yellow-500" : "bg-red-500"
+              }`}
+              style={{ width: `${remaining.pct}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Stats row */}
+      <div className="flex items-center gap-4 text-sm text-gray-500 mb-2">
+        {remaining && (
+          <span>{Math.round(remaining.remainingWeight)}g remaining{remaining.pct != null ? ` (${remaining.pct}%)` : ""}</span>
+        )}
+        {remaining?.lengthMeters != null && (
+          <span>{remaining.lengthMeters.toFixed(1)}m left</span>
+        )}
+        {!remaining && spool.totalWeight != null && (
+          <span>{spool.totalWeight}g on scale</span>
+        )}
+      </div>
+
+      {/* Inline weight update */}
+      {filament.spoolWeight != null && (
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            step="1"
+            min="0"
+            className="w-28 px-2 py-1 border border-gray-300 rounded text-sm bg-transparent"
+            value={weightInput}
+            onChange={(e) => setWeightInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }}
+            placeholder={spool.totalWeight != null ? `${spool.totalWeight}g` : "grams"}
+          />
+          <button
+            onClick={handleSave}
+            disabled={saving || !weightInput}
+            className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+          >
+            {saving ? "..." : "Save"}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

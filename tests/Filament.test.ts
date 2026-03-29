@@ -154,4 +154,108 @@ describe("Filament Model", () => {
     expect(filament.createdAt).toBeDefined();
     expect(filament.updatedAt).toBeDefined();
   });
+
+  it("creates a filament with spools", async () => {
+    const filament = await Filament.create({
+      name: "Spool Test",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [
+        { label: "Printer 1", totalWeight: 800 },
+        { label: "Backup", totalWeight: 1150 },
+      ],
+    });
+
+    expect(filament.spools).toHaveLength(2);
+    expect(filament.spools[0].label).toBe("Printer 1");
+    expect(filament.spools[0].totalWeight).toBe(800);
+    expect(filament.spools[0]._id).toBeDefined();
+    expect(filament.spools[0].createdAt).toBeDefined();
+    expect(filament.spools[1].label).toBe("Backup");
+    expect(filament.spools[1].totalWeight).toBe(1150);
+  });
+
+  it("defaults spools to empty array", async () => {
+    const filament = await Filament.create({
+      name: "No Spools",
+      vendor: "Test",
+      type: "PLA",
+    });
+
+    expect(filament.spools).toEqual([]);
+  });
+
+  it("adds a spool via push and save", async () => {
+    const filament = await Filament.create({
+      name: "Push Spool",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+    });
+
+    filament.spools.push({ label: "", totalWeight: 950 });
+    await filament.save();
+
+    const found = await Filament.findById(filament._id);
+    expect(found!.spools).toHaveLength(1);
+    expect(found!.spools[0].totalWeight).toBe(950);
+    expect(found!.spools[0].label).toBe("");
+  });
+
+  it("removes a spool via pull", async () => {
+    const filament = await Filament.create({
+      name: "Remove Spool",
+      vendor: "Test",
+      type: "PLA",
+      spools: [
+        { label: "A", totalWeight: 500 },
+        { label: "B", totalWeight: 600 },
+      ],
+    });
+
+    const spoolId = filament.spools[0]._id;
+    await Filament.findByIdAndUpdate(filament._id, {
+      $pull: { spools: { _id: spoolId } },
+    });
+
+    const found = await Filament.findById(filament._id);
+    expect(found!.spools).toHaveLength(1);
+    expect(found!.spools[0].label).toBe("B");
+  });
+
+  it("updates a spool weight via positional operator", async () => {
+    const filament = await Filament.create({
+      name: "Update Spool",
+      vendor: "Test",
+      type: "PLA",
+      spools: [{ label: "Main", totalWeight: 900 }],
+    });
+
+    const spoolId = filament.spools[0]._id;
+    await Filament.findOneAndUpdate(
+      { _id: filament._id, "spools._id": spoolId },
+      { $set: { "spools.$.totalWeight": 750 } },
+    );
+
+    const found = await Filament.findById(filament._id);
+    expect(found!.spools[0].totalWeight).toBe(750);
+  });
+
+  it("stores spool weight fields", async () => {
+    const filament = await Filament.create({
+      name: "Weight Fields",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 190,
+      netFilamentWeight: 1000,
+      totalWeight: 850,
+    });
+
+    expect(filament.spoolWeight).toBe(190);
+    expect(filament.netFilamentWeight).toBe(1000);
+    expect(filament.totalWeight).toBe(850);
+  });
 });

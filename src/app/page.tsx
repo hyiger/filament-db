@@ -15,6 +15,10 @@ interface Filament {
   cost: number | null;
   density: number | null;
   parentId: string | null;
+  spools: {
+    _id: string;
+    totalWeight: number | null;
+  }[];
   spoolWeight: number | null;
   netFilamentWeight: number | null;
   totalWeight: number | null;
@@ -25,8 +29,28 @@ interface Filament {
 }
 
 function getRemainingPct(f: Filament): number | null {
+  // Multi-spool: aggregate across all spools
+  if (f.spools?.length > 0 && f.spoolWeight != null && f.netFilamentWeight != null && f.netFilamentWeight > 0) {
+    let totalRemaining = 0;
+    let validCount = 0;
+    for (const spool of f.spools) {
+      if (spool.totalWeight != null) {
+        totalRemaining += Math.max(0, spool.totalWeight - f.spoolWeight);
+        validCount++;
+      }
+    }
+    if (validCount === 0) return null;
+    const totalNet = f.netFilamentWeight * validCount;
+    return Math.min(100, Math.max(0, Math.round((totalRemaining / totalNet) * 100)));
+  }
+  // Legacy single-spool
   if (f.totalWeight == null || f.spoolWeight == null || f.netFilamentWeight == null || f.netFilamentWeight <= 0) return null;
   return Math.min(100, Math.max(0, Math.round(((f.totalWeight - f.spoolWeight) / f.netFilamentWeight) * 100)));
+}
+
+function getSpoolCount(f: Filament): number {
+  if (f.spools?.length > 0) return f.spools.length;
+  return f.totalWeight != null ? 1 : 0;
 }
 
 type SortKey = "name" | "vendor" | "type" | "nozzle" | "bed" | "cost" | "remaining";
@@ -401,14 +425,16 @@ export default function Home() {
       <td className="py-2 px-2 text-right">
         {(() => {
           const pct = getRemainingPct(f);
+          const spoolCt = getSpoolCount(f);
           if (pct == null) return <span className="text-gray-400">—</span>;
           const color = pct > 25 ? "bg-green-500" : pct > 10 ? "bg-yellow-500" : "bg-red-500";
           return (
-            <div className="flex items-center gap-1.5 justify-end" title={`${pct}% remaining`}>
+            <div className="flex items-center gap-1.5 justify-end" title={`${pct}% remaining${spoolCt > 1 ? ` (${spoolCt} spools)` : ""}`}>
               <div className="w-12 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                 <div className={`h-2 rounded-full ${color}`} style={{ width: `${pct}%` }} />
               </div>
               <span className="text-xs text-gray-500 w-8 text-right">{pct}%</span>
+              {spoolCt > 1 && <span className="text-xs text-gray-400">×{spoolCt}</span>}
             </div>
           );
         })()}

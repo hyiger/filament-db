@@ -180,4 +180,53 @@ describe("resolveFilament", () => {
     expect(result._inherited).toEqual([]);
     expect(result.vendor).toBe("");
   });
+
+  it("does not inherit spools from parent (variant-only field)", () => {
+    const parent = makeParent({
+      spools: [{ _id: "spool-1", label: "Parent Spool", totalWeight: 800 }],
+    });
+    const variant = makeVariant({
+      spools: [{ _id: "spool-2", label: "Variant Spool", totalWeight: 500 }],
+    });
+    const result = resolveFilament(variant, parent);
+    expect(result.spools).toHaveLength(1);
+    expect(result.spools[0].label).toBe("Variant Spool");
+  });
+
+  it("variant with empty spools does not get parent spools", () => {
+    const parent = makeParent({
+      spools: [{ _id: "spool-1", label: "Parent Spool", totalWeight: 800 }],
+    });
+    const variant = makeVariant({ spools: [] });
+    const result = resolveFilament(variant, parent);
+    expect(result.spools).toEqual([]);
+  });
+
+  it("inherits spoolWeight and netFilamentWeight from parent", () => {
+    const parent = makeParent({ spoolWeight: 200, netFilamentWeight: 1000 });
+    const variant = makeVariant({ spoolWeight: null, netFilamentWeight: null });
+    const result = resolveFilament(variant, parent);
+    expect(result.spoolWeight).toBe(200);
+    expect(result.netFilamentWeight).toBe(1000);
+    expect(result._inherited).toContain("spoolWeight");
+    expect(result._inherited).toContain("netFilamentWeight");
+  });
+
+  it("inherits presets when variant has none", () => {
+    const parent = makeParent({
+      presets: [{ label: "Default", extrusionMultiplier: 0.95, temperatures: { nozzle: 275, nozzleFirstLayer: null, bed: null, bedFirstLayer: null } }],
+    });
+    const variant = makeVariant({ presets: [] });
+    const result = resolveFilament(variant, parent);
+    expect(result.presets).toHaveLength(1);
+    expect(result._inherited).toContain("presets");
+  });
+
+  it("inherits settings fully when variant has none", () => {
+    const parent = makeParent();
+    const variant = makeVariant({ settings: {} });
+    const result = resolveFilament(variant, parent);
+    expect(result.settings.chamber_temperature).toBe("40");
+    expect(result._inherited).toContain("settings");
+  });
 });

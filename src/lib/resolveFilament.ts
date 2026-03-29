@@ -13,7 +13,7 @@
 type FilamentDoc = Record<string, any>;
 
 /** Fields that are always variant-specific and never inherited */
-const VARIANT_ONLY_FIELDS = ["_id", "name", "color", "parentId", "createdAt", "updatedAt", "__v"];
+const VARIANT_ONLY_FIELDS = ["_id", "name", "color", "parentId", "spools", "createdAt", "updatedAt", "__v"];
 
 /** Numeric/string fields that can be inherited from parent */
 const INHERITABLE_FIELDS = [

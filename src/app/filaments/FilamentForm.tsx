@@ -819,7 +819,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Current Total (g)</label>
+            <label className={labelClass}>Initial Weight (g)</label>
             <input
               type="number"
               step="1"
@@ -829,6 +829,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               onChange={(e) => setForm({ ...form, totalWeight: e.target.value })}
               placeholder="Weigh spool on scale"
             />
+            <p className="text-xs text-gray-400 mt-1">Creates your first spool. Add more from the detail page.</p>
           </div>
         </div>
       </fieldset>

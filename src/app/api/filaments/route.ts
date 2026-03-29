@@ -48,6 +48,12 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // If an initial totalWeight is provided, auto-create a spool entry
+  if (body.totalWeight != null && (!body.spools || body.spools.length === 0)) {
+    body.spools = [{ label: "", totalWeight: body.totalWeight }];
+    body.totalWeight = null;
+  }
+
   const filament = await Filament.create(body);
   return NextResponse.json(filament, { status: 201 });
 }
