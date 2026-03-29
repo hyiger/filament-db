@@ -10,6 +10,7 @@ directories:
 icon: assets/icon.png
 
 asar: false
+npmRebuild: false
 
 files:
   - electron-dist/**/*
