@@ -1,6 +1,6 @@
 {
   "name": "filament-db",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Desktop and web app for managing 3D printing filament profiles",
   "author": {
     "name": "hyiger",

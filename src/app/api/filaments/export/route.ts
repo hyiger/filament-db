@@ -36,6 +36,7 @@ export async function GET() {
   const filaments = await Filament.find({ _deletedAt: null })
     .sort({ name: 1 })
     .populate("calibrations.nozzle")
+    .populate("calibrations.printer")
     .lean();
 
   // Build a parent lookup for resolving variants
@@ -58,6 +59,7 @@ export async function GET() {
 
     const settings = (resolved.settings || {}) as Record<string, string | null>;
     const calibrations = resolved.calibrations as unknown as Array<{
+      printer: { _id: string; name: string } | null;
       nozzle: { _id: string; name: string; diameter: number } | null;
       extrusionMultiplier: number | null;
       maxVolumetricSpeed: number | null;
@@ -82,6 +84,7 @@ export async function GET() {
       for (const cal of calibrations) {
         if (!cal.nozzle) continue;
         const nozzleSuffix = cal.nozzle.name;
+        const printerPrefix = cal.printer ? `${cal.printer.name} ` : "";
 
         const calOverrides: Record<string, string> = {};
         if (cal.extrusionMultiplier != null)
@@ -124,10 +127,10 @@ export async function GET() {
               combined.bed_temperature = preset.temperatures.bed.toString();
             if (preset.temperatures?.bedFirstLayer != null)
               combined.first_layer_bed_temperature = preset.temperatures.bedFirstLayer.toString();
-            writeSection(lines, `${resolved.name} ${nozzleSuffix} ${preset.label}`, settings, combined);
+            writeSection(lines, `${resolved.name} ${printerPrefix}${nozzleSuffix} ${preset.label}`, settings, combined);
           }
         } else {
-          writeSection(lines, `${resolved.name} ${nozzleSuffix}`, settings, calOverrides);
+          writeSection(lines, `${resolved.name} ${printerPrefix}${nozzleSuffix}`, settings, calOverrides);
         }
       }
     } else if (presets.length > 0) {

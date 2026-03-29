@@ -39,6 +39,10 @@ interface Filament {
     highFlow: boolean;
   }[];
   calibrations: {
+    printer: {
+      _id: string;
+      name: string;
+    } | null;
     nozzle: {
       _id: string;
       name: string;
@@ -402,55 +406,73 @@ export default function FilamentDetail() {
             )}
           </h2>
           {filament.calibrations?.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
-                <thead>
-                  <tr className="border-b border-gray-300">
-                    <th className="text-left py-2 px-2">Nozzle</th>
-                    <th className="text-right py-2 px-2">EM</th>
-                    <th className="text-right py-2 px-2">Max Vol</th>
-                    <th className="text-right py-2 px-2">PA</th>
-                    <th className="text-right py-2 px-2">Retract</th>
-                    <th className="text-right py-2 px-2">Speed</th>
-                    <th className="text-right py-2 px-2">Z Lift</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filament.calibrations.map((cal, i) => (
-                    <tr
-                      key={i}
-                      className="border-b border-gray-200 dark:border-gray-800"
-                    >
-                      <td className="py-2 px-2">
-                        {cal.nozzle?.name || "—"}
-                        {cal.nozzle?.highFlow && (
-                          <span className="ml-1.5 px-1.5 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 rounded text-xs">
-                            HF
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-2 px-2 text-right">
-                        {cal.extrusionMultiplier ?? "—"}
-                      </td>
-                      <td className="py-2 px-2 text-right">
-                        {cal.maxVolumetricSpeed ? `${cal.maxVolumetricSpeed}` : "—"}
-                      </td>
-                      <td className="py-2 px-2 text-right">
-                        {cal.pressureAdvance ?? "—"}
-                      </td>
-                      <td className="py-2 px-2 text-right">
-                        {cal.retractLength ? `${cal.retractLength}mm` : "—"}
-                      </td>
-                      <td className="py-2 px-2 text-right">
-                        {cal.retractSpeed ? `${cal.retractSpeed}` : "—"}
-                      </td>
-                      <td className="py-2 px-2 text-right">
-                        {cal.retractLift ? `${cal.retractLift}mm` : "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="overflow-x-auto space-y-4">
+              {(() => {
+                // Group calibrations by printer
+                const groups = new Map<string, typeof filament.calibrations>();
+                for (const cal of filament.calibrations) {
+                  const key = cal.printer?._id || "default";
+                  if (!groups.has(key)) groups.set(key, []);
+                  groups.get(key)!.push(cal);
+                }
+                return Array.from(groups.entries()).map(([groupKey, cals]) => (
+                  <div key={groupKey}>
+                    {groups.size > 1 && (
+                      <h3 className="text-xs font-medium text-gray-400 uppercase tracking-wider mb-1">
+                        {cals[0].printer?.name || "Default (any printer)"}
+                      </h3>
+                    )}
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="border-b border-gray-300">
+                          <th className="text-left py-2 px-2">Nozzle</th>
+                          <th className="text-right py-2 px-2">EM</th>
+                          <th className="text-right py-2 px-2">Max Vol</th>
+                          <th className="text-right py-2 px-2">PA</th>
+                          <th className="text-right py-2 px-2">Retract</th>
+                          <th className="text-right py-2 px-2">Speed</th>
+                          <th className="text-right py-2 px-2">Z Lift</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {cals.map((cal, i) => (
+                          <tr
+                            key={i}
+                            className="border-b border-gray-200 dark:border-gray-800"
+                          >
+                            <td className="py-2 px-2">
+                              {cal.nozzle?.name || "—"}
+                              {cal.nozzle?.highFlow && (
+                                <span className="ml-1.5 px-1.5 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 rounded text-xs">
+                                  HF
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-2 px-2 text-right">
+                              {cal.extrusionMultiplier ?? "—"}
+                            </td>
+                            <td className="py-2 px-2 text-right">
+                              {cal.maxVolumetricSpeed ? `${cal.maxVolumetricSpeed}` : "—"}
+                            </td>
+                            <td className="py-2 px-2 text-right">
+                              {cal.pressureAdvance ?? "—"}
+                            </td>
+                            <td className="py-2 px-2 text-right">
+                              {cal.retractLength ? `${cal.retractLength}mm` : "—"}
+                            </td>
+                            <td className="py-2 px-2 text-right">
+                              {cal.retractSpeed ? `${cal.retractSpeed}` : "—"}
+                            </td>
+                            <td className="py-2 px-2 text-right">
+                              {cal.retractLift ? `${cal.retractLift}mm` : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ));
+              })()}
             </div>
           ) : (
             <div className="flex flex-wrap gap-2">

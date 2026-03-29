@@ -17,6 +17,7 @@ export interface IFilament extends Document {
   maxVolumetricSpeed: number | null;
   compatibleNozzles: mongoose.Types.ObjectId[];
   calibrations: {
+    printer: mongoose.Types.ObjectId | null;
     nozzle: mongoose.Types.ObjectId;
     extrusionMultiplier: number | null;
     maxVolumetricSpeed: number | null;
@@ -66,6 +67,7 @@ const FilamentSchema = new Schema<IFilament>(
     compatibleNozzles: [{ type: Schema.Types.ObjectId, ref: "Nozzle" }],
     calibrations: [
       {
+        printer: { type: Schema.Types.ObjectId, ref: "Printer", default: null },
         nozzle: { type: Schema.Types.ObjectId, ref: "Nozzle", required: true },
         extrusionMultiplier: { type: Number, default: null },
         maxVolumetricSpeed: { type: Number, default: null },

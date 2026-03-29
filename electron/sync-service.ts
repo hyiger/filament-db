@@ -107,7 +107,7 @@ export class SyncService extends EventEmitter {
       const localDb = local.db("filament-db");
       const remoteDb = remote.db("filament-db");
 
-      // Sync nozzles first (filaments reference them)
+      // Sync nozzles first (filaments and printers reference them)
       this.updateStatus({ progress: "Syncing nozzles..." });
       const nozzleResult = await this.syncCollection(localDb, remoteDb, "nozzles");
 
@@ -117,14 +117,27 @@ export class SyncService extends EventEmitter {
       const localNozzleByName = new Map(localNozzles.map(n => [n.name, n._id]));
       const remoteNozzleByName = new Map(remoteNozzles.map(n => [n.name, n._id]));
 
-      // Sync filaments with nozzle reference remapping
+      // Sync printers (filament calibrations reference them)
+      this.updateStatus({ progress: "Syncing printers..." });
+      const printerResult = await this.syncCollection(
+        localDb, remoteDb, "printers",
+        (doc, direction) => this.remapPrinterRefs(doc, direction, localNozzleByName, remoteNozzleByName)
+      );
+
+      // Build printer name→ID maps for filament calibration reference remapping
+      const localPrinters = await localDb.collection("printers").find({ _deletedAt: null }).toArray();
+      const remotePrinters = await remoteDb.collection("printers").find({ _deletedAt: null }).toArray();
+      const localPrinterByName = new Map(localPrinters.map(p => [p.name, p._id]));
+      const remotePrinterByName = new Map(remotePrinters.map(p => [p.name, p._id]));
+
+      // Sync filaments with nozzle and printer reference remapping
       this.updateStatus({ progress: "Syncing filaments..." });
       const filamentResult = await this.syncCollection(
         localDb, remoteDb, "filaments",
-        (doc, direction) => this.remapFilamentRefs(doc, direction, localNozzleByName, remoteNozzleByName)
+        (doc, direction) => this.remapFilamentRefs(doc, direction, localNozzleByName, remoteNozzleByName, localPrinterByName, remotePrinterByName)
       );
 
-      const results = [nozzleResult, filamentResult];
+      const results = [nozzleResult, printerResult, filamentResult];
       this.updateStatus({
         state: "idle",
         lastSyncAt: new Date().toISOString(),
@@ -261,31 +274,25 @@ export class SyncService extends EventEmitter {
   }
 
   /**
-   * Remap nozzle ObjectId references in filament documents.
-   * compatibleNozzles and calibrations.nozzle need to point to the
-   * correct IDs on the target side.
+   * Remap nozzle ObjectId references in printer documents.
+   * installedNozzles need to point to the correct IDs on the target side.
    */
-  private remapFilamentRefs(
+  private remapPrinterRefs(
     doc: Document,
     direction: "toLocal" | "toRemote",
     localNozzleByName: Map<string, ObjectId>,
     remoteNozzleByName: Map<string, ObjectId>,
   ): Document {
-    // We need the source nozzle map (to look up names) and target map (to get target IDs)
-    // Since we stripped _id, the nozzle refs in the doc still use source-side IDs
-    // Build a reverse map from source IDs to names
     const sourceMap = direction === "toLocal" ? remoteNozzleByName : localNozzleByName;
     const targetMap = direction === "toLocal" ? localNozzleByName : remoteNozzleByName;
 
-    // Build source ID → name reverse lookup
     const sourceIdToName = new Map<string, string>();
     for (const [name, id] of sourceMap) {
       sourceIdToName.set(id.toString(), name);
     }
 
-    // Remap compatibleNozzles
-    if (Array.isArray(doc.compatibleNozzles)) {
-      doc.compatibleNozzles = doc.compatibleNozzles
+    if (Array.isArray(doc.installedNozzles)) {
+      doc.installedNozzles = doc.installedNozzles
         .map((id: ObjectId) => {
           const name = sourceIdToName.get(id.toString());
           return name ? targetMap.get(name) : null;
@@ -293,15 +300,66 @@ export class SyncService extends EventEmitter {
         .filter(Boolean);
     }
 
-    // Remap calibrations.nozzle
+    return doc;
+  }
+
+  /**
+   * Remap nozzle and printer ObjectId references in filament documents.
+   * compatibleNozzles, calibrations.nozzle, and calibrations.printer need
+   * to point to the correct IDs on the target side.
+   */
+  private remapFilamentRefs(
+    doc: Document,
+    direction: "toLocal" | "toRemote",
+    localNozzleByName: Map<string, ObjectId>,
+    remoteNozzleByName: Map<string, ObjectId>,
+    localPrinterByName: Map<string, ObjectId>,
+    remotePrinterByName: Map<string, ObjectId>,
+  ): Document {
+    const sourceNozzleMap = direction === "toLocal" ? remoteNozzleByName : localNozzleByName;
+    const targetNozzleMap = direction === "toLocal" ? localNozzleByName : remoteNozzleByName;
+    const sourcePrinterMap = direction === "toLocal" ? remotePrinterByName : localPrinterByName;
+    const targetPrinterMap = direction === "toLocal" ? localPrinterByName : remotePrinterByName;
+
+    // Build source ID → name reverse lookups
+    const sourceNozzleIdToName = new Map<string, string>();
+    for (const [name, id] of sourceNozzleMap) {
+      sourceNozzleIdToName.set(id.toString(), name);
+    }
+    const sourcePrinterIdToName = new Map<string, string>();
+    for (const [name, id] of sourcePrinterMap) {
+      sourcePrinterIdToName.set(id.toString(), name);
+    }
+
+    // Remap compatibleNozzles
+    if (Array.isArray(doc.compatibleNozzles)) {
+      doc.compatibleNozzles = doc.compatibleNozzles
+        .map((id: ObjectId) => {
+          const name = sourceNozzleIdToName.get(id.toString());
+          return name ? targetNozzleMap.get(name) : null;
+        })
+        .filter(Boolean);
+    }
+
+    // Remap calibrations.nozzle and calibrations.printer
     if (Array.isArray(doc.calibrations)) {
       doc.calibrations = doc.calibrations
         .map((cal: Document) => {
           if (!cal.nozzle) return cal;
-          const name = sourceIdToName.get(cal.nozzle.toString());
-          const targetId = name ? targetMap.get(name) : null;
-          if (!targetId) return null; // Drop calibration if nozzle doesn't exist on target
-          return { ...cal, nozzle: targetId };
+          const nozzleName = sourceNozzleIdToName.get(cal.nozzle.toString());
+          const targetNozzleId = nozzleName ? targetNozzleMap.get(nozzleName) : null;
+          if (!targetNozzleId) return null; // Drop calibration if nozzle doesn't exist on target
+
+          const remapped = { ...cal, nozzle: targetNozzleId };
+
+          // Remap printer reference if present
+          if (cal.printer) {
+            const printerName = sourcePrinterIdToName.get(cal.printer.toString());
+            const targetPrinterId = printerName ? targetPrinterMap.get(printerName) : null;
+            remapped.printer = targetPrinterId || null;
+          }
+
+          return remapped;
         })
         .filter(Boolean);
     }

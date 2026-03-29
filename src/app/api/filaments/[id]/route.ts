@@ -13,6 +13,7 @@ export async function GET(
   const filament = await Filament.findById(id)
     .populate("compatibleNozzles")
     .populate("calibrations.nozzle")
+    .populate("calibrations.printer")
     .lean();
   if (!filament) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -25,6 +26,7 @@ export async function GET(
     const parent = await Filament.findById(filament.parentId)
       .populate("compatibleNozzles")
       .populate("calibrations.nozzle")
+      .populate("calibrations.printer")
       .lean();
     resolved = resolveFilament(filament, parent);
   }

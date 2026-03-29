@@ -49,6 +49,13 @@ interface ParentOption {
   color: string;
 }
 
+interface PrinterOption {
+  _id: string;
+  name: string;
+  manufacturer: string;
+  printerModel: string;
+}
+
 interface NozzleOption {
   _id: string;
   name: string;
@@ -107,6 +114,9 @@ function extractPressureAdvance(data: Record<string, unknown> | undefined): stri
 export default function FilamentForm({ initialData, onSubmit }: Props) {
   const [nozzles, setNozzles] = useState<NozzleOption[]>([]);
   const [nozzlesLoading, setNozzlesLoading] = useState(true);
+  const [printers, setPrinters] = useState<PrinterOption[]>([]);
+  const [printersLoading, setPrintersLoading] = useState(true);
+  const [selectedPrinter, setSelectedPrinter] = useState<string>("default");
   const [parentOptions, setParentOptions] = useState<ParentOption[]>([]);
   const [parentsLoading, setParentsLoading] = useState(true);
   const [parentSearch, setParentSearch] = useState("");
@@ -239,13 +249,19 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.vendor]);
 
+  const calKey = (printerId: string | null, nozzleId: string) =>
+    `${printerId || "default"}:${nozzleId}`;
+
   const getInitialCalibrations = (): Record<string, CalibrationEntry> => {
     const cals: Record<string, CalibrationEntry> = {};
     if (!initialData?.calibrations) return cals;
     for (const cal of initialData.calibrations) {
       const nozzleId = typeof cal.nozzle === "string" ? cal.nozzle : cal.nozzle?._id;
       if (!nozzleId) continue;
-      cals[nozzleId] = {
+      const printerId = cal.printer
+        ? (typeof cal.printer === "string" ? cal.printer : cal.printer._id)
+        : null;
+      cals[calKey(printerId, nozzleId)] = {
         extrusionMultiplier: cal.extrusionMultiplier?.toString() || "",
         maxVolumetricSpeed: cal.maxVolumetricSpeed?.toString() || "",
         pressureAdvance: cal.pressureAdvance?.toString() || "",
@@ -293,11 +309,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     );
   };
 
-  const updateCalibration = (nozzleId: string, field: keyof CalibrationEntry, value: string) => {
+  const updateCalibration = (key: string, field: keyof CalibrationEntry, value: string) => {
     setCalibrations((prev) => ({
       ...prev,
-      [nozzleId]: {
-        ...(prev[nozzleId] || {
+      [key]: {
+        ...(prev[key] || {
           extrusionMultiplier: "",
           maxVolumetricSpeed: "",
           pressureAdvance: "",
@@ -315,6 +331,13 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       .then((r) => r.json())
       .then(setNozzles)
       .finally(() => setNozzlesLoading(false));
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/printers")
+      .then((r) => r.json())
+      .then(setPrinters)
+      .finally(() => setPrintersLoading(false));
   }, []);
 
   const toggleNozzle = (id: string) => {
@@ -397,14 +420,16 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       },
       maxVolumetricSpeed: parseNum(form.maxVolumetricSpeed),
       compatibleNozzles: form.compatibleNozzles,
-      calibrations: form.compatibleNozzles
-        .filter((nozzleId) => {
-          const cal = calibrations[nozzleId];
-          return cal && Object.values(cal).some((v) => v !== "");
+      calibrations: Object.entries(calibrations)
+        .filter(([, cal]) => Object.values(cal).some((v) => v !== ""))
+        .filter(([key]) => {
+          const [, nozzleId] = key.split(":");
+          return form.compatibleNozzles.includes(nozzleId);
         })
-        .map((nozzleId) => {
-          const cal = calibrations[nozzleId];
+        .map(([key, cal]) => {
+          const [printerId, nozzleId] = key.split(":");
           return {
+            printer: printerId === "default" ? null : printerId,
             nozzle: nozzleId,
             extrusionMultiplier: parseNum(cal.extrusionMultiplier),
             maxVolumetricSpeed: parseNum(cal.maxVolumetricSpeed),
@@ -1123,15 +1148,49 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
       {form.compatibleNozzles.length > 0 && (
         <fieldset className="border border-gray-300 rounded p-4">
-          <legend className="text-sm font-medium px-2">Nozzle Calibrations</legend>
+          <legend className="text-sm font-medium px-2">Calibrations</legend>
           <p className="text-xs text-gray-500 mb-3">
             Per-nozzle overrides for calibration values. Leave blank to use base defaults.
+            {printers.length > 0 && " Select a printer tab for printer-specific calibrations."}
           </p>
+
+          {/* Printer selector tabs */}
+          {!printersLoading && printers.length > 0 && (
+            <div className="flex flex-wrap gap-1 mb-4 border-b border-gray-200 dark:border-gray-700 pb-2">
+              <button
+                type="button"
+                onClick={() => setSelectedPrinter("default")}
+                className={`px-3 py-1.5 text-sm rounded-t ${
+                  selectedPrinter === "default"
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+                }`}
+              >
+                Default (any printer)
+              </button>
+              {printers.map((p) => (
+                <button
+                  key={p._id}
+                  type="button"
+                  onClick={() => setSelectedPrinter(p._id)}
+                  className={`px-3 py-1.5 text-sm rounded-t ${
+                    selectedPrinter === p._id
+                      ? "bg-blue-600 text-white"
+                      : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+                  }`}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="space-y-4">
             {form.compatibleNozzles.map((nozzleId) => {
               const nozzle = nozzles.find((n) => n._id === nozzleId);
               if (!nozzle) return null;
-              const cal = calibrations[nozzleId] || {
+              const key = calKey(selectedPrinter === "default" ? null : selectedPrinter, nozzleId);
+              const cal = calibrations[key] || {
                 extrusionMultiplier: "",
                 maxVolumetricSpeed: "",
                 pressureAdvance: "",
@@ -1139,9 +1198,12 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                 retractSpeed: "",
                 retractLift: "",
               };
+              // Show default values as placeholders when viewing printer-specific calibrations
+              const defaultKey = calKey(null, nozzleId);
+              const defaultCal = selectedPrinter !== "default" ? calibrations[defaultKey] : undefined;
               return (
                 <div
-                  key={nozzleId}
+                  key={key}
                   className="border border-gray-200 dark:border-gray-700 rounded p-3"
                 >
                   <p className="text-sm font-medium mb-2">
@@ -1161,9 +1223,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         className={inputClass}
                         value={cal.extrusionMultiplier}
                         onChange={(e) =>
-                          updateCalibration(nozzleId, "extrusionMultiplier", e.target.value)
+                          updateCalibration(key, "extrusionMultiplier", e.target.value)
                         }
-                        placeholder={form.extrusionMultiplier || "base"}
+                        placeholder={defaultCal?.extrusionMultiplier || form.extrusionMultiplier || "base"}
                       />
                     </div>
                     <div>
@@ -1174,9 +1236,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         className={inputClass}
                         value={cal.maxVolumetricSpeed}
                         onChange={(e) =>
-                          updateCalibration(nozzleId, "maxVolumetricSpeed", e.target.value)
+                          updateCalibration(key, "maxVolumetricSpeed", e.target.value)
                         }
-                        placeholder={form.maxVolumetricSpeed || "base"}
+                        placeholder={defaultCal?.maxVolumetricSpeed || form.maxVolumetricSpeed || "base"}
                       />
                     </div>
                     <div>
@@ -1187,9 +1249,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         className={inputClass}
                         value={cal.pressureAdvance}
                         onChange={(e) =>
-                          updateCalibration(nozzleId, "pressureAdvance", e.target.value)
+                          updateCalibration(key, "pressureAdvance", e.target.value)
                         }
-                        placeholder={form.pressureAdvance || "base"}
+                        placeholder={defaultCal?.pressureAdvance || form.pressureAdvance || "base"}
                       />
                     </div>
                     <div>
@@ -1200,9 +1262,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         className={inputClass}
                         value={cal.retractLength}
                         onChange={(e) =>
-                          updateCalibration(nozzleId, "retractLength", e.target.value)
+                          updateCalibration(key, "retractLength", e.target.value)
                         }
-                        placeholder={form.retractLength || "base"}
+                        placeholder={defaultCal?.retractLength || form.retractLength || "base"}
                       />
                     </div>
                     <div>
@@ -1212,9 +1274,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         className={inputClass}
                         value={cal.retractSpeed}
                         onChange={(e) =>
-                          updateCalibration(nozzleId, "retractSpeed", e.target.value)
+                          updateCalibration(key, "retractSpeed", e.target.value)
                         }
-                        placeholder={form.retractSpeed || "base"}
+                        placeholder={defaultCal?.retractSpeed || form.retractSpeed || "base"}
                       />
                     </div>
                     <div>
@@ -1225,9 +1287,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         className={inputClass}
                         value={cal.retractLift}
                         onChange={(e) =>
-                          updateCalibration(nozzleId, "retractLift", e.target.value)
+                          updateCalibration(key, "retractLift", e.target.value)
                         }
-                        placeholder={form.retractLift || "base"}
+                        placeholder={defaultCal?.retractLift || form.retractLift || "base"}
                       />
                     </div>
                   </div>

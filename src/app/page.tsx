@@ -553,9 +553,14 @@ export default function Home() {
             <h1 className="text-3xl font-bold">Filament DB</h1>
             <SyncStatusIndicator />
           </div>
-          <Link href="/nozzles" className="text-blue-600 hover:underline text-sm">
-            Manage Nozzles
-          </Link>
+          <div className="flex gap-3">
+            <Link href="/nozzles" className="text-blue-600 hover:underline text-sm">
+              Manage Nozzles
+            </Link>
+            <Link href="/printers" className="text-blue-600 hover:underline text-sm">
+              Manage Printers
+            </Link>
+          </div>
         </div>
         <div className="flex gap-2">
           <button
