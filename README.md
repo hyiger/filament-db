@@ -1,6 +1,6 @@
 # Filament DB
 
-A desktop and web application for managing 3D printing filament profiles. Import filament configurations from PrusaSlicer, store them in MongoDB or MongoDB Atlas, and manage them through a clean interface. Available as an installable desktop app for macOS, Windows, and Linux, or run as a web app. The desktop app supports offline mode with an embedded local database, hybrid mode with automatic cloud sync, or direct Atlas cloud mode.
+A desktop and web application for managing 3D printing filament profiles. Import filament configurations from PrusaSlicer, store them in MongoDB or MongoDB Atlas, and manage them through a clean interface. Available as an installable desktop app for macOS, Windows, and Linux, or run as a local web app. The desktop app supports offline mode with an embedded local database, hybrid mode with automatic cloud sync, or direct Atlas cloud mode. The API is unauthenticated and intended for single-user localhost use; do not expose to untrusted networks without adding an auth layer.
 
 ## Features
 
@@ -18,7 +18,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Spool tracking** -- track remaining filament by weight with computed length in meters from density and diameter
 - **NFC tag read/write** -- read and write [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags directly from the desktop app using an ACR1552U reader
 - **OpenPrintTag export** -- download OpenPrintTag binary files for any filament
-- **Offline mode** -- works without internet using an embedded local MongoDB; choose cloud-only, hybrid (local + sync), or fully offline
+- **Offline mode** -- works without internet using an embedded local MongoDB; choose cloud-only, hybrid (local + sync), or fully offline (first launch downloads the database engine, then works fully offline)
 - **Atlas sync** -- in hybrid mode, automatic bidirectional sync with MongoDB Atlas using last-write-wins conflict resolution
 - **Import from Atlas** -- connect to a remote MongoDB Atlas database and selectively import filaments
 - **API documentation** -- interactive Swagger UI at `/api-docs` with full OpenAPI 3.0 spec

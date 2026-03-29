@@ -50,11 +50,18 @@ export async function POST(request: NextRequest) {
 
         const existing = await Filament.findOne({ name: filamentData.name, _deletedAt: null });
         if (existing) {
-          await Filament.updateOne({ name: filamentData.name }, filamentData);
+          await Filament.updateOne({ _id: existing._id }, filamentData);
           updated++;
         } else {
-          await Filament.create(filamentData);
-          created++;
+          // If a soft-deleted doc with the same name exists, resurrect it
+          const softDeleted = await Filament.findOne({ name: filamentData.name, _deletedAt: { $ne: null } });
+          if (softDeleted) {
+            await Filament.updateOne({ _id: softDeleted._id }, { ...filamentData, _deletedAt: null });
+            updated++;
+          } else {
+            await Filament.create(filamentData);
+            created++;
+          }
         }
       }
 
@@ -69,14 +76,13 @@ export async function POST(request: NextRequest) {
     // Otherwise, list all filaments from the remote DB
     const filaments = await db
       .collection("filaments")
-      .find({})
+      .find({ _deletedAt: null })
       .project({
         _id: 1,
         name: 1,
         vendor: 1,
         type: 1,
         color: 1,
-        parentId: 1,
         "temperatures.nozzle": 1,
         "temperatures.bed": 1,
       })

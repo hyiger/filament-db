@@ -150,7 +150,7 @@ The desktop app supports three connection modes:
 
 - All data stored locally, no cloud connection
 - No MongoDB Atlas account needed
-- Can be upgraded to Hybrid mode later from settings
+- Can be switched to Hybrid mode later by resetting the configuration (see [Troubleshooting](troubleshooting.md#desktop-app-how-to-switch-connection-modes))
 
 ---
 

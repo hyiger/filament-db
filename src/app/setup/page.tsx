@@ -169,10 +169,10 @@ export default function SetupPage() {
 
           <div className="p-4 bg-gray-800 border border-gray-700 rounded-lg mb-6">
             <p className="text-sm text-gray-300 mb-3">
-              Your filament data will be stored in a local database on this computer. No internet connection is required.
+              Your filament data will be stored in a local database on this computer. An internet connection may be needed on first launch to download the database engine; after that, no internet is required.
             </p>
             <p className="text-xs text-gray-500">
-              You can switch to hybrid mode later from the settings to enable cloud sync.
+              You can switch to hybrid mode later by resetting the configuration (see Troubleshooting).
             </p>
           </div>
 

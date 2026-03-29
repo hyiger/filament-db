@@ -131,11 +131,21 @@ export class SyncService extends EventEmitter {
       const localPrinterBySyncId = new Map(localPrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
       const remotePrinterBySyncId = new Map(remotePrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
 
-      // Sync filaments with nozzle and printer reference remapping
+      // Backfill filament syncIds before building maps (syncCollection does this too, but we need maps first)
+      await this.backfillSyncIds(localDb.collection("filaments"));
+      await this.backfillSyncIds(remoteDb.collection("filaments"));
+
+      // Build filament syncId→ID maps for parentId remapping
+      const localFilaments = await localDb.collection("filaments").find({}).toArray();
+      const remoteFilaments = await remoteDb.collection("filaments").find({}).toArray();
+      const localFilamentBySyncId = new Map(localFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
+      const remoteFilamentBySyncId = new Map(remoteFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
+
+      // Sync filaments with nozzle, printer, and parent reference remapping
       this.updateStatus({ progress: "Syncing filaments..." });
       const filamentResult = await this.syncCollection(
         localDb, remoteDb, "filaments",
-        (doc, direction) => this.remapFilamentRefs(doc, direction, localNozzleBySyncId, remoteNozzleBySyncId, localPrinterBySyncId, remotePrinterBySyncId)
+        (doc, direction) => this.remapFilamentRefs(doc, direction, localNozzleBySyncId, remoteNozzleBySyncId, localPrinterBySyncId, remotePrinterBySyncId, localFilamentBySyncId, remoteFilamentBySyncId)
       );
 
       const results = [nozzleResult, printerResult, filamentResult];
@@ -345,6 +355,8 @@ export class SyncService extends EventEmitter {
     remoteNozzleBySyncId: Map<string, ObjectId>,
     localPrinterBySyncId: Map<string, ObjectId>,
     remotePrinterBySyncId: Map<string, ObjectId>,
+    localFilamentBySyncId: Map<string, ObjectId>,
+    remoteFilamentBySyncId: Map<string, ObjectId>,
   ): Document {
     const sourceNozzleMap = direction === "toLocal" ? remoteNozzleBySyncId : localNozzleBySyncId;
     const targetNozzleMap = direction === "toLocal" ? localNozzleBySyncId : remoteNozzleBySyncId;
@@ -394,10 +406,20 @@ export class SyncService extends EventEmitter {
         .filter(Boolean);
     }
 
-    // Remap parentId — this uses filament names, but we can't easily do it here
-    // since we'd need the filament name maps. For now, strip parentId during sync
-    // (same as Atlas import behavior). Parent-variant relationships are local.
-    delete doc.parentId;
+    // Remap parentId (variant → parent relationship)
+    if (doc.parentId) {
+      const sourceFilamentMap = direction === "toLocal" ? remoteFilamentBySyncId : localFilamentBySyncId;
+      const targetFilamentMap = direction === "toLocal" ? localFilamentBySyncId : remoteFilamentBySyncId;
+
+      const sourceFilamentIdToSyncId = new Map<string, string>();
+      for (const [syncId, id] of sourceFilamentMap) {
+        sourceFilamentIdToSyncId.set(id.toString(), syncId);
+      }
+
+      const parentSyncId = sourceFilamentIdToSyncId.get(doc.parentId.toString());
+      const targetParentId = parentSyncId ? targetFilamentMap.get(parentSyncId) : null;
+      doc.parentId = targetParentId || null;
+    }
 
     return doc;
   }

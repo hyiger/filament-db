@@ -24,6 +24,10 @@ npm run dev -- -p 3001
 
 The first run may need to download the MongoDB binary. Ensure you have internet access and try again. On CI, the binary is cached after the first run.
 
+## Desktop app: offline/hybrid mode fails on first launch without internet
+
+The embedded local database (`mongodb-memory-server-core`) downloads the `mongod` binary on first use. This one-time download requires internet access. After the first successful launch, the binary is cached and no internet is needed for offline mode. If your first launch is in a fully offline environment, run the app once with internet access to prime the cache, then disconnect.
+
 ## "MONGODB_URI environment variable is not set" when running seed script
 
 The seed script requires `MONGODB_URI` to be set. Either:
