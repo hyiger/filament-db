@@ -29,11 +29,18 @@ export async function POST(request: NextRequest) {
   for (const filament of filaments) {
     const existing = await Filament.findOne({ name: filament.name, _deletedAt: null });
     if (existing) {
-      await Filament.updateOne({ name: filament.name }, filament);
+      await Filament.updateOne({ _id: existing._id }, filament);
       updated++;
     } else {
-      await Filament.create(filament);
-      created++;
+      // If a soft-deleted doc with the same name exists, resurrect it
+      const softDeleted = await Filament.findOne({ name: filament.name, _deletedAt: { $ne: null } });
+      if (softDeleted) {
+        await Filament.updateOne({ _id: softDeleted._id }, { ...filament, _deletedAt: null });
+        updated++;
+      } else {
+        await Filament.create(filament);
+        created++;
+      }
     }
   }
 

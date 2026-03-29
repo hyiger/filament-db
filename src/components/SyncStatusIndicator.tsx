@@ -62,6 +62,9 @@ export default function SyncStatusIndicator() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, [showTooltip]);
 
+  // Track actual Atlas reachability (not just navigator.onLine)
+  const [atlasReachable, setAtlasReachable] = useState<boolean | null>(null);
+
   // Electron sync status
   useEffect(() => {
     const api = window.electronAPI;
@@ -69,6 +72,10 @@ export default function SyncStatusIndicator() {
 
     api.getConfig().then((config) => {
       setMode(config.connectionMode);
+      // For atlas mode, check actual Atlas connectivity
+      if (config.connectionMode === "atlas" && api.checkAtlasConnectivity) {
+        api.checkAtlasConnectivity().then(r => setAtlasReachable(r.connected));
+      }
     });
 
     api.getSyncStatus().then(setStatus);
@@ -83,6 +90,17 @@ export default function SyncStatusIndicator() {
       unsub2();
     };
   }, []);
+
+  // Periodically re-check Atlas connectivity in atlas mode
+  useEffect(() => {
+    if (mode !== "atlas" || isFallback) return;
+    const api = window.electronAPI;
+    if (!api?.checkAtlasConnectivity) return;
+    const id = setInterval(() => {
+      api.checkAtlasConnectivity().then(r => setAtlasReachable(r.connected));
+    }, 60000); // check every 60s
+    return () => clearInterval(id);
+  }, [mode, isFallback]);
 
   // Periodically refresh the "Synced Xm ago" label
   const [, setTick] = useState(0);
@@ -128,16 +146,18 @@ export default function SyncStatusIndicator() {
     );
   }
 
-  // Electron: atlas mode (no fallback active) — show connectivity
+  // Electron: atlas mode (no fallback active) — show actual Atlas connectivity
   if (mode === "atlas" && !isFallback) {
+    // Use actual Atlas ping result; fall back to navigator.onLine while first check is pending
+    const connected = atlasReachable !== null ? atlasReachable : online;
     return (
       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs ${
-        online
+        connected
           ? "bg-green-900/40 text-green-400"
           : "bg-amber-900/40 text-amber-400"
       }`}>
-        <span className={`w-1.5 h-1.5 rounded-full ${online ? "bg-green-500" : "bg-amber-500"}`} />
-        {online ? "Connected" : "No Connection"}
+        <span className={`w-1.5 h-1.5 rounded-full ${connected ? "bg-green-500" : "bg-amber-500"}`} />
+        {connected ? "Connected" : "No Connection"}
       </span>
     );
   }

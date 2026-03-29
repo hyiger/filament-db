@@ -9,7 +9,7 @@ export async function GET(
 ) {
   await dbConnect();
   const { id } = await params;
-  const printer = await Printer.findById(id)
+  const printer = await Printer.findOne({ _id: id, _deletedAt: null })
     .populate("installedNozzles")
     .lean();
   if (!printer) {
@@ -25,10 +25,11 @@ export async function PUT(
   await dbConnect();
   const { id } = await params;
   const body = await request.json();
-  const printer = await Printer.findByIdAndUpdate(id, body, {
-    new: true,
-    runValidators: true,
-  }).lean();
+  const printer = await Printer.findOneAndUpdate(
+    { _id: id, _deletedAt: null },
+    body,
+    { new: true, runValidators: true }
+  ).lean();
   if (!printer) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

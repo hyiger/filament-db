@@ -75,7 +75,7 @@ Delete the config file at the paths listed above, or open the developer console 
 
 ## Desktop app: status indicator shows "Offline" even though I have internet
 
-The status indicator uses the browser's `navigator.onLine` API, which can occasionally report false negatives (e.g., on captive portal networks). In hybrid mode, click the status pill and try **Sync Now** to manually test the Atlas connection.
+In **Atlas mode**, the status indicator pings Atlas directly every 60 seconds, so it reflects actual Atlas reachability. In **hybrid mode**, the indicator tracks sync cycle results. In the **web app**, it falls back to the browser's `navigator.onLine` API, which can occasionally report false negatives (e.g., on captive portal networks). In hybrid mode, click the status pill and try **Sync Now** to manually test the Atlas connection.
 
 ## Desktop app: sync conflicts — wrong version won
 

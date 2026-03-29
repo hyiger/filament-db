@@ -26,7 +26,7 @@ On first launch, the app shows a setup wizard where you choose a connection mode
 
 For Atlas and Hybrid modes, you'll be asked for a MongoDB Atlas connection string. Enter it and click **Connect** -- the app validates the connection before saving.
 
-Your configuration is stored encrypted on your local machine:
+Your configuration is stored in an encrypted local file (using `electron-store` with AES encryption):
 - **macOS**: `~/Library/Application Support/filament-db/config.json`
 - **Windows**: `%APPDATA%/filament-db/config.json`
 - **Linux**: `~/.config/filament-db/config.json`

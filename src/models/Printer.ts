@@ -2,6 +2,7 @@ import mongoose, { Schema, Document, Model } from "mongoose";
 
 export interface IPrinter extends Document {
   name: string;
+  syncId: string | null;
   manufacturer: string;
   printerModel: string;
   installedNozzles: mongoose.Types.ObjectId[];
@@ -13,7 +14,8 @@ export interface IPrinter extends Document {
 
 const PrinterSchema = new Schema<IPrinter>(
   {
-    name: { type: String, required: true, unique: true, index: true },
+    name: { type: String, required: true, index: true },
+    syncId: { type: String, unique: true, sparse: true, index: true },
     manufacturer: { type: String, required: true, index: true },
     printerModel: { type: String, required: true },
     installedNozzles: [{ type: Schema.Types.ObjectId, ref: "Nozzle" }],
@@ -21,6 +23,12 @@ const PrinterSchema = new Schema<IPrinter>(
     _deletedAt: { type: Date, default: null },
   },
   { timestamps: true }
+);
+
+// Partial unique index: enforce unique names only among non-deleted documents
+PrinterSchema.index(
+  { name: 1 },
+  { unique: true, partialFilterExpression: { _deletedAt: null } }
 );
 
 const Printer: Model<IPrinter> =

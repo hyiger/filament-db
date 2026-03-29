@@ -2,6 +2,7 @@ import mongoose, { Schema, Document, Model } from "mongoose";
 
 export interface IFilament extends Document {
   name: string;
+  syncId: string | null;
   vendor: string;
   type: string;
   color: string;
@@ -50,7 +51,8 @@ export interface IFilament extends Document {
 
 const FilamentSchema = new Schema<IFilament>(
   {
-    name: { type: String, required: true, unique: true, index: true },
+    name: { type: String, required: true, index: true },
+    syncId: { type: String, unique: true, sparse: true, index: true },
     vendor: { type: String, required: true, index: true },
     type: { type: String, required: true, index: true },
     color: { type: String, default: "#808080" },
@@ -99,6 +101,12 @@ const FilamentSchema = new Schema<IFilament>(
     _deletedAt: { type: Date, default: null },
   },
   { timestamps: true }
+);
+
+// Partial unique index: enforce unique names only among non-deleted documents
+FilamentSchema.index(
+  { name: 1 },
+  { unique: true, partialFilterExpression: { _deletedAt: null } }
 );
 
 const Filament: Model<IFilament> =

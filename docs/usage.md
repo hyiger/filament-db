@@ -77,8 +77,8 @@ A status pill appears next to the "Filament DB" title on the home page, showing 
 
 | Indicator | Meaning |
 |-----------|---------|
-| 🟢 **Connected** | Atlas is reachable |
-| 🟡 **No Connection** | Network is down; using local fallback if Atlas was unreachable on startup |
+| 🟢 **Connected** | Atlas is reachable (verified by periodic ping) |
+| 🟡 **No Connection** | Atlas is unreachable; using local fallback if Atlas was unreachable on startup |
 
 ### Desktop App — Hybrid Mode
 

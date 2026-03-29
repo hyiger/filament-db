@@ -2,6 +2,7 @@ import mongoose, { Schema, Document, Model } from "mongoose";
 
 export interface INozzle extends Document {
   name: string;
+  syncId: string | null;
   diameter: number;
   type: string;
   highFlow: boolean;
@@ -14,7 +15,8 @@ export interface INozzle extends Document {
 
 const NozzleSchema = new Schema<INozzle>(
   {
-    name: { type: String, required: true, unique: true, index: true },
+    name: { type: String, required: true, index: true },
+    syncId: { type: String, unique: true, sparse: true, index: true },
     diameter: { type: Number, required: true, index: true },
     type: { type: String, required: true, index: true },
     highFlow: { type: Boolean, default: false },
@@ -23,6 +25,12 @@ const NozzleSchema = new Schema<INozzle>(
     _deletedAt: { type: Date, default: null },
   },
   { timestamps: true }
+);
+
+// Partial unique index: enforce unique names only among non-deleted documents
+NozzleSchema.index(
+  { name: 1 },
+  { unique: true, partialFilterExpression: { _deletedAt: null } }
 );
 
 const Nozzle: Model<INozzle> =

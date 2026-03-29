@@ -9,7 +9,7 @@ export async function GET(
 ) {
   await dbConnect();
   const { id } = await params;
-  const nozzle = await Nozzle.findById(id).lean();
+  const nozzle = await Nozzle.findOne({ _id: id, _deletedAt: null }).lean();
   if (!nozzle) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -23,10 +23,11 @@ export async function PUT(
   await dbConnect();
   const { id } = await params;
   const body = await request.json();
-  const nozzle = await Nozzle.findByIdAndUpdate(id, body, {
-    new: true,
-    runValidators: true,
-  }).lean();
+  const nozzle = await Nozzle.findOneAndUpdate(
+    { _id: id, _deletedAt: null },
+    body,
+    { new: true, runValidators: true }
+  ).lean();
   if (!nozzle) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

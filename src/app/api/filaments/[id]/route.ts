@@ -10,7 +10,7 @@ export async function GET(
 ) {
   await dbConnect();
   const { id } = await params;
-  const filament = await Filament.findById(id)
+  const filament = await Filament.findOne({ _id: id, _deletedAt: null })
     .populate("compatibleNozzles")
     .populate("calibrations.nozzle")
     .populate("calibrations.printer")
@@ -67,10 +67,11 @@ export async function PUT(
     }
   }
 
-  const filament = await Filament.findByIdAndUpdate(id, body, {
-    new: true,
-    runValidators: true,
-  }).lean();
+  const filament = await Filament.findOneAndUpdate(
+    { _id: id, _deletedAt: null },
+    body,
+    { new: true, runValidators: true }
+  ).lean();
   if (!filament) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }

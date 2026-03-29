@@ -107,7 +107,7 @@ MONGODB_URI=mongodb+srv://youruser:yourpassword@yourcluster.mongodb.net/filament
 
 > **Note:** If your password contains special characters (`@`, `#`, `%`, etc.), you must URL-encode them. For example, `p@ssword` becomes `p%40ssword`.
 
-> **Note:** The desktop app does not use `.env.local` -- it prompts for the connection string on first launch and stores it securely via the OS keychain. In offline and hybrid modes, the desktop app runs an embedded local MongoDB instance automatically.
+> **Note:** The desktop app does not use `.env.local` -- it prompts for the connection string on first launch and stores it in an encrypted local config file (see [Desktop App](desktop.md) for storage locations). In offline and hybrid modes, the desktop app runs an embedded local MongoDB instance automatically.
 
 ### Running
 

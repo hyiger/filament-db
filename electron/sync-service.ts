@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { randomUUID } from "crypto";
 import { MongoClient, ObjectId, Document } from "mongodb";
 
 export interface SyncStatus {
@@ -111,30 +112,30 @@ export class SyncService extends EventEmitter {
       this.updateStatus({ progress: "Syncing nozzles..." });
       const nozzleResult = await this.syncCollection(localDb, remoteDb, "nozzles");
 
-      // Build nozzle name→ID maps for reference remapping
+      // Build nozzle syncId→ID maps for reference remapping
       const localNozzles = await localDb.collection("nozzles").find({ _deletedAt: null }).toArray();
       const remoteNozzles = await remoteDb.collection("nozzles").find({ _deletedAt: null }).toArray();
-      const localNozzleByName = new Map(localNozzles.map(n => [n.name, n._id]));
-      const remoteNozzleByName = new Map(remoteNozzles.map(n => [n.name, n._id]));
+      const localNozzleBySyncId = new Map(localNozzles.filter(n => n.syncId).map(n => [n.syncId as string, n._id]));
+      const remoteNozzleBySyncId = new Map(remoteNozzles.filter(n => n.syncId).map(n => [n.syncId as string, n._id]));
 
       // Sync printers (filament calibrations reference them)
       this.updateStatus({ progress: "Syncing printers..." });
       const printerResult = await this.syncCollection(
         localDb, remoteDb, "printers",
-        (doc, direction) => this.remapPrinterRefs(doc, direction, localNozzleByName, remoteNozzleByName)
+        (doc, direction) => this.remapPrinterRefs(doc, direction, localNozzleBySyncId, remoteNozzleBySyncId)
       );
 
-      // Build printer name→ID maps for filament calibration reference remapping
+      // Build printer syncId→ID maps for filament calibration reference remapping
       const localPrinters = await localDb.collection("printers").find({ _deletedAt: null }).toArray();
       const remotePrinters = await remoteDb.collection("printers").find({ _deletedAt: null }).toArray();
-      const localPrinterByName = new Map(localPrinters.map(p => [p.name, p._id]));
-      const remotePrinterByName = new Map(remotePrinters.map(p => [p.name, p._id]));
+      const localPrinterBySyncId = new Map(localPrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
+      const remotePrinterBySyncId = new Map(remotePrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
 
       // Sync filaments with nozzle and printer reference remapping
       this.updateStatus({ progress: "Syncing filaments..." });
       const filamentResult = await this.syncCollection(
         localDb, remoteDb, "filaments",
-        (doc, direction) => this.remapFilamentRefs(doc, direction, localNozzleByName, remoteNozzleByName, localPrinterByName, remotePrinterByName)
+        (doc, direction) => this.remapFilamentRefs(doc, direction, localNozzleBySyncId, remoteNozzleBySyncId, localPrinterBySyncId, remotePrinterBySyncId)
       );
 
       const results = [nozzleResult, printerResult, filamentResult];
@@ -160,7 +161,9 @@ export class SyncService extends EventEmitter {
   }
 
   /**
-   * Sync a single collection bidirectionally using name as the natural key.
+   * Sync a single collection bidirectionally using syncId as the stable
+   * cross-database identity key. Documents without a syncId get one
+   * assigned automatically (UUID). This survives renames.
    */
   private async syncCollection(
     localDb: ReturnType<MongoClient["db"]>,
@@ -171,21 +174,25 @@ export class SyncService extends EventEmitter {
     const localCol = localDb.collection(collectionName);
     const remoteCol = remoteDb.collection(collectionName);
 
+    // Backfill: assign syncId to any docs that don't have one yet
+    await this.backfillSyncIds(localCol);
+    await this.backfillSyncIds(remoteCol);
+
     // Fetch all docs (including soft-deleted) from both sides
     const localDocs = await localCol.find({}).toArray();
     const remoteDocs = await remoteCol.find({}).toArray();
 
-    const localByName = new Map(localDocs.map(d => [d.name as string, d]));
-    const remoteByName = new Map(remoteDocs.map(d => [d.name as string, d]));
+    const localBySyncId = new Map(localDocs.filter(d => d.syncId).map(d => [d.syncId as string, d]));
+    const remoteBySyncId = new Map(remoteDocs.filter(d => d.syncId).map(d => [d.syncId as string, d]));
 
     const result: SyncResult = { collection: collectionName, pushed: 0, pulled: 0, updated: 0, deleted: 0 };
 
-    // Process all unique names from both sides
-    const allNames = new Set([...localByName.keys(), ...remoteByName.keys()]);
+    // Process all unique syncIds from both sides
+    const allSyncIds = new Set([...localBySyncId.keys(), ...remoteBySyncId.keys()]);
 
-    for (const name of allNames) {
-      const localDoc = localByName.get(name);
-      const remoteDoc = remoteByName.get(name);
+    for (const syncId of allSyncIds) {
+      const localDoc = localBySyncId.get(syncId);
+      const remoteDoc = remoteBySyncId.get(syncId);
 
       if (localDoc && !remoteDoc) {
         // Local-only: push to remote
@@ -266,6 +273,26 @@ export class SyncService extends EventEmitter {
   }
 
   /**
+   * Assign a syncId (UUID) to any documents that don't have one.
+   * This allows existing data to participate in syncId-based sync.
+   */
+  private async backfillSyncIds(col: ReturnType<ReturnType<MongoClient["db"]>["collection"]>) {
+    const cursor = col.find({ syncId: { $exists: false } });
+    const bulk: { updateOne: { filter: { _id: ObjectId }; update: { $set: { syncId: string } } } }[] = [];
+    for await (const doc of cursor) {
+      bulk.push({
+        updateOne: {
+          filter: { _id: doc._id },
+          update: { $set: { syncId: randomUUID() } },
+        },
+      });
+    }
+    if (bulk.length > 0) {
+      await col.bulkWrite(bulk);
+    }
+  }
+
+  /**
    * Strip _id and __v for transfer between databases.
    */
   private stripForTransfer(doc: Document): Document {
@@ -276,26 +303,27 @@ export class SyncService extends EventEmitter {
   /**
    * Remap nozzle ObjectId references in printer documents.
    * installedNozzles need to point to the correct IDs on the target side.
+   * Maps use syncId as the stable key (survives renames).
    */
   private remapPrinterRefs(
     doc: Document,
     direction: "toLocal" | "toRemote",
-    localNozzleByName: Map<string, ObjectId>,
-    remoteNozzleByName: Map<string, ObjectId>,
+    localNozzleBySyncId: Map<string, ObjectId>,
+    remoteNozzleBySyncId: Map<string, ObjectId>,
   ): Document {
-    const sourceMap = direction === "toLocal" ? remoteNozzleByName : localNozzleByName;
-    const targetMap = direction === "toLocal" ? localNozzleByName : remoteNozzleByName;
+    const sourceMap = direction === "toLocal" ? remoteNozzleBySyncId : localNozzleBySyncId;
+    const targetMap = direction === "toLocal" ? localNozzleBySyncId : remoteNozzleBySyncId;
 
-    const sourceIdToName = new Map<string, string>();
-    for (const [name, id] of sourceMap) {
-      sourceIdToName.set(id.toString(), name);
+    const sourceIdToSyncId = new Map<string, string>();
+    for (const [syncId, id] of sourceMap) {
+      sourceIdToSyncId.set(id.toString(), syncId);
     }
 
     if (Array.isArray(doc.installedNozzles)) {
       doc.installedNozzles = doc.installedNozzles
         .map((id: ObjectId) => {
-          const name = sourceIdToName.get(id.toString());
-          return name ? targetMap.get(name) : null;
+          const syncId = sourceIdToSyncId.get(id.toString());
+          return syncId ? targetMap.get(syncId) : null;
         })
         .filter(Boolean);
     }
@@ -307,36 +335,37 @@ export class SyncService extends EventEmitter {
    * Remap nozzle and printer ObjectId references in filament documents.
    * compatibleNozzles, calibrations.nozzle, and calibrations.printer need
    * to point to the correct IDs on the target side.
+   * Maps use syncId as the stable key (survives renames).
    */
   private remapFilamentRefs(
     doc: Document,
     direction: "toLocal" | "toRemote",
-    localNozzleByName: Map<string, ObjectId>,
-    remoteNozzleByName: Map<string, ObjectId>,
-    localPrinterByName: Map<string, ObjectId>,
-    remotePrinterByName: Map<string, ObjectId>,
+    localNozzleBySyncId: Map<string, ObjectId>,
+    remoteNozzleBySyncId: Map<string, ObjectId>,
+    localPrinterBySyncId: Map<string, ObjectId>,
+    remotePrinterBySyncId: Map<string, ObjectId>,
   ): Document {
-    const sourceNozzleMap = direction === "toLocal" ? remoteNozzleByName : localNozzleByName;
-    const targetNozzleMap = direction === "toLocal" ? localNozzleByName : remoteNozzleByName;
-    const sourcePrinterMap = direction === "toLocal" ? remotePrinterByName : localPrinterByName;
-    const targetPrinterMap = direction === "toLocal" ? localPrinterByName : remotePrinterByName;
+    const sourceNozzleMap = direction === "toLocal" ? remoteNozzleBySyncId : localNozzleBySyncId;
+    const targetNozzleMap = direction === "toLocal" ? localNozzleBySyncId : remoteNozzleBySyncId;
+    const sourcePrinterMap = direction === "toLocal" ? remotePrinterBySyncId : localPrinterBySyncId;
+    const targetPrinterMap = direction === "toLocal" ? localPrinterBySyncId : remotePrinterBySyncId;
 
-    // Build source ID → name reverse lookups
-    const sourceNozzleIdToName = new Map<string, string>();
-    for (const [name, id] of sourceNozzleMap) {
-      sourceNozzleIdToName.set(id.toString(), name);
+    // Build source ID → syncId reverse lookups
+    const sourceNozzleIdToSyncId = new Map<string, string>();
+    for (const [syncId, id] of sourceNozzleMap) {
+      sourceNozzleIdToSyncId.set(id.toString(), syncId);
     }
-    const sourcePrinterIdToName = new Map<string, string>();
-    for (const [name, id] of sourcePrinterMap) {
-      sourcePrinterIdToName.set(id.toString(), name);
+    const sourcePrinterIdToSyncId = new Map<string, string>();
+    for (const [syncId, id] of sourcePrinterMap) {
+      sourcePrinterIdToSyncId.set(id.toString(), syncId);
     }
 
     // Remap compatibleNozzles
     if (Array.isArray(doc.compatibleNozzles)) {
       doc.compatibleNozzles = doc.compatibleNozzles
         .map((id: ObjectId) => {
-          const name = sourceNozzleIdToName.get(id.toString());
-          return name ? targetNozzleMap.get(name) : null;
+          const syncId = sourceNozzleIdToSyncId.get(id.toString());
+          return syncId ? targetNozzleMap.get(syncId) : null;
         })
         .filter(Boolean);
     }
@@ -346,16 +375,16 @@ export class SyncService extends EventEmitter {
       doc.calibrations = doc.calibrations
         .map((cal: Document) => {
           if (!cal.nozzle) return cal;
-          const nozzleName = sourceNozzleIdToName.get(cal.nozzle.toString());
-          const targetNozzleId = nozzleName ? targetNozzleMap.get(nozzleName) : null;
+          const nozzleSyncId = sourceNozzleIdToSyncId.get(cal.nozzle.toString());
+          const targetNozzleId = nozzleSyncId ? targetNozzleMap.get(nozzleSyncId) : null;
           if (!targetNozzleId) return null; // Drop calibration if nozzle doesn't exist on target
 
           const remapped = { ...cal, nozzle: targetNozzleId };
 
           // Remap printer reference if present
           if (cal.printer) {
-            const printerName = sourcePrinterIdToName.get(cal.printer.toString());
-            const targetPrinterId = printerName ? targetPrinterMap.get(printerName) : null;
+            const printerSyncId = sourcePrinterIdToSyncId.get(cal.printer.toString());
+            const targetPrinterId = printerSyncId ? targetPrinterMap.get(printerSyncId) : null;
             remapped.printer = targetPrinterId || null;
           }
 
