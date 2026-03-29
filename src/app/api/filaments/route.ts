@@ -54,6 +54,20 @@ export async function POST(request: NextRequest) {
     body.totalWeight = null;
   }
 
-  const filament = await Filament.create(body);
-  return NextResponse.json(filament, { status: 201 });
+  try {
+    const filament = await Filament.create(body);
+    return NextResponse.json(filament, { status: 201 });
+  } catch (err: unknown) {
+    // Duplicate key (e.g. name already exists)
+    if (typeof err === "object" && err !== null && "code" in err && (err as { code: number }).code === 11000) {
+      const keyValue = (err as { keyValue?: Record<string, unknown> }).keyValue;
+      const field = keyValue ? Object.keys(keyValue)[0] : "field";
+      const value = keyValue ? Object.values(keyValue)[0] : "unknown";
+      return NextResponse.json(
+        { error: `A filament with that ${field} already exists: "${value}"` },
+        { status: 409 },
+      );
+    }
+    throw err;
+  }
 }
