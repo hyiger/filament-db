@@ -29,6 +29,12 @@ function NewFilamentContent() {
   const [iniFilaments, setIniFilaments] = useState<Record<string, unknown>[] | null>(null);
   const iniFileRef = useRef<HTMLInputElement>(null);
 
+  // Prusament QR state
+  const [prusamentInput, setPrusamentInput] = useState("");
+  const [prusamentOpen, setPrusamentOpen] = useState(false);
+  const [prusamentLoading, setPrusamentLoading] = useState(false);
+  const prusamentRef = useRef<HTMLDivElement>(null);
+
   // Clone picker state
   const [cloneSearch, setCloneSearch] = useState("");
   const [cloneOptions, setCloneOptions] = useState<FilamentOption[]>([]);
@@ -124,11 +130,14 @@ function NewFilamentContent() {
       .catch(() => {});
   }, []);
 
-  // Close clone dropdown on outside click
+  // Close dropdowns on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (cloneRef.current && !cloneRef.current.contains(e.target as Node)) {
         setCloneOpen(false);
+      }
+      if (prusamentRef.current && !prusamentRef.current.contains(e.target as Node)) {
+        setPrusamentOpen(false);
       }
     }
     document.addEventListener("mousedown", handleClick);
@@ -199,6 +208,55 @@ function NewFilamentContent() {
     setFormKey((k) => k + 1);
     setIniFilaments(null);
     toast("Form populated from INI profile");
+  };
+
+  // Handle Prusament QR lookup
+  const handlePrusament = async () => {
+    const input = prusamentInput.trim();
+    if (!input) return;
+
+    setPrusamentLoading(true);
+    try {
+      // Extract spoolId from URL or use as-is
+      let spoolId = input;
+      if (input.includes("spoolId=")) {
+        try { spoolId = new URL(input).searchParams.get("spoolId") || input; } catch { /* use as-is */ }
+      }
+
+      const res = await fetch(`/api/prusament?spoolId=${encodeURIComponent(spoolId)}`);
+      const data = await res.json();
+      if (!res.ok) {
+        toast(data.error || "Failed to fetch Prusament data", "error");
+        return;
+      }
+
+      setInitialData({
+        name: data.productName || "",
+        vendor: "Prusament",
+        type: data.material || "PLA",
+        color: data.colorHex || "#808080",
+        diameter: data.diameter ?? 1.75,
+        cost: data.priceUsd ?? null,
+        temperatures: {
+          nozzle: data.nozzleTempMax ?? null,
+          nozzleFirstLayer: data.nozzleTempMin ?? data.nozzleTempMax ?? null,
+          bed: data.bedTempMax ?? null,
+          bedFirstLayer: data.bedTempMin ?? data.bedTempMax ?? null,
+        },
+        spoolWeight: data.spoolWeight ?? null,
+        netFilamentWeight: data.netWeight ?? null,
+        totalWeight: data.totalWeight ?? null,
+      });
+      setTitle("New Filament from Prusament QR");
+      setFormKey((k) => k + 1);
+      setPrusamentOpen(false);
+      setPrusamentInput("");
+      toast("Form populated from Prusament spool data");
+    } catch {
+      toast("Failed to fetch Prusament data", "error");
+    } finally {
+      setPrusamentLoading(false);
+    }
   };
 
   // Handle clone selection
@@ -272,6 +330,45 @@ function NewFilamentContent() {
                 </span>
               </div>
             )}
+
+            {/* Prusament QR */}
+            <div ref={prusamentRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setPrusamentOpen((o) => !o)}
+                className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 inline-flex items-center gap-1.5"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.5 14.625v2.625m3.375-2.625v2.625M16.875 20.25h-3.375v-3.375" />
+                </svg>
+                Prusament QR
+              </button>
+              {prusamentOpen && (
+                <div className="absolute z-50 mt-1 w-80 bg-gray-800 border border-gray-600 rounded-lg shadow-lg p-3">
+                  <label className="text-xs text-gray-400 block mb-1.5">Spool ID or URL from QR code</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={prusamentInput}
+                      onChange={(e) => setPrusamentInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handlePrusament(); } }}
+                      placeholder="e.g. 4a7b3c... or full URL"
+                      className="flex-1 px-2.5 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-gray-100 outline-none placeholder-gray-500"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={handlePrusament}
+                      disabled={prusamentLoading || !prusamentInput.trim()}
+                      className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 disabled:opacity-50"
+                    >
+                      {prusamentLoading ? "..." : "Fetch"}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
 
             {/* INI file */}
             <input

@@ -155,6 +155,7 @@ export default function FilamentDetail() {
         chamberTemp: filament.settings?.chamber_temperature
           ? Number(filament.settings.chamber_temperature)
           : null,
+        weightGrams: filament.netFilamentWeight ?? null,
       });
       await writeTag(payload);
       setNfcWriteSuccess(true);

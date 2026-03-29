@@ -40,6 +40,7 @@ export async function GET(
       resolved.settings?.chamber_temperature != null
         ? Number(resolved.settings.chamber_temperature)
         : null,
+    weightGrams: resolved.netFilamentWeight ?? null,
   });
 
   const safeName = resolved.name

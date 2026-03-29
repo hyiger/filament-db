@@ -1,11 +1,18 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useNfcContext } from "@/components/NfcProvider";
 
 export default function NfcStatus() {
   const { isElectron, status } = useNfcContext();
+  const [mounted, setMounted] = useState(false);
 
-  if (!isElectron) return null;
+  // Avoid hydration mismatch — only render after client mount
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted || !isElectron) return null;
 
   let dotColor: string;
   let label: string;

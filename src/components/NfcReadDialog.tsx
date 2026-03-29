@@ -250,26 +250,53 @@ export default function NfcReadDialog() {
 function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) {
   return (
     <div className="grid grid-cols-2 gap-2 text-sm">
-      {data.nozzleTemp != null && (
-        <Stat label="Nozzle Temp" value={`${data.nozzleTempMin ?? "?"}–${data.nozzleTemp}°C`} />
+      {data.materialName && (
+        <Stat label="Material Name" value={data.materialName} />
       )}
-      {data.bedTemp != null && (
-        <Stat label="Bed Temp" value={`${data.bedTempMin ?? "?"}–${data.bedTemp}°C`} />
+      {data.brandName && (
+        <Stat label="Brand" value={data.brandName} />
       )}
-      {data.density != null && (
-        <Stat label="Density" value={`${data.density.toFixed(2)} g/cm³`} />
+      {data.materialType && (
+        <Stat label="Material Type" value={data.materialType} />
+      )}
+      {data.materialAbbreviation && data.materialAbbreviation !== data.materialType && (
+        <Stat label="Abbreviation" value={data.materialAbbreviation} />
+      )}
+      {data.color && (
+        <div className="bg-gray-800 px-3 py-2 rounded">
+          <div className="text-gray-400 text-xs">Color</div>
+          <div className="flex items-center gap-2">
+            <div
+              className="w-4 h-4 rounded-full border border-gray-600"
+              style={{ backgroundColor: data.color }}
+            />
+            <span className="text-white">{data.color}</span>
+          </div>
+        </div>
       )}
       {data.diameter != null && (
         <Stat label="Diameter" value={`${data.diameter.toFixed(2)} mm`} />
       )}
-      {data.weightGrams != null && (
-        <Stat label="Weight" value={`${data.weightGrams}g`} />
+      {data.density != null && (
+        <Stat label="Density" value={`${data.density.toFixed(2)} g/cm³`} />
       )}
-      {data.countryOfOrigin && (
-        <Stat label="Origin" value={data.countryOfOrigin} />
+      {data.weightGrams != null && (
+        <Stat label="Net Weight" value={`${data.weightGrams} g`} />
+      )}
+      {data.nozzleTemp != null && (
+        <Stat label="Nozzle Temp" value={`${data.nozzleTempMin ?? "?"}–${data.nozzleTemp}°C`} />
+      )}
+      {data.preheatTemp != null && (
+        <Stat label="Preheat Temp" value={`${data.preheatTemp}°C`} />
+      )}
+      {data.bedTemp != null && (
+        <Stat label="Bed Temp" value={`${data.bedTempMin ?? "?"}–${data.bedTemp}°C`} />
       )}
       {data.chamberTemp != null && (
         <Stat label="Chamber Temp" value={`${data.chamberTemp}°C`} />
+      )}
+      {data.countryOfOrigin && (
+        <Stat label="Origin" value={data.countryOfOrigin} />
       )}
     </div>
   );
