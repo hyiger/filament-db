@@ -74,9 +74,9 @@ export class SyncService extends EventEmitter {
   startPeriodicSync(intervalMs = 5 * 60 * 1000) {
     this.stopPeriodicSync();
     // Run immediately, then on interval
-    this.sync().catch(() => {});
+    this.sync().catch((err) => console.error("Periodic sync failed:", err));
     this.intervalId = setInterval(() => {
-      this.sync().catch(() => {});
+      this.sync().catch((err) => console.error("Periodic sync failed:", err));
     }, intervalMs);
   }
 

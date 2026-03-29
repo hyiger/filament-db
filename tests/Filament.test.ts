@@ -258,4 +258,37 @@ describe("Filament Model", () => {
     expect(filament.netFilamentWeight).toBe(1000);
     expect(filament.totalWeight).toBe(850);
   });
+
+  it("soft-deletes by setting _deletedAt", async () => {
+    const filament = await Filament.create({
+      name: "SoftDel Test",
+      vendor: "Test",
+      type: "PLA",
+    });
+
+    await Filament.findByIdAndUpdate(filament._id, { _deletedAt: new Date() });
+
+    // Should be excluded by _deletedAt: null filter
+    const found = await Filament.findOne({ _id: filament._id, _deletedAt: null });
+    expect(found).toBeNull();
+
+    // But still exists in the database
+    const raw = await Filament.findById(filament._id);
+    expect(raw).not.toBeNull();
+    expect(raw!._deletedAt).toBeInstanceOf(Date);
+  });
+
+  it("_deletedAt defaults to null", async () => {
+    const filament = await Filament.create({
+      name: "DeletedAt Default",
+      vendor: "Test",
+      type: "PLA",
+    });
+
+    expect(filament._deletedAt).toBeNull();
+
+    // Findable with _deletedAt: null filter
+    const found = await Filament.findOne({ _id: filament._id, _deletedAt: null });
+    expect(found).not.toBeNull();
+  });
 });

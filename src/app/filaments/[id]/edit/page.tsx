@@ -19,7 +19,8 @@ export default function EditFilament() {
         if (!r.ok) { setNotFound(true); return null; }
         return r.json();
       })
-      .then((data) => { if (data) setFilament(data); });
+      .then((data) => { if (data) setFilament(data); })
+      .catch(() => { setNotFound(true); });
   }, [params.id]);
 
   const handleSubmit = async (data: Record<string, unknown>) => {

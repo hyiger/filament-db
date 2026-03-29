@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { resolveFilament } from "@/lib/resolveFilament";
+import { describe, it, expect, beforeAll } from "vitest";
+import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
 
 const makeParent = (overrides = {}) => ({
   _id: "parent-id",
@@ -228,5 +228,39 @@ describe("resolveFilament", () => {
     const result = resolveFilament(variant, parent);
     expect(result.settings.chamber_temperature).toBe("40");
     expect(result._inherited).toContain("settings");
+  });
+});
+
+describe("hasVariants", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeAll(async () => {
+    const mongoose = await import("mongoose");
+    // Use the already-registered model or import it
+    Filament = mongoose.default.models.Filament || (await import("@/models/Filament")).default;
+  });
+
+  it("returns true when parent has non-deleted variants", async () => {
+    const parent = await Filament.create({ name: "HasVar Parent", vendor: "V", type: "PLA" });
+    await Filament.create({ name: "HasVar Child", vendor: "V", type: "PLA", parentId: parent._id });
+    expect(await hasVariants(Filament, parent._id.toString())).toBe(true);
+  });
+
+  it("returns false when parent has no variants", async () => {
+    const parent = await Filament.create({ name: "NoVar Parent", vendor: "V", type: "PLA" });
+    expect(await hasVariants(Filament, parent._id.toString())).toBe(false);
+  });
+
+  it("returns false when all variants are soft-deleted", async () => {
+    const parent = await Filament.create({ name: "SoftDel Parent", vendor: "V", type: "PLA" });
+    await Filament.create({
+      name: "SoftDel Child",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      _deletedAt: new Date(),
+    });
+    expect(await hasVariants(Filament, parent._id.toString())).toBe(false);
   });
 });

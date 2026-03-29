@@ -106,6 +106,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
   const handleImport = async () => {
     setStep("importing");
     setImportProgress("Importing...");
+    setError("");
     try {
       const res = await fetch("/api/filaments/import-atlas", {
         method: "POST",
@@ -115,12 +116,14 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Import failed");
+        setImportProgress("");
         setStep("select");
         return;
       }
       onImported(data.message);
     } catch {
       setError("Network error during import");
+      setImportProgress("");
       setStep("select");
     }
   };

@@ -408,9 +408,12 @@ ipcMain.handle("check-atlas-connectivity", async () => {
     const atlasUri = store.get("atlasUri") as string;
     if (!atlasUri) return { connected: false };
     const tempSync = new SyncService("", atlasUri);
-    const connected = await tempSync.checkAtlasConnectivity();
-    tempSync.destroy();
-    return { connected };
+    try {
+      const connected = await tempSync.checkAtlasConnectivity();
+      return { connected };
+    } finally {
+      tempSync.destroy();
+    }
   }
   const connected = await syncService.checkAtlasConnectivity();
   return { connected };
@@ -473,6 +476,10 @@ app.whenReady().then(async () => {
       await startProductionServer(mongoUri || undefined);
     } catch (err) {
       console.error("Failed to start server:", err);
+      dialog.showErrorBox(
+        "Server Startup Failed",
+        `The embedded web server failed to start. The app may not work correctly.\n\n${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -491,6 +498,7 @@ app.whenReady().then(async () => {
           prevTagPresent = status.tagPresent;
           return;
         }
+        // Set timestamp BEFORE async read to prevent concurrent triggers
         lastAutoReadAt = now;
         nfcService.readTag()
           .then((data) => {

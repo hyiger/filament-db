@@ -28,6 +28,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  if (action && action !== "create" && action !== "add-spool") {
+    return NextResponse.json(
+      { error: `Invalid action: "${action}". Must be "create" or "add-spool".` },
+      { status: 400 },
+    );
+  }
+
   // Compute density from Prusament data: weight(g) / volume(cm³)
   // volume = length(m) * 100(cm/m) * π * (diameter_mm / 20)²
   const radiusCm = spool.diameter / 20;

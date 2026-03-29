@@ -213,22 +213,34 @@ export default function Home() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
+  const fetchFilamentsRef = useRef<AbortController | null>(null);
   const fetchFilaments = useCallback(async () => {
+    // Abort previous in-flight request to prevent stale data
+    fetchFilamentsRef.current?.abort();
+    const controller = new AbortController();
+    fetchFilamentsRef.current = controller;
+
     setLoading(true);
     const params = new URLSearchParams();
     if (search) params.set("search", search);
     if (typeFilter) params.set("type", typeFilter);
     if (vendorFilter) params.set("vendor", vendorFilter);
 
-    const res = await fetch(`/api/filaments?${params}`);
-    if (!res.ok) {
+    try {
+      const res = await fetch(`/api/filaments?${params}`, { signal: controller.signal });
+      if (!res.ok) {
+        toast("Failed to load filaments", "error");
+        setLoading(false);
+        return;
+      }
+      const data = await res.json();
+      setFilaments(data);
+      setLoading(false);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       toast("Failed to load filaments", "error");
       setLoading(false);
-      return;
     }
-    const data = await res.json();
-    setFilaments(data);
-    setLoading(false);
   }, [search, typeFilter, vendorFilter, toast]);
 
   useEffect(() => {

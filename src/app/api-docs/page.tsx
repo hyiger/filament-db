@@ -8,11 +8,15 @@ import "swagger-ui-react/swagger-ui.css";
 const SwaggerUI = dynamic(() => import("swagger-ui-react"), { ssr: false });
 
 export default function ApiDocsPage() {
-  // Suppress UNSAFE_componentWillReceiveProps warnings from swagger-ui-react internals
+  // Suppress known React deprecation warnings from swagger-ui-react internals
   useEffect(() => {
     const origWarn = console.error;
     console.error = (...args: unknown[]) => {
-      if (typeof args[0] === "string" && args[0].includes("UNSAFE_componentWillReceiveProps")) return;
+      if (
+        typeof args[0] === "string" &&
+        (args[0].includes("UNSAFE_componentWillReceiveProps") ||
+         args[0].includes("UNSAFE_componentWillMount"))
+      ) return;
       origWarn.apply(console, args);
     };
     return () => { console.error = origWarn; };

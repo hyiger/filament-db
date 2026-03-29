@@ -57,7 +57,9 @@ export default function PrusamentImportDialog({
   const [error, setError] = useState("");
   const [spool, setSpool] = useState<PrusamentScrapeResult | null>(null);
   const [matches, setMatches] = useState<MatchingFilament[]>([]);
-  const [action, setAction] = useState<"create" | "add-spool">("create");
+  const [action, setAction] = useState<"create" | "add-spool">(
+    targetFilamentId ? "add-spool" : "create",
+  );
   const [selectedFilamentId, setSelectedFilamentId] = useState<string>(
     targetFilamentId || "",
   );
