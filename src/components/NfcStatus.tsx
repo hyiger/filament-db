@@ -9,7 +9,7 @@ export default function NfcStatus() {
 
   // Avoid hydration mismatch — only render after client mount
   useEffect(() => {
-    setMounted(true);
+    setMounted(true); // eslint-disable-line react-hooks/set-state-in-effect -- mount-only initialization to avoid hydration mismatch
   }, []);
 
   if (!mounted || !isElectron) return null;
