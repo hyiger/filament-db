@@ -8,7 +8,8 @@ describe("Filament Model", () => {
   beforeEach(async () => {
     // Clear cached model and re-import to get coverage on the actual file
     delete mongoose.models.Filament;
-    delete (mongoose as unknown as Record<string, unknown>).modelSchemas?.Filament;
+    const schemas = (mongoose as unknown as Record<string, Record<string, unknown>>).modelSchemas;
+    if (schemas) delete schemas.Filament;
     // Dynamic import to re-evaluate the module
     const mod = await import("@/models/Filament");
     Filament = mod.default;
