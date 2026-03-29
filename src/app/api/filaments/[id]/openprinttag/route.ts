@@ -25,6 +25,12 @@ export async function GET(
     resolved = resolveFilament(filament, parent);
   }
 
+  // Compute actual remaining weight from scale reading if available
+  let actualWeightGrams: number | null = null;
+  if (resolved.totalWeight != null && resolved.spoolWeight != null) {
+    actualWeightGrams = Math.max(0, resolved.totalWeight - resolved.spoolWeight);
+  }
+
   const binary = generateOpenPrintTagBinary({
     materialName: resolved.name,
     brandName: resolved.vendor,
@@ -41,6 +47,8 @@ export async function GET(
         ? Number(resolved.settings.chamber_temperature)
         : null,
     weightGrams: resolved.netFilamentWeight ?? null,
+    actualWeightGrams,
+    emptySpoolWeight: resolved.spoolWeight ?? null,
   });
 
   const safeName = resolved.name

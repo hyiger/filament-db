@@ -281,7 +281,13 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
         <Stat label="Density" value={`${data.density.toFixed(2)} g/cm³`} />
       )}
       {data.weightGrams != null && (
-        <Stat label="Net Weight" value={`${data.weightGrams} g`} />
+        <Stat label="Net Weight (Nominal)" value={`${data.weightGrams} g`} />
+      )}
+      {data.actualWeightGrams != null && data.actualWeightGrams !== data.weightGrams && (
+        <Stat label="Actual Remaining" value={`${data.actualWeightGrams} g`} />
+      )}
+      {data.emptySpoolWeight != null && (
+        <Stat label="Spool Weight" value={`${data.emptySpoolWeight} g`} />
       )}
       {data.nozzleTemp != null && (
         <Stat label="Nozzle Temp" value={`${data.nozzleTempMin ?? "?"}–${data.nozzleTemp}°C`} />

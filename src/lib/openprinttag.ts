@@ -383,6 +383,8 @@ export interface OpenPrintTagInput {
   bedTempFirstLayer?: number | null;
   chamberTemp?: number | null; // °C
   weightGrams?: number | null; // nominal net weight in grams
+  actualWeightGrams?: number | null; // actual remaining filament weight (key 17), defaults to weightGrams
+  emptySpoolWeight?: number | null; // empty spool/container weight in grams
   countryOfOrigin?: string;    // ISO 3166-1 alpha-2, default "US"
 }
 
@@ -462,9 +464,20 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   if (input.weightGrams != null && input.weightGrams > 0) {
     encodeCBORKey(buf, OPT_KEY.NOMINAL_NETTO_FULL_WEIGHT);
     encodeCBORCompactNumber(buf, input.weightGrams);
-    // Set actual = nominal as starting point
+  }
+
+  // actual_netto_full_weight (key 17) — actual remaining filament weight
+  // If actualWeightGrams is explicitly provided, use it; otherwise default to nominal
+  const actualWeight = input.actualWeightGrams ?? input.weightGrams;
+  if (actualWeight != null && actualWeight > 0) {
     encodeCBORKey(buf, OPT_KEY.ACTUAL_NETTO_FULL_WEIGHT);
-    encodeCBORCompactNumber(buf, input.weightGrams);
+    encodeCBORCompactNumber(buf, actualWeight);
+  }
+
+  // empty_container_weight (grams)
+  if (input.emptySpoolWeight != null && input.emptySpoolWeight > 0) {
+    encodeCBORKey(buf, OPT_KEY.EMPTY_CONTAINER_WEIGHT);
+    encodeCBORCompactNumber(buf, input.emptySpoolWeight);
   }
 
   // primary_color (RGBA byte string)

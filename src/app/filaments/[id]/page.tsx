@@ -141,6 +141,11 @@ export default function FilamentDetail() {
     if (!filament) return;
     setNfcWriteSuccess(null);
     try {
+      // Compute actual remaining weight from the most recent scale reading
+      let actualWeightGrams: number | null = null;
+      if (filament.totalWeight != null && filament.spoolWeight != null) {
+        actualWeightGrams = Math.max(0, filament.totalWeight - filament.spoolWeight);
+      }
       const payload = generateOpenPrintTagBinary({
         materialName: filament.name,
         brandName: filament.vendor,
@@ -156,12 +161,48 @@ export default function FilamentDetail() {
           ? Number(filament.settings.chamber_temperature)
           : null,
         weightGrams: filament.netFilamentWeight ?? null,
+        actualWeightGrams,
+        emptySpoolWeight: filament.spoolWeight ?? null,
       });
       await writeTag(payload);
       setNfcWriteSuccess(true);
       setTimeout(() => setNfcWriteSuccess(null), 3000);
     } catch {
       setNfcWriteSuccess(false);
+      setTimeout(() => setNfcWriteSuccess(null), 5000);
+    }
+  };
+
+  const handleNfcWeightUpdate = async (scaleWeight: number) => {
+    if (!filament || filament.spoolWeight == null) return;
+    const actualRemaining = Math.max(0, scaleWeight - filament.spoolWeight);
+    setNfcWriteSuccess(null);
+    try {
+      const payload = generateOpenPrintTagBinary({
+        materialName: filament.name,
+        brandName: filament.vendor,
+        materialType: filament.type,
+        color: filament.color,
+        density: filament.density,
+        diameter: filament.diameter,
+        nozzleTemp: filament.temperatures?.nozzle,
+        nozzleTempFirstLayer: filament.temperatures?.nozzleFirstLayer,
+        bedTemp: filament.temperatures?.bed,
+        bedTempFirstLayer: filament.temperatures?.bedFirstLayer,
+        chamberTemp: filament.settings?.chamber_temperature
+          ? Number(filament.settings.chamber_temperature)
+          : null,
+        weightGrams: filament.netFilamentWeight ?? null,
+        actualWeightGrams: actualRemaining,
+        emptySpoolWeight: filament.spoolWeight ?? null,
+      });
+      await writeTag(payload);
+      setNfcWriteSuccess(true);
+      toast(`NFC tag updated: ${Math.round(actualRemaining)}g remaining`);
+      setTimeout(() => setNfcWriteSuccess(null), 3000);
+    } catch {
+      setNfcWriteSuccess(false);
+      toast("Failed to write NFC tag", "error");
       setTimeout(() => setNfcWriteSuccess(null), 5000);
     }
   };
@@ -491,7 +532,7 @@ export default function FilamentDetail() {
             )}
 
             {!hasSpools && filament.spoolWeight != null && (
-              <div className="flex items-center gap-2 mb-3">
+              <div className="flex items-center gap-2 mb-3 flex-wrap">
                 <label className="text-sm text-gray-500 flex-shrink-0">Update scale weight:</label>
                 <input
                   ref={weightRef}
@@ -511,6 +552,25 @@ export default function FilamentDetail() {
                 >
                   {weightSaving ? "..." : "Save"}
                 </button>
+                {isElectron && nfcStatus.tagPresent && (
+                  <button
+                    onClick={() => {
+                      const val = parseFloat(weightInput);
+                      if (!isNaN(val) && val > 0) {
+                        handleNfcWeightUpdate(val);
+                      } else if (filament.totalWeight != null) {
+                        handleNfcWeightUpdate(filament.totalWeight);
+                      } else {
+                        toast("Enter a scale weight first", "error");
+                      }
+                    }}
+                    disabled={nfcWriting}
+                    className="px-3 py-1 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50"
+                    title="Write updated weight to NFC tag"
+                  >
+                    {nfcWriting ? "..." : "Update NFC"}
+                  </button>
+                )}
               </div>
             )}
 
@@ -535,6 +595,9 @@ export default function FilamentDetail() {
                     onUpdateWeight={(weight) => handleUpdateSpool(spool._id, { totalWeight: weight })}
                     onUpdateLabel={(label) => handleUpdateSpool(spool._id, { label })}
                     onRemove={() => handleRemoveSpool(spool._id)}
+                    onNfcWeightUpdate={(scaleWeight) => handleNfcWeightUpdate(scaleWeight)}
+                    nfcAvailable={isElectron && nfcStatus.tagPresent}
+                    nfcWriting={nfcWriting}
                   />
                 ))}
                 <div className="flex gap-2">
@@ -806,9 +869,12 @@ interface SpoolCardProps {
   onUpdateWeight: (weight: number) => void;
   onUpdateLabel: (label: string) => void;
   onRemove: () => void;
+  onNfcWeightUpdate?: (scaleWeight: number) => void;
+  nfcAvailable?: boolean;
+  nfcWriting?: boolean;
 }
 
-function SpoolCard({ spool, filament, onUpdateWeight, onUpdateLabel, onRemove }: SpoolCardProps) {
+function SpoolCard({ spool, filament, onUpdateWeight, onUpdateLabel, onRemove, onNfcWeightUpdate, nfcAvailable, nfcWriting }: SpoolCardProps) {
   const [weightInput, setWeightInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingLabel, setEditingLabel] = useState(false);
@@ -897,7 +963,7 @@ function SpoolCard({ spool, filament, onUpdateWeight, onUpdateLabel, onRemove }:
 
       {/* Inline weight update */}
       {filament.spoolWeight != null && (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <input
             type="number"
             step="1"
@@ -915,6 +981,23 @@ function SpoolCard({ spool, filament, onUpdateWeight, onUpdateLabel, onRemove }:
           >
             {saving ? "..." : "Save"}
           </button>
+          {nfcAvailable && onNfcWeightUpdate && (
+            <button
+              onClick={() => {
+                const val = parseFloat(weightInput);
+                if (!isNaN(val) && val > 0) {
+                  onNfcWeightUpdate(val);
+                } else if (spool.totalWeight != null) {
+                  onNfcWeightUpdate(spool.totalWeight);
+                }
+              }}
+              disabled={nfcWriting}
+              className="px-3 py-1 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50"
+              title="Write updated weight to NFC tag"
+            >
+              {nfcWriting ? "..." : "Update NFC"}
+            </button>
+          )}
         </div>
       )}
     </div>

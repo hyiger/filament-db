@@ -42,6 +42,8 @@ export interface DecodedOpenPrintTag {
   bedTempMin?: number;
   chamberTemp?: number;
   weightGrams?: number;
+  actualWeightGrams?: number;
+  emptySpoolWeight?: number;
   materialAbbreviation?: string;
   countryOfOrigin?: string;
 }
@@ -300,6 +302,12 @@ export function decodeOpenPrintTagBinary(data: Uint8Array): DecodedOpenPrintTag 
   }
   if (main.NOMINAL_NETTO_FULL_WEIGHT !== undefined) {
     result.weightGrams = main.NOMINAL_NETTO_FULL_WEIGHT as number;
+  }
+  if (main.ACTUAL_NETTO_FULL_WEIGHT !== undefined) {
+    result.actualWeightGrams = main.ACTUAL_NETTO_FULL_WEIGHT as number;
+  }
+  if (main.EMPTY_CONTAINER_WEIGHT !== undefined) {
+    result.emptySpoolWeight = main.EMPTY_CONTAINER_WEIGHT as number;
   }
   if (main.MATERIAL_ABBREVIATION !== undefined) {
     result.materialAbbreviation = main.MATERIAL_ABBREVIATION as string;
