@@ -24,9 +24,16 @@ export default function SyncStatusIndicator() {
   const [mode, setMode] = useState<string>("");
   const [isFallback, setIsFallback] = useState(false);
   const [showTooltip, setShowTooltip] = useState(false);
-  const [online, setOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  const [online, setOnline] = useState(true);
+  const [mounted, setMounted] = useState(false);
   const tooltipRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // Avoid hydration mismatch — only render after mount
+  useEffect(() => {
+    setOnline(navigator.onLine);
+    setMounted(true);
+  }, []);
 
   // Browser online/offline detection
   useEffect(() => {
@@ -91,6 +98,9 @@ export default function SyncStatusIndicator() {
   }, []);
 
   const isElectron = typeof window !== "undefined" && !!window.electronAPI;
+
+  // Don't render until client-side mount to avoid hydration mismatch
+  if (!mounted) return null;
 
   // ── Determine what to display ──
 
