@@ -42,6 +42,7 @@ export class NfcService extends EventEmitter {
   private readers: Map<string, CardReader> = new Map();
   private readerPresent: Map<string, boolean> = new Map();
   private activeReader: CardReader | null = null;
+  private lastReaderDiscoveredAt = 0;
   private status: NfcStatus = {
     readerConnected: false,
     readerName: null,
@@ -55,6 +56,7 @@ export class NfcService extends EventEmitter {
 
     this.pcsc.on("reader", (reader: CardReader) => {
       this.readers.set(reader.name, reader);
+      this.lastReaderDiscoveredAt = Date.now();
       console.log(`[NFC] Reader discovered: ${reader.name} (${this.readers.size} total)`);
 
       if (this.readers.size === 1) {
@@ -134,6 +136,16 @@ export class NfcService extends EventEmitter {
    */
   private async connect(): Promise<number> {
     if (this.readers.size === 0) throw new Error("No NFC reader connected");
+
+    // On hot-plug, macOS registers two reader instances sequentially. If a reader
+    // was just discovered, wait briefly so both driver instances (ifd-ccid and
+    // ifd-acsccid) have time to register before we try to connect.
+    const msSinceDiscovery = Date.now() - this.lastReaderDiscoveredAt;
+    if (msSinceDiscovery < 2000) {
+      const settleDelay = Math.max(500, 2000 - msSinceDiscovery);
+      console.log(`[NFC] Reader recently discovered, waiting ${settleDelay}ms for drivers to settle`);
+      await new Promise(r => setTimeout(r, settleDelay));
+    }
 
     const readerList = [...this.readers.values()];
 

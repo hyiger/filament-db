@@ -377,12 +377,17 @@ export default function Home() {
     const file = e.target.files?.[0];
     if (!file) return;
 
+    const ext = file.name.split(".").pop()?.toLowerCase();
+    let endpoint = "/api/filaments/import";
+    if (ext === "csv") endpoint = "/api/filaments/import-csv";
+    else if (ext === "xlsx") endpoint = "/api/filaments/import-xlsx";
+
     setImporting(true);
     const formData = new FormData();
     formData.append("file", file);
 
     try {
-      const res = await fetch("/api/filaments/import", {
+      const res = await fetch(endpoint, {
         method: "POST",
         body: formData,
       });
@@ -596,7 +601,7 @@ export default function Home() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".ini"
+          accept=".ini,.csv,.xlsx"
           onChange={handleImport}
           className="hidden"
         />
@@ -652,17 +657,38 @@ export default function Home() {
                   className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-50 flex items-center gap-2"
                 >
                   <span className="w-2 h-2 rounded-full bg-amber-500" />
-                  {importing ? "Importing..." : "Import INI"}
+                  {importing ? "Importing..." : "Import File (INI / CSV / XLSX)"}
                 </button>
                 <div className="border-t border-gray-600 my-1" />
+                <div className="px-4 py-1">
+                  <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Export</span>
+                </div>
                 {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
                 <a
                   href="/api/filaments/export"
-                  className="block px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  className="block px-4 py-2 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
                   onClick={() => setShowImportExport(false)}
                 >
                   <span className="w-2 h-2 rounded-full bg-green-500" />
-                  Export INI
+                  INI (PrusaSlicer)
+                </a>
+                {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+                <a
+                  href="/api/filaments/export-csv"
+                  className="block px-4 py-2 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  onClick={() => setShowImportExport(false)}
+                >
+                  <span className="w-2 h-2 rounded-full bg-green-500" />
+                  CSV
+                </a>
+                {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+                <a
+                  href="/api/filaments/export-xlsx"
+                  className="block px-4 py-2 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  onClick={() => setShowImportExport(false)}
+                >
+                  <span className="w-2 h-2 rounded-full bg-green-500" />
+                  Excel (XLSX)
                 </a>
               </div>
             )}
