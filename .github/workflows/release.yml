@@ -89,7 +89,7 @@ jobs:
       - name: Rebuild native modules and package (Linux arm64)
         if: matrix.platform == 'linux-arm64'
         run: |
-          npx electron-rebuild -f -w @pokusew/pcsclite --arch=arm64
+          npx electron-rebuild -f -o @pokusew/pcsclite --arch=arm64
           npx electron-builder --config electron-builder.yml --arm64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
