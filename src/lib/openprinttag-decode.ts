@@ -12,9 +12,17 @@
 import { OPT_KEY, MATERIAL_TYPE, decodeCBORFloat16 } from "./openprinttag";
 
 // Reverse lookup: CBOR key number → field name
-const KEY_TO_NAME: Record<number, string> = {};
+// Meta and main maps share key numbers 0-3 with different meanings,
+// so we build separate lookup tables.
+const META_KEYS = new Set(["MAIN_REGION_OFFSET", "MAIN_REGION_SIZE", "AUX_REGION_OFFSET", "AUX_REGION_SIZE"]);
+const META_KEY_TO_NAME: Record<number, string> = {};
+const MAIN_KEY_TO_NAME: Record<number, string> = {};
 for (const [name, key] of Object.entries(OPT_KEY)) {
-  KEY_TO_NAME[key] = name;
+  if (META_KEYS.has(name)) {
+    META_KEY_TO_NAME[key] = name;
+  } else {
+    MAIN_KEY_TO_NAME[key] = name;
+  }
 }
 
 // Reverse lookup: material type number → abbreviation
@@ -46,6 +54,7 @@ export interface DecodedOpenPrintTag {
   emptySpoolWeight?: number;
   materialAbbreviation?: string;
   countryOfOrigin?: string;
+  spoolUid?: string;
 }
 
 // ── CBOR decoding primitives ────────────────────────────────────────
@@ -238,7 +247,7 @@ export function decodeOpenPrintTagBinary(data: Uint8Array): DecodedOpenPrintTag 
   const meta: Record<string, number> = {};
   for (const [k, v] of Object.entries(metaMap)) {
     const keyNum = parseInt(k, 10);
-    const name = KEY_TO_NAME[keyNum] ?? `unknown_${k}`;
+    const name = META_KEY_TO_NAME[keyNum] ?? `unknown_${k}`;
     meta[name] = v as number;
   }
 
@@ -249,7 +258,7 @@ export function decodeOpenPrintTagBinary(data: Uint8Array): DecodedOpenPrintTag 
   const main: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(mainMap)) {
     const keyNum = parseInt(k, 10);
-    const name = KEY_TO_NAME[keyNum] ?? `key_${k}`;
+    const name = MAIN_KEY_TO_NAME[keyNum] ?? `key_${k}`;
     main[name] = v;
   }
 
@@ -314,6 +323,11 @@ export function decodeOpenPrintTagBinary(data: Uint8Array): DecodedOpenPrintTag 
   }
   if (main.COUNTRY_OF_ORIGIN !== undefined) {
     result.countryOfOrigin = main.COUNTRY_OF_ORIGIN as string;
+  }
+
+  // brand_specific_instance_id – spool/instance identifier string
+  if (main.BRAND_SPECIFIC_INSTANCE_ID !== undefined) {
+    result.spoolUid = main.BRAND_SPECIFIC_INSTANCE_ID as string;
   }
 
   return result;

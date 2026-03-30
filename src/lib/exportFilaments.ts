@@ -19,6 +19,7 @@ export interface ExportRow {
   netFilamentWeight: number | null;
   spoolCount: number;
   tdsUrl: string | null;
+  instanceId: string;
 }
 
 export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
@@ -38,6 +39,7 @@ export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
   { key: "netFilamentWeight", header: "Net Filament Weight (g)" },
   { key: "spoolCount", header: "Spools" },
   { key: "tdsUrl", header: "TDS URL" },
+  { key: "instanceId", header: "Instance ID" },
 ];
 
 export async function getExportRows(): Promise<ExportRow[]> {
@@ -77,6 +79,7 @@ export async function getExportRows(): Promise<ExportRow[]> {
       netFilamentWeight: resolved.netFilamentWeight ?? null,
       spoolCount: resolved.spools?.length || (resolved.totalWeight != null ? 1 : 0),
       tdsUrl: resolved.tdsUrl ?? null,
+      instanceId: filament.instanceId ?? "",
     };
   });
 }

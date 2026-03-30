@@ -304,6 +304,9 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
       {data.countryOfOrigin && (
         <Stat label="Origin" value={data.countryOfOrigin} />
       )}
+      {data.spoolUid && (
+        <Stat label="Instance ID" value={data.spoolUid} />
+      )}
     </div>
   );
 }

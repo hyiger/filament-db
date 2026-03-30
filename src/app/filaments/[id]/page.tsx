@@ -19,6 +19,7 @@ interface Variant {
 interface Filament {
   _id: string;
   name: string;
+  instanceId?: string;
   vendor: string;
   type: string;
   color: string;
@@ -163,6 +164,7 @@ export default function FilamentDetail() {
         weightGrams: filament.netFilamentWeight ?? null,
         actualWeightGrams,
         emptySpoolWeight: filament.spoolWeight ?? null,
+        spoolUid: filament.instanceId ?? null,
       });
       await writeTag(payload);
       setNfcWriteSuccess(true);
@@ -195,6 +197,7 @@ export default function FilamentDetail() {
         weightGrams: filament.netFilamentWeight ?? null,
         actualWeightGrams: actualRemaining,
         emptySpoolWeight: filament.spoolWeight ?? null,
+        spoolUid: filament.instanceId ?? null,
       });
       await writeTag(payload);
       setNfcWriteSuccess(true);
@@ -350,6 +353,9 @@ export default function FilamentDetail() {
           <h1 className="text-2xl font-bold">{filament.name}</h1>
           <p className="text-gray-500">
             {filament.vendor} &middot; {filament.type}
+            {filament.instanceId && (
+              <span className="ml-2 text-xs font-mono text-gray-400">{filament.instanceId}</span>
+            )}
             {isVariant && (
               <span className="ml-2 text-xs bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded">
                 variant

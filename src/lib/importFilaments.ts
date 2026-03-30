@@ -17,6 +17,7 @@ export interface ImportRow {
   spoolWeight?: number | null;
   netFilamentWeight?: number | null;
   tdsUrl?: string | null;
+  instanceId?: string | null;
 }
 
 /** Map header text (case-insensitive) to ImportRow keys */
@@ -50,6 +51,9 @@ const HEADER_MAP: Record<string, keyof ImportRow | undefined> = {
   spools: undefined, // skip spool count — computed, not importable
   "tds url": "tdsUrl",
   tdsurl: "tdsUrl",
+  "instance id": "instanceId",
+  instanceid: "instanceId",
+  "instance_id": "instanceId",
 };
 
 const NUM_FIELDS = new Set<keyof ImportRow>([
@@ -149,6 +153,7 @@ export async function upsertImportRows(
       spoolWeight: row.spoolWeight ?? null,
       netFilamentWeight: row.netFilamentWeight ?? null,
       tdsUrl: row.tdsUrl ?? null,
+      ...(row.instanceId ? { instanceId: row.instanceId } : {}),
     };
 
     const existing = activeByName.get(row.name);

@@ -53,6 +53,16 @@ export const OPT_KEY = {
   // Additional
   MATERIAL_ABBREVIATION: 52,
   COUNTRY_OF_ORIGIN: 55,
+
+  // Identity – UUIDs and brand-specific IDs
+  INSTANCE_UUID: 0,                  // UUIDv5 derived from NFC tag UID (16-byte binary)
+  PACKAGE_UUID: 1,                   // UUIDv5 package identifier
+  MATERIAL_UUID: 2,                  // UUIDv5 material identifier
+  BRAND_UUID: 3,                     // UUIDv5 brand identifier
+  GTIN: 4,                           // Global Trade Item Number
+  BRAND_SPECIFIC_INSTANCE_ID: 5,     // e.g. Prusament "2acc21072a" (string, max 16)
+  BRAND_SPECIFIC_PACKAGE_ID: 6,      // (string, max 16)
+  BRAND_SPECIFIC_MATERIAL_ID: 7,     // (string, max 16)
 } as const;
 
 // Material class enum (data/material_class_enum.yaml)
@@ -386,6 +396,7 @@ export interface OpenPrintTagInput {
   actualWeightGrams?: number | null; // actual remaining filament weight (key 17), defaults to weightGrams
   emptySpoolWeight?: number | null; // empty spool/container weight in grams
   countryOfOrigin?: string;    // ISO 3166-1 alpha-2, default "US"
+  spoolUid?: string | null;    // 5-byte hex instance ID (e.g. "2acc21072a")
 }
 
 // ── Main encoder ────────────────────────────────────────────────────
@@ -543,6 +554,12 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   // country_of_origin (ISO 3166-1 alpha-2)
   encodeCBORKey(buf, OPT_KEY.COUNTRY_OF_ORIGIN);
   encodeCBORText(buf, (input.countryOfOrigin ?? "US").slice(0, 2));
+
+  // brand_specific_instance_id – unique spool/instance identifier (string, max 16 chars)
+  if (input.spoolUid) {
+    encodeCBORKey(buf, OPT_KEY.BRAND_SPECIFIC_INSTANCE_ID);
+    encodeCBORText(buf, input.spoolUid.slice(0, 16));
+  }
 
   buf.push(0xff); // indefinite map end
 

@@ -49,6 +49,7 @@ export async function GET(
     weightGrams: resolved.netFilamentWeight ?? null,
     actualWeightGrams,
     emptySpoolWeight: resolved.spoolWeight ?? null,
+    spoolUid: filament.instanceId ?? null,
   });
 
   const safeName = resolved.name

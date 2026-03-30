@@ -1,4 +1,10 @@
+import crypto from "crypto";
 import mongoose, { Schema, Document, Model } from "mongoose";
+
+/** Generate a random 5-byte hex instance ID (10 hex chars), matching Prusament's format. */
+function generateInstanceId(): string {
+  return crypto.randomBytes(5).toString("hex");
+}
 
 export interface ISpool {
   _id: mongoose.Types.ObjectId;
@@ -10,6 +16,7 @@ export interface ISpool {
 export interface IFilament extends Document {
   name: string;
   syncId: string | null;
+  instanceId: string;
   vendor: string;
   type: string;
   color: string;
@@ -61,6 +68,7 @@ const FilamentSchema = new Schema<IFilament>(
   {
     name: { type: String, required: true },
     syncId: { type: String, unique: true, sparse: true, index: true },
+    instanceId: { type: String, unique: true, default: generateInstanceId },
     vendor: { type: String, required: true, index: true },
     type: { type: String, required: true, index: true },
     color: { type: String, default: "#808080" },
