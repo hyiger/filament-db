@@ -138,7 +138,32 @@ FilamentSchema.index(
   { unique: true, partialFilterExpression: { _deletedAt: null } }
 );
 
+// Ensure instanceId is always set before saving
+FilamentSchema.pre("save", function () {
+  if (!this.instanceId) {
+    this.instanceId = generateInstanceId();
+  }
+});
+
 const Filament: Model<IFilament> =
   mongoose.models.Filament || mongoose.model<IFilament>("Filament", FilamentSchema);
+
+/**
+ * Backfill instanceId for any existing filaments that don't have one.
+ * Safe to call multiple times — only updates documents missing the field.
+ */
+export async function backfillInstanceIds(): Promise<number> {
+  const cursor = Filament.find({
+    $or: [{ instanceId: null }, { instanceId: { $exists: false } }],
+  }).cursor();
+
+  let count = 0;
+  for await (const doc of cursor) {
+    doc.instanceId = generateInstanceId();
+    await doc.save();
+    count++;
+  }
+  return count;
+}
 
 export default Filament;

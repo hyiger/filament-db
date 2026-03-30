@@ -4,6 +4,7 @@ interface MongooseCache {
   conn: typeof mongoose | null;
   promise: Promise<typeof mongoose> | null;
   uri: string | null;
+  migrated: boolean;
 }
 
 declare global {
@@ -23,6 +24,7 @@ export default async function dbConnect() {
     conn: null,
     promise: null,
     uri: null,
+    migrated: false,
   };
 
   if (!global.mongoose) {
@@ -35,6 +37,7 @@ export default async function dbConnect() {
     cached.conn = null;
     cached.promise = null;
     cached.uri = null;
+    cached.migrated = false;
   }
 
   if (cached.conn) {
@@ -47,5 +50,20 @@ export default async function dbConnect() {
   }
 
   cached.conn = await cached.promise;
+
+  // One-time migration: backfill instanceId for existing filaments
+  if (!cached.migrated) {
+    cached.migrated = true;
+    try {
+      const { backfillInstanceIds } = await import("@/models/Filament");
+      const count = await backfillInstanceIds();
+      if (count > 0) {
+        console.log(`[migration] Backfilled instanceId for ${count} filament(s)`);
+      }
+    } catch (err) {
+      console.error("[migration] Failed to backfill instanceIds:", err);
+    }
+  }
+
   return cached.conn;
 }
