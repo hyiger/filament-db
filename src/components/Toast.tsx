@@ -27,7 +27,11 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
 
   const toast = useCallback((message: string, type: Toast["type"] = "success") => {
     const id = ++nextId;
-    setToasts((prev) => [...prev, { id, message, type }]);
+    setToasts((prev) => {
+      const next = [...prev, { id, message, type }];
+      // Cap visible toasts at 5 — drop oldest when exceeded
+      return next.length > 5 ? next.slice(-5) : next;
+    });
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 4000);

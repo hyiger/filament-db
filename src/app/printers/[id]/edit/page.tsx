@@ -12,14 +12,17 @@ export default function EditPrinter() {
   const { toast } = useToast();
   const [printer, setPrinter] = useState(null);
   const [notFound, setNotFound] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     fetch(`/api/printers/${params.id}`)
       .then((r) => {
-        if (!r.ok) { setNotFound(true); return null; }
+        if (r.status === 404) { setNotFound(true); return null; }
+        if (!r.ok) { setFetchError(true); return null; }
         return r.json();
       })
-      .then((data) => { if (data) setPrinter(data); });
+      .then((data) => { if (data) setPrinter(data); })
+      .catch(() => setFetchError(true));
   }, [params.id]);
 
   const handleSubmit = async (data: Record<string, unknown>) => {
@@ -37,7 +40,18 @@ export default function EditPrinter() {
     }
   };
 
-  if (notFound) return <p className="p-8 text-red-500">Printer not found. It may have been deleted.</p>;
+  if (notFound) return (
+    <div className="p-8">
+      <p className="text-red-500 mb-4">Printer not found. It may have been deleted.</p>
+      <Link href="/printers" className="text-blue-600 hover:underline text-sm">&larr; Back to Printers</Link>
+    </div>
+  );
+  if (fetchError) return (
+    <div className="p-8">
+      <p className="text-red-500 mb-4">Failed to load printer. Please try again.</p>
+      <Link href="/printers" className="text-blue-600 hover:underline text-sm">&larr; Back to Printers</Link>
+    </div>
+  );
   if (!printer) return <p className="p-8 text-gray-500">Loading...</p>;
 
   return (

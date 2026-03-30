@@ -6,31 +6,37 @@ import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 
 const OID_RE = /^[a-f0-9]{24}$/i;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
 const OID_FIELDS = new Set(["_id", "parentId", "printer", "nozzle"]);
+const DATE_FIELDS = new Set(["createdAt", "updatedAt", "_deletedAt"]);
 
 /**
- * Recursively restore ObjectId fields that were serialized as strings.
+ * Recursively restore ObjectId and Date fields that were serialized as strings.
  * Handles _id, parentId, array elements in compatibleNozzles/installedNozzles,
- * and nested refs in calibrations/spools.
+ * nested refs in calibrations/spools, and timestamp fields.
  */
-function restoreObjectIds(doc: Record<string, unknown>): Record<string, unknown> {
+function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
   for (const [key, val] of Object.entries(doc)) {
     if (val === null || val === undefined) continue;
 
-    if (typeof val === "string" && OID_RE.test(val) && OID_FIELDS.has(key)) {
-      doc[key] = new mongoose.Types.ObjectId(val);
+    if (typeof val === "string") {
+      if (OID_RE.test(val) && OID_FIELDS.has(key)) {
+        doc[key] = new mongoose.Types.ObjectId(val);
+      } else if (DATE_FIELDS.has(key) && ISO_DATE_RE.test(val)) {
+        doc[key] = new Date(val);
+      }
     } else if (Array.isArray(val)) {
       doc[key] = val.map((item) => {
         if (typeof item === "string" && OID_RE.test(item)) {
           return new mongoose.Types.ObjectId(item);
         }
         if (typeof item === "object" && item !== null && !Array.isArray(item)) {
-          return restoreObjectIds(item as Record<string, unknown>);
+          return restoreTypes(item as Record<string, unknown>);
         }
         return item;
       });
     } else if (typeof val === "object" && !(val instanceof mongoose.Types.ObjectId) && !(val instanceof Date)) {
-      doc[key] = restoreObjectIds(val as Record<string, unknown>);
+      doc[key] = restoreTypes(val as Record<string, unknown>);
     }
   }
   return doc;
@@ -137,19 +143,19 @@ export async function POST(request: NextRequest) {
     const results = { filaments: 0, nozzles: 0, printers: 0 };
 
     if (nozzles.length > 0) {
-      const docs = (nozzles as Record<string, unknown>[]).map(restoreObjectIds);
+      const docs = (nozzles as Record<string, unknown>[]).map(restoreTypes);
       await Nozzle.insertMany(docs, { lean: true, ordered: false });
       results.nozzles = nozzles.length;
     }
 
     if (printers.length > 0) {
-      const docs = (printers as Record<string, unknown>[]).map(restoreObjectIds);
+      const docs = (printers as Record<string, unknown>[]).map(restoreTypes);
       await Printer.insertMany(docs, { lean: true, ordered: false });
       results.printers = printers.length;
     }
 
     if (filaments.length > 0) {
-      const docs = (filaments as Record<string, unknown>[]).map(restoreObjectIds);
+      const docs = (filaments as Record<string, unknown>[]).map(restoreTypes);
       await Filament.insertMany(docs, { lean: true, ordered: false });
       results.filaments = filaments.length;
     }

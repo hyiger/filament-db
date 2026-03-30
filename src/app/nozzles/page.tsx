@@ -128,7 +128,12 @@ export default function NozzlesPage() {
       {loading ? (
         <p className="text-gray-500">Loading...</p>
       ) : nozzles.length === 0 ? (
-        <p className="text-gray-500">No nozzles defined yet.</p>
+        <div className="text-center py-12">
+          <p className="text-gray-500 mb-4">No nozzles defined yet.</p>
+          <Link href="/nozzles/new" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">
+            + Add Your First Nozzle
+          </Link>
+        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">

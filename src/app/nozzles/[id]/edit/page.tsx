@@ -12,14 +12,17 @@ export default function EditNozzle() {
   const { toast } = useToast();
   const [nozzle, setNozzle] = useState(null);
   const [notFound, setNotFound] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     fetch(`/api/nozzles/${params.id}`)
       .then((r) => {
-        if (!r.ok) { setNotFound(true); return null; }
+        if (r.status === 404) { setNotFound(true); return null; }
+        if (!r.ok) { setFetchError(true); return null; }
         return r.json();
       })
-      .then((data) => { if (data) setNozzle(data); });
+      .then((data) => { if (data) setNozzle(data); })
+      .catch(() => setFetchError(true));
   }, [params.id]);
 
   const handleSubmit = async (data: Record<string, unknown>) => {
@@ -37,7 +40,18 @@ export default function EditNozzle() {
     }
   };
 
-  if (notFound) return <p className="p-8 text-red-500">Nozzle not found. It may have been deleted.</p>;
+  if (notFound) return (
+    <div className="p-8">
+      <p className="text-red-500 mb-4">Nozzle not found. It may have been deleted.</p>
+      <Link href="/nozzles" className="text-blue-600 hover:underline text-sm">&larr; Back to Nozzles</Link>
+    </div>
+  );
+  if (fetchError) return (
+    <div className="p-8">
+      <p className="text-red-500 mb-4">Failed to load nozzle. Please try again.</p>
+      <Link href="/nozzles" className="text-blue-600 hover:underline text-sm">&larr; Back to Nozzles</Link>
+    </div>
+  );
   if (!nozzle) return <p className="p-8 text-gray-500">Loading...</p>;
 
   return (

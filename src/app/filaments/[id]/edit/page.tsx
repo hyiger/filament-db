@@ -12,15 +12,17 @@ export default function EditFilament() {
   const { toast } = useToast();
   const [filament, setFilament] = useState(null);
   const [notFound, setNotFound] = useState(false);
+  const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
     fetch(`/api/filaments/${params.id}`)
       .then((r) => {
-        if (!r.ok) { setNotFound(true); return null; }
+        if (r.status === 404) { setNotFound(true); return null; }
+        if (!r.ok) { setFetchError(true); return null; }
         return r.json();
       })
       .then((data) => { if (data) setFilament(data); })
-      .catch(() => { setNotFound(true); });
+      .catch(() => setFetchError(true));
   }, [params.id]);
 
   const handleSubmit = async (data: Record<string, unknown>) => {
@@ -38,7 +40,18 @@ export default function EditFilament() {
     }
   };
 
-  if (notFound) return <p className="p-8 text-red-500">Filament not found. It may have been deleted.</p>;
+  if (notFound) return (
+    <div className="p-8">
+      <p className="text-red-500 mb-4">Filament not found. It may have been deleted.</p>
+      <Link href="/" className="text-blue-600 hover:underline text-sm">&larr; Back to Filaments</Link>
+    </div>
+  );
+  if (fetchError) return (
+    <div className="p-8">
+      <p className="text-red-500 mb-4">Failed to load filament. Please try again.</p>
+      <Link href="/" className="text-blue-600 hover:underline text-sm">&larr; Back to Filaments</Link>
+    </div>
+  );
   if (!filament) return <p className="p-8 text-gray-500">Loading...</p>;
 
   return (

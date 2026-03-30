@@ -105,6 +105,26 @@ export async function upsertImportRows(
   let updated = 0;
   let skipped = 0;
 
+  // Batch-load all existing filaments by name to avoid N+1 queries
+  const validNames = rows
+    .filter((r) => r.name && r.vendor && r.type)
+    .map((r) => r.name!);
+
+  const allExisting = await Filament.find({ name: { $in: validNames } }).lean();
+
+  // Build lookup maps: name → active doc, name → soft-deleted doc
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const activeByName = new Map<string, { _id: any }>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const deletedByName = new Map<string, { _id: any }>();
+  for (const doc of allExisting) {
+    if (doc._deletedAt == null) {
+      activeByName.set(doc.name, doc);
+    } else if (!deletedByName.has(doc.name)) {
+      deletedByName.set(doc.name, doc);
+    }
+  }
+
   for (const row of rows) {
     if (!row.name || !row.vendor || !row.type) {
       skipped++;
@@ -131,15 +151,12 @@ export async function upsertImportRows(
       tdsUrl: row.tdsUrl ?? null,
     };
 
-    const existing = await Filament.findOne({ name: row.name, _deletedAt: null });
+    const existing = activeByName.get(row.name);
     if (existing) {
       await Filament.updateOne({ _id: existing._id }, doc);
       updated++;
     } else {
-      const softDeleted = await Filament.findOne({
-        name: row.name,
-        _deletedAt: { $ne: null },
-      });
+      const softDeleted = deletedByName.get(row.name);
       if (softDeleted) {
         await Filament.updateOne(
           { _id: softDeleted._id },

@@ -134,7 +134,12 @@ export default function PrintersPage() {
       {loading ? (
         <p className="text-gray-500">Loading...</p>
       ) : printers.length === 0 ? (
-        <p className="text-gray-500">No printers defined yet. Add a printer to start tracking per-printer calibrations.</p>
+        <div className="text-center py-12">
+          <p className="text-gray-500 mb-4">No printers defined yet. Add a printer to start tracking per-printer calibrations.</p>
+          <Link href="/printers/new" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">
+            + Add Your First Printer
+          </Link>
+        </div>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-sm border-collapse">
