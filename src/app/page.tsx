@@ -212,6 +212,8 @@ export default function Home() {
   const [showAtlasImport, setShowAtlasImport] = useState(false);
   const [showPrusamentImport, setShowPrusamentImport] = useState(false);
   const [showImportExport, setShowImportExport] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importExportRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
@@ -374,6 +376,47 @@ export default function Home() {
     fetchFilaments();
   };
 
+  const allFilamentIds = useMemo(() => filaments.map((f) => f._id), [filaments]);
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (selected.size === allFilamentIds.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(allFilamentIds));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    const count = selected.size;
+    if (!confirm(`Delete ${count} filament${count !== 1 ? "s" : ""}?`)) return;
+    setBulkDeleting(true);
+    let deleted = 0;
+    const errors: string[] = [];
+    for (const id of selected) {
+      const res = await fetch(`/api/filaments/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        deleted++;
+      } else {
+        const body = await res.json().catch(() => null);
+        const name = filaments.find((f) => f._id === id)?.name ?? id;
+        errors.push(body?.error || `Failed to delete "${name}"`);
+      }
+    }
+    if (deleted > 0) toast(`Deleted ${deleted} filament${deleted !== 1 ? "s" : ""}`);
+    if (errors.length > 0) toast(errors.join("; "), "error");
+    setBulkDeleting(false);
+    setSelected(new Set());
+    fetchFilaments();
+  };
+
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -416,8 +459,16 @@ export default function Home() {
   const renderRow = (f: Filament, isVariant = false) => (
     <tr
       key={f._id}
-      className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${isVariant ? "bg-gray-50/50 dark:bg-gray-950/50" : ""}`}
+      className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${isVariant ? "bg-gray-50/50 dark:bg-gray-950/50" : ""} ${selected.has(f._id) ? "bg-red-950/20" : ""}`}
     >
+      <td className="py-2 px-2">
+        <input
+          type="checkbox"
+          checked={selected.has(f._id)}
+          onChange={() => toggleSelect(f._id)}
+          className="accent-red-600"
+        />
+      </td>
       <td className="py-2 px-2">
         <div className="flex items-center gap-1">
           {isVariant && <span className="text-gray-400 text-xs ml-2">&#8627;</span>}
@@ -497,8 +548,16 @@ export default function Home() {
       <>
         <tr
           key={f._id}
-          className="border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900"
+          className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(f._id) ? "bg-red-950/20" : ""}`}
         >
+          <td className="py-2 px-2">
+            <input
+              type="checkbox"
+              checked={selected.has(f._id)}
+              onChange={() => toggleSelect(f._id)}
+              className="accent-red-600"
+            />
+          </td>
           <td className="py-2 px-2">
             <div className="flex items-center gap-1">
               <button
@@ -574,7 +633,7 @@ export default function Home() {
         {isExpanded && group.variants.map((v) => renderRow(v, true))}
         {!isExpanded && (
           <tr key={`${f._id}-colors`} className="border-b border-gray-200">
-            <td colSpan={9} className="py-1 px-2 pl-10">
+            <td colSpan={10} className="py-1 px-2 pl-10">
               <div className="flex items-center gap-1.5">
                 {group.variants.map((v) => (
                   <Link
@@ -756,6 +815,25 @@ export default function Home() {
         </select>
       </div>
 
+      {selected.size > 0 && (
+        <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-950/30 border border-red-800 rounded-lg">
+          <span className="text-sm text-red-300">{selected.size} selected</span>
+          <button
+            onClick={handleBulkDelete}
+            disabled={bulkDeleting}
+            className="px-3 py-1 bg-red-700 text-white rounded text-sm hover:bg-red-600 disabled:opacity-50"
+          >
+            {bulkDeleting ? "Deleting..." : `Delete ${selected.size}`}
+          </button>
+          <button
+            onClick={() => setSelected(new Set())}
+            className="text-sm text-gray-400 hover:text-gray-200"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <p className="text-gray-500">Loading...</p>
       ) : filaments.length === 0 ? (
@@ -765,6 +843,14 @@ export default function Home() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b border-gray-300">
+                <th className="py-3 px-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={selected.size === allFilamentIds.length && allFilamentIds.length > 0}
+                    onChange={toggleAll}
+                    className="accent-red-600"
+                  />
+                </th>
                 <th className="text-left py-3 px-2">Color</th>
                 {(["name", "vendor", "type", "nozzle", "bed", "cost", "remaining"] as SortKey[]).map((col) => (
                   <th

@@ -17,6 +17,8 @@ interface Nozzle {
 export default function NozzlesPage() {
   const [nozzles, setNozzles] = useState<Nozzle[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const { toast } = useToast();
 
   const fetchNozzles = useCallback(async () => {
@@ -29,12 +31,29 @@ export default function NozzlesPage() {
     }
     const data = await res.json();
     setNozzles(data);
+    setSelected(new Set());
     setLoading(false);
   }, [toast]);
 
   useEffect(() => {
     fetchNozzles(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetching on mount
   }, [fetchNozzles]);
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (selected.size === nozzles.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(nozzles.map((n) => n._id)));
+    }
+  };
 
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Delete nozzle "${name}"?`)) return;
@@ -45,6 +64,28 @@ export default function NozzlesPage() {
       return;
     }
     toast(`Deleted "${name}"`);
+    fetchNozzles();
+  };
+
+  const handleBulkDelete = async () => {
+    const count = selected.size;
+    if (!confirm(`Delete ${count} nozzle${count !== 1 ? "s" : ""}?`)) return;
+    setBulkDeleting(true);
+    let deleted = 0;
+    const errors: string[] = [];
+    for (const id of selected) {
+      const res = await fetch(`/api/nozzles/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        deleted++;
+      } else {
+        const body = await res.json().catch(() => null);
+        const name = nozzles.find((n) => n._id === id)?.name ?? id;
+        errors.push(body?.error || `Failed to delete "${name}"`);
+      }
+    }
+    if (deleted > 0) toast(`Deleted ${deleted} nozzle${deleted !== 1 ? "s" : ""}`);
+    if (errors.length > 0) toast(errors.join("; "), "error");
+    setBulkDeleting(false);
     fetchNozzles();
   };
 
@@ -65,6 +106,25 @@ export default function NozzlesPage() {
         </Link>
       </div>
 
+      {selected.size > 0 && (
+        <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-950/30 border border-red-800 rounded-lg">
+          <span className="text-sm text-red-300">{selected.size} selected</span>
+          <button
+            onClick={handleBulkDelete}
+            disabled={bulkDeleting}
+            className="px-3 py-1 bg-red-700 text-white rounded text-sm hover:bg-red-600 disabled:opacity-50"
+          >
+            {bulkDeleting ? "Deleting..." : `Delete ${selected.size}`}
+          </button>
+          <button
+            onClick={() => setSelected(new Set())}
+            className="text-sm text-gray-400 hover:text-gray-200"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <p className="text-gray-500">Loading...</p>
       ) : nozzles.length === 0 ? (
@@ -74,6 +134,14 @@ export default function NozzlesPage() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b border-gray-300">
+                <th className="py-3 px-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={selected.size === nozzles.length && nozzles.length > 0}
+                    onChange={toggleAll}
+                    className="accent-red-600"
+                  />
+                </th>
                 <th className="text-left py-3 px-2">Name</th>
                 <th className="text-right py-3 px-2">Diameter</th>
                 <th className="text-left py-3 px-2">Type</th>
@@ -87,8 +155,16 @@ export default function NozzlesPage() {
               {nozzles.map((n) => (
                 <tr
                   key={n._id}
-                  className="border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900"
+                  className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(n._id) ? "bg-red-950/20" : ""}`}
                 >
+                  <td className="py-2 px-2">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(n._id)}
+                      onChange={() => toggleSelect(n._id)}
+                      className="accent-red-600"
+                    />
+                  </td>
                   <td className="py-2 px-2 font-medium">{n.name}</td>
                   <td className="py-2 px-2 text-right">{n.diameter}mm</td>
                   <td className="py-2 px-2">

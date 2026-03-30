@@ -23,6 +23,8 @@ interface Printer {
 export default function PrintersPage() {
   const [printers, setPrinters] = useState<Printer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const { toast } = useToast();
 
   const fetchPrinters = useCallback(async () => {
@@ -35,12 +37,29 @@ export default function PrintersPage() {
     }
     const data = await res.json();
     setPrinters(data);
+    setSelected(new Set());
     setLoading(false);
   }, [toast]);
 
   useEffect(() => {
     fetchPrinters(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetching on mount
   }, [fetchPrinters]);
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = () => {
+    if (selected.size === printers.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(printers.map((p) => p._id)));
+    }
+  };
 
   const handleDelete = async (id: string, name: string) => {
     if (!confirm(`Delete printer "${name}"?`)) return;
@@ -51,6 +70,28 @@ export default function PrintersPage() {
       return;
     }
     toast(`Deleted "${name}"`);
+    fetchPrinters();
+  };
+
+  const handleBulkDelete = async () => {
+    const count = selected.size;
+    if (!confirm(`Delete ${count} printer${count !== 1 ? "s" : ""}?`)) return;
+    setBulkDeleting(true);
+    let deleted = 0;
+    const errors: string[] = [];
+    for (const id of selected) {
+      const res = await fetch(`/api/printers/${id}`, { method: "DELETE" });
+      if (res.ok) {
+        deleted++;
+      } else {
+        const body = await res.json().catch(() => null);
+        const name = printers.find((p) => p._id === id)?.name ?? id;
+        errors.push(body?.error || `Failed to delete "${name}"`);
+      }
+    }
+    if (deleted > 0) toast(`Deleted ${deleted} printer${deleted !== 1 ? "s" : ""}`);
+    if (errors.length > 0) toast(errors.join("; "), "error");
+    setBulkDeleting(false);
     fetchPrinters();
   };
 
@@ -71,6 +112,25 @@ export default function PrintersPage() {
         </Link>
       </div>
 
+      {selected.size > 0 && (
+        <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-950/30 border border-red-800 rounded-lg">
+          <span className="text-sm text-red-300">{selected.size} selected</span>
+          <button
+            onClick={handleBulkDelete}
+            disabled={bulkDeleting}
+            className="px-3 py-1 bg-red-700 text-white rounded text-sm hover:bg-red-600 disabled:opacity-50"
+          >
+            {bulkDeleting ? "Deleting..." : `Delete ${selected.size}`}
+          </button>
+          <button
+            onClick={() => setSelected(new Set())}
+            className="text-sm text-gray-400 hover:text-gray-200"
+          >
+            Clear
+          </button>
+        </div>
+      )}
+
       {loading ? (
         <p className="text-gray-500">Loading...</p>
       ) : printers.length === 0 ? (
@@ -80,6 +140,14 @@ export default function PrintersPage() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b border-gray-300">
+                <th className="py-3 px-2 w-8">
+                  <input
+                    type="checkbox"
+                    checked={selected.size === printers.length && printers.length > 0}
+                    onChange={toggleAll}
+                    className="accent-red-600"
+                  />
+                </th>
                 <th className="text-left py-3 px-2">Name</th>
                 <th className="text-left py-3 px-2">Manufacturer</th>
                 <th className="text-left py-3 px-2">Model</th>
@@ -92,8 +160,16 @@ export default function PrintersPage() {
               {printers.map((p) => (
                 <tr
                   key={p._id}
-                  className="border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900"
+                  className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(p._id) ? "bg-red-950/20" : ""}`}
                 >
+                  <td className="py-2 px-2">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(p._id)}
+                      onChange={() => toggleSelect(p._id)}
+                      className="accent-red-600"
+                    />
+                  </td>
                   <td className="py-2 px-2 font-medium">{p.name}</td>
                   <td className="py-2 px-2">{p.manufacturer}</td>
                   <td className="py-2 px-2">{p.printerModel}</td>
