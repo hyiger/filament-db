@@ -1,8 +1,40 @@
 import { NextRequest, NextResponse } from "next/server";
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
+
+const OID_RE = /^[a-f0-9]{24}$/i;
+const OID_FIELDS = new Set(["_id", "parentId", "printer", "nozzle"]);
+
+/**
+ * Recursively restore ObjectId fields that were serialized as strings.
+ * Handles _id, parentId, array elements in compatibleNozzles/installedNozzles,
+ * and nested refs in calibrations/spools.
+ */
+function restoreObjectIds(doc: Record<string, unknown>): Record<string, unknown> {
+  for (const [key, val] of Object.entries(doc)) {
+    if (val === null || val === undefined) continue;
+
+    if (typeof val === "string" && OID_RE.test(val) && OID_FIELDS.has(key)) {
+      doc[key] = new mongoose.Types.ObjectId(val);
+    } else if (Array.isArray(val)) {
+      doc[key] = val.map((item) => {
+        if (typeof item === "string" && OID_RE.test(item)) {
+          return new mongoose.Types.ObjectId(item);
+        }
+        if (typeof item === "object" && item !== null && !Array.isArray(item)) {
+          return restoreObjectIds(item as Record<string, unknown>);
+        }
+        return item;
+      });
+    } else if (typeof val === "object" && !(val instanceof mongoose.Types.ObjectId) && !(val instanceof Date)) {
+      doc[key] = restoreObjectIds(val as Record<string, unknown>);
+    }
+  }
+  return doc;
+}
 
 /**
  * GET /api/snapshot — Export the entire database as a JSON snapshot.
@@ -105,17 +137,20 @@ export async function POST(request: NextRequest) {
     const results = { filaments: 0, nozzles: 0, printers: 0 };
 
     if (nozzles.length > 0) {
-      await Nozzle.insertMany(nozzles, { lean: true, ordered: false });
+      const docs = (nozzles as Record<string, unknown>[]).map(restoreObjectIds);
+      await Nozzle.insertMany(docs, { lean: true, ordered: false });
       results.nozzles = nozzles.length;
     }
 
     if (printers.length > 0) {
-      await Printer.insertMany(printers, { lean: true, ordered: false });
+      const docs = (printers as Record<string, unknown>[]).map(restoreObjectIds);
+      await Printer.insertMany(docs, { lean: true, ordered: false });
       results.printers = printers.length;
     }
 
     if (filaments.length > 0) {
-      await Filament.insertMany(filaments, { lean: true, ordered: false });
+      const docs = (filaments as Record<string, unknown>[]).map(restoreObjectIds);
+      await Filament.insertMany(docs, { lean: true, ordered: false });
       results.filaments = filaments.length;
     }
 

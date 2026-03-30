@@ -320,7 +320,12 @@ export default function FilamentDetail() {
     }
   };
 
-  if (notFound) return <p className="p-8 text-red-500">Filament not found. It may have been deleted.</p>;
+  if (notFound) return (
+    <div className="p-8">
+      <p className="text-red-500 mb-4">Filament not found. It may have been deleted.</p>
+      <Link href="/" className="text-blue-600 hover:underline text-sm">&larr; Back to Filaments</Link>
+    </div>
+  );
   if (fetchError) return <p className="p-8 text-red-500">{fetchError}</p>;
   if (!filament) return <p className="p-8 text-gray-500">Loading...</p>;
 
