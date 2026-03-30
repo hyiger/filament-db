@@ -364,18 +364,6 @@ export default function Home() {
     }
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete "${name}"?`)) return;
-    const res = await fetch(`/api/filaments/${id}`, { method: "DELETE" });
-    if (!res.ok) {
-      const data = await res.json().catch(() => null);
-      toast(data?.error || "Delete failed", "error");
-      return;
-    }
-    toast(`Deleted "${name}"`);
-    fetchFilaments();
-  };
-
   const allFilamentIds = useMemo(() => filaments.map((f) => f._id), [filaments]);
 
   const toggleSelect = (id: string) => {
@@ -527,16 +515,10 @@ export default function Home() {
       <td className="py-2 px-2 text-right">
         <Link
           href={`/filaments/${f._id}/edit`}
-          className="text-blue-600 hover:underline mr-3 text-xs"
+          className="text-blue-600 hover:underline text-xs"
         >
           Edit
         </Link>
-        <button
-          onClick={() => handleDelete(f._id, f.name)}
-          className="text-red-600 hover:underline text-xs"
-        >
-          Delete
-        </button>
       </td>
     </tr>
   );
@@ -618,16 +600,10 @@ export default function Home() {
           <td className="py-2 px-2 text-right">
             <Link
               href={`/filaments/${f._id}/edit`}
-              className="text-blue-600 hover:underline mr-3 text-xs"
+              className="text-blue-600 hover:underline text-xs"
             >
               Edit
             </Link>
-            <button
-              onClick={() => handleDelete(f._id, f.name)}
-              className="text-red-600 hover:underline text-xs"
-            >
-              Delete
-            </button>
           </td>
         </tr>
         {isExpanded && group.variants.map((v) => renderRow(v, true))}
