@@ -188,33 +188,46 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
   const [vendorDropdownOpen, setVendorDropdownOpen] = useState(false);
   const [vendorHighlight, setVendorHighlight] = useState(-1);
   const vendorRef = useRef<HTMLDivElement>(null);
+  const [fetchErrors, setFetchErrors] = useState<string[]>([]);
+
+  const addFetchError = (label: string) =>
+    setFetchErrors((prev) => (prev.includes(label) ? prev : [...prev, label]));
 
   // Fetch distinct filament types from DB and merge with defaults
   useEffect(() => {
     fetch("/api/filaments/types")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error();
+        return r.json();
+      })
       .then((dbTypes: string[]) => {
         const merged = Array.from(new Set([...DEFAULT_FILAMENT_TYPES, ...dbTypes])).sort();
         setFilamentTypes(merged);
       })
-      .catch(() => {});
+      .catch(() => addFetchError("filament types"));
   }, []);
 
   // Fetch distinct vendors from DB
   useEffect(() => {
     fetch("/api/filaments/vendors")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error();
+        return r.json();
+      })
       .then((v: string[]) => setVendorOptions(v))
-      .catch(() => {});
+      .catch(() => addFetchError("vendors"));
   }, []);
 
   // Fetch potential parent filaments
   useEffect(() => {
     const exclude = initialData?._id || "";
     fetch(`/api/filaments/parents${exclude ? `?exclude=${exclude}` : ""}`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error();
+        return r.json();
+      })
       .then(setParentOptions)
-      .catch(() => {})
+      .catch(() => addFetchError("parent filaments"))
       .finally(() => setParentsLoading(false));
   }, [initialData?._id]);
 
@@ -328,15 +341,23 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
   useEffect(() => {
     fetch("/api/nozzles")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error();
+        return r.json();
+      })
       .then(setNozzles)
+      .catch(() => addFetchError("nozzles"))
       .finally(() => setNozzlesLoading(false));
   }, []);
 
   useEffect(() => {
     fetch("/api/printers")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error();
+        return r.json();
+      })
       .then(setPrinters)
+      .catch(() => addFetchError("printers"))
       .finally(() => setPrintersLoading(false));
   }, []);
 
@@ -404,63 +425,65 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       }
     }
 
-    await onSubmit({
-      name: form.name,
-      vendor: form.vendor,
-      type: form.type,
-      color: form.color,
-      cost: parseNum(form.cost),
-      density: parseNum(form.density),
-      diameter: parseNum(form.diameter) ?? 1.75,
-      temperatures: {
-        nozzle: parseNum(form.temperatures.nozzle),
-        nozzleFirstLayer: parseNum(form.temperatures.nozzleFirstLayer),
-        bed: parseNum(form.temperatures.bed),
-        bedFirstLayer: parseNum(form.temperatures.bedFirstLayer),
-      },
-      maxVolumetricSpeed: parseNum(form.maxVolumetricSpeed),
-      compatibleNozzles: form.compatibleNozzles,
-      calibrations: Object.entries(calibrations)
-        .filter(([, cal]) => Object.values(cal).some((v) => v !== ""))
-        .filter(([key]) => {
-          const [, nozzleId] = key.split(":");
-          return form.compatibleNozzles.includes(nozzleId);
-        })
-        .map(([key, cal]) => {
-          const [printerId, nozzleId] = key.split(":");
-          return {
-            printer: printerId === "default" ? null : printerId,
-            nozzle: nozzleId,
-            extrusionMultiplier: parseNum(cal.extrusionMultiplier),
-            maxVolumetricSpeed: parseNum(cal.maxVolumetricSpeed),
-            pressureAdvance: parseNum(cal.pressureAdvance),
-            retractLength: parseNum(cal.retractLength),
-            retractSpeed: parseNum(cal.retractSpeed),
-            retractLift: parseNum(cal.retractLift),
-          };
-        }),
-      spoolWeight: parseNum(form.spoolWeight),
-      netFilamentWeight: parseNum(form.netFilamentWeight),
-      totalWeight: parseNum(form.totalWeight),
-      presets: presets
-        .filter((p) => p.label.trim() !== "")
-        .map((p) => ({
-          label: p.label.trim(),
-          extrusionMultiplier: parseNum(p.extrusionMultiplier),
-          temperatures: {
-            nozzle: parseNum(p.nozzle),
-            nozzleFirstLayer: parseNum(p.nozzleFirstLayer),
-            bed: parseNum(p.bed),
-            bedFirstLayer: parseNum(p.bedFirstLayer),
-          },
-        })),
-      tdsUrl: form.tdsUrl || null,
-      inherits: form.inherits || null,
-      parentId: form.parentId || null,
-      settings,
-    });
-
-    setSaving(false);
+    try {
+      await onSubmit({
+        name: form.name,
+        vendor: form.vendor,
+        type: form.type,
+        color: form.color,
+        cost: parseNum(form.cost),
+        density: parseNum(form.density),
+        diameter: parseNum(form.diameter) ?? 1.75,
+        temperatures: {
+          nozzle: parseNum(form.temperatures.nozzle),
+          nozzleFirstLayer: parseNum(form.temperatures.nozzleFirstLayer),
+          bed: parseNum(form.temperatures.bed),
+          bedFirstLayer: parseNum(form.temperatures.bedFirstLayer),
+        },
+        maxVolumetricSpeed: parseNum(form.maxVolumetricSpeed),
+        compatibleNozzles: form.compatibleNozzles,
+        calibrations: Object.entries(calibrations)
+          .filter(([, cal]) => Object.values(cal).some((v) => v !== ""))
+          .filter(([key]) => {
+            const [, nozzleId] = key.split(":");
+            return form.compatibleNozzles.includes(nozzleId);
+          })
+          .map(([key, cal]) => {
+            const [printerId, nozzleId] = key.split(":");
+            return {
+              printer: printerId === "default" ? null : printerId,
+              nozzle: nozzleId,
+              extrusionMultiplier: parseNum(cal.extrusionMultiplier),
+              maxVolumetricSpeed: parseNum(cal.maxVolumetricSpeed),
+              pressureAdvance: parseNum(cal.pressureAdvance),
+              retractLength: parseNum(cal.retractLength),
+              retractSpeed: parseNum(cal.retractSpeed),
+              retractLift: parseNum(cal.retractLift),
+            };
+          }),
+        spoolWeight: parseNum(form.spoolWeight),
+        netFilamentWeight: parseNum(form.netFilamentWeight),
+        totalWeight: parseNum(form.totalWeight),
+        presets: presets
+          .filter((p) => p.label.trim() !== "")
+          .map((p) => ({
+            label: p.label.trim(),
+            extrusionMultiplier: parseNum(p.extrusionMultiplier),
+            temperatures: {
+              nozzle: parseNum(p.nozzle),
+              nozzleFirstLayer: parseNum(p.nozzleFirstLayer),
+              bed: parseNum(p.bed),
+              bedFirstLayer: parseNum(p.bedFirstLayer),
+            },
+          })),
+        tdsUrl: form.tdsUrl || null,
+        inherits: form.inherits || null,
+        parentId: form.parentId || null,
+        settings,
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const inputClass =
@@ -469,6 +492,12 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      {fetchErrors.length > 0 && (
+        <div className="px-3 py-2 bg-yellow-900/30 border border-yellow-800 rounded text-sm text-yellow-300">
+          Could not load {fetchErrors.join(", ")}. Some dropdowns may be empty. Check that the server is running.
+        </div>
+      )}
+
       <div>
         <label className={labelClass}>Name *</label>
         <input

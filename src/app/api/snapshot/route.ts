@@ -129,8 +129,13 @@ export async function POST(request: NextRequest) {
 
   const { filaments = [], nozzles = [], printers = [] } = snapshot.collections;
 
-  // Use a transaction-like approach: delete all, then insert
-  // (MongoDB transactions require replica sets, which local dev may not have)
+  // --- Safety: snapshot the current DB so we can roll back on failure ---
+  const [backupFilaments, backupNozzles, backupPrinters] = await Promise.all([
+    Filament.find({}).lean(),
+    Nozzle.find({}).lean(),
+    Printer.find({}).lean(),
+  ]);
+
   try {
     // Delete all existing documents from each collection
     await Promise.all([
@@ -165,9 +170,23 @@ export async function POST(request: NextRequest) {
       restored: results,
     });
   } catch (err) {
+    // --- Rollback: attempt to restore the pre-restore data ---
+    try {
+      await Promise.all([
+        Nozzle.deleteMany({}),
+        Printer.deleteMany({}),
+        Filament.deleteMany({}),
+      ]);
+      if (backupNozzles.length > 0) await Nozzle.insertMany(backupNozzles, { ordered: false });
+      if (backupPrinters.length > 0) await Printer.insertMany(backupPrinters, { ordered: false });
+      if (backupFilaments.length > 0) await Filament.insertMany(backupFilaments, { ordered: false });
+    } catch {
+      // Rollback itself failed — nothing more we can do
+    }
+
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
-      { error: "Failed to restore snapshot", detail: message },
+      { error: "Failed to restore snapshot — your previous data has been rolled back.", detail: message },
       { status: 500 },
     );
   }

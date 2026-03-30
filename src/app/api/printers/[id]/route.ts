@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Printer from "@/models/Printer";
 import Filament from "@/models/Filament";
+import Nozzle from "@/models/Nozzle";
 
 export async function GET(
   _request: NextRequest,
@@ -10,7 +11,7 @@ export async function GET(
   await dbConnect();
   const { id } = await params;
   const printer = await Printer.findOne({ _id: id, _deletedAt: null })
-    .populate("installedNozzles")
+    .populate({ path: "installedNozzles", match: { _deletedAt: null } })
     .lean();
   if (!printer) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -25,6 +26,21 @@ export async function PUT(
   await dbConnect();
   const { id } = await params;
   const body = await request.json();
+
+  // Validate that all referenced nozzle IDs exist and are active
+  if (body.installedNozzles?.length > 0) {
+    const activeCount = await Nozzle.countDocuments({
+      _id: { $in: body.installedNozzles },
+      _deletedAt: null,
+    });
+    if (activeCount !== body.installedNozzles.length) {
+      return NextResponse.json(
+        { error: "One or more selected nozzles no longer exist." },
+        { status: 400 },
+      );
+    }
+  }
+
   const printer = await Printer.findOneAndUpdate(
     { _id: id, _deletedAt: null },
     body,

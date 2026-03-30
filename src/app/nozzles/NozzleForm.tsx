@@ -52,16 +52,18 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
       return;
     }
 
-    await onSubmit({
-      name: form.name,
-      diameter,
-      type: form.type,
-      highFlow: form.highFlow,
-      hardened: form.hardened,
-      notes: form.notes,
-    });
-
-    setSaving(false);
+    try {
+      await onSubmit({
+        name: form.name,
+        diameter,
+        type: form.type,
+        highFlow: form.highFlow,
+        hardened: form.hardened,
+        notes: form.notes,
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const inputClass =

@@ -34,13 +34,17 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
     notes: initialData?.notes || "",
   });
   const [nozzles, setNozzles] = useState<Nozzle[]>([]);
+  const [nozzlesFetchError, setNozzlesFetchError] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     fetch("/api/nozzles")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error("fetch failed");
+        return r.json();
+      })
       .then(setNozzles)
-      .catch(() => {});
+      .catch(() => setNozzlesFetchError(true));
   }, []);
 
   // Auto-generate name from manufacturer + model (for new printers only)
@@ -65,15 +69,17 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
     e.preventDefault();
     setSaving(true);
 
-    await onSubmit({
-      name: form.name,
-      manufacturer: form.manufacturer,
-      printerModel: form.printerModel,
-      installedNozzles: form.installedNozzles,
-      notes: form.notes,
-    });
-
-    setSaving(false);
+    try {
+      await onSubmit({
+        name: form.name,
+        manufacturer: form.manufacturer,
+        printerModel: form.printerModel,
+        installedNozzles: form.installedNozzles,
+        notes: form.notes,
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
   const inputClass =
@@ -126,6 +132,12 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
           Auto-generated from manufacturer and model. Edit to customize.
         </p>
       </div>
+
+      {nozzlesFetchError && (
+        <div className="px-3 py-2 bg-yellow-900/30 border border-yellow-800 rounded text-sm text-yellow-300">
+          Could not load nozzles. Check that the server is running and try again.
+        </div>
+      )}
 
       {nozzles.length > 0 && (
         <div>
