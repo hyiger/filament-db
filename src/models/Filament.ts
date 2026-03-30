@@ -55,6 +55,9 @@ export interface IFilament extends Document {
   spoolWeight: number | null;
   netFilamentWeight: number | null;
   totalWeight: number | null;
+  dryingTemperature: number | null;
+  dryingTime: number | null;
+  transmissionDistance: number | null;
   tdsUrl: string | null;
   inherits: string | null;
   parentId: mongoose.Types.ObjectId | null;
@@ -117,6 +120,9 @@ const FilamentSchema = new Schema<IFilament>(
     spoolWeight: { type: Number, default: null },
     netFilamentWeight: { type: Number, default: null },
     totalWeight: { type: Number, default: null },
+    dryingTemperature: { type: Number, default: null },
+    dryingTime: { type: Number, default: null },
+    transmissionDistance: { type: Number, default: null },
     tdsUrl: { type: String, default: null },
     inherits: { type: String, default: null },
     parentId: { type: Schema.Types.ObjectId, ref: "Filament", default: null, index: true },

@@ -50,6 +50,11 @@ export async function GET(
     actualWeightGrams,
     emptySpoolWeight: resolved.spoolWeight ?? null,
     spoolUid: filament.instanceId ?? null,
+    dryingTemperature: resolved.dryingTemperature ?? null,
+    dryingTime: resolved.dryingTime ?? null,
+    transmissionDistance: resolved.transmissionDistance ?? null,
+    abrasive: resolved.settings?.filament_abrasive === "1",
+    soluble: resolved.settings?.filament_soluble === "1",
   });
 
   const safeName = resolved.name

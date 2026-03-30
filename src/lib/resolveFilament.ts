@@ -25,6 +25,9 @@ const INHERITABLE_FIELDS = [
   "maxVolumetricSpeed",
   "spoolWeight",
   "netFilamentWeight",
+  "dryingTemperature",
+  "dryingTime",
+  "transmissionDistance",
   "tdsUrl",
   "inherits",
 ];

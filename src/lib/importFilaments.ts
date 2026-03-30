@@ -16,6 +16,9 @@ export interface ImportRow {
   maxVolumetricSpeed?: number | null;
   spoolWeight?: number | null;
   netFilamentWeight?: number | null;
+  dryingTemperature?: number | null;
+  dryingTime?: number | null;
+  transmissionDistance?: number | null;
   tdsUrl?: string | null;
   instanceId?: string | null;
 }
@@ -54,6 +57,17 @@ const HEADER_MAP: Record<string, keyof ImportRow | undefined> = {
   "instance id": "instanceId",
   instanceid: "instanceId",
   "instance_id": "instanceId",
+  "drying temp": "dryingTemperature",
+  "drying temp (°c)": "dryingTemperature",
+  "drying temperature": "dryingTemperature",
+  dryingtemperature: "dryingTemperature",
+  "drying time": "dryingTime",
+  "drying time (min)": "dryingTime",
+  dryingtime: "dryingTime",
+  "transmission distance": "transmissionDistance",
+  "hueforge td": "transmissionDistance",
+  transmissiondistance: "transmissionDistance",
+  td: "transmissionDistance",
 };
 
 const NUM_FIELDS = new Set<keyof ImportRow>([
@@ -67,6 +81,9 @@ const NUM_FIELDS = new Set<keyof ImportRow>([
   "maxVolumetricSpeed",
   "spoolWeight",
   "netFilamentWeight",
+  "dryingTemperature",
+  "dryingTime",
+  "transmissionDistance",
 ]);
 
 function parseNum(val: unknown): number | null {
@@ -152,6 +169,9 @@ export async function upsertImportRows(
       maxVolumetricSpeed: row.maxVolumetricSpeed ?? null,
       spoolWeight: row.spoolWeight ?? null,
       netFilamentWeight: row.netFilamentWeight ?? null,
+      dryingTemperature: row.dryingTemperature ?? null,
+      dryingTime: row.dryingTime ?? null,
+      transmissionDistance: row.transmissionDistance ?? null,
       tdsUrl: row.tdsUrl ?? null,
       ...(row.instanceId ? { instanceId: row.instanceId } : {}),
     };

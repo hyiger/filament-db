@@ -18,6 +18,9 @@ export interface ExportRow {
   spoolWeight: number | null;
   netFilamentWeight: number | null;
   spoolCount: number;
+  dryingTemperature: number | null;
+  dryingTime: number | null;
+  transmissionDistance: number | null;
   tdsUrl: string | null;
   instanceId: string;
 }
@@ -38,6 +41,9 @@ export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
   { key: "spoolWeight", header: "Spool Weight (g)" },
   { key: "netFilamentWeight", header: "Net Filament Weight (g)" },
   { key: "spoolCount", header: "Spools" },
+  { key: "dryingTemperature", header: "Drying Temp (°C)" },
+  { key: "dryingTime", header: "Drying Time (min)" },
+  { key: "transmissionDistance", header: "HueForge TD" },
   { key: "tdsUrl", header: "TDS URL" },
   { key: "instanceId", header: "Instance ID" },
 ];
@@ -78,6 +84,9 @@ export async function getExportRows(): Promise<ExportRow[]> {
       spoolWeight: resolved.spoolWeight ?? null,
       netFilamentWeight: resolved.netFilamentWeight ?? null,
       spoolCount: resolved.spools?.length || (resolved.totalWeight != null ? 1 : 0),
+      dryingTemperature: resolved.dryingTemperature ?? null,
+      dryingTime: resolved.dryingTime ?? null,
+      transmissionDistance: resolved.transmissionDistance ?? null,
       tdsUrl: resolved.tdsUrl ?? null,
       instanceId: filament.instanceId ?? "",
     };

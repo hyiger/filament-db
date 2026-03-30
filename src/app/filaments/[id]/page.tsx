@@ -76,6 +76,9 @@ interface Filament {
   spoolWeight: number | null;
   netFilamentWeight: number | null;
   totalWeight: number | null;
+  dryingTemperature: number | null;
+  dryingTime: number | null;
+  transmissionDistance: number | null;
   tdsUrl: string | null;
   inherits: string | null;
   parentId: string | null;
@@ -165,6 +168,11 @@ export default function FilamentDetail() {
         actualWeightGrams,
         emptySpoolWeight: filament.spoolWeight ?? null,
         spoolUid: filament.instanceId ?? null,
+        dryingTemperature: filament.dryingTemperature,
+        dryingTime: filament.dryingTime,
+        transmissionDistance: filament.transmissionDistance,
+        abrasive: filament.settings?.filament_abrasive === "1",
+        soluble: filament.settings?.filament_soluble === "1",
       });
       await writeTag(payload);
       setNfcWriteSuccess(true);
@@ -198,6 +206,11 @@ export default function FilamentDetail() {
         actualWeightGrams: actualRemaining,
         emptySpoolWeight: filament.spoolWeight ?? null,
         spoolUid: filament.instanceId ?? null,
+        dryingTemperature: filament.dryingTemperature,
+        dryingTime: filament.dryingTime,
+        transmissionDistance: filament.transmissionDistance,
+        abrasive: filament.settings?.filament_abrasive === "1",
+        soluble: filament.settings?.filament_soluble === "1",
       });
       await writeTag(payload);
       setNfcWriteSuccess(true);

@@ -301,6 +301,15 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
       {data.chamberTemp != null && (
         <Stat label="Chamber Temp" value={`${data.chamberTemp}°C`} />
       )}
+      {data.dryingTemperature != null && (
+        <Stat label="Drying Temp" value={`${data.dryingTemperature}°C`} />
+      )}
+      {data.dryingTime != null && (
+        <Stat label="Drying Time" value={`${Math.floor(data.dryingTime / 60)}h ${data.dryingTime % 60}m`} />
+      )}
+      {data.transmissionDistance != null && (
+        <Stat label="HueForge TD" value={String(data.transmissionDistance)} />
+      )}
       {data.countryOfOrigin && (
         <Stat label="Origin" value={data.countryOfOrigin} />
       )}

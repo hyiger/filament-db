@@ -35,6 +35,8 @@ export const OPT_KEY = {
   ACTUAL_NETTO_FULL_WEIGHT: 17,
   EMPTY_CONTAINER_WEIGHT: 18,
   PRIMARY_COLOR: 19,
+  TRANSMISSION_DISTANCE: 27,
+  TAGS: 28,
   DENSITY: 29,
 
   // Main section – FFF-specific
@@ -396,7 +398,12 @@ export interface OpenPrintTagInput {
   actualWeightGrams?: number | null; // actual remaining filament weight (key 17), defaults to weightGrams
   emptySpoolWeight?: number | null; // empty spool/container weight in grams
   countryOfOrigin?: string;    // ISO 3166-1 alpha-2, default "US"
-  spoolUid?: string | null;    // 5-byte hex instance ID (e.g. "2acc21072a")
+  spoolUid?: string | null;    // brand-specific instance ID (e.g. "2acc21072a")
+  dryingTemperature?: number | null;  // °C
+  dryingTime?: number | null;         // minutes
+  transmissionDistance?: number | null; // HueForge TD value
+  abrasive?: boolean;          // material is abrasive (tag enum key 4)
+  soluble?: boolean;           // material is water-soluble (tag enum key 13)
 }
 
 // ── Main encoder ────────────────────────────────────────────────────
@@ -554,6 +561,37 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   // country_of_origin (ISO 3166-1 alpha-2)
   encodeCBORKey(buf, OPT_KEY.COUNTRY_OF_ORIGIN);
   encodeCBORText(buf, (input.countryOfOrigin ?? "US").slice(0, 2));
+
+  // transmission_distance – HueForge TD value (type: number)
+  if (input.transmissionDistance != null && input.transmissionDistance > 0) {
+    encodeCBORKey(buf, OPT_KEY.TRANSMISSION_DISTANCE);
+    encodeCBORCompactNumber(buf, input.transmissionDistance);
+  }
+
+  // tags – enum_array of material property tags
+  const tagValues: number[] = [];
+  if (input.abrasive) tagValues.push(4);        // abrasive
+  if (input.soluble) tagValues.push(13);         // water_soluble
+  if (tagValues.length > 0) {
+    encodeCBORKey(buf, OPT_KEY.TAGS);
+    // Encode as CBOR array (major type 4)
+    buf.push(0x80 | tagValues.length); // definite array with N items
+    for (const tag of tagValues) {
+      encodeCBORUint(buf, tag);
+    }
+  }
+
+  // drying_temperature (°C, int)
+  if (input.dryingTemperature != null && input.dryingTemperature > 0) {
+    encodeCBORKey(buf, OPT_KEY.DRYING_TEMPERATURE);
+    encodeCBORUint(buf, input.dryingTemperature);
+  }
+
+  // drying_time (minutes, int)
+  if (input.dryingTime != null && input.dryingTime > 0) {
+    encodeCBORKey(buf, OPT_KEY.DRYING_TIME);
+    encodeCBORUint(buf, input.dryingTime);
+  }
 
   // brand_specific_instance_id – unique spool/instance identifier (string, max 16 chars)
   if (input.spoolUid) {

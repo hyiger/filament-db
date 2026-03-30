@@ -34,6 +34,9 @@ interface FilamentFormData {
   spoolWeight: string;
   netFilamentWeight: string;
   totalWeight: string;
+  dryingTemperature: string;
+  dryingTime: string;
+  transmissionDistance: string;
   notes: string;
   tdsUrl: string;
   compatibleNozzles: string[];
@@ -162,6 +165,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     spoolWeight: initialData?.spoolWeight?.toString() || "",
     netFilamentWeight: initialData?.netFilamentWeight?.toString() || "",
     totalWeight: initialData?.totalWeight?.toString() || "",
+    dryingTemperature: initialData?.dryingTemperature?.toString() || "",
+    dryingTime: initialData?.dryingTime?.toString() || "",
+    transmissionDistance: initialData?.transmissionDistance?.toString() || "",
     notes: getSettingVal(initialData, "filament_notes").replace(/^"|"$/g, ""),
     tdsUrl: initialData?.tdsUrl || "",
     compatibleNozzles: getInitialNozzleIds(),
@@ -175,7 +181,8 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       form.shrinkageXY || form.shrinkageZ ||
       form.fanMinSpeed || form.fanMaxSpeed || form.fanBridgeSpeed || form.fanDisableFirstLayers ||
       form.retractLength || form.retractSpeed || form.retractLift ||
-      form.abrasive || form.soluble
+      form.abrasive || form.soluble ||
+      form.dryingTemperature || form.dryingTime || form.transmissionDistance
     );
   });
   const [tdsSuggestions, setTdsSuggestions] = useState<{ name: string; tdsUrl: string }[]>([]);
@@ -476,6 +483,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               bedFirstLayer: parseNum(p.bedFirstLayer),
             },
           })),
+        dryingTemperature: parseNum(form.dryingTemperature),
+        dryingTime: parseNum(form.dryingTime),
+        transmissionDistance: parseNum(form.transmissionDistance),
         tdsUrl: form.tdsUrl || null,
         inherits: form.inherits || null,
         parentId: form.parentId || null,
@@ -1089,6 +1099,45 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           </div>
         </div>
       </fieldset>
+
+      <div className="grid grid-cols-3 gap-4">
+        <div>
+          <label className={labelClass}>Drying Temp (°C)</label>
+          <input
+            className={inputClass}
+            type="number"
+            step="1"
+            min="0"
+            value={form.dryingTemperature}
+            onChange={(e) => setForm({ ...form, dryingTemperature: e.target.value })}
+            placeholder="e.g. 45"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Drying Time (min)</label>
+          <input
+            className={inputClass}
+            type="number"
+            step="1"
+            min="0"
+            value={form.dryingTime}
+            onChange={(e) => setForm({ ...form, dryingTime: e.target.value })}
+            placeholder="e.g. 480"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>HueForge TD</label>
+          <input
+            className={inputClass}
+            type="number"
+            step="any"
+            min="0"
+            value={form.transmissionDistance}
+            onChange={(e) => setForm({ ...form, transmissionDistance: e.target.value })}
+            placeholder="e.g. 6.6"
+          />
+        </div>
+      </div>
 
       <div className="flex gap-6">
         <div className="flex items-center gap-2">

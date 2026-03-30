@@ -55,6 +55,10 @@ export interface DecodedOpenPrintTag {
   materialAbbreviation?: string;
   countryOfOrigin?: string;
   spoolUid?: string;
+  dryingTemperature?: number;
+  dryingTime?: number;
+  transmissionDistance?: number;
+  tags?: number[];
 }
 
 // ── CBOR decoding primitives ────────────────────────────────────────
@@ -328,6 +332,19 @@ export function decodeOpenPrintTagBinary(data: Uint8Array): DecodedOpenPrintTag 
   // brand_specific_instance_id – spool/instance identifier string
   if (main.BRAND_SPECIFIC_INSTANCE_ID !== undefined) {
     result.spoolUid = main.BRAND_SPECIFIC_INSTANCE_ID as string;
+  }
+
+  if (main.DRYING_TEMPERATURE !== undefined) {
+    result.dryingTemperature = main.DRYING_TEMPERATURE as number;
+  }
+  if (main.DRYING_TIME !== undefined) {
+    result.dryingTime = main.DRYING_TIME as number;
+  }
+  if (main.TRANSMISSION_DISTANCE !== undefined) {
+    result.transmissionDistance = main.TRANSMISSION_DISTANCE as number;
+  }
+  if (main.TAGS !== undefined && Array.isArray(main.TAGS)) {
+    result.tags = main.TAGS as number[];
   }
 
   return result;
