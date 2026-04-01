@@ -52,6 +52,18 @@ From any filament's detail page:
 3. The app encodes the filament data as OpenPrintTag CBOR, wraps it in an NDEF message, and writes it block-by-block
 4. The button shows progress and success/failure feedback
 
+### Erasing / Formatting Tags
+
+From the **Settings** page (Electron only):
+
+1. Place a tag on the reader (the NFC status indicator turns green)
+2. Click **"Erase Tag"** (red button)
+3. Confirm the action in the inline confirmation prompt
+4. The app writes a blank NFC Forum Type 5 header (CC bytes) to block 0, a terminator to block 1, and zeroes all remaining user memory blocks
+5. A success or error message appears when complete
+
+If you remove the tag before confirming, the confirmation prompt automatically dismisses.
+
 ### OpenPrintTag Binary Export
 
 Click **"Export OPT"** on any filament's detail page to download the OpenPrintTag binary as a `.bin` file. This file can be written to a tag using external NFC writing software.

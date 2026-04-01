@@ -186,6 +186,14 @@ On any filament's detail page:
 2. Click **"Write NFC"**
 3. Wait for the write to complete (button shows "Written!" on success)
 
+### Erasing / Formatting Tags
+
+On the **Settings** page, the NFC Tools section lets you erase a tag:
+
+1. Place a tag on the reader (status turns green)
+2. Click **"Erase Tag"** and confirm
+3. The tag is wiped — blank CC header, terminator, and zeroed memory
+
 ### Exporting OpenPrintTag Binary
 
 Click **"Export OPT"** on any filament's detail page to download the binary as a `.bin` file for use with external NFC tools.

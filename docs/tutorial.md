@@ -315,6 +315,8 @@ NFC features require the Electron desktop app plus hardware. Skip this section i
 | **Reader** | ACS ACR1552U USB (~$40-50) |
 | **Tags** | NXP ICODE SLIX2 (ISO 15693, 320 bytes) |
 | **macOS driver** | Install [ifd-acsccid.bundle](https://www.acs.com.hk/en/drivers/) from ACS |
+| **Linux / RPi driver** | `sudo apt install pcscd libpcsclite-dev` (standard `ccid` driver) |
+| **Windows driver** | None needed — built-in Microsoft CCID driver works |
 
 ### NFC Status Indicator
 
@@ -342,6 +344,17 @@ A small colored dot appears in the header:
 2. Place a blank SLIX2 tag on the reader (dot turns green).
 3. Click **Write NFC** (purple button).
 4. Wait ~2 seconds. The button shows **Written!** on success or **Write Failed** on error.
+
+### Erasing a Tag
+
+1. Go to **Settings** (gear icon in the header).
+2. Scroll to the **NFC Tools** section — it shows the reader/tag status.
+3. Place a tag on the reader (status turns green).
+4. Click **Erase Tag** (red button).
+5. Confirm the action. The app zeroes all memory blocks and writes a blank header.
+6. The tag is now blank and ready to be rewritten.
+
+If you remove the tag before confirming, the confirmation prompt closes automatically.
 
 ### Exporting an OpenPrintTag Binary
 
@@ -428,6 +441,7 @@ In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted fi
 | Manage printers | Home > Manage Printers |
 | Browse API docs | Home > API Docs (or navigate to `/api-docs`) |
 | Write NFC tag | Detail page > Write NFC (desktop app) |
+| Erase NFC tag | Settings > NFC Tools > Erase Tag (desktop app) |
 | Export NFC binary | Detail page > Export OPT |
 | Track spools | Detail page > Spool Tracker > + Add Spool |
 | Manual sync | Click status pill > Sync Now (desktop hybrid mode) |

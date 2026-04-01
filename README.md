@@ -17,7 +17,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Color variants** -- clone a filament as a color variant; inherited settings resolve automatically from the parent
 - **Instance IDs** -- unique per-filament instance identifier (5-byte hex, compatible with Prusament's brand_specific_instance_id), stored in NFC tags
 - **Spool tracking** -- track multiple spools per filament with individual weights and computed length in meters from density and diameter
-- **NFC tag read/write** -- read and write [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags directly from the desktop app using an ACR1552U reader
+- **NFC tag read/write/erase** -- read, write, and erase [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags directly from the desktop app using an ACR1552U reader
 - **OpenPrintTag export** -- download OpenPrintTag binary files for any filament, including drying temperature/time, transmission distance (HueForge TD), and instance ID
 - **Snapshot backup/restore** -- export and import the entire database as a JSON snapshot with atomic restore and rollback on failure
 - **Offline mode** -- works without internet using an embedded local MongoDB; choose cloud-only, hybrid (local + sync), or fully offline (first launch downloads the database engine, then works fully offline)
