@@ -2,27 +2,42 @@
 
 import { useState, useEffect, useRef } from "react";
 
+interface BedTypeTempEntry {
+  bedType: string;
+  temperature: string;
+  firstLayerTemperature: string;
+}
+
 interface FilamentFormData {
   name: string;
   vendor: string;
   type: string;
   color: string;
+  colorName: string;
   cost: string;
   density: string;
   diameter: string;
   temperatures: {
     nozzle: string;
     nozzleFirstLayer: string;
+    nozzleRangeMin: string;
+    nozzleRangeMax: string;
     bed: string;
     bedFirstLayer: string;
+    standby: string;
     chamber: string;
   };
+  bedTypeTemps: BedTypeTempEntry[];
   maxVolumetricSpeed: string;
+  minPrintSpeed: string;
+  maxPrintSpeed: string;
   extrusionMultiplier: string;
   shrinkageXY: string;
   shrinkageZ: string;
   shoreHardnessA: string;
   shoreHardnessD: string;
+  glassTempTransition: string;
+  heatDeflectionTemp: string;
   abrasive: boolean;
   soluble: boolean;
   optTags: number[];
@@ -30,16 +45,32 @@ interface FilamentFormData {
   fanMaxSpeed: string;
   fanBridgeSpeed: string;
   fanDisableFirstLayers: string;
+  overhangFanSpeed: string;
+  auxFanSpeed: string;
+  fanBelowLayerTime: string;
+  slowDownMinSpeed: string;
+  activateAirFiltration: boolean;
   retractLength: string;
   retractSpeed: string;
   retractLift: string;
+  retractMinTravel: string;
   pressureAdvance: string;
+  zOffset: string;
+  filamentLoadingSpeed: string;
+  filamentUnloadingSpeed: string;
+  filamentLoadTime: string;
+  filamentUnloadTime: string;
+  rammingParameters: string;
+  wipe: boolean;
   spoolWeight: string;
   netFilamentWeight: string;
   totalWeight: string;
+  spoolType: string;
   dryingTemperature: string;
   dryingTime: string;
   transmissionDistance: string;
+  startGcode: string;
+  endGcode: string;
   notes: string;
   tdsUrl: string;
   compatibleNozzles: string[];
@@ -141,22 +172,35 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     vendor: initialData?.vendor || "",
     type: initialData?.type || "PLA",
     color: initialData?.color || "#808080",
+    colorName: initialData?.colorName || "",
     cost: initialData?.cost?.toString() || "",
     density: initialData?.density?.toString() || "",
     diameter: initialData?.diameter?.toString() || "1.75",
     temperatures: {
       nozzle: initialData?.temperatures?.nozzle?.toString() || "",
       nozzleFirstLayer: initialData?.temperatures?.nozzleFirstLayer?.toString() || "",
+      nozzleRangeMin: initialData?.temperatures?.nozzleRangeMin?.toString() || "",
+      nozzleRangeMax: initialData?.temperatures?.nozzleRangeMax?.toString() || "",
       bed: initialData?.temperatures?.bed?.toString() || "",
       bedFirstLayer: initialData?.temperatures?.bedFirstLayer?.toString() || "",
+      standby: initialData?.temperatures?.standby?.toString() || "",
       chamber: getSettingVal(initialData, "chamber_temperature"),
     },
+    bedTypeTemps: (initialData?.bedTypeTemps || []).map((bt: Record<string, unknown>) => ({
+      bedType: (bt.bedType as string) || "",
+      temperature: bt.temperature?.toString() || "",
+      firstLayerTemperature: bt.firstLayerTemperature?.toString() || "",
+    })),
     maxVolumetricSpeed: initialData?.maxVolumetricSpeed?.toString() || "",
+    minPrintSpeed: initialData?.minPrintSpeed?.toString() || "",
+    maxPrintSpeed: initialData?.maxPrintSpeed?.toString() || "",
     extrusionMultiplier: getSettingVal(initialData, "extrusion_multiplier"),
     shrinkageXY: getSettingVal(initialData, "filament_shrinkage_compensation_xy"),
     shrinkageZ: getSettingVal(initialData, "filament_shrinkage_compensation_z"),
     shoreHardnessA: initialData?.shoreHardnessA?.toString() || "",
     shoreHardnessD: initialData?.shoreHardnessD?.toString() || "",
+    glassTempTransition: initialData?.glassTempTransition?.toString() || "",
+    heatDeflectionTemp: initialData?.heatDeflectionTemp?.toString() || "",
     abrasive: getSettingVal(initialData, "filament_abrasive") === "1",
     soluble: getSettingVal(initialData, "filament_soluble") === "1",
     optTags: initialData?.optTags || [],
@@ -164,16 +208,32 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     fanMaxSpeed: getSettingVal(initialData, "max_fan_speed"),
     fanBridgeSpeed: getSettingVal(initialData, "bridge_fan_speed"),
     fanDisableFirstLayers: getSettingVal(initialData, "disable_fan_first_layers"),
+    overhangFanSpeed: getSettingVal(initialData, "overhang_fan_speed"),
+    auxFanSpeed: getSettingVal(initialData, "additional_cooling_fan_speed"),
+    fanBelowLayerTime: getSettingVal(initialData, "fan_below_layer_time"),
+    slowDownMinSpeed: getSettingVal(initialData, "slow_down_min_speed"),
+    activateAirFiltration: getSettingVal(initialData, "activate_air_filtration") === "1",
     retractLength: getSettingVal(initialData, "filament_retract_length"),
     retractSpeed: getSettingVal(initialData, "filament_retract_speed") === "nil" ? "" : getSettingVal(initialData, "filament_retract_speed"),
     retractLift: getSettingVal(initialData, "filament_retract_lift"),
+    retractMinTravel: getSettingVal(initialData, "filament_retraction_minimum_travel"),
     pressureAdvance: extractPressureAdvance(initialData),
+    zOffset: getSettingVal(initialData, "z_offset"),
+    filamentLoadingSpeed: getSettingVal(initialData, "filament_loading_speed"),
+    filamentUnloadingSpeed: getSettingVal(initialData, "filament_unloading_speed"),
+    filamentLoadTime: getSettingVal(initialData, "filament_load_time"),
+    filamentUnloadTime: getSettingVal(initialData, "filament_unload_time"),
+    rammingParameters: getSettingVal(initialData, "filament_ramming_parameters"),
+    wipe: getSettingVal(initialData, "filament_wipe") === "1",
     spoolWeight: initialData?.spoolWeight?.toString() || "",
     netFilamentWeight: initialData?.netFilamentWeight?.toString() || "",
     totalWeight: initialData?.totalWeight?.toString() || "",
+    spoolType: initialData?.spoolType || "",
     dryingTemperature: initialData?.dryingTemperature?.toString() || "",
     dryingTime: initialData?.dryingTime?.toString() || "",
     transmissionDistance: initialData?.transmissionDistance?.toString() || "",
+    startGcode: getSettingVal(initialData, "start_filament_gcode").replace(/^"|"$/g, ""),
+    endGcode: getSettingVal(initialData, "end_filament_gcode").replace(/^"|"$/g, ""),
     notes: getSettingVal(initialData, "filament_notes").replace(/^"|"$/g, ""),
     tdsUrl: initialData?.tdsUrl || "",
     compatibleNozzles: getInitialNozzleIds(),
@@ -186,10 +246,14 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     return !!(
       form.shrinkageXY || form.shrinkageZ ||
       form.fanMinSpeed || form.fanMaxSpeed || form.fanBridgeSpeed || form.fanDisableFirstLayers ||
-      form.retractLength || form.retractSpeed || form.retractLift ||
+      form.overhangFanSpeed || form.auxFanSpeed || form.fanBelowLayerTime || form.slowDownMinSpeed ||
+      form.retractLength || form.retractSpeed || form.retractLift || form.retractMinTravel ||
       form.abrasive || form.soluble || form.optTags.length > 0 ||
       form.shoreHardnessA || form.shoreHardnessD ||
-      form.dryingTemperature || form.dryingTime || form.transmissionDistance
+      form.glassTempTransition || form.heatDeflectionTemp ||
+      form.dryingTemperature || form.dryingTime || form.transmissionDistance ||
+      form.filamentLoadingSpeed || form.filamentUnloadingSpeed ||
+      form.startGcode || form.endGcode || form.zOffset
     );
   });
   const [tdsSuggestions, setTdsSuggestions] = useState<{ name: string; tdsUrl: string }[]>([]);
@@ -409,27 +473,27 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     settings.filament_retract_length = form.retractLength || undefined;
     settings.filament_retract_speed = form.retractSpeed || undefined;
     settings.filament_retract_lift = form.retractLift || undefined;
+    settings.filament_retraction_minimum_travel = form.retractMinTravel || undefined;
+    settings.overhang_fan_speed = form.overhangFanSpeed || undefined;
+    settings.additional_cooling_fan_speed = form.auxFanSpeed || undefined;
+    settings.fan_below_layer_time = form.fanBelowLayerTime || undefined;
+    settings.slow_down_min_speed = form.slowDownMinSpeed || undefined;
+    settings.activate_air_filtration = form.activateAirFiltration ? "1" : "0";
+    settings.z_offset = form.zOffset || undefined;
+    settings.filament_loading_speed = form.filamentLoadingSpeed || undefined;
+    settings.filament_unloading_speed = form.filamentUnloadingSpeed || undefined;
+    settings.filament_load_time = form.filamentLoadTime || undefined;
+    settings.filament_unload_time = form.filamentUnloadTime || undefined;
+    settings.filament_ramming_parameters = form.rammingParameters || undefined;
+    settings.filament_wipe = form.wipe ? "1" : "0";
+    settings.end_filament_gcode = form.endGcode ? `"${form.endGcode}"` : undefined;
     settings.filament_notes = form.notes ? `"${form.notes}"` : undefined;
 
-    // Update pressure advance in start_filament_gcode
-    if (form.pressureAdvance) {
-      if (settings.start_filament_gcode) {
-        const gcode = settings.start_filament_gcode as string;
-        if (gcode.match(/M572\s+S[\d.]+/) && !gcode.includes("{if")) {
-          // Update existing M572 line
-          settings.start_filament_gcode = gcode.replace(
-            /M572\s+S[\d.]+/,
-            `M572 S${form.pressureAdvance}`
-          );
-        } else if (!gcode.match(/M572/) && !gcode.includes("{if")) {
-          // Append M572 to existing gcode
-          const trimmed = gcode.replace(/^"|"$/g, "");
-          settings.start_filament_gcode = `"${trimmed}\\nM572 S${form.pressureAdvance}"`;
-        }
-      } else {
-        // No gcode yet — create it
-        settings.start_filament_gcode = `"M572 S${form.pressureAdvance}"`;
-      }
+    // Handle start G-code: if the user edited it directly, use that; otherwise manage PA injection
+    if (form.startGcode) {
+      settings.start_filament_gcode = `"${form.startGcode}"`;
+    } else if (form.pressureAdvance) {
+      settings.start_filament_gcode = `"M572 S${form.pressureAdvance}"`;
     } else if (settings.start_filament_gcode) {
       // PA cleared — remove M572 line if it's a simple one
       const gcode = settings.start_filament_gcode as string;
@@ -445,16 +509,29 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         vendor: form.vendor,
         type: form.type,
         color: form.color,
+        colorName: form.colorName || null,
         cost: parseNum(form.cost),
         density: parseNum(form.density),
         diameter: parseNum(form.diameter) ?? 1.75,
         temperatures: {
           nozzle: parseNum(form.temperatures.nozzle),
           nozzleFirstLayer: parseNum(form.temperatures.nozzleFirstLayer),
+          nozzleRangeMin: parseNum(form.temperatures.nozzleRangeMin),
+          nozzleRangeMax: parseNum(form.temperatures.nozzleRangeMax),
           bed: parseNum(form.temperatures.bed),
           bedFirstLayer: parseNum(form.temperatures.bedFirstLayer),
+          standby: parseNum(form.temperatures.standby),
         },
+        bedTypeTemps: form.bedTypeTemps
+          .filter((bt) => bt.bedType.trim() !== "")
+          .map((bt) => ({
+            bedType: bt.bedType.trim(),
+            temperature: parseNum(bt.temperature),
+            firstLayerTemperature: parseNum(bt.firstLayerTemperature),
+          })),
         maxVolumetricSpeed: parseNum(form.maxVolumetricSpeed),
+        minPrintSpeed: parseNum(form.minPrintSpeed),
+        maxPrintSpeed: parseNum(form.maxPrintSpeed),
         compatibleNozzles: form.compatibleNozzles,
         calibrations: Object.entries(calibrations)
           .filter(([, cal]) => Object.values(cal).some((v) => v !== ""))
@@ -478,6 +555,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         spoolWeight: parseNum(form.spoolWeight),
         netFilamentWeight: parseNum(form.netFilamentWeight),
         totalWeight: parseNum(form.totalWeight),
+        spoolType: form.spoolType || null,
         presets: presets
           .filter((p) => p.label.trim() !== "")
           .map((p) => ({
@@ -493,6 +571,8 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         dryingTemperature: parseNum(form.dryingTemperature),
         dryingTime: parseNum(form.dryingTime),
         transmissionDistance: parseNum(form.transmissionDistance),
+        glassTempTransition: parseNum(form.glassTempTransition),
+        heatDeflectionTemp: parseNum(form.heatDeflectionTemp),
         shoreHardnessA: parseNum(form.shoreHardnessA),
         shoreHardnessD: parseNum(form.shoreHardnessD),
         optTags: form.optTags,
@@ -807,7 +887,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div>
           <label className={labelClass}>Color</label>
           <input
@@ -815,6 +895,15 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             className="w-full h-10 rounded border border-gray-300 cursor-pointer"
             value={form.color}
             onChange={(e) => setForm({ ...form, color: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Color Name</label>
+          <input
+            className={inputClass}
+            value={form.colorName}
+            onChange={(e) => setForm({ ...form, colorName: e.target.value })}
+            placeholder="e.g. Galaxy Black"
           />
         </div>
         <div>
@@ -883,7 +972,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         </div>
       </fieldset>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
           <label className={labelClass}>Extrusion Multiplier</label>
           <input
@@ -914,6 +1003,28 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             className={inputClass}
             value={form.maxVolumetricSpeed}
             onChange={(e) => setForm({ ...form, maxVolumetricSpeed: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Min Print Speed (mm/s)</label>
+          <input type="number" step="1" min="0" className={inputClass}
+            value={form.minPrintSpeed}
+            onChange={(e) => setForm({ ...form, minPrintSpeed: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Max Print Speed (mm/s)</label>
+          <input type="number" step="1" min="0" className={inputClass}
+            value={form.maxPrintSpeed}
+            onChange={(e) => setForm({ ...form, maxPrintSpeed: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Z Offset (mm)</label>
+          <input type="number" step="0.001" className={inputClass}
+            value={form.zOffset}
+            onChange={(e) => setForm({ ...form, zOffset: e.target.value })}
+            placeholder="e.g. -0.05"
           />
         </div>
       </div>
@@ -991,7 +1102,89 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               }
             />
           </div>
+          <div>
+            <label className={labelClass}>Standby (dual extrusion)</label>
+            <input
+              type="number"
+              className={inputClass}
+              value={form.temperatures.standby}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  temperatures: { ...form.temperatures, standby: e.target.value },
+                })
+              }
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Nozzle Range Min</label>
+            <input
+              type="number"
+              className={inputClass}
+              value={form.temperatures.nozzleRangeMin}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  temperatures: { ...form.temperatures, nozzleRangeMin: e.target.value },
+                })
+              }
+              placeholder="Safe minimum"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Nozzle Range Max</label>
+            <input
+              type="number"
+              className={inputClass}
+              value={form.temperatures.nozzleRangeMax}
+              onChange={(e) =>
+                setForm({
+                  ...form,
+                  temperatures: { ...form.temperatures, nozzleRangeMax: e.target.value },
+                })
+              }
+              placeholder="Safe maximum"
+            />
+          </div>
         </div>
+
+        {/* Per-bed-type temperatures */}
+        {form.bedTypeTemps.length > 0 && (
+          <div className="mt-3 space-y-2">
+            <p className="text-xs text-gray-400 font-medium uppercase">Per-Bed-Type Temperatures</p>
+            {form.bedTypeTemps.map((bt, idx) => (
+              <div key={idx} className="grid grid-cols-4 gap-2 items-end">
+                <div>
+                  <input className={inputClass} value={bt.bedType} onChange={(e) => {
+                    const updated = [...form.bedTypeTemps];
+                    updated[idx] = { ...bt, bedType: e.target.value };
+                    setForm({ ...form, bedTypeTemps: updated });
+                  }} placeholder="Bed type" />
+                </div>
+                <div>
+                  <input type="number" className={inputClass} value={bt.temperature} onChange={(e) => {
+                    const updated = [...form.bedTypeTemps];
+                    updated[idx] = { ...bt, temperature: e.target.value };
+                    setForm({ ...form, bedTypeTemps: updated });
+                  }} placeholder="Temp" />
+                </div>
+                <div>
+                  <input type="number" className={inputClass} value={bt.firstLayerTemperature} onChange={(e) => {
+                    const updated = [...form.bedTypeTemps];
+                    updated[idx] = { ...bt, firstLayerTemperature: e.target.value };
+                    setForm({ ...form, bedTypeTemps: updated });
+                  }} placeholder="1st layer" />
+                </div>
+                <button type="button" className="text-red-500 text-sm hover:underline" onClick={() => {
+                  setForm({ ...form, bedTypeTemps: form.bedTypeTemps.filter((_, i) => i !== idx) });
+                }}>Remove</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <button type="button" className="mt-2 text-xs text-blue-600 hover:underline" onClick={() => {
+          setForm({ ...form, bedTypeTemps: [...form.bedTypeTemps, { bedType: "", temperature: "", firstLayerTemperature: "" }] });
+        }}>+ Add Bed Type</button>
       </fieldset>
 
       <div>
@@ -1072,6 +1265,41 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               onChange={(e) => setForm({ ...form, fanDisableFirstLayers: e.target.value })}
             />
           </div>
+          <div>
+            <label className={labelClass}>Overhang Speed (%)</label>
+            <input type="number" className={inputClass}
+              value={form.overhangFanSpeed}
+              onChange={(e) => setForm({ ...form, overhangFanSpeed: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Aux/Chamber Fan (%)</label>
+            <input type="number" className={inputClass}
+              value={form.auxFanSpeed}
+              onChange={(e) => setForm({ ...form, auxFanSpeed: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Fan Below Layer Time (s)</label>
+            <input type="number" className={inputClass}
+              value={form.fanBelowLayerTime}
+              onChange={(e) => setForm({ ...form, fanBelowLayerTime: e.target.value })}
+              placeholder="e.g. 60"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Slow Down Min Speed (mm/s)</label>
+            <input type="number" className={inputClass}
+              value={form.slowDownMinSpeed}
+              onChange={(e) => setForm({ ...form, slowDownMinSpeed: e.target.value })}
+              placeholder="e.g. 15"
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-2 mt-3">
+          <input type="checkbox" id="airFiltration" checked={form.activateAirFiltration}
+            onChange={(e) => setForm({ ...form, activateAirFiltration: e.target.checked })} className="w-4 h-4" />
+          <label htmlFor="airFiltration" className="text-sm font-medium">Activate air filtration</label>
         </div>
       </fieldset>
 
@@ -1107,10 +1335,95 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               onChange={(e) => setForm({ ...form, retractLift: e.target.value })}
             />
           </div>
+          <div>
+            <label className={labelClass}>Min Travel (mm)</label>
+            <input type="number" step="0.1" className={inputClass}
+              value={form.retractMinTravel}
+              onChange={(e) => setForm({ ...form, retractMinTravel: e.target.value })}
+              placeholder="e.g. 2"
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-2 mt-3">
+          <input type="checkbox" id="wipe" checked={form.wipe}
+            onChange={(e) => setForm({ ...form, wipe: e.target.checked })} className="w-4 h-4" />
+          <label htmlFor="wipe" className="text-sm font-medium">Enable wipe</label>
         </div>
       </fieldset>
 
-      <div className="grid grid-cols-3 gap-4">
+      <fieldset className="border border-gray-300 rounded p-4">
+        <legend className="text-sm font-medium px-2">Multi-Material (MMU/AMS)</legend>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div>
+            <label className={labelClass}>Loading Speed (mm/s)</label>
+            <input type="number" step="0.1" className={inputClass}
+              value={form.filamentLoadingSpeed}
+              onChange={(e) => setForm({ ...form, filamentLoadingSpeed: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Unloading Speed (mm/s)</label>
+            <input type="number" step="0.1" className={inputClass}
+              value={form.filamentUnloadingSpeed}
+              onChange={(e) => setForm({ ...form, filamentUnloadingSpeed: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Load Time (s)</label>
+            <input type="number" step="0.1" className={inputClass}
+              value={form.filamentLoadTime}
+              onChange={(e) => setForm({ ...form, filamentLoadTime: e.target.value })}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Unload Time (s)</label>
+            <input type="number" step="0.1" className={inputClass}
+              value={form.filamentUnloadTime}
+              onChange={(e) => setForm({ ...form, filamentUnloadTime: e.target.value })}
+            />
+          </div>
+        </div>
+        <div className="mt-3">
+          <label className={labelClass}>Ramming Parameters</label>
+          <input className={inputClass}
+            value={form.rammingParameters}
+            onChange={(e) => setForm({ ...form, rammingParameters: e.target.value })}
+            placeholder="Comma-separated values"
+          />
+        </div>
+      </fieldset>
+
+      <fieldset className="border border-gray-300 rounded p-4">
+        <legend className="text-sm font-medium px-2">Material Properties</legend>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+        <div>
+          <label className={labelClass}>Glass Transition Tg (°C)</label>
+          <input type="number" step="1" min="0" className={inputClass}
+            value={form.glassTempTransition}
+            onChange={(e) => setForm({ ...form, glassTempTransition: e.target.value })}
+            placeholder="e.g. 60"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Heat Deflection HDT (°C)</label>
+          <input type="number" step="1" min="0" className={inputClass}
+            value={form.heatDeflectionTemp}
+            onChange={(e) => setForm({ ...form, heatDeflectionTemp: e.target.value })}
+            placeholder="e.g. 52"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>HueForge TD</label>
+          <input type="number" step="any" min="0" className={inputClass}
+            value={form.transmissionDistance}
+            onChange={(e) => setForm({ ...form, transmissionDistance: e.target.value })}
+            placeholder="e.g. 6.6"
+          />
+        </div>
+        </div>
+      </fieldset>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
           <label className={labelClass}>Drying Temp (°C)</label>
           <input
@@ -1136,16 +1449,15 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           />
         </div>
         <div>
-          <label className={labelClass}>HueForge TD</label>
-          <input
-            className={inputClass}
-            type="number"
-            step="any"
-            min="0"
-            value={form.transmissionDistance}
-            onChange={(e) => setForm({ ...form, transmissionDistance: e.target.value })}
-            placeholder="e.g. 6.6"
-          />
+          <label className={labelClass}>Spool Type</label>
+          <select className={inputClass} value={form.spoolType}
+            onChange={(e) => setForm({ ...form, spoolType: e.target.value })}>
+            <option value="">—</option>
+            <option value="plastic">Plastic</option>
+            <option value="cardboard">Cardboard</option>
+            <option value="metal">Metal</option>
+            <option value="refill">Refill (no spool)</option>
+          </select>
         </div>
       </div>
 
@@ -1588,6 +1900,28 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           </div>
         )}
       </div>
+
+      <fieldset className="border border-gray-300 rounded p-4">
+        <legend className="text-sm font-medium px-2">G-Code</legend>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label className={labelClass}>Start G-Code</label>
+            <textarea className={inputClass} rows={3}
+              value={form.startGcode}
+              onChange={(e) => setForm({ ...form, startGcode: e.target.value })}
+              placeholder="e.g. M572 S0.053"
+            />
+          </div>
+          <div>
+            <label className={labelClass}>End G-Code</label>
+            <textarea className={inputClass} rows={3}
+              value={form.endGcode}
+              onChange={(e) => setForm({ ...form, endGcode: e.target.value })}
+              placeholder="e.g. G1 E-2 F1500"
+            />
+          </div>
+        </div>
+      </fieldset>
 
       <div>
         <label className={labelClass}>Notes</label>

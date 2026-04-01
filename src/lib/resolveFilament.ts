@@ -28,8 +28,13 @@ const INHERITABLE_FIELDS = [
   "dryingTemperature",
   "dryingTime",
   "transmissionDistance",
+  "glassTempTransition",
+  "heatDeflectionTemp",
   "shoreHardnessA",
   "shoreHardnessD",
+  "minPrintSpeed",
+  "maxPrintSpeed",
+  "spoolType",
   "tdsUrl",
   "inherits",
 ];

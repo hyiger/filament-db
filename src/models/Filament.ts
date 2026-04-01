@@ -10,7 +10,16 @@ export interface ISpool {
   _id: mongoose.Types.ObjectId;
   label: string;
   totalWeight: number | null;
+  lotNumber: string | null;
+  purchaseDate: Date | null;
+  openedDate: Date | null;
   createdAt: Date;
+}
+
+export interface IBedTypeTemp {
+  bedType: string;         // e.g. "Hot Plate", "Textured PEI", "Cool Plate", "Engineering Plate"
+  temperature: number | null;
+  firstLayerTemperature: number | null;
 }
 
 export interface IFilament extends Document {
@@ -20,15 +29,20 @@ export interface IFilament extends Document {
   vendor: string;
   type: string;
   color: string;
+  colorName: string | null;
   cost: number | null;
   density: number | null;
   diameter: number;
   temperatures: {
     nozzle: number | null;
     nozzleFirstLayer: number | null;
+    nozzleRangeMin: number | null;
+    nozzleRangeMax: number | null;
     bed: number | null;
     bedFirstLayer: number | null;
+    standby: number | null;
   };
+  bedTypeTemps: IBedTypeTemp[];
   maxVolumetricSpeed: number | null;
   compatibleNozzles: mongoose.Types.ObjectId[];
   calibrations: {
@@ -58,8 +72,13 @@ export interface IFilament extends Document {
   dryingTemperature: number | null;
   dryingTime: number | null;
   transmissionDistance: number | null;
+  glassTempTransition: number | null;
+  heatDeflectionTemp: number | null;
   shoreHardnessA: number | null;
   shoreHardnessD: number | null;
+  minPrintSpeed: number | null;
+  maxPrintSpeed: number | null;
+  spoolType: string | null;
   optTags: number[];
   tdsUrl: string | null;
   inherits: string | null;
@@ -78,15 +97,26 @@ const FilamentSchema = new Schema<IFilament>(
     vendor: { type: String, required: true, index: true },
     type: { type: String, required: true, index: true },
     color: { type: String, default: "#808080" },
+    colorName: { type: String, default: null },
     cost: { type: Number, default: null },
     density: { type: Number, default: null },
     diameter: { type: Number, default: 1.75 },
     temperatures: {
       nozzle: { type: Number, default: null },
       nozzleFirstLayer: { type: Number, default: null },
+      nozzleRangeMin: { type: Number, default: null },
+      nozzleRangeMax: { type: Number, default: null },
       bed: { type: Number, default: null },
       bedFirstLayer: { type: Number, default: null },
+      standby: { type: Number, default: null },
     },
+    bedTypeTemps: [
+      {
+        bedType: { type: String, required: true },
+        temperature: { type: Number, default: null },
+        firstLayerTemperature: { type: Number, default: null },
+      },
+    ],
     maxVolumetricSpeed: { type: Number, default: null },
     compatibleNozzles: [{ type: Schema.Types.ObjectId, ref: "Nozzle" }],
     calibrations: [
@@ -117,6 +147,9 @@ const FilamentSchema = new Schema<IFilament>(
       {
         label: { type: String, default: "" },
         totalWeight: { type: Number, default: null },
+        lotNumber: { type: String, default: null },
+        purchaseDate: { type: Date, default: null },
+        openedDate: { type: Date, default: null },
         createdAt: { type: Date, default: Date.now },
       },
     ],
@@ -126,8 +159,13 @@ const FilamentSchema = new Schema<IFilament>(
     dryingTemperature: { type: Number, default: null },
     dryingTime: { type: Number, default: null },
     transmissionDistance: { type: Number, default: null },
+    glassTempTransition: { type: Number, default: null },
+    heatDeflectionTemp: { type: Number, default: null },
     shoreHardnessA: { type: Number, default: null },
     shoreHardnessD: { type: Number, default: null },
+    minPrintSpeed: { type: Number, default: null },
+    maxPrintSpeed: { type: Number, default: null },
+    spoolType: { type: String, default: null },
     optTags: { type: [Number], default: [] },
     tdsUrl: { type: String, default: null },
     inherits: { type: String, default: null },

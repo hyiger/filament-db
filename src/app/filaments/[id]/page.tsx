@@ -79,8 +79,14 @@ interface Filament {
   dryingTemperature: number | null;
   dryingTime: number | null;
   transmissionDistance: number | null;
+  glassTempTransition: number | null;
+  heatDeflectionTemp: number | null;
   shoreHardnessA: number | null;
   shoreHardnessD: number | null;
+  minPrintSpeed: number | null;
+  maxPrintSpeed: number | null;
+  colorName: string | null;
+  spoolType: string | null;
   optTags: number[];
   tdsUrl: string | null;
   inherits: string | null;

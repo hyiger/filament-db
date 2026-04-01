@@ -21,8 +21,17 @@ export interface ExportRow {
   dryingTemperature: number | null;
   dryingTime: number | null;
   transmissionDistance: number | null;
+  glassTempTransition: number | null;
+  heatDeflectionTemp: number | null;
   shoreHardnessA: number | null;
   shoreHardnessD: number | null;
+  minPrintSpeed: number | null;
+  maxPrintSpeed: number | null;
+  colorName: string | null;
+  spoolType: string | null;
+  nozzleRangeMin: number | null;
+  nozzleRangeMax: number | null;
+  standbyTemp: number | null;
   tdsUrl: string | null;
   instanceId: string;
 }
@@ -46,8 +55,17 @@ export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
   { key: "dryingTemperature", header: "Drying Temp (°C)" },
   { key: "dryingTime", header: "Drying Time (min)" },
   { key: "transmissionDistance", header: "HueForge TD" },
+  { key: "glassTempTransition", header: "Glass Transition Tg (°C)" },
+  { key: "heatDeflectionTemp", header: "Heat Deflection HDT (°C)" },
   { key: "shoreHardnessA", header: "Shore A" },
   { key: "shoreHardnessD", header: "Shore D" },
+  { key: "minPrintSpeed", header: "Min Print Speed (mm/s)" },
+  { key: "maxPrintSpeed", header: "Max Print Speed (mm/s)" },
+  { key: "colorName", header: "Color Name" },
+  { key: "spoolType", header: "Spool Type" },
+  { key: "nozzleRangeMin", header: "Nozzle Range Min (°C)" },
+  { key: "nozzleRangeMax", header: "Nozzle Range Max (°C)" },
+  { key: "standbyTemp", header: "Standby Temp (°C)" },
   { key: "tdsUrl", header: "TDS URL" },
   { key: "instanceId", header: "Instance ID" },
 ];
@@ -91,8 +109,17 @@ export async function getExportRows(): Promise<ExportRow[]> {
       dryingTemperature: resolved.dryingTemperature ?? null,
       dryingTime: resolved.dryingTime ?? null,
       transmissionDistance: resolved.transmissionDistance ?? null,
+      glassTempTransition: resolved.glassTempTransition ?? null,
+      heatDeflectionTemp: resolved.heatDeflectionTemp ?? null,
       shoreHardnessA: resolved.shoreHardnessA ?? null,
       shoreHardnessD: resolved.shoreHardnessD ?? null,
+      minPrintSpeed: resolved.minPrintSpeed ?? null,
+      maxPrintSpeed: resolved.maxPrintSpeed ?? null,
+      colorName: resolved.colorName ?? null,
+      spoolType: resolved.spoolType ?? null,
+      nozzleRangeMin: resolved.temperatures?.nozzleRangeMin ?? null,
+      nozzleRangeMax: resolved.temperatures?.nozzleRangeMax ?? null,
+      standbyTemp: resolved.temperatures?.standby ?? null,
       tdsUrl: resolved.tdsUrl ?? null,
       instanceId: filament.instanceId ?? "",
     };

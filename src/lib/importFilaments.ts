@@ -19,8 +19,17 @@ export interface ImportRow {
   dryingTemperature?: number | null;
   dryingTime?: number | null;
   transmissionDistance?: number | null;
+  glassTempTransition?: number | null;
+  heatDeflectionTemp?: number | null;
   shoreHardnessA?: number | null;
   shoreHardnessD?: number | null;
+  minPrintSpeed?: number | null;
+  maxPrintSpeed?: number | null;
+  colorName?: string | null;
+  spoolType?: string | null;
+  nozzleRangeMin?: number | null;
+  nozzleRangeMax?: number | null;
+  standbyTemp?: number | null;
   tdsUrl?: string | null;
   instanceId?: string | null;
 }
@@ -76,6 +85,26 @@ const HEADER_MAP: Record<string, keyof ImportRow | undefined> = {
   "shore d": "shoreHardnessD",
   "shore hardness d": "shoreHardnessD",
   shored: "shoreHardnessD",
+  "glass transition": "glassTempTransition",
+  "glass transition tg (°c)": "glassTempTransition",
+  tg: "glassTempTransition",
+  "heat deflection": "heatDeflectionTemp",
+  "heat deflection hdt (°c)": "heatDeflectionTemp",
+  hdt: "heatDeflectionTemp",
+  "min print speed": "minPrintSpeed",
+  "min print speed (mm/s)": "minPrintSpeed",
+  "max print speed": "maxPrintSpeed",
+  "max print speed (mm/s)": "maxPrintSpeed",
+  "color name": "colorName",
+  colorname: "colorName",
+  "spool type": "spoolType",
+  spooltype: "spoolType",
+  "nozzle range min": "nozzleRangeMin",
+  "nozzle range min (°c)": "nozzleRangeMin",
+  "nozzle range max": "nozzleRangeMax",
+  "nozzle range max (°c)": "nozzleRangeMax",
+  "standby temp": "standbyTemp",
+  "standby temp (°c)": "standbyTemp",
 };
 
 const NUM_FIELDS = new Set<keyof ImportRow>([
@@ -94,6 +123,13 @@ const NUM_FIELDS = new Set<keyof ImportRow>([
   "transmissionDistance",
   "shoreHardnessA",
   "shoreHardnessD",
+  "glassTempTransition",
+  "heatDeflectionTemp",
+  "minPrintSpeed",
+  "maxPrintSpeed",
+  "nozzleRangeMin",
+  "nozzleRangeMax",
+  "standbyTemp",
 ]);
 
 function parseNum(val: unknown): number | null {
@@ -183,8 +219,17 @@ export async function upsertImportRows(
     if (row.dryingTemperature !== undefined) doc.dryingTemperature = row.dryingTemperature ?? null;
     if (row.dryingTime !== undefined) doc.dryingTime = row.dryingTime ?? null;
     if (row.transmissionDistance !== undefined) doc.transmissionDistance = row.transmissionDistance ?? null;
+    if (row.glassTempTransition !== undefined) doc.glassTempTransition = row.glassTempTransition ?? null;
+    if (row.heatDeflectionTemp !== undefined) doc.heatDeflectionTemp = row.heatDeflectionTemp ?? null;
     if (row.shoreHardnessA !== undefined) doc.shoreHardnessA = row.shoreHardnessA ?? null;
     if (row.shoreHardnessD !== undefined) doc.shoreHardnessD = row.shoreHardnessD ?? null;
+    if (row.minPrintSpeed !== undefined) doc.minPrintSpeed = row.minPrintSpeed ?? null;
+    if (row.maxPrintSpeed !== undefined) doc.maxPrintSpeed = row.maxPrintSpeed ?? null;
+    if (row.colorName !== undefined) doc.colorName = row.colorName ?? null;
+    if (row.spoolType !== undefined) doc.spoolType = row.spoolType ?? null;
+    if (row.nozzleRangeMin !== undefined) doc["temperatures.nozzleRangeMin"] = row.nozzleRangeMin ?? null;
+    if (row.nozzleRangeMax !== undefined) doc["temperatures.nozzleRangeMax"] = row.nozzleRangeMax ?? null;
+    if (row.standbyTemp !== undefined) doc["temperatures.standby"] = row.standbyTemp ?? null;
     if (row.tdsUrl !== undefined) doc.tdsUrl = row.tdsUrl ?? null;
     if (row.instanceId) doc.instanceId = row.instanceId;
 
