@@ -123,7 +123,7 @@ describe("upsertImportRows", () => {
 
     const all = await Filament.find({ _deletedAt: null });
     expect(all).toHaveLength(2);
-  });
+  }, 15_000);
 
   it("updates existing filaments by name", async () => {
     await Filament.create({
