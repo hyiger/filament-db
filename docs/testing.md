@@ -29,15 +29,16 @@ tests/
 ├── resolveFilament.test.ts     # Parent/variant resolution + spool inheritance + hasVariants tests (24 tests)
 ├── parseIni.test.ts            # INI parser tests (18 tests)
 ├── prusament.test.ts           # Prusament spool data extraction tests (8 tests)
+├── apiErrorHandler.test.ts     # API error handler utility tests (10 tests)
 ├── Filament.test.ts            # Filament model + spool CRUD + soft-delete + instanceId tests (23 tests)
 ├── Printer.test.ts             # Printer model + unique constraints + soft-delete tests (13 tests)
 ├── Nozzle.test.ts              # Nozzle model tests (9 tests)
 ├── mongodb.test.ts             # DB connection + migration tests (10 tests)
-├── importFilaments.test.ts     # CSV/XLSX import mapping + upsert tests (18 tests)
+├── importFilaments.test.ts     # CSV/XLSX import mapping + upsert + skip report tests (19 tests)
 └── exportFilaments.test.ts     # CSV/XLSX export column mapping tests (11 tests)
 ```
 
-**Total: 306 tests across 13 test files**
+**Total: 329 tests across 14 test files**
 
 ## Coverage Thresholds
 

@@ -368,7 +368,7 @@ Permanently deletes all documents from all three collections (filaments, nozzles
 
 ### GET /api/filaments/export-csv
 
-Downloads all filaments as a CSV file with columns for name, vendor, type, color, diameter, temperatures, cost, density, weights, instance ID, drying temperature/time, and transmission distance.
+Downloads all filaments as a CSV file with columns for name, vendor, type, color, color name, diameter, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying temperature/time, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, and spool type.
 
 ### GET /api/filaments/export-xlsx
 
@@ -376,11 +376,11 @@ Downloads all filaments as a styled XLSX spreadsheet with auto-filter, frozen he
 
 ### POST /api/filaments/import-csv
 
-Upload a CSV file via `multipart/form-data` with a `file` field. The CSV must have a header row with `Name`, `Vendor`, and `Type` columns at minimum. Additional columns are mapped by header name (case-insensitive). Only fields present in the CSV are updated — existing data for unmapped columns is preserved.
+Upload a CSV file via `multipart/form-data` with a `file` field (max 10 MB). The CSV must have a header row with `Name`, `Vendor`, and `Type` columns at minimum. Additional columns are mapped by header name (case-insensitive), including: `Color`, `Color Name`, `Diameter`, `Cost`, `Density`, `Nozzle Temp`, `Bed Temp`, `Nozzle First Layer`, `Bed First Layer`, `Max Volumetric Speed`, `Spool Weight`, `Net Filament Weight`, `TDS URL`, `Instance ID`, `Drying Temp`, `Drying Time`, `Transmission Distance` / `HueForge TD`, `Glass Transition` / `Tg`, `Heat Deflection` / `HDT`, `Shore A`, `Shore D`, `Min Print Speed`, `Max Print Speed`, `Nozzle Range Min`, `Nozzle Range Max`, `Standby Temp`, `Spool Type`. Only fields present in the CSV are updated — existing data for unmapped columns is preserved.
 
 ### POST /api/filaments/import-xlsx
 
-Upload an XLSX file via `multipart/form-data` with a `file` field. Same column mapping and behavior as CSV import.
+Upload an XLSX file via `multipart/form-data` with a `file` field (max 10 MB). Same column mapping and behavior as CSV import.
 
 Both return:
 ```json
@@ -389,7 +389,10 @@ Both return:
   "total": 10,
   "created": 8,
   "updated": 1,
-  "skipped": 1
+  "skipped": 1,
+  "skippedRows": [
+    { "row": 5, "name": "Partial Entry", "reason": "Missing required field(s): vendor" }
+  ]
 }
 ```
 

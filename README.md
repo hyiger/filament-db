@@ -7,10 +7,13 @@ A desktop and web application for managing 3D printing filament profiles. Import
 ### Filament Management
 - **Browse and search** -- filterable, sortable table with color swatches and collapsible statistics (by type, vendor, color)
 - **Full CRUD** -- create, view, edit, and delete filament profiles with temperatures, fan settings, shrinkage, retraction, pressure advance, abrasive/soluble flags, and notes
+- **Material properties** -- glass transition temperature (Tg), heat deflection temperature (HDT), shore hardness (A/D), nozzle temp ranges, print speed ranges, per-bed-type temperatures
+- **Slicer parity** -- OrcaSlicer/BambuStudio/PrusaSlicer settings: overhang fan, aux fan, layer time thresholds, MMU/AMS params, start/end G-code, z-offset, air filtration
 - **Color variants** -- clone a filament as a color variant; inherited settings resolve automatically from the parent
 - **Presets** -- named parameter variants per filament (e.g., shore hardness profiles with different temps and extrusion multiplier)
-- **Spool tracking** -- track multiple spools per filament with individual weights and computed length from density and diameter
+- **Spool tracking** -- track multiple spools per filament with individual weights, lot numbers, purchase/opened dates, and computed length from density and diameter
 - **Technical Data Sheets** -- link vendor TDS documents with inline preview pane and auto-suggestions from same-vendor filaments
+- **Material defaults backfill** -- script to populate Tg, HDT, density, drying params, and speed ranges from curated defaults for 30+ material types
 
 ### Hardware Integration
 - **Printers** -- define printers with manufacturer, model, and installed nozzles
@@ -101,7 +104,7 @@ filament-db/
 │   ├── hooks/               # Custom hooks (useNfc)
 │   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder
 │   └── models/              # Mongoose schemas (Filament, Nozzle, Printer)
-├── tests/                   # Vitest unit tests (306 tests across 13 files)
+├── tests/                   # Vitest unit tests (329 tests across 14 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   └── release.yml          # CD: build desktop installers on version tags (4 platforms)

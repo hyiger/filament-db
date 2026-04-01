@@ -141,7 +141,10 @@ The following fields are encoded into each NFC tag:
 | Drying temperature | 57 | °C |
 | Drying time | 58 | Minutes |
 | Transmission distance | 27 | HueForge TD value |
-| Tags | 28 | Flags array (abrasive=4, soluble=13) |
+| Shore hardness A | 31 | Flexible materials (TPU/TPE/PEBA) |
+| Shore hardness D | 32 | Rigid materials |
+| Tags | 28 | Flags array (42 supported tags: abrasive, soluble, matte, silk, carbon fiber, high speed, recycled, etc.) |
+| Consumed weight | aux 0 | Tracked in auxiliary region (if set) |
 
 Instance IDs are auto-generated for each filament (matching Prusament's 5-byte hex format, e.g. `2acc21072a`) and are written as the `brand_specific_instance_id` field per the OpenPrintTag specification.
 

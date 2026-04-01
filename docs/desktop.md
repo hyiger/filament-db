@@ -116,6 +116,8 @@ The desktop app wraps the Next.js application in Electron:
 │  │   via @pokusew/pcsclite               │  │
 │  │ - Embedded local MongoDB (mongod)     │  │
 │  │ - Bidirectional Atlas sync service    │  │
+│  │ - Server crash auto-recovery         │  │
+│  │ - IPC timeout protection (15s)       │  │
 │  └───────────────────────────────────────┘  │
 │                                             │
 │  ┌─ Renderer (BrowserWindow) ────────────┐  │
@@ -143,7 +145,9 @@ The desktop app wraps the Next.js application in Electron:
 
 In **development mode**: Electron loads `http://localhost:3000` (Next.js dev server).
 
-In **production mode**: Electron uses `utilityProcess.fork()` to run the standalone Next.js server on `http://localhost:3456`, then loads it in the BrowserWindow.
+In **production mode**: Electron uses `utilityProcess.fork()` to run the standalone Next.js server on `http://localhost:3456`, then loads it in the BrowserWindow. If the server crashes unexpectedly, the app automatically attempts to restart it and reload the window. If restart fails, an error dialog is shown.
+
+IPC calls to NFC operations and sync have a 15-second timeout to prevent the UI from hanging if an operation becomes unresponsive.
 
 ## Resetting Configuration
 

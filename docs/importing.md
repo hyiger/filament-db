@@ -89,10 +89,11 @@ This also works from a filament's detail page to add another spool of the same m
 ## CSV / XLSX Import
 
 1. Click **"Import CSV"** or **"Import XLSX"** on the home page
-2. Select a file with a header row containing at minimum `Name`, `Vendor`, and `Type` columns
-3. Additional supported columns: `Color`, `Diameter`, `Cost`, `Density`, `Nozzle Temp`, `Bed Temp`, `Nozzle First Layer`, `Bed First Layer`, `Max Volumetric Speed`, `Spool Weight`, `Net Filament Weight`, `TDS URL`, `Instance ID`, `Drying Temp`, `Drying Time`, `Transmission Distance` (HueForge TD)
-4. Column names are matched case-insensitively with common aliases (e.g. "HueForge TD" maps to Transmission Distance)
+2. Select a file with a header row containing at minimum `Name`, `Vendor`, and `Type` columns (max 10 MB)
+3. Additional supported columns: `Color`, `Color Name`, `Diameter`, `Cost`, `Density`, `Nozzle Temp`, `Bed Temp`, `Nozzle First Layer`, `Bed First Layer`, `Max Volumetric Speed`, `Spool Weight`, `Net Filament Weight`, `TDS URL`, `Instance ID`, `Drying Temp`, `Drying Time`, `Transmission Distance` (HueForge TD), `Glass Transition` / `Tg`, `Heat Deflection` / `HDT`, `Shore A`, `Shore D`, `Min Print Speed`, `Max Print Speed`, `Nozzle Range Min`, `Nozzle Range Max`, `Standby Temp`, `Spool Type`
+4. Column names are matched case-insensitively with common aliases (e.g. "HueForge TD" maps to Transmission Distance, "Tg" maps to Glass Transition)
 5. Only fields present in the file are updated — existing data for unmapped columns is preserved
+6. Rows missing required fields (Name, Vendor, or Type) are skipped — the response includes a `skippedRows` array with row numbers and reasons
 
 ---
 
@@ -109,7 +110,7 @@ You can restore a previously exported snapshot to import an entire database (fil
 
 ## CSV / XLSX Export
 
-Click **"Export CSV"** or **"Export XLSX"** to download all filaments. Exports include name, vendor, type, color, temperatures, cost, density, weights, instance ID, drying settings, and transmission distance.
+Click **"Export CSV"** or **"Export XLSX"** to download all filaments. Exports include name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying settings, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, and spool type.
 
 ---
 

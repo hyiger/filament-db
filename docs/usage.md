@@ -241,13 +241,13 @@ This also works from a filament's detail page to add another spool of the same m
 
 ### Exporting
 
-Click **"Export CSV"** or **"Export XLSX"** on the home page to download all filaments in the chosen format. The export includes name, vendor, type, color, temperatures, cost, density, weights, instance ID, drying temperature/time, and transmission distance.
+Click **"Export CSV"** or **"Export XLSX"** on the home page to download all filaments in the chosen format. The export includes name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying temperature/time, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, and spool type.
 
 XLSX exports include styled headers, color-coded cells, auto-filter, and a frozen header row.
 
 ### Importing
 
-Click **"Import CSV"** or **"Import XLSX"** on the home page to upload a file. The file must have a header row with at minimum `Name`, `Vendor`, and `Type` columns. Additional columns are mapped by header name (case-insensitive). Only fields present in the file are updated — existing data for unmapped columns is preserved.
+Click **"Import CSV"** or **"Import XLSX"** on the home page to upload a file (max 10 MB). The file must have a header row with at minimum `Name`, `Vendor`, and `Type` columns. Additional columns are mapped by header name (case-insensitive), including glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, nozzle temp ranges, standby temp, color name, and spool type. Only fields present in the file are updated — existing data for unmapped columns is preserved. Rows missing required fields are reported with row numbers and reasons.
 
 ---
 
