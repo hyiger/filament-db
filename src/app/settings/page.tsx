@@ -36,12 +36,13 @@ export default function SettingsPage() {
   }, []);
 
   const handleFormat = async () => {
-    if (!window.electronAPI?.nfcFormatTag) return;
-
     setShowFormatConfirm(false);
     setFormatting(true);
     setFormatResult(null);
     try {
+      if (!window.electronAPI?.nfcFormatTag) {
+        throw new Error("NFC format not available — restart the app to load updated NFC support");
+      }
       await window.electronAPI.nfcFormatTag();
       setFormatResult({ ok: true, message: "Tag erased successfully" });
     } catch (err: unknown) {
