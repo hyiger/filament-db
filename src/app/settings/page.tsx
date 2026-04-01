@@ -35,6 +35,13 @@ export default function SettingsPage() {
     return () => { unsub(); };
   }, []);
 
+  // Auto-dismiss erase confirmation when tag is removed
+  useEffect(() => {
+    if (!nfcStatus.tagPresent && showFormatConfirm) {
+      setShowFormatConfirm(false);
+    }
+  }, [nfcStatus.tagPresent, showFormatConfirm]);
+
   const handleFormat = async () => {
     setShowFormatConfirm(false);
     setFormatting(true);
