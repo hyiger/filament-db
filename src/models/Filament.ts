@@ -58,6 +58,9 @@ export interface IFilament extends Document {
   dryingTemperature: number | null;
   dryingTime: number | null;
   transmissionDistance: number | null;
+  shoreHardnessA: number | null;
+  shoreHardnessD: number | null;
+  optTags: number[];
   tdsUrl: string | null;
   inherits: string | null;
   parentId: mongoose.Types.ObjectId | null;
@@ -123,6 +126,9 @@ const FilamentSchema = new Schema<IFilament>(
     dryingTemperature: { type: Number, default: null },
     dryingTime: { type: Number, default: null },
     transmissionDistance: { type: Number, default: null },
+    shoreHardnessA: { type: Number, default: null },
+    shoreHardnessD: { type: Number, default: null },
+    optTags: { type: [Number], default: [] },
     tdsUrl: { type: String, default: null },
     inherits: { type: String, default: null },
     parentId: { type: Schema.Types.ObjectId, ref: "Filament", default: null, index: true },

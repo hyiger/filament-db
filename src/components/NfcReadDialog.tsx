@@ -76,6 +76,9 @@ export default function NfcReadDialog() {
     if (data.chamberTemp != null) params.set("chamber", String(data.chamberTemp));
     if (data.weightGrams != null) params.set("weight", String(data.weightGrams));
     if (data.countryOfOrigin) params.set("country", data.countryOfOrigin);
+    if (data.shoreHardnessA != null) params.set("shoreA", String(data.shoreHardnessA));
+    if (data.shoreHardnessD != null) params.set("shoreD", String(data.shoreHardnessD));
+    if (data.tags && data.tags.length > 0) params.set("optTags", data.tags.join(","));
     dismissTagRead();
     router.push(`/filaments/new?${params}`);
   };

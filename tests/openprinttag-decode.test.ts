@@ -443,4 +443,91 @@ describe("decodeOpenPrintTagBinary", () => {
     expect(decoded.materialType).toBe("Unknown(99)");
     expect(decoded.materialTypeRaw).toBe(99);
   });
+
+  it("round-trips shore hardness A and D", () => {
+    const input: OpenPrintTagInput = {
+      materialName: "TPU 95A",
+      brandName: "Brand",
+      materialType: "TPU",
+      shoreHardnessA: 95,
+      shoreHardnessD: 45,
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+
+    expect(decoded.shoreHardnessA).toBe(95);
+    expect(decoded.shoreHardnessD).toBe(45);
+  });
+
+  it("round-trips expanded tags with tag names", () => {
+    const input: OpenPrintTagInput = {
+      materialName: "CF PLA",
+      brandName: "Brand",
+      materialType: "PLA",
+      optTags: [31, 16, 71], // carbon fiber, matte, high speed
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+
+    expect(decoded.tags).toEqual([16, 31, 71]); // sorted
+    expect(decoded.tagNames).toEqual(
+      expect.arrayContaining(["MATTE", "CONTAINS_CARBON_FIBER", "HIGH_SPEED"]),
+    );
+  });
+
+  it("merges optTags with abrasive/soluble booleans (deduplicated)", () => {
+    const input: OpenPrintTagInput = {
+      materialName: "Abrasive CF",
+      brandName: "Brand",
+      materialType: "PLA",
+      abrasive: true,
+      optTags: [4, 31], // 4 = abrasive (duplicate), 31 = carbon fiber
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+
+    // Should be deduplicated and sorted
+    expect(decoded.tags).toEqual([4, 31]);
+  });
+
+  it("round-trips consumed_weight in auxiliary region", () => {
+    const input: OpenPrintTagInput = {
+      materialName: "Used Spool",
+      brandName: "Brand",
+      materialType: "PLA",
+      weightGrams: 1000,
+      consumedWeight: 350,
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+
+    expect(decoded.consumedWeight).toBe(350);
+    expect(decoded.aux).toBeDefined();
+  });
+
+  it("omits auxiliary region when consumedWeight is null", () => {
+    const input: OpenPrintTagInput = {
+      materialName: "New Spool",
+      brandName: "Brand",
+      materialType: "PLA",
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+
+    expect(decoded.consumedWeight).toBeUndefined();
+    expect(decoded.aux).toBeUndefined();
+  });
+
+  it("omits shore hardness when not provided", () => {
+    const input: OpenPrintTagInput = {
+      materialName: "Plain PLA",
+      brandName: "Brand",
+      materialType: "PLA",
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+
+    expect(decoded.shoreHardnessA).toBeUndefined();
+    expect(decoded.shoreHardnessD).toBeUndefined();
+  });
 });

@@ -86,6 +86,9 @@ function NewFilamentContent() {
           bedFirstLayer: bedMin ?? bedMax,
         },
         ...(weight != null ? { netFilamentWeight: weight } : {}),
+        ...(searchParams.get("shoreA") ? { shoreHardnessA: Number(searchParams.get("shoreA")) } : {}),
+        ...(searchParams.get("shoreD") ? { shoreHardnessD: Number(searchParams.get("shoreD")) } : {}),
+        ...(searchParams.get("optTags") ? { optTags: searchParams.get("optTags")!.split(",").map(Number) } : {}),
         settings: {
           ...(searchParams.get("chamber")
             ? { chamber_temperature: searchParams.get("chamber") }

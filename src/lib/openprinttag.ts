@@ -41,6 +41,8 @@ export const OPT_KEY = {
 
   // Main section – FFF-specific
   FILAMENT_DIAMETER: 30,
+  SHORE_HARDNESS_A: 31,
+  SHORE_HARDNESS_D: 32,
   MIN_PRINT_TEMPERATURE: 34,
   MAX_PRINT_TEMPERATURE: 35,
   PREHEAT_TEMPERATURE: 36,
@@ -55,6 +57,9 @@ export const OPT_KEY = {
   // Additional
   MATERIAL_ABBREVIATION: 52,
   COUNTRY_OF_ORIGIN: 55,
+
+  // Auxiliary region keys (data/aux_fields.yaml)
+  AUX_CONSUMED_WEIGHT: 0,
 
   // Identity – UUIDs and brand-specific IDs
   INSTANCE_UUID: 0,                  // UUIDv5 derived from NFC tag UID (16-byte binary)
@@ -115,6 +120,57 @@ export const MATERIAL_TYPE: Record<string, number> = {
   OBC: 40,
   EVA: 41,
 } as const;
+
+// Tags enum (data/tags_enum.yaml) – material property tags
+export const OPT_TAG = {
+  CONTAINS_GLASS_FIBER: 0,
+  CONTAINS_ARAMID_FIBER: 1,
+  TRANSPARENT: 2,
+  TRANSLUCENT: 3,
+  ABRASIVE: 4,
+  FOOD_SAFE: 5,
+  HEAT_RESISTANT: 6,
+  UV_RESISTANT: 7,
+  FLAME_RETARDANT: 8,
+  FLEXIBLE: 9,
+  CONDUCTIVE: 10,
+  MAGNETIC: 11,
+  BIODEGRADABLE: 12,
+  WATER_SOLUBLE: 13,
+  HIGH_IMPACT: 14,
+  LOW_WARP: 15,
+  MATTE: 16,
+  SILK: 17,
+  MARBLE: 18,
+  WOOD_FILL: 19,
+  METAL_FILL: 20,
+  STONE_FILL: 21,
+  SPARKLE: 22,
+  PHOSPHORESCENT: 23,
+  GLOW_IN_THE_DARK: 24,
+  COLOR_CHANGING: 25,
+  FUZZY: 26,
+  GRADIENT: 27,
+  DUAL_COLOR: 28,
+  TRIPLE_COLOR: 29,
+  CONTAINS_CARBON_FIBER: 31,
+  CONTAINS_KEVLAR: 32,
+  HYGROSCOPIC: 33,
+  ANTI_STATIC: 34,
+  ESD_SAFE: 35,
+  CHEMICALLY_RESISTANT: 36,
+  MEDICAL_GRADE: 37,
+  AUTOMOTIVE_GRADE: 38,
+  AEROSPACE_GRADE: 39,
+  RECYCLED: 49,
+  HIGH_SPEED: 71,
+} as const;
+
+// Reverse lookup: tag number → name
+export const OPT_TAG_TO_NAME: Record<number, string> = {};
+for (const [name, val] of Object.entries(OPT_TAG)) {
+  OPT_TAG_TO_NAME[val] = name;
+}
 
 // ── Low-level CBOR helpers ──────────────────────────────────────────
 
@@ -402,8 +458,12 @@ export interface OpenPrintTagInput {
   dryingTemperature?: number | null;  // °C
   dryingTime?: number | null;         // minutes
   transmissionDistance?: number | null; // HueForge TD value
+  shoreHardnessA?: number | null;  // Shore A hardness (TPU/TPE)
+  shoreHardnessD?: number | null;  // Shore D hardness (rigid materials)
   abrasive?: boolean;          // material is abrasive (tag enum key 4)
   soluble?: boolean;           // material is water-soluble (tag enum key 13)
+  optTags?: number[];          // additional OPT_TAG enum values
+  consumedWeight?: number | null;  // grams of filament consumed (aux region)
 }
 
 // ── Main encoder ────────────────────────────────────────────────────
@@ -450,7 +510,27 @@ export function generateOpenPrintTagBinary(
   // Main map (already built)
   buf.push(...main);
 
+  // Auxiliary region (writable section after main)
+  if (input.consumedWeight != null && input.consumedWeight > 0) {
+    const aux = buildAuxMap(input);
+    buf.push(...aux);
+  }
+
   return new Uint8Array(buf);
+}
+
+/** Build the auxiliary region CBOR map (consumed_weight, etc.). */
+function buildAuxMap(input: OpenPrintTagInput): number[] {
+  const buf: number[] = [];
+  buf.push(0xbf); // indefinite map start
+
+  if (input.consumedWeight != null && input.consumedWeight > 0) {
+    encodeCBORKey(buf, OPT_KEY.AUX_CONSUMED_WEIGHT);
+    encodeCBORCompactNumber(buf, input.consumedWeight);
+  }
+
+  buf.push(0xff); // indefinite map end
+  return buf;
 }
 
 /** Build the indefinite-length CBOR main map. */
@@ -521,6 +601,18 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
     encodeCBORCompactNumber(buf, diameter);
   }
 
+  // shore_hardness_a (Shore A, integer 0-100)
+  if (input.shoreHardnessA != null && input.shoreHardnessA > 0) {
+    encodeCBORKey(buf, OPT_KEY.SHORE_HARDNESS_A);
+    encodeCBORUint(buf, input.shoreHardnessA);
+  }
+
+  // shore_hardness_d (Shore D, integer 0-100)
+  if (input.shoreHardnessD != null && input.shoreHardnessD > 0) {
+    encodeCBORKey(buf, OPT_KEY.SHORE_HARDNESS_D);
+    encodeCBORUint(buf, input.shoreHardnessD);
+  }
+
   // Temperatures – all type: int, unit: °C
   if (input.nozzleTemp != null) {
     // Use nozzle temp as max, derive min as temp - 20
@@ -569,10 +661,12 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   }
 
   // tags – enum_array of material property tags
-  const tagValues: number[] = [];
-  if (input.abrasive) tagValues.push(4);        // abrasive
-  if (input.soluble) tagValues.push(13);         // water_soluble
-  if (tagValues.length > 0) {
+  // Merge boolean convenience flags with explicit optTags array (deduplicated)
+  const tagSet = new Set<number>(input.optTags ?? []);
+  if (input.abrasive) tagSet.add(OPT_TAG.ABRASIVE);
+  if (input.soluble) tagSet.add(OPT_TAG.WATER_SOLUBLE);
+  if (tagSet.size > 0) {
+    const tagValues = [...tagSet].sort((a, b) => a - b);
     encodeCBORKey(buf, OPT_KEY.TAGS);
     // Encode as CBOR array (major type 4)
     buf.push(0x80 | tagValues.length); // definite array with N items

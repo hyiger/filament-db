@@ -9,7 +9,7 @@
  *   2. Main map — indefinite map with filament fields
  */
 
-import { OPT_KEY, MATERIAL_TYPE, decodeCBORFloat16 } from "./openprinttag";
+import { OPT_KEY, MATERIAL_TYPE, OPT_TAG_TO_NAME, decodeCBORFloat16 } from "./openprinttag";
 
 // Reverse lookup: CBOR key number → field name
 // Meta and main maps share key numbers 0-3 with different meanings,
@@ -58,7 +58,12 @@ export interface DecodedOpenPrintTag {
   dryingTemperature?: number;
   dryingTime?: number;
   transmissionDistance?: number;
+  shoreHardnessA?: number;
+  shoreHardnessD?: number;
   tags?: number[];
+  tagNames?: string[];
+  consumedWeight?: number;
+  aux?: Record<string, unknown>;
 }
 
 // ── CBOR decoding primitives ────────────────────────────────────────
@@ -351,8 +356,35 @@ export function decodeOpenPrintTagBinary(data: Uint8Array): DecodedOpenPrintTag 
   if (main.TRANSMISSION_DISTANCE !== undefined) {
     result.transmissionDistance = main.TRANSMISSION_DISTANCE as number;
   }
+  if (main.SHORE_HARDNESS_A !== undefined) {
+    result.shoreHardnessA = main.SHORE_HARDNESS_A as number;
+  }
+  if (main.SHORE_HARDNESS_D !== undefined) {
+    result.shoreHardnessD = main.SHORE_HARDNESS_D as number;
+  }
   if (main.TAGS !== undefined && Array.isArray(main.TAGS)) {
     result.tags = main.TAGS as number[];
+    result.tagNames = result.tags
+      .map((t) => OPT_TAG_TO_NAME[t])
+      .filter(Boolean);
+  }
+
+  // Decode auxiliary region if present
+  if (meta.AUX_REGION_OFFSET != null && meta.AUX_REGION_OFFSET < data.length) {
+    try {
+      const [auxRaw] = decodeCBORItem(data, meta.AUX_REGION_OFFSET);
+      const auxMap = auxRaw as Record<string, unknown>;
+      result.aux = {};
+      for (const [k, v] of Object.entries(auxMap)) {
+        result.aux[`aux_${k}`] = v;
+      }
+      // consumed_weight is aux key 0
+      if (auxMap["0"] !== undefined) {
+        result.consumedWeight = auxMap["0"] as number;
+      }
+    } catch {
+      // Aux region may not be present or may be empty — that's OK
+    }
   }
 
   return result;

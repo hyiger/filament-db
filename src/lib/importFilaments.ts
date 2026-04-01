@@ -19,6 +19,8 @@ export interface ImportRow {
   dryingTemperature?: number | null;
   dryingTime?: number | null;
   transmissionDistance?: number | null;
+  shoreHardnessA?: number | null;
+  shoreHardnessD?: number | null;
   tdsUrl?: string | null;
   instanceId?: string | null;
 }
@@ -68,6 +70,12 @@ const HEADER_MAP: Record<string, keyof ImportRow | undefined> = {
   "hueforge td": "transmissionDistance",
   transmissiondistance: "transmissionDistance",
   td: "transmissionDistance",
+  "shore a": "shoreHardnessA",
+  "shore hardness a": "shoreHardnessA",
+  shorea: "shoreHardnessA",
+  "shore d": "shoreHardnessD",
+  "shore hardness d": "shoreHardnessD",
+  shored: "shoreHardnessD",
 };
 
 const NUM_FIELDS = new Set<keyof ImportRow>([
@@ -84,6 +92,8 @@ const NUM_FIELDS = new Set<keyof ImportRow>([
   "dryingTemperature",
   "dryingTime",
   "transmissionDistance",
+  "shoreHardnessA",
+  "shoreHardnessD",
 ]);
 
 function parseNum(val: unknown): number | null {
@@ -173,6 +183,8 @@ export async function upsertImportRows(
     if (row.dryingTemperature !== undefined) doc.dryingTemperature = row.dryingTemperature ?? null;
     if (row.dryingTime !== undefined) doc.dryingTime = row.dryingTime ?? null;
     if (row.transmissionDistance !== undefined) doc.transmissionDistance = row.transmissionDistance ?? null;
+    if (row.shoreHardnessA !== undefined) doc.shoreHardnessA = row.shoreHardnessA ?? null;
+    if (row.shoreHardnessD !== undefined) doc.shoreHardnessD = row.shoreHardnessD ?? null;
     if (row.tdsUrl !== undefined) doc.tdsUrl = row.tdsUrl ?? null;
     if (row.instanceId) doc.instanceId = row.instanceId;
 

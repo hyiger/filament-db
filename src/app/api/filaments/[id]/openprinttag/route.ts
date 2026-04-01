@@ -55,6 +55,9 @@ export async function GET(
     transmissionDistance: resolved.transmissionDistance ?? null,
     abrasive: resolved.settings?.filament_abrasive === "1",
     soluble: resolved.settings?.filament_soluble === "1",
+    shoreHardnessA: resolved.shoreHardnessA ?? null,
+    shoreHardnessD: resolved.shoreHardnessD ?? null,
+    optTags: resolved.optTags ?? [],
   });
 
   const safeName = resolved.name

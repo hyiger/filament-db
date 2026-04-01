@@ -79,6 +79,9 @@ interface Filament {
   dryingTemperature: number | null;
   dryingTime: number | null;
   transmissionDistance: number | null;
+  shoreHardnessA: number | null;
+  shoreHardnessD: number | null;
+  optTags: number[];
   tdsUrl: string | null;
   inherits: string | null;
   parentId: string | null;
@@ -173,6 +176,9 @@ export default function FilamentDetail() {
         transmissionDistance: filament.transmissionDistance,
         abrasive: filament.settings?.filament_abrasive === "1",
         soluble: filament.settings?.filament_soluble === "1",
+        shoreHardnessA: filament.shoreHardnessA,
+        shoreHardnessD: filament.shoreHardnessD,
+        optTags: filament.optTags,
       });
       await writeTag(payload);
       setNfcWriteSuccess(true);
@@ -211,6 +217,9 @@ export default function FilamentDetail() {
         transmissionDistance: filament.transmissionDistance,
         abrasive: filament.settings?.filament_abrasive === "1",
         soluble: filament.settings?.filament_soluble === "1",
+        shoreHardnessA: filament.shoreHardnessA,
+        shoreHardnessD: filament.shoreHardnessD,
+        optTags: filament.optTags,
       });
       await writeTag(payload);
       setNfcWriteSuccess(true);

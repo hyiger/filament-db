@@ -21,8 +21,11 @@ interface FilamentFormData {
   extrusionMultiplier: string;
   shrinkageXY: string;
   shrinkageZ: string;
+  shoreHardnessA: string;
+  shoreHardnessD: string;
   abrasive: boolean;
   soluble: boolean;
+  optTags: number[];
   fanMinSpeed: string;
   fanMaxSpeed: string;
   fanBridgeSpeed: string;
@@ -152,8 +155,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     extrusionMultiplier: getSettingVal(initialData, "extrusion_multiplier"),
     shrinkageXY: getSettingVal(initialData, "filament_shrinkage_compensation_xy"),
     shrinkageZ: getSettingVal(initialData, "filament_shrinkage_compensation_z"),
+    shoreHardnessA: initialData?.shoreHardnessA?.toString() || "",
+    shoreHardnessD: initialData?.shoreHardnessD?.toString() || "",
     abrasive: getSettingVal(initialData, "filament_abrasive") === "1",
     soluble: getSettingVal(initialData, "filament_soluble") === "1",
+    optTags: initialData?.optTags || [],
     fanMinSpeed: getSettingVal(initialData, "min_fan_speed"),
     fanMaxSpeed: getSettingVal(initialData, "max_fan_speed"),
     fanBridgeSpeed: getSettingVal(initialData, "bridge_fan_speed"),
@@ -181,7 +187,8 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       form.shrinkageXY || form.shrinkageZ ||
       form.fanMinSpeed || form.fanMaxSpeed || form.fanBridgeSpeed || form.fanDisableFirstLayers ||
       form.retractLength || form.retractSpeed || form.retractLift ||
-      form.abrasive || form.soluble ||
+      form.abrasive || form.soluble || form.optTags.length > 0 ||
+      form.shoreHardnessA || form.shoreHardnessD ||
       form.dryingTemperature || form.dryingTime || form.transmissionDistance
     );
   });
@@ -486,6 +493,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         dryingTemperature: parseNum(form.dryingTemperature),
         dryingTime: parseNum(form.dryingTime),
         transmissionDistance: parseNum(form.transmissionDistance),
+        shoreHardnessA: parseNum(form.shoreHardnessA),
+        shoreHardnessD: parseNum(form.shoreHardnessD),
+        optTags: form.optTags,
         tdsUrl: form.tdsUrl || null,
         inherits: form.inherits || null,
         parentId: form.parentId || null,
@@ -1139,32 +1149,83 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         </div>
       </div>
 
-      <div className="flex gap-6">
-        <div className="flex items-center gap-2">
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className={labelClass}>Shore Hardness A</label>
           <input
-            type="checkbox"
-            id="abrasive"
-            checked={form.abrasive}
-            onChange={(e) => setForm({ ...form, abrasive: e.target.checked })}
-            className="w-4 h-4"
+            className={inputClass}
+            type="number"
+            step="1"
+            min="0"
+            max="100"
+            value={form.shoreHardnessA}
+            onChange={(e) => setForm({ ...form, shoreHardnessA: e.target.value })}
+            placeholder="e.g. 95 (TPU/TPE)"
           />
-          <label htmlFor="abrasive" className="text-sm font-medium">
-            Abrasive filament
-          </label>
         </div>
-        <div className="flex items-center gap-2">
+        <div>
+          <label className={labelClass}>Shore Hardness D</label>
           <input
-            type="checkbox"
-            id="soluble"
-            checked={form.soluble}
-            onChange={(e) => setForm({ ...form, soluble: e.target.checked })}
-            className="w-4 h-4"
+            className={inputClass}
+            type="number"
+            step="1"
+            min="0"
+            max="100"
+            value={form.shoreHardnessD}
+            onChange={(e) => setForm({ ...form, shoreHardnessD: e.target.value })}
+            placeholder="e.g. 60 (rigid)"
           />
-          <label htmlFor="soluble" className="text-sm font-medium">
-            Soluble filament
-          </label>
         </div>
       </div>
+
+      <fieldset className="border border-gray-300 rounded p-4">
+        <legend className="text-sm font-medium px-2">Material Tags</legend>
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          {([
+            [4, "Abrasive"],
+            [13, "Water Soluble"],
+            [9, "Flexible"],
+            [31, "Carbon Fiber"],
+            [0, "Glass Fiber"],
+            [16, "Matte"],
+            [17, "Silk"],
+            [22, "Sparkle"],
+            [24, "Glow in the Dark"],
+            [25, "Color Changing"],
+            [71, "High Speed"],
+            [49, "Recycled"],
+            [2, "Transparent"],
+            [3, "Translucent"],
+            [19, "Wood Fill"],
+            [20, "Metal Fill"],
+            [12, "Biodegradable"],
+            [5, "Food Safe"],
+          ] as [number, string][]).map(([val, label]) => (
+            <label key={val} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={form.optTags.includes(val) || (val === 4 && form.abrasive) || (val === 13 && form.soluble)}
+                onChange={(e) => {
+                  const checked = e.target.checked;
+                  // Keep abrasive/soluble booleans in sync
+                  const updates: Partial<FilamentFormData> = {};
+                  if (val === 4) updates.abrasive = checked;
+                  if (val === 13) updates.soluble = checked;
+                  setForm((prev) => ({
+                    ...prev,
+                    ...updates,
+                    optTags: checked
+                      ? [...new Set([...prev.optTags, val])]
+                      : prev.optTags.filter((t) => t !== val),
+                  }));
+                }}
+                className="w-4 h-4"
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
       </>)}
 
       <fieldset className="border border-gray-300 rounded p-4">

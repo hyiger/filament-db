@@ -21,6 +21,8 @@ export interface ExportRow {
   dryingTemperature: number | null;
   dryingTime: number | null;
   transmissionDistance: number | null;
+  shoreHardnessA: number | null;
+  shoreHardnessD: number | null;
   tdsUrl: string | null;
   instanceId: string;
 }
@@ -44,6 +46,8 @@ export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
   { key: "dryingTemperature", header: "Drying Temp (°C)" },
   { key: "dryingTime", header: "Drying Time (min)" },
   { key: "transmissionDistance", header: "HueForge TD" },
+  { key: "shoreHardnessA", header: "Shore A" },
+  { key: "shoreHardnessD", header: "Shore D" },
   { key: "tdsUrl", header: "TDS URL" },
   { key: "instanceId", header: "Instance ID" },
 ];
@@ -87,6 +91,8 @@ export async function getExportRows(): Promise<ExportRow[]> {
       dryingTemperature: resolved.dryingTemperature ?? null,
       dryingTime: resolved.dryingTime ?? null,
       transmissionDistance: resolved.transmissionDistance ?? null,
+      shoreHardnessA: resolved.shoreHardnessA ?? null,
+      shoreHardnessD: resolved.shoreHardnessD ?? null,
       tdsUrl: resolved.tdsUrl ?? null,
       instanceId: filament.instanceId ?? "",
     };

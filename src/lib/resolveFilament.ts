@@ -28,6 +28,8 @@ const INHERITABLE_FIELDS = [
   "dryingTemperature",
   "dryingTime",
   "transmissionDistance",
+  "shoreHardnessA",
+  "shoreHardnessD",
   "tdsUrl",
   "inherits",
 ];

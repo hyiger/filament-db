@@ -13,6 +13,7 @@ import {
   deriveMaterialAbbreviation,
   generateOpenPrintTagBinary,
   OPT_KEY,
+  OPT_TAG,
   MATERIAL_CLASS,
   MATERIAL_TYPE,
   type OpenPrintTagInput,
@@ -899,6 +900,89 @@ describe("generateOpenPrintTagBinary", () => {
     const key = findCBORKey(bytes, OPT_KEY.EMPTY_CONTAINER_WEIGHT);
     expect(key).toBe(-1);
   });
+
+  it("encodes shore_hardness_a at key 31", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      materialType: "TPU",
+      shoreHardnessA: 95,
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+    const keyIdx = findCBORKey(bytes, OPT_KEY.SHORE_HARDNESS_A);
+    expect(keyIdx).not.toBe(-1);
+    // Key 31 >= 24, so encoded as 0x18 0x1f; value at keyIdx + 2
+    expect(bytes[keyIdx + 2]).toBe(0x18); // uint8 prefix
+    expect(bytes[keyIdx + 3]).toBe(95);
+  });
+
+  it("encodes shore_hardness_d at key 32", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      shoreHardnessD: 60,
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+    const keyIdx = findCBORKey(bytes, OPT_KEY.SHORE_HARDNESS_D);
+    expect(keyIdx).not.toBe(-1);
+    expect(bytes[keyIdx + 2]).toBe(0x18);
+    expect(bytes[keyIdx + 3]).toBe(60);
+  });
+
+  it("omits shore hardness when null", () => {
+    const result = generateOpenPrintTagBinary(minimalInput);
+    const bytes = Array.from(result);
+    expect(findCBORKey(bytes, OPT_KEY.SHORE_HARDNESS_A)).toBe(-1);
+    expect(findCBORKey(bytes, OPT_KEY.SHORE_HARDNESS_D)).toBe(-1);
+  });
+
+  it("encodes optTags merged with abrasive/soluble (sorted, deduplicated)", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      abrasive: true,
+      optTags: [71, 4, 16], // high speed, abrasive (dup), matte
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+    const keyIdx = findCBORKey(bytes, OPT_KEY.TAGS);
+    expect(keyIdx).not.toBe(-1);
+    // Tags key is 28 >= 24, value starts at keyIdx + 2
+    const arrStart = keyIdx + 2;
+    // Should be definite array of length 3 (4=abrasive, 16=matte, 71=high_speed)
+    expect(bytes[arrStart] & 0xf0).toBe(0x80); // major type 4 (array)
+    expect(bytes[arrStart] & 0x0f).toBe(3);    // 3 items
+    // Items should be sorted: 4, 16, 71
+    expect(bytes[arrStart + 1]).toBe(4);
+    expect(bytes[arrStart + 2]).toBe(16);
+    expect(bytes[arrStart + 3]).toBe(0x18); // 71 >= 24
+    expect(bytes[arrStart + 4]).toBe(71);
+  });
+
+  it("appends auxiliary region with consumed_weight", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      consumedWeight: 150,
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+    // The aux region should be appended after the main map
+    // Look for an indefinite map (0xBF) after the first 0xFF (main map end)
+    const mainEnd = bytes.indexOf(0xff);
+    const auxStart = bytes.indexOf(0xbf, mainEnd + 1);
+    expect(auxStart).toBeGreaterThan(mainEnd);
+    // Key 0 = consumed_weight, value = 150 (0x18, 0x96)
+    expect(bytes[auxStart + 1]).toBe(0); // key 0
+    expect(bytes[auxStart + 2]).toBe(0x18); // uint8 prefix
+    expect(bytes[auxStart + 3]).toBe(150);
+  });
+
+  it("omits auxiliary region when consumedWeight is null", () => {
+    const result = generateOpenPrintTagBinary(minimalInput);
+    const bytes = Array.from(result);
+    // Count 0xBF occurrences — should be exactly 1 (main map only)
+    const bfCount = bytes.filter((b) => b === 0xbf).length;
+    expect(bfCount).toBe(1);
+  });
 });
 
 // ── Constants ───────────────────────────────────────────────────────
@@ -911,12 +995,28 @@ describe("OPT_KEY constants", () => {
     expect(OPT_KEY.BRAND_NAME).toBe(11);
     expect(OPT_KEY.NOMINAL_NETTO_FULL_WEIGHT).toBe(16);
     expect(OPT_KEY.FILAMENT_DIAMETER).toBe(30);
+    expect(OPT_KEY.SHORE_HARDNESS_A).toBe(31);
+    expect(OPT_KEY.SHORE_HARDNESS_D).toBe(32);
     expect(OPT_KEY.MIN_PRINT_TEMPERATURE).toBe(34);
     expect(OPT_KEY.MAX_PRINT_TEMPERATURE).toBe(35);
     expect(OPT_KEY.MATERIAL_ABBREVIATION).toBe(52);
     expect(OPT_KEY.COUNTRY_OF_ORIGIN).toBe(55);
     expect(OPT_KEY.DRYING_TEMPERATURE).toBe(57);
     expect(OPT_KEY.DRYING_TIME).toBe(58);
+    expect(OPT_KEY.AUX_CONSUMED_WEIGHT).toBe(0);
+  });
+});
+
+describe("OPT_TAG constants", () => {
+  it("has expected tag values from the spec", () => {
+    expect(OPT_TAG.ABRASIVE).toBe(4);
+    expect(OPT_TAG.WATER_SOLUBLE).toBe(13);
+    expect(OPT_TAG.MATTE).toBe(16);
+    expect(OPT_TAG.SILK).toBe(17);
+    expect(OPT_TAG.GLOW_IN_THE_DARK).toBe(24);
+    expect(OPT_TAG.CONTAINS_CARBON_FIBER).toBe(31);
+    expect(OPT_TAG.RECYCLED).toBe(49);
+    expect(OPT_TAG.HIGH_SPEED).toBe(71);
   });
 });
 
