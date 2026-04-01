@@ -91,7 +91,7 @@ filament-db/
 │   ├── hooks/               # Custom hooks (useNfc)
 │   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder
 │   └── models/              # Mongoose schemas (Filament, Nozzle, Printer)
-├── tests/                   # Vitest unit tests (254 tests across 12 files)
+├── tests/                   # Vitest unit tests (302 tests across 13 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   └── release.yml          # CD: build desktop installers on version tags (4 platforms)
