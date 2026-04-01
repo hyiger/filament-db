@@ -187,6 +187,22 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
   });
 }
 
+/** Maximum wait time (ms) for IPC calls before they're considered timed out. */
+const IPC_TIMEOUT_MS = 15_000;
+
+/**
+ * Wraps an async IPC handler with a timeout to prevent hanging calls
+ * when the server becomes unresponsive.
+ */
+function withIpcTimeout<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  return Promise.race([
+    fn(),
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`IPC timeout: ${label} took longer than ${IPC_TIMEOUT_MS}ms`)), IPC_TIMEOUT_MS)
+    ),
+  ]);
+}
+
 function stopServer() {
   if (serverProcess) {
     serverProcess.kill();
@@ -398,7 +414,7 @@ ipcMain.handle("trigger-sync", async () => {
   if (!syncService) {
     return { error: "Sync not available in current mode" };
   }
-  const results = await syncService.sync();
+  const results = await withIpcTimeout(() => syncService!.sync(), "trigger-sync");
   return { results };
 });
 
@@ -431,18 +447,18 @@ ipcMain.handle("nfc-get-status", () => {
 
 ipcMain.handle("nfc-read-tag", async () => {
   if (!nfcService) throw new Error("NFC not initialized");
-  return nfcService.readTag();
+  return withIpcTimeout(() => nfcService!.readTag(), "nfc-read-tag");
 });
 
 ipcMain.handle("nfc-write-tag", async (_event, payload: number[]) => {
   if (!nfcService) throw new Error("NFC not initialized");
-  await nfcService.writeTag(new Uint8Array(payload));
+  await withIpcTimeout(() => nfcService!.writeTag(new Uint8Array(payload)), "nfc-write-tag");
   return { success: true };
 });
 
 ipcMain.handle("nfc-format-tag", async () => {
   if (!nfcService) throw new Error("NFC not initialized");
-  await nfcService.formatTag();
+  await withIpcTimeout(() => nfcService!.formatTag(), "nfc-format-tag");
   return { success: true };
 });
 
@@ -480,6 +496,27 @@ app.whenReady().then(async () => {
     // Always start the server — even without mongoUri, the setup page needs it
     try {
       await startProductionServer(mongoUri || undefined);
+
+      // Watch for unexpected server crashes after successful startup
+      if (serverProcess) {
+        serverProcess.on("exit", (code) => {
+          if (code !== null && code !== 0) {
+            console.error(`Server crashed with exit code ${code}, attempting restart...`);
+            startProductionServer(mongoUri || undefined)
+              .then(() => {
+                console.log("Server restarted successfully after crash");
+                mainWindow?.reload();
+              })
+              .catch((restartErr) => {
+                console.error("Server restart failed:", restartErr);
+                dialog.showErrorBox(
+                  "Server Crashed",
+                  `The embedded web server crashed and could not be restarted.\n\n${restartErr instanceof Error ? restartErr.message : String(restartErr)}`,
+                );
+              });
+          }
+        });
+      }
     } catch (err) {
       console.error("Failed to start server:", err);
       dialog.showErrorBox(

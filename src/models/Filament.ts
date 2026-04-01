@@ -182,6 +182,9 @@ FilamentSchema.index(
   { unique: true, partialFilterExpression: { _deletedAt: null } }
 );
 
+// Composite index for common filter queries (vendor + type)
+FilamentSchema.index({ vendor: 1, type: 1 });
+
 // Ensure instanceId is always set before saving
 FilamentSchema.pre("save", function () {
   if (!this.instanceId) {
@@ -195,19 +198,25 @@ const Filament: Model<IFilament> =
 /**
  * Backfill instanceId for any existing filaments that don't have one.
  * Safe to call multiple times — only updates documents missing the field.
+ * Uses batched bulkWrite for performance instead of one-at-a-time saves.
  */
 export async function backfillInstanceIds(): Promise<number> {
-  const cursor = Filament.find({
-    $or: [{ instanceId: null }, { instanceId: { $exists: false } }],
-  }).cursor();
+  const docs = await Filament.find(
+    { $or: [{ instanceId: null }, { instanceId: { $exists: false } }] },
+    { _id: 1 },
+  ).lean();
 
-  let count = 0;
-  for await (const doc of cursor) {
-    doc.instanceId = generateInstanceId();
-    await doc.save();
-    count++;
-  }
-  return count;
+  if (docs.length === 0) return 0;
+
+  const ops = docs.map((doc) => ({
+    updateOne: {
+      filter: { _id: doc._id },
+      update: { $set: { instanceId: generateInstanceId() } },
+    },
+  }));
+
+  const result = await Filament.bulkWrite(ops);
+  return result.modifiedCount;
 }
 
 export default Filament;

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 
 interface NozzleFormData {
   name: string;
@@ -11,9 +11,17 @@ interface NozzleFormData {
   notes: string;
 }
 
+interface NozzleInitialData {
+  name?: string;
+  diameter?: number;
+  type?: string;
+  highFlow?: boolean;
+  hardened?: boolean;
+  notes?: string;
+}
+
 interface Props {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  initialData?: any;
+  initialData?: NozzleInitialData;
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
 }
 
@@ -41,6 +49,24 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
     notes: initialData?.notes || "",
   });
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const savedRef = useRef(false);
+
+  // Warn on unsaved changes when navigating away
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirty && !savedRef.current) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty]);
+
+  const updateForm = (updates: Partial<NozzleFormData>) => {
+    setForm((f) => ({ ...f, ...updates }));
+    setDirty(true);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,6 +87,8 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
         hardened: form.hardened,
         notes: form.notes,
       });
+      savedRef.current = true;
+      setDirty(false);
     } finally {
       setSaving(false);
     }
@@ -77,7 +105,7 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
         <input
           className={inputClass}
           value={form.name}
-          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          onChange={(e) => updateForm({ name: e.target.value })}
           placeholder="e.g. CoreOne 0.4 Brass"
           required
         />
@@ -94,7 +122,7 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
             max="10"
             list="common-diameters"
             value={form.diameter}
-            onChange={(e) => setForm({ ...form, diameter: e.target.value })}
+            onChange={(e) => updateForm({ diameter: e.target.value })}
             placeholder="e.g. 0.4"
             required
           />
@@ -109,7 +137,7 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
           <select
             className={inputClass}
             value={form.type}
-            onChange={(e) => setForm({ ...form, type: e.target.value })}
+            onChange={(e) => updateForm({ type: e.target.value })}
           >
             {NOZZLE_TYPES.map((t) => (
               <option key={t} value={t}>
@@ -125,7 +153,7 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
           type="checkbox"
           id="highFlow"
           checked={form.highFlow}
-          onChange={(e) => setForm({ ...form, highFlow: e.target.checked })}
+          onChange={(e) => updateForm({ highFlow: e.target.checked })}
           className="w-4 h-4"
         />
         <label htmlFor="highFlow" className="text-sm font-medium">
@@ -138,7 +166,7 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
           type="checkbox"
           id="hardened"
           checked={form.hardened}
-          onChange={(e) => setForm({ ...form, hardened: e.target.checked })}
+          onChange={(e) => updateForm({ hardened: e.target.checked })}
           className="w-4 h-4"
         />
         <label htmlFor="hardened" className="text-sm font-medium">
@@ -152,7 +180,7 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
           className={inputClass}
           rows={3}
           value={form.notes}
-          onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          onChange={(e) => updateForm({ notes: e.target.value })}
           placeholder="Optional notes about this nozzle..."
         />
       </div>

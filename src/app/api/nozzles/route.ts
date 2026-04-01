@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
+import { getErrorMessage, errorResponse, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 
 export async function GET(request: NextRequest) {
   try {
@@ -19,8 +20,7 @@ export async function GET(request: NextRequest) {
     const nozzles = await Nozzle.find(filter).sort({ diameter: 1, type: 1 }).lean();
     return NextResponse.json(nozzles);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to fetch nozzles", detail: message }, { status: 500 });
+    return errorResponse("Failed to fetch nozzles", 500, getErrorMessage(err));
   }
 }
 
@@ -32,10 +32,8 @@ export async function POST(request: NextRequest) {
     const nozzle = await Nozzle.create(body);
     return NextResponse.json(nozzle, { status: 201 });
   } catch (err) {
-    if (typeof err === "object" && err !== null && "code" in err && (err as { code: number }).code === 11000) {
-      return NextResponse.json({ error: "A nozzle with that name already exists" }, { status: 409 });
-    }
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to create nozzle", detail: message }, { status: 500 });
+    const dupResponse = handleDuplicateKeyError(err, "nozzle");
+    if (dupResponse) return dupResponse;
+    return errorResponse("Failed to create nozzle", 500, getErrorMessage(err));
   }
 }

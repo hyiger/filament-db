@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 
 interface Nozzle {
   _id: string;
@@ -17,9 +17,16 @@ interface PrinterFormData {
   notes: string;
 }
 
+interface PrinterInitialData {
+  name?: string;
+  manufacturer?: string;
+  printerModel?: string;
+  installedNozzles?: (Nozzle | string)[];
+  notes?: string;
+}
+
 interface Props {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  initialData?: any;
+  initialData?: PrinterInitialData;
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
 }
 
@@ -36,6 +43,19 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
   const [nozzles, setNozzles] = useState<Nozzle[]>([]);
   const [nozzlesFetchError, setNozzlesFetchError] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const savedRef = useRef(false);
+
+  // Warn on unsaved changes when navigating away
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirty && !savedRef.current) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty]);
 
   useEffect(() => {
     fetch("/api/nozzles")
@@ -56,6 +76,11 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
     return null;
   };
 
+  const updateForm = (updates: Partial<PrinterFormData>) => {
+    setForm((f) => ({ ...f, ...updates }));
+    setDirty(true);
+  };
+
   const toggleNozzle = (id: string) => {
     setForm((f) => ({
       ...f,
@@ -63,6 +88,7 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
         ? f.installedNozzles.filter((n) => n !== id)
         : [...f.installedNozzles, id],
     }));
+    setDirty(true);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -77,6 +103,8 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
         installedNozzles: form.installedNozzles,
         notes: form.notes,
       });
+      savedRef.current = true;
+      setDirty(false);
     } finally {
       setSaving(false);
     }
@@ -97,7 +125,7 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
             onChange={(e) => {
               const manufacturer = e.target.value;
               const autoName = autoGenerateName(manufacturer, form.printerModel);
-              setForm({ ...form, manufacturer, ...(autoName != null ? { name: autoName } : {}) });
+              updateForm({ manufacturer, ...(autoName != null ? { name: autoName } : {}) });
             }}
             placeholder="e.g. Prusa, Bambu Lab"
             required
@@ -111,7 +139,7 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
             onChange={(e) => {
               const printerModel = e.target.value;
               const autoName = autoGenerateName(form.manufacturer, printerModel);
-              setForm({ ...form, printerModel, ...(autoName != null ? { name: autoName } : {}) });
+              updateForm({ printerModel, ...(autoName != null ? { name: autoName } : {}) });
             }}
             placeholder="e.g. Core One, X1C"
             required
@@ -124,7 +152,7 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
         <input
           className={inputClass}
           value={form.name}
-          onChange={(e) => setForm({ ...form, name: e.target.value })}
+          onChange={(e) => updateForm({ name: e.target.value })}
           placeholder="Auto-generated from manufacturer + model"
           required
         />
@@ -173,7 +201,7 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
           className={inputClass}
           rows={3}
           value={form.notes}
-          onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          onChange={(e) => updateForm({ notes: e.target.value })}
           placeholder="Optional notes about this printer..."
         />
       </div>

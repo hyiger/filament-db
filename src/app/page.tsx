@@ -7,28 +7,9 @@ import ImportAtlasDialog from "@/components/ImportAtlasDialog";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 import NfcStatus from "@/components/NfcStatus";
+import type { FilamentSummary } from "@/types/filament";
 
-interface Filament {
-  _id: string;
-  name: string;
-  vendor: string;
-  type: string;
-  color: string;
-  cost: number | null;
-  density: number | null;
-  parentId: string | null;
-  spools: {
-    _id: string;
-    totalWeight: number | null;
-  }[];
-  spoolWeight: number | null;
-  netFilamentWeight: number | null;
-  totalWeight: number | null;
-  temperatures: {
-    nozzle: number | null;
-    bed: number | null;
-  };
-}
+type Filament = FilamentSummary;
 
 function getRemainingPct(f: Filament): number | null {
   // Multi-spool: aggregate across all spools

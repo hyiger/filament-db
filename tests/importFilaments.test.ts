@@ -161,7 +161,7 @@ describe("upsertImportRows", () => {
     expect(resurrected!._deletedAt).toBeNull();
   });
 
-  it("skips rows missing required fields", async () => {
+  it("skips rows missing required fields and returns skip report", async () => {
     const result = await upsertImportRows([
       { name: "Has Name Only", vendor: "", type: "" },
       { name: "", vendor: "HasVendor", type: "PLA" },
@@ -170,6 +170,21 @@ describe("upsertImportRows", () => {
 
     expect(result.skipped).toBe(3);
     expect(result.created).toBe(0);
+    expect(result.skippedRows).toHaveLength(3);
+
+    // Row 2: vendor and type empty
+    expect(result.skippedRows[0].row).toBe(2);
+    expect(result.skippedRows[0].name).toBe("Has Name Only");
+    expect(result.skippedRows[0].reason).toContain("vendor");
+    expect(result.skippedRows[0].reason).toContain("type");
+
+    // Row 3: name empty
+    expect(result.skippedRows[1].row).toBe(3);
+    expect(result.skippedRows[1].reason).toContain("name");
+
+    // Row 4: name undefined
+    expect(result.skippedRows[2].row).toBe(4);
+    expect(result.skippedRows[2].reason).toContain("name");
   });
 
   it("applies default values for optional fields", async () => {

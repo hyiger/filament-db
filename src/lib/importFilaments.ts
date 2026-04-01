@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 
@@ -163,14 +164,29 @@ export function rowToImport(
   return row;
 }
 
+export interface SkippedRow {
+  row: number;
+  name: string | undefined;
+  reason: string;
+}
+
+export interface ImportResult {
+  total: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  skippedRows: SkippedRow[];
+}
+
 export async function upsertImportRows(
   rows: ImportRow[],
-): Promise<{ total: number; created: number; updated: number; skipped: number }> {
+): Promise<ImportResult> {
   await dbConnect();
 
   let created = 0;
   let updated = 0;
   let skipped = 0;
+  const skippedRows: SkippedRow[] = [];
 
   // Batch-load all existing filaments by name to avoid N+1 queries
   const validNames = rows
@@ -180,10 +196,8 @@ export async function upsertImportRows(
   const allExisting = await Filament.find({ name: { $in: validNames } }).lean();
 
   // Build lookup maps: name → active doc, name → soft-deleted doc
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const activeByName = new Map<string, { _id: any }>();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const deletedByName = new Map<string, { _id: any }>();
+  const activeByName = new Map<string, { _id: mongoose.Types.ObjectId }>();
+  const deletedByName = new Map<string, { _id: mongoose.Types.ObjectId }>();
   for (const doc of allExisting) {
     if (doc._deletedAt == null) {
       activeByName.set(doc.name, doc);
@@ -192,8 +206,15 @@ export async function upsertImportRows(
     }
   }
 
-  for (const row of rows) {
+  for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+    const row = rows[rowIdx];
     if (!row.name || !row.vendor || !row.type) {
+      const missing = [
+        !row.name && "name",
+        !row.vendor && "vendor",
+        !row.type && "type",
+      ].filter(Boolean).join(", ");
+      skippedRows.push({ row: rowIdx + 2, name: row.name, reason: `Missing required field(s): ${missing}` });
       skipped++;
       continue;
     }
@@ -201,8 +222,7 @@ export async function upsertImportRows(
     // Build the update doc using only fields that were actually present in the
     // import row. This prevents overwriting existing data (e.g. temperatures,
     // calibrations) with nulls when the CSV simply doesn't have those columns.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const doc: Record<string, any> = {
+    const doc: Record<string, unknown> = {
       name: row.name,
       vendor: row.vendor,
       type: row.type,
@@ -276,5 +296,5 @@ export async function upsertImportRows(
     }
   }
 
-  return { total: rows.length, created, updated, skipped };
+  return { total: rows.length, created, updated, skipped, skippedRows };
 }

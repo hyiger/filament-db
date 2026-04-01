@@ -119,9 +119,12 @@ interface PresetEntry {
   bedFirstLayer: string;
 }
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type FilamentInitialData = Record<string, any>;
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
 interface Props {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  initialData?: any;
+  initialData?: FilamentInitialData;
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
 }
 
@@ -241,6 +244,28 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     parentId: initialData?.parentId?._id || initialData?.parentId || "",
   });
   const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const savedRef = useRef(false);
+
+  // Warn on unsaved changes when navigating away
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirty && !savedRef.current) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty]);
+
+  // Track dirty state on any form field change via useEffect
+  const initialFormRef = useRef(JSON.stringify(form));
+  useEffect(() => {
+    if (JSON.stringify(form) !== initialFormRef.current) {
+      setDirty(true);
+    }
+  }, [form]);
+
   const [showAdvanced, setShowAdvanced] = useState(() => {
     // Auto-expand if any advanced fields have values
     return !!(
@@ -581,6 +606,8 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         parentId: form.parentId || null,
         settings,
       });
+      savedRef.current = true;
+      setDirty(false);
     } finally {
       setSaving(false);
     }

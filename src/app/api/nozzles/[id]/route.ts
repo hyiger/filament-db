@@ -3,6 +3,7 @@ import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
 import Filament from "@/models/Filament";
 import Printer from "@/models/Printer";
+import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 
 export async function GET(
   _request: NextRequest,
@@ -13,12 +14,11 @@ export async function GET(
     const { id } = await params;
     const nozzle = await Nozzle.findOne({ _id: id, _deletedAt: null }).lean();
     if (!nozzle) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return errorResponse("Not found", 404);
     }
     return NextResponse.json(nozzle);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to fetch nozzle", detail: message }, { status: 500 });
+    return errorResponse("Failed to fetch nozzle", 500, getErrorMessage(err));
   }
 }
 
@@ -36,12 +36,11 @@ export async function PUT(
       { new: true, runValidators: true }
     ).lean();
     if (!nozzle) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return errorResponse("Not found", 404);
     }
     return NextResponse.json(nozzle);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to update nozzle", detail: message }, { status: 500 });
+    return errorResponse("Failed to update nozzle", 500, getErrorMessage(err));
   }
 }
 
@@ -62,11 +61,9 @@ export async function DELETE(
       ],
     });
     if (referencingCount > 0) {
-      return NextResponse.json(
-        {
-          error: `Cannot delete this nozzle — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}. Remove it from those filaments first.`,
-        },
-        { status: 400 },
+      return errorResponse(
+        `Cannot delete this nozzle — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}. Remove it from those filaments first.`,
+        400,
       );
     }
 
@@ -76,11 +73,9 @@ export async function DELETE(
       installedNozzles: id,
     });
     if (printerCount > 0) {
-      return NextResponse.json(
-        {
-          error: `Cannot delete this nozzle — it is installed on ${printerCount} printer${printerCount !== 1 ? "s" : ""}. Remove it from those printers first.`,
-        },
-        { status: 400 },
+      return errorResponse(
+        `Cannot delete this nozzle — it is installed on ${printerCount} printer${printerCount !== 1 ? "s" : ""}. Remove it from those printers first.`,
+        400,
       );
     }
 
@@ -90,11 +85,10 @@ export async function DELETE(
       { new: true }
     ).lean();
     if (!nozzle) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return errorResponse("Not found", 404);
     }
     return NextResponse.json({ message: "Deleted" });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to delete nozzle", detail: message }, { status: 500 });
+    return errorResponse("Failed to delete nozzle", 500, getErrorMessage(err));
   }
 }

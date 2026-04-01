@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
-import Filament from "@/models/Filament";
+import Filament, { IFilament } from "@/models/Filament";
 import "@/models/Nozzle";
 import "@/models/Printer";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
+import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 
 export async function GET(
   _request: NextRequest,
@@ -18,12 +19,11 @@ export async function GET(
       .populate("calibrations.printer")
       .lean();
     if (!filament) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return errorResponse("Not found", 404);
     }
 
     // If this is a variant, resolve inherited values from parent
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let resolved: any = filament;
+    let resolved: IFilament | ReturnType<typeof resolveFilament> = filament;
     if (filament.parentId) {
       const parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
         .populate("compatibleNozzles")
@@ -41,8 +41,7 @@ export async function GET(
 
     return NextResponse.json({ ...resolved, _variants: variants });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to fetch filament", detail: message }, { status: 500 });
+    return errorResponse("Failed to fetch filament", 500, getErrorMessage(err));
   }
 }
 
@@ -59,18 +58,15 @@ export async function PUT(
     if (body.parentId) {
       const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null }).lean();
       if (!parent) {
-        return NextResponse.json({ error: "Parent filament not found" }, { status: 400 });
+        return errorResponse("Parent filament not found", 400);
       }
       // Prevent circular references
       if (parent.parentId) {
-        return NextResponse.json(
-          { error: "Cannot set a variant as parent (no nested inheritance)" },
-          { status: 400 },
-        );
+        return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
       }
       // Prevent self-reference
       if (body.parentId === id) {
-        return NextResponse.json({ error: "Cannot be your own parent" }, { status: 400 });
+        return errorResponse("Cannot be your own parent", 400);
       }
     }
 
@@ -80,12 +76,11 @@ export async function PUT(
       { new: true, runValidators: true }
     ).lean();
     if (!filament) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return errorResponse("Not found", 404);
     }
     return NextResponse.json(filament);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to update filament", detail: message }, { status: 500 });
+    return errorResponse("Failed to update filament", 500, getErrorMessage(err));
   }
 }
 
@@ -99,9 +94,9 @@ export async function DELETE(
 
     // Prevent deleting a parent that has variants
     if (await hasVariants(Filament, id)) {
-      return NextResponse.json(
-        { error: "Cannot delete a filament that has color variants. Delete the variants first." },
-        { status: 400 },
+      return errorResponse(
+        "Cannot delete a filament that has color variants. Delete the variants first.",
+        400,
       );
     }
 
@@ -111,11 +106,10 @@ export async function DELETE(
       { new: true }
     ).lean();
     if (!filament) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return errorResponse("Not found", 404);
     }
     return NextResponse.json({ message: "Deleted" });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to delete filament", detail: message }, { status: 500 });
+    return errorResponse("Failed to delete filament", 500, getErrorMessage(err));
   }
 }

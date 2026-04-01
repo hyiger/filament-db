@@ -8,93 +8,9 @@ import { useNfcContext } from "@/components/NfcProvider";
 import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
 import { useToast } from "@/components/Toast";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
+import type { FilamentDetail } from "@/types/filament";
 
-interface Variant {
-  _id: string;
-  name: string;
-  color: string;
-  cost: number | null;
-}
-
-interface Filament {
-  _id: string;
-  name: string;
-  instanceId?: string;
-  vendor: string;
-  type: string;
-  color: string;
-  cost: number | null;
-  density: number | null;
-  diameter: number;
-  temperatures: {
-    nozzle: number | null;
-    nozzleFirstLayer: number | null;
-    bed: number | null;
-    bedFirstLayer: number | null;
-  };
-  maxVolumetricSpeed: number | null;
-  compatibleNozzles: {
-    _id: string;
-    name: string;
-    diameter: number;
-    type: string;
-    highFlow: boolean;
-  }[];
-  calibrations: {
-    printer: {
-      _id: string;
-      name: string;
-    } | null;
-    nozzle: {
-      _id: string;
-      name: string;
-      highFlow: boolean;
-    };
-    extrusionMultiplier: number | null;
-    maxVolumetricSpeed: number | null;
-    pressureAdvance: number | null;
-    retractLength: number | null;
-    retractSpeed: number | null;
-    retractLift: number | null;
-  }[];
-  presets: {
-    label: string;
-    extrusionMultiplier: number | null;
-    temperatures: {
-      nozzle: number | null;
-      nozzleFirstLayer: number | null;
-      bed: number | null;
-      bedFirstLayer: number | null;
-    };
-  }[];
-  spools: {
-    _id: string;
-    label: string;
-    totalWeight: number | null;
-    createdAt: string;
-  }[];
-  spoolWeight: number | null;
-  netFilamentWeight: number | null;
-  totalWeight: number | null;
-  dryingTemperature: number | null;
-  dryingTime: number | null;
-  transmissionDistance: number | null;
-  glassTempTransition: number | null;
-  heatDeflectionTemp: number | null;
-  shoreHardnessA: number | null;
-  shoreHardnessD: number | null;
-  minPrintSpeed: number | null;
-  maxPrintSpeed: number | null;
-  colorName: string | null;
-  spoolType: string | null;
-  optTags: number[];
-  tdsUrl: string | null;
-  inherits: string | null;
-  parentId: string | null;
-  settings: Record<string, string | null>;
-  _inherited?: string[];
-  _variants?: Variant[];
-}
+type Filament = FilamentDetail;
 
 function computeRemaining(filament: Filament, overrideTotalWeight?: number | null) {
   const { spoolWeight, netFilamentWeight, density, diameter } = filament;
