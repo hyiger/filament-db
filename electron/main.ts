@@ -511,6 +511,10 @@ app.whenReady().then(async () => {
             mainWindow?.webContents.send("nfc-tag-detected", { data });
           })
           .catch((err) => {
+            // Blank/erased tags have no NDEF data — silently ignore
+            if (err.message?.includes("No NDEF TLV") || err.message?.includes("No NDEF record")) {
+              return;
+            }
             mainWindow?.webContents.send("nfc-tag-detected", { error: err.message });
           });
       }
