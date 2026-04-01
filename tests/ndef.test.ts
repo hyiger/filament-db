@@ -193,4 +193,107 @@ describe("parseNdefFromTag", () => {
     data.set([0xe1, 0x40, 0x28, 0x01, 0x03, 0x05, 0xd2, 0x01, 99, 0x58]);
     expect(() => parseNdefFromTag(data)).toThrow("truncated");
   });
+
+  it("throws on formatted/erased tag (no NDEF message, just terminator)", () => {
+    // A formatted tag has valid CC + TLV terminator but no NDEF record
+    // CC: E1 40 28 01, then TLV terminator: FE, zeroes for padding
+    const formatted = new Uint8Array(320);
+    formatted[0] = 0xe1;
+    formatted[1] = 0x40;
+    formatted[2] = 0x28; // 320/8 = 40 = 0x28
+    formatted[3] = 0x01;
+    formatted[4] = 0xfe; // TLV terminator — no NDEF message
+    expect(() => parseNdefFromTag(formatted)).toThrow("No NDEF TLV found");
+  });
+
+  it("throws when no NDEF record matches OpenPrintTag MIME type", () => {
+    // Build tag with a valid NDEF record but wrong MIME type
+    const wrongType = new TextEncoder().encode("text/plain");
+    const payload = new Uint8Array([0x01, 0x02, 0x03]);
+    const recordLen = 1 + 1 + 1 + wrongType.length + payload.length; // flags + typelen + payloadlen + type + payload
+
+    const data = new Uint8Array(64);
+    let pos = 0;
+    // CC
+    data[pos++] = 0xe1;
+    data[pos++] = 0x40;
+    data[pos++] = 0x08;
+    data[pos++] = 0x01;
+    // TLV
+    data[pos++] = 0x03;
+    data[pos++] = recordLen;
+    // NDEF record: MB=1, ME=1, SR=1, TNF=02
+    data[pos++] = 0xd2;
+    data[pos++] = wrongType.length;
+    data[pos++] = payload.length;
+    data.set(wrongType, pos);
+    pos += wrongType.length;
+    data.set(payload, pos);
+    pos += payload.length;
+    data[pos++] = 0xfe;
+
+    expect(() => parseNdefFromTag(data)).toThrow('No NDEF record with type');
+  });
+
+  it("skips unknown TLV types", () => {
+    // Insert an unknown TLV (type 0x05, len 2, data) before the NDEF TLV
+    const payload = new Uint8Array([0xab, 0xcd]);
+    const tagMemory = wrapNdefForTag(payload);
+
+    // Shift to make room for unknown TLV (type=0x05, len=2, data=0x00 0x00)
+    const withUnknown = new Uint8Array(tagMemory.length + 4);
+    withUnknown.set(tagMemory.subarray(0, 4), 0); // CC
+    withUnknown[4] = 0x05; // unknown TLV type
+    withUnknown[5] = 0x02; // length
+    withUnknown[6] = 0x00; // data
+    withUnknown[7] = 0x00; // data
+    withUnknown.set(tagMemory.subarray(4), 8); // rest of original
+
+    const result = parseNdefFromTag(withUnknown);
+    expect(Array.from(result)).toEqual([0xab, 0xcd]);
+  });
+
+  it("handles non-short NDEF record (payload > 255 bytes)", () => {
+    // Build a tag with a non-short record (4-byte payload length)
+    const payload = new Uint8Array(300);
+    payload[0] = 0x42;
+    payload[299] = 0x99;
+
+    const mimeBytes = new TextEncoder().encode(MIME_TYPE);
+    // flags: MB=1, ME=1, SR=0, TNF=02 = 0xC2
+    const recordLen = 1 + 1 + 4 + mimeBytes.length + payload.length;
+    const data = new Uint8Array(4 + 4 + recordLen + 1); // CC + long TLV header + record + terminator
+    let pos = 0;
+
+    // CC
+    data[pos++] = 0xe1;
+    data[pos++] = 0x40;
+    data[pos++] = Math.floor(data.length / 8);
+    data[pos++] = 0x01;
+
+    // TLV (long format since recordLen >= 255)
+    data[pos++] = 0x03;
+    data[pos++] = 0xff;
+    data[pos++] = (recordLen >> 8) & 0xff;
+    data[pos++] = recordLen & 0xff;
+
+    // NDEF record
+    data[pos++] = 0xc2; // MB=1, ME=1, SR=0, TNF=02
+    data[pos++] = mimeBytes.length;
+    // 4-byte payload length
+    data[pos++] = 0x00;
+    data[pos++] = 0x00;
+    data[pos++] = (payload.length >> 8) & 0xff;
+    data[pos++] = payload.length & 0xff;
+    data.set(mimeBytes, pos);
+    pos += mimeBytes.length;
+    data.set(payload, pos);
+    pos += payload.length;
+    data[pos++] = 0xfe;
+
+    const result = parseNdefFromTag(data);
+    expect(result[0]).toBe(0x42);
+    expect(result[299]).toBe(0x99);
+    expect(result.length).toBe(300);
+  });
 });
