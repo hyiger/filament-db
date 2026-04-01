@@ -81,11 +81,14 @@ function decodeCBORItem(
   if (additional < 24) {
     argument = additional;
   } else if (additional === 24) {
+    if (offset >= data.length) throw new Error("CBOR decode: unexpected end of data reading 1-byte argument");
     argument = data[offset++];
   } else if (additional === 25) {
+    if (offset + 2 > data.length) throw new Error("CBOR decode: unexpected end of data reading 2-byte argument");
     argument = (data[offset] << 8) | data[offset + 1];
     offset += 2;
   } else if (additional === 26) {
+    if (offset + 4 > data.length) throw new Error("CBOR decode: unexpected end of data reading 4-byte argument");
     argument =
       ((data[offset] << 24) >>> 0) |
       (data[offset + 1] << 16) |
@@ -93,6 +96,7 @@ function decodeCBORItem(
       data[offset + 3];
     offset += 4;
   } else if (additional === 27) {
+    if (offset + 8 > data.length) throw new Error("CBOR decode: unexpected end of data reading 8-byte argument");
     // 64-bit - read as two 32-bit values
     const hi =
       ((data[offset] << 24) >>> 0) |
@@ -124,6 +128,7 @@ function decodeCBORItem(
     case 2: {
       // Byte string
       if (argument < 0) throw new Error("CBOR: indefinite byte strings not supported");
+      if (offset + argument > data.length) throw new Error(`CBOR decode: byte string length ${argument} exceeds available data`);
       const bytes = data.slice(offset, offset + argument);
       offset += argument;
       return [bytes, offset];
@@ -132,6 +137,7 @@ function decodeCBORItem(
     case 3: {
       // Text string
       if (argument < 0) throw new Error("CBOR: indefinite text strings not supported");
+      if (offset + argument > data.length) throw new Error(`CBOR decode: text string length ${argument} exceeds available data`);
       const textBytes = data.slice(offset, offset + argument);
       offset += argument;
       const text = new TextDecoder().decode(textBytes);
@@ -143,11 +149,12 @@ function decodeCBORItem(
       const arr: unknown[] = [];
       if (argument < 0) {
         // Indefinite array
-        while (data[offset] !== 0xff) {
+        while (offset < data.length && data[offset] !== 0xff) {
           const [item, newOffset] = decodeCBORItem(data, offset);
           arr.push(item);
           offset = newOffset;
         }
+        if (offset >= data.length) throw new Error("CBOR decode: missing break byte for indefinite array");
         offset++; // skip break byte
       } else {
         for (let i = 0; i < argument; i++) {
@@ -164,12 +171,13 @@ function decodeCBORItem(
       const map: Record<string, unknown> = {};
       if (argument < 0) {
         // Indefinite map
-        while (data[offset] !== 0xff) {
+        while (offset < data.length && data[offset] !== 0xff) {
           const [key, keyOffset] = decodeCBORItem(data, offset);
           const [value, valOffset] = decodeCBORItem(data, keyOffset);
           map[String(key)] = value;
           offset = valOffset;
         }
+        if (offset >= data.length) throw new Error("CBOR decode: missing break byte for indefinite map");
         offset++; // skip break byte
       } else {
         for (let i = 0; i < argument; i++) {

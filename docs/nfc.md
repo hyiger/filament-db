@@ -62,7 +62,7 @@ The app communicates with the ACR1552U via PC/SC using `@pokusew/pcsclite`:
 ### Data Format
 
 - **Tag memory layout**: CC (4B) + NDEF TLV + NDEF Record (TNF=0x02, type=`application/vnd.openprinttag`) + Terminator (0xFE)
-- **Payload**: CBOR-encoded OpenPrintTag data (meta map + main map with material info, temperatures, color, density, etc.)
+- **Payload**: CBOR-encoded OpenPrintTag data (meta map + main map with material info, temperatures, color, density, instance ID, drying temperature/time, transmission distance, tags, etc.)
 - **Write optimization**: Only blocks containing actual data are written (not zero-padded tail), avoiding the potentially write-protected last block on SLIX2 tags
 
 ### Architecture
@@ -93,6 +93,28 @@ The app communicates with the ACR1552U via PC/SC using `@pokusew/pcsclite`:
 │  └── Write NFC button                    │
 └──────────────────────────────────────────┘
 ```
+
+### OpenPrintTag Fields Written
+
+The following fields are encoded into each NFC tag:
+
+| Field | CBOR Key | Description |
+|-------|----------|-------------|
+| Material name | 8 | Filament name |
+| Brand name | 9 | Vendor name |
+| Material type | 10 | PLA, PETG, ABS, etc. (numeric enum) |
+| Primary color | 11 | RGB color bytes |
+| Density | 17 | g/cm³ (float16) |
+| Filament diameter | 22 | mm (float16) |
+| Temperatures | 12–16, 18 | Nozzle (min/max), bed (min/max), chamber, preheat |
+| Weights | 19–21 | Net weight, actual weight, empty spool weight |
+| Instance ID | 5 | Brand-specific instance identifier (5-byte hex string, max 16 chars) |
+| Drying temperature | 57 | °C |
+| Drying time | 58 | Minutes |
+| Transmission distance | 27 | HueForge TD value |
+| Tags | 28 | Flags array (abrasive=4, soluble=13) |
+
+Instance IDs are auto-generated for each filament (matching Prusament's 5-byte hex format, e.g. `2acc21072a`) and are written as the `brand_specific_instance_id` field per the OpenPrintTag specification.
 
 ## Troubleshooting
 

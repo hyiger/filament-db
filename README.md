@@ -5,7 +5,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 ## Features
 
 - **Desktop app** -- installable on macOS (.dmg), Windows (.exe), and Linux (.AppImage, .deb) including arm64 for Raspberry Pi
-- **Import/Export** -- PrusaSlicer INI config bundles via browser upload or CLI
+- **Import/Export** -- PrusaSlicer INI config bundles, CSV, and XLSX via browser upload or CLI
 - **Browse** -- searchable, filterable, sortable table with color swatches and collapsible statistics summary (by type, vendor, color)
 - **Full CRUD** -- create, view, edit, and delete filament profiles
 - **Nozzle management** -- define nozzles by diameter, type, high-flow, and hardened attributes
@@ -15,9 +15,11 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Advanced settings** -- temperatures, fan settings, shrinkage, retraction, pressure advance, abrasive/soluble flags, notes
 - **Presets** -- named parameter variants per filament (e.g., shore hardness profiles with different temps and extrusion multiplier)
 - **Color variants** -- clone a filament as a color variant; inherited settings resolve automatically from the parent
+- **Instance IDs** -- unique per-filament instance identifier (5-byte hex, compatible with Prusament's brand_specific_instance_id), stored in NFC tags
 - **Spool tracking** -- track multiple spools per filament with individual weights and computed length in meters from density and diameter
 - **NFC tag read/write** -- read and write [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags directly from the desktop app using an ACR1552U reader
-- **OpenPrintTag export** -- download OpenPrintTag binary files for any filament
+- **OpenPrintTag export** -- download OpenPrintTag binary files for any filament, including drying temperature/time, transmission distance (HueForge TD), and instance ID
+- **Snapshot backup/restore** -- export and import the entire database as a JSON snapshot with atomic restore and rollback on failure
 - **Offline mode** -- works without internet using an embedded local MongoDB; choose cloud-only, hybrid (local + sync), or fully offline (first launch downloads the database engine, then works fully offline)
 - **Atlas sync** -- in hybrid mode, automatic bidirectional sync with MongoDB Atlas using last-write-wins conflict resolution
 - **Prusament QR import** -- scan a Prusament spool QR code (or enter the spool ID) to auto-import filament specs, temperatures, weights, and pricing
@@ -89,7 +91,7 @@ filament-db/
 │   ├── hooks/               # Custom hooks (useNfc)
 │   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder
 │   └── models/              # Mongoose schemas (Filament, Nozzle, Printer)
-├── tests/                   # Vitest unit tests (228 tests across 10 files)
+├── tests/                   # Vitest unit tests (254 tests across 12 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   └── release.yml          # CD: build desktop installers on version tags (4 platforms)

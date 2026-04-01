@@ -86,6 +86,33 @@ This also works from a filament's detail page to add another spool of the same m
 
 ---
 
+## CSV / XLSX Import
+
+1. Click **"Import CSV"** or **"Import XLSX"** on the home page
+2. Select a file with a header row containing at minimum `Name`, `Vendor`, and `Type` columns
+3. Additional supported columns: `Color`, `Diameter`, `Cost`, `Density`, `Nozzle Temp`, `Bed Temp`, `Nozzle First Layer`, `Bed First Layer`, `Max Volumetric Speed`, `Spool Weight`, `Net Filament Weight`, `TDS URL`, `Instance ID`, `Drying Temp`, `Drying Time`, `Transmission Distance` (HueForge TD)
+4. Column names are matched case-insensitively with common aliases (e.g. "HueForge TD" maps to Transmission Distance)
+5. Only fields present in the file are updated — existing data for unmapped columns is preserved
+
+---
+
+## Snapshot Restore
+
+You can restore a previously exported snapshot to import an entire database (filaments, nozzles, and printers):
+
+1. Click **"Restore"** on the home page
+2. Select a snapshot JSON file (exported via **"Backup"**)
+3. All current data is replaced with the snapshot contents
+4. The restore is atomic — if any error occurs, your previous data is automatically rolled back
+
+---
+
+## CSV / XLSX Export
+
+Click **"Export CSV"** or **"Export XLSX"** to download all filaments. Exports include name, vendor, type, color, temperatures, cost, density, weights, instance ID, drying settings, and transmission distance.
+
+---
+
 ## Exporting to PrusaSlicer INI
 
 Click **"Export INI"** in the top right to download all filaments as a PrusaSlicer-compatible INI file. This file contains all stored settings for each filament and can be imported back into PrusaSlicer via **File > Import > Import Config Bundle...**

@@ -184,6 +184,18 @@ Prusament spools have a QR code linking to a detail page with full specification
 
 You can also click **"+ Prusament QR"** on a filament's detail page (in the Spool Tracker section) to add another spool of the same material.
 
+### From CSV or XLSX
+
+1. On the home page, click **Import CSV** or **Import XLSX**.
+2. Select a file with a header row containing at minimum `Name`, `Vendor`, and `Type` columns.
+3. A toast confirms how many filaments were imported. Only fields present in the file are updated — existing data for unmapped columns is preserved.
+
+### From a Snapshot Backup
+
+1. On the home page, click **Restore**.
+2. Select a previously exported snapshot JSON file.
+3. All current data is replaced with the snapshot contents (atomic with automatic rollback on failure).
+
 ### Via CLI (alternative)
 
 ```bash
@@ -402,9 +414,13 @@ In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted fi
 | Add filament | Home > + Add Filament |
 | Populate from NFC / INI / Clone | Add Filament > Populate from toolbar |
 | Import from PrusaSlicer | Home > Import INI |
+| Import from CSV/XLSX | Home > Import CSV / Import XLSX |
 | Import Prusament spool | Home > Prusament QR |
 | Import from Atlas | Home > Import from Atlas |
+| Restore from snapshot | Home > Restore |
 | Export to PrusaSlicer | Home > Export INI |
+| Export to CSV/XLSX | Home > Export CSV / Export XLSX |
+| Backup database | Home > Backup |
 | View filament details | Home > click filament name |
 | Edit filament | Detail page > Edit |
 | Add color variant | Detail page > + Add Color |

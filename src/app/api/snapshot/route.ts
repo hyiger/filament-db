@@ -5,6 +5,9 @@ import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 
+// Simple in-memory mutex to prevent concurrent restore operations
+let restoreInProgress = false;
+
 const OID_RE = /^[a-f0-9]{24}$/i;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
 const OID_FIELDS = new Set(["_id", "parentId", "printer", "nozzle"]);
@@ -90,6 +93,22 @@ export async function GET() {
  * the snapshot JSON.
  */
 export async function POST(request: NextRequest) {
+  if (restoreInProgress) {
+    return NextResponse.json(
+      { error: "A snapshot restore is already in progress. Please wait." },
+      { status: 409 },
+    );
+  }
+
+  restoreInProgress = true;
+  try {
+    return await restoreSnapshot(request);
+  } finally {
+    restoreInProgress = false;
+  }
+}
+
+async function restoreSnapshot(request: NextRequest) {
   await dbConnect();
 
   let snapshot: {

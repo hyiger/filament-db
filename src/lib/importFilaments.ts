@@ -152,36 +152,60 @@ export async function upsertImportRows(
       continue;
     }
 
-    const doc = {
+    // Build the update doc using only fields that were actually present in the
+    // import row. This prevents overwriting existing data (e.g. temperatures,
+    // calibrations) with nulls when the CSV simply doesn't have those columns.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const doc: Record<string, any> = {
       name: row.name,
       vendor: row.vendor,
       type: row.type,
       color: row.color || "#808080",
       diameter: row.diameter ?? 1.75,
-      cost: row.cost ?? null,
-      density: row.density ?? null,
-      temperatures: {
-        nozzle: row.nozzleTemp ?? null,
-        nozzleFirstLayer: row.nozzleFirstLayerTemp ?? null,
-        bed: row.bedTemp ?? null,
-        bedFirstLayer: row.bedFirstLayerTemp ?? null,
-      },
-      maxVolumetricSpeed: row.maxVolumetricSpeed ?? null,
-      spoolWeight: row.spoolWeight ?? null,
-      netFilamentWeight: row.netFilamentWeight ?? null,
-      dryingTemperature: row.dryingTemperature ?? null,
-      dryingTime: row.dryingTime ?? null,
-      transmissionDistance: row.transmissionDistance ?? null,
-      tdsUrl: row.tdsUrl ?? null,
-      ...(row.instanceId ? { instanceId: row.instanceId } : {}),
     };
+
+    // Only set optional scalar fields if they were explicitly provided
+    if (row.cost !== undefined) doc.cost = row.cost ?? null;
+    if (row.density !== undefined) doc.density = row.density ?? null;
+    if (row.maxVolumetricSpeed !== undefined) doc.maxVolumetricSpeed = row.maxVolumetricSpeed ?? null;
+    if (row.spoolWeight !== undefined) doc.spoolWeight = row.spoolWeight ?? null;
+    if (row.netFilamentWeight !== undefined) doc.netFilamentWeight = row.netFilamentWeight ?? null;
+    if (row.dryingTemperature !== undefined) doc.dryingTemperature = row.dryingTemperature ?? null;
+    if (row.dryingTime !== undefined) doc.dryingTime = row.dryingTime ?? null;
+    if (row.transmissionDistance !== undefined) doc.transmissionDistance = row.transmissionDistance ?? null;
+    if (row.tdsUrl !== undefined) doc.tdsUrl = row.tdsUrl ?? null;
+    if (row.instanceId) doc.instanceId = row.instanceId;
+
+    // Only set temperature sub-fields that were present in the import
+    const temps: Record<string, number | null> = {};
+    if (row.nozzleTemp !== undefined) temps.nozzle = row.nozzleTemp ?? null;
+    if (row.nozzleFirstLayerTemp !== undefined) temps.nozzleFirstLayer = row.nozzleFirstLayerTemp ?? null;
+    if (row.bedTemp !== undefined) temps.bed = row.bedTemp ?? null;
+    if (row.bedFirstLayerTemp !== undefined) temps.bedFirstLayer = row.bedFirstLayerTemp ?? null;
 
     const existing = activeByName.get(row.name);
     if (existing) {
-      await Filament.updateOne({ _id: existing._id }, doc);
+      // For updates, use dot-notation for temperatures to avoid overwriting
+      // sub-fields that weren't in the import
+      const updateDoc = { ...doc };
+      delete updateDoc.temperatures;
+      const $set: Record<string, unknown> = { ...updateDoc };
+      for (const [tempKey, tempVal] of Object.entries(temps)) {
+        $set[`temperatures.${tempKey}`] = tempVal;
+      }
+      await Filament.updateOne({ _id: existing._id }, { $set });
       updated++;
     } else {
       const softDeleted = deletedByName.get(row.name);
+      // For creates/resurrections, include temperatures as a nested object
+      if (Object.keys(temps).length > 0) {
+        doc.temperatures = {
+          nozzle: temps.nozzle ?? null,
+          nozzleFirstLayer: temps.nozzleFirstLayer ?? null,
+          bed: temps.bed ?? null,
+          bedFirstLayer: temps.bedFirstLayer ?? null,
+        };
+      }
       if (softDeleted) {
         await Filament.updateOne(
           { _id: softDeleted._id },

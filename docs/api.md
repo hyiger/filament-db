@@ -12,7 +12,11 @@
 | `PUT` | `/api/filaments/:id` | Update a filament by ID |
 | `DELETE` | `/api/filaments/:id` | Soft-delete a filament (blocked if it has variants) |
 | `GET` | `/api/filaments/export` | Download all filaments as a PrusaSlicer INI file |
+| `GET` | `/api/filaments/export-csv` | Download all filaments as a CSV file |
+| `GET` | `/api/filaments/export-xlsx` | Download all filaments as an XLSX spreadsheet |
 | `POST` | `/api/filaments/import` | Upload an INI file to import filament profiles |
+| `POST` | `/api/filaments/import-csv` | Upload a CSV file to import filaments |
+| `POST` | `/api/filaments/import-xlsx` | Upload an XLSX file to import filaments |
 | `GET` | `/api/filaments/match` | Match an NFC tag against existing filaments. Query params: `name`, `vendor`, `type` |
 | `GET` | `/api/filaments/types` | List all distinct filament types |
 | `GET` | `/api/filaments/vendors` | List all distinct vendor names |
@@ -314,6 +318,84 @@ Soft-delete a printer by ID (sets `_deletedAt` timestamp). Cannot delete a print
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/setup` | Test a MongoDB connection string |
+
+---
+
+## Snapshot
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/snapshot` | Export the entire database as a JSON snapshot |
+| `POST` | `/api/snapshot` | Restore the database from a JSON snapshot |
+| `DELETE` | `/api/snapshot/delete` | Permanently delete all data from all collections |
+
+### GET /api/snapshot
+
+Downloads a JSON snapshot of the entire database, including all filaments, nozzles, and printers (including soft-deleted documents). The snapshot preserves `_id` values, timestamps, and references so it can be restored exactly.
+
+Returns a JSON file with `Content-Disposition: attachment` header.
+
+### POST /api/snapshot
+
+Restore the database from a previously exported snapshot. This is a destructive operation: all existing data is replaced with the snapshot contents.
+
+Upload via `multipart/form-data` with a `file` field containing the snapshot JSON, or send the JSON directly as the request body.
+
+The restore is **atomic with rollback**: if any part of the restore fails, the previous data is automatically restored from an in-memory backup. Concurrent restore requests are rejected with 409.
+
+Returns:
+```json
+{
+  "message": "Snapshot restored successfully",
+  "restored": { "filaments": 42, "nozzles": 5, "printers": 2 }
+}
+```
+
+### DELETE /api/snapshot/delete
+
+Permanently deletes all documents from all three collections (filaments, nozzles, printers). Returns the count of deleted documents per collection.
+
+---
+
+## CSV / XLSX Import & Export
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/filaments/export-csv` | Download all filaments as a CSV file |
+| `GET` | `/api/filaments/export-xlsx` | Download all filaments as an XLSX spreadsheet |
+| `POST` | `/api/filaments/import-csv` | Import filaments from a CSV file |
+| `POST` | `/api/filaments/import-xlsx` | Import filaments from an XLSX file |
+
+### GET /api/filaments/export-csv
+
+Downloads all filaments as a CSV file with columns for name, vendor, type, color, diameter, temperatures, cost, density, weights, instance ID, drying temperature/time, and transmission distance.
+
+### GET /api/filaments/export-xlsx
+
+Downloads all filaments as a styled XLSX spreadsheet with auto-filter, frozen header row, color-coded cells, and the same columns as CSV export.
+
+### POST /api/filaments/import-csv
+
+Upload a CSV file via `multipart/form-data` with a `file` field. The CSV must have a header row with `Name`, `Vendor`, and `Type` columns at minimum. Additional columns are mapped by header name (case-insensitive). Only fields present in the CSV are updated — existing data for unmapped columns is preserved.
+
+### POST /api/filaments/import-xlsx
+
+Upload an XLSX file via `multipart/form-data` with a `file` field. Same column mapping and behavior as CSV import.
+
+Both return:
+```json
+{
+  "message": "Imported 10 filaments (8 new, 1 updated, 1 skipped)",
+  "total": 10,
+  "created": 8,
+  "updated": 1,
+  "skipped": 1
+}
+```
+
+---
+
+## Setup
 
 ### POST /api/setup
 

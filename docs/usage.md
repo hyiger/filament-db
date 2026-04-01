@@ -229,6 +229,38 @@ This also works from a filament's detail page to add another spool of the same m
 
 ---
 
+## CSV and XLSX Import/Export
+
+### Exporting
+
+Click **"Export CSV"** or **"Export XLSX"** on the home page to download all filaments in the chosen format. The export includes name, vendor, type, color, temperatures, cost, density, weights, instance ID, drying temperature/time, and transmission distance.
+
+XLSX exports include styled headers, color-coded cells, auto-filter, and a frozen header row.
+
+### Importing
+
+Click **"Import CSV"** or **"Import XLSX"** on the home page to upload a file. The file must have a header row with at minimum `Name`, `Vendor`, and `Type` columns. Additional columns are mapped by header name (case-insensitive). Only fields present in the file are updated — existing data for unmapped columns is preserved.
+
+---
+
+## Snapshot Backup & Restore
+
+### Exporting a Snapshot
+
+Click **"Backup"** on the home page to download a JSON snapshot of the entire database. The snapshot includes all filaments, nozzles, and printers (including soft-deleted documents) with all references and timestamps preserved.
+
+### Restoring a Snapshot
+
+Click **"Restore"** on the home page and select a previously exported snapshot file. This replaces all current data with the snapshot contents. The restore is atomic — if any error occurs, your previous data is automatically rolled back.
+
+---
+
+## Instance IDs
+
+Each filament has a unique instance identifier (5-byte hex string, e.g. `2acc21072a`), auto-generated on creation. This matches Prusament's `brand_specific_instance_id` format and is written to NFC tags. Instance IDs are visible on the filament detail page next to the vendor/type and are included in CSV/XLSX exports.
+
+---
+
 ## API Documentation
 
 Click **"API Docs"** on the home page to open the interactive Swagger UI at `/api-docs`. This provides a browsable, testable interface for all REST API endpoints with full request/response schemas. The underlying OpenAPI 3.0 spec is available at `/openapi.json`.

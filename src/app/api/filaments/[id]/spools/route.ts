@@ -6,25 +6,30 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  await dbConnect();
-  const { id } = await params;
-  const body = await request.json();
+  try {
+    await dbConnect();
+    const { id } = await params;
+    const body = await request.json();
 
-  const filament = await Filament.findOneAndUpdate(
-    { _id: id, _deletedAt: null },
-    {
-      $push: {
-        spools: {
-          label: body.label || "",
-          totalWeight: body.totalWeight ?? null,
+    const filament = await Filament.findOneAndUpdate(
+      { _id: id, _deletedAt: null },
+      {
+        $push: {
+          spools: {
+            label: body.label || "",
+            totalWeight: body.totalWeight ?? null,
+          },
         },
       },
-    },
-    { new: true }
-  ).lean();
+      { new: true }
+    ).lean();
 
-  if (!filament) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!filament) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    return NextResponse.json(filament);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: "Failed to add spool", detail: message }, { status: 500 });
   }
-  return NextResponse.json(filament);
 }

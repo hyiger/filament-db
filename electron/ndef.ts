@@ -146,13 +146,23 @@ export function parseNdefFromTag(raw: Uint8Array): Uint8Array {
 
     // Parse TLV length
     let tlvLen: number;
+    if (offset >= raw.length) {
+      throw new Error("Tag data truncated: no TLV length byte");
+    }
     if (raw[offset] === 0xff) {
       // 3-byte length format
       offset++;
+      if (offset + 2 > raw.length) {
+        throw new Error("Tag data truncated: incomplete 3-byte TLV length");
+      }
       tlvLen = (raw[offset] << 8) | raw[offset + 1];
       offset += 2;
     } else {
       tlvLen = raw[offset++];
+    }
+
+    if (offset + tlvLen > raw.length) {
+      throw new Error(`Tag data truncated: TLV claims ${tlvLen} bytes but only ${raw.length - offset} remain`);
     }
 
     if (tlvTag === 0x03) {
@@ -179,6 +189,10 @@ function parseNdefRecord(
   const messageEnd = offset + messageLen;
 
   while (offset < messageEnd) {
+    if (offset + 2 > data.length) {
+      throw new Error("NDEF record truncated: not enough bytes for record header");
+    }
+
     const flags = data[offset++];
     const tnf = flags & 0x07;
     const isShortRecord = (flags & 0x10) !== 0;
@@ -188,8 +202,10 @@ function parseNdefRecord(
 
     let payloadLength: number;
     if (isShortRecord) {
+      if (offset >= data.length) throw new Error("NDEF record truncated: missing payload length");
       payloadLength = data[offset++];
     } else {
+      if (offset + 4 > data.length) throw new Error("NDEF record truncated: incomplete payload length");
       payloadLength =
         (data[offset] << 24) |
         (data[offset + 1] << 16) |
@@ -200,7 +216,12 @@ function parseNdefRecord(
 
     let idLength = 0;
     if (hasIdLength) {
+      if (offset >= data.length) throw new Error("NDEF record truncated: missing ID length");
       idLength = data[offset++];
+    }
+
+    if (offset + typeLength + idLength + payloadLength > data.length) {
+      throw new Error("NDEF record truncated: type + id + payload exceeds available data");
     }
 
     // Read type

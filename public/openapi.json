@@ -3,7 +3,7 @@
   "info": {
     "title": "Filament DB API",
     "description": "REST API for managing 3D printing filament profiles, nozzles, and printers. Supports filament inheritance (parent/variant), per-printer per-nozzle calibrations, INI profile export/import, and OpenPrintTag NFC binary generation.",
-    "version": "1.2.0",
+    "version": "1.3.0",
     "license": {
       "name": "MIT"
     }
@@ -16,8 +16,11 @@
   ],
   "tags": [
     { "name": "Filaments", "description": "CRUD and bulk operations for filament profiles" },
+    { "name": "Spools", "description": "Per-filament spool tracking" },
     { "name": "Nozzles", "description": "Manage nozzle definitions" },
     { "name": "Printers", "description": "Manage printer profiles" },
+    { "name": "Prusament", "description": "Prusament spool scraping and import" },
+    { "name": "Snapshot", "description": "Database backup and restore" },
     { "name": "Setup", "description": "Database connectivity" }
   ],
   "paths": {
@@ -911,6 +914,314 @@
         }
       }
     },
+    "/api/filaments/{id}/spools": {
+      "post": {
+        "tags": ["Spools"],
+        "summary": "Add spool to filament",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "label": { "type": "string", "description": "Spool label (e.g. spool ID or date)" },
+                  "totalWeight": { "type": "number", "nullable": true, "description": "Total weight in grams (spool + filament)" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated filament with new spool",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Filament" }
+              }
+            }
+          },
+          "404": {
+            "description": "Filament not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/api/filaments/{id}/spools/{spoolId}": {
+      "put": {
+        "tags": ["Spools"],
+        "summary": "Update spool",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" },
+          { "name": "spoolId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "label": { "type": "string" },
+                  "totalWeight": { "type": "number", "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated filament",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Filament" } } }
+          },
+          "404": {
+            "description": "Filament or spool not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      },
+      "delete": {
+        "tags": ["Spools"],
+        "summary": "Delete spool",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" },
+          { "name": "spoolId", "in": "path", "required": true, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Updated filament",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Filament" } } }
+          },
+          "404": {
+            "description": "Filament or spool not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/api/filaments/export-csv": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "Export filaments as CSV",
+        "description": "Downloads all filaments as a CSV file with columns for name, vendor, type, color, temperatures, cost, density, weights, instance ID, drying settings, and transmission distance.",
+        "responses": {
+          "200": {
+            "description": "CSV file download",
+            "content": { "text/csv": { "schema": { "type": "string" } } }
+          }
+        }
+      }
+    },
+    "/api/filaments/export-xlsx": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "Export filaments as XLSX",
+        "description": "Downloads all filaments as a styled XLSX spreadsheet with auto-filter, frozen header, color-coded cells.",
+        "responses": {
+          "200": {
+            "description": "XLSX file download",
+            "content": { "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": { "schema": { "type": "string", "format": "binary" } } }
+          }
+        }
+      }
+    },
+    "/api/filaments/import-csv": {
+      "post": {
+        "tags": ["Filaments"],
+        "summary": "Import filaments from CSV",
+        "description": "Upload a CSV file with header row. Requires Name, Vendor, Type columns. Only fields present are updated.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": { "file": { "type": "string", "format": "binary" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import results",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ImportResult" } } }
+          },
+          "400": {
+            "description": "Missing file or required columns",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/api/filaments/import-xlsx": {
+      "post": {
+        "tags": ["Filaments"],
+        "summary": "Import filaments from XLSX",
+        "description": "Upload an XLSX file with header row. Same column mapping as CSV import.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": { "file": { "type": "string", "format": "binary" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Import results",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ImportResult" } } }
+          },
+          "400": {
+            "description": "Missing file or required columns",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/api/prusament": {
+      "get": {
+        "tags": ["Prusament"],
+        "summary": "Scrape Prusament spool",
+        "description": "Fetches a Prusament spool detail page and extracts specifications (material, color, temperatures, weights, pricing).",
+        "parameters": [
+          {
+            "name": "spoolId",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "Prusament spool ID (e.g. c6974284da) or full URL"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Scraped spool data",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PrusamentSpool" } } }
+          },
+          "400": { "description": "Missing spoolId", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Spool not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "502": { "description": "Prusament fetch failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/prusament/import": {
+      "post": {
+        "tags": ["Prusament"],
+        "summary": "Import Prusament spool",
+        "description": "Creates a filament from scraped Prusament data or adds a spool to an existing filament.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["spool"],
+                "properties": {
+                  "spool": { "$ref": "#/components/schemas/PrusamentSpool" },
+                  "action": { "type": "string", "enum": ["create", "add-spool"], "description": "Create new filament or add spool to existing" },
+                  "filamentId": { "type": "string", "nullable": true, "description": "Target filament ID (for add-spool action)" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Created filament", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Filament" } } } },
+          "200": { "description": "Added spool to existing filament", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Filament" } } } },
+          "400": { "description": "Missing spool data", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/snapshot": {
+      "get": {
+        "tags": ["Snapshot"],
+        "summary": "Export database snapshot",
+        "description": "Downloads a JSON snapshot of the entire database including all filaments, nozzles, and printers.",
+        "responses": {
+          "200": {
+            "description": "JSON snapshot file",
+            "content": { "application/json": { "schema": { "type": "object" } } }
+          }
+        }
+      },
+      "post": {
+        "tags": ["Snapshot"],
+        "summary": "Restore database snapshot",
+        "description": "Restores the database from a snapshot. Atomic with automatic rollback on failure. Concurrent restores are rejected.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": { "type": "object", "required": ["file"], "properties": { "file": { "type": "string", "format": "binary" } } }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Restore successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string" },
+                    "restored": {
+                      "type": "object",
+                      "properties": {
+                        "filaments": { "type": "integer" },
+                        "nozzles": { "type": "integer" },
+                        "printers": { "type": "integer" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "Invalid snapshot", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "409": { "description": "Restore already in progress", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "500": { "description": "Restore failed (rolled back)", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/snapshot/delete": {
+      "delete": {
+        "tags": ["Snapshot"],
+        "summary": "Clear database",
+        "description": "Permanently deletes all data from all collections.",
+        "responses": {
+          "200": {
+            "description": "Database cleared",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string" },
+                    "deleted": {
+                      "type": "object",
+                      "properties": {
+                        "filaments": { "type": "integer" },
+                        "nozzles": { "type": "integer" },
+                        "printers": { "type": "integer" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/setup": {
       "post": {
         "tags": ["Setup"],
@@ -1053,6 +1364,24 @@
           "spoolWeight": { "type": "number", "nullable": true, "description": "Empty spool weight in grams" },
           "netFilamentWeight": { "type": "number", "nullable": true, "description": "Net filament weight in grams" },
           "totalWeight": { "type": "number", "nullable": true, "description": "Current total weight (spool + filament) in grams" },
+          "instanceId": { "type": "string", "description": "Unique instance identifier (5-byte hex, e.g. 2acc21072a)", "example": "2acc21072a" },
+          "dryingTemperature": { "type": "number", "nullable": true, "description": "Recommended drying temperature in °C" },
+          "dryingTime": { "type": "number", "nullable": true, "description": "Recommended drying time in minutes" },
+          "transmissionDistance": { "type": "number", "nullable": true, "description": "HueForge transmission distance" },
+          "abrasive": { "type": "boolean", "default": false, "description": "Whether the filament is abrasive" },
+          "soluble": { "type": "boolean", "default": false, "description": "Whether the filament is soluble (support material)" },
+          "spools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "_id": { "type": "string" },
+                "label": { "type": "string" },
+                "totalWeight": { "type": "number", "nullable": true }
+              }
+            },
+            "description": "Individual spool entries with weights"
+          },
           "tdsUrl": { "type": "string", "nullable": true, "description": "Technical data sheet URL" },
           "inherits": { "type": "string", "nullable": true, "description": "Name of the slicer base profile this inherits from" },
           "parentId": { "type": "string", "nullable": true, "description": "Parent filament ID for color variants" },
@@ -1111,6 +1440,8 @@
           "diameter": { "type": "number", "example": 0.4 },
           "type": { "type": "string", "example": "Brass" },
           "highFlow": { "type": "boolean", "default": false },
+          "hardened": { "type": "boolean", "default": false },
+          "notes": { "type": "string", "nullable": true },
           "createdAt": { "type": "string", "format": "date-time" },
           "updatedAt": { "type": "string", "format": "date-time" }
         },
@@ -1122,7 +1453,9 @@
           "name": { "type": "string" },
           "diameter": { "type": "number" },
           "type": { "type": "string" },
-          "highFlow": { "type": "boolean" }
+          "highFlow": { "type": "boolean" },
+          "hardened": { "type": "boolean" },
+          "notes": { "type": "string" }
         },
         "required": ["name", "diameter", "type"]
       },
@@ -1158,6 +1491,45 @@
           "notes": { "type": "string" }
         },
         "required": ["name", "manufacturer", "printerModel"]
+      },
+      "ImportResult": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" },
+          "total": { "type": "integer" },
+          "created": { "type": "integer" },
+          "updated": { "type": "integer" },
+          "skipped": { "type": "integer" }
+        }
+      },
+      "PrusamentSpool": {
+        "type": "object",
+        "properties": {
+          "spoolId": { "type": "string", "example": "c6974284da" },
+          "productName": { "type": "string" },
+          "material": { "type": "string" },
+          "colorName": { "type": "string" },
+          "colorHex": { "type": "string", "example": "#292929" },
+          "diameter": { "type": "number", "example": 1.75 },
+          "diameterAvg": { "type": "number" },
+          "diameterStdDev": { "type": "number", "nullable": true },
+          "ovality": { "type": "number" },
+          "netWeight": { "type": "number", "description": "Net filament weight in grams" },
+          "spoolWeight": { "type": "number", "description": "Empty spool weight in grams" },
+          "totalWeight": { "type": "number" },
+          "lengthMeters": { "type": "number" },
+          "nozzleTempMin": { "type": "number" },
+          "nozzleTempMax": { "type": "number" },
+          "bedTempMin": { "type": "number" },
+          "bedTempMax": { "type": "number" },
+          "manufactureDate": { "type": "string" },
+          "country": { "type": "string" },
+          "goodsId": { "type": "integer" },
+          "priceUsd": { "type": "number", "nullable": true },
+          "priceEur": { "type": "number", "nullable": true },
+          "photoUrl": { "type": "string" },
+          "pageUrl": { "type": "string" }
+        }
       }
     }
   }
