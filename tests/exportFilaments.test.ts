@@ -161,7 +161,7 @@ describe("getExportRows", () => {
     });
 
     const rows = await getExportRows();
-    const row = rows.find((r: Record<string, unknown>) => r.name === "Instance Export");
+    const row = rows.find((r) => r.name === "Instance Export");
     expect(row!.instanceId).toBe("abc123def");
   });
 
@@ -178,7 +178,7 @@ describe("getExportRows", () => {
     });
 
     const rows = await getExportRows();
-    const row = rows.find((r: Record<string, unknown>) => r.name === "No Instance Export");
+    const row = rows.find((r) => r.name === "No Instance Export");
     expect(row!.instanceId).toBe("");
   });
 
