@@ -74,5 +74,20 @@ export function useNfc() {
     [isElectron],
   );
 
-  return { isElectron, status, writing, error, readTag, writeTag };
+  const formatTag = useCallback(async () => {
+    if (!isElectron) throw new Error("NFC only available in Electron");
+    setError(null);
+    setWriting(true);
+    try {
+      await window.electronAPI!.nfcFormatTag();
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      throw err;
+    } finally {
+      setWriting(false);
+    }
+  }, [isElectron]);
+
+  return { isElectron, status, writing, error, readTag, writeTag, formatTag };
 }

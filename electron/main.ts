@@ -440,6 +440,12 @@ ipcMain.handle("nfc-write-tag", async (_event, payload: number[]) => {
   return { success: true };
 });
 
+ipcMain.handle("nfc-format-tag", async () => {
+  if (!nfcService) throw new Error("NFC not initialized");
+  await nfcService.formatTag();
+  return { success: true };
+});
+
 // ── App lifecycle ──
 
 app.whenReady().then(async () => {

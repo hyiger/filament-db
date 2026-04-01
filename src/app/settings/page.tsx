@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 
 export default function SettingsPage() {
   const [restoring, setRestoring] = useState(false);
@@ -13,6 +13,46 @@ export default function SettingsPage() {
   const [deleteInput, setDeleteInput] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [deleteResult, setDeleteResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // NFC state (Electron only)
+  const [isElectron, setIsElectron] = useState(false);
+  const [nfcStatus, setNfcStatus] = useState<{
+    readerConnected: boolean;
+    readerName: string | null;
+    tagPresent: boolean;
+    tagUid: string | null;
+  }>({ readerConnected: false, readerName: null, tagPresent: false, tagUid: null });
+  const [formatting, setFormatting] = useState(false);
+  const [formatResult, setFormatResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.nfcGetStatus) return;
+    setIsElectron(true);
+    api.nfcGetStatus().then(setNfcStatus).catch(() => {});
+    const unsub = api.onNfcStatusChange(setNfcStatus);
+    return () => { unsub(); };
+  }, []);
+
+  const handleFormat = async () => {
+    if (!window.electronAPI?.nfcFormatTag) return;
+    if (!confirm(
+      "This will erase ALL data on the NFC tag and write a blank NFC Forum header.\n\n" +
+      "Are you sure?"
+    )) return;
+
+    setFormatting(true);
+    setFormatResult(null);
+    try {
+      await window.electronAPI.nfcFormatTag();
+      setFormatResult({ ok: true, message: "Tag erased successfully" });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      setFormatResult({ ok: false, message });
+    } finally {
+      setFormatting(false);
+    }
+  };
 
   const handleRestore = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -172,6 +212,54 @@ export default function SettingsPage() {
           </div>
         )}
       </div>
+
+      {/* NFC Tools (Electron only) */}
+      {isElectron && (
+        <div className="mt-8 pt-6 border-t border-gray-800">
+          <h2 className="text-lg font-semibold text-gray-200 mb-1">NFC Tools</h2>
+          <p className="text-sm text-gray-500 mb-4">
+            Format or erase NFC tags. Place a tag on the reader before using these tools.
+          </p>
+
+          <div className="flex items-center gap-3 mb-4">
+            <span className={`inline-block w-2.5 h-2.5 rounded-full ${
+              nfcStatus.tagPresent
+                ? "bg-green-500"
+                : nfcStatus.readerConnected
+                  ? "bg-yellow-500"
+                  : "bg-gray-600"
+            }`} />
+            <span className="text-sm text-gray-400">
+              {nfcStatus.tagPresent
+                ? `Tag detected${nfcStatus.tagUid ? ` (${nfcStatus.tagUid.slice(-8).toUpperCase()})` : ""}`
+                : nfcStatus.readerConnected
+                  ? "Reader ready — place a tag"
+                  : "No NFC reader connected"}
+            </span>
+          </div>
+
+          <button
+            onClick={handleFormat}
+            disabled={formatting || !nfcStatus.tagPresent}
+            className="px-4 py-2 bg-gray-700 text-white rounded text-sm hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9.75 14.25 12m0 0 2.25 2.25M14.25 12l2.25-2.25M14.25 12 12 14.25m-2.58 4.92-6.374-6.375a1.125 1.125 0 0 1 0-1.59L9.42 4.83a1.125 1.125 0 0 1 1.59 0l6.375 6.375a1.125 1.125 0 0 1 0 1.59l-6.375 6.375a1.125 1.125 0 0 1-1.59 0Z" />
+            </svg>
+            {formatting ? "Erasing..." : "Erase Tag"}
+          </button>
+
+          {formatResult && (
+            <div className={`mt-3 text-sm px-3 py-2 rounded ${
+              formatResult.ok
+                ? "bg-green-900/50 text-green-300 border border-green-800"
+                : "bg-red-900/50 text-red-300 border border-red-800"
+            }`}>
+              {formatResult.message}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Danger Zone */}
       <div className="mt-8 pt-6 border-t border-red-900/50">

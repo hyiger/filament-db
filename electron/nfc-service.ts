@@ -312,6 +312,44 @@ export class NfcService extends EventEmitter {
     });
   }
 
+  async formatTag(): Promise<void> {
+    return this.withConnection(async (protocol) => {
+      // Read block 0 to get memory size from the CC
+      const block0 = await this.readBlock(protocol, 0);
+      const mlen = block0[2];
+      const numBlocks = mlen ? Math.min(Math.ceil((mlen * 8) / BLOCK_SIZE), DEFAULT_BLOCK_COUNT) : DEFAULT_BLOCK_COUNT;
+
+      // Write CC with valid NFC Forum Type 5 header, then zero everything else
+      // CC: E1 40 <size/8> 01 — magic, v1.0 RW, size, read-multiple-blocks supported
+      const cc = Buffer.from([0xe1, 0x40, mlen || (DEFAULT_BLOCK_COUNT * BLOCK_SIZE / 8), 0x01]);
+      await this.writeBlock(protocol, 0, cc);
+
+      // Write TLV terminator in block 1, zero the rest
+      const terminator = Buffer.from([0xfe, 0x00, 0x00, 0x00]);
+      await this.writeBlock(protocol, 1, terminator);
+
+      // Zero remaining blocks (skip block 0 and 1, already written)
+      const zeroes = Buffer.alloc(BLOCK_SIZE);
+      for (let i = 2; i < numBlocks; i++) {
+        try {
+          await this.writeBlock(protocol, i, zeroes);
+        } catch {
+          // Last block(s) may be write-protected on SLIX2 (config area) — stop
+          break;
+        }
+
+        if (i < numBlocks - 1) {
+          await new Promise(r => setTimeout(r, 10));
+        }
+
+        this.emit("writeProgress", {
+          block: i, total: numBlocks,
+          percent: Math.round(((i + 1) / numBlocks) * 100),
+        });
+      }
+    });
+  }
+
   destroy(): void {
     for (const reader of this.readers.values()) {
       try { reader.close(); } catch { /* */ }

@@ -32,6 +32,7 @@ interface ElectronAPI {
   }>;
   nfcReadTag: () => Promise<unknown>;
   nfcWriteTag: (payload: number[]) => Promise<{ success: boolean }>;
+  nfcFormatTag: () => Promise<{ success: boolean }>;
   onNfcStatusChange: (callback: (status: {
     readerConnected: boolean;
     readerName: string | null;
