@@ -6,8 +6,25 @@ Filament DB supports reading and writing [OpenPrintTag](https://openprinttag.io/
 
 - **Reader**: ACS ACR1552U USB NFC reader/writer (or compatible PC/SC reader with ISO 15693 support)
 - **Tags**: NXP ICODE SLIX2 (or compatible NFC-V / ISO 15693 tags with at least 320 bytes user memory)
-- **Driver (macOS)**: [ifd-acsccid.bundle](https://www.acs.com.hk/en/drivers/) -- install via the ACS driver package
 - **Desktop app**: NFC features are only available in the Electron desktop app, not the web version
+
+### Driver Setup
+
+**macOS**: Install `ifd-acsccid.bundle` from the [ACS driver package](https://www.acs.com.hk/en/drivers/). A restart may be required.
+
+**Linux / Raspberry Pi**: Install the PC/SC daemon and development headers. The standard `ccid` driver included in the kernel handles the ACR1552U — no additional ACS driver is needed.
+
+```bash
+sudo apt install pcscd libpcsclite-dev
+```
+
+Verify the reader is detected:
+
+```bash
+pcsc_scan
+```
+
+**Windows**: No additional driver is needed — the built-in Microsoft CCID driver works out of the box.
 
 ## How It Works
 
