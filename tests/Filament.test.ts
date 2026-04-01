@@ -336,6 +336,7 @@ describe("Filament Model", () => {
 });
 
 describe("backfillInstanceIds", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let Filament: any;
   let backfillInstanceIds: typeof import("@/models/Filament").backfillInstanceIds;
 

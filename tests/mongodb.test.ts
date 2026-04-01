@@ -95,7 +95,7 @@ describe("dbConnect", () => {
     await dbConnect();
 
     // Simulate URI change by modifying the cached URI
-    const cached = (global as any).mongoose;
+    const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
     cached.uri = "mongodb://different-uri:27017/test";
 
     // This should trigger disconnect and reconnect
@@ -110,7 +110,7 @@ describe("dbConnect", () => {
     const result = await dbConnect();
     expect(result).toBeDefined();
     // Migration should have run (cached.migrated = true)
-    const cached = (global as any).mongoose;
+    const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
     expect(cached.migrated).toBe(true);
   });
 
@@ -119,7 +119,7 @@ describe("dbConnect", () => {
     await dbConnect();
 
     // Second call should skip migration
-    const cached = (global as any).mongoose;
+    const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
     expect(cached.migrated).toBe(true);
 
     const result = await dbConnect();

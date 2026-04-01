@@ -165,9 +165,6 @@ describe("parseNdefFromTag", () => {
 
   it("throws on truncated 3-byte TLV length", () => {
     // CC (4B) + TLV tag 0x03 + 0xFF (long format) + only 1 length byte (needs 2)
-    const data = new Uint8Array([0xe1, 0x40, 0x28, 0x01, 0x03, 0xff, 0x00, 0x00]);
-    // Truncate after the 0xFF to leave incomplete length
-    const truncated = data.slice(0, 6);
     // Falls under "too short" since < 8 bytes, so pad to 8 bytes
     const padded = new Uint8Array(8);
     padded.set([0xe1, 0x40, 0x28, 0x01, 0x03, 0xff, 0x01]);
