@@ -184,6 +184,28 @@ describe("upsertImportRows", () => {
     expect(doc!.temperatures.nozzle).toBeNull();
   });
 
+  it("updates temperature fields using dot-notation without overwriting others", async () => {
+    // Create with all temp fields
+    await Filament.create({
+      name: "Temp Update",
+      vendor: "V",
+      type: "PLA",
+      temperatures: { nozzle: 200, nozzleFirstLayer: 205, bed: 55, bedFirstLayer: 60 },
+    });
+
+    // Update only nozzle temp - should NOT overwrite bed temps
+    const result = await upsertImportRows([
+      { name: "Temp Update", vendor: "V", type: "PLA", nozzleTemp: 210 },
+    ]);
+
+    expect(result.updated).toBe(1);
+    const doc = await Filament.findOne({ name: "Temp Update" });
+    expect(doc!.temperatures.nozzle).toBe(210);
+    // These should remain unchanged
+    expect(doc!.temperatures.bed).toBe(55);
+    expect(doc!.temperatures.bedFirstLayer).toBe(60);
+  });
+
   it("imports temperature fields correctly", async () => {
     await upsertImportRows([
       {

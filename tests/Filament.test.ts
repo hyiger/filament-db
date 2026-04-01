@@ -291,4 +291,85 @@ describe("Filament Model", () => {
     const found = await Filament.findOne({ _id: filament._id, _deletedAt: null });
     expect(found).not.toBeNull();
   });
+
+  it("auto-generates instanceId on save via pre-save hook", async () => {
+    const filament = await Filament.create({
+      name: "InstanceId Test",
+      vendor: "Test",
+      type: "PLA",
+    });
+    expect(filament.instanceId).toBeDefined();
+    expect(typeof filament.instanceId).toBe("string");
+    expect(filament.instanceId.length).toBeGreaterThan(0);
+  });
+
+  it("regenerates instanceId via pre-save hook when cleared", async () => {
+    const filament = await Filament.create({
+      name: "Regen InstanceId",
+      vendor: "Test",
+      type: "PLA",
+    });
+    const originalId = filament.instanceId;
+    expect(originalId).toBeDefined();
+
+    // Clear instanceId and save — hook should regenerate it
+    filament.instanceId = "";
+    await filament.save();
+    expect(filament.instanceId).toBeDefined();
+    expect(filament.instanceId.length).toBeGreaterThan(0);
+    expect(filament.instanceId).not.toBe(originalId);
+  });
+
+  it("does not overwrite existing instanceId on save", async () => {
+    const filament = await Filament.create({
+      name: "Keep InstanceId",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "custom-id-123",
+    });
+    expect(filament.instanceId).toBe("custom-id-123");
+
+    filament.vendor = "Updated";
+    await filament.save();
+    expect(filament.instanceId).toBe("custom-id-123");
+  });
+});
+
+describe("backfillInstanceIds", () => {
+  let Filament: any;
+  let backfillInstanceIds: typeof import("@/models/Filament").backfillInstanceIds;
+
+  beforeEach(async () => {
+    delete mongoose.models.Filament;
+    const schemas = (mongoose as unknown as Record<string, Record<string, unknown>>).modelSchemas;
+    if (schemas) delete schemas.Filament;
+    const mod = await import("@/models/Filament");
+    Filament = mod.default;
+    backfillInstanceIds = mod.backfillInstanceIds;
+    await Filament.syncIndexes();
+  });
+
+  it("backfills instanceId for filaments missing it", async () => {
+    // Insert directly to bypass pre-save hook
+    await Filament.collection.insertOne({
+      name: "No Instance",
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+    });
+
+    const count = await backfillInstanceIds();
+    expect(count).toBe(1);
+
+    const doc = await Filament.findOne({ name: "No Instance" });
+    expect(doc!.instanceId).toBeDefined();
+    expect(doc!.instanceId.length).toBeGreaterThan(0);
+  });
+
+  it("returns 0 when all filaments have instanceId", async () => {
+    await Filament.create({ name: "Has ID", vendor: "Test", type: "PLA" });
+    const count = await backfillInstanceIds();
+    expect(count).toBe(0);
+  });
 });

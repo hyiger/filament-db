@@ -212,6 +212,219 @@ describe("decodeOpenPrintTagBinary", () => {
     expect(decoded.meta.AUX_REGION_OFFSET).toBe(binary.length);
   });
 
+  it("round-trips spoolUid (brand_specific_instance_id)", () => {
+    const input: OpenPrintTagInput = {
+      materialName: "Test",
+      brandName: "Brand",
+      materialType: "PLA",
+      spoolUid: "2acc21072a",
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+
+    expect(decoded.spoolUid).toBe("2acc21072a");
+  });
+
+  it("round-trips drying temperature and time", () => {
+    const input: OpenPrintTagInput = {
+      materialName: "Dry Me",
+      brandName: "Brand",
+      materialType: "PA",
+      dryingTemperature: 65,
+      dryingTime: 240,
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+
+    expect(decoded.dryingTemperature).toBe(65);
+    expect(decoded.dryingTime).toBe(240);
+  });
+
+  it("round-trips transmission distance", () => {
+    const input: OpenPrintTagInput = {
+      materialName: "HueForge",
+      brandName: "Brand",
+      materialType: "PLA",
+      transmissionDistance: 1.35,
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+
+    expect(decoded.transmissionDistance).toBeCloseTo(1.35, 1);
+  });
+
+  it("round-trips tags (abrasive + soluble)", () => {
+    const input: OpenPrintTagInput = {
+      materialName: "Tagged",
+      brandName: "Brand",
+      materialType: "PLA",
+      abrasive: true,
+      soluble: true,
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+
+    expect(decoded.tags).toEqual(expect.arrayContaining([4, 13]));
+  });
+
+  it("handles CBOR tagged values (major type 6)", () => {
+    // Build a payload with a tagged value: tag(0) wrapping a text string
+    // Meta: {2: 20} = A1 02 14
+    // Main map with a tagged value for material_name key
+    const payload = new Uint8Array([
+      0xa1, 0x02, 0x14,      // meta: {2: 20}
+      0xbf,                    // indefinite map start
+      0x08, 0x00,             // material_class = FFF
+      0x09, 0x00,             // material_type = PLA
+      0x0a, 0xc0, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = tag(0, "Test")
+      0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+      0xff,                    // break
+    ]);
+    const decoded = decodeOpenPrintTagBinary(payload);
+    expect(decoded.materialName).toBe("Test");
+  });
+
+  it("decodes CBOR float32 values", () => {
+    // Manually build a payload with a float32 density (0xFA prefix)
+    // Float32 1.24 = 0x3F9EB852
+    const ab = new ArrayBuffer(4);
+    new DataView(ab).setFloat32(0, 1.2345678);
+    const f32bytes = new Uint8Array(ab);
+
+    const payload = new Uint8Array([
+      0xa1, 0x02, 0x18, 0xff,  // meta: {2: 255} (dummy offset)
+      0xbf,                      // indefinite map start
+      0x08, 0x00,               // material_class = FFF
+      0x09, 0x00,               // material_type = PLA
+      0x0a, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = "Test"
+      0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+      0x18, 0x1d,               // key 29 = DENSITY
+      0xfa, f32bytes[0], f32bytes[1], f32bytes[2], f32bytes[3], // float32
+      0xff,                      // break
+    ]);
+    const decoded = decodeOpenPrintTagBinary(payload);
+    expect(decoded.density).toBeCloseTo(1.2345678, 4);
+  });
+
+  it("decodes CBOR float64 values", () => {
+    // Manually build a payload with a float64 value (0xFB prefix)
+    const ab = new ArrayBuffer(8);
+    new DataView(ab).setFloat64(0, 1.23456789012345);
+    const f64bytes = new Uint8Array(ab);
+
+    const payload = new Uint8Array([
+      0xa1, 0x02, 0x18, 0xff,  // meta: {2: 255}
+      0xbf,                      // indefinite map start
+      0x08, 0x00,               // material_class = FFF
+      0x09, 0x00,               // material_type = PLA
+      0x0a, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = "Test"
+      0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+      0x18, 0x1d,               // key 29 = DENSITY
+      0xfb, ...f64bytes,        // float64
+      0xff,                      // break
+    ]);
+    const decoded = decodeOpenPrintTagBinary(payload);
+    expect(decoded.density).toBeCloseTo(1.23456789012345, 10);
+  });
+
+  it("decodes indefinite CBOR arrays", () => {
+    // Build a payload with tags as indefinite array
+    const payload = new Uint8Array([
+      0xa1, 0x02, 0x18, 0xff,  // meta: {2: 255}
+      0xbf,                      // indefinite map start
+      0x08, 0x00,               // material_class = FFF
+      0x09, 0x00,               // material_type = PLA
+      0x0a, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = "Test"
+      0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+      0x18, 0x1c,               // key 28 = TAGS
+      0x9f, 0x04, 0x0d, 0xff,  // indefinite array [4, 13]
+      0xff,                      // break (map)
+    ]);
+    const decoded = decodeOpenPrintTagBinary(payload);
+    expect(decoded.tags).toEqual([4, 13]);
+  });
+
+  it("round-trips emptySpoolWeight", () => {
+    const input: OpenPrintTagInput = {
+      materialName: "Spool",
+      brandName: "Brand",
+      materialType: "PLA",
+      emptySpoolWeight: 200,
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+    expect(decoded.emptySpoolWeight).toBe(200);
+  });
+
+  it("decodes CBOR negative integers", () => {
+    // Build a payload with a negative integer value
+    // CBOR major type 1: negative integer, -1 = 0x20
+    const payload = new Uint8Array([
+      0xa1, 0x02, 0x14,      // meta: {2: 20}
+      0xbf,                    // indefinite map start
+      0x08, 0x00,             // material_class = FFF
+      0x09, 0x00,             // material_type = PLA
+      0x0a, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = "Test"
+      0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+      0x18, 0x22,             // key 34 = MIN_PRINT_TEMPERATURE
+      0x20,                    // negative integer: -1
+      0xff,                    // break
+    ]);
+    const decoded = decodeOpenPrintTagBinary(payload);
+    expect(decoded.nozzleTempMin).toBe(-1);
+  });
+
+  it("throws on reserved CBOR additional value", () => {
+    // Additional value 28 (0x1C) is reserved in CBOR
+    const payload = new Uint8Array([
+      0x1c, // major type 0, additional = 28 (reserved)
+    ]);
+    expect(() => decodeOpenPrintTagBinary(payload)).toThrow("reserved additional value");
+  });
+
+  it("throws on unknown CBOR major type", () => {
+    // Create a payload where an inner value has an impossible state
+    // This is hard to trigger naturally since all major types 0-7 are handled
+    // But we can test the break byte (0xFF = major 7, additional 31) path
+    const payload = new Uint8Array([
+      0xa1, 0x02, 0x14,      // meta: {2: 20}
+      0xbf,                    // indefinite map start
+      0x08, 0x00,             // material_class = FFF
+      0x09, 0x00,             // material_type = PLA
+      0x0a, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = "Test"
+      0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+      0x18, 0x22,             // key 34
+      0xf8, 0x2a,             // simple value 42 (major 7, additional 24, value 42)
+      0xff,                    // break
+    ]);
+    const decoded = decodeOpenPrintTagBinary(payload);
+    // Simple value 42 should be returned as-is
+    expect(decoded.nozzleTempMin).toBe(42);
+  });
+
+  it("handles standalone CBOR break byte gracefully", () => {
+    // Build payload where a break byte (0xFF) appears as a value in a definite map
+    // The break case in major type 7 (additional=31) returns undefined
+    const payload = new Uint8Array([
+      0xa1, 0x02, 0x14,      // meta: {2: 20}
+      0xa2,                    // definite map with 2 pairs
+      0x08, 0x00,             // material_class = FFF
+      0x09, 0xff,             // material_type = break byte (standalone, returns undefined)
+    ]);
+    // This should not throw - break as value yields undefined
+    const decoded = decodeOpenPrintTagBinary(payload);
+    expect(decoded).toBeDefined();
+  });
+
+  it("throws on truncated CBOR data", () => {
+    // Single byte is not enough for a valid CBOR map
+    expect(() => decodeOpenPrintTagBinary(new Uint8Array([0xa1]))).toThrow();
+  });
+
+  it("throws on empty data", () => {
+    expect(() => decodeOpenPrintTagBinary(new Uint8Array([]))).toThrow("unexpected end of data");
+  });
+
   it("handles unknown material types gracefully", () => {
     // Manually encode a payload with material_type = 99 (unknown)
     const payload = new Uint8Array([

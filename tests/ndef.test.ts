@@ -162,4 +162,38 @@ describe("parseNdefFromTag", () => {
     expect(result[229]).toBe(0x99);
     expect(result.length).toBe(230);
   });
+
+  it("throws on truncated 3-byte TLV length", () => {
+    // CC (4B) + TLV tag 0x03 + 0xFF (long format) + only 1 length byte (needs 2)
+    const data = new Uint8Array([0xe1, 0x40, 0x28, 0x01, 0x03, 0xff, 0x00, 0x00]);
+    // Truncate after the 0xFF to leave incomplete length
+    const truncated = data.slice(0, 6);
+    // Falls under "too short" since < 8 bytes, so pad to 8 bytes
+    const padded = new Uint8Array(8);
+    padded.set([0xe1, 0x40, 0x28, 0x01, 0x03, 0xff, 0x01]);
+    // 0xFF means 3-byte length, but only 1 byte follows before end
+    expect(() => parseNdefFromTag(padded)).toThrow("truncated");
+  });
+
+  it("throws on TLV length exceeding available data", () => {
+    // CC + TLV tag 0x03 + length 200 but only a few bytes available (pad to 8+)
+    const data = new Uint8Array(10);
+    data.set([0xe1, 0x40, 0x28, 0x01, 0x03, 200]);
+    expect(() => parseNdefFromTag(data)).toThrow("truncated");
+  });
+
+  it("throws on truncated NDEF record header", () => {
+    // CC + TLV tag 0x03 + length 6 + NDEF: flags=non-SR TNF=02, type_len=1,
+    // then only 2 bytes for a 4-byte payload length (non-short record)
+    const data = new Uint8Array(10);
+    data.set([0xe1, 0x40, 0x28, 0x01, 0x03, 0x06, 0xc2, 0x01, 0x00, 0x00]);
+    expect(() => parseNdefFromTag(data)).toThrow("truncated");
+  });
+
+  it("throws when NDEF record payload exceeds available data", () => {
+    // CC + TLV tag 0x03 + TLV length 5 + NDEF: flags=SR+TNF02, type_len=1, payload_len=99, type='X'
+    const data = new Uint8Array(12);
+    data.set([0xe1, 0x40, 0x28, 0x01, 0x03, 0x05, 0xd2, 0x01, 99, 0x58]);
+    expect(() => parseNdefFromTag(data)).toThrow("truncated");
+  });
 });

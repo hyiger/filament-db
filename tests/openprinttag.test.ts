@@ -843,6 +843,62 @@ describe("generateOpenPrintTagBinary", () => {
     const offset = bytes[3];
     expect(offset).toBe(result.byteLength);
   });
+
+  it("handles large payloads requiring 5-byte meta size", async () => {
+    // The encoder caps strings at 31 chars, so normal inputs can't exceed 256 bytes.
+    // We verify the >= 256 meta branch by manually constructing a large payload
+    // with a 5-byte meta header and decoding it.
+
+    // Build the main map content first, then calculate total size
+    const mainContent: number[] = [];
+    mainContent.push(0xbf); // indefinite map start
+    mainContent.push(0x08, 0x00); // material_class = FFF
+    mainContent.push(0x09, 0x00); // material_type = PLA
+    mainContent.push(0x0a, 0x64, 0x54, 0x65, 0x73, 0x74); // material_name = "Test"
+    mainContent.push(0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64); // brand_name = "Brand"
+    // Pad with key/value pairs (2 bytes each) until main content >= 252 bytes
+    // (5-byte meta + 252 = 257 > 256, triggering the branch)
+    while (mainContent.length < 252) {
+      mainContent.push(0x17, 0x00); // key 23 = 0, repeated padding
+    }
+    mainContent.push(0xff); // break
+
+    const metaSize = 5; // 0xA1 + 0x02 + 0x19 + hi + lo
+    const totalSize = metaSize + mainContent.length;
+
+    const largePayload = new Uint8Array(totalSize);
+    largePayload[0] = 0xa1; // meta: definite map, 1 pair
+    largePayload[1] = 0x02; // key: aux_region_offset
+    largePayload[2] = 0x19; // uint16 follows
+    largePayload[3] = (totalSize >> 8) & 0xff;
+    largePayload[4] = totalSize & 0xff;
+    largePayload.set(mainContent, metaSize);
+
+    // Verify the decoder handles the 5-byte meta header correctly
+    const { decodeOpenPrintTagBinary } = await import("@/lib/openprinttag-decode");
+    const decoded = decodeOpenPrintTagBinary(largePayload);
+    expect(decoded.materialName).toBe("Test");
+    expect(decoded.brandName).toBe("Brand");
+    expect(decoded.meta.AUX_REGION_OFFSET).toBe(totalSize);
+  });
+
+  it("includes empty_container_weight when emptySpoolWeight provided", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      emptySpoolWeight: 250,
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+    const key = findCBORKey(bytes, OPT_KEY.EMPTY_CONTAINER_WEIGHT);
+    expect(key).toBeGreaterThan(0);
+  });
+
+  it("omits empty_container_weight when emptySpoolWeight is null", () => {
+    const result = generateOpenPrintTagBinary(minimalInput);
+    const bytes = Array.from(result);
+    const key = findCBORKey(bytes, OPT_KEY.EMPTY_CONTAINER_WEIGHT);
+    expect(key).toBe(-1);
+  });
 });
 
 // ── Constants ───────────────────────────────────────────────────────

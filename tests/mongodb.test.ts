@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 
@@ -52,5 +52,77 @@ describe("dbConnect", () => {
     (global as Record<string, unknown>).mongoose = undefined;
     await dbConnect();
     expect((global as Record<string, unknown>).mongoose).toBeDefined();
+  });
+
+  it("logs when migration backfills instanceIds", async () => {
+    // Connect first to get access to the collection
+    await dbConnect();
+
+    // Insert a filament without instanceId directly via collection
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    await Filament.collection.insertOne({
+      name: "MigrationTest",
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      _deletedAt: null,
+    });
+
+    // Reset cache to force migration to run again
+    const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
+    cached.migrated = false;
+    cached.conn = null;
+    cached.promise = null;
+
+    // Spy on console.log to verify migration message
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await dbConnect();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[migration] Backfilled instanceId")
+      );
+    } finally {
+      logSpy.mockRestore();
+      // Clean up
+      await Filament.deleteMany({ name: "MigrationTest" });
+    }
+  });
+
+
+  it("reconnects when URI changes", async () => {
+    // First connect with current URI
+    await dbConnect();
+
+    // Simulate URI change by modifying the cached URI
+    const cached = (global as any).mongoose;
+    cached.uri = "mongodb://different-uri:27017/test";
+
+    // This should trigger disconnect and reconnect
+    const result = await dbConnect();
+    expect(result).toBeDefined();
+  });
+
+  it("runs migration on first connect", async () => {
+    // Reset cache to force fresh connection
+    (global as Record<string, unknown>).mongoose = undefined;
+
+    const result = await dbConnect();
+    expect(result).toBeDefined();
+    // Migration should have run (cached.migrated = true)
+    const cached = (global as any).mongoose;
+    expect(cached.migrated).toBe(true);
+  });
+
+  it("skips migration on subsequent connects", async () => {
+    (global as Record<string, unknown>).mongoose = undefined;
+    await dbConnect();
+
+    // Second call should skip migration
+    const cached = (global as any).mongoose;
+    expect(cached.migrated).toBe(true);
+
+    const result = await dbConnect();
+    expect(result).toBeDefined();
   });
 });

@@ -152,6 +152,36 @@ describe("getExportRows", () => {
     expect(rows.map((r) => r.name)).toEqual(["Alpha", "Middle", "Zebra"]);
   });
 
+  it("exports instanceId field", async () => {
+    await Filament.create({
+      name: "Instance Export",
+      vendor: "V",
+      type: "PLA",
+      instanceId: "abc123def",
+    });
+
+    const rows = await getExportRows();
+    const row = rows.find((r: any) => r.name === "Instance Export");
+    expect(row!.instanceId).toBe("abc123def");
+  });
+
+  it("exports empty string for missing instanceId", async () => {
+    // Use collection.insertOne to bypass pre-save hook
+    const Filament2 = (await import("@/models/Filament")).default;
+    await Filament2.collection.insertOne({
+      name: "No Instance Export",
+      vendor: "V",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      _deletedAt: null,
+    });
+
+    const rows = await getExportRows();
+    const row = rows.find((r: any) => r.name === "No Instance Export");
+    expect(row!.instanceId).toBe("");
+  });
+
   it("counts spools correctly", async () => {
     await Filament.create({
       name: "Multi Spool",

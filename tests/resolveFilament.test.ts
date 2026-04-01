@@ -222,6 +222,32 @@ describe("resolveFilament", () => {
     expect(result._inherited).toContain("presets");
   });
 
+  it("uses variant's own calibrations when it has them", () => {
+    const parent = makeParent();
+    const variant = makeVariant({
+      calibrations: [
+        { nozzle: "nozzle-3", extrusionMultiplier: 0.98, maxVolumetricSpeed: 12, pressureAdvance: 0.04, retractLength: null, retractSpeed: null, retractLift: null },
+      ],
+    });
+    const result = resolveFilament(variant, parent);
+    expect(result.calibrations).toHaveLength(1);
+    expect(result.calibrations[0].nozzle).toBe("nozzle-3");
+    expect(result._inherited).not.toContain("calibrations");
+  });
+
+  it("uses variant's own presets when it has them", () => {
+    const parent = makeParent({
+      presets: [{ label: "Parent Preset", extrusionMultiplier: 0.95, temperatures: {} }],
+    });
+    const variant = makeVariant({
+      presets: [{ label: "Variant Preset", extrusionMultiplier: 0.97, temperatures: {} }],
+    });
+    const result = resolveFilament(variant, parent);
+    expect(result.presets).toHaveLength(1);
+    expect(result.presets[0].label).toBe("Variant Preset");
+    expect(result._inherited).not.toContain("presets");
+  });
+
   it("inherits settings fully when variant has none", () => {
     const parent = makeParent();
     const variant = makeVariant({ settings: {} });
