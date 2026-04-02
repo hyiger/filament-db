@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useCurrency } from "@/hooks/useCurrency";
 
 interface BedTypeTempEntry {
   bedType: string;
@@ -152,6 +153,7 @@ function extractPressureAdvance(data: Record<string, unknown> | undefined): stri
 }
 
 export default function FilamentForm({ initialData, onSubmit }: Props) {
+  const { symbol: currencySymbol } = useCurrency();
   const [nozzles, setNozzles] = useState<NozzleOption[]>([]);
   const [nozzlesLoading, setNozzlesLoading] = useState(true);
   const [printers, setPrinters] = useState<PrinterOption[]>([]);
@@ -614,8 +616,8 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
   };
 
   const inputClass =
-    "w-full px-3 py-2 border border-gray-300 rounded text-sm bg-transparent";
-  const labelClass = "block text-sm font-medium mb-1";
+    "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent text-gray-900 dark:text-gray-100";
+  const labelClass = "block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100";
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -934,7 +936,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           />
         </div>
         <div>
-          <label className={labelClass}>Cost ($/kg)</label>
+          <label className={labelClass}>Cost ({currencySymbol}/kg)</label>
           <input
             type="number"
             step="0.01"

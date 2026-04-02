@@ -111,8 +111,8 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
   };
 
   const inputClass =
-    "w-full px-3 py-2 border border-gray-300 rounded text-sm bg-transparent";
-  const labelClass = "block text-sm font-medium mb-1";
+    "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent text-gray-900 dark:text-gray-100";
+  const labelClass = "block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100";
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -177,7 +177,7 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
             {nozzles.map((n) => (
               <label
                 key={n._id}
-                className="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-800 cursor-pointer text-sm"
+                className="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer text-sm"
               >
                 <input
                   type="checkbox"

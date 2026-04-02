@@ -7,6 +7,7 @@ import NfcStatus from "@/components/NfcStatus";
 import { useNfcContext } from "@/components/NfcProvider";
 import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
 import { useToast } from "@/components/Toast";
+import { useCurrency } from "@/hooks/useCurrency";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import type { FilamentDetail } from "@/types/filament";
 
@@ -37,6 +38,7 @@ function computeRemaining(filament: Filament, overrideTotalWeight?: number | nul
 }
 
 export default function FilamentDetail() {
+  const { symbol: currencySymbol } = useCurrency();
   const params = useParams();
   const [filament, setFilament] = useState<Filament | null>(null);
   const [showAllSettings, setShowAllSettings] = useState(false);
@@ -409,7 +411,7 @@ export default function FilamentDetail() {
                 />
                 <span className="text-sm">{v.name}</span>
                 {v.cost != null && (
-                  <span className="text-xs text-gray-500">${v.cost.toFixed(2)}</span>
+                  <span className="text-xs text-gray-500">{currencySymbol}{v.cost.toFixed(2)}</span>
                 )}
               </Link>
             ))}
@@ -422,7 +424,7 @@ export default function FilamentDetail() {
         <InfoCard label="Nozzle (1st Layer)" value={filament.temperatures.nozzleFirstLayer ? `${filament.temperatures.nozzleFirstLayer}°C` : "—"} inherited={inherited.has("temperatures.nozzleFirstLayer")} />
         <InfoCard label="Bed Temp" value={filament.temperatures.bed ? `${filament.temperatures.bed}°C` : "—"} inherited={inherited.has("temperatures.bed")} />
         <InfoCard label="Bed (1st Layer)" value={filament.temperatures.bedFirstLayer ? `${filament.temperatures.bedFirstLayer}°C` : "—"} inherited={inherited.has("temperatures.bedFirstLayer")} />
-        <InfoCard label="Cost" value={filament.cost != null ? `$${filament.cost.toFixed(2)}/kg` : "—"} inherited={inherited.has("cost")} />
+        <InfoCard label="Cost" value={filament.cost != null ? `${currencySymbol}${filament.cost.toFixed(2)}/kg` : "—"} inherited={inherited.has("cost")} />
         <InfoCard label="Density" value={filament.density ? `${filament.density.toFixed(2)} g/cm³` : "—"} inherited={inherited.has("density")} />
         <InfoCard label="Diameter" value={`${filament.diameter.toFixed(2)} mm`} inherited={inherited.has("diameter")} />
         <InfoCard label="Max Vol. Speed" value={filament.maxVolumetricSpeed ? `${filament.maxVolumetricSpeed} mm³/s` : "—"} inherited={inherited.has("maxVolumetricSpeed")} />

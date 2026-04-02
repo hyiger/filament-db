@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRef, useState, useEffect } from "react";
+import { CURRENCIES, useCurrency, type CurrencyCode } from "@/hooks/useCurrency";
 
 export default function SettingsPage() {
   const [restoring, setRestoring] = useState(false);
@@ -27,6 +28,9 @@ export default function SettingsPage() {
   const [aiSaving, setAiSaving] = useState(false);
   const [aiResult, setAiResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [showAiKey, setShowAiKey] = useState(false);
+
+  // Currency
+  const { currency, setCurrency } = useCurrency();
 
   // NFC state (Electron only)
   const [isElectron, setIsElectron] = useState(false);
@@ -150,11 +154,11 @@ export default function SettingsPage() {
       <div className="grid gap-4">
         <Link
           href="/nozzles"
-          className="block p-5 rounded-lg border border-gray-700 hover:border-gray-500 hover:bg-gray-900/50 transition-colors group"
+          className="block p-5 rounded-lg border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 hover:bg-gray-100 dark:hover:bg-gray-900/50 transition-colors group"
         >
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-gray-200 group-hover:text-white">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 group-hover:text-black dark:group-hover:text-white">
                 Nozzles
               </h2>
               <p className="text-sm text-gray-500 mt-1">
@@ -169,11 +173,11 @@ export default function SettingsPage() {
 
         <Link
           href="/printers"
-          className="block p-5 rounded-lg border border-gray-700 hover:border-gray-500 hover:bg-gray-900/50 transition-colors group"
+          className="block p-5 rounded-lg border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 hover:bg-gray-100 dark:hover:bg-gray-900/50 transition-colors group"
         >
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-gray-200 group-hover:text-white">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 group-hover:text-black dark:group-hover:text-white">
                 Printers
               </h2>
               <p className="text-sm text-gray-500 mt-1">
@@ -188,11 +192,11 @@ export default function SettingsPage() {
 
         <Link
           href="/api-docs"
-          className="block p-5 rounded-lg border border-gray-700 hover:border-gray-500 hover:bg-gray-900/50 transition-colors group"
+          className="block p-5 rounded-lg border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 hover:bg-gray-100 dark:hover:bg-gray-900/50 transition-colors group"
         >
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-gray-200 group-hover:text-white">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 group-hover:text-black dark:group-hover:text-white">
                 API Documentation
               </h2>
               <p className="text-sm text-gray-500 mt-1">
@@ -204,6 +208,30 @@ export default function SettingsPage() {
             </svg>
           </div>
         </Link>
+      </div>
+
+      {/* Currency */}
+      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 mb-1">Currency</h2>
+        <p className="text-sm text-gray-500 mb-4">
+          Choose the currency symbol used for filament costs.
+        </p>
+        <div className="flex gap-2">
+          {CURRENCIES.map((c) => (
+            <button
+              key={c.code}
+              type="button"
+              onClick={() => setCurrency(c.code as CurrencyCode)}
+              className={`px-4 py-2 text-sm rounded border transition-colors ${
+                currency === c.code
+                  ? "border-blue-500 bg-blue-600/20 text-blue-400 dark:text-blue-300"
+                  : "border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500 hover:text-gray-800 dark:hover:text-gray-300"
+              }`}
+            >
+              {c.symbol} {c.code}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Database Snapshots */}

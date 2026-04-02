@@ -1,7 +1,7 @@
 interface ElectronAPI {
   // Config
-  getConfig: () => Promise<{ mongodbUri: string; connectionMode: string; atlasUri: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string }>;
-  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string }) => Promise<{ success: boolean }>;
+  getConfig: () => Promise<{ mongodbUri: string; connectionMode: string; atlasUri: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string }>;
+  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string }) => Promise<{ success: boolean }>;
   resetConfig: () => Promise<{ success: boolean }>;
   testConnection: (uri: string) => Promise<{ success: boolean; error?: string }>;
   showMessage: (options: { type: string; title: string; message: string }) => Promise<void>;

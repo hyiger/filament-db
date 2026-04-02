@@ -7,6 +7,7 @@ import ImportAtlasDialog from "@/components/ImportAtlasDialog";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 import NfcStatus from "@/components/NfcStatus";
+import { useCurrency } from "@/hooks/useCurrency";
 import type { FilamentSummary } from "@/types/filament";
 
 type Filament = FilamentSummary;
@@ -177,6 +178,7 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
 }
 
 export default function Home() {
+  const { symbol: currencySymbol } = useCurrency();
   const [filaments, setFilaments] = useState<Filament[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -487,7 +489,7 @@ export default function Home() {
         {f.temperatures.bed ? `${f.temperatures.bed}°C` : "—"}
       </td>
       <td className="py-2 px-2 text-right">
-        {f.cost != null ? `$${f.cost.toFixed(2)}` : "—"}
+        {f.cost != null ? `${currencySymbol}${f.cost.toFixed(2)}` : "—"}
       </td>
       <td className="py-2 px-2 text-right">
         {(() => {
@@ -574,7 +576,7 @@ export default function Home() {
             {f.temperatures.bed ? `${f.temperatures.bed}°C` : "—"}
           </td>
           <td className="py-2 px-2 text-right">
-            {f.cost != null ? `$${f.cost.toFixed(2)}` : "—"}
+            {f.cost != null ? `${currencySymbol}${f.cost.toFixed(2)}` : "—"}
           </td>
           <td className="py-2 px-2 text-right">
             {(() => {

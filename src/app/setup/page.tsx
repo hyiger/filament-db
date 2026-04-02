@@ -114,7 +114,7 @@ export default function SetupPage() {
               <div className="flex items-start gap-3">
                 <div className="text-2xl mt-0.5">&#9729;</div>
                 <div>
-                  <div className="font-semibold text-white">MongoDB Atlas (Cloud)</div>
+                  <div className="font-semibold text-gray-900 dark:text-white">MongoDB Atlas (Cloud)</div>
                   <p className="text-sm text-gray-400 mt-1">
                     Connect to a MongoDB Atlas cloud database. Your data is stored remotely and accessible from anywhere.
                     Requires an internet connection.
@@ -132,7 +132,7 @@ export default function SetupPage() {
                 <div className="flex items-start gap-3">
                   <div className="text-2xl mt-0.5">&#8644;</div>
                   <div>
-                    <div className="font-semibold text-white">Hybrid (Local + Cloud Sync)</div>
+                    <div className="font-semibold text-gray-900 dark:text-white">Hybrid (Local + Cloud Sync)</div>
                     <p className="text-sm text-gray-400 mt-1">
                       Store data locally with automatic sync to MongoDB Atlas when connected. Works offline and syncs
                       when internet is available. <span className="text-gray-500">Recommended.</span>
@@ -151,7 +151,7 @@ export default function SetupPage() {
                 <div className="flex items-start gap-3">
                   <div className="text-2xl mt-0.5">&#128190;</div>
                   <div>
-                    <div className="font-semibold text-white">Local Only (Offline)</div>
+                    <div className="font-semibold text-gray-900 dark:text-white">Local Only (Offline)</div>
                     <p className="text-sm text-gray-400 mt-1">
                       All data is stored locally on this computer. No cloud account or internet connection needed.
                       You can switch to hybrid mode later.
@@ -185,8 +185,8 @@ export default function SetupPage() {
             <p className="text-gray-500">Local Offline Mode</p>
           </div>
 
-          <div className="p-4 bg-gray-800 border border-gray-700 rounded-lg mb-6">
-            <p className="text-sm text-gray-300 mb-3">
+          <div className="p-4 bg-gray-100 dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg mb-6">
+            <p className="text-sm text-gray-600 dark:text-gray-300 mb-3">
               Your filament data will be stored in a local database on this computer. An internet connection may be needed on first launch to download the database engine; after that, no internet is required.
             </p>
             <p className="text-xs text-gray-500">
@@ -247,7 +247,7 @@ export default function SetupPage() {
             </label>
             <input
               type="password"
-              className="w-full px-3 py-2 border border-gray-300 rounded text-sm bg-transparent"
+              className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent text-gray-900 dark:text-gray-100"
               value={mongoUri}
               onChange={(e) => setMongoUri(e.target.value)}
               placeholder="mongodb+srv://user:pass@cluster.mongodb.net/filament-db"
