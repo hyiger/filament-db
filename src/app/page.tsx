@@ -197,9 +197,22 @@ export default function Home() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importExportRef = useRef<HTMLDivElement>(null);
+  const stickyHeaderRef = useRef<HTMLDivElement>(null);
+  const [stickyHeaderHeight, setStickyHeaderHeight] = useState(0);
   const { toast } = useToast();
 
   const fetchFilamentsRef = useRef<AbortController | null>(null);
+  // Track sticky header height for positioning the table thead below it
+  useEffect(() => {
+    const el = stickyHeaderRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(() => {
+      setStickyHeaderHeight(el.offsetHeight);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
   const fetchFilaments = useCallback(async () => {
     // Abort previous in-flight request to prevent stale data
     fetchFilamentsRef.current?.abort();
@@ -623,6 +636,7 @@ export default function Home() {
           className="hidden"
         />
       )}
+      <div ref={stickyHeaderRef} className="sticky top-0 z-20 bg-white dark:bg-gray-950 pb-3 -mt-8 pt-8 border-b border-gray-200 dark:border-gray-800 shadow-sm">
       <div className="flex items-center justify-between mb-6">
         <div>
           <div className="flex items-center gap-3">
@@ -790,15 +804,16 @@ export default function Home() {
           </button>
         </div>
       )}
+      </div>{/* end sticky header */}
 
       {loading ? (
         <p className="text-gray-500">Loading...</p>
       ) : filaments.length === 0 ? (
         <p className="text-gray-500">No filaments found.</p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm border-collapse">
-            <thead>
+        <div>
+          <table className="w-full text-sm border-collapse min-w-[800px]">
+            <thead className="sticky z-10 bg-white dark:bg-gray-950 shadow-[0_1px_0_0_rgba(209,213,219,0.5)]" style={{ top: `${stickyHeaderHeight}px` }}>
               <tr className="border-b border-gray-300">
                 <th className="py-3 px-2 w-8">
                   <input
