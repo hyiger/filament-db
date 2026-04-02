@@ -231,5 +231,67 @@ describe("tdsExtractor", () => {
       expect(parsed.contents[0].parts[0].inlineData).toBeDefined();
       expect(parsed.contents[0].parts[0].inlineData.mimeType).toBe("application/pdf");
     });
+
+    it("calls Claude API when provider is claude", async () => {
+      const claudeResponse = {
+        content: [{ type: "text", text: '{"name": "Claude PLA", "vendor": "TestCo", "type": "PLA"}' }],
+      };
+
+      let callCount = 0;
+      let apiUrl = "";
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve({
+            ok: true,
+            headers: new Headers({ "content-type": "text/html" }),
+            text: () => Promise.resolve("TDS content"),
+          });
+        }
+        apiUrl = url;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(claudeResponse),
+        });
+      }));
+
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/tds", "sk-ant-test", "claude");
+
+      expect(result.success).toBe(true);
+      expect(result.data?.name).toBe("Claude PLA");
+      expect(apiUrl).toContain("anthropic.com");
+    });
+
+    it("calls OpenAI API when provider is openai", async () => {
+      const openaiResponse = {
+        choices: [{ message: { content: '{"name": "GPT PLA", "vendor": "TestCo", "type": "PLA"}' } }],
+      };
+
+      let callCount = 0;
+      let apiUrl = "";
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve({
+            ok: true,
+            headers: new Headers({ "content-type": "text/html" }),
+            text: () => Promise.resolve("TDS content"),
+          });
+        }
+        apiUrl = url;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(openaiResponse),
+        });
+      }));
+
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/tds", "sk-test", "openai");
+
+      expect(result.success).toBe(true);
+      expect(result.data?.name).toBe("GPT PLA");
+      expect(apiUrl).toContain("openai.com");
+    });
   });
 });

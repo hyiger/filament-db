@@ -278,18 +278,20 @@ function NewFilamentContent() {
 
     setTdsLoading(true);
     try {
-      // Get API key from Electron config if available
+      // Get API key and provider from Electron config if available
       let apiKey: string | undefined;
+      let provider: string | undefined;
       const api = window.electronAPI;
       if (api?.getConfig) {
         const cfg = await api.getConfig();
-        apiKey = cfg.geminiApiKey || undefined;
+        apiKey = cfg.aiApiKey || cfg.geminiApiKey || undefined;
+        provider = cfg.aiProvider || undefined;
       }
 
       const res = await fetch("/api/tds", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, apiKey }),
+        body: JSON.stringify({ url, apiKey, provider }),
       });
       const result = await res.json();
 

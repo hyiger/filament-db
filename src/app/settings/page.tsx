@@ -14,12 +14,19 @@ export default function SettingsPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteResult, setDeleteResult] = useState<{ ok: boolean; message: string } | null>(null);
 
-  // Gemini API key state
-  const [geminiKey, setGeminiKey] = useState("");
-  const [geminiConfigured, setGeminiConfigured] = useState(false);
-  const [geminiSaving, setGeminiSaving] = useState(false);
-  const [geminiResult, setGeminiResult] = useState<{ ok: boolean; message: string } | null>(null);
-  const [showGeminiKey, setShowGeminiKey] = useState(false);
+  // AI provider state
+  type AiProvider = "gemini" | "claude" | "openai";
+  const AI_PROVIDERS: { id: AiProvider; name: string; keyUrl: string }[] = [
+    { id: "gemini", name: "Google Gemini", keyUrl: "https://aistudio.google.com/apikey" },
+    { id: "claude", name: "Anthropic Claude", keyUrl: "https://console.anthropic.com/settings/keys" },
+    { id: "openai", name: "OpenAI ChatGPT", keyUrl: "https://platform.openai.com/api-keys" },
+  ];
+  const [aiProvider, setAiProvider] = useState<AiProvider>("gemini");
+  const [aiKey, setAiKey] = useState("");
+  const [aiConfigured, setAiConfigured] = useState(false);
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiResult, setAiResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [showAiKey, setShowAiKey] = useState(false);
 
   // NFC state (Electron only)
   const [isElectron, setIsElectron] = useState(false);
@@ -33,20 +40,24 @@ export default function SettingsPage() {
   const [formatResult, setFormatResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [showFormatConfirm, setShowFormatConfirm] = useState(false);
 
-  // Load Gemini config status
+  // Load AI config status
   useEffect(() => {
     const api = window.electronAPI;
     if (api?.getConfig) {
       // Electron mode — check electron-store
       api.getConfig().then((cfg) => {
-        if (cfg.geminiApiKey) {
-          setGeminiConfigured(true);
+        if (cfg.aiApiKey || cfg.geminiApiKey) {
+          setAiConfigured(true);
+        }
+        if (cfg.aiProvider) {
+          setAiProvider(cfg.aiProvider as AiProvider);
         }
       }).catch(() => {});
     } else {
       // Web mode — check API
       fetch("/api/tds").then((r) => r.json()).then((d) => {
-        setGeminiConfigured(d.configured);
+        setAiConfigured(d.configured);
+        if (d.provider) setAiProvider(d.provider);
       }).catch(() => {});
     }
   }, []);
@@ -244,100 +255,127 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* AI Features — Gemini API Key */}
+      {/* AI Features — Provider & API Key */}
       <div className="mt-8 pt-6 border-t border-gray-800">
         <h2 className="text-lg font-semibold text-gray-200 mb-1">AI Features</h2>
         <p className="text-sm text-gray-500 mb-4">
-          Configure a Google Gemini API key to enable AI-powered extraction of filament properties from Technical Data Sheets (TDS).
-          Get a free key from{" "}
+          Configure an AI provider to enable extraction of filament properties from Technical Data Sheets (TDS).
+          Get a free API key from your chosen provider.
+        </p>
+
+        <div className="flex items-center gap-2 mb-4">
+          <span className={`inline-block w-2.5 h-2.5 rounded-full ${aiConfigured ? "bg-green-500" : "bg-gray-600"}`} />
+          <span className="text-sm text-gray-400">
+            {aiConfigured
+              ? `${AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider} configured`
+              : "No API key configured"}
+          </span>
+        </div>
+
+        {/* Provider selector */}
+        <div className="mb-3">
+          <label className="text-xs text-gray-500 block mb-1.5 font-medium uppercase tracking-wider">Provider</label>
+          <div className="flex gap-2">
+            {AI_PROVIDERS.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => { setAiProvider(p.id); setAiResult(null); }}
+                className={`px-3 py-1.5 text-sm rounded border transition-colors ${
+                  aiProvider === p.id
+                    ? "border-blue-500 bg-blue-600/20 text-blue-300"
+                    : "border-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-300"
+                }`}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* API key link */}
+        <p className="text-xs text-gray-500 mb-2">
+          Get a key from{" "}
           <a
-            href="https://aistudio.google.com/apikey"
+            href={AI_PROVIDERS.find((p) => p.id === aiProvider)?.keyUrl}
             target="_blank"
             rel="noopener noreferrer"
             className="text-blue-400 hover:text-blue-300 underline"
           >
-            Google AI Studio
+            {AI_PROVIDERS.find((p) => p.id === aiProvider)?.name}
           </a>
-          .
         </p>
-
-        <div className="flex items-center gap-2 mb-3">
-          <span className={`inline-block w-2.5 h-2.5 rounded-full ${geminiConfigured ? "bg-green-500" : "bg-gray-600"}`} />
-          <span className="text-sm text-gray-400">
-            {geminiConfigured ? "API key configured" : "No API key configured"}
-          </span>
-        </div>
 
         <div className="flex gap-2 items-center flex-wrap">
           <div className="relative flex-1 max-w-sm">
             <input
-              type={showGeminiKey ? "text" : "password"}
-              value={geminiKey}
-              onChange={(e) => setGeminiKey(e.target.value)}
-              placeholder={geminiConfigured ? "••••••••••••••••" : "Enter Gemini API key"}
+              type={showAiKey ? "text" : "password"}
+              value={aiKey}
+              onChange={(e) => setAiKey(e.target.value)}
+              placeholder={aiConfigured ? "••••••••••••••••" : "Enter API key"}
               className="w-full px-3 py-2 bg-transparent border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600"
             />
             <button
               type="button"
-              onClick={() => setShowGeminiKey((s) => !s)}
+              onClick={() => setShowAiKey((s) => !s)}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs"
             >
-              {showGeminiKey ? "Hide" : "Show"}
+              {showAiKey ? "Hide" : "Show"}
             </button>
           </div>
 
           <button
             onClick={async () => {
-              if (!geminiKey.trim()) return;
-              setGeminiSaving(true);
-              setGeminiResult(null);
+              if (!aiKey.trim()) return;
+              setAiSaving(true);
+              setAiResult(null);
               try {
                 const api = window.electronAPI;
                 if (api?.saveConfig) {
                   // Electron mode
-                  await api.saveConfig({ geminiApiKey: geminiKey.trim() });
-                  setGeminiConfigured(true);
-                  setGeminiKey("");
-                  setGeminiResult({ ok: true, message: "API key saved" });
+                  await api.saveConfig({ aiApiKey: aiKey.trim(), aiProvider });
+                  setAiConfigured(true);
+                  setAiKey("");
+                  setAiResult({ ok: true, message: `${AI_PROVIDERS.find((p) => p.id === aiProvider)?.name} API key saved` });
                 } else {
-                  // Web mode
+                  // Web mode — validate via API
                   const res = await fetch("/api/tds", {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ apiKey: geminiKey.trim() }),
+                    body: JSON.stringify({ apiKey: aiKey.trim(), provider: aiProvider }),
                   });
                   const data = await res.json();
                   if (res.ok) {
-                    setGeminiConfigured(true);
-                    setGeminiKey("");
-                    setGeminiResult({ ok: true, message: "API key saved and validated" });
+                    setAiConfigured(true);
+                    setAiKey("");
+                    setAiResult({ ok: true, message: `${AI_PROVIDERS.find((p) => p.id === aiProvider)?.name} API key saved and validated` });
                   } else {
-                    setGeminiResult({ ok: false, message: data.error || "Failed to save key" });
+                    setAiResult({ ok: false, message: data.error || "Failed to save key" });
                   }
                 }
               } catch {
-                setGeminiResult({ ok: false, message: "Failed to save API key" });
+                setAiResult({ ok: false, message: "Failed to save API key" });
               } finally {
-                setGeminiSaving(false);
+                setAiSaving(false);
               }
             }}
-            disabled={geminiSaving || !geminiKey.trim()}
+            disabled={aiSaving || !aiKey.trim()}
             className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
-            {geminiSaving ? "Validating..." : "Save Key"}
+            {aiSaving ? "Validating..." : "Save Key"}
           </button>
 
-          {geminiConfigured && (
+          {aiConfigured && (
             <button
               onClick={async () => {
                 const api = window.electronAPI;
                 if (api?.saveConfig) {
-                  await api.saveConfig({ geminiApiKey: "" });
+                  await api.saveConfig({ aiApiKey: "", aiProvider: "gemini" });
                 } else {
                   await fetch("/api/tds", { method: "DELETE" });
                 }
-                setGeminiConfigured(false);
-                setGeminiResult({ ok: true, message: "API key removed" });
+                setAiConfigured(false);
+                setAiResult({ ok: true, message: "API key removed" });
               }}
               className="px-4 py-2 bg-gray-700 text-white rounded text-sm hover:bg-gray-600 transition-colors"
             >
@@ -346,13 +384,13 @@ export default function SettingsPage() {
           )}
         </div>
 
-        {geminiResult && (
+        {aiResult && (
           <div className={`mt-3 text-sm px-3 py-2 rounded ${
-            geminiResult.ok
+            aiResult.ok
               ? "bg-green-900/50 text-green-300 border border-green-800"
               : "bg-red-900/50 text-red-300 border border-red-800"
           }`}>
-            {geminiResult.message}
+            {aiResult.message}
           </div>
         )}
       </div>

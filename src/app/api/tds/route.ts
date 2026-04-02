@@ -1,67 +1,100 @@
 import { NextRequest, NextResponse } from "next/server";
-import { extractFromTds } from "@/lib/tdsExtractor";
+import { extractFromTds, validateApiKey, type AiProvider } from "@/lib/tdsExtractor";
 import { errorResponse, getErrorMessage } from "@/lib/apiErrorHandler";
 
 /**
- * In-memory API key store for web mode.
+ * In-memory API key/provider store for web mode.
  * In Electron, the key is passed in the request body from the client.
  */
 let storedApiKey: string | null = null;
+let storedProvider: AiProvider = "gemini";
 
-/** GET /api/tds — check if Gemini API key is configured */
+/** GET /api/tds — check if an AI API key is configured */
 export async function GET() {
-  const configured = !!(process.env.GEMINI_API_KEY || storedApiKey);
-  return NextResponse.json({ configured });
+  const envKey = process.env.GEMINI_API_KEY || process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY;
+  const configured = !!(envKey || storedApiKey);
+
+  // Detect provider from env if no stored provider
+  let provider = storedProvider;
+  if (!storedApiKey && envKey) {
+    if (process.env.ANTHROPIC_API_KEY) provider = "claude";
+    else if (process.env.OPENAI_API_KEY) provider = "openai";
+    else provider = "gemini";
+  }
+
+  return NextResponse.json({ configured, provider });
 }
 
-/** PUT /api/tds — save Gemini API key (web mode) */
+/** PUT /api/tds — save AI API key (web mode) */
 export async function PUT(request: NextRequest) {
   try {
-    const { apiKey } = await request.json();
+    const { apiKey, provider = "gemini" } = await request.json();
     if (!apiKey || typeof apiKey !== "string") {
       return errorResponse("API key is required", 400);
     }
 
-    // Validate the key with a lightweight Gemini call
-    const testRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`,
-    );
-    if (!testRes.ok) {
-      return errorResponse("Invalid Gemini API key", 401);
+    const validProvider = ["gemini", "claude", "openai"].includes(provider) ? provider as AiProvider : "gemini";
+
+    // Validate the key
+    const valid = await validateApiKey(validProvider, apiKey);
+    if (!valid) {
+      return errorResponse(`Invalid ${validProvider} API key`, 401);
     }
 
     storedApiKey = apiKey;
+    storedProvider = validProvider;
     return NextResponse.json({ success: true });
   } catch (err) {
     return errorResponse("Failed to save API key", 500, getErrorMessage(err));
   }
 }
 
-/** DELETE /api/tds — remove Gemini API key */
+/** DELETE /api/tds — remove AI API key */
 export async function DELETE() {
   storedApiKey = null;
+  storedProvider = "gemini";
   return NextResponse.json({ success: true });
 }
 
 /** POST /api/tds — extract filament data from a TDS URL */
 export async function POST(request: NextRequest) {
   try {
-    const { url, apiKey: bodyKey } = await request.json();
+    const { url, apiKey: bodyKey, provider: bodyProvider } = await request.json();
 
     if (!url || typeof url !== "string") {
       return errorResponse("URL is required", 400);
     }
 
-    // Resolve API key: body > env > stored
-    const apiKey = bodyKey || process.env.GEMINI_API_KEY || storedApiKey;
+    // Resolve provider
+    const provider: AiProvider = bodyProvider || storedProvider || "gemini";
+
+    // Resolve API key: body > env (per-provider) > stored
+    let apiKey = bodyKey;
+    if (!apiKey) {
+      switch (provider) {
+        case "gemini":
+          apiKey = process.env.GEMINI_API_KEY;
+          break;
+        case "claude":
+          apiKey = process.env.ANTHROPIC_API_KEY;
+          break;
+        case "openai":
+          apiKey = process.env.OPENAI_API_KEY;
+          break;
+      }
+    }
+    if (!apiKey) {
+      apiKey = storedApiKey;
+    }
+
     if (!apiKey) {
       return errorResponse(
-        "Gemini API key not configured. Add it in Settings or set GEMINI_API_KEY environment variable.",
+        "AI API key not configured. Add it in Settings or set the appropriate environment variable (GEMINI_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY).",
         401,
       );
     }
 
-    const result = await extractFromTds(url, apiKey);
+    const result = await extractFromTds(url, apiKey, provider);
 
     if (!result.success) {
       return errorResponse(result.error || "Extraction failed", 502);

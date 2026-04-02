@@ -15,6 +15,8 @@ const store = new Store({
     connectionMode: "" as ConnectionMode, // empty = not yet configured
     atlasUri: "",
     geminiApiKey: "",
+    aiApiKey: "",
+    aiProvider: "gemini",
   },
 });
 
@@ -310,6 +312,8 @@ ipcMain.handle("get-config", () => {
     connectionMode: store.get("connectionMode") as string,
     atlasUri: store.get("atlasUri") as string,
     geminiApiKey: store.get("geminiApiKey") as string,
+    aiApiKey: store.get("aiApiKey") as string,
+    aiProvider: store.get("aiProvider") as string,
   };
 });
 
@@ -318,6 +322,8 @@ ipcMain.handle("save-config", async (_event, config: {
   connectionMode?: ConnectionMode;
   atlasUri?: string;
   geminiApiKey?: string;
+  aiApiKey?: string;
+  aiProvider?: string;
 }) => {
   // Update individual fields
   if (config.connectionMode !== undefined) {
@@ -328,6 +334,12 @@ ipcMain.handle("save-config", async (_event, config: {
   }
   if (config.geminiApiKey !== undefined) {
     store.set("geminiApiKey", config.geminiApiKey);
+  }
+  if (config.aiApiKey !== undefined) {
+    store.set("aiApiKey", config.aiApiKey);
+  }
+  if (config.aiProvider !== undefined) {
+    store.set("aiProvider", config.aiProvider);
   }
 
   // Legacy: if only mongodbUri is sent (old atlas-only flow)
