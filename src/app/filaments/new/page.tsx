@@ -40,6 +40,7 @@ function NewFilamentContent() {
   const [tdsUrl, setTdsUrl] = useState("");
   const [tdsLoading, setTdsLoading] = useState(false);
   const tdsRef = useRef<HTMLDivElement>(null);
+  const tdsFileRef = useRef<HTMLInputElement>(null);
 
   // Clone picker state
   const [cloneSearch, setCloneSearch] = useState("");
@@ -271,22 +272,65 @@ function NewFilamentContent() {
     }
   };
 
-  // Handle TDS extraction
+  // Apply extracted TDS data to the form
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const applyTdsResult = (result: any, sourceUrl?: string) => {
+    const d = result.data;
+    setInitialData({
+      name: d.name || "",
+      vendor: d.vendor || "",
+      type: d.type || "PLA",
+      density: d.density ?? null,
+      diameter: d.diameter ?? 1.75,
+      temperatures: {
+        nozzle: d.temperatures?.nozzle ?? null,
+        nozzleFirstLayer: d.temperatures?.nozzleRangeMin ?? d.temperatures?.nozzle ?? null,
+        nozzleRangeMin: d.temperatures?.nozzleRangeMin ?? null,
+        nozzleRangeMax: d.temperatures?.nozzleRangeMax ?? null,
+        bed: d.temperatures?.bed ?? null,
+        bedFirstLayer: d.temperatures?.bedRangeMin ?? d.temperatures?.bed ?? null,
+      },
+      dryingTemperature: d.dryingTemperature ?? null,
+      dryingTime: d.dryingTime ?? null,
+      glassTempTransition: d.glassTempTransition ?? null,
+      heatDeflectionTemp: d.heatDeflectionTemp ?? null,
+      shoreHardnessA: d.shoreHardnessA ?? null,
+      shoreHardnessD: d.shoreHardnessD ?? null,
+      maxVolumetricSpeed: d.maxVolumetricSpeed ?? null,
+      minPrintSpeed: d.minPrintSpeed ?? null,
+      maxPrintSpeed: d.maxPrintSpeed ?? null,
+      netFilamentWeight: d.netFilamentWeight ?? null,
+      spoolWeight: d.spoolWeight ?? null,
+      ...(sourceUrl ? { tdsUrl: sourceUrl } : {}),
+    });
+    setTitle("New Filament from TDS");
+    setFormKey((k) => k + 1);
+    setTdsOpen(false);
+    setTdsUrl("");
+    toast(`Extracted ${result.fieldsExtracted} fields from TDS`);
+  };
+
+  // Get AI config from Electron store (if available)
+  const getAiConfig = async () => {
+    const api = window.electronAPI;
+    if (api?.getConfig) {
+      const cfg = await api.getConfig();
+      return {
+        apiKey: cfg.aiApiKey || cfg.geminiApiKey || undefined,
+        provider: cfg.aiProvider || undefined,
+      };
+    }
+    return { apiKey: undefined, provider: undefined };
+  };
+
+  // Handle TDS extraction from URL
   const handleTds = async () => {
     const url = tdsUrl.trim();
     if (!url) return;
 
     setTdsLoading(true);
     try {
-      // Get API key and provider from Electron config if available
-      let apiKey: string | undefined;
-      let provider: string | undefined;
-      const api = window.electronAPI;
-      if (api?.getConfig) {
-        const cfg = await api.getConfig();
-        apiKey = cfg.aiApiKey || cfg.geminiApiKey || undefined;
-        provider = cfg.aiProvider || undefined;
-      }
+      const { apiKey, provider } = await getAiConfig();
 
       const res = await fetch("/api/tds", {
         method: "POST",
@@ -300,39 +344,41 @@ function NewFilamentContent() {
         return;
       }
 
-      const d = result.data;
-      setInitialData({
-        name: d.name || "",
-        vendor: d.vendor || "",
-        type: d.type || "PLA",
-        density: d.density ?? null,
-        diameter: d.diameter ?? 1.75,
-        temperatures: {
-          nozzle: d.temperatures?.nozzle ?? null,
-          nozzleFirstLayer: d.temperatures?.nozzleRangeMin ?? d.temperatures?.nozzle ?? null,
-          nozzleRangeMin: d.temperatures?.nozzleRangeMin ?? null,
-          nozzleRangeMax: d.temperatures?.nozzleRangeMax ?? null,
-          bed: d.temperatures?.bed ?? null,
-          bedFirstLayer: d.temperatures?.bedRangeMin ?? d.temperatures?.bed ?? null,
-        },
-        dryingTemperature: d.dryingTemperature ?? null,
-        dryingTime: d.dryingTime ?? null,
-        glassTempTransition: d.glassTempTransition ?? null,
-        heatDeflectionTemp: d.heatDeflectionTemp ?? null,
-        shoreHardnessA: d.shoreHardnessA ?? null,
-        shoreHardnessD: d.shoreHardnessD ?? null,
-        maxVolumetricSpeed: d.maxVolumetricSpeed ?? null,
-        minPrintSpeed: d.minPrintSpeed ?? null,
-        maxPrintSpeed: d.maxPrintSpeed ?? null,
-        netFilamentWeight: d.netFilamentWeight ?? null,
-        spoolWeight: d.spoolWeight ?? null,
-        tdsUrl: url,
+      applyTdsResult(result, url);
+    } catch {
+      toast("Failed to extract TDS data", "error");
+    } finally {
+      setTdsLoading(false);
+    }
+  };
+
+  // Handle TDS extraction from uploaded file
+  const handleTdsFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = ""; // reset so same file can be re-selected
+
+    setTdsLoading(true);
+    try {
+      const { apiKey, provider } = await getAiConfig();
+
+      const formData = new FormData();
+      formData.append("file", file);
+      if (apiKey) formData.append("apiKey", apiKey);
+      if (provider) formData.append("provider", provider);
+
+      const res = await fetch("/api/tds", {
+        method: "POST",
+        body: formData,
       });
-      setTitle("New Filament from TDS");
-      setFormKey((k) => k + 1);
-      setTdsOpen(false);
-      setTdsUrl("");
-      toast(`Extracted ${result.fieldsExtracted} fields from TDS`);
+      const result = await res.json();
+
+      if (!res.ok) {
+        toast(result.error || "Failed to extract TDS data", "error");
+        return;
+      }
+
+      applyTdsResult(result);
     } catch {
       toast("Failed to extract TDS data", "error");
     } finally {
@@ -485,8 +531,31 @@ function NewFilamentContent() {
                       {tdsLoading ? "Extracting..." : "Extract"}
                     </button>
                   </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <div className="flex-1 border-t border-gray-700" />
+                    <span className="text-xs text-gray-600">or</span>
+                    <div className="flex-1 border-t border-gray-700" />
+                  </div>
+                  <input
+                    ref={tdsFileRef}
+                    type="file"
+                    accept=".pdf,.html,.htm,.txt"
+                    onChange={handleTdsFile}
+                    className="hidden"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => tdsFileRef.current?.click()}
+                    disabled={tdsLoading}
+                    className="mt-2 w-full px-3 py-1.5 text-sm bg-gray-700 text-gray-300 rounded hover:bg-gray-600 disabled:opacity-50 inline-flex items-center justify-center gap-1.5"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                    </svg>
+                    {tdsLoading ? "Extracting..." : "Upload local file"}
+                  </button>
                   <p className="text-xs text-gray-500 mt-2">
-                    Uses Google Gemini AI to extract filament properties.
+                    Uses AI to extract filament properties.
                     {" "}
                     <a href="/settings" className="text-blue-400 hover:text-blue-300 underline">
                       Configure API key

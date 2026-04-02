@@ -449,6 +449,74 @@ function countFields(data: TdsExtractedData): number {
 }
 
 /**
+ * Clean up extracted data: remove null values, count fields.
+ */
+function cleanExtractedData(data: TdsExtractedData): TdsExtractResult {
+  const cleaned: TdsExtractedData = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (key === "temperatures" && typeof value === "object" && value !== null) {
+      const temps: Record<string, number | undefined> = {};
+      for (const [tk, tv] of Object.entries(value)) {
+        if (tv != null) temps[tk] = tv as number;
+      }
+      if (Object.keys(temps).length > 0) {
+        cleaned.temperatures = temps as TdsExtractedData["temperatures"];
+      }
+    } else if (value != null) {
+      (cleaned as Record<string, unknown>)[key] = value;
+    }
+  }
+  const fieldsExtracted = countFields(cleaned);
+  return { success: true, data: cleaned, fieldsExtracted };
+}
+
+/**
+ * Extract filament data from pre-fetched TDS content (for file uploads).
+ */
+export async function extractFromTdsContent(
+  fileData: Buffer | Uint8Array,
+  mimeType: string,
+  apiKey: string,
+  provider: AiProvider = "gemini",
+): Promise<TdsExtractResult> {
+  try {
+    let content: TdsContent;
+
+    if (mimeType === "application/pdf" || mimeType.includes("pdf")) {
+      content = {
+        type: "pdf",
+        data: Buffer.from(fileData).toString("base64"),
+        mimeType: "application/pdf",
+      };
+    } else {
+      // Text/HTML file — decode and strip
+      let text = Buffer.from(fileData).toString("utf-8");
+      text = text
+        .replace(/<script[\s\S]*?<\/script>/gi, "")
+        .replace(/<style[\s\S]*?<\/style>/gi, "")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/&nbsp;/g, " ")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&#\d+;/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (text.length > 50_000) text = text.slice(0, 50_000);
+      content = { type: "text", data: text };
+    }
+
+    const data = await callProvider(provider, content, apiKey);
+    return cleanExtractedData(data);
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+/**
  * Extract filament data from a TDS URL using the specified AI provider.
  */
 export async function extractFromTds(
@@ -459,25 +527,7 @@ export async function extractFromTds(
   try {
     const content = await fetchTdsContent(url);
     const data = await callProvider(provider, content, apiKey);
-
-    // Clean up null values
-    const cleaned: TdsExtractedData = {};
-    for (const [key, value] of Object.entries(data)) {
-      if (key === "temperatures" && typeof value === "object" && value !== null) {
-        const temps: Record<string, number | undefined> = {};
-        for (const [tk, tv] of Object.entries(value)) {
-          if (tv != null) temps[tk] = tv as number;
-        }
-        if (Object.keys(temps).length > 0) {
-          cleaned.temperatures = temps as TdsExtractedData["temperatures"];
-        }
-      } else if (value != null) {
-        (cleaned as Record<string, unknown>)[key] = value;
-      }
-    }
-
-    const fieldsExtracted = countFields(cleaned);
-    return { success: true, data: cleaned, fieldsExtracted };
+    return cleanExtractedData(data);
   } catch (err) {
     return {
       success: false,
