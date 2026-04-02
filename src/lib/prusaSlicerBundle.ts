@@ -46,10 +46,14 @@ export function filamentToSlicerKeys(
   const set = (key: string, value: unknown) => {
     if (value != null && value !== "") {
       keys[key] = String(value);
-    } else if (!(key in keys)) {
-      // Only write nil if the settings bag didn't already have a value
-      keys[key] = null;
+    } else if (key in keys && keys[key] === null) {
+      // The settings bag has nil for this key (from a previous import).
+      // Remove it so PrusaSlicer uses its built-in defaults instead of
+      // interpreting nil as "reset to zero" for numeric fields.
+      delete keys[key];
     }
+    // If the settings bag has an actual string value, preserve it.
+    // If the key isn't in the settings bag at all, don't add it.
   };
 
   // Core identification
@@ -120,8 +124,9 @@ function writeSection(
   for (const key of sortedKeys) {
     const value = merged[key];
     if (value === null) {
+      // Preserve nil for settings bag values (means "inherit from parent" in PrusaSlicer)
       lines.push(`${key} = nil`);
-    } else {
+    } else if (value !== undefined) {
       lines.push(`${key} = ${value}`);
     }
   }

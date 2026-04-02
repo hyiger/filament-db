@@ -685,6 +685,15 @@ export default function Home() {
                   <span className="w-2 h-2 rounded-full bg-purple-500" />
                   Import from Atlas
                 </button>
+                {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
+                <a
+                  href="/openprinttag"
+                  className="block px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  onClick={() => setShowImportExport(false)}
+                >
+                  <span className="w-2 h-2 rounded-full bg-teal-500" />
+                  Browse OpenPrintTag DB
+                </a>
                 <button
                   onClick={() => { setShowImportExport(false); fileInputRef.current?.click(); }}
                   disabled={importing}

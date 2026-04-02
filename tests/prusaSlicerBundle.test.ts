@@ -120,7 +120,7 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.cooling).toBe("1");
   });
 
-  it("writes nil for missing temperatures when not in settings", () => {
+  it("omits missing temperatures when not in settings (PrusaSlicer uses defaults)", () => {
     const filament = {
       name: "Minimal",
       vendor: "Test",
@@ -133,10 +133,12 @@ describe("filamentToSlicerKeys", () => {
 
     const keys = filamentToSlicerKeys(filament);
 
-    expect(keys.temperature).toBeNull();
-    expect(keys.first_layer_temperature).toBeNull();
-    expect(keys.bed_temperature).toBeNull();
-    expect(keys.first_layer_bed_temperature).toBeNull();
+    // Missing structured fields should be omitted entirely so PrusaSlicer
+    // uses its built-in defaults instead of interpreting nil as zero.
+    expect(keys.temperature).toBeUndefined();
+    expect(keys.first_layer_temperature).toBeUndefined();
+    expect(keys.bed_temperature).toBeUndefined();
+    expect(keys.first_layer_bed_temperature).toBeUndefined();
   });
 
   it("preserves temperatures from settings when DB fields are null", () => {
