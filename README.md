@@ -2,6 +2,8 @@
 
 A desktop and web application for managing 3D printing filament profiles. Import filament configurations from PrusaSlicer, store them in MongoDB or MongoDB Atlas, and manage them through a clean interface. Available as an installable desktop app for macOS, Windows, and Linux, or run as a local web app. The desktop app supports offline mode with an embedded local database, hybrid mode with automatic cloud sync, or direct Atlas cloud mode. The API is unauthenticated and intended for single-user localhost use; do not expose to untrusted networks without adding an auth layer.
 
+![Filament DB](docs/images/filament-db-screenshot.png)
+
 ## Features
 
 ### Filament Management
@@ -104,10 +106,10 @@ filament-db/
 │   │   ├── nozzles/         # Nozzle pages (list, edit, new)
 │   │   └── printers/        # Printer pages (list, edit, new)
 │   ├── components/          # React components (NFC status, dialogs, providers)
-│   ├── hooks/               # Custom hooks (useNfc)
+│   ├── hooks/               # Custom hooks (useNfc, useCurrency)
 │   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder, TDS extractor
 │   └── models/              # Mongoose schemas (Filament, Nozzle, Printer)
-├── tests/                   # Vitest unit tests (343 tests across 15 files)
+├── tests/                   # Vitest unit tests (345 tests across 15 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   └── release.yml          # CD: build desktop installers on version tags (4 platforms)
