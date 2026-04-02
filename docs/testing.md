@@ -22,24 +22,24 @@ npm run test:coverage
 ```
 tests/
 ├── setup.ts                    # Test setup (mongodb-memory-server lifecycle)
-├── openprinttag.test.ts        # OpenPrintTag encoder tests (113 tests)
-├── openprinttag-decode.test.ts # OpenPrintTag decoder tests (30 tests)
+├── openprinttag.test.ts        # OpenPrintTag encoder tests (120 tests)
+├── openprinttag-decode.test.ts # OpenPrintTag decoder tests (36 tests)
 ├── ndef.test.ts                # NDEF wrap/parse + format/erase tests (23 tests)
 ├── nfc-roundtrip.test.ts       # NFC encode→decode roundtrip tests (6 tests)
 ├── resolveFilament.test.ts     # Parent/variant resolution + spool inheritance + hasVariants tests (24 tests)
 ├── parseIni.test.ts            # INI parser tests (18 tests)
 ├── prusament.test.ts           # Prusament spool data extraction tests (8 tests)
-├── tdsExtractor.test.ts        # TDS AI extraction tests — Gemini/Claude/OpenAI providers (9 tests)
+├── tdsExtractor.test.ts        # TDS AI extraction tests — Gemini/Claude/OpenAI providers, file uploads (14 tests)
 ├── apiErrorHandler.test.ts     # API error handler utility tests (10 tests)
-├── Filament.test.ts            # Filament model + spool CRUD + soft-delete + instanceId tests (23 tests)
-├── Printer.test.ts             # Printer model + unique constraints + soft-delete tests (13 tests)
+├── Filament.test.ts            # Filament model + spool CRUD + soft-delete + instanceId tests (24 tests)
+├── Printer.test.ts             # Printer model + unique constraints + soft-delete tests (12 tests)
 ├── Nozzle.test.ts              # Nozzle model tests (9 tests)
 ├── mongodb.test.ts             # DB connection + migration tests (10 tests)
-├── importFilaments.test.ts     # CSV/XLSX import mapping + upsert + skip report tests (19 tests)
+├── importFilaments.test.ts     # CSV/XLSX import mapping + upsert + skip report tests (18 tests)
 └── exportFilaments.test.ts     # CSV/XLSX export column mapping tests (11 tests)
 ```
 
-**Total: 338 tests across 15 test files**
+**Total: 343 tests across 15 test files**
 
 ## Coverage Thresholds
 

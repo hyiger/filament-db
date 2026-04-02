@@ -308,4 +308,150 @@ describe("tdsExtractor", () => {
       expect(apiUrl).toContain("openai.com");
     });
   });
+
+  describe("extractFromTdsContent", () => {
+    it("extracts data from a PDF file upload", async () => {
+      const geminiResponse = {
+        candidates: [{
+          content: {
+            parts: [{
+              text: JSON.stringify({
+                name: "PDF Filament",
+                vendor: "TestBrand",
+                type: "PETG",
+                density: 1.27,
+                diameter: 1.75,
+              }),
+            }],
+          },
+        }],
+      };
+
+      let geminiBody: string | undefined;
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, opts?: { body?: string }) => {
+        geminiBody = opts?.body;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(geminiResponse),
+        });
+      }));
+
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const pdfBuffer = Buffer.from("fake-pdf-content");
+      const result = await extractFromTdsContent(pdfBuffer, "application/pdf", "fake-key", "gemini");
+
+      expect(result.success).toBe(true);
+      expect(result.data?.name).toBe("PDF Filament");
+      expect(result.data?.type).toBe("PETG");
+      expect(result.data?.density).toBe(1.27);
+      // Verify PDF was sent as base64 inlineData
+      const parsed = JSON.parse(geminiBody!);
+      expect(parsed.contents[0].parts[0].inlineData).toBeDefined();
+      expect(parsed.contents[0].parts[0].inlineData.mimeType).toBe("application/pdf");
+    });
+
+    it("extracts data from an HTML file upload", async () => {
+      const geminiResponse = {
+        candidates: [{
+          content: {
+            parts: [{
+              text: JSON.stringify({
+                name: "HTML Filament",
+                vendor: "TestCo",
+                type: "PLA",
+              }),
+            }],
+          },
+        }],
+      };
+
+      let geminiBody: string | undefined;
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, opts?: { body?: string }) => {
+        geminiBody = opts?.body;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(geminiResponse),
+        });
+      }));
+
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const htmlBuffer = Buffer.from("<html><body><h1>PLA TDS</h1><p>Density: 1.24</p></body></html>");
+      const result = await extractFromTdsContent(htmlBuffer, "text/html", "fake-key", "gemini");
+
+      expect(result.success).toBe(true);
+      expect(result.data?.name).toBe("HTML Filament");
+      // Verify HTML tags were stripped (sent as text, not inlineData)
+      const parsed = JSON.parse(geminiBody!);
+      expect(parsed.contents[0].parts[0].text).toBeDefined();
+      expect(parsed.contents[0].parts[0].text).not.toContain("<html>");
+      expect(parsed.contents[0].parts[0].text).toContain("PLA TDS");
+    });
+
+    it("strips HTML tags and entities from uploaded HTML files", async () => {
+      const geminiResponse = {
+        candidates: [{
+          content: { parts: [{ text: '{"name": "Stripped", "type": "ABS"}' }] },
+        }],
+      };
+
+      let geminiBody: string | undefined;
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, opts?: { body?: string }) => {
+        geminiBody = opts?.body;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(geminiResponse),
+        });
+      }));
+
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const htmlBuffer = Buffer.from(
+        "<html><head><script>alert('x')</script><style>.a{}</style></head>" +
+        "<body><p>Temp&nbsp;210&amp;230&lt;C&gt;</p></body></html>"
+      );
+      const result = await extractFromTdsContent(htmlBuffer, "text/html", "fake-key");
+
+      expect(result.success).toBe(true);
+      const parsed = JSON.parse(geminiBody!);
+      const text = parsed.contents[0].parts[0].text;
+      // Scripts and styles should be stripped
+      expect(text).not.toContain("alert");
+      expect(text).not.toContain("<style>");
+      // HTML entities should be decoded
+      expect(text).toContain("210&230<C>");
+    });
+
+    it("returns error when AI provider call fails", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("API unreachable")));
+
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const buffer = Buffer.from("some content");
+      const result = await extractFromTdsContent(buffer, "text/plain", "fake-key", "gemini");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("API unreachable");
+    });
+
+    it("routes to Claude provider for file uploads", async () => {
+      const claudeResponse = {
+        content: [{ type: "text", text: '{"name": "Claude File", "type": "TPU"}' }],
+      };
+
+      let apiUrl = "";
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+        apiUrl = url;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(claudeResponse),
+        });
+      }));
+
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const buffer = Buffer.from("TPU filament specs");
+      const result = await extractFromTdsContent(buffer, "text/plain", "sk-ant-test", "claude");
+
+      expect(result.success).toBe(true);
+      expect(result.data?.name).toBe("Claude File");
+      expect(apiUrl).toContain("anthropic.com");
+    });
+  });
 });
