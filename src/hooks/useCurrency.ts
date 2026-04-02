@@ -18,11 +18,25 @@ export function getCurrencySymbol(code: CurrencyCode): string {
   return CURRENCIES.find((c) => c.code === code)?.symbol ?? "$";
 }
 
+function getInitialCurrency(): CurrencyCode {
+  if (typeof window === "undefined") return DEFAULT_CURRENCY;
+  // Synchronously read from localStorage for SSR-safe init
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved && CURRENCIES.some((c) => c.code === saved)) {
+      return saved as CurrencyCode;
+    }
+  } catch {
+    // localStorage may not be available
+  }
+  return DEFAULT_CURRENCY;
+}
+
 export function useCurrency() {
-  const [currency, setCurrencyState] = useState<CurrencyCode>(DEFAULT_CURRENCY);
+  const [currency, setCurrencyState] = useState<CurrencyCode>(getInitialCurrency);
 
   useEffect(() => {
-    // Load from electron-store or localStorage
+    // In Electron, electron-store is the source of truth — override localStorage value
     const api = window.electronAPI;
     if (api?.getConfig) {
       api.getConfig().then((cfg) => {
@@ -31,11 +45,6 @@ export function useCurrency() {
           setCurrencyState(saved as CurrencyCode);
         }
       }).catch(() => {});
-    } else {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved && CURRENCIES.some((c) => c.code === saved)) {
-        setCurrencyState(saved as CurrencyCode);
-      }
     }
   }, []);
 
