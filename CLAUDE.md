@@ -52,7 +52,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 
 ## Testing
 
-- 345 tests across 15 files
+- 364 tests across 16 files
 - Coverage thresholds: 80% lines/statements, 90% functions, 75% branches
 - Setup file: `tests/setup.ts` (mongodb-memory-server)
 - Tests run in CI on Node 20 and 22
