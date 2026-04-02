@@ -30,30 +30,44 @@ describe("tdsExtractor", () => {
       expect(result.error).toContain("404");
     });
 
-    it("handles Gemini rate limit error", async () => {
-      let callCount = 0;
+    it("retries on Gemini rate limit and eventually fails", async () => {
+      vi.useFakeTimers();
+
+      let apiCallCount = 0;
       vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
-        callCount++;
-        if (callCount === 1) {
-          // First call: URL fetch succeeds with HTML
+        if (url.includes("example.com")) {
+          // URL fetch succeeds with HTML
           return Promise.resolve({
             ok: true,
             headers: new Headers({ "content-type": "text/html" }),
             text: () => Promise.resolve("<html><body>PLA filament specs</body></html>"),
           });
         }
-        // Second call: Gemini API returns 429
+        // Gemini API always returns 429
+        apiCallCount++;
         return Promise.resolve({
           ok: false,
           status: 429,
+          headers: new Headers(),
           text: () => Promise.resolve("Rate limit exceeded"),
         });
       }));
 
       const { extractFromTds } = await import("@/lib/tdsExtractor");
-      const result = await extractFromTds("https://example.com/tds.html", "fake-key");
+      const resultPromise = extractFromTds("https://example.com/tds.html", "fake-key");
+
+      // Advance through retry delays (5s, 10s, 20s)
+      for (let i = 0; i < 3; i++) {
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+
+      const result = await resultPromise;
       expect(result.success).toBe(false);
       expect(result.error).toContain("rate limit");
+      // Should have retried: 1 initial + 3 retries = 4 API calls
+      expect(apiCallCount).toBe(4);
+
+      vi.useRealTimers();
     });
 
     it("successfully extracts data from HTML TDS", async () => {

@@ -179,6 +179,43 @@ async function fetchTdsContent(url: string): Promise<TdsContent> {
   }
 }
 
+// ── Retry with backoff ──
+
+/** Error subclass for rate-limit responses so we can detect and retry. */
+class RateLimitError extends Error {
+  retryAfterMs: number;
+  constructor(provider: string, retryAfterMs: number) {
+    super(`${provider} rate limit exceeded`);
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+const MAX_RETRIES = 3;
+const BASE_DELAY_MS = 5_000; // 5 seconds initial wait
+
+/**
+ * Retry a provider call with exponential backoff on rate-limit errors.
+ */
+async function withRetry(
+  fn: () => Promise<string>,
+  provider: string,
+): Promise<string> {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof RateLimitError && attempt < MAX_RETRIES) {
+        const delay = err.retryAfterMs || BASE_DELAY_MS * Math.pow(2, attempt);
+        console.log(`Rate limited by ${provider}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error(`${provider} rate limit exceeded after ${MAX_RETRIES} retries.`);
+}
+
 // ── Provider-specific API calls ──
 
 /**
@@ -223,7 +260,8 @@ async function callGemini(
       throw new Error("Invalid Gemini API key. Check your key in Settings.");
     }
     if (res.status === 429) {
-      throw new Error("Gemini rate limit exceeded. Wait a moment and try again.");
+      const retryAfter = parseInt(res.headers.get("retry-after") || "0", 10);
+      throw new RateLimitError("Gemini", retryAfter ? retryAfter * 1000 : 0);
     }
     throw new Error(`Gemini API error: HTTP ${res.status} — ${errorBody.slice(0, 200)}`);
   }
@@ -279,7 +317,8 @@ async function callClaude(
       throw new Error("Invalid Claude API key. Check your key in Settings.");
     }
     if (res.status === 429) {
-      throw new Error("Claude rate limit exceeded. Wait a moment and try again.");
+      const retryAfter = parseInt(res.headers.get("retry-after") || "0", 10);
+      throw new RateLimitError("Claude", retryAfter ? retryAfter * 1000 : 0);
     }
     throw new Error(`Claude API error: HTTP ${res.status} — ${errorBody.slice(0, 200)}`);
   }
@@ -339,7 +378,8 @@ async function callOpenAI(
       throw new Error("Invalid OpenAI API key. Check your key in Settings.");
     }
     if (res.status === 429) {
-      throw new Error("OpenAI rate limit exceeded. Wait a moment and try again.");
+      const retryAfter = parseInt(res.headers.get("retry-after") || "0", 10);
+      throw new RateLimitError("OpenAI", retryAfter ? retryAfter * 1000 : 0);
     }
     throw new Error(`OpenAI API error: HTTP ${res.status} — ${errorBody.slice(0, 200)}`);
   }
@@ -355,21 +395,23 @@ async function callProvider(
   content: TdsContent,
   apiKey: string,
 ): Promise<TdsExtractedData> {
-  let rawText: string;
+  let callFn: () => Promise<string>;
 
   switch (provider) {
     case "gemini":
-      rawText = await callGemini(content, apiKey);
+      callFn = () => callGemini(content, apiKey);
       break;
     case "claude":
-      rawText = await callClaude(content, apiKey);
+      callFn = () => callClaude(content, apiKey);
       break;
     case "openai":
-      rawText = await callOpenAI(content, apiKey);
+      callFn = () => callOpenAI(content, apiKey);
       break;
     default:
       throw new Error(`Unknown AI provider: ${provider}`);
   }
+
+  const rawText = await withRetry(callFn, provider);
 
   if (!rawText) {
     throw new Error(`${provider} returned an empty response. The TDS may not contain extractable data.`);
