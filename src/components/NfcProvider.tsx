@@ -24,7 +24,7 @@ interface NfcContextValue {
   status: NfcStatus;
   writing: boolean;
   writeError: string | null;
-  writeTag: (payload: Uint8Array) => Promise<void>;
+  writeTag: (payload: Uint8Array, productUrl?: string) => Promise<void>;
   tagReadResult: NfcTagReadResult | null;
   dismissTagRead: () => void;
 }
