@@ -313,6 +313,80 @@ Soft-delete a printer by ID (sets `_deletedAt` timestamp). Cannot delete a print
 
 ---
 
+## TDS Extraction (AI)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/tds` | Check if an AI API key is configured |
+| `PUT` | `/api/tds` | Save an AI API key (with provider selection) |
+| `DELETE` | `/api/tds` | Remove the stored AI API key |
+| `POST` | `/api/tds` | Extract filament data from a TDS URL |
+
+### GET /api/tds
+
+Returns whether an AI API key is configured and which provider is active.
+
+```json
+{ "configured": true, "provider": "gemini" }
+```
+
+### PUT /api/tds
+
+Save and validate an AI API key. Send a JSON body:
+
+```json
+{ "apiKey": "your-api-key", "provider": "gemini" }
+```
+
+Supported providers: `gemini` (Google Gemini), `claude` (Anthropic Claude), `openai` (OpenAI ChatGPT).
+
+The key is validated against the provider's API before saving. Returns `{ success: true }` on success or 401 if the key is invalid.
+
+### DELETE /api/tds
+
+Removes the stored API key and resets the provider to the default (Gemini).
+
+### POST /api/tds
+
+Extract filament properties from a Technical Data Sheet URL using AI. Send a JSON body:
+
+```json
+{ "url": "https://example.com/filament-tds.pdf", "apiKey": "optional-key", "provider": "gemini" }
+```
+
+- `url` (required) -- URL to a TDS document (PDF or web page)
+- `apiKey` (optional) -- API key to use. Falls back to environment variable (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`) or the stored key from PUT.
+- `provider` (optional) -- AI provider to use. Falls back to the stored provider.
+
+Returns:
+```json
+{
+  "success": true,
+  "fieldsExtracted": 12,
+  "data": {
+    "name": "SuperPLA Pro",
+    "vendor": "ExampleBrand",
+    "type": "PLA",
+    "density": 1.24,
+    "diameter": 1.75,
+    "temperatures": {
+      "nozzle": 215,
+      "nozzleRangeMin": 200,
+      "nozzleRangeMax": 230,
+      "bed": 60
+    },
+    "dryingTemperature": 55,
+    "dryingTime": 4,
+    "glassTempTransition": 60,
+    "heatDeflectionTemp": 52
+  }
+}
+```
+
+Extracted fields include: name, vendor, type, density, diameter, temperatures (nozzle, bed, ranges), drying temperature/time, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), volumetric speed, print speed ranges, and weights. Fields not found in the TDS are omitted from the response.
+
+---
+
 ## Setup
 
 | Method | Endpoint | Description |

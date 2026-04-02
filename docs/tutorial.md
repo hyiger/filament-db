@@ -143,10 +143,33 @@ Before adding filaments you need at least one nozzle profile so you can assign p
 On the **Add New Filament** page, the **"Populate from"** toolbar offers three shortcuts:
 
 - **NFC Tag** (desktop only) -- place a tagged spool on the reader. The form auto-populates with material, vendor, temps, density, and color from the OpenPrintTag data.
+- **Import from TDS** -- paste a Technical Data Sheet URL and the AI extracts temperatures, density, drying specs, Tg, HDT, shore hardness, and more. Requires an AI API key configured in Settings (see [Step 5b](#step-5b-import-from-a-technical-data-sheet)).
+- **Prusament QR** -- enter a spool ID or URL from a Prusament QR code to fetch full specs.
 - **Load from INI** -- upload a PrusaSlicer `.ini` config bundle. If it contains one filament profile, the form fills automatically. If multiple profiles are found, a picker dialog lets you choose which one.
 - **Clone Existing** -- search your library and select a filament. All settings are copied into the form (with the name cleared so you can enter a new one).
 
 After populating, review and adjust any fields before clicking **Create Filament**.
+
+### Step 5b: Import from a Technical Data Sheet
+
+If you have a link to a manufacturer's Technical Data Sheet (PDF or web page), the app can use AI to extract filament properties automatically.
+
+**First-time setup (once):**
+
+1. Go to **Settings** (gear icon or navigate to `/settings`).
+2. Scroll to **AI Features**.
+3. Choose a provider: **Google Gemini** (free tier), **Anthropic Claude**, or **OpenAI ChatGPT**.
+4. Click the provider link to get an API key (Gemini is free, Claude and OpenAI are pay-per-use).
+5. Paste the key and click **Save Key**. A green dot confirms it's configured.
+
+**Importing from TDS:**
+
+1. On the **Add New Filament** page, click **"Import from TDS"** (purple button in the toolbar).
+2. Paste the TDS URL (e.g., `https://bambulab.com/filament/pla-basic-tds.pdf`).
+3. Click **Extract**. The AI reads the document and extracts all available properties.
+4. The form auto-populates with extracted data. A toast shows how many fields were extracted (e.g., "Extracted 12 fields from TDS").
+5. The TDS URL is also saved to the filament's TDS Link field.
+6. Review, adjust if needed, and click **Create Filament**.
 
 ---
 
@@ -425,7 +448,9 @@ In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted fi
 | Action | Where |
 |--------|-------|
 | Add filament | Home > + Add Filament |
-| Populate from NFC / INI / Clone | Add Filament > Populate from toolbar |
+| Populate from NFC / TDS / INI / Clone | Add Filament > Populate from toolbar |
+| Import from TDS | Add Filament > Import from TDS |
+| Configure AI provider | Settings > AI Features |
 | Import from PrusaSlicer | Home > Import INI |
 | Import from CSV/XLSX | Home > Import CSV / Import XLSX |
 | Import Prusament spool | Home > Prusament QR |

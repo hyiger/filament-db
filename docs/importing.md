@@ -70,6 +70,31 @@ Running the seed script again will update existing filaments (matched by name) w
 
 ---
 
+## Import from Technical Data Sheet (AI)
+
+Extract filament properties automatically from a manufacturer's Technical Data Sheet using AI. Works with PDF and web page TDS URLs.
+
+### Prerequisites
+
+Configure an AI provider API key in **Settings > AI Features**. Supported providers:
+
+- **Google Gemini** — free tier (15 RPM), get a key at [Google AI Studio](https://aistudio.google.com/apikey)
+- **Anthropic Claude** — pay-per-use, get a key at [Anthropic Console](https://console.anthropic.com/settings/keys)
+- **OpenAI ChatGPT** — pay-per-use, get a key at [OpenAI Platform](https://platform.openai.com/api-keys)
+
+Alternatively, set an environment variable: `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`.
+
+### Usage
+
+1. Click **"+ Add Filament"** on the home page
+2. Click **"Import from TDS"** in the "Populate from" toolbar
+3. Paste a TDS URL (e.g., `https://bambulab.com/filament-tds.pdf`)
+4. Click **Extract** — the AI parses the document and returns structured data
+5. The form auto-populates with extracted fields (name, vendor, type, temperatures, density, drying specs, Tg, HDT, shore hardness, print speeds, weights)
+6. Review, adjust, and click **Create Filament**
+
+---
+
 ## Prusament Spool Import
 
 Prusament filament spools have a QR code that links to a detail page with specifications (material, color, temperatures, weight, manufacturing date, diameter tolerances, pricing).

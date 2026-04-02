@@ -13,6 +13,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Presets** -- named parameter variants per filament (e.g., shore hardness profiles with different temps and extrusion multiplier)
 - **Spool tracking** -- track multiple spools per filament with individual weights, lot numbers, purchase/opened dates, and computed length from density and diameter
 - **Technical Data Sheets** -- link vendor TDS documents with inline preview pane and auto-suggestions from same-vendor filaments
+- **AI-powered TDS import** -- extract filament properties (temperatures, density, drying specs, Tg, HDT, shore hardness, speeds) from PDF or web TDS using Google Gemini, Anthropic Claude, or OpenAI ChatGPT
 - **Material defaults backfill** -- script to populate Tg, HDT, density, drying params, and speed ranges from curated defaults for 30+ material types
 
 ### Hardware Integration
@@ -27,6 +28,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **CSV / XLSX** -- import and export spreadsheets with column mapping
 - **Prusament QR** -- scan a spool QR code or enter spool ID to auto-import specs, temps, weights, and pricing
 - **Import from Atlas** -- connect to a remote MongoDB Atlas database and selectively import filaments
+- **TDS extraction** -- paste a TDS URL to auto-populate the filament form via AI (Gemini, Claude, or ChatGPT)
 - **OpenPrintTag binary** -- download `.bin` files with drying temps, transmission distance (HueForge TD), and instance ID
 - **Snapshot backup/restore** -- export and import the entire database as JSON with atomic restore and rollback on failure
 
@@ -94,6 +96,7 @@ filament-db/
 │   │   ├── api/nozzles/     # Nozzle REST API (CRUD)
 │   │   ├── api/printers/    # Printer REST API (CRUD)
 │   │   ├── api/prusament/    # Prusament spool scraping and import
+│   │   ├── api/tds/          # AI-powered TDS extraction (Gemini/Claude/OpenAI)
 │   │   ├── api/setup/       # Connection test endpoint (for desktop setup wizard)
 │   │   ├── api-docs/        # Interactive Swagger UI (OpenAPI 3.0)
 │   │   ├── setup/           # First-launch setup wizard
@@ -102,9 +105,9 @@ filament-db/
 │   │   └── printers/        # Printer pages (list, edit, new)
 │   ├── components/          # React components (NFC status, dialogs, providers)
 │   ├── hooks/               # Custom hooks (useNfc)
-│   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder
+│   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder, TDS extractor
 │   └── models/              # Mongoose schemas (Filament, Nozzle, Printer)
-├── tests/                   # Vitest unit tests (329 tests across 14 files)
+├── tests/                   # Vitest unit tests (338 tests across 15 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   └── release.yml          # CD: build desktop installers on version tags (4 platforms)

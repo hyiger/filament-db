@@ -99,11 +99,18 @@ cp .env.example .env.local
 Copy-Item .env.example .env.local
 ```
 
-Then edit `.env.local` with your MongoDB connection string:
+Then edit `.env.local` with your MongoDB connection string and optionally an AI API key for TDS extraction:
 
 ```
 MONGODB_URI=mongodb+srv://youruser:yourpassword@yourcluster.mongodb.net/filament-db?appName=Filaments
+
+# Optional: AI provider for TDS extraction (choose one)
+GEMINI_API_KEY=your-gemini-key
+# ANTHROPIC_API_KEY=your-claude-key
+# OPENAI_API_KEY=your-openai-key
 ```
+
+The AI API key enables the "Import from TDS" feature, which uses AI to extract filament properties from Technical Data Sheets. You can also configure this in the Settings page instead of using environment variables.
 
 > **Note:** If your password contains special characters (`@`, `#`, `%`, etc.), you must URL-encode them. For example, `p@ssword` becomes `p%40ssword`.
 

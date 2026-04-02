@@ -34,7 +34,7 @@ On first launch, the app shows a setup wizard where you choose a connection mode
 
 For Atlas and Hybrid modes, you'll be asked for a MongoDB Atlas connection string. Enter it and click **Connect** -- the app validates the connection before saving.
 
-Your configuration is stored in an encrypted local file (using `electron-store` with AES encryption):
+Your configuration is stored in an encrypted local file (using `electron-store` with AES encryption). This includes your MongoDB connection settings, AI provider API key, and connection mode.
 - **macOS**: `~/Library/Application Support/filament-db/config.json`
 - **Windows**: `%APPDATA%/filament-db/config.json`
 - **Linux**: `~/.config/filament-db/config.json`
@@ -110,6 +110,7 @@ The desktop app wraps the Next.js application in Electron:
 │  │ - Spawns Next.js standalone server    │  │
 │  │   via Electron utilityProcess        │  │
 │  │ - Encrypted config storage            │  │
+│  │   (MongoDB URI, AI API key, etc.)    │  │
 │  │ - IPC handlers (save/load config)     │  │
 │  │ - HTTP polling for server readiness   │  │
 │  │ - NFC reader/writer service (PC/SC)   │  │

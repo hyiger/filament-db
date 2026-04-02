@@ -27,6 +27,8 @@ Click any filament name in the table to see its full details:
 1. Click **"+ Add Filament"** in the top right
 2. Optionally use the **"Populate from"** toolbar to pre-fill the form:
    - **Place an NFC tag** on the reader to auto-populate from OpenPrintTag data (desktop only)
+   - **Import from TDS** to extract properties from a Technical Data Sheet URL using AI (requires API key — see [AI Settings](#ai-settings))
+   - **Prusament QR** to fetch specs from a Prusament spool QR code
    - **Load from INI** to pick a profile from a PrusaSlicer config bundle
    - **Clone Existing** to copy all settings from another filament in your library
 3. Fill in the required fields (name, vendor, type)
@@ -197,6 +199,50 @@ On the **Settings** page, the NFC Tools section lets you erase a tag:
 ### Exporting OpenPrintTag Binary
 
 Click **"Export OPT"** on any filament's detail page to download the binary as a `.bin` file for use with external NFC tools.
+
+---
+
+## AI-Powered TDS Import
+
+Extract filament properties automatically from a manufacturer's Technical Data Sheet using AI. Supports PDF and web page TDS URLs.
+
+### Setup
+
+1. Go to **Settings** and scroll to the **AI Features** section
+2. Select your preferred AI provider: **Google Gemini**, **Anthropic Claude**, or **OpenAI ChatGPT**
+3. Get a free API key from your chosen provider (links are provided in the settings page)
+4. Paste the key and click **Save Key** — the key is validated before saving
+
+### Using TDS Import
+
+1. Click **"+ Add Filament"** on the home page
+2. In the **"Populate from"** toolbar, click **"Import from TDS"** (purple button)
+3. Paste the URL of a filament's Technical Data Sheet
+4. Click **"Extract"** — the AI analyzes the document and extracts properties
+5. The form auto-populates with extracted data (temperatures, density, drying specs, Tg, HDT, shore hardness, print speeds, etc.)
+6. Review and adjust any fields, then click **"Create Filament"**
+
+The TDS URL is also saved to the filament's `tdsUrl` field for future reference.
+
+### Supported Providers
+
+| Provider | Model | Free Tier | PDF Support |
+|----------|-------|-----------|-------------|
+| Google Gemini | gemini-2.0-flash | 15 requests/minute | Native |
+| Anthropic Claude | claude-sonnet-4-20250514 | Pay-per-use | Native |
+| OpenAI ChatGPT | gpt-4o-mini | Pay-per-use | Text extraction |
+
+### AI Settings
+
+On the **Settings** page under **AI Features**:
+
+- **Provider selector** — click a provider button to switch between Gemini, Claude, and ChatGPT
+- **API key** — masked input field with show/hide toggle
+- **Save Key** — validates the key against the selected provider before saving
+- **Remove Key** — clears the stored key
+- **Status indicator** — green dot when configured, gray when not
+
+In the desktop app, the API key is stored in the encrypted local config file. In the web app, set the key via the Settings page or use environment variables (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`).
 
 ---
 
