@@ -203,7 +203,6 @@ export function wrapNdefForTag(
   // TLV: tag=0x03, length, value=ndefMessage
   const ndefMessageLen = ndefMessage.length;
   const useLongTlv = ndefMessageLen >= 255;
-  const tlvHeaderLen = useLongTlv ? 4 : 2;
 
   // Allocate full tag memory (zero-filled)
   const tagMemory = new Uint8Array(tagMemorySize);
