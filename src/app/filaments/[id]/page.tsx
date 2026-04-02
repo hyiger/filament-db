@@ -773,7 +773,7 @@ export default function FilamentDetail() {
         </p>
       )}
 
-      <div>
+      {filament.settings && Object.keys(filament.settings).length > 0 && (<div>
         <button
           onClick={() => setShowAllSettings(!showAllSettings)}
           className="text-sm text-blue-600 hover:underline mb-3"
@@ -797,7 +797,7 @@ export default function FilamentDetail() {
             </table>
           </div>
         )}
-      </div>
+      </div>)}
 
       {showPrusamentImport && (
         <PrusamentImportDialog
