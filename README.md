@@ -58,6 +58,14 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 Download the latest release for your platform from [GitHub Releases](https://github.com/hyiger/filament-db/releases). On first launch, the app will prompt you to choose a connection mode (cloud, hybrid, or offline). No MongoDB Atlas account is needed for offline mode.
 
+### Docker
+
+```bash
+docker run -p 3000:3000 -e MONGODB_URI="mongodb+srv://..." ghcr.io/hyiger/filament-db
+```
+
+Open http://localhost:3000. See the [Setup Guide](docs/setup.md#option-2-docker) for Docker Compose and configuration options.
+
 ### From Source
 
 ```bash
@@ -76,7 +84,7 @@ See the [Setup Guide](docs/setup.md) for detailed instructions.
 | Document | Description |
 |----------|-------------|
 | [Tutorial](docs/tutorial.md) | Step-by-step walkthrough of every feature, from first launch to NFC |
-| [Setup Guide](docs/setup.md) | Installation, MongoDB Atlas setup, running as web or desktop app |
+| [Setup Guide](docs/setup.md) | Installation, Docker, MongoDB Atlas setup, running as web or desktop app |
 | [Desktop App](docs/desktop.md) | Electron desktop app: building, packaging, and releasing |
 | [Importing & Exporting](docs/importing.md) | PrusaSlicer config export, web UI import, CLI seed script, INI export |
 | [Usage Guide](docs/usage.md) | Browsing, filtering, sorting, editing filaments, nozzle management, calibrations, TDS links |
@@ -112,7 +120,8 @@ filament-db/
 ├── tests/                   # Vitest unit tests (345 tests across 15 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
-│   └── release.yml          # CD: build desktop installers on version tags (4 platforms)
+│   ├── release.yml          # CD: build desktop installers on version tags (4 platforms)
+│   └── docker.yml           # CD: build and push Docker image to GHCR on version tags
 ├── electron-builder.yml     # Electron packaging config (macOS, Windows, Linux x64/arm64)
 └── vitest.config.ts         # Test config with coverage thresholds
 ```

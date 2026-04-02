@@ -18,7 +18,93 @@ On first launch, you'll be prompted to choose a connection mode:
 
 For Atlas and Hybrid modes, you'll need a MongoDB Atlas connection string. See [Setting Up MongoDB Atlas](#setting-up-mongodb-atlas-free-tier) below if you don't have an account yet.
 
-## Option 2: Run from Source
+## Option 2: Docker
+
+Run Filament DB as a Docker container. The image is ~72MB, built on `node:22-alpine`, and supports both `linux/amd64` and `linux/arm64` (Raspberry Pi).
+
+> **Note:** The Docker image runs the web app only. NFC tag reading/writing requires the [desktop app](#option-1-desktop-app-easiest) for direct USB hardware access.
+
+### Quick Start
+
+```bash
+docker run -p 3000:3000 \
+  -e MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/filament-db" \
+  ghcr.io/hyiger/filament-db
+```
+
+Open http://localhost:3000.
+
+### Docker Compose
+
+Create a `docker-compose.yml`:
+
+```yaml
+services:
+  filament-db:
+    image: ghcr.io/hyiger/filament-db
+    ports:
+      - "3000:3000"
+    environment:
+      - MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/filament-db
+      # Optional: AI provider for TDS extraction (choose one)
+      # - GEMINI_API_KEY=your-key
+      # - ANTHROPIC_API_KEY=your-key
+      # - OPENAI_API_KEY=your-key
+    restart: unless-stopped
+```
+
+```bash
+docker compose up -d
+```
+
+### Docker Compose with Local MongoDB
+
+If you don't have a MongoDB Atlas account, you can run MongoDB alongside Filament DB:
+
+```yaml
+services:
+  filament-db:
+    image: ghcr.io/hyiger/filament-db
+    ports:
+      - "3000:3000"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/filament-db
+    depends_on:
+      - mongo
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:8
+    volumes:
+      - mongo-data:/data/db
+    restart: unless-stopped
+
+volumes:
+  mongo-data:
+```
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `MONGODB_URI` | Yes | MongoDB connection string |
+| `PORT` | No | Server port (default: `3000`) |
+| `GEMINI_API_KEY` | No | Google Gemini API key for TDS extraction |
+| `ANTHROPIC_API_KEY` | No | Anthropic Claude API key for TDS extraction |
+| `OPENAI_API_KEY` | No | OpenAI API key for TDS extraction |
+
+### Building from Source
+
+```bash
+git clone https://github.com/hyiger/filament-db.git
+cd filament-db
+docker build -t filament-db .
+docker run -p 3000:3000 -e MONGODB_URI="mongodb+srv://..." filament-db
+```
+
+---
+
+## Option 3: Run from Source
 
 ### Prerequisites
 
