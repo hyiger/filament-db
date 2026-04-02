@@ -468,9 +468,9 @@ ipcMain.handle("nfc-read-tag", async () => {
   return withIpcTimeout(() => nfcService!.readTag(), "nfc-read-tag");
 });
 
-ipcMain.handle("nfc-write-tag", async (_event, payload: number[]) => {
+ipcMain.handle("nfc-write-tag", async (_event, payload: number[], productUrl?: string) => {
   if (!nfcService) throw new Error("NFC not initialized");
-  await withIpcTimeout(() => nfcService!.writeTag(new Uint8Array(payload)), "nfc-write-tag");
+  await withIpcTimeout(() => nfcService!.writeTag(new Uint8Array(payload), productUrl), "nfc-write-tag");
   return { success: true };
 });
 

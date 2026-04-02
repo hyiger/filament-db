@@ -102,7 +102,10 @@ export default function FilamentDetail() {
         shoreHardnessD: filament.shoreHardnessD,
         optTags: filament.optTags,
       });
-      await writeTag(payload);
+      // Include a URI record for Prusa app compatibility
+      const productUrl = filament.tdsUrl
+        || `https://filamentdb.app/filament/${encodeURIComponent(filament.vendor)}/${encodeURIComponent(filament.name)}`;
+      await writeTag(payload, productUrl);
       setNfcWriteSuccess(true);
       setTimeout(() => setNfcWriteSuccess(null), 3000);
     } catch {
@@ -143,7 +146,9 @@ export default function FilamentDetail() {
         shoreHardnessD: filament.shoreHardnessD,
         optTags: filament.optTags,
       });
-      await writeTag(payload);
+      const productUrl = filament.tdsUrl
+        || `https://filamentdb.app/filament/${encodeURIComponent(filament.vendor)}/${encodeURIComponent(filament.name)}`;
+      await writeTag(payload, productUrl);
       setNfcWriteSuccess(true);
       toast(`NFC tag updated: ${Math.round(actualRemaining)}g remaining`);
       setTimeout(() => setNfcWriteSuccess(null), 3000);

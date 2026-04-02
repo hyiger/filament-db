@@ -272,13 +272,13 @@ export class NfcService extends EventEmitter {
     });
   }
 
-  async writeTag(cborPayload: Uint8Array): Promise<void> {
+  async writeTag(cborPayload: Uint8Array, productUrl?: string): Promise<void> {
     return this.withConnection(async (protocol) => {
       const block0 = await this.readBlock(protocol, 0);
       const mlen = block0[2];
       const tagMemorySize = mlen * 8 || DEFAULT_BLOCK_COUNT * BLOCK_SIZE;
 
-      const tagMemory = wrapNdefForTag(cborPayload, tagMemorySize);
+      const tagMemory = wrapNdefForTag(cborPayload, tagMemorySize, productUrl);
 
       // Only write blocks up through the TLV terminator (0xFE), not the zero-padded tail.
       // The last block on SLIX2 tags (block 79) may be write-protected (config/password area).

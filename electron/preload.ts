@@ -51,7 +51,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // NFC
   nfcGetStatus: () => ipcRenderer.invoke("nfc-get-status"),
   nfcReadTag: () => ipcRenderer.invoke("nfc-read-tag"),
-  nfcWriteTag: (payload: number[]) => ipcRenderer.invoke("nfc-write-tag", payload),
+  nfcWriteTag: (payload: number[], productUrl?: string) => ipcRenderer.invoke("nfc-write-tag", payload, productUrl),
   nfcFormatTag: () => ipcRenderer.invoke("nfc-format-tag"),
   onNfcStatusChange: (callback: (status: NfcStatus) => void) => {
     const handler = (_event: IpcRendererEvent, status: NfcStatus) => callback(status);

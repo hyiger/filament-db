@@ -469,9 +469,11 @@ describe("generateOpenPrintTagBinary", () => {
     expect(bytes).toContain(0xbf);
   });
 
-  it("ends with indefinite map break (0xFF)", () => {
+  it("ends with empty aux map (0xA0) after indefinite map break (0xFF)", () => {
     const result = generateOpenPrintTagBinary(minimalInput);
-    expect(result[result.length - 1]).toBe(0xff);
+    // Last byte: empty aux map, second-to-last: indefinite map break
+    expect(result[result.length - 1]).toBe(0xa0);
+    expect(result[result.length - 2]).toBe(0xff);
   });
 
   it("contains material_class = FFF (0)", () => {
@@ -799,7 +801,9 @@ describe("generateOpenPrintTagBinary", () => {
     const bytes = Array.from(result);
     const bfIdx = bytes.indexOf(0xbf);
     expect(bfIdx).toBeGreaterThan(0);
-    expect(bytes[bytes.length - 1]).toBe(0xff);
+    // Last byte is empty aux map (0xA0), second-to-last is break (0xFF)
+    expect(bytes[bytes.length - 1]).toBe(0xa0);
+    expect(bytes[bytes.length - 2]).toBe(0xff);
   });
 
   it("uses nozzleTempFirstLayer to derive min print temp", () => {
@@ -833,7 +837,7 @@ describe("generateOpenPrintTagBinary", () => {
     expect(bytes[minBedKey + 3]).toBe(70);
   });
 
-  it("meta aux_region_offset points past the payload", () => {
+  it("meta aux_region_offset points to the aux map within the payload", () => {
     const result = generateOpenPrintTagBinary(minimalInput);
     const bytes = Array.from(result);
 
@@ -842,7 +846,9 @@ describe("generateOpenPrintTagBinary", () => {
     expect(bytes[1]).toBe(0x02); // key = aux_region_offset
     expect(bytes[2]).toBe(0x18); // uint8 follows
     const offset = bytes[3];
-    expect(offset).toBe(result.byteLength);
+    // aux_region_offset points to the empty aux map (0xA0), one byte before end
+    expect(offset).toBe(result.byteLength - 1);
+    expect(bytes[offset]).toBe(0xa0); // empty map at that offset
   });
 
   it("handles large payloads requiring 5-byte meta size", async () => {

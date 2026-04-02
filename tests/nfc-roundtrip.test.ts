@@ -118,7 +118,7 @@ describe("NFC round-trip: encode → NDEF wrap → NDEF parse → decode", () =>
 });
 
 describe("writeTag block count optimization", () => {
-  it("data blocks end well before block 79", () => {
+  it("padded NDEF payload fills tag memory with aux region space", () => {
     const input: OpenPrintTagInput = {
       materialName: "Test",
       brandName: "Brand",
@@ -128,23 +128,24 @@ describe("writeTag block count optimization", () => {
     const cbor = generateOpenPrintTagBinary(input);
     const tagMemory = wrapNdefForTag(cbor, 320);
 
-    // Find last non-zero byte (simulating what writeTag does)
-    let lastDataByte = 0;
+    // The NDEF payload is padded to fill the tag, leaving the TLV terminator
+    // near the end. This ensures the CBOR aux_region_offset points to
+    // valid data within the NDEF payload (matching Prusa firmware behavior).
+    expect(tagMemory.length).toBe(320);
+
+    // Find the TLV terminator (0xFE) — it should be near the end
+    let terminatorIdx = -1;
     for (let i = tagMemory.length - 1; i >= 0; i--) {
-      if (tagMemory[i] !== 0x00) {
-        lastDataByte = i;
+      if (tagMemory[i] === 0xfe) {
+        terminatorIdx = i;
         break;
       }
     }
-
-    const numBlocks = Math.ceil((lastDataByte + 1) / 4);
-    // For a small payload, should need far fewer than 79 blocks
-    expect(numBlocks).toBeLessThan(40);
-    // Must not touch the potentially write-protected last block
-    expect(numBlocks).toBeLessThan(80);
+    // Terminator should be in the last few bytes (after padded NDEF + zeros)
+    expect(terminatorIdx).toBeGreaterThan(300);
   });
 
-  it("terminator byte (0xFE) is the last non-zero byte", () => {
+  it("terminator byte (0xFE) is present in tag memory", () => {
     const input: OpenPrintTagInput = {
       materialName: "Test",
       brandName: "Brand",
@@ -154,6 +155,7 @@ describe("writeTag block count optimization", () => {
     const cbor = generateOpenPrintTagBinary(input);
     const tagMemory = wrapNdefForTag(cbor, 320);
 
+    // Find last non-zero byte
     let lastDataByte = 0;
     for (let i = tagMemory.length - 1; i >= 0; i--) {
       if (tagMemory[i] !== 0x00) {

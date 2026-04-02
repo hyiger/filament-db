@@ -511,9 +511,14 @@ export function generateOpenPrintTagBinary(
   buf.push(...main);
 
   // Auxiliary region (writable section after main)
+  // Always write at least an empty map (0xA0) so the aux_region_offset
+  // points to valid CBOR. The Prusa app reads the aux region and will
+  // error if the offset points to invalid data (e.g. 0xFE terminator).
   if (input.consumedWeight != null && input.consumedWeight > 0) {
     const aux = buildAuxMap(input);
     buf.push(...aux);
+  } else {
+    buf.push(0xa0); // empty definite map
   }
 
   return new Uint8Array(buf);

@@ -16,68 +16,194 @@
 const NDEF_MIME_TYPE = "application/vnd.openprinttag";
 const NDEF_MIME_TYPE_BYTES = new TextEncoder().encode(NDEF_MIME_TYPE);
 
+// URI prefix codes (NFC Forum RTD URI)
+const URI_PREFIX: Record<number, string> = {
+  0x00: "",
+  0x01: "http://www.",
+  0x02: "https://www.",
+  0x03: "http://",
+  0x04: "https://",
+};
+
+/**
+ * Build an NDEF URI record (Well-Known type, TNF=0x01, type="U").
+ * Uses NFC Forum URI prefix compression.
+ */
+function buildUriRecord(url: string, isFirst: boolean, isLast: boolean): Uint8Array {
+  // Find the best matching prefix for compression
+  let prefixCode = 0x00;
+  let remainder = url;
+  for (const [code, prefix] of Object.entries(URI_PREFIX)) {
+    if (prefix && url.startsWith(prefix) && prefix.length > (URI_PREFIX[prefixCode]?.length ?? 0)) {
+      prefixCode = Number(code);
+      remainder = url.slice(prefix.length);
+    }
+  }
+
+  const remainderBytes = new TextEncoder().encode(remainder);
+  const payloadLen = 1 + remainderBytes.length; // prefix code byte + URI remainder
+  const isShort = payloadLen <= 255;
+
+  // Flags: MB, ME, CF=0, SR, IL=0, TNF=001 (Well-Known)
+  let flags = 0x01; // TNF = Well-Known
+  if (isFirst) flags |= 0x80; // MB
+  if (isLast) flags |= 0x40; // ME
+  if (isShort) flags |= 0x10; // SR
+
+  const headerLen = 2 + (isShort ? 1 : 4); // flags + type_len + payload_len
+  const record = new Uint8Array(headerLen + 1 + payloadLen); // +1 for type "U"
+  let pos = 0;
+
+  record[pos++] = flags;
+  record[pos++] = 1; // TYPE_LENGTH = 1 ("U")
+  if (isShort) {
+    record[pos++] = payloadLen;
+  } else {
+    record[pos++] = (payloadLen >>> 24) & 0xff;
+    record[pos++] = (payloadLen >>> 16) & 0xff;
+    record[pos++] = (payloadLen >>> 8) & 0xff;
+    record[pos++] = payloadLen & 0xff;
+  }
+  record[pos++] = 0x55; // TYPE = "U" (URI)
+  record[pos++] = prefixCode;
+  record.set(remainderBytes, pos);
+
+  return record;
+}
+
 // ── NDEF wrapping (for writing to tag) ──────────────────────────────
 
 /**
  * Wrap a CBOR payload into a complete NFC-V tag memory image.
  *
+ * Produces an NDEF message with one or two records:
+ *   1. (optional) URI record pointing to a product URL — required by some
+ *      NFC readers (e.g. Prusa app) for compatibility.
+ *   2. OpenPrintTag record with the CBOR payload.
+ *
  * @param cborPayload - The OpenPrintTag CBOR binary (meta + main maps)
  * @param tagMemorySize - Total user memory in bytes (default 320 for SLIX2: 80 blocks × 4 bytes)
+ * @param productUrl - Optional product URL for a leading URI NDEF record
  * @returns Complete tag memory image ready to be written block-by-block
  */
 export function wrapNdefForTag(
   cborPayload: Uint8Array,
   tagMemorySize: number = 320,
+  productUrl?: string,
 ): Uint8Array {
-  // Build the NDEF record
+  const hasUri = !!productUrl;
+
+  // Calculate overhead to determine how much space we can give the OPT payload.
+  // The Prusa app expects the aux_region_offset (in the CBOR meta map) to point
+  // to valid CBOR *within* the NDEF record payload. To achieve this, we pad the
+  // CBOR payload with zeros and place the TLV terminator at the very end of
+  // tag memory, filling the OPT record payload to use all remaining space.
+  //
+  // Reserve the last block (4 bytes) since SLIX2 block 79 is often write-protected.
+  const usableMemory = tagMemorySize - 4;
+
   const typeLen = NDEF_MIME_TYPE_BYTES.length; // 28
-  const payloadLen = cborPayload.length;
 
-  // NDEF record header:
-  //   Byte 0: flags (MB=1, ME=1, CF=0, SR=?, IL=0, TNF=010)
-  //   Byte 1: TYPE_LENGTH
-  //   Byte 2-5 or Byte 2: PAYLOAD_LENGTH (4 bytes if !SR, 1 byte if SR)
-  //   Then: TYPE, PAYLOAD
-  const isShortRecord = payloadLen <= 255;
-  const ndefRecordHeaderLen = 2 + (isShortRecord ? 1 : 4); // flags + type_len + payload_len
-  const ndefRecordLen = ndefRecordHeaderLen + typeLen + payloadLen;
+  // Build the URI record first (if any) so we know its size
+  let uriRecord: Uint8Array | null = null;
+  if (hasUri) {
+    uriRecord = buildUriRecord(productUrl!, true, false); // MB=1, ME=0
+  }
 
-  // Build NDEF record
+  // Calculate fixed overhead:
+  //   CC (4) + TLV header (2 or 4) + URI record (variable) +
+  //   OPT record header (2 + payload_len_bytes) + OPT type (28) + terminator (1)
+  const uriLen = uriRecord?.length ?? 0;
+
+  // We need to figure out OPT payload size, but it depends on whether SR (short record)
+  // is used, which depends on the payload size. Iterate to find the right fit.
+  // Start by assuming the CBOR fills all remaining space.
+  // Try SR=1 first (payload <= 255), then fall back to SR=0.
+  let paddedPayloadLen: number;
+  let isShortRecord: boolean;
+
+  // With SR=1: overhead = 4 + tlv_header + uriLen + 3 (flags+typelen+payloadlen) + 28 + 1
+  const overheadSR1_shortTlv = 4 + 2 + uriLen + 3 + typeLen + 1;
+  const overheadSR1_longTlv = 4 + 4 + uriLen + 3 + typeLen + 1;
+
+  // With SR=0: overhead = 4 + tlv_header + uriLen + 6 (flags+typelen+4B payloadlen) + 28 + 1
+  const overheadSR0_longTlv = 4 + 4 + uriLen + 6 + typeLen + 1;
+
+  // Try SR=1 with short TLV first
+  let candidatePayload = usableMemory - overheadSR1_shortTlv;
+  const candidateNdefLen = uriLen + 3 + typeLen + candidatePayload;
+
+  if (candidatePayload <= 255 && candidateNdefLen < 255) {
+    // SR=1, short TLV works
+    paddedPayloadLen = candidatePayload;
+    isShortRecord = true;
+  } else {
+    // Try SR=1 with long TLV
+    candidatePayload = usableMemory - overheadSR1_longTlv;
+    if (candidatePayload <= 255) {
+      paddedPayloadLen = candidatePayload;
+      isShortRecord = true;
+    } else {
+      // SR=0, long TLV
+      paddedPayloadLen = usableMemory - overheadSR0_longTlv;
+      isShortRecord = false;
+    }
+  }
+
+  // Ensure the padded payload is at least as large as the actual CBOR data
+  if (paddedPayloadLen < cborPayload.length) {
+    throw new Error(
+      `Payload too large for tag: ${cborPayload.length} CBOR bytes but only ${paddedPayloadLen} available`,
+    );
+  }
+
+  // Build the padded CBOR payload (original data + zero padding)
+  const paddedCbor = new Uint8Array(paddedPayloadLen);
+  paddedCbor.set(cborPayload, 0);
+  // Remaining bytes are already zero-filled
+
+  // Build OPT NDEF record
+  const ndefRecordHeaderLen = 2 + (isShortRecord ? 1 : 4);
+  const ndefRecordLen = ndefRecordHeaderLen + typeLen + paddedPayloadLen;
   const ndefRecord = new Uint8Array(ndefRecordLen);
   let pos = 0;
 
-  // Flags: MB=1, ME=1, CF=0, SR=?, IL=0, TNF=010
-  ndefRecord[pos++] = isShortRecord ? 0xd2 : 0xc2;
+  // Flags: MB=? (1 if no URI, 0 if URI precedes), ME=1, CF=0, SR=?, IL=0, TNF=010
+  let optFlags = 0x42; // ME=1, TNF=010
+  if (!hasUri) optFlags |= 0x80; // MB=1 (this is the first and only record)
+  if (isShortRecord) optFlags |= 0x10; // SR=1
+  ndefRecord[pos++] = optFlags;
   // TYPE_LENGTH
   ndefRecord[pos++] = typeLen;
   // PAYLOAD_LENGTH
   if (isShortRecord) {
-    ndefRecord[pos++] = payloadLen;
+    ndefRecord[pos++] = paddedPayloadLen;
   } else {
-    ndefRecord[pos++] = (payloadLen >>> 24) & 0xff;
-    ndefRecord[pos++] = (payloadLen >>> 16) & 0xff;
-    ndefRecord[pos++] = (payloadLen >>> 8) & 0xff;
-    ndefRecord[pos++] = payloadLen & 0xff;
+    ndefRecord[pos++] = (paddedPayloadLen >>> 24) & 0xff;
+    ndefRecord[pos++] = (paddedPayloadLen >>> 16) & 0xff;
+    ndefRecord[pos++] = (paddedPayloadLen >>> 8) & 0xff;
+    ndefRecord[pos++] = paddedPayloadLen & 0xff;
   }
   // TYPE
   ndefRecord.set(NDEF_MIME_TYPE_BYTES, pos);
   pos += typeLen;
-  // PAYLOAD
-  ndefRecord.set(cborPayload, pos);
+  // PAYLOAD (padded CBOR)
+  ndefRecord.set(paddedCbor, pos);
 
-  // TLV: tag=0x03, length, value=ndefRecord
-  const ndefMessageLen = ndefRecordLen;
-  const useLongTlv = ndefMessageLen >= 255;
-  const tlvHeaderLen = useLongTlv ? 4 : 2; // tag + (FF + 2-byte len) or (1-byte len)
-
-  // CC (4 bytes) + TLV header + NDEF message + terminator (1 byte)
-  const totalLen = 4 + tlvHeaderLen + ndefMessageLen + 1;
-
-  if (totalLen > tagMemorySize) {
-    throw new Error(
-      `Payload too large for tag: ${totalLen} bytes needed, ${tagMemorySize} available`,
-    );
+  // Build the full NDEF message (URI record + OPT record, or just OPT record)
+  let ndefMessage: Uint8Array;
+  if (uriRecord) {
+    ndefMessage = new Uint8Array(uriRecord.length + ndefRecordLen);
+    ndefMessage.set(uriRecord, 0);
+    ndefMessage.set(ndefRecord, uriRecord.length);
+  } else {
+    ndefMessage = ndefRecord;
   }
+
+  // TLV: tag=0x03, length, value=ndefMessage
+  const ndefMessageLen = ndefMessage.length;
+  const useLongTlv = ndefMessageLen >= 255;
+  const tlvHeaderLen = useLongTlv ? 4 : 2;
 
   // Allocate full tag memory (zero-filled)
   const tagMemory = new Uint8Array(tagMemorySize);
@@ -99,11 +225,11 @@ export function wrapNdefForTag(
     tagMemory[offset++] = ndefMessageLen;
   }
 
-  // NDEF record
-  tagMemory.set(ndefRecord, offset);
-  offset += ndefRecordLen;
+  // NDEF message (URI record + OPT record with padded payload)
+  tagMemory.set(ndefMessage, offset);
+  offset += ndefMessageLen;
 
-  // TLV terminator
+  // TLV terminator at the very end of tag memory (after the padded NDEF message)
   tagMemory[offset++] = 0xfe;
 
   return tagMemory;

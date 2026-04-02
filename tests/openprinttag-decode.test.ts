@@ -209,7 +209,8 @@ describe("decodeOpenPrintTagBinary", () => {
     const binary = generateOpenPrintTagBinary(input);
     const decoded = decodeOpenPrintTagBinary(binary);
 
-    expect(decoded.meta.AUX_REGION_OFFSET).toBe(binary.length);
+    // aux_region_offset points to the empty aux map (last byte = 0xA0)
+    expect(decoded.meta.AUX_REGION_OFFSET).toBe(binary.length - 1);
   });
 
   it("round-trips spoolUid (brand_specific_instance_id)", () => {
@@ -505,7 +506,7 @@ describe("decodeOpenPrintTagBinary", () => {
     expect(decoded.aux).toBeDefined();
   });
 
-  it("omits auxiliary region when consumedWeight is null", () => {
+  it("has empty auxiliary region when consumedWeight is null", () => {
     const input: OpenPrintTagInput = {
       materialName: "New Spool",
       brandName: "Brand",
@@ -515,7 +516,8 @@ describe("decodeOpenPrintTagBinary", () => {
     const decoded = decodeOpenPrintTagBinary(binary);
 
     expect(decoded.consumedWeight).toBeUndefined();
-    expect(decoded.aux).toBeUndefined();
+    // An empty aux map (0xA0) is always present for Prusa app compatibility
+    expect(decoded.aux).toEqual({});
   });
 
   it("omits shore hardness when not provided", () => {
