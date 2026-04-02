@@ -22,7 +22,7 @@ interface NfcStatus {
 contextBridge.exposeInMainWorld("electronAPI", {
   // Config
   getConfig: () => ipcRenderer.invoke("get-config"),
-  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string }) =>
+  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string }) =>
     ipcRenderer.invoke("save-config", config),
   resetConfig: () => ipcRenderer.invoke("reset-config"),
   testConnection: (uri: string) => ipcRenderer.invoke("test-connection", uri),

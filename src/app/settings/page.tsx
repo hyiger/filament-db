@@ -14,6 +14,13 @@ export default function SettingsPage() {
   const [deleting, setDeleting] = useState(false);
   const [deleteResult, setDeleteResult] = useState<{ ok: boolean; message: string } | null>(null);
 
+  // Gemini API key state
+  const [geminiKey, setGeminiKey] = useState("");
+  const [geminiConfigured, setGeminiConfigured] = useState(false);
+  const [geminiSaving, setGeminiSaving] = useState(false);
+  const [geminiResult, setGeminiResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+
   // NFC state (Electron only)
   const [isElectron, setIsElectron] = useState(false);
   const [nfcStatus, setNfcStatus] = useState<{
@@ -25,6 +32,24 @@ export default function SettingsPage() {
   const [formatting, setFormatting] = useState(false);
   const [formatResult, setFormatResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [showFormatConfirm, setShowFormatConfirm] = useState(false);
+
+  // Load Gemini config status
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (api?.getConfig) {
+      // Electron mode — check electron-store
+      api.getConfig().then((cfg) => {
+        if (cfg.geminiApiKey) {
+          setGeminiConfigured(true);
+        }
+      }).catch(() => {});
+    } else {
+      // Web mode — check API
+      fetch("/api/tds").then((r) => r.json()).then((d) => {
+        setGeminiConfigured(d.configured);
+      }).catch(() => {});
+    }
+  }, []);
 
   useEffect(() => {
     const api = window.electronAPI;
@@ -215,6 +240,119 @@ export default function SettingsPage() {
               : "bg-red-900/50 text-red-300 border border-red-800"
           }`}>
             {restoreResult.message}
+          </div>
+        )}
+      </div>
+
+      {/* AI Features — Gemini API Key */}
+      <div className="mt-8 pt-6 border-t border-gray-800">
+        <h2 className="text-lg font-semibold text-gray-200 mb-1">AI Features</h2>
+        <p className="text-sm text-gray-500 mb-4">
+          Configure a Google Gemini API key to enable AI-powered extraction of filament properties from Technical Data Sheets (TDS).
+          Get a free key from{" "}
+          <a
+            href="https://aistudio.google.com/apikey"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-400 hover:text-blue-300 underline"
+          >
+            Google AI Studio
+          </a>
+          .
+        </p>
+
+        <div className="flex items-center gap-2 mb-3">
+          <span className={`inline-block w-2.5 h-2.5 rounded-full ${geminiConfigured ? "bg-green-500" : "bg-gray-600"}`} />
+          <span className="text-sm text-gray-400">
+            {geminiConfigured ? "API key configured" : "No API key configured"}
+          </span>
+        </div>
+
+        <div className="flex gap-2 items-center flex-wrap">
+          <div className="relative flex-1 max-w-sm">
+            <input
+              type={showGeminiKey ? "text" : "password"}
+              value={geminiKey}
+              onChange={(e) => setGeminiKey(e.target.value)}
+              placeholder={geminiConfigured ? "••••••••••••••••" : "Enter Gemini API key"}
+              className="w-full px-3 py-2 bg-transparent border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600"
+            />
+            <button
+              type="button"
+              onClick={() => setShowGeminiKey((s) => !s)}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs"
+            >
+              {showGeminiKey ? "Hide" : "Show"}
+            </button>
+          </div>
+
+          <button
+            onClick={async () => {
+              if (!geminiKey.trim()) return;
+              setGeminiSaving(true);
+              setGeminiResult(null);
+              try {
+                const api = window.electronAPI;
+                if (api?.saveConfig) {
+                  // Electron mode
+                  await api.saveConfig({ geminiApiKey: geminiKey.trim() });
+                  setGeminiConfigured(true);
+                  setGeminiKey("");
+                  setGeminiResult({ ok: true, message: "API key saved" });
+                } else {
+                  // Web mode
+                  const res = await fetch("/api/tds", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ apiKey: geminiKey.trim() }),
+                  });
+                  const data = await res.json();
+                  if (res.ok) {
+                    setGeminiConfigured(true);
+                    setGeminiKey("");
+                    setGeminiResult({ ok: true, message: "API key saved and validated" });
+                  } else {
+                    setGeminiResult({ ok: false, message: data.error || "Failed to save key" });
+                  }
+                }
+              } catch {
+                setGeminiResult({ ok: false, message: "Failed to save API key" });
+              } finally {
+                setGeminiSaving(false);
+              }
+            }}
+            disabled={geminiSaving || !geminiKey.trim()}
+            className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          >
+            {geminiSaving ? "Validating..." : "Save Key"}
+          </button>
+
+          {geminiConfigured && (
+            <button
+              onClick={async () => {
+                const api = window.electronAPI;
+                if (api?.saveConfig) {
+                  await api.saveConfig({ geminiApiKey: "" });
+                } else {
+                  await fetch("/api/tds", { method: "DELETE" });
+                }
+                setGeminiConfigured(false);
+                setGeminiResult({ ok: true, message: "API key removed" });
+              }}
+              className="px-4 py-2 bg-gray-700 text-white rounded text-sm hover:bg-gray-600 transition-colors"
+            >
+              Remove Key
+            </button>
+          )}
+        </div>
+
+        {geminiResult && (
+          <div className={`mt-3 text-sm px-3 py-2 rounded ${
+            geminiResult.ok
+              ? "bg-green-900/50 text-green-300 border border-green-800"
+              : "bg-red-900/50 text-red-300 border border-red-800"
+          }`}>
+            {geminiResult.message}
           </div>
         )}
       </div>

@@ -35,6 +35,12 @@ function NewFilamentContent() {
   const [prusamentLoading, setPrusamentLoading] = useState(false);
   const prusamentRef = useRef<HTMLDivElement>(null);
 
+  // TDS import state
+  const [tdsOpen, setTdsOpen] = useState(false);
+  const [tdsUrl, setTdsUrl] = useState("");
+  const [tdsLoading, setTdsLoading] = useState(false);
+  const tdsRef = useRef<HTMLDivElement>(null);
+
   // Clone picker state
   const [cloneSearch, setCloneSearch] = useState("");
   const [cloneOptions, setCloneOptions] = useState<FilamentOption[]>([]);
@@ -141,6 +147,9 @@ function NewFilamentContent() {
       }
       if (prusamentRef.current && !prusamentRef.current.contains(e.target as Node)) {
         setPrusamentOpen(false);
+      }
+      if (tdsRef.current && !tdsRef.current.contains(e.target as Node)) {
+        setTdsOpen(false);
       }
     }
     document.addEventListener("mousedown", handleClick);
@@ -262,6 +271,73 @@ function NewFilamentContent() {
     }
   };
 
+  // Handle TDS extraction
+  const handleTds = async () => {
+    const url = tdsUrl.trim();
+    if (!url) return;
+
+    setTdsLoading(true);
+    try {
+      // Get API key from Electron config if available
+      let apiKey: string | undefined;
+      const api = window.electronAPI;
+      if (api?.getConfig) {
+        const cfg = await api.getConfig();
+        apiKey = cfg.geminiApiKey || undefined;
+      }
+
+      const res = await fetch("/api/tds", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, apiKey }),
+      });
+      const result = await res.json();
+
+      if (!res.ok) {
+        toast(result.error || "Failed to extract TDS data", "error");
+        return;
+      }
+
+      const d = result.data;
+      setInitialData({
+        name: d.name || "",
+        vendor: d.vendor || "",
+        type: d.type || "PLA",
+        density: d.density ?? null,
+        diameter: d.diameter ?? 1.75,
+        temperatures: {
+          nozzle: d.temperatures?.nozzle ?? null,
+          nozzleFirstLayer: d.temperatures?.nozzleRangeMin ?? d.temperatures?.nozzle ?? null,
+          nozzleRangeMin: d.temperatures?.nozzleRangeMin ?? null,
+          nozzleRangeMax: d.temperatures?.nozzleRangeMax ?? null,
+          bed: d.temperatures?.bed ?? null,
+          bedFirstLayer: d.temperatures?.bedRangeMin ?? d.temperatures?.bed ?? null,
+        },
+        dryingTemperature: d.dryingTemperature ?? null,
+        dryingTime: d.dryingTime ?? null,
+        glassTempTransition: d.glassTempTransition ?? null,
+        heatDeflectionTemp: d.heatDeflectionTemp ?? null,
+        shoreHardnessA: d.shoreHardnessA ?? null,
+        shoreHardnessD: d.shoreHardnessD ?? null,
+        maxVolumetricSpeed: d.maxVolumetricSpeed ?? null,
+        minPrintSpeed: d.minPrintSpeed ?? null,
+        maxPrintSpeed: d.maxPrintSpeed ?? null,
+        netFilamentWeight: d.netFilamentWeight ?? null,
+        spoolWeight: d.spoolWeight ?? null,
+        tdsUrl: url,
+      });
+      setTitle("New Filament from TDS");
+      setFormKey((k) => k + 1);
+      setTdsOpen(false);
+      setTdsUrl("");
+      toast(`Extracted ${result.fieldsExtracted} fields from TDS`);
+    } catch {
+      toast("Failed to extract TDS data", "error");
+    } finally {
+      setTdsLoading(false);
+    }
+  };
+
   // Handle clone selection
   const handleClone = async (id: string) => {
     setCloneOpen(false);
@@ -369,6 +445,51 @@ function NewFilamentContent() {
                       {prusamentLoading ? "..." : "Fetch"}
                     </button>
                   </div>
+                </div>
+              )}
+            </div>
+
+            {/* TDS Import */}
+            <div ref={tdsRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setTdsOpen((o) => !o)}
+                className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 inline-flex items-center gap-1.5"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
+                </svg>
+                Import from TDS
+              </button>
+              {tdsOpen && (
+                <div className="absolute z-50 mt-1 w-96 bg-gray-800 border border-gray-600 rounded-lg shadow-lg p-3">
+                  <label className="text-xs text-gray-400 block mb-1.5">Technical Data Sheet URL (PDF or web page)</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={tdsUrl}
+                      onChange={(e) => setTdsUrl(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleTds(); } }}
+                      placeholder="https://example.com/filament-tds.pdf"
+                      className="flex-1 px-2.5 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-gray-100 outline-none placeholder-gray-500"
+                      autoFocus
+                    />
+                    <button
+                      type="button"
+                      onClick={handleTds}
+                      disabled={tdsLoading || !tdsUrl.trim()}
+                      className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50 whitespace-nowrap"
+                    >
+                      {tdsLoading ? "Extracting..." : "Extract"}
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Uses Google Gemini AI to extract filament properties.
+                    {" "}
+                    <a href="/settings" className="text-blue-400 hover:text-blue-300 underline">
+                      Configure API key
+                    </a>
+                  </p>
                 </div>
               )}
             </div>
