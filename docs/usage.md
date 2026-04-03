@@ -301,11 +301,11 @@ Click **"Import CSV"** or **"Import XLSX"** on the home page to upload a file (m
 
 ### Exporting a Snapshot
 
-Click **"Backup"** on the home page to download a JSON snapshot of the entire database. The snapshot includes all filaments, nozzles, and printers (including soft-deleted documents) with all references and timestamps preserved.
+Go to **Settings** and click **"Backup"** in the Database Snapshots section to download a JSON snapshot of the entire database. The snapshot includes all filaments, nozzles, and printers (including soft-deleted documents) with all references and timestamps preserved.
 
 ### Restoring a Snapshot
 
-Click **"Restore"** on the home page and select a previously exported snapshot file. This replaces all current data with the snapshot contents. The restore is atomic — if any error occurs, your previous data is automatically rolled back.
+Go to **Settings** and click **"Restore"** in the Database Snapshots section. Select a previously exported snapshot file. This replaces all current data with the snapshot contents. The restore uses best-effort rollback — if any part fails, the handler attempts to re-insert the previous data from an in-memory backup.
 
 ---
 
@@ -376,4 +376,4 @@ Even without the fork, you can manually sync:
 
 ## API Documentation
 
-Click **"API Docs"** on the home page to open the interactive Swagger UI at `/api-docs`. This provides a browsable, testable interface for all REST API endpoints with full request/response schemas. The underlying OpenAPI 3.0 spec is available at `/openapi.json`.
+Go to **Settings** and click **"API Documentation"** to open the interactive Swagger UI at `/api-docs`. This provides a browsable, testable interface for all REST API endpoints with full request/response schemas. The underlying OpenAPI 3.0 spec is available at `/api/openapi` (dynamically versioned from `package.json`).

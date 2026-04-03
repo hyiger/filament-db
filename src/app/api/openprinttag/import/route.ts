@@ -53,14 +53,24 @@ export async function POST(request: NextRequest) {
         const name = payload.name as string;
         const vendor = payload.vendor as string;
 
-        // Check for existing filament by name + vendor
+        // The unique index is on { name } where _deletedAt is null, so we
+        // must query by name alone to avoid a duplicate-key error when the
+        // same name exists under a different vendor.
         const existing = await Filament.findOne({
           name,
-          vendor,
           _deletedAt: null,
         });
 
         if (existing) {
+          // Only update if the vendor matches — don't silently merge data
+          // from a different brand into an unrelated filament.
+          if (existing.vendor !== vendor) {
+            errors.push(
+              `${material.name}: skipped — a filament named "${name}" already exists under vendor "${existing.vendor}"`,
+            );
+            continue;
+          }
+
           // Update with new data but don't overwrite user calibrations/settings
           const updateFields: Record<string, unknown> = {};
           if (payload.density != null && existing.density == null)

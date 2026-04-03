@@ -54,6 +54,8 @@ The Vitest config (`vitest.config.ts`) enforces the following minimum thresholds
 
 Tests will fail if coverage drops below these thresholds.
 
+**Coverage scope**: Thresholds currently apply only to `src/lib/**` and `src/models/**`. API routes (`src/app/api/`), pages (`src/app/`), and Electron code (`electron/`) are not covered by the threshold gate.
+
 ## CI / GitHub Actions
 
 ### Test Workflow (`.github/workflows/test.yml`)

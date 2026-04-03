@@ -34,7 +34,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Import from Atlas** -- connect to a remote MongoDB Atlas database and selectively import filaments
 - **TDS extraction** -- paste a TDS URL to auto-populate the filament form via AI (Gemini, Claude, or ChatGPT)
 - **OpenPrintTag binary** -- download `.bin` files with drying temps, transmission distance (HueForge TD), and instance ID
-- **Snapshot backup/restore** -- export and import the entire database as JSON with atomic restore and rollback on failure
+- **Snapshot backup/restore** -- export and import the entire database as JSON with best-effort rollback on failure
 
 ### Desktop App
 - **Cross-platform** -- installable on macOS (.dmg), Windows (.exe), and Linux (.AppImage, .deb) including arm64 for Raspberry Pi

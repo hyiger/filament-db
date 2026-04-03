@@ -199,13 +199,23 @@ async function restoreSnapshot(request: NextRequest) {
       if (backupNozzles.length > 0) await Nozzle.insertMany(backupNozzles, { ordered: false });
       if (backupPrinters.length > 0) await Printer.insertMany(backupPrinters, { ordered: false });
       if (backupFilaments.length > 0) await Filament.insertMany(backupFilaments, { ordered: false });
-    } catch {
-      // Rollback itself failed — nothing more we can do
+    } catch (rollbackErr) {
+      // Rollback itself failed — report it so the user knows data may be lost
+      const detail = err instanceof Error ? err.message : String(err);
+      const rollbackDetail = rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr);
+      return NextResponse.json(
+        {
+          error: "Failed to restore snapshot and rollback also failed. Database may be in an inconsistent state — re-import a backup manually.",
+          detail,
+          rollbackError: rollbackDetail,
+        },
+        { status: 500 },
+      );
     }
 
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
-      { error: "Failed to restore snapshot — your previous data has been rolled back.", detail: message },
+      { error: "Failed to restore snapshot — previous data has been rolled back.", detail: message },
       { status: 500 },
     );
   }

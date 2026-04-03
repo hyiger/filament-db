@@ -197,7 +197,7 @@ Returns `text/plain` INI content.
 
 ### POST /api/filaments/prusaslicer
 
-Import a PrusaSlicer INI config bundle. Upload via `multipart/form-data` with a `file` field, or send the INI text as the request body with `Content-Type: text/plain`.
+Import a PrusaSlicer INI config bundle. Send the INI text as the raw request body (e.g. `Content-Type: text/plain`).
 
 Returns:
 ```json
@@ -515,7 +515,7 @@ Restore the database from a previously exported snapshot. This is a destructive 
 
 Upload via `multipart/form-data` with a `file` field containing the snapshot JSON, or send the JSON directly as the request body.
 
-The restore is **atomic with rollback**: if any part of the restore fails, the previous data is automatically restored from an in-memory backup. Concurrent restore requests are rejected with 409.
+The restore uses **best-effort rollback**: if any part of the restore fails, the handler attempts to re-insert the previous data from an in-memory backup. Concurrent restore requests are rejected with 409. Note: the restore is not truly atomic — concurrent readers may observe partial state during the delete/insert window, and if rollback itself fails the database may be left incomplete. For safety, take a backup before restoring.
 
 Returns:
 ```json

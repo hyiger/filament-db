@@ -215,9 +215,9 @@ You can also click **"+ Prusament QR"** on a filament's detail page (in the Spoo
 
 ### From a Snapshot Backup
 
-1. On the home page, click **Restore**.
+1. Go to **Settings** and click **"Restore"** in the Database Snapshots section.
 2. Select a previously exported snapshot JSON file.
-3. All current data is replaced with the snapshot contents (atomic with automatic rollback on failure).
+3. All current data is replaced with the snapshot contents (best-effort rollback on failure).
 
 ### Via CLI (alternative)
 
@@ -499,16 +499,16 @@ In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted fi
 | Import Prusament spool | Home > Prusament QR |
 | Import from Atlas | Home > Import from Atlas |
 | Browse OpenPrintTag DB | Home > Import/Export > Browse OpenPrintTag DB |
-| Restore from snapshot | Home > Restore |
+| Restore from snapshot | Settings > Database Snapshots > Restore |
 | Export to PrusaSlicer | Home > Export INI |
 | Export to CSV/XLSX | Home > Export CSV / Export XLSX |
-| Backup database | Home > Backup |
+| Backup database | Settings > Database Snapshots > Backup |
 | View filament details | Home > click filament name |
 | Edit filament | Detail page > Edit |
 | Add color variant | Detail page > + Add Color |
 | Manage nozzles | Home > Manage Nozzles |
 | Manage printers | Home > Manage Printers |
-| Browse API docs | Home > API Docs (or navigate to `/api-docs`) |
+| Browse API docs | Settings > API Documentation (or navigate to `/api-docs`) |
 | Write NFC tag | Detail page > Write NFC (desktop app) |
 | Erase NFC tag | Settings > NFC Tools > Erase Tag (desktop app) |
 | Export NFC binary | Detail page > Export OPT |

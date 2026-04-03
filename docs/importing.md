@@ -126,10 +126,10 @@ This also works from a filament's detail page to add another spool of the same m
 
 You can restore a previously exported snapshot to import an entire database (filaments, nozzles, and printers):
 
-1. Click **"Restore"** on the home page
+1. Go to **Settings** and click **"Restore"** in the Database Snapshots section
 2. Select a snapshot JSON file (exported via **"Backup"**)
 3. All current data is replaced with the snapshot contents
-4. The restore is atomic — if any error occurs, your previous data is automatically rolled back
+4. The restore uses best-effort rollback — if any error occurs, the handler attempts to re-insert the previous data
 
 ---
 
