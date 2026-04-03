@@ -84,6 +84,60 @@ export async function PUT(
   }
 }
 
+/**
+ * POST /api/filaments/:nameOrId
+ *
+ * Sync a filament preset back from PrusaSlicer. The param can be a
+ * URL-encoded preset name (e.g. "The%20K8%20PC") or a MongoDB ObjectId.
+ *
+ * Body: { name: string, config: Record<string, string> }
+ *
+ * Finds the filament by name (falling back to _id), then merges the
+ * incoming config keys into the filament's `settings` bag.
+ */
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    await dbConnect();
+    const { id } = await params;
+    const body = await request.json();
+    const config: Record<string, string> = body.config || {};
+
+    if (!config || Object.keys(config).length === 0) {
+      return errorResponse("No config provided", 400);
+    }
+
+    // Try to find by name first (PrusaSlicer sends URL-encoded name),
+    // then fall back to ObjectId
+    const decodedName = decodeURIComponent(id);
+    let filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
+    if (!filament && /^[a-f0-9]{24}$/i.test(id)) {
+      filament = await Filament.findOne({ _id: id, _deletedAt: null });
+    }
+
+    if (!filament) {
+      return errorResponse(`Filament not found: ${decodedName}`, 404);
+    }
+
+    // Merge incoming config into the settings bag
+    const settings = (filament.settings as Record<string, unknown>) || {};
+    for (const [key, value] of Object.entries(config)) {
+      settings[key] = value;
+    }
+
+    await Filament.findByIdAndUpdate(filament._id, { $set: { settings } });
+
+    return NextResponse.json({
+      message: `Synced ${Object.keys(config).length} settings for "${decodedName}"`,
+      filamentId: filament._id,
+    });
+  } catch (err) {
+    return errorResponse("Failed to sync filament", 500, getErrorMessage(err));
+  }
+}
+
 export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
