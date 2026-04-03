@@ -24,7 +24,7 @@ tests/
 ├── setup.ts                    # Test setup (mongodb-memory-server lifecycle)
 ├── openprinttag.test.ts        # OpenPrintTag encoder tests (120 tests)
 ├── openprinttag-decode.test.ts # OpenPrintTag decoder tests (36 tests)
-├── ndef.test.ts                # NDEF wrap/parse + format/erase tests (23 tests)
+├── ndef.test.ts                # NDEF wrap/parse + format/erase tests (25 tests)
 ├── nfc-roundtrip.test.ts       # NFC encode→decode roundtrip tests (6 tests)
 ├── resolveFilament.test.ts     # Parent/variant resolution + spool inheritance + hasVariants tests (24 tests)
 ├── parseIni.test.ts            # INI parser tests (18 tests)
@@ -41,7 +41,7 @@ tests/
 └── openprinttagBrowser.test.ts # OpenPrintTag database browser + completeness scoring tests (36 tests)
 ```
 
-**Total: 400 tests across 17 test files**
+**Total: 401 tests across 17 test files**
 
 ## Coverage Thresholds
 

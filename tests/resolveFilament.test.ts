@@ -15,6 +15,9 @@ const makeParent = (overrides = {}) => ({
     nozzleFirstLayer: 280,
     bed: 110,
     bedFirstLayer: 115,
+    nozzleRangeMin: 260,
+    nozzleRangeMax: 290,
+    standby: 150,
   },
   maxVolumetricSpeed: 8,
   compatibleNozzles: ["nozzle-1", "nozzle-2"],
@@ -44,6 +47,9 @@ const makeVariant = (overrides = {}) => ({
     nozzleFirstLayer: null,
     bed: null,
     bedFirstLayer: null,
+    nozzleRangeMin: null,
+    nozzleRangeMax: null,
+    standby: null,
   },
   maxVolumetricSpeed: null,
   compatibleNozzles: [],
@@ -96,10 +102,22 @@ describe("resolveFilament", () => {
     expect(result._inherited).toContain("temperatures.bed");
   });
 
+  it("inherits nozzleRangeMin, nozzleRangeMax, and standby temps from parent", () => {
+    const parent = makeParent();
+    const variant = makeVariant();
+    const result = resolveFilament(variant, parent);
+    expect(result.temperatures.nozzleRangeMin).toBe(260);
+    expect(result.temperatures.nozzleRangeMax).toBe(290);
+    expect(result.temperatures.standby).toBe(150);
+    expect(result._inherited).toContain("temperatures.nozzleRangeMin");
+    expect(result._inherited).toContain("temperatures.nozzleRangeMax");
+    expect(result._inherited).toContain("temperatures.standby");
+  });
+
   it("variant can override individual temperature fields", () => {
     const parent = makeParent();
     const variant = makeVariant({
-      temperatures: { nozzle: 270, nozzleFirstLayer: null, bed: null, bedFirstLayer: null },
+      temperatures: { nozzle: 270, nozzleFirstLayer: null, bed: null, bedFirstLayer: null, nozzleRangeMin: null, nozzleRangeMax: null, standby: null },
     });
     const result = resolveFilament(variant, parent);
     expect(result.temperatures.nozzle).toBe(270);

@@ -70,7 +70,6 @@ function NewFilamentContent() {
   };
 
   // Initialize from NFC query params
-  /* eslint-disable react-hooks/set-state-in-effect -- initializes form state from URL search params on mount */
   useEffect(() => {
     if (searchParams.get("from_nfc")) {
       const nozzleMax = searchParams.get("nozzle") ? Number(searchParams.get("nozzle")) : null;
@@ -109,7 +108,6 @@ function NewFilamentContent() {
       setFormKey((k) => k + 1);
     }
   }, [searchParams]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Initialize from ?parentId= query param
   useEffect(() => {
@@ -158,7 +156,6 @@ function NewFilamentContent() {
   }, []);
 
   // Handle NFC tag read while on this page
-  /* eslint-disable react-hooks/set-state-in-effect -- reacts to external NFC tag read event */
   useEffect(() => {
     if (!tagReadResult?.data) return;
     const data = tagReadResult.data;
@@ -186,7 +183,6 @@ function NewFilamentContent() {
     dismissTagRead();
     toast("Form populated from NFC tag");
   }, [tagReadResult, dismissTagRead, toast]);
-  /* eslint-enable react-hooks/set-state-in-effect */
 
   // Handle INI file selection
   const handleIniFile = async (e: React.ChangeEvent<HTMLInputElement>) => {

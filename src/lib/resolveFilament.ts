@@ -82,8 +82,11 @@ export function resolveFilament(
     nozzleFirstLayer: variantTemps.nozzleFirstLayer ?? parentTemps.nozzleFirstLayer ?? null,
     bed: variantTemps.bed ?? parentTemps.bed ?? null,
     bedFirstLayer: variantTemps.bedFirstLayer ?? parentTemps.bedFirstLayer ?? null,
+    nozzleRangeMin: variantTemps.nozzleRangeMin ?? parentTemps.nozzleRangeMin ?? null,
+    nozzleRangeMax: variantTemps.nozzleRangeMax ?? parentTemps.nozzleRangeMax ?? null,
+    standby: variantTemps.standby ?? parentTemps.standby ?? null,
   };
-  for (const tempField of ["nozzle", "nozzleFirstLayer", "bed", "bedFirstLayer"]) {
+  for (const tempField of ["nozzle", "nozzleFirstLayer", "bed", "bedFirstLayer", "nozzleRangeMin", "nozzleRangeMax", "standby"]) {
     if (
       variantTemps[tempField] == null &&
       parentTemps[tempField] != null

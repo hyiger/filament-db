@@ -284,7 +284,7 @@ export default function OpenPrintTagBrowser() {
   );
 
   useEffect(() => {
-    fetchDatabase(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetching on mount
+    fetchDatabase();
   }, [fetchDatabase]);
 
   // ── Derived data ───────────────────────────────────────────────────
