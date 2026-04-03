@@ -38,10 +38,10 @@ tests/
 ├── importFilaments.test.ts     # CSV/XLSX import mapping + upsert + skip report tests (18 tests)
 ├── exportFilaments.test.ts     # CSV/XLSX export column mapping tests (11 tests)
 ├── prusaSlicerBundle.test.ts   # PrusaSlicer INI bundle generation tests (19 tests)
-└── openprinttagBrowser.test.ts # OpenPrintTag database browser + completeness scoring tests (33 tests)
+└── openprinttagBrowser.test.ts # OpenPrintTag database browser + completeness scoring tests (36 tests)
 ```
 
-**Total: 397 tests across 17 test files**
+**Total: 400 tests across 17 test files**
 
 ## Coverage Thresholds
 
