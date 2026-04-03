@@ -264,7 +264,7 @@ export function mapToFilamentPayload(
   for (const tag of m.tags) {
     const enumKey = TAG_STRING_TO_OPT[tag];
     if (enumKey && enumKey in OPT_TAG) {
-      optTags.push(OPT_TAG[enumKey]);
+      optTags.push(OPT_TAG[enumKey as keyof typeof OPT_TAG]);
     }
   }
 

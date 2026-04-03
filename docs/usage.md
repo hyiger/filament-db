@@ -315,6 +315,65 @@ Each filament has a unique instance identifier (5-byte hex string, e.g. `2acc210
 
 ---
 
+## OpenPrintTag Community Database Browser
+
+Browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) directly from Filament DB to discover and import filaments from 97 brands.
+
+### Accessing the Browser
+
+From the home page, open the **Import/Export** dropdown and click **"Browse OpenPrintTag DB"** (teal dot). The browser fetches the entire database from GitHub on first load (~3 MB, cached for 1 hour).
+
+### Browsing and Filtering
+
+The browser shows only FDM filaments (SLA resins are filtered out). Use the sidebar controls to narrow results:
+
+- **Search** -- filter by filament name or brand
+- **Sort** -- by name, brand, type, or completeness score
+- **Data Quality** -- filter by completeness tier:
+  - 🟢 **Rich** (7-10 fields) -- well-documented materials
+  - 🟡 **Partial** (4-6 fields) -- moderately complete
+  - ⚪ **Stub** (0-3 fields) -- minimal data, rendered at 50% opacity
+- **Type** -- filter by material type (PLA, PETG, ABS, TPU, etc.)
+- **Brand** -- filter by manufacturer (searchable list with material counts)
+
+### Viewing Material Details
+
+Click any material row to expand a detail panel with three columns:
+
+- **Identity** -- brand, slug, type abbreviation, color swatch, UUID
+- **Properties** -- density, nozzle temp range, bed temp range, chamber temp, drying temp/time, shore hardness, transmission distance
+- **Data Quality & Links** -- completeness score bar (out of 10), photo preview, product URL, tags
+
+### Importing Materials
+
+1. Select materials using checkboxes (or use **Select All** / **Clear Selection** in the toolbar)
+2. Click **"Import Selected (N)"** to import
+3. Materials are matched by name and vendor:
+   - **New materials** are created with all available fields
+   - **Existing materials** are updated conservatively -- only null/empty fields are filled, preserving your existing calibration data
+
+---
+
+## PrusaSlicer Integration
+
+### Live Sync (PrusaSlicer Fork)
+
+If you use the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Filament DB integration, filament presets load automatically from Filament DB on startup:
+
+1. Start Filament DB (desktop app or web at `http://localhost:3000`)
+2. Launch the PrusaSlicer fork
+3. Your filament presets appear in the filament dropdown with calibration values (EM, max volumetric speed, pressure advance, retraction) baked in for the selected printer and nozzle
+
+### Manual INI Export/Import
+
+Even without the fork, you can manually sync:
+
+- **Export**: Click **"Export INI"** on the home page to download all filaments as a PrusaSlicer-compatible config bundle
+- **Import**: In PrusaSlicer, go to **File > Import > Import Config Bundle** to load the exported file
+- **Re-import**: Click **"Import INI"** to import a PrusaSlicer config bundle back into Filament DB
+
+---
+
 ## API Documentation
 
 Click **"API Docs"** on the home page to open the interactive Swagger UI at `/api-docs`. This provides a browsable, testable interface for all REST API endpoints with full request/response schemas. The underlying OpenAPI 3.0 spec is available at `/openapi.json`.

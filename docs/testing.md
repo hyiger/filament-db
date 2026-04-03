@@ -36,10 +36,12 @@ tests/
 ├── Nozzle.test.ts              # Nozzle model tests (9 tests)
 ├── mongodb.test.ts             # DB connection + migration tests (10 tests)
 ├── importFilaments.test.ts     # CSV/XLSX import mapping + upsert + skip report tests (18 tests)
-└── exportFilaments.test.ts     # CSV/XLSX export column mapping tests (11 tests)
+├── exportFilaments.test.ts     # CSV/XLSX export column mapping tests (11 tests)
+├── prusaSlicerBundle.test.ts   # PrusaSlicer INI bundle generation tests (19 tests)
+└── openprinttagBrowser.test.ts # OpenPrintTag database browser + completeness scoring tests (33 tests)
 ```
 
-**Total: 343 tests across 15 test files**
+**Total: 397 tests across 17 test files**
 
 ## Coverage Thresholds
 

@@ -432,7 +432,48 @@ If a filament has a single `totalWeight` but no spools yet, click **"Migrate to 
 
 ---
 
-## Step 16: Delete a Filament
+## Step 16: Browse the OpenPrintTag Community Database
+
+Discover filaments from 97 brands in the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) and selectively import them into your library.
+
+1. From the home page, open the **Import/Export** dropdown and click **"Browse OpenPrintTag DB"**.
+2. The browser loads all FDM filaments (11,000+ materials; SLA resins are filtered out automatically).
+3. Materials are color-coded by data completeness:
+   - 🟢 **Rich** (7-10 fields) -- green progress bar, fully opaque
+   - 🟡 **Partial** (4-6 fields) -- yellow progress bar, fully opaque
+   - ⚪ **Stub** (0-3 fields) -- grey progress bar, 50% opacity
+4. Use the **sidebar filters** to narrow results:
+   - **Search** by name or brand
+   - **Sort** by name, brand, type, or completeness
+   - Filter by **Data Quality** tier, **Type**, or **Brand**
+5. **Click any row** to expand a detail panel showing identity, properties (density, temps, hardness, transmission distance), and data quality with links.
+6. **Select materials** using checkboxes, then click **"Import Selected"**.
+7. Imported filaments are matched by name and vendor — existing entries are updated (only null fields are filled), new entries are created.
+
+---
+
+## Step 17: PrusaSlicer Integration
+
+### Live Sync with PrusaSlicer Fork
+
+If you use the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Filament DB integration:
+
+1. Start Filament DB (desktop app or web at `http://localhost:3000`)
+2. Launch the PrusaSlicer fork — it fetches filament presets from Filament DB automatically
+3. Your filaments appear in the filament dropdown with calibrated values (EM, max volumetric speed, PA, retraction) baked in for your selected printer and nozzle
+4. Edit filaments in Filament DB, restart PrusaSlicer, and the updated values appear automatically
+
+### Manual Export/Import
+
+Without the fork, sync manually:
+
+1. Click **"Export INI"** on the home page to download a PrusaSlicer-compatible config bundle
+2. In PrusaSlicer, go to **File > Import > Import Config Bundle** to load it
+3. To re-import from PrusaSlicer, export a config bundle and use **"Import INI"** in Filament DB
+
+---
+
+## Step 18: Delete a Filament
 
 1. On the home page, click **Delete** next to any filament.
 2. Confirm the deletion in the popup.
@@ -440,6 +481,8 @@ If a filament has a single `totalWeight` but no spools yet, click **"Migrate to 
 **Note**: Parent filaments with color variants cannot be deleted. Delete the variants first.
 
 In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted filaments are soft-deleted internally (marked with a timestamp) so the deletion propagates correctly across devices.
+
+---
 
 ---
 
@@ -455,6 +498,7 @@ In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted fi
 | Import from CSV/XLSX | Home > Import CSV / Import XLSX |
 | Import Prusament spool | Home > Prusament QR |
 | Import from Atlas | Home > Import from Atlas |
+| Browse OpenPrintTag DB | Home > Import/Export > Browse OpenPrintTag DB |
 | Restore from snapshot | Home > Restore |
 | Export to PrusaSlicer | Home > Export INI |
 | Export to CSV/XLSX | Home > Export CSV / Export XLSX |

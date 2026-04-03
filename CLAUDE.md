@@ -32,7 +32,7 @@ npm run electron:build   # Full Electron build pipeline
 src/app/            App Router pages + API routes
 src/components/     React components (NfcProvider, Toast, dialogs)
 src/hooks/          Custom hooks (useNfc, useCurrency)
-src/lib/            Core logic (openprinttag CBOR, NDEF, TDS extraction, INI parser)
+src/lib/            Core logic (openprinttag CBOR, NDEF, TDS extraction, INI parser, PrusaSlicer bundle, OpenPrintTag DB browser)
 src/models/         Mongoose schemas (Filament, Nozzle, Printer)
 src/types/          TypeScript type defs (electron.d.ts, filament.ts)
 electron/           Electron main process (main.ts, preload.ts, ndef.ts)
@@ -52,7 +52,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 
 ## Testing
 
-- 364 tests across 16 files
+- 397 tests across 17 files
 - Coverage thresholds: 80% lines/statements, 90% functions, 75% branches
 - Setup file: `tests/setup.ts` (mongodb-memory-server)
 - Tests run in CI on Node 20 and 22
@@ -61,6 +61,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 
 - **Tests**: Run on push to main and PRs (`test.yml`)
 - **Releases**: Triggered by `v*` tags (`release.yml`). Builds macOS (x64+arm64), Windows (x64), Linux (x64+arm64). Uploads assets to GitHub release.
+- **Docker**: Triggered by `v*` tags (`docker.yml`). Builds multi-arch (amd64+arm64) Docker image and pushes to GHCR.
 - **Lint rule**: `react-hooks/set-state-in-effect` — don't call setState directly in useEffect body; use lazy initializers or callbacks
 
 ## Release Process
@@ -70,5 +71,20 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 3. Tag with `git tag v<version>` and push tag
 4. CI builds desktop installers and uploads to GitHub release
 5. Apply release notes with `gh release edit`
+
+## PrusaSlicer Integration
+
+- **Config bundle API**: `GET /api/filaments/prusaslicer` exports filaments as PrusaSlicer INI bundle; `POST` imports bundles back
+- **Field mapping**: `src/lib/prusaSlicerBundle.ts` maps structured DB fields → PrusaSlicer INI keys, merges with `settings` bag
+- **Nil handling**: Structured DB fields that are null must NOT emit `nil` in the INI output — PrusaSlicer interprets nil as "reset to zero" for numeric fields. Only settings bag nil values (meaning "inherit from parent") are preserved.
+- **PrusaSlicer fork**: [hyiger/PrusaSlicer](https://github.com/hyiger/PrusaSlicer) has a `FilamentDB` module that fetches presets on startup via the REST API
+
+## OpenPrintTag Database Browser
+
+- **Page**: `/openprinttag` — browse the OpenPrintTag community database (11k+ materials)
+- **API**: `GET /api/openprinttag` fetches GitHub tarball, parses YAML, filters to FFF, caches 1 hour
+- **Import**: `POST /api/openprinttag/import` with `{ slugs: [...] }` — upserts by name+vendor
+- **Completeness scoring**: 0–10 scale (color, density, temps, hardness, TD, drying, chamber, photos, url)
+- **Tiers**: rich (7–10 green), partial (4–6 yellow), stub (0–3 grey/dimmed)
 
 Note: SLIX2 NFC tags have write-protected block 79. The NDEF wrapper reserves the last 4 bytes (`usableMemory = tagMemorySize - 4`).

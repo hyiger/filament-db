@@ -139,6 +139,43 @@ Click **"Export CSV"** or **"Export XLSX"** to download all filaments. Exports i
 
 ---
 
+## OpenPrintTag Community Database Import
+
+Browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) (11,000+ materials from 97 brands) and selectively import filaments into your library.
+
+1. From the home page, open the **Import/Export** dropdown and click **"Browse OpenPrintTag DB"**
+2. The browser loads all FDM filaments from the OpenPrintTag database (SLA resins are filtered out)
+3. Use the sidebar to filter by:
+   - **Search** -- filter by name or brand
+   - **Sort** -- by name, brand, type, or completeness score
+   - **Data Quality** -- filter by Rich (green, 7-10 fields), Partial (yellow, 4-6 fields), or Stub (grey, 0-3 fields)
+   - **Type** -- filter by material type (PLA, PETG, ABS, etc.)
+   - **Brand** -- filter by manufacturer (searchable)
+4. Click any material row to expand a detail panel showing:
+   - **Identity** -- brand, type, color swatch, UUID
+   - **Properties** -- density, temperatures (nozzle, bed, chamber, drying), hardness, transmission distance
+   - **Data Quality & Links** -- completeness score bar, photo, product URL
+5. Select materials using checkboxes (or **Select All** / **Clear Selection** in the toolbar)
+6. Click **Import Selected (N)** to import the selected materials
+7. Imported filaments are matched by name and vendor -- existing filaments are updated (only null fields are filled), new filaments are created
+
+Stub entries (completeness score 0-3) are rendered at 50% opacity to indicate minimal data.
+
+---
+
+## PrusaSlicer Live Sync
+
+If you are using the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Filament DB integration, filament presets sync automatically via REST API:
+
+1. Build and run the PrusaSlicer fork (see the fork's README for build instructions)
+2. Start Filament DB (desktop app or web at `http://localhost:3000`)
+3. In PrusaSlicer, filament presets from Filament DB appear in the filament dropdown on startup
+4. Calibration values (EM, max volumetric speed, pressure advance, retraction) are baked into the presets based on the selected printer and nozzle
+
+The PrusaSlicer fork fetches presets from `GET /api/filaments/prusaslicer` on startup. You can also import a PrusaSlicer config bundle back into Filament DB via `POST /api/filaments/prusaslicer`.
+
+---
+
 ## Exporting to PrusaSlicer INI
 
 Click **"Export INI"** in the top right to download all filaments as a PrusaSlicer-compatible INI file. This file contains all stored settings for each filament and can be imported back into PrusaSlicer via **File > Import > Import Config Bundle...**

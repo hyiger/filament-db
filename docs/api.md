@@ -177,6 +177,106 @@ Remove a spool from a filament. Returns the updated filament document.
 
 ---
 
+## PrusaSlicer Config Bundle
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/filaments/prusaslicer` | Export filaments as a PrusaSlicer-compatible INI config bundle |
+| `POST` | `/api/filaments/prusaslicer` | Import a PrusaSlicer INI config bundle |
+
+### GET /api/filaments/prusaslicer
+
+Exports all filaments as a PrusaSlicer-compatible INI config bundle. Structured DB fields (temperatures, density, cost, max volumetric speed, shrinkage) are mapped to their PrusaSlicer INI equivalents and merged with the `settings` passthrough bag. Calibration data generates per-nozzle/printer sections with overrides; presets generate temperature/extrusion variants.
+
+Query parameters:
+- `type` -- filter by filament type (e.g. `PLA`, `PETG`)
+- `vendor` -- filter by vendor name
+- `ids` -- comma-separated list of filament IDs
+
+Returns `text/plain` INI content.
+
+### POST /api/filaments/prusaslicer
+
+Import a PrusaSlicer INI config bundle. Upload via `multipart/form-data` with a `file` field, or send the INI text as the request body with `Content-Type: text/plain`.
+
+Returns:
+```json
+{
+  "message": "Imported 15 filaments (12 new, 3 updated)",
+  "total": 15,
+  "created": 12,
+  "updated": 3
+}
+```
+
+---
+
+## OpenPrintTag Database
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/openprinttag` | Browse the OpenPrintTag community database (FDM filaments only) |
+| `POST` | `/api/openprinttag/import` | Import selected materials into Filament DB |
+
+### GET /api/openprinttag
+
+Fetches the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) from GitHub, parses all material YAML files, filters to FFF (FDM) filaments, and returns them with completeness scores. Results are cached for 1 hour.
+
+Query parameters:
+- `refresh=true` -- force re-fetch from GitHub (clears cache)
+
+Returns:
+```json
+{
+  "brands": [
+    { "slug": "prusament", "name": "Prusament", "materialCount": 42 }
+  ],
+  "materials": [
+    {
+      "slug": "prusament-pla-prusa-galaxy-black",
+      "uuid": "1aaca54a-...",
+      "brandSlug": "prusament",
+      "brandName": "Prusament",
+      "name": "PLA Prusa Galaxy Black",
+      "type": "PLA",
+      "color": "#3d3e3d",
+      "density": 1.24,
+      "nozzleTempMin": 205,
+      "nozzleTempMax": 225,
+      "completenessScore": 8,
+      "completenessTier": "rich"
+    }
+  ],
+  "cachedAt": "2026-04-02T...",
+  "totalFFF": 11194,
+  "totalSLA": 171
+}
+```
+
+Completeness scoring (0–10): color, density, print temps, bed temps, drying temp, hardness, transmission distance, chamber temp, photos, product URL. Tiers: rich (7–10), partial (4–6), stub (0–3).
+
+### POST /api/openprinttag/import
+
+Import selected OpenPrintTag materials into Filament DB. Send a JSON body:
+
+```json
+{ "slugs": ["prusament-pla-prusa-galaxy-black", "polymaker-fiberon-pa6-cf20-black"] }
+```
+
+Materials are mapped to the Filament DB schema (type, vendor, temperatures, density, hardness, transmission distance, drying specs, OPT tags) and upserted by name + vendor.
+
+Returns:
+```json
+{
+  "message": "Imported 2 filaments (2 new)",
+  "total": 2,
+  "created": 2,
+  "updated": 0
+}
+```
+
+---
+
 ## Prusament
 
 | Method | Endpoint | Description |

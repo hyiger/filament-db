@@ -27,6 +27,8 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 ### Import / Export
 - **PrusaSlicer** -- import and export INI config bundles via browser upload or CLI
+- **PrusaSlicer integration** -- live sync of filament presets to a [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) via REST API; presets appear in the filament dropdown on startup with calibrated values baked in
+- **OpenPrintTag database** -- browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) (11,000+ materials from 97 brands), filter by type/brand/data quality, and selectively import filaments with completeness scoring
 - **CSV / XLSX** -- import and export spreadsheets with column mapping
 - **Prusament QR** -- scan a spool QR code or enter spool ID to auto-import specs, temps, weights, and pricing
 - **Import from Atlas** -- connect to a remote MongoDB Atlas database and selectively import filaments
@@ -41,6 +43,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 ### Developer
 - **REST API** -- full CRUD endpoints for filaments, nozzles, and printers
+- **PrusaSlicer API** -- `GET /api/filaments/prusaslicer` exports filaments as a PrusaSlicer-compatible INI config bundle with calibration overrides; `POST` imports bundles back
 - **API documentation** -- interactive Swagger UI at `/api-docs` with OpenAPI 3.0 spec
 
 ## Tech Stack
@@ -106,18 +109,20 @@ filament-db/
 │   │   ├── api/nozzles/     # Nozzle REST API (CRUD)
 │   │   ├── api/printers/    # Printer REST API (CRUD)
 │   │   ├── api/prusament/    # Prusament spool scraping and import
+│   │   ├── api/openprinttag/ # OpenPrintTag database browser and import
 │   │   ├── api/tds/          # AI-powered TDS extraction (Gemini/Claude/OpenAI)
 │   │   ├── api/setup/       # Connection test endpoint (for desktop setup wizard)
 │   │   ├── api-docs/        # Interactive Swagger UI (OpenAPI 3.0)
 │   │   ├── setup/           # First-launch setup wizard
 │   │   ├── filaments/       # Filament pages (list, detail, edit, new)
+│   │   ├── openprinttag/    # OpenPrintTag community database browser
 │   │   ├── nozzles/         # Nozzle pages (list, edit, new)
 │   │   └── printers/        # Printer pages (list, edit, new)
 │   ├── components/          # React components (NFC status, dialogs, providers)
 │   ├── hooks/               # Custom hooks (useNfc, useCurrency)
-│   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder, TDS extractor
+│   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder, TDS extractor, PrusaSlicer bundle generator, OpenPrintTag DB browser
 │   └── models/              # Mongoose schemas (Filament, Nozzle, Printer)
-├── tests/                   # Vitest unit tests (364 tests across 16 files)
+├── tests/                   # Vitest unit tests (397 tests across 17 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   ├── release.yml          # CD: build desktop installers on version tags (4 platforms)
