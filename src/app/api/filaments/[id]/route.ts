@@ -121,13 +121,58 @@ export async function POST(
       return errorResponse(`Filament not found: ${decodedName}`, 404);
     }
 
-    // Merge incoming config into the settings bag
-    const settings = (filament.settings as Record<string, unknown>) || {};
-    for (const [key, value] of Object.entries(config)) {
-      settings[key] = value;
+    // Reverse-map PrusaSlicer INI keys → structured DB fields
+    const update: Record<string, unknown> = {};
+    const temps: Record<string, unknown> = {};
+
+    // Core fields
+    if (config.filament_type) update.type = config.filament_type;
+    if (config.filament_vendor) update.vendor = config.filament_vendor;
+    if (config.filament_colour) update.color = config.filament_colour;
+    if (config.filament_diameter) update.diameter = parseFloat(config.filament_diameter);
+    if (config.filament_density) update.density = parseFloat(config.filament_density);
+    if (config.filament_cost) update.cost = parseFloat(config.filament_cost);
+    if (config.filament_spool_weight) update.spoolWeight = parseFloat(config.filament_spool_weight);
+    if (config.filament_max_volumetric_speed) update.maxVolumetricSpeed = parseFloat(config.filament_max_volumetric_speed);
+
+    // Temperatures
+    if (config.temperature) temps.nozzle = parseInt(config.temperature);
+    if (config.first_layer_temperature) temps.nozzleFirstLayer = parseInt(config.first_layer_temperature);
+    if (config.bed_temperature) temps.bed = parseInt(config.bed_temperature);
+    if (config.first_layer_bed_temperature) temps.bedFirstLayer = parseInt(config.first_layer_bed_temperature);
+
+    // Shrinkage
+    if (config.filament_shrinkage_compensation_xy) update.shrinkageXY = parseFloat(config.filament_shrinkage_compensation_xy);
+    if (config.filament_shrinkage_compensation_z) update.shrinkageZ = parseFloat(config.filament_shrinkage_compensation_z);
+
+    // Flags
+    if (config.filament_soluble) update.soluble = config.filament_soluble === "1";
+    if (config.filament_abrasive) update.abrasive = config.filament_abrasive === "1";
+
+    // Merge temperatures into existing
+    if (Object.keys(temps).length > 0) {
+      const existing = (filament.temperatures as Record<string, unknown>) || {};
+      update.temperatures = { ...existing, ...temps };
     }
 
-    await Filament.findByIdAndUpdate(filament._id, { $set: { settings } });
+    // Everything else goes into the settings bag
+    const STRUCTURED_KEYS = new Set([
+      "filament_type", "filament_vendor", "filament_colour", "filament_diameter",
+      "filament_density", "filament_cost", "filament_spool_weight",
+      "filament_max_volumetric_speed", "temperature", "first_layer_temperature",
+      "bed_temperature", "first_layer_bed_temperature",
+      "filament_shrinkage_compensation_xy", "filament_shrinkage_compensation_z",
+      "filament_soluble", "filament_abrasive", "filament_settings_id",
+    ]);
+    const settings = (filament.settings as Record<string, unknown>) || {};
+    for (const [key, value] of Object.entries(config)) {
+      if (!STRUCTURED_KEYS.has(key)) {
+        settings[key] = value;
+      }
+    }
+    update.settings = settings;
+
+    await Filament.findByIdAndUpdate(filament._id, { $set: update });
 
     return NextResponse.json({
       message: `Synced ${Object.keys(config).length} settings for "${decodedName}"`,
