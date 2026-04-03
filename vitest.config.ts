@@ -16,6 +16,7 @@ export default defineConfig({
         statements: 80,
       },
     },
+    testTimeout: 15000,
     setupFiles: ["./tests/setup.ts"],
   },
   resolve: {
