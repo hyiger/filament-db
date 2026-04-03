@@ -76,6 +76,8 @@ export interface IFilament extends Document {
   heatDeflectionTemp: number | null;
   shoreHardnessA: number | null;
   shoreHardnessD: number | null;
+  shrinkageXY: number | null;
+  shrinkageZ: number | null;
   minPrintSpeed: number | null;
   maxPrintSpeed: number | null;
   spoolType: string | null;
@@ -163,6 +165,8 @@ const FilamentSchema = new Schema<IFilament>(
     heatDeflectionTemp: { type: Number, default: null },
     shoreHardnessA: { type: Number, default: null },
     shoreHardnessD: { type: Number, default: null },
+    shrinkageXY: { type: Number, default: null },
+    shrinkageZ: { type: Number, default: null },
     minPrintSpeed: { type: Number, default: null },
     maxPrintSpeed: { type: Number, default: null },
     spoolType: { type: String, default: null },
