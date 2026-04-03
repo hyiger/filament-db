@@ -1,4 +1,15 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { mkdirSync, writeFileSync } from "fs";
+import { join } from "path";
+
+const { mockExecSync } = vi.hoisted(() => ({
+  mockExecSync: vi.fn(),
+}));
+vi.mock("child_process", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("child_process")>();
+  return { ...orig, execSync: mockExecSync };
+});
+
 import {
   computeCompletenessScore,
   completenessTier,
@@ -6,6 +17,8 @@ import {
   parseBrandYaml,
   parseMaterialYaml,
   mapToFilamentPayload,
+  fetchOpenPrintTagDatabase,
+  clearCache,
 } from "@/lib/openprinttagBrowser";
 
 describe("computeCompletenessScore", () => {
@@ -409,5 +422,110 @@ describe("mapToFilamentPayload", () => {
     // ABRASIVE = 4, CONTAINS_CARBON_FIBER = 31
     expect(optTags).toContain(4);
     expect(optTags).toContain(31);
+  });
+});
+
+describe("clearCache", () => {
+  it("clears cached database so next fetch re-downloads", () => {
+    // clearCache should not throw
+    expect(() => clearCache()).not.toThrow();
+  });
+});
+
+describe("fetchOpenPrintTagDatabase", () => {
+  beforeEach(() => {
+    clearCache();
+    mockExecSync.mockReset();
+  });
+
+  it("fetches and parses the database from a mock tarball", async () => {
+    mockExecSync.mockImplementation((_cmd: string) => {
+      const match = String(_cmd).match(/-C "([^"]+)"/);
+      if (!match) return Buffer.from("");
+      const tmpDir = match[1];
+
+      const repoDir = join(tmpDir, "OpenPrintTag-openprinttag-database-abc123");
+      const brandsDir = join(repoDir, "data", "brands");
+      const materialsDir = join(repoDir, "data", "materials", "prusament");
+
+      mkdirSync(brandsDir, { recursive: true });
+      mkdirSync(materialsDir, { recursive: true });
+
+      writeFileSync(
+        join(brandsDir, "prusament.yaml"),
+        `slug: prusament\nname: Prusament\ncountry: CZ`
+      );
+
+      writeFileSync(
+        join(materialsDir, "prusament-pla-galaxy-black.yaml"),
+        `uuid: test-uuid-1234
+slug: prusament-pla-galaxy-black
+brand:
+  slug: prusament
+name: PLA Galaxy Black
+class: FFF
+type: PLA
+abbreviation: PLA
+primary_color:
+  color_rgba: '#3d3e3dff'
+properties:
+  density: 1.24
+  min_print_temperature: 205
+  max_print_temperature: 225
+  min_bed_temperature: 40
+  max_bed_temperature: 60`
+      );
+
+      writeFileSync(
+        join(materialsDir, "some-resin.yaml"),
+        `uuid: resin-uuid
+slug: some-resin
+brand:
+  slug: prusament
+name: Some Resin
+class: SLA
+type: Resin`
+      );
+
+      return Buffer.from("");
+    });
+
+    const db = await fetchOpenPrintTagDatabase();
+
+    expect(db.totalFFF).toBe(1);
+    expect(db.totalSLA).toBe(1);
+    expect(db.materials).toHaveLength(1);
+    expect(db.materials[0].slug).toBe("prusament-pla-galaxy-black");
+    expect(db.materials[0].brandName).toBe("Prusament");
+    expect(db.brands).toHaveLength(1);
+    expect(db.brands[0].name).toBe("Prusament");
+    expect(db.cachedAt).toBeTruthy();
+  });
+
+  it("returns cached result on second call", async () => {
+    let callCount = 0;
+    mockExecSync.mockImplementation((_cmd: string) => {
+      callCount++;
+      const match = String(_cmd).match(/-C "([^"]+)"/);
+      if (!match) return Buffer.from("");
+      const tmpDir = match[1];
+
+      const repoDir = join(tmpDir, "OpenPrintTag-abc");
+      const materialsDir = join(repoDir, "data", "materials");
+      mkdirSync(materialsDir, { recursive: true });
+      mkdirSync(join(repoDir, "data", "brands"), { recursive: true });
+
+      writeFileSync(
+        join(materialsDir, "test.yaml"),
+        `uuid: u1\nslug: test\nbrand:\n  slug: test\nname: Test\nclass: FFF\ntype: PLA`
+      );
+
+      return Buffer.from("");
+    });
+
+    await fetchOpenPrintTagDatabase();
+    await fetchOpenPrintTagDatabase();
+
+    expect(callCount).toBe(1);
   });
 });
