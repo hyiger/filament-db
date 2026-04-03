@@ -224,7 +224,11 @@ async function resolveMongoUri(): Promise<string | null> {
   const atlasUri = store.get("atlasUri") as string;
 
   if (mode === "offline") {
-    // Pure local mode
+    // Pure local mode — tear down any active sync
+    if (syncService) {
+      syncService.destroy();
+      syncService = null;
+    }
     const localUri = await startLocalMongo();
     store.set("mongodbUri", localUri);
     return localUri;
