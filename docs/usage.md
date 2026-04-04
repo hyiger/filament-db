@@ -105,7 +105,7 @@ Sync uses **last-write-wins** conflict resolution: if the same filament was edit
 
 ## Managing Nozzles
 
-Click **"Manage Nozzles"** on the home page to view, create, edit, and delete nozzle profiles.
+Go to **Settings** and click **Nozzles** to view, create, edit, and delete nozzle profiles.
 
 Each nozzle has:
 - **Diameter** (0.25mm, 0.4mm, 0.6mm, etc.)
@@ -118,7 +118,7 @@ Each nozzle has:
 
 ## Managing Printers
 
-Click **"Manage Printers"** on the home page to view, create, edit, and delete printer profiles.
+Go to **Settings** and click **Printers** to view, create, edit, and delete printer profiles.
 
 Each printer has:
 - **Manufacturer** (e.g. Prusa, Bambu Lab)

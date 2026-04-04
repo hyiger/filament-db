@@ -85,7 +85,7 @@ After setup, a small status pill appears next to the "Filament DB" title on the 
 
 If you have multiple printers (e.g. a Prusa Core One and a Bambu H2D), define them now so you can store per-printer calibrations later. If you only have one printer or want to skip this, jump to Step 4.
 
-1. From the home page, click **Manage Printers**.
+1. Go to **Settings** (gear icon in the top right of the home page), then click **Printers**.
 2. Click **+ Add Printer**.
 3. Fill in:
    - **Manufacturer** -- e.g. `Prusa`
@@ -101,7 +101,7 @@ If you have multiple printers (e.g. a Prusa Core One and a Bambu H2D), define th
 
 Before adding filaments you need at least one nozzle profile so you can assign per-nozzle calibrations later.
 
-1. From the home page, click **Manage Nozzles** in the header.
+1. Go to **Settings** (gear icon in the top right of the home page), then click **Nozzles**.
 2. Click **+ Add Nozzle**.
 3. Fill in the form:
    - **Name** -- a short label, e.g. `0.4 Brass`
@@ -300,10 +300,10 @@ To turn an existing standalone filament into a variant:
 ## Step 11: Export to PrusaSlicer
 
 1. On the home page, click **Export INI**.
-2. A `.ini` file downloads containing all your filaments as `[filament:Name]` sections.
+2. A `.ini` file downloads containing all your filaments as `[filament:Name]` sections — one section per filament.
 3. In PrusaSlicer, go to **File > Import > Import Config Bundle** and select the file.
 
-**How calibrations export**: Filaments with calibrations generate one section per printer/nozzle combination (e.g. `[filament:Prusament PLA Prusa Core One 0.4mm]` for printer-specific or `[filament:Prusament PLA 0.4mm]` for default) with overrides merged in. Pressure advance is written as `M572 S<value>` in `start_filament_gcode`.
+Calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are not included in the exported INI — they are applied dynamically by the PrusaSlicer fork via the calibration API when the printer/nozzle context changes.
 
 ---
 
@@ -311,7 +311,7 @@ To turn an existing standalone filament into a variant:
 
 ### Nozzles
 
-From the home page, click **Manage Nozzles**.
+Go to **Settings** and click **Nozzles**.
 
 - **Edit** -- click Edit next to any nozzle to change its properties.
 - **Delete** -- click Delete to remove a nozzle. If any filaments reference it, deletion is blocked and a message tells you how many filaments to update first.
@@ -319,7 +319,7 @@ From the home page, click **Manage Nozzles**.
 
 ### Printers
 
-From the home page, click **Manage Printers**.
+Go to **Settings** and click **Printers**.
 
 - **Edit** -- click Edit next to any printer to change its properties or update installed nozzles.
 - **Delete** -- click Delete to remove a printer. If any filament calibrations reference it, deletion is blocked.
@@ -460,7 +460,7 @@ If you use the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Fi
 
 1. Start Filament DB (desktop app or web at `http://localhost:3000`)
 2. Launch the PrusaSlicer fork — it fetches filament presets from Filament DB automatically
-3. Your filaments appear in the filament dropdown with calibrated values (EM, max volumetric speed, PA, retraction) baked in for your selected printer and nozzle
+3. Your filaments appear in the filament dropdown; calibration values (EM, max volumetric speed, PA, retraction) are applied dynamically when you switch printer/nozzle
 4. Edit filaments in Filament DB, restart PrusaSlicer, and the updated values appear automatically
 
 ### Manual Export/Import
@@ -506,8 +506,8 @@ In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted fi
 | View filament details | Home > click filament name |
 | Edit filament | Detail page > Edit |
 | Add color variant | Detail page > + Add Color |
-| Manage nozzles | Home > Manage Nozzles |
-| Manage printers | Home > Manage Printers |
+| Manage nozzles | Settings > Nozzles |
+| Manage printers | Settings > Printers |
 | Browse API docs | Settings > API Documentation (or navigate to `/api-docs`) |
 | Write NFC tag | Detail page > Write NFC (desktop app) |
 | Erase NFC tag | Settings > NFC Tools > Erase Tag (desktop app) |
