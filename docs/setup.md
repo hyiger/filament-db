@@ -27,12 +27,12 @@ Run Filament DB as a Docker container. The image is ~72MB, built on `node:22-alp
 ### Quick Start
 
 ```bash
-docker run -p 3000:3000 \
+docker run -p 3456:3000 \
   -e MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/filament-db" \
   ghcr.io/hyiger/filament-db
 ```
 
-Open http://localhost:3000.
+Open http://localhost:3456.
 
 ### Docker Compose
 
@@ -43,7 +43,7 @@ services:
   filament-db:
     image: ghcr.io/hyiger/filament-db
     ports:
-      - "3000:3000"
+      - "3456:3000"
     environment:
       - MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/filament-db
       # Optional: AI provider for TDS extraction (choose one)
@@ -66,7 +66,7 @@ services:
   filament-db:
     image: ghcr.io/hyiger/filament-db
     ports:
-      - "3000:3000"
+      - "3456:3000"
     environment:
       - MONGODB_URI=mongodb://mongo:27017/filament-db
     depends_on:
@@ -99,7 +99,7 @@ volumes:
 git clone https://github.com/hyiger/filament-db.git
 cd filament-db
 docker build -t filament-db .
-docker run -p 3000:3000 -e MONGODB_URI="mongodb+srv://..." filament-db
+docker run -p 3456:3000 -e MONGODB_URI="mongodb+srv://..." filament-db
 ```
 
 ---
@@ -207,18 +207,18 @@ The AI API key enables the "Import from TDS" feature, which uses AI to extract f
 #### Web App
 
 ```bash
-npm run dev                   # development at http://localhost:3000
+npm run dev                   # development at http://localhost:3456
 npm run build && npm start    # production
 ```
 
 #### Desktop App (from source)
 
 ```bash
-npm run electron:dev          # development mode (port 3000)
+npm run electron:dev          # development mode
 npm run electron:build        # build installer for your platform
 ```
 
-> **Ports:** The development server (`npm run dev`) and Docker expose port **3000**. The desktop app's built-in production server runs on port **3456**. If you use the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer), set the Filament DB URL in Preferences to match whichever you're running.
+> **Port:** Filament DB always runs on port **3456** — dev, desktop, and Docker (mapped from container port 3000). The [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) defaults to `http://localhost:3456`.
 
 ---
 

@@ -64,10 +64,10 @@ Download the latest release for your platform from [GitHub Releases](https://git
 ### Docker
 
 ```bash
-docker run -p 3000:3000 -e MONGODB_URI="mongodb+srv://..." ghcr.io/hyiger/filament-db
+docker run -p 3456:3000 -e MONGODB_URI="mongodb+srv://..." ghcr.io/hyiger/filament-db
 ```
 
-Open http://localhost:3000. See the [Setup Guide](docs/setup.md#option-2-docker) for Docker Compose and configuration options.
+Open http://localhost:3456. See the [Setup Guide](docs/setup.md#option-2-docker) for Docker Compose and configuration options.
 
 ### From Source
 
@@ -76,8 +76,8 @@ git clone https://github.com/hyiger/filament-db.git
 cd filament-db
 npm install
 cp .env.example .env.local   # then edit with your MongoDB Atlas connection string
-npm run dev                   # web app at http://localhost:3000
-npm run electron:dev          # or run as desktop app (port 3456 in production)
+npm run dev                   # web app at http://localhost:3456
+npm run electron:dev          # or run as desktop app
 ```
 
 See the [Setup Guide](docs/setup.md) for detailed instructions.

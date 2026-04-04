@@ -32,12 +32,12 @@ git clone https://github.com/hyiger/filament-db.git
 cd filament-db
 npm install
 cp .env.example .env.local   # edit with your MongoDB Atlas URI
-npm run dev                   # opens http://localhost:3000
+npm run dev                   # opens http://localhost:3456
 ```
 
 > **Note:** The web app always requires a `MONGODB_URI` in `.env.local`. Offline and hybrid modes are desktop-app-only features.
 >
-> **Ports:** The dev server (`npm run dev`) and Docker run on port **3000**. The desktop app's embedded server runs on port **3456**.
+> **Port:** Filament DB always runs on port **3456** in all modes.
 
 ---
 
@@ -465,7 +465,7 @@ If you use the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Fi
 3. Your filaments appear in the filament dropdown; calibration values (EM, max volumetric speed, PA, retraction) are applied dynamically when you switch printer/nozzle
 4. Edit filaments in Filament DB, restart PrusaSlicer, and the updated values appear automatically
 
-> **Port note:** The desktop app runs its embedded web server on port **3456**. The dev server (`npm run dev`) and Docker use port **3000**. PrusaSlicer defaults to `http://localhost:3000` — if you're using the desktop app, change the Filament DB URL in PrusaSlicer's Preferences to `http://localhost:3456`.
+> **Port:** Filament DB runs on port **3456** in all modes. PrusaSlicer defaults to `http://localhost:3456`.
 
 ### Manual Export/Import
 

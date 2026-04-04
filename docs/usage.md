@@ -360,10 +360,9 @@ Click any material row to expand a detail panel with three columns:
 
 If you use the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Filament DB integration, filament presets load automatically from Filament DB on startup:
 
-1. Start Filament DB (desktop app or web)
-2. In PrusaSlicer Preferences, set the Filament DB URL to `http://localhost:3456` (desktop app) or `http://localhost:3000` (dev server / Docker)
-3. Launch the PrusaSlicer fork
-4. Your filament presets appear in the filament dropdown; calibration values (EM, max volumetric speed, pressure advance, retraction) are applied dynamically when you switch printer/nozzle
+1. Start Filament DB (desktop app or web at `http://localhost:3456`)
+2. Launch the PrusaSlicer fork
+3. Your filament presets appear in the filament dropdown; calibration values (EM, max volumetric speed, pressure advance, retraction) are applied dynamically when you switch printer/nozzle
 
 ### Manual INI Export/Import
 

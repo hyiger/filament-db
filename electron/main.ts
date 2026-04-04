@@ -28,9 +28,6 @@ let syncService: SyncService | null = null;
 const PORT = 3456;
 
 function getAppURL(urlPath = "/") {
-  if (isDev) {
-    return `http://localhost:3000${urlPath}`;
-  }
   return `http://localhost:${PORT}${urlPath}`;
 }
 

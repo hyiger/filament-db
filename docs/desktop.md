@@ -51,9 +51,9 @@ Run the desktop app in development mode with hot-reload:
 npm run electron:dev
 ```
 
-This starts the Next.js dev server and Electron concurrently. The app loads `http://localhost:3000` (dev mode only).
+This starts the Next.js dev server on port 3456 and Electron concurrently. The app loads `http://localhost:3456`.
 
-> **Note:** In dev mode, Electron always connects to the separate `next dev` server on port 3000. Connection-mode changes (offline/hybrid/atlas) made through the setup wizard will save to the config store and reconfigure the Electron main process (local MongoDB, sync service), but the Next.js backend on port 3000 still uses whatever `MONGODB_URI` is in your `.env.local`. To fully test connection modes, use a production build (`npm run electron:build`).
+> **Note:** In dev mode, Electron connects to the `next dev` server on port 3456. Connection-mode changes (offline/hybrid/atlas) made through the setup wizard will save to the config store and reconfigure the Electron main process (local MongoDB, sync service), but the Next.js backend still uses whatever `MONGODB_URI` is in your `.env.local`. To fully test connection modes, use a production build (`npm run electron:build`).
 
 ### Production Build
 
@@ -144,7 +144,7 @@ The desktop app wraps the Next.js application in Electron:
    Local MongoDB (embedded) ←→ MongoDB Atlas (cloud, optional)
 ```
 
-In **development mode**: Electron loads `http://localhost:3000` (Next.js dev server).
+In **development mode**: Electron loads `http://localhost:3456` (Next.js dev server).
 
 In **production mode**: Electron uses `utilityProcess.fork()` to run the standalone Next.js server on `http://localhost:3456`, then loads it in the BrowserWindow. If the server crashes unexpectedly, the app automatically attempts to restart it and reload the window. If restart fails, an error dialog is shown.
 
