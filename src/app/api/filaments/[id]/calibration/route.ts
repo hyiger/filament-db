@@ -60,12 +60,13 @@ export async function GET(
         .populate("calibrations.printer")
         .lean();
       if (parent) {
-        filament = resolveFilament(filament, parent);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        filament = resolveFilament(filament, parent) as any;
       }
     }
 
     // Find calibration matching the nozzle diameter
-    const calibrations = (filament.calibrations || []) as Array<{
+    const calibrations = ((filament as NonNullable<typeof filament>).calibrations || []) as Array<{
       nozzle?: { diameter?: number; name?: string; highFlow?: boolean };
       printer?: { name?: string };
       extrusionMultiplier?: number;
@@ -97,7 +98,7 @@ export async function GET(
     }
 
     return NextResponse.json({
-      filament: filament.name,
+      filament: (filament as NonNullable<typeof filament>).name,
       nozzle: {
         diameter: match.nozzle?.diameter,
         name: match.nozzle?.name,

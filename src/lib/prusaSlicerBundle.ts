@@ -134,65 +134,6 @@ function writeSection(
   lines.push("");
 }
 
-/**
- * Apply calibration overrides (nozzle/printer-specific values) to a set of
- * PrusaSlicer keys, returning the overrides dict.
- */
-function buildCalibrationOverrides(
-  cal: FilamentDoc,
-  baseSettings: Record<string, string | null>,
-): Record<string, string> {
-  const overrides: Record<string, string> = {};
-
-  if (cal.extrusionMultiplier != null)
-    overrides.extrusion_multiplier = String(cal.extrusionMultiplier);
-  if (cal.maxVolumetricSpeed != null)
-    overrides.filament_max_volumetric_speed = String(cal.maxVolumetricSpeed);
-  if (cal.retractLength != null)
-    overrides.filament_retract_length = String(cal.retractLength);
-  if (cal.retractSpeed != null)
-    overrides.filament_retract_speed = String(cal.retractSpeed);
-  if (cal.retractLift != null)
-    overrides.filament_retract_lift = String(cal.retractLift);
-
-  if (cal.pressureAdvance != null) {
-    const gcode = baseSettings.start_filament_gcode as string | null;
-    if (gcode && /M572\s+S[\d.]+/.test(gcode)) {
-      overrides.start_filament_gcode = gcode.replace(
-        /M572\s+S[\d.]+/,
-        `M572 S${cal.pressureAdvance}`,
-      );
-    } else if (gcode) {
-      overrides.start_filament_gcode = `${gcode}\\nM572 S${cal.pressureAdvance}`;
-    } else {
-      overrides.start_filament_gcode = `M572 S${cal.pressureAdvance}`;
-    }
-  }
-
-  return overrides;
-}
-
-/**
- * Apply preset overrides (temperature/extrusion variants) to a set of overrides.
- */
-function buildPresetOverrides(
-  preset: FilamentDoc,
-): Record<string, string> {
-  const overrides: Record<string, string> = {};
-
-  if (preset.extrusionMultiplier != null)
-    overrides.extrusion_multiplier = String(preset.extrusionMultiplier);
-  if (preset.temperatures?.nozzle != null)
-    overrides.temperature = String(preset.temperatures.nozzle);
-  if (preset.temperatures?.nozzleFirstLayer != null)
-    overrides.first_layer_temperature = String(preset.temperatures.nozzleFirstLayer);
-  if (preset.temperatures?.bed != null)
-    overrides.bed_temperature = String(preset.temperatures.bed);
-  if (preset.temperatures?.bedFirstLayer != null)
-    overrides.first_layer_bed_temperature = String(preset.temperatures.bedFirstLayer);
-
-  return overrides;
-}
 
 /**
  * Generate a PrusaSlicer-compatible INI config bundle from an array of
