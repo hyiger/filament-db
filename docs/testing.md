@@ -41,7 +41,7 @@ tests/
 └── openprinttagBrowser.test.ts # OpenPrintTag database browser + completeness scoring tests (36 tests)
 ```
 
-**Total: 401 tests across 17 test files**
+**Total: 399 tests across 17 test files**
 
 ## Coverage Thresholds
 

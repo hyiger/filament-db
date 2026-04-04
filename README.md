@@ -122,7 +122,7 @@ filament-db/
 │   ├── hooks/               # Custom hooks (useNfc, useCurrency)
 │   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder, TDS extractor, PrusaSlicer bundle generator, OpenPrintTag DB browser
 │   └── models/              # Mongoose schemas (Filament, Nozzle, Printer)
-├── tests/                   # Vitest unit tests (401 tests across 17 files)
+├── tests/                   # Vitest unit tests (399 tests across 17 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   ├── release.yml          # CD: build desktop installers on version tags (4 platforms)

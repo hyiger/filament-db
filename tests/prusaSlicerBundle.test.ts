@@ -263,7 +263,7 @@ describe("generatePrusaSlicerBundle", () => {
     expect(bundle).toContain("fan_always_on = 1");
   });
 
-  it("generates multiple sections for calibrations", () => {
+  it("ignores calibrations (applied dynamically via API)", () => {
     const filaments = [
       {
         name: "PLA",
@@ -291,19 +291,19 @@ describe("generatePrusaSlicerBundle", () => {
 
     const bundle = generatePrusaSlicerBundle(filaments);
 
-    expect(bundle).toContain("[filament:PLA MK3S+ 0.4mm Brass]");
-    expect(bundle).toContain("[filament:PLA 0.6mm Brass]");
+    // Calibrations are not expanded into separate sections — they are
+    // applied dynamically by PrusaSlicer via the calibration API endpoint.
+    // Only the base filament section should be generated.
+    expect(bundle).toContain("[filament:PLA]");
+    expect(bundle).not.toContain("[filament:PLA MK3S+ 0.4mm Brass]");
+    expect(bundle).not.toContain("[filament:PLA 0.6mm Brass]");
 
-    // Calibration overrides applied
-    const mk3Section = bundle.split("[filament:PLA MK3S+ 0.4mm Brass]")[1].split("[filament:")[0];
-    expect(mk3Section).toContain("extrusion_multiplier = 0.95");
-    expect(mk3Section).toContain("filament_retract_length = 0.8");
-
-    const nozzle6Section = bundle.split("[filament:PLA 0.6mm Brass]")[1].split("[filament:")[0];
-    expect(nozzle6Section).toContain("filament_max_volumetric_speed = 20");
+    // Base filament values present
+    expect(bundle).toContain("temperature = 210");
+    expect(bundle).toContain("bed_temperature = 60");
   });
 
-  it("generates preset × calibration combinations", () => {
+  it("ignores presets (single section per filament)", () => {
     const filaments = [
       {
         name: "PETG",
@@ -313,13 +313,6 @@ describe("generatePrusaSlicerBundle", () => {
         diameter: 1.75,
         temperatures: { nozzle: 240, bed: 80 },
         settings: {},
-        calibrations: [
-          {
-            nozzle: { name: "0.4mm", diameter: 0.4 },
-            printer: null,
-            extrusionMultiplier: 0.97,
-          },
-        ],
         presets: [
           {
             label: "Standard",
@@ -337,17 +330,13 @@ describe("generatePrusaSlicerBundle", () => {
 
     const bundle = generatePrusaSlicerBundle(filaments);
 
-    expect(bundle).toContain("[filament:PETG 0.4mm Standard]");
-    expect(bundle).toContain("[filament:PETG 0.4mm Fast]");
-
-    // Fast preset overrides
-    const fastSection = bundle.split("[filament:PETG 0.4mm Fast]")[1].split("[filament:")[0];
-    expect(fastSection).toContain("temperature = 250");
-    expect(fastSection).toContain("bed_temperature = 85");
-    expect(fastSection).toContain("extrusion_multiplier = 0.93");
+    // Only the base section — no preset expansion
+    expect(bundle).toContain("[filament:PETG]");
+    expect(bundle).not.toContain("[filament:PETG 0.4mm Standard]");
+    expect(bundle).not.toContain("[filament:PETG 0.4mm Fast]");
   });
 
-  it("generates preset-only sections (no calibrations)", () => {
+  it("outputs base section for filaments with presets only", () => {
     const filaments = [
       {
         name: "ABS",
@@ -367,10 +356,12 @@ describe("generatePrusaSlicerBundle", () => {
     ];
 
     const bundle = generatePrusaSlicerBundle(filaments);
-    expect(bundle).toContain("[filament:ABS Low Temp]");
+    expect(bundle).toContain("[filament:ABS]");
+    expect(bundle).toContain("temperature = 255");
+    expect(bundle).toContain("bed_temperature = 100");
   });
 
-  it("handles pressure advance injection into start_filament_gcode", () => {
+  it("preserves start_filament_gcode from settings bag", () => {
     const filaments = [
       {
         name: "PA",
@@ -382,71 +373,13 @@ describe("generatePrusaSlicerBundle", () => {
         settings: {
           start_filament_gcode: "; setup\\nM572 S0.04\\n; done",
         },
-        calibrations: [
-          {
-            nozzle: { name: "0.4mm", diameter: 0.4 },
-            printer: null,
-            pressureAdvance: 0.06,
-          },
-        ],
       },
     ];
 
     const bundle = generatePrusaSlicerBundle(filaments);
 
-    // PA value should be replaced, not duplicated
-    expect(bundle).toContain("M572 S0.06");
-    expect(bundle).not.toContain("M572 S0.04");
-  });
-
-  it("appends pressure advance when no M572 exists in gcode", () => {
-    const filaments = [
-      {
-        name: "PA2",
-        vendor: "Test",
-        type: "PA",
-        color: "#808080",
-        diameter: 1.75,
-        temperatures: {},
-        settings: {
-          start_filament_gcode: "; filament start",
-        },
-        calibrations: [
-          {
-            nozzle: { name: "0.4mm", diameter: 0.4 },
-            printer: null,
-            pressureAdvance: 0.05,
-          },
-        ],
-      },
-    ];
-
-    const bundle = generatePrusaSlicerBundle(filaments);
-    expect(bundle).toContain("; filament start\\nM572 S0.05");
-  });
-
-  it("creates pressure advance gcode when no start_filament_gcode exists", () => {
-    const filaments = [
-      {
-        name: "PA3",
-        vendor: "Test",
-        type: "PA",
-        color: "#808080",
-        diameter: 1.75,
-        temperatures: {},
-        settings: {},
-        calibrations: [
-          {
-            nozzle: { name: "0.4mm", diameter: 0.4 },
-            printer: null,
-            pressureAdvance: 0.03,
-          },
-        ],
-      },
-    ];
-
-    const bundle = generatePrusaSlicerBundle(filaments);
-    expect(bundle).toContain("start_filament_gcode = M572 S0.03");
+    // Settings bag gcode is preserved as-is in the base section
+    expect(bundle).toContain("start_filament_gcode = ; setup\\nM572 S0.04\\n; done");
   });
 
   it("sorts keys alphabetically within sections", () => {
@@ -483,7 +416,7 @@ describe("generatePrusaSlicerBundle", () => {
     expect(bundle).not.toContain("[filament:");
   });
 
-  it("skips calibrations with no nozzle", () => {
+  it("outputs base section even when calibrations have no nozzle", () => {
     const filaments = [
       {
         name: "NoNozzle",
@@ -500,10 +433,9 @@ describe("generatePrusaSlicerBundle", () => {
     ];
 
     const bundle = generatePrusaSlicerBundle(filaments);
-    // Calibrations with no nozzle are skipped — no sections generated for them
+    // Calibrations are ignored — base section is always generated
+    expect(bundle).toContain("[filament:NoNozzle]");
     expect(bundle).not.toContain("[filament:NoNozzle ");
-    // The calibrations branch was entered but produced nothing
-    expect(bundle).not.toContain("[filament:NoNozzle]");
   });
 
   it("round-trips through parseIniFilaments", () => {
