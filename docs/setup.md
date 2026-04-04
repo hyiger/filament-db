@@ -214,9 +214,11 @@ npm run build && npm start    # production
 #### Desktop App (from source)
 
 ```bash
-npm run electron:dev          # development mode
+npm run electron:dev          # development mode (port 3000)
 npm run electron:build        # build installer for your platform
 ```
+
+> **Ports:** The development server (`npm run dev`) and Docker expose port **3000**. The desktop app's built-in production server runs on port **3456**. If you use the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer), set the Filament DB URL in Preferences to match whichever you're running.
 
 ---
 

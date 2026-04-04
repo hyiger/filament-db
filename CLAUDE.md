@@ -8,6 +8,7 @@ Next.js 16 + Electron desktop app for managing 3D printing filament profiles wit
 
 ```bash
 npm run dev              # Next.js dev server (localhost:3000)
+                         # Desktop app production server runs on port 3456
 npm run build            # Production build
 npm run lint             # ESLint
 npm test                 # Vitest (single run)
@@ -78,6 +79,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 - **Field mapping**: `src/lib/prusaSlicerBundle.ts` maps structured DB fields → PrusaSlicer INI keys, merges with `settings` bag
 - **Nil handling**: Structured DB fields that are null must NOT emit `nil` in the INI output — PrusaSlicer interprets nil as "reset to zero" for numeric fields. Only settings bag nil values (meaning "inherit from parent") are preserved.
 - **PrusaSlicer fork**: [hyiger/PrusaSlicer](https://github.com/hyiger/PrusaSlicer) has a `FilamentDB` module that fetches presets on startup via the REST API
+- **Ports**: Dev server and Docker use port 3000. Desktop app embedded server uses port 3456 (hardcoded in `electron/main.ts`). PrusaSlicer defaults to `http://localhost:3456`.
 
 ## OpenPrintTag Database Browser
 

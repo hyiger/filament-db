@@ -77,7 +77,7 @@ cd filament-db
 npm install
 cp .env.example .env.local   # then edit with your MongoDB Atlas connection string
 npm run dev                   # web app at http://localhost:3000
-npm run electron:dev          # or run as desktop app
+npm run electron:dev          # or run as desktop app (port 3456 in production)
 ```
 
 See the [Setup Guide](docs/setup.md) for detailed instructions.

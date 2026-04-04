@@ -11,7 +11,7 @@
 
 ## Option 1: Web / Desktop UI (recommended)
 
-1. Open Filament DB (desktop app or web at `http://localhost:3000`)
+1. Open Filament DB (desktop app on port 3456, or web/Docker on port 3000)
 2. Click **"Import INI"** in the top right of the home page
 3. Select your PrusaSlicer config bundle `.ini` file
 4. Filaments are parsed and upserted into the database
@@ -168,8 +168,9 @@ Stub entries (completeness score 0-3) are rendered at 50% opacity to indicate mi
 If you are using the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Filament DB integration, filament presets sync automatically via REST API:
 
 1. Build and run the PrusaSlicer fork (see the fork's README for build instructions)
-2. Start Filament DB (desktop app or web at `http://localhost:3000`)
-3. In PrusaSlicer, filament presets from Filament DB appear in the filament dropdown on startup
+2. Start Filament DB (desktop app or web)
+3. In PrusaSlicer Preferences, set the Filament DB URL to `http://localhost:3456` (desktop app) or `http://localhost:3000` (dev server / Docker)
+4. In PrusaSlicer, filament presets from Filament DB appear in the filament dropdown on startup
 4. Calibration values (EM, max volumetric speed, pressure advance, retraction) are applied dynamically when the printer/nozzle changes — they are fetched via `GET /api/filaments/:name/calibration`
 
 The PrusaSlicer fork fetches base presets from `GET /api/filaments/prusaslicer` on startup (one section per filament). Calibration overrides are requested separately per printer/nozzle context. You can also import a PrusaSlicer config bundle back into Filament DB via `POST /api/filaments/prusaslicer`.

@@ -22,6 +22,7 @@ export async function startLocalMongo(): Promise<string> {
     instance: {
       dbPath,
       storageEngine: "wiredTiger",
+      launchTimeout: 60000,
     },
   });
 

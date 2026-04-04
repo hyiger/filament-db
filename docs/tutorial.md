@@ -36,6 +36,8 @@ npm run dev                   # opens http://localhost:3000
 ```
 
 > **Note:** The web app always requires a `MONGODB_URI` in `.env.local`. Offline and hybrid modes are desktop-app-only features.
+>
+> **Ports:** The dev server (`npm run dev`) and Docker run on port **3000**. The desktop app's embedded server runs on port **3456**.
 
 ---
 
@@ -458,10 +460,12 @@ Discover filaments from 97 brands in the [OpenPrintTag community database](https
 
 If you use the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Filament DB integration:
 
-1. Start Filament DB (desktop app or web at `http://localhost:3000`)
+1. Start Filament DB (desktop app or web)
 2. Launch the PrusaSlicer fork — it fetches filament presets from Filament DB automatically
 3. Your filaments appear in the filament dropdown; calibration values (EM, max volumetric speed, PA, retraction) are applied dynamically when you switch printer/nozzle
 4. Edit filaments in Filament DB, restart PrusaSlicer, and the updated values appear automatically
+
+> **Port note:** The desktop app runs its embedded web server on port **3456**. The dev server (`npm run dev`) and Docker use port **3000**. PrusaSlicer defaults to `http://localhost:3000` — if you're using the desktop app, change the Filament DB URL in PrusaSlicer's Preferences to `http://localhost:3456`.
 
 ### Manual Export/Import
 
