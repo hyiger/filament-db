@@ -127,24 +127,3 @@ export interface FilamentSummary {
     bed: number | null;
   };
 }
-
-/** Printer type for form initialData */
-export interface PrinterDetail {
-  _id: string;
-  name: string;
-  manufacturer: string;
-  printerModel: string;
-  installedNozzles: (string | { _id: string; name: string; diameter: number; type: string })[];
-  notes: string;
-}
-
-/** Nozzle type for form initialData */
-export interface NozzleDetail {
-  _id: string;
-  name: string;
-  diameter: number;
-  type: string;
-  highFlow: boolean;
-  hardened: boolean;
-  notes: string;
-}

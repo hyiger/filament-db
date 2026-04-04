@@ -362,7 +362,7 @@ If you use the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Fi
 
 1. Start Filament DB (desktop app or web at `http://localhost:3000`)
 2. Launch the PrusaSlicer fork
-3. Your filament presets appear in the filament dropdown with calibration values (EM, max volumetric speed, pressure advance, retraction) baked in for the selected printer and nozzle
+3. Your filament presets appear in the filament dropdown; calibration values (EM, max volumetric speed, pressure advance, retraction) are applied dynamically when you switch printer/nozzle
 
 ### Manual INI Export/Import
 

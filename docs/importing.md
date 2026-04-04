@@ -170,9 +170,9 @@ If you are using the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) w
 1. Build and run the PrusaSlicer fork (see the fork's README for build instructions)
 2. Start Filament DB (desktop app or web at `http://localhost:3000`)
 3. In PrusaSlicer, filament presets from Filament DB appear in the filament dropdown on startup
-4. Calibration values (EM, max volumetric speed, pressure advance, retraction) are baked into the presets based on the selected printer and nozzle
+4. Calibration values (EM, max volumetric speed, pressure advance, retraction) are applied dynamically when the printer/nozzle changes — they are fetched via `GET /api/filaments/:name/calibration`
 
-The PrusaSlicer fork fetches presets from `GET /api/filaments/prusaslicer` on startup. You can also import a PrusaSlicer config bundle back into Filament DB via `POST /api/filaments/prusaslicer`.
+The PrusaSlicer fork fetches base presets from `GET /api/filaments/prusaslicer` on startup (one section per filament). Calibration overrides are requested separately per printer/nozzle context. You can also import a PrusaSlicer config bundle back into Filament DB via `POST /api/filaments/prusaslicer`.
 
 ---
 
@@ -180,4 +180,4 @@ The PrusaSlicer fork fetches presets from `GET /api/filaments/prusaslicer` on st
 
 Click **"Export INI"** in the top right to download all filaments as a PrusaSlicer-compatible INI file. This file contains all stored settings for each filament and can be imported back into PrusaSlicer via **File > Import > Import Config Bundle...**
 
-Filaments with per-nozzle calibrations are exported as separate sections (e.g., `[filament:Generic HIPS MultiMaterial 0.4mm]` and `[filament:Generic HIPS MultiMaterial 0.6mm]`).
+Each filament produces one `[filament:Name]` section. Calibration overrides are not included — they are applied dynamically via the calibration API.

@@ -66,7 +66,7 @@ Soft-delete a filament by ID (sets `_deletedAt` timestamp). The filament is hidd
 
 ### GET /api/filaments/export
 
-Downloads all filaments as a PrusaSlicer-compatible INI file. Filaments with calibrations are exported as separate sections with overrides merged into the base settings. Section names follow the pattern `[filament:Name PrinterName NozzleName]` when printer-specific calibrations exist, `[filament:Name NozzleName]` for default/any-printer calibrations, or `[filament:Name PrinterName NozzleName PresetLabel]` when presets are defined.
+Downloads all filaments as a PrusaSlicer-compatible INI file with one `[filament:Name]` section per filament. Uses the same generator as `GET /api/filaments/prusaslicer` — structured DB fields are mapped to PrusaSlicer INI keys and merged with the settings passthrough bag.
 
 ### POST /api/filaments/import
 
@@ -186,7 +186,7 @@ Remove a spool from a filament. Returns the updated filament document.
 
 ### GET /api/filaments/prusaslicer
 
-Exports all filaments as a PrusaSlicer-compatible INI config bundle. Structured DB fields (temperatures, density, cost, max volumetric speed, shrinkage) are mapped to their PrusaSlicer INI equivalents and merged with the `settings` passthrough bag. Calibration data generates per-nozzle/printer sections with overrides; presets generate temperature/extrusion variants.
+Exports all filaments as a PrusaSlicer-compatible INI config bundle with one `[filament:Name]` section per filament. Structured DB fields (temperatures, density, cost, max volumetric speed, shrinkage) are mapped to their PrusaSlicer INI equivalents and merged with the `settings` passthrough bag. Calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are NOT baked into the bundle — they are applied dynamically by the PrusaSlicer fork via `GET /api/filaments/:name/calibration` when the printer/nozzle context changes.
 
 Query parameters:
 - `type` -- filter by filament type (e.g. `PLA`, `PETG`)
@@ -263,7 +263,7 @@ Import selected OpenPrintTag materials into Filament DB. Send a JSON body:
 { "slugs": ["prusament-pla-prusa-galaxy-black", "polymaker-fiberon-pa6-cf20-black"] }
 ```
 
-Materials are mapped to the Filament DB schema (type, vendor, temperatures, density, hardness, transmission distance, drying specs, OPT tags) and upserted by name + vendor.
+Materials are mapped to the Filament DB schema (type, vendor, temperatures, density, hardness, transmission distance, drying specs, OPT tags) and upserted by name. If a filament with the same name already exists under a different vendor, the import is skipped with an informative error (the unique index is on `name` alone).
 
 Returns:
 ```json

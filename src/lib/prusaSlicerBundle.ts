@@ -9,8 +9,11 @@
  * 1. Writing core PrusaSlicer keys from structured DB fields (temps, density, cost, etc.)
  * 2. Merging with the `settings` catch-all for PrusaSlicer-specific keys not in the schema
  *    (fan settings, retraction, gcode, ramming, etc.)
- * 3. Applying calibration overrides per nozzle/printer combination
- * 4. Applying preset overrides for temperature/extrusion variants
+ *
+ * One section is generated per filament. Calibration overrides (extrusion
+ * multiplier, pressure advance, retraction, max volumetric speed) are applied
+ * dynamically by the PrusaSlicer fork via `GET /api/filaments/:name/calibration`
+ * when the printer/nozzle context changes — they are NOT baked into the bundle.
  *
  * The structured DB fields always take precedence — they represent the canonical
  * values in Filament DB. The `settings` bag provides passthrough for keys that
@@ -19,15 +22,6 @@
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FilamentDoc = Record<string, any>;
-
-export interface BundleOptions {
-  /** Filter by filament type (e.g. "PLA", "PETG") */
-  type?: string;
-  /** Filter by vendor name */
-  vendor?: string;
-  /** Filter by specific filament IDs */
-  ids?: string[];
-}
 
 /**
  * Map a resolved Filament DB document to PrusaSlicer INI key-value pairs.

@@ -1155,7 +1155,7 @@
       "post": {
         "tags": ["Snapshot"],
         "summary": "Restore database snapshot",
-        "description": "Restores the database from a snapshot. Atomic with automatic rollback on failure. Concurrent restores are rejected.",
+        "description": "Restores the database from a snapshot using best-effort rollback. If any part of the restore fails, the handler attempts to re-insert previous data from an in-memory backup. Concurrent restores are rejected with 409. Note: the restore is not truly atomic — concurrent readers may observe partial state during the delete/insert window, and rollback itself may fail.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1219,6 +1219,125 @@
               }
             }
           }
+        }
+      }
+    },
+    "/api/filaments/prusaslicer": {
+      "get": {
+        "tags": ["PrusaSlicer"],
+        "summary": "Export PrusaSlicer config bundle",
+        "description": "Exports filaments as a PrusaSlicer-compatible INI config bundle with one section per filament. Structured DB fields are mapped to PrusaSlicer INI keys and merged with the settings passthrough bag. Calibration overrides are applied dynamically via GET /api/filaments/{id}/calibration.",
+        "parameters": [
+          { "name": "type", "in": "query", "schema": { "type": "string" }, "description": "Filter by filament type" },
+          { "name": "vendor", "in": "query", "schema": { "type": "string" }, "description": "Filter by vendor name" },
+          { "name": "ids", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated filament IDs" }
+        ],
+        "responses": {
+          "200": { "description": "INI config bundle", "content": { "text/plain": { "schema": { "type": "string" } } } }
+        }
+      },
+      "post": {
+        "tags": ["PrusaSlicer"],
+        "summary": "Import PrusaSlicer config bundle",
+        "description": "Imports a PrusaSlicer INI config bundle. Send raw INI text as the request body.",
+        "requestBody": {
+          "required": true,
+          "content": { "text/plain": { "schema": { "type": "string" } } }
+        },
+        "responses": {
+          "200": { "description": "Import result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ImportResult" } } } },
+          "400": { "description": "Empty body or no sections found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/openprinttag": {
+      "get": {
+        "tags": ["OpenPrintTag"],
+        "summary": "Browse OpenPrintTag community database",
+        "description": "Fetches the OpenPrintTag community database from GitHub, parses material YAML files, filters to FFF filaments, and returns them with completeness scores. Cached for 1 hour.",
+        "parameters": [
+          { "name": "refresh", "in": "query", "schema": { "type": "string", "enum": ["true"] }, "description": "Force re-fetch from GitHub" }
+        ],
+        "responses": {
+          "200": { "description": "Brands and materials list", "content": { "application/json": { "schema": { "type": "object" } } } }
+        }
+      }
+    },
+    "/api/openprinttag/import": {
+      "post": {
+        "tags": ["OpenPrintTag"],
+        "summary": "Import OpenPrintTag materials",
+        "description": "Import selected OpenPrintTag materials into Filament DB. Materials are upserted by name (not name+vendor). If a filament with the same name exists under a different vendor, the import is skipped with an error.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["slugs"],
+                "properties": { "slugs": { "type": "array", "items": { "type": "string" } } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Import result", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ImportResult" } } } },
+          "400": { "description": "Missing slugs or database not loaded", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/tds": {
+      "get": {
+        "tags": ["TDS"],
+        "summary": "Check AI API key status",
+        "description": "Returns whether an AI API key is configured and which provider is active.",
+        "responses": {
+          "200": {
+            "description": "Key status",
+            "content": { "application/json": { "schema": { "type": "object", "properties": { "configured": { "type": "boolean" }, "provider": { "type": "string", "enum": ["gemini", "claude", "openai"] } } } } }
+          }
+        }
+      },
+      "put": {
+        "tags": ["TDS"],
+        "summary": "Save AI API key",
+        "description": "Save and validate an AI API key for TDS extraction.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "type": "object", "required": ["apiKey"], "properties": { "apiKey": { "type": "string" }, "provider": { "type": "string", "enum": ["gemini", "claude", "openai"] } } } } }
+        },
+        "responses": {
+          "200": { "description": "Key saved", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": { "type": "boolean" } } } } } },
+          "401": { "description": "Invalid API key", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["TDS"],
+        "summary": "Remove AI API key",
+        "description": "Removes the stored API key and resets provider to default.",
+        "responses": {
+          "200": { "description": "Key removed", "content": { "application/json": { "schema": { "type": "object", "properties": { "success": { "type": "boolean" } } } } } }
+        }
+      },
+      "post": {
+        "tags": ["TDS"],
+        "summary": "Extract filament data from TDS",
+        "description": "Extract filament properties from a Technical Data Sheet URL or uploaded file using AI.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "required": ["url"], "properties": { "url": { "type": "string" }, "apiKey": { "type": "string" }, "provider": { "type": "string" } } }
+            },
+            "multipart/form-data": {
+              "schema": { "type": "object", "required": ["file"], "properties": { "file": { "type": "string", "format": "binary" }, "apiKey": { "type": "string" }, "provider": { "type": "string" } } }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Extraction result", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "401": { "description": "API key not configured", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "502": { "description": "Extraction failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
         }
       }
     },
