@@ -210,50 +210,10 @@ export function generatePrusaSlicerBundle(filaments: FilamentDoc[]): string {
   for (const filament of filaments) {
     const slicerKeys = filamentToSlicerKeys(filament);
 
-    const calibrations = (filament.calibrations || []) as FilamentDoc[];
-    const presets = (filament.presets || []) as FilamentDoc[];
-
-    if (calibrations.length > 0) {
-      for (const cal of calibrations) {
-        if (!cal.nozzle) continue;
-        const nozzleSuffix = cal.nozzle.name || `${cal.nozzle.diameter}mm`;
-        const printerPrefix = cal.printer ? `${cal.printer.name} ` : "";
-        const calOverrides = buildCalibrationOverrides(cal, slicerKeys);
-
-        if (presets.length > 0) {
-          for (const preset of presets) {
-            const combined = {
-              ...calOverrides,
-              ...buildPresetOverrides(preset),
-            };
-            writeSection(
-              lines,
-              `${filament.name} ${printerPrefix}${nozzleSuffix} ${preset.label}`,
-              slicerKeys,
-              combined,
-            );
-          }
-        } else {
-          writeSection(
-            lines,
-            `${filament.name} ${printerPrefix}${nozzleSuffix}`,
-            slicerKeys,
-            calOverrides,
-          );
-        }
-      }
-    } else if (presets.length > 0) {
-      for (const preset of presets) {
-        writeSection(
-          lines,
-          `${filament.name} ${preset.label}`,
-          slicerKeys,
-          buildPresetOverrides(preset),
-        );
-      }
-    } else {
-      writeSection(lines, filament.name, slicerKeys);
-    }
+    // Output one preset per filament — nozzle-specific calibration data
+    // is applied dynamically by PrusaSlicer when the printer changes
+    // (via the /api/filaments/{name}/calibration endpoint).
+    writeSection(lines, filament.name, slicerKeys);
   }
 
   return lines.join("\n");

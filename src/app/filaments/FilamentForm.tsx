@@ -1003,39 +1003,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         </div>
       </fieldset>
 
+      {/* EM, PA, and Max Vol. Speed are nozzle-specific — they belong in the
+          Calibrations section below, not here at the top level. */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-        <div>
-          <label className={labelClass}>Extrusion Multiplier</label>
-          <input
-            type="number"
-            step="0.01"
-            className={inputClass}
-            value={form.extrusionMultiplier}
-            onChange={(e) => setForm({ ...form, extrusionMultiplier: e.target.value })}
-            placeholder="e.g. 0.95"
-          />
-        </div>
-        <div>
-          <label className={labelClass}>Pressure Advance</label>
-          <input
-            type="number"
-            step="0.001"
-            className={inputClass}
-            value={form.pressureAdvance}
-            onChange={(e) => setForm({ ...form, pressureAdvance: e.target.value })}
-            placeholder="e.g. 0.053"
-          />
-        </div>
-        <div>
-          <label className={labelClass}>Max Vol. Speed (mm³/s)</label>
-          <input
-            type="number"
-            step="0.1"
-            className={inputClass}
-            value={form.maxVolumetricSpeed}
-            onChange={(e) => setForm({ ...form, maxVolumetricSpeed: e.target.value })}
-          />
-        </div>
         <div>
           <label className={labelClass}>Min Print Speed (mm/s)</label>
           <input type="number" step="1" min="0" className={inputClass}
