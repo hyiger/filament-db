@@ -21,6 +21,7 @@ const store = new Store({
     geminiApiKey: "",
     aiApiKey: "",
     aiProvider: "gemini",
+    locale: "en",
   },
 });
 

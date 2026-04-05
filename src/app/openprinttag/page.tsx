@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -52,6 +53,7 @@ type SortKey = "completeness" | "name" | "type" | "brand";
 // ── Completeness indicator ─────────────────────────────────────────────
 
 function CompletenessBar({ score, tier }: { score: number; tier: string }) {
+  const { t } = useTranslation();
   const colors = {
     rich: "bg-green-500 dark:bg-green-400",
     partial: "bg-yellow-500 dark:bg-yellow-400",
@@ -61,7 +63,7 @@ function CompletenessBar({ score, tier }: { score: number; tier: string }) {
   const pct = (score / 10) * 100;
 
   return (
-    <div className="flex items-center gap-1.5" title={`${score}/10 data completeness`}>
+    <div className="flex items-center gap-1.5" title={t("openprinttag.completenessTitle", { score: score })}>
       <div className="w-16 h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
         <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
       </div>
@@ -100,11 +102,12 @@ function TypeBadge({ type }: { type: string }) {
 // ── Color swatch ───────────────────────────────────────────────────────
 
 function ColorSwatch({ color }: { color: string | null }) {
+  const { t } = useTranslation();
   return (
     <span
       className="inline-block w-5 h-5 rounded-full border border-gray-300 dark:border-gray-600 flex-shrink-0"
       style={{ backgroundColor: color || "#808080" }}
-      title={color || "Unknown"}
+      title={color || t("openprinttag.unknown")}
     />
   );
 }
@@ -126,7 +129,12 @@ function DetailField({ label, value, unit }: { label: string; value: unknown; un
 // ── Expanded detail panel ──────────────────────────────────────────────
 
 function MaterialDetail({ m }: { m: OPTMaterial }) {
-  const tierLabel = { rich: "Rich", partial: "Partial", stub: "Stub" }[m.completenessTier];
+  const { t } = useTranslation();
+  const tierLabel = {
+    rich: t("openprinttag.tierRich"),
+    partial: t("openprinttag.tierPartial"),
+    stub: t("openprinttag.tierStub"),
+  }[m.completenessTier];
   const tierColor = {
     rich: "text-green-600 dark:text-green-400",
     partial: "text-yellow-600 dark:text-yellow-400",
@@ -144,16 +152,16 @@ function MaterialDetail({ m }: { m: OPTMaterial }) {
         {/* Identity */}
         <div>
           <h4 className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">
-            Identity
+            {t("openprinttag.detail.identity")}
           </h4>
-          <DetailField label="Brand" value={m.brandName} />
-          <DetailField label="Type" value={m.type} />
-          <DetailField label="Abbreviation" value={m.abbreviation} />
-          <DetailField label="Color" value={m.color} />
-          <DetailField label="UUID" value={m.uuid ? m.uuid.slice(0, 8) + "..." : null} />
+          <DetailField label={t("openprinttag.detail.brand")} value={m.brandName} />
+          <DetailField label={t("openprinttag.detail.type")} value={m.type} />
+          <DetailField label={t("openprinttag.detail.abbreviation")} value={m.abbreviation} />
+          <DetailField label={t("openprinttag.detail.color")} value={m.color} />
+          <DetailField label={t("openprinttag.detail.uuid")} value={m.uuid ? m.uuid.slice(0, 8) + "..." : null} />
           {m.tags.length > 0 && (
             <div className="flex justify-between py-1 border-b border-gray-100 dark:border-gray-700/50">
-              <span className="text-xs text-gray-500 dark:text-gray-400">Tags</span>
+              <span className="text-xs text-gray-500 dark:text-gray-400">{t("openprinttag.detail.tags")}</span>
               <span className="text-xs font-medium text-gray-800 dark:text-gray-200 text-right max-w-[200px]">
                 {m.tags.join(", ")}
               </span>
@@ -164,16 +172,16 @@ function MaterialDetail({ m }: { m: OPTMaterial }) {
         {/* Properties */}
         <div>
           <h4 className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">
-            Properties
+            {t("openprinttag.detail.properties")}
           </h4>
           {hasAnyProperty ? (
             <>
-              <DetailField label="Density" value={m.density} unit="g/cm³" />
-              <DetailField label="Hardness (Shore D)" value={m.hardnessShoreD} />
-              <DetailField label="Transmission Distance" value={m.transmissionDistance} />
+              <DetailField label={t("openprinttag.detail.density")} value={m.density} unit="g/cm³" />
+              <DetailField label={t("openprinttag.detail.hardnessShoreD")} value={m.hardnessShoreD} />
+              <DetailField label={t("openprinttag.detail.transmissionDistance")} value={m.transmissionDistance} />
               {(m.nozzleTempMin != null || m.nozzleTempMax != null) && (
                 <DetailField
-                  label="Nozzle Temp"
+                  label={t("openprinttag.detail.nozzleTemp")}
                   value={m.nozzleTempMin != null && m.nozzleTempMax != null
                     ? `${m.nozzleTempMin}–${m.nozzleTempMax}`
                     : m.nozzleTempMin ?? m.nozzleTempMax}
@@ -182,36 +190,36 @@ function MaterialDetail({ m }: { m: OPTMaterial }) {
               )}
               {(m.bedTempMin != null || m.bedTempMax != null) && (
                 <DetailField
-                  label="Bed Temp"
+                  label={t("openprinttag.detail.bedTemp")}
                   value={m.bedTempMin != null && m.bedTempMax != null
                     ? `${m.bedTempMin}–${m.bedTempMax}`
                     : m.bedTempMin ?? m.bedTempMax}
                   unit="°C"
                 />
               )}
-              <DetailField label="Chamber Temp" value={m.chamberTemp} unit="°C" />
-              <DetailField label="Preheat Temp" value={m.preheatTemp} unit="°C" />
-              <DetailField label="Drying Temp" value={m.dryingTemp} unit="°C" />
-              <DetailField label="Drying Time" value={m.dryingTime} unit="h" />
+              <DetailField label={t("openprinttag.detail.chamberTemp")} value={m.chamberTemp} unit="°C" />
+              <DetailField label={t("openprinttag.detail.preheatTemp")} value={m.preheatTemp} unit="°C" />
+              <DetailField label={t("openprinttag.detail.dryingTemp")} value={m.dryingTemp} unit="°C" />
+              <DetailField label={t("openprinttag.detail.dryingTime")} value={m.dryingTime} unit="h" />
             </>
           ) : (
-            <p className="text-xs text-gray-400 dark:text-gray-500 italic py-1">No properties data</p>
+            <p className="text-xs text-gray-400 dark:text-gray-500 italic py-1">{t("openprinttag.detail.noProperties")}</p>
           )}
         </div>
 
         {/* Data Quality & Links */}
         <div>
           <h4 className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-1">
-            Data Quality
+            {t("openprinttag.detail.dataQuality")}
           </h4>
           <div className="flex justify-between py-1 border-b border-gray-100 dark:border-gray-700/50">
-            <span className="text-xs text-gray-500 dark:text-gray-400">Score</span>
+            <span className="text-xs text-gray-500 dark:text-gray-400">{t("openprinttag.detail.score")}</span>
             <span className={`text-xs font-medium ${tierColor}`}>
               {m.completenessScore}/10 ({tierLabel})
             </span>
           </div>
-          <DetailField label="Photo" value={m.photoUrl ? "Yes" : null} />
-          <DetailField label="Product URL" value={m.productUrl ? "Yes" : null} />
+          <DetailField label={t("openprinttag.detail.photo")} value={m.photoUrl ? t("openprinttag.detail.yes") : null} />
+          <DetailField label={t("openprinttag.detail.productUrl")} value={m.productUrl ? t("openprinttag.detail.yes") : null} />
 
           {(m.productUrl || m.photoUrl) && (
             <div className="mt-2 flex flex-col gap-1">
@@ -222,7 +230,7 @@ function MaterialDetail({ m }: { m: OPTMaterial }) {
                   rel="noopener noreferrer"
                   className="text-xs text-blue-600 dark:text-blue-400 hover:underline truncate"
                 >
-                  Product page ↗
+                  {t("openprinttag.detail.productPageLink")}
                 </a>
               )}
               {m.photoUrl && (
@@ -232,7 +240,7 @@ function MaterialDetail({ m }: { m: OPTMaterial }) {
                   rel="noopener noreferrer"
                   className="text-xs text-blue-600 dark:text-blue-400 hover:underline truncate"
                 >
-                  Photo ↗
+                  {t("openprinttag.detail.photoLink")}
                 </a>
               )}
             </div>
@@ -246,6 +254,7 @@ function MaterialDetail({ m }: { m: OPTMaterial }) {
 // ── Main page ──────────────────────────────────────────────────────────
 
 export default function OpenPrintTagBrowser() {
+  const { t } = useTranslation();
   const [db, setDb] = useState<OPTDatabase | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -275,12 +284,12 @@ export default function OpenPrintTagBrowser() {
         setDb(data);
       } catch (err) {
         setError(String(err));
-        toast("Failed to load OpenPrintTag database", "error");
+        toast(t("openprinttag.failedToLoad"), "error");
       } finally {
         setLoading(false);
       }
     },
-    [toast],
+    [toast, t],
   );
 
   useEffect(() => {
@@ -382,13 +391,13 @@ export default function OpenPrintTagBrowser() {
       });
       const data = await res.json();
       if (!res.ok) {
-        toast(data.error || "Import failed", "error");
+        toast(data.error || t("openprinttag.importFailed"), "error");
       } else {
         toast(data.message, "success");
         setSelected(new Set());
       }
     } catch {
-      toast("Import failed: network error", "error");
+      toast(t("openprinttag.importFailedNetwork"), "error");
     } finally {
       setImporting(false);
     }
@@ -402,12 +411,10 @@ export default function OpenPrintTagBrowser() {
         <div className="text-center">
           <div className="inline-block w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4" />
           <p className="text-gray-600 dark:text-gray-300 text-lg">
-            Fetching OpenPrintTag database...
+            {t("openprinttag.fetching")}
           </p>
           <p className="text-gray-400 dark:text-gray-500 text-sm mt-2">
-            Downloading and parsing ~11,000 material files from GitHub.
-            <br />
-            This may take 10–30 seconds on first load (cached for 1 hour after).
+            {t("openprinttag.fetchingDescription")}
           </p>
         </div>
       </div>
@@ -418,13 +425,13 @@ export default function OpenPrintTagBrowser() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white dark:bg-gray-900">
         <div className="text-center max-w-md">
-          <p className="text-red-500 text-lg mb-4">Failed to load database</p>
+          <p className="text-red-500 text-lg mb-4">{t("openprinttag.failedToLoadDatabase")}</p>
           <p className="text-gray-500 dark:text-gray-400 text-sm mb-4">{error}</p>
           <button
             onClick={() => fetchDatabase(true)}
             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
           >
-            Retry
+            {t("openprinttag.retry")}
           </button>
         </div>
       </div>
@@ -451,11 +458,11 @@ export default function OpenPrintTagBrowser() {
                 </svg>
               </Link>
               <div>
-                <h1 className="text-lg font-semibold">OpenPrintTag Database</h1>
+                <h1 className="text-lg font-semibold">{t("openprinttag.title")}</h1>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                  {db.totalFFF.toLocaleString()} FDM filaments across {db.brands.length} brands
+                  {t("openprinttag.subtitle", { fdmCount: db.totalFFF.toLocaleString(), brandCount: db.brands.length })}
                   <span className="ml-2 text-gray-400">•</span>
-                  <span className="ml-2">{db.totalSLA.toLocaleString()} SLA resins filtered out</span>
+                  <span className="ml-2">{t("openprinttag.slaFiltered", { slaCount: db.totalSLA.toLocaleString() })}</span>
                 </p>
               </div>
             </div>
@@ -463,7 +470,7 @@ export default function OpenPrintTagBrowser() {
             <div className="flex items-center gap-2">
               {selected.size > 0 && (
                 <span className="text-sm text-blue-600 dark:text-blue-400 font-medium">
-                  {selected.size} selected
+                  {t("openprinttag.selectedCount", { count: selected.size })}
                 </span>
               )}
               <button
@@ -471,14 +478,14 @@ export default function OpenPrintTagBrowser() {
                 disabled={selected.size === 0 || importing}
                 className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {importing ? "Importing..." : `Import Selected (${selected.size})`}
+                {importing ? t("openprinttag.importing") : t("openprinttag.importSelected", { count: selected.size })}
               </button>
               <button
                 onClick={() => fetchDatabase(true)}
                 className="px-3 py-1.5 text-sm text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-50 dark:hover:bg-gray-700"
-                title="Re-fetch from GitHub"
+                title={t("openprinttag.refreshTitle")}
               >
-                Refresh
+                {t("openprinttag.refresh")}
               </button>
             </div>
           </div>
@@ -492,7 +499,7 @@ export default function OpenPrintTagBrowser() {
           <div className="p-3 border-b border-gray-200 dark:border-gray-700">
             <input
               type="text"
-              placeholder="Search filaments..."
+              placeholder={t("openprinttag.searchPlaceholder")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400"
@@ -502,52 +509,52 @@ export default function OpenPrintTagBrowser() {
           {/* Sort */}
           <div className="p-3 border-b border-gray-200 dark:border-gray-700">
             <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-              Sort by
+              {t("openprinttag.sortBy")}
             </label>
             <select
               value={sortKey}
               onChange={(e) => setSortKey(e.target.value as SortKey)}
               className="mt-1 w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100"
             >
-              <option value="completeness">Data Completeness</option>
-              <option value="name">Name</option>
-              <option value="type">Type</option>
-              <option value="brand">Brand</option>
+              <option value="completeness">{t("openprinttag.sortCompleteness")}</option>
+              <option value="name">{t("openprinttag.sortName")}</option>
+              <option value="type">{t("openprinttag.sortType")}</option>
+              <option value="brand">{t("openprinttag.sortBrand")}</option>
             </select>
           </div>
 
           {/* Completeness filter */}
           <div className="p-3 border-b border-gray-200 dark:border-gray-700">
             <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-              Data Quality
+              {t("openprinttag.dataQuality")}
             </label>
             <div className="mt-2 space-y-1">
               <button
                 onClick={() => setTierFilter(null)}
                 className={`w-full text-left px-2 py-1 text-sm rounded ${!tierFilter ? "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300" : "hover:bg-gray-100 dark:hover:bg-gray-700"}`}
               >
-                All
+                {t("openprinttag.all")}
               </button>
               <button
                 onClick={() => setTierFilter(tierFilter === "rich" ? null : "rich")}
                 className={`w-full text-left px-2 py-1 text-sm rounded flex items-center gap-2 ${tierFilter === "rich" ? "bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300" : "hover:bg-gray-100 dark:hover:bg-gray-700"}`}
               >
                 <span className="w-2.5 h-2.5 rounded-full bg-green-500" />
-                Rich (7–10)
+                {t("openprinttag.filterRich")}
               </button>
               <button
                 onClick={() => setTierFilter(tierFilter === "partial" ? null : "partial")}
                 className={`w-full text-left px-2 py-1 text-sm rounded flex items-center gap-2 ${tierFilter === "partial" ? "bg-yellow-100 dark:bg-yellow-900/50 text-yellow-700 dark:text-yellow-300" : "hover:bg-gray-100 dark:hover:bg-gray-700"}`}
               >
                 <span className="w-2.5 h-2.5 rounded-full bg-yellow-500" />
-                Partial (4–6)
+                {t("openprinttag.filterPartial")}
               </button>
               <button
                 onClick={() => setTierFilter(tierFilter === "stub" ? null : "stub")}
                 className={`w-full text-left px-2 py-1 text-sm rounded flex items-center gap-2 ${tierFilter === "stub" ? "bg-gray-200 dark:bg-gray-600 text-gray-700 dark:text-gray-300" : "hover:bg-gray-100 dark:hover:bg-gray-700"}`}
               >
                 <span className="w-2.5 h-2.5 rounded-full bg-gray-400" />
-                Stub (0–3)
+                {t("openprinttag.filterStub")}
               </button>
             </div>
           </div>
@@ -555,14 +562,14 @@ export default function OpenPrintTagBrowser() {
           {/* Type filter */}
           <div className="p-3 border-b border-gray-200 dark:border-gray-700">
             <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-              Material Type
+              {t("openprinttag.materialType")}
             </label>
             <div className="mt-2 space-y-0.5 max-h-48 overflow-y-auto">
               <button
                 onClick={() => setTypeFilter(null)}
                 className={`w-full text-left px-2 py-1 text-sm rounded ${!typeFilter ? "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300" : "hover:bg-gray-100 dark:hover:bg-gray-700"}`}
               >
-                All Types
+                {t("openprinttag.allTypes")}
               </button>
               {types.map(({ type, count }) => (
                 <button
@@ -580,11 +587,11 @@ export default function OpenPrintTagBrowser() {
           {/* Brand filter */}
           <div className="p-3">
             <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
-              Brand
+              {t("openprinttag.brand")}
             </label>
             <input
               type="text"
-              placeholder="Filter brands..."
+              placeholder={t("openprinttag.filterBrandsPlaceholder")}
               value={brandSearch}
               onChange={(e) => setBrandSearch(e.target.value)}
               className="mt-1 w-full px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 placeholder-gray-400"
@@ -594,7 +601,7 @@ export default function OpenPrintTagBrowser() {
                 onClick={() => setBrandFilter(null)}
                 className={`w-full text-left px-2 py-1 text-sm rounded ${!brandFilter ? "bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300" : "hover:bg-gray-100 dark:hover:bg-gray-700"}`}
               >
-                All Brands
+                {t("openprinttag.allBrands")}
               </button>
               {filteredBrands.map((b) => (
                 <button
@@ -622,10 +629,10 @@ export default function OpenPrintTagBrowser() {
                   onChange={() => (allSelected ? deselectAll() : selectAllVisible())}
                   className="rounded border-gray-300 dark:border-gray-600"
                 />
-                Select all
+                {t("openprinttag.selectAll")}
               </label>
               <span className="text-sm text-gray-500 dark:text-gray-400">
-                {filteredMaterials.length.toLocaleString()} filament{filteredMaterials.length !== 1 ? "s" : ""}
+                {t("openprinttag.filamentCount", { count: filteredMaterials.length.toLocaleString() })}
               </span>
               {(brandFilter || typeFilter || searchQuery || tierFilter) && (
                 <button
@@ -637,7 +644,7 @@ export default function OpenPrintTagBrowser() {
                   }}
                   className="text-xs text-blue-600 dark:text-blue-400 hover:underline"
                 >
-                  Clear filters
+                  {t("openprinttag.clearFilters")}
                 </button>
               )}
             </div>
@@ -646,7 +653,7 @@ export default function OpenPrintTagBrowser() {
                 onClick={deselectAll}
                 className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
               >
-                Deselect all ({selected.size})
+                {t("openprinttag.deselectAll", { count: selected.size })}
               </button>
             )}
           </div>
@@ -655,7 +662,7 @@ export default function OpenPrintTagBrowser() {
           <div className="divide-y divide-gray-100 dark:divide-gray-800">
             {filteredMaterials.length === 0 ? (
               <div className="px-4 py-12 text-center text-gray-500 dark:text-gray-400">
-                No filaments match the current filters.
+                {t("openprinttag.noResults")}
               </div>
             ) : (
               filteredMaterials.map((m) => {

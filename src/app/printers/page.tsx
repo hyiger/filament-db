@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface Nozzle {
   _id: string;
@@ -26,13 +27,14 @@ export default function PrintersPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const { toast } = useToast();
+  const { t } = useTranslation();
 
   const fetchPrinters = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
       const res = await fetch("/api/printers", { signal });
       if (!res.ok) {
-        toast("Failed to load printers", "error");
+        toast(t("printers.loadError"), "error");
         setLoading(false);
         return;
       }
@@ -42,10 +44,10 @@ export default function PrintersPage() {
       setLoading(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      toast("Failed to load printers", "error");
+      toast(t("printers.loadError"), "error");
       setLoading(false);
     }
-  }, [toast]);
+  }, [toast, t]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -70,20 +72,20 @@ export default function PrintersPage() {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete printer "${name}"?`)) return;
+    if (!confirm(t("printers.deleteConfirm", { name }))) return;
     const res = await fetch(`/api/printers/${id}`, { method: "DELETE" });
     if (!res.ok) {
       const body = await res.json().catch(() => null);
-      toast(body?.error || "Failed to delete printer", "error");
+      toast(body?.error || t("printers.deleteError"), "error");
       return;
     }
-    toast(`Deleted "${name}"`);
+    toast(t("printers.deleted", { name }));
     fetchPrinters();
   };
 
   const handleBulkDelete = async () => {
     const count = selected.size;
-    if (!confirm(`Delete ${count} printer${count !== 1 ? "s" : ""}?`)) return;
+    if (!confirm(t("printers.bulkDeleteConfirm", { count }))) return;
     setBulkDeleting(true);
     let deleted = 0;
     const errors: string[] = [];
@@ -94,10 +96,10 @@ export default function PrintersPage() {
       } else {
         const body = await res.json().catch(() => null);
         const name = printers.find((p) => p._id === id)?.name ?? id;
-        errors.push(body?.error || `Failed to delete "${name}"`);
+        errors.push(body?.error || t("printers.deleteErrorNamed", { name }));
       }
     }
-    if (deleted > 0) toast(`Deleted ${deleted} printer${deleted !== 1 ? "s" : ""}`);
+    if (deleted > 0) toast(t("printers.bulkDeleted", { count: deleted }));
     if (errors.length > 0) toast(errors.join("; "), "error");
     setBulkDeleting(false);
     fetchPrinters();
@@ -107,45 +109,45 @@ export default function PrintersPage() {
     <main className="max-w-5xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold">Printers</h1>
+          <h1 className="text-3xl font-bold">{t("printers.title")}</h1>
           <Link href="/" className="text-blue-600 hover:underline text-sm">
-            &larr; Back to filaments
+            &larr; {t("printers.backToFilaments")}
           </Link>
         </div>
         <Link
           href="/printers/new"
           className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
         >
-          + Add Printer
+          {t("printers.addNew")}
         </Link>
       </div>
 
       {selected.size > 0 && (
         <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-950/30 border border-red-800 rounded-lg">
-          <span className="text-sm text-red-300">{selected.size} selected</span>
+          <span className="text-sm text-red-300">{t("printers.selected", { count: selected.size })}</span>
           <button
             onClick={handleBulkDelete}
             disabled={bulkDeleting}
             className="px-3 py-1 bg-red-700 text-white rounded text-sm hover:bg-red-600 disabled:opacity-50"
           >
-            {bulkDeleting ? "Deleting..." : `Delete ${selected.size}`}
+            {bulkDeleting ? t("printers.deleting") : t("printers.deleteCount", { count: selected.size })}
           </button>
           <button
             onClick={() => setSelected(new Set())}
             className="text-sm text-gray-400 hover:text-gray-200"
           >
-            Clear
+            {t("printers.clear")}
           </button>
         </div>
       )}
 
       {loading ? (
-        <p className="text-gray-500">Loading...</p>
+        <p className="text-gray-500">{t("printers.loading")}</p>
       ) : printers.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-gray-500 mb-4">No printers defined yet. Add a printer to start tracking per-printer calibrations.</p>
+          <p className="text-gray-500 mb-4">{t("printers.empty")}</p>
           <Link href="/printers/new" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">
-            + Add Your First Printer
+            {t("printers.addFirst")}
           </Link>
         </div>
       ) : (
@@ -161,12 +163,12 @@ export default function PrintersPage() {
                     className="accent-red-600"
                   />
                 </th>
-                <th className="text-left py-3 px-2">Name</th>
-                <th className="text-left py-3 px-2">Manufacturer</th>
-                <th className="text-left py-3 px-2">Model</th>
-                <th className="text-left py-3 px-2">Nozzles</th>
-                <th className="text-left py-3 px-2">Notes</th>
-                <th className="text-right py-3 px-2">Actions</th>
+                <th className="text-left py-3 px-2">{t("printers.table.name")}</th>
+                <th className="text-left py-3 px-2">{t("printers.table.manufacturer")}</th>
+                <th className="text-left py-3 px-2">{t("printers.table.model")}</th>
+                <th className="text-left py-3 px-2">{t("printers.table.nozzles")}</th>
+                <th className="text-left py-3 px-2">{t("printers.table.notes")}</th>
+                <th className="text-right py-3 px-2">{t("printers.table.actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -199,7 +201,7 @@ export default function PrintersPage() {
                         ))}
                       </div>
                     ) : (
-                      <span className="text-gray-500 text-xs">None</span>
+                      <span className="text-gray-500 text-xs">{t("printers.table.none")}</span>
                     )}
                   </td>
                   <td className="py-2 px-2 text-gray-500 text-xs">{p.notes || "—"}</td>
@@ -208,13 +210,13 @@ export default function PrintersPage() {
                       href={`/printers/${p._id}/edit`}
                       className="text-blue-600 hover:underline mr-3 text-xs"
                     >
-                      Edit
+                      {t("printers.table.edit")}
                     </Link>
                     <button
                       onClick={() => handleDelete(p._id, p.name)}
                       className="text-red-600 hover:underline text-xs"
                     >
-                      Delete
+                      {t("printers.table.delete")}
                     </button>
                   </td>
                 </tr>

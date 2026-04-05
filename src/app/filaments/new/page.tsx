@@ -6,6 +6,7 @@ import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
 import { useToast } from "@/components/Toast";
 import { useNfcContext } from "@/components/NfcProvider";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface FilamentOption {
   _id: string;
@@ -20,10 +21,11 @@ function NewFilamentContent() {
   const searchParams = useSearchParams();
   const { toast } = useToast();
   const { isElectron, status: nfcStatus, tagReadResult, dismissTagRead } = useNfcContext();
+  const { t } = useTranslation();
 
   const [initialData, setInitialData] = useState<Record<string, unknown> | undefined>(undefined);
   const [formKey, setFormKey] = useState(0);
-  const [title, setTitle] = useState("Add New Filament");
+  const [titleKey, setTitleKey] = useState("new.title");
 
   // INI picker state
   const [iniFilaments, setIniFilaments] = useState<Record<string, unknown>[] | null>(null);
@@ -61,11 +63,11 @@ function NewFilamentContent() {
     });
     if (res.ok) {
       const created = await res.json();
-      toast("Filament created");
+      toast(t("new.toast.created"));
       router.push(`/filaments/${created._id}`);
     } else {
       const body = await res.json().catch(() => null);
-      toast(body?.error || "Failed to create filament", "error");
+      toast(body?.error || t("new.toast.createFailed"), "error");
     }
   };
 
@@ -104,7 +106,7 @@ function NewFilamentContent() {
             : {}),
         },
       });
-      setTitle("New Filament from NFC Tag");
+      setTitleKey("new.fromNfc");
       setFormKey((k) => k + 1);
     }
   }, [searchParams]);
@@ -121,7 +123,7 @@ function NewFilamentContent() {
               vendor: parent.vendor || "",
               type: parent.type || "",
             });
-            setTitle("Add Color Variant");
+            setTitleKey("new.addColorVariant");
             setFormKey((k) => k + 1);
           }
         })
@@ -178,11 +180,11 @@ function NewFilamentContent() {
         ...(data.countryOfOrigin ? { filament_notes: `"Origin: ${data.countryOfOrigin}"` } : {}),
       },
     });
-    setTitle("New Filament from NFC Tag");
+    setTitleKey("new.fromNfc");
     setFormKey((k) => k + 1);
     dismissTagRead();
-    toast("Form populated from NFC tag");
-  }, [tagReadResult, dismissTagRead, toast]);
+    toast(t("new.toast.populatedFromNfc"));
+  }, [tagReadResult, dismissTagRead, toast, t]);
 
   // Handle INI file selection
   const handleIniFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -198,7 +200,7 @@ function NewFilamentContent() {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => null);
-      toast(body?.error || "Failed to parse INI file", "error");
+      toast(body?.error || t("new.toast.iniParseFailed"), "error");
       return;
     }
     const { filaments } = await res.json();
@@ -213,10 +215,10 @@ function NewFilamentContent() {
 
   const applyIniFilament = (f: Record<string, unknown>) => {
     setInitialData(f);
-    setTitle("New Filament from INI");
+    setTitleKey("new.fromIni");
     setFormKey((k) => k + 1);
     setIniFilaments(null);
-    toast("Form populated from INI profile");
+    toast(t("new.toast.populatedFromIni"));
   };
 
   // Handle Prusament QR lookup
@@ -235,7 +237,7 @@ function NewFilamentContent() {
       const res = await fetch(`/api/prusament?spoolId=${encodeURIComponent(spoolId)}`);
       const data = await res.json();
       if (!res.ok) {
-        toast(data.error || "Failed to fetch Prusament data", "error");
+        toast(data.error || t("new.toast.prusamentFetchFailed"), "error");
         return;
       }
 
@@ -256,13 +258,13 @@ function NewFilamentContent() {
         netFilamentWeight: data.netWeight ?? null,
         totalWeight: data.totalWeight ?? null,
       });
-      setTitle("New Filament from Prusament QR");
+      setTitleKey("new.fromPrusament");
       setFormKey((k) => k + 1);
       setPrusamentOpen(false);
       setPrusamentInput("");
-      toast("Form populated from Prusament spool data");
+      toast(t("new.toast.populatedFromPrusament"));
     } catch {
-      toast("Failed to fetch Prusament data", "error");
+      toast(t("new.toast.prusamentFetchFailed"), "error");
     } finally {
       setPrusamentLoading(false);
     }
@@ -299,11 +301,11 @@ function NewFilamentContent() {
       spoolWeight: d.spoolWeight ?? null,
       ...(sourceUrl ? { tdsUrl: sourceUrl } : {}),
     });
-    setTitle("New Filament from TDS");
+    setTitleKey("new.fromTds");
     setFormKey((k) => k + 1);
     setTdsOpen(false);
     setTdsUrl("");
-    toast(`Extracted ${result.fieldsExtracted} fields from TDS`);
+    toast(t("new.toast.extractedFromTds", { count: result.fieldsExtracted }));
   };
 
   // Get AI config from Electron store (if available)
@@ -336,13 +338,13 @@ function NewFilamentContent() {
       const result = await res.json();
 
       if (!res.ok) {
-        toast(result.error || "Failed to extract TDS data", "error");
+        toast(result.error || t("new.toast.tdsExtractFailed"), "error");
         return;
       }
 
       applyTdsResult(result, url);
     } catch {
-      toast("Failed to extract TDS data", "error");
+      toast(t("new.toast.tdsExtractFailed"), "error");
     } finally {
       setTdsLoading(false);
     }
@@ -370,13 +372,13 @@ function NewFilamentContent() {
       const result = await res.json();
 
       if (!res.ok) {
-        toast(result.error || "Failed to extract TDS data", "error");
+        toast(result.error || t("new.toast.tdsExtractFailed"), "error");
         return;
       }
 
       applyTdsResult(result);
     } catch {
-      toast("Failed to extract TDS data", "error");
+      toast(t("new.toast.tdsExtractFailed"), "error");
     } finally {
       setTdsLoading(false);
     }
@@ -388,17 +390,17 @@ function NewFilamentContent() {
     setCloneSearch("");
     const res = await fetch(`/api/filaments/${id}`);
     if (!res.ok) {
-      toast("Failed to load filament", "error");
+      toast(t("new.toast.loadFailed"), "error");
       return;
     }
     const filament = await res.json();
     // Strip identity fields — keep everything else as a template
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { _id, _variants, _inherited, parentId: _pid, createdAt, updatedAt, __v, ...rest } = filament;
-    setInitialData({ ...rest, name: `${rest.name} (copy)` });
-    setTitle("Clone Filament");
+    setInitialData({ ...rest, name: `${rest.name} (${t("new.copySuffix")})` });
+    setTitleKey("new.cloneTitle");
     setFormKey((k) => k + 1);
-    toast("Form populated from clone");
+    toast(t("new.toast.populatedFromClone"));
   };
 
   const filteredClones = cloneOptions.filter(
@@ -413,11 +415,11 @@ function NewFilamentContent() {
       <main className="max-w-2xl mx-auto px-4 py-8">
         <div className="mb-4">
           <Link href="/" className="text-blue-600 hover:underline text-sm">
-            &larr; Back to list
+            &larr; {t("detail.back")}
           </Link>
         </div>
-        <h1 className="text-2xl font-bold mb-6">{title}</h1>
-        <p className="text-gray-500">Loading parent filament...</p>
+        <h1 className="text-2xl font-bold mb-6">{t(titleKey)}</h1>
+        <p className="text-gray-500">{t("new.loadingParent")}</p>
       </main>
     );
   }
@@ -426,15 +428,15 @@ function NewFilamentContent() {
     <main className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
         <Link href="/" className="text-blue-600 hover:underline text-sm">
-          &larr; Back to list
+          &larr; {t("detail.back")}
         </Link>
       </div>
-      <h1 className="text-2xl font-bold mb-6">{title}</h1>
+      <h1 className="text-2xl font-bold mb-6">{t(titleKey)}</h1>
 
       {/* Populate-from toolbar */}
       {!parentId && (
         <div className="mb-6 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-800">
-          <div className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wider">Populate from</div>
+          <div className="text-xs text-gray-500 mb-2 font-medium uppercase tracking-wider">{t("new.populateFrom")}</div>
           <div className="flex flex-wrap gap-2 items-start">
             {/* NFC */}
             {isElectron && (
@@ -446,10 +448,10 @@ function NewFilamentContent() {
                 />
                 <span className="text-sm text-gray-400">
                   {nfcStatus.tagPresent
-                    ? "Tag detected — reading..."
+                    ? t("new.nfc.tagDetected")
                     : nfcStatus.readerConnected
-                      ? "Place NFC tag on reader"
-                      : "No NFC reader"}
+                      ? t("new.nfc.placeTag")
+                      : t("new.nfc.noReader")}
                 </span>
               </div>
             )}
@@ -465,11 +467,11 @@ function NewFilamentContent() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 013.75 9.375v-4.5zM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 01-1.125-1.125v-4.5zM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0113.5 9.375v-4.5z" />
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.5 14.625v2.625m3.375-2.625v2.625M16.875 20.25h-3.375v-3.375" />
                 </svg>
-                Prusament QR
+                {t("new.prusamentQr")}
               </button>
               {prusamentOpen && (
                 <div className="absolute z-50 mt-1 w-80 bg-gray-800 border border-gray-600 rounded-lg shadow-lg p-3">
-                  <label className="text-xs text-gray-400 block mb-1.5">Spool ID or URL from QR code</label>
+                  <label className="text-xs text-gray-400 block mb-1.5">{t("new.prusament.inputLabel")}</label>
                   <div className="flex gap-2">
                     <input
                       type="text"
@@ -486,7 +488,7 @@ function NewFilamentContent() {
                       disabled={prusamentLoading || !prusamentInput.trim()}
                       className="px-3 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 disabled:opacity-50"
                     >
-                      {prusamentLoading ? "..." : "Fetch"}
+                      {prusamentLoading ? "..." : t("new.prusament.fetch")}
                     </button>
                   </div>
                 </div>
@@ -503,11 +505,11 @@ function NewFilamentContent() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.455 2.456L21.75 6l-1.036.259a3.375 3.375 0 00-2.455 2.456z" />
                 </svg>
-                Import from TDS
+                {t("new.importFromTds")}
               </button>
               {tdsOpen && (
                 <div className="absolute z-50 mt-1 w-96 bg-gray-800 border border-gray-600 rounded-lg shadow-lg p-3">
-                  <label className="text-xs text-gray-400 block mb-1.5">Technical Data Sheet URL (PDF or web page)</label>
+                  <label className="text-xs text-gray-400 block mb-1.5">{t("new.tds.urlLabel")}</label>
                   <div className="flex gap-2">
                     <input
                       type="text"
@@ -524,12 +526,12 @@ function NewFilamentContent() {
                       disabled={tdsLoading || !tdsUrl.trim()}
                       className="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50 whitespace-nowrap"
                     >
-                      {tdsLoading ? "Extracting..." : "Extract"}
+                      {tdsLoading ? t("new.tds.extracting") : t("new.tds.extract")}
                     </button>
                   </div>
                   <div className="flex items-center gap-2 mt-2">
                     <div className="flex-1 border-t border-gray-700" />
-                    <span className="text-xs text-gray-600">or</span>
+                    <span className="text-xs text-gray-600">{t("new.tds.or")}</span>
                     <div className="flex-1 border-t border-gray-700" />
                   </div>
                   <input
@@ -548,13 +550,13 @@ function NewFilamentContent() {
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
                     </svg>
-                    {tdsLoading ? "Extracting..." : "Upload local file"}
+                    {tdsLoading ? t("new.tds.extracting") : t("new.tds.uploadLocalFile")}
                   </button>
                   <p className="text-xs text-gray-500 mt-2">
-                    Uses AI to extract filament properties.
+                    {t("new.tds.aiDescription")}
                     {" "}
                     <Link href="/settings" className="text-blue-400 hover:text-blue-300 underline">
-                      Configure API key
+                      {t("new.tds.configureApiKey")}
                     </Link>
                   </p>
                 </div>
@@ -577,7 +579,7 @@ function NewFilamentContent() {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              Load from INI
+              {t("new.loadFromIni")}
             </button>
 
             {/* Clone */}
@@ -590,13 +592,13 @@ function NewFilamentContent() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
-                Clone Existing
+                {t("new.cloneExisting")}
               </button>
               {cloneOpen && (
                 <div className="absolute z-50 mt-1 w-80 bg-gray-800 border border-gray-600 rounded-lg shadow-lg">
                   <input
                     className="w-full px-3 py-2 bg-transparent border-b border-gray-600 text-sm text-gray-100 outline-none placeholder-gray-500"
-                    placeholder="Search filaments..."
+                    placeholder={t("new.clone.searchPlaceholder")}
                     value={cloneSearch}
                     onChange={(e) => { setCloneSearch(e.target.value); setCloneHighlight(-1); }}
                     onKeyDown={(e) => {
@@ -638,7 +640,7 @@ function NewFilamentContent() {
                       </li>
                     ))}
                     {filteredClones.length === 0 && (
-                      <li className="px-3 py-2 text-gray-500 text-sm">No filaments found</li>
+                      <li className="px-3 py-2 text-gray-500 text-sm">{t("new.clone.noResults")}</li>
                     )}
                   </ul>
                 </div>
@@ -656,11 +658,11 @@ function NewFilamentContent() {
             <div
               role="dialog"
               aria-modal="true"
-              aria-label="Select a filament profile"
+              aria-label={t("new.ini.selectProfile")}
               className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-lg w-full mx-4 p-6 pointer-events-auto max-h-[80vh] flex flex-col"
             >
-              <h2 className="text-lg font-bold text-white mb-1">Select a Profile</h2>
-              <p className="text-sm text-gray-400 mb-4">{iniFilaments.length} filament profiles found in INI file</p>
+              <h2 className="text-lg font-bold text-white mb-1">{t("new.ini.selectProfile")}</h2>
+              <p className="text-sm text-gray-400 mb-4">{t("new.ini.profileCount", { count: iniFilaments.length })}</p>
               <ul className="overflow-y-auto flex-1 space-y-1">
                 {iniFilaments.map((f, i) => (
                   <li key={i}>
@@ -685,7 +687,7 @@ function NewFilamentContent() {
                   onClick={() => setIniFilaments(null)}
                   className="px-4 py-2 text-sm text-gray-300 hover:text-white border border-gray-600 rounded hover:border-gray-500"
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
               </div>
             </div>
@@ -700,7 +702,7 @@ function NewFilamentContent() {
 
 export default function NewFilament() {
   return (
-    <Suspense fallback={<p className="p-8 text-gray-500">Loading...</p>}>
+    <Suspense fallback={<p className="p-8 text-gray-500">Loading&hellip;</p>}>
       <NewFilamentContent />
     </Suspense>
   );

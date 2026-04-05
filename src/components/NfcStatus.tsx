@@ -2,9 +2,11 @@
 
 import { useState, useEffect } from "react";
 import { useNfcContext } from "@/components/NfcProvider";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function NfcStatus() {
   const { isElectron, status } = useNfcContext();
+  const { t } = useTranslation();
   const [mounted, setMounted] = useState(false);
 
   // Avoid hydration mismatch — only render after client mount
@@ -19,13 +21,15 @@ export default function NfcStatus() {
 
   if (!status.readerConnected) {
     dotColor = "bg-gray-500";
-    label = "No NFC reader";
+    label = t("nfc.status.noReader");
   } else if (!status.tagPresent) {
     dotColor = "bg-yellow-400";
-    label = "Ready — place tag";
+    label = t("nfc.status.readyPlaceTag");
   } else {
     dotColor = "bg-green-400";
-    label = `Tag detected${status.tagUid ? ` (${status.tagUid.slice(-8).toUpperCase()})` : ""}`;
+    label = status.tagUid
+      ? t("nfc.status.tagDetectedWithUid", { uid: status.tagUid.slice(-8).toUpperCase() })
+      : t("nfc.status.tagDetected");
   }
 
   return (

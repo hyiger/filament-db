@@ -3,8 +3,11 @@
 import Link from "next/link";
 import { useRef, useState, useEffect } from "react";
 import { CURRENCIES, useCurrency, type CurrencyCode } from "@/hooks/useCurrency";
+import { useTranslation } from "@/i18n/TranslationProvider";
+import { LOCALES } from "@/i18n";
 
 export default function SettingsPage() {
+  const { t, locale, setLocale } = useTranslation();
   const [restoring, setRestoring] = useState(false);
   const [restoreResult, setRestoreResult] = useState<{ ok: boolean; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -35,9 +38,9 @@ export default function SettingsPage() {
   // Connection mode state (Electron only)
   type ConnectionMode = "atlas" | "hybrid" | "offline" | "";
   const CONNECTION_MODES: { id: ConnectionMode; label: string; icon: string; description: string; needsUri: boolean }[] = [
-    { id: "atlas", label: "MongoDB Atlas (Cloud)", icon: "\u2601", description: "All data in the cloud. Falls back to local if Atlas is unreachable.", needsUri: true },
-    { id: "hybrid", label: "Hybrid (Local + Cloud Sync)", icon: "\u21C4", description: "Data stored locally, synced to Atlas every 5 minutes.", needsUri: true },
-    { id: "offline", label: "Local Only (Offline)", icon: "\uD83D\uDCBE", description: "Everything stored on this computer. No cloud needed.", needsUri: false },
+    { id: "atlas", label: t("settings.connectionAtlas"), icon: "\u2601", description: t("settings.connectionAtlasDesc"), needsUri: true },
+    { id: "hybrid", label: t("settings.connectionHybrid"), icon: "\u21C4", description: t("settings.connectionHybridDesc"), needsUri: true },
+    { id: "offline", label: t("settings.connectionOffline"), icon: "\uD83D\uDCBE", description: t("settings.connectionOfflineDesc"), needsUri: false },
   ];
   const [currentMode, setCurrentMode] = useState<ConnectionMode>("");
   const [pendingMode, setPendingMode] = useState<ConnectionMode>("");
@@ -113,7 +116,7 @@ export default function SettingsPage() {
         throw new Error("NFC format not available — restart the app to load updated NFC support");
       }
       await window.electronAPI.nfcFormatTag();
-      setFormatResult({ ok: true, message: "Tag erased successfully" });
+      setFormatResult({ ok: true, message: t("settings.nfcEraseSuccess") });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       setFormatResult({ ok: false, message });
@@ -130,9 +133,7 @@ export default function SettingsPage() {
     e.target.value = "";
 
     if (!confirm(
-      "This will replace ALL data in the database with the snapshot contents.\n\n" +
-      "All current filaments, nozzles, and printers will be deleted.\n\n" +
-      "Are you sure?"
+      t("settings.restoreConfirm")
     )) return;
 
     setRestoring(true);
@@ -148,13 +149,13 @@ export default function SettingsPage() {
       if (res.ok) {
         setRestoreResult({
           ok: true,
-          message: `Restored ${data.restored.filaments} filaments, ${data.restored.nozzles} nozzles, ${data.restored.printers} printers`,
+          message: t("settings.restoreSuccess", { filaments: data.restored.filaments, nozzles: data.restored.nozzles, printers: data.restored.printers }),
         });
       } else {
-        setRestoreResult({ ok: false, message: data.error || "Restore failed" });
+        setRestoreResult({ ok: false, message: data.error || t("settings.restoreFailed") });
       }
     } catch {
-      setRestoreResult({ ok: false, message: "Failed to connect to server" });
+      setRestoreResult({ ok: false, message: t("common.serverError") });
     } finally {
       setRestoring(false);
     }
@@ -164,13 +165,13 @@ export default function SettingsPage() {
     <main className="max-w-3xl mx-auto px-4 py-8">
       <div className="mb-6">
         <Link href="/" className="text-blue-600 hover:underline text-sm">
-          &larr; Back to Filaments
+          &larr; {t("settings.backToFilaments")}
         </Link>
       </div>
 
-      <h1 className="text-3xl font-bold mb-2">Settings</h1>
+      <h1 className="text-3xl font-bold mb-2">{t("settings.title")}</h1>
       <p className="text-gray-500 text-sm mb-8">
-        Manage your printers, nozzles, and other configuration.
+        {t("settings.subtitle")}
       </p>
 
       <div className="grid gap-4">
@@ -181,10 +182,10 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 group-hover:text-black dark:group-hover:text-white">
-                Nozzles
+                {t("settings.nozzles")}
               </h2>
               <p className="text-sm text-gray-500 mt-1">
-                Manage nozzle sizes available for your printers.
+                {t("settings.nozzlesDesc")}
               </p>
             </div>
             <svg className="w-5 h-5 text-gray-600 group-hover:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -200,10 +201,10 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 group-hover:text-black dark:group-hover:text-white">
-                Printers
+                {t("settings.printers")}
               </h2>
               <p className="text-sm text-gray-500 mt-1">
-                Manage your 3D printers and their installed nozzles.
+                {t("settings.printersDesc")}
               </p>
             </div>
             <svg className="w-5 h-5 text-gray-600 group-hover:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -219,10 +220,10 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 group-hover:text-black dark:group-hover:text-white">
-                API Documentation
+                {t("settings.apiDocs")}
               </h2>
               <p className="text-sm text-gray-500 mt-1">
-                Interactive API reference for all REST endpoints.
+                {t("settings.apiDocsDesc")}
               </p>
             </div>
             <svg className="w-5 h-5 text-gray-600 group-hover:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -234,9 +235,9 @@ export default function SettingsPage() {
 
       {/* Currency */}
       <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
-        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 mb-1">Currency</h2>
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 mb-1">{t("settings.currency")}</h2>
         <p className="text-sm text-gray-500 mb-4">
-          Choose the currency symbol used for filament costs.
+          {t("settings.currencyDesc")}
         </p>
         <div className="flex gap-2">
           {CURRENCIES.map((c) => (
@@ -256,12 +257,36 @@ export default function SettingsPage() {
         </div>
       </div>
 
+      {/* Language */}
+      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 mb-1">{t("settings.language")}</h2>
+        <p className="text-sm text-gray-500 mb-4">
+          {t("settings.languageDesc")}
+        </p>
+        <div className="flex gap-2">
+          {LOCALES.map((l) => (
+            <button
+              key={l.code}
+              type="button"
+              onClick={() => setLocale(l.code)}
+              className={`px-4 py-2 text-sm rounded border transition-colors ${
+                locale === l.code
+                  ? "border-blue-500 bg-blue-600/20 text-blue-400 dark:text-blue-300"
+                  : "border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500 hover:text-gray-800 dark:hover:text-gray-300"
+              }`}
+            >
+              {l.nativeName}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* Connection Mode (Electron only) */}
       {isElectron && currentMode && (
         <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 mb-1">Connection Mode</h2>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 mb-1">{t("settings.connectionMode")}</h2>
           <p className="text-sm text-gray-500 mb-4">
-            Switch how your filament data is stored and synced.
+            {t("settings.connectionModeDesc")}
           </p>
 
           <div className="space-y-2">
@@ -302,7 +327,7 @@ export default function SettingsPage() {
                           {m.label}
                         </span>
                         {isActive && (
-                          <span className="text-xs px-1.5 py-0.5 bg-blue-600/30 text-blue-300 rounded">Current</span>
+                          <span className="text-xs px-1.5 py-0.5 bg-blue-600/30 text-blue-300 rounded">{t("settings.connectionCurrent")}</span>
                         )}
                       </div>
                       <p className="text-xs text-gray-500 mt-0.5">{m.description}</p>
@@ -317,7 +342,7 @@ export default function SettingsPage() {
           {showUriInput && pendingMode && (
             <div className="mt-3 p-4 border border-gray-700 rounded-lg bg-gray-900/50">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                MongoDB Atlas Connection String
+                {t("settings.atlasConnectionString")}
               </label>
               <input
                 type="password"
@@ -328,7 +353,7 @@ export default function SettingsPage() {
                 autoFocus
               />
               <p className="text-xs text-gray-500 mb-3">
-                Your connection string is stored locally and never sent to any third party.
+                {t("settings.connectionStringPrivacy")}
               </p>
               <div className="flex gap-2">
                 <button
@@ -339,7 +364,7 @@ export default function SettingsPage() {
                     try {
                       const result = await window.electronAPI!.testConnection(atlasUri.trim());
                       if (!result.success) {
-                        setModeResult({ ok: false, message: result.error || "Connection failed" });
+                        setModeResult({ ok: false, message: result.error || t("settings.connectionFailed") });
                         setTestingConnection(false);
                         return;
                       }
@@ -354,9 +379,9 @@ export default function SettingsPage() {
                       setPendingMode("");
                       setShowUriInput(false);
                       setAtlasUri("");
-                      setModeResult({ ok: true, message: `Switched to ${CONNECTION_MODES.find((m) => m.id === pendingMode)?.label}` });
+                      setModeResult({ ok: true, message: t("settings.switchedTo", { mode: CONNECTION_MODES.find((m) => m.id === pendingMode)?.label || "" }) });
                     } catch (err) {
-                      setModeResult({ ok: false, message: err instanceof Error ? err.message : "Switch failed" });
+                      setModeResult({ ok: false, message: err instanceof Error ? err.message : t("settings.switchFailed") });
                     } finally {
                       setTestingConnection(false);
                       setModeSwitching(false);
@@ -365,13 +390,13 @@ export default function SettingsPage() {
                   disabled={testingConnection || !atlasUri.trim()}
                   className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
                 >
-                  {testingConnection ? "Testing..." : "Connect & Switch"}
+                  {testingConnection ? t("settings.testing") : t("settings.connectAndSwitch")}
                 </button>
                 <button
                   onClick={() => { setPendingMode(""); setShowUriInput(false); setAtlasUri(""); setModeResult(null); }}
                   className="px-3 py-1.5 text-gray-400 hover:text-gray-200 text-sm transition-colors"
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
               </div>
             </div>
@@ -388,9 +413,9 @@ export default function SettingsPage() {
                     await window.electronAPI!.saveConfig({ connectionMode: pendingMode });
                     setCurrentMode(pendingMode);
                     setPendingMode("");
-                    setModeResult({ ok: true, message: `Switched to ${CONNECTION_MODES.find((m) => m.id === pendingMode)?.label}` });
+                    setModeResult({ ok: true, message: t("settings.switchedTo", { mode: CONNECTION_MODES.find((m) => m.id === pendingMode)?.label || "" }) });
                   } catch (err) {
-                    setModeResult({ ok: false, message: err instanceof Error ? err.message : "Switch failed" });
+                    setModeResult({ ok: false, message: err instanceof Error ? err.message : t("settings.switchFailed") });
                   } finally {
                     setModeSwitching(false);
                   }
@@ -398,13 +423,13 @@ export default function SettingsPage() {
                 disabled={modeSwitching}
                 className="px-4 py-1.5 bg-yellow-600 text-white rounded text-sm hover:bg-yellow-500 disabled:opacity-50 transition-colors"
               >
-                {modeSwitching ? "Switching..." : `Switch to ${CONNECTION_MODES.find((m) => m.id === pendingMode)?.label}`}
+                {modeSwitching ? t("settings.switching") : t("settings.switchTo", { mode: CONNECTION_MODES.find((m) => m.id === pendingMode)?.label || "" })}
               </button>
               <button
                 onClick={() => { setPendingMode(""); setModeResult(null); }}
                 className="px-3 py-1.5 text-gray-400 hover:text-gray-200 text-sm transition-colors"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
             </div>
           )}
@@ -423,9 +448,9 @@ export default function SettingsPage() {
 
       {/* Database Snapshots */}
       <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
-        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">Database Snapshots</h2>
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">{t("settings.snapshots")}</h2>
         <p className="text-sm text-gray-500 mb-4">
-          Download a full backup of all filaments, nozzles, and printers, or restore from a previous snapshot.
+          {t("settings.snapshotsDesc")}
         </p>
 
         <div className="flex gap-3 items-center flex-wrap">
@@ -436,7 +461,7 @@ export default function SettingsPage() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3" />
             </svg>
-            Download Snapshot
+            {t("settings.downloadSnapshot")}
           </a>
 
           <input
@@ -454,7 +479,7 @@ export default function SettingsPage() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
             </svg>
-            {restoring ? "Restoring..." : "Restore from Snapshot"}
+            {restoring ? t("settings.restoring") : t("settings.restoreFromSnapshot")}
           </button>
         </div>
 
@@ -471,24 +496,23 @@ export default function SettingsPage() {
 
       {/* AI Features — Provider & API Key */}
       <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
-        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">AI Features</h2>
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">{t("settings.aiFeatures")}</h2>
         <p className="text-sm text-gray-500 mb-4">
-          Configure an AI provider to enable extraction of filament properties from Technical Data Sheets (TDS).
-          Get a free API key from your chosen provider.
+          {t("settings.aiFeaturesDesc")}
         </p>
 
         <div className="flex items-center gap-2 mb-4">
           <span className={`inline-block w-2.5 h-2.5 rounded-full ${aiConfigured ? "bg-green-500" : "bg-gray-600"}`} />
           <span className="text-sm text-gray-500 dark:text-gray-400">
             {aiConfigured
-              ? `${AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider} configured`
-              : "No API key configured"}
+              ? t("settings.aiConfigured", { provider: AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider })
+              : t("settings.aiNotConfigured")}
           </span>
         </div>
 
         {/* Provider selector */}
         <div className="mb-3">
-          <label className="text-xs text-gray-500 block mb-1.5 font-medium uppercase tracking-wider">Provider</label>
+          <label className="text-xs text-gray-500 block mb-1.5 font-medium uppercase tracking-wider">{t("settings.aiProvider")}</label>
           <div className="flex gap-2">
             {AI_PROVIDERS.map((p) => (
               <button
@@ -509,7 +533,7 @@ export default function SettingsPage() {
 
         {/* API key link */}
         <p className="text-xs text-gray-500 mb-2">
-          Get a key from{" "}
+          {t("settings.getKeyFrom")}{" "}
           <a
             href={AI_PROVIDERS.find((p) => p.id === aiProvider)?.keyUrl}
             target="_blank"
@@ -526,7 +550,7 @@ export default function SettingsPage() {
               type={showAiKey ? "text" : "password"}
               value={aiKey}
               onChange={(e) => setAiKey(e.target.value)}
-              placeholder={aiConfigured ? "••••••••••••••••" : "Enter API key"}
+              placeholder={aiConfigured ? "••••••••••••••••" : t("settings.enterApiKey")}
               className="w-full px-3 py-2 bg-transparent border border-gray-300 dark:border-gray-700 rounded text-sm text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-blue-600"
             />
             <button
@@ -534,7 +558,7 @@ export default function SettingsPage() {
               onClick={() => setShowAiKey((s) => !s)}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xs"
             >
-              {showAiKey ? "Hide" : "Show"}
+              {showAiKey ? t("common.hide") : t("common.show")}
             </button>
           </div>
 
@@ -550,7 +574,7 @@ export default function SettingsPage() {
                   await api.saveConfig({ aiApiKey: aiKey.trim(), aiProvider });
                   setAiConfigured(true);
                   setAiKey("");
-                  setAiResult({ ok: true, message: `${AI_PROVIDERS.find((p) => p.id === aiProvider)?.name} API key saved` });
+                  setAiResult({ ok: true, message: t("settings.aiKeySaved", { provider: AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider }) });
                 } else {
                   // Web mode — validate via API
                   const res = await fetch("/api/tds", {
@@ -562,13 +586,13 @@ export default function SettingsPage() {
                   if (res.ok) {
                     setAiConfigured(true);
                     setAiKey("");
-                    setAiResult({ ok: true, message: `${AI_PROVIDERS.find((p) => p.id === aiProvider)?.name} API key saved and validated` });
+                    setAiResult({ ok: true, message: t("settings.aiKeySavedValidated", { provider: AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider }) });
                   } else {
-                    setAiResult({ ok: false, message: data.error || "Failed to save key" });
+                    setAiResult({ ok: false, message: data.error || t("settings.aiKeySaveFailed") });
                   }
                 }
               } catch {
-                setAiResult({ ok: false, message: "Failed to save API key" });
+                setAiResult({ ok: false, message: t("settings.aiKeySaveFailed") });
               } finally {
                 setAiSaving(false);
               }
@@ -576,7 +600,7 @@ export default function SettingsPage() {
             disabled={aiSaving || !aiKey.trim()}
             className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
-            {aiSaving ? "Validating..." : "Save Key"}
+            {aiSaving ? t("settings.validating") : t("settings.saveKey")}
           </button>
 
           {aiConfigured && (
@@ -589,11 +613,11 @@ export default function SettingsPage() {
                   await fetch("/api/tds", { method: "DELETE" });
                 }
                 setAiConfigured(false);
-                setAiResult({ ok: true, message: "API key removed" });
+                setAiResult({ ok: true, message: t("settings.aiKeyRemoved") });
               }}
               className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white rounded text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
             >
-              Remove Key
+              {t("settings.removeKey")}
             </button>
           )}
         </div>
@@ -612,9 +636,9 @@ export default function SettingsPage() {
       {/* NFC Tools (Electron only) */}
       {isElectron && (
         <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
-          <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">NFC Tools</h2>
+          <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">{t("settings.nfcTools")}</h2>
           <p className="text-sm text-gray-500 mb-4">
-            Format or erase NFC tags. Place a tag on the reader before using these tools.
+            {t("settings.nfcToolsDesc")}
           </p>
 
           <div className="flex items-center gap-3 mb-4">
@@ -627,10 +651,10 @@ export default function SettingsPage() {
             }`} />
             <span className="text-sm text-gray-500 dark:text-gray-400">
               {nfcStatus.tagPresent
-                ? `Tag detected${nfcStatus.tagUid ? ` (${nfcStatus.tagUid.slice(-8).toUpperCase()})` : ""}`
+                ? t("settings.nfcTagDetected", { uid: nfcStatus.tagUid ? nfcStatus.tagUid.slice(-8).toUpperCase() : "" })
                 : nfcStatus.readerConnected
-                  ? "Reader ready — place a tag"
-                  : "No NFC reader connected"}
+                  ? t("settings.nfcReaderReady")
+                  : t("settings.nfcNoReader")}
             </span>
           </div>
 
@@ -643,12 +667,12 @@ export default function SettingsPage() {
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9.75 14.25 12m0 0 2.25 2.25M14.25 12l2.25-2.25M14.25 12 12 14.25m-2.58 4.92-6.374-6.375a1.125 1.125 0 0 1 0-1.59L9.42 4.83a1.125 1.125 0 0 1 1.59 0l6.375 6.375a1.125 1.125 0 0 1 0 1.59l-6.375 6.375a1.125 1.125 0 0 1-1.59 0Z" />
               </svg>
-              Erase Tag
+              {t("settings.eraseTag")}
             </button>
           ) : (
             <div className="p-4 border border-yellow-800 rounded-lg bg-yellow-950/30">
               <p className="text-sm text-yellow-300 mb-3">
-                This will erase ALL data on the NFC tag. Are you sure?
+                {t("settings.eraseConfirm")}
               </p>
               <div className="flex gap-2 items-center">
                 <button
@@ -656,13 +680,13 @@ export default function SettingsPage() {
                   disabled={formatting}
                   className="px-4 py-1.5 bg-yellow-700 text-white rounded text-sm hover:bg-yellow-600 disabled:opacity-50 transition-colors"
                 >
-                  {formatting ? "Erasing..." : "Confirm Erase"}
+                  {formatting ? t("settings.erasing") : t("settings.confirmErase")}
                 </button>
                 <button
                   onClick={() => setShowFormatConfirm(false)}
                   className="px-3 py-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-sm transition-colors"
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </button>
               </div>
             </div>
@@ -682,9 +706,9 @@ export default function SettingsPage() {
 
       {/* Danger Zone */}
       <div className="mt-8 pt-6 border-t border-red-900/50">
-        <h2 className="text-lg font-semibold text-red-400 mb-1">Danger Zone</h2>
+        <h2 className="text-lg font-semibold text-red-400 mb-1">{t("settings.dangerZone")}</h2>
         <p className="text-sm text-gray-500 mb-4">
-          Permanently delete all filaments, nozzles, and printers. This cannot be undone.
+          {t("settings.dangerZoneDesc")}
         </p>
 
         {!showDeleteConfirm ? (
@@ -695,12 +719,12 @@ export default function SettingsPage() {
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
             </svg>
-            Delete Database
+            {t("settings.deleteDatabase")}
           </button>
         ) : (
           <div className="p-4 border border-red-800 rounded-lg bg-red-950/30">
             <p className="text-sm text-red-300 mb-3">
-              Type <span className="font-mono font-bold">delete</span> to confirm:
+              {t("settings.deleteTypeConfirm")}
             </p>
             <div className="flex gap-2 items-center">
               <input
@@ -713,7 +737,7 @@ export default function SettingsPage() {
                     setDeleteInput("");
                   }
                 }}
-                placeholder="type delete"
+                placeholder={t("settings.deleteTypePlaceholder")}
                 className="w-40 px-3 py-1.5 border border-red-800 rounded text-sm bg-transparent text-red-200 placeholder-red-800 focus:outline-none focus:border-red-600"
                 autoFocus
               />
@@ -727,13 +751,13 @@ export default function SettingsPage() {
                     if (res.ok) {
                       setDeleteResult({
                         ok: true,
-                        message: `Deleted ${data.deleted.filaments} filaments, ${data.deleted.nozzles} nozzles, ${data.deleted.printers} printers`,
+                        message: t("settings.deleteResult", { filaments: data.deleted.filaments, nozzles: data.deleted.nozzles, printers: data.deleted.printers }),
                       });
                     } else {
-                      setDeleteResult({ ok: false, message: data.error || "Delete failed" });
+                      setDeleteResult({ ok: false, message: data.error || t("settings.deleteFailed") });
                     }
                   } catch {
-                    setDeleteResult({ ok: false, message: "Failed to connect to server" });
+                    setDeleteResult({ ok: false, message: t("common.serverError") });
                   } finally {
                     setDeleting(false);
                     setShowDeleteConfirm(false);
@@ -743,13 +767,13 @@ export default function SettingsPage() {
                 disabled={deleteInput !== "delete" || deleting}
                 className="px-4 py-1.5 bg-red-700 text-white rounded text-sm hover:bg-red-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
               >
-                {deleting ? "Deleting..." : "Confirm Delete"}
+                {deleting ? t("settings.deleting") : t("settings.confirmDelete")}
               </button>
               <button
                 onClick={() => { setShowDeleteConfirm(false); setDeleteInput(""); }}
                 className="px-3 py-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-sm transition-colors"
               >
-                Cancel
+                {t("common.cancel")}
               </button>
             </div>
           </div>

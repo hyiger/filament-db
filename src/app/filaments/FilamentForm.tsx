@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useCurrency } from "@/hooks/useCurrency";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface BedTypeTempEntry {
   bedType: string;
@@ -154,6 +155,7 @@ function extractPressureAdvance(data: Record<string, unknown> | undefined): stri
 
 export default function FilamentForm({ initialData, onSubmit }: Props) {
   const { symbol: currencySymbol } = useCurrency();
+  const { t } = useTranslation();
   const [nozzles, setNozzles] = useState<NozzleOption[]>([]);
   const [nozzlesLoading, setNozzlesLoading] = useState(true);
   const [printers, setPrinters] = useState<PrinterOption[]>([]);
@@ -638,12 +640,12 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
     <form onSubmit={handleSubmit} className="space-y-4">
       {fetchErrors.length > 0 && (
         <div className="px-3 py-2 bg-yellow-900/30 border border-yellow-800 rounded text-sm text-yellow-300">
-          Could not load {fetchErrors.join(", ")}. Some dropdowns may be empty. Check that the server is running.
+          {t("form.fetchError", { items: fetchErrors.join(", ") })}
         </div>
       )}
 
       <div>
-        <label className={labelClass}>Name *</label>
+        <label className={labelClass}>{t("form.name")} *</label>
         <input
           className={inputClass}
           value={form.name}
@@ -654,8 +656,8 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
       <div ref={parentRef} className="relative">
         <label className={labelClass}>
-          Parent Filament
-          <span className="text-gray-400 font-normal ml-1">(optional — for color variants)</span>
+          {t("form.parentFilament")}
+          <span className="text-gray-400 font-normal ml-1">({t("form.parentFilamentHint")})</span>
         </label>
         {form.parentId ? (
           <div className="flex items-center gap-2 px-3 py-2 border border-blue-400 bg-blue-50 dark:bg-blue-950 rounded text-sm">
@@ -671,7 +673,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                   <span className="text-gray-500 text-xs">{p.vendor} &middot; {p.type}</span>
                 </>
               ) : (
-                <span className="text-gray-500">Loading...</span>
+                <span className="text-gray-500">{t("form.loading")}</span>
               );
             })()}
             <button
@@ -679,7 +681,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               onClick={() => setForm({ ...form, parentId: "" })}
               className="text-red-500 hover:text-red-700 text-xs ml-2"
             >
-              Remove
+              {t("form.remove")}
             </button>
           </div>
         ) : (
@@ -717,7 +719,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                   setParentHighlight(-1);
                 }
               }}
-              placeholder="Search for a parent filament..."
+              placeholder={t("form.placeholder.parentSearch")}
             />
             {parentDropdownOpen && (
               <ul id="parent-listbox" role="listbox" className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
@@ -761,7 +763,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                   p.vendor.toLowerCase().includes(parentSearch.toLowerCase())
                 ).length === 0 && (
                   <li className="px-3 py-2 text-gray-500 text-sm">
-                    {parentsLoading ? "Loading..." : "No matching filaments"}
+                    {parentsLoading ? t("form.loading") : t("form.noMatchingFilaments")}
                   </li>
                 )}
               </ul>
@@ -770,15 +772,14 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         )}
         {form.parentId && (
           <p className="text-xs text-gray-500 mt-1">
-            This filament will inherit shared settings (temps, density, retraction, etc.) from its parent.
-            Only color, name, and cost need to be set here.
+            {t("form.parentInheritHint")}
           </p>
         )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div ref={vendorRef} className="relative">
-          <label className={labelClass} id="vendor-label">Vendor *</label>
+          <label className={labelClass} id="vendor-label">{t("form.vendor")} *</label>
           <input
             className={inputClass}
             value={form.vendor}
@@ -813,7 +814,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                 setVendorHighlight(-1);
               }
             }}
-            placeholder="Select or type..."
+            placeholder={t("form.placeholder.selectOrType")}
             required
           />
           {vendorDropdownOpen && (
@@ -847,14 +848,14 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                     setVendorDropdownOpen(false);
                   }}
                 >
-                  + Add &quot;{form.vendor}&quot;
+                  {t("form.addItem", { item: form.vendor })}
                 </li>
               )}
             </ul>
           )}
         </div>
         <div ref={typeRef} className="relative">
-          <label className={labelClass} id="type-label">Type *</label>
+          <label className={labelClass} id="type-label">{t("form.type")} *</label>
           <input
             className={inputClass}
             value={form.type}
@@ -889,7 +890,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                 setTypeHighlight(-1);
               }
             }}
-            placeholder="Select or type..."
+            placeholder={t("form.placeholder.selectOrType")}
             required
           />
           {typeDropdownOpen && (
@@ -923,7 +924,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                     setTypeDropdownOpen(false);
                   }}
                 >
-                  + Add &quot;{form.type}&quot;
+                  {t("form.addItem", { item: form.type })}
                 </li>
               )}
             </ul>
@@ -933,7 +934,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div>
-          <label className={labelClass}>Color</label>
+          <label className={labelClass}>{t("form.color")}</label>
           <input
             type="color"
             className="w-full h-10 rounded border border-gray-300 cursor-pointer"
@@ -942,16 +943,16 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           />
         </div>
         <div>
-          <label className={labelClass}>Color Name</label>
+          <label className={labelClass}>{t("form.colorName")}</label>
           <input
             className={inputClass}
             value={form.colorName}
             onChange={(e) => setForm({ ...form, colorName: e.target.value })}
-            placeholder="e.g. Galaxy Black"
+            placeholder={t("form.placeholder.colorName")}
           />
         </div>
         <div>
-          <label className={labelClass}>Cost ({currencySymbol}/kg)</label>
+          <label className={labelClass}>{t("form.cost", { symbol: currencySymbol })}</label>
           <input
             type="number"
             step="0.01"
@@ -962,7 +963,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           />
         </div>
         <div>
-          <label className={labelClass}>Density (g/cm³)</label>
+          <label className={labelClass}>{t("form.density")}</label>
           <input
             type="number"
             step="0.01"
@@ -974,10 +975,10 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       </div>
 
       <fieldset className="border border-gray-300 rounded p-4">
-        <legend className="text-sm font-medium px-2">Spool Weight</legend>
+        <legend className="text-sm font-medium px-2">{t("form.section.spoolWeight")}</legend>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <label className={labelClass}>Net Filament (g)</label>
+            <label className={labelClass}>{t("form.netFilament")}</label>
             <input
               type="number"
               step="1"
@@ -985,11 +986,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               className={inputClass}
               value={form.netFilamentWeight}
               onChange={(e) => setForm({ ...form, netFilamentWeight: e.target.value })}
-              placeholder="e.g. 1000"
+              placeholder={t("form.placeholder.netFilament")}
             />
           </div>
           <div>
-            <label className={labelClass}>Empty Spool (g)</label>
+            <label className={labelClass}>{t("form.emptySpool")}</label>
             <input
               type="number"
               step="1"
@@ -997,11 +998,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               className={inputClass}
               value={form.spoolWeight}
               onChange={(e) => setForm({ ...form, spoolWeight: e.target.value })}
-              placeholder="e.g. 250"
+              placeholder={t("form.placeholder.emptySpool")}
             />
           </div>
           <div>
-            <label className={labelClass}>Initial Weight (g)</label>
+            <label className={labelClass}>{t("form.initialWeight")}</label>
             <input
               type="number"
               step="1"
@@ -1009,9 +1010,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               className={inputClass}
               value={form.totalWeight}
               onChange={(e) => setForm({ ...form, totalWeight: e.target.value })}
-              placeholder="Weigh spool on scale"
+              placeholder={t("form.placeholder.initialWeight")}
             />
-            <p className="text-xs text-gray-400 mt-1">Creates your first spool. Add more from the detail page.</p>
+            <p className="text-xs text-gray-400 mt-1">{t("form.initialWeightHint")}</p>
           </div>
         </div>
       </fieldset>
@@ -1020,34 +1021,34 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           Calibrations section below, not here at the top level. */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
-          <label className={labelClass}>Min Print Speed (mm/s)</label>
+          <label className={labelClass}>{t("form.minPrintSpeed")}</label>
           <input type="number" step="1" min="0" className={inputClass}
             value={form.minPrintSpeed}
             onChange={(e) => setForm({ ...form, minPrintSpeed: e.target.value })}
           />
         </div>
         <div>
-          <label className={labelClass}>Max Print Speed (mm/s)</label>
+          <label className={labelClass}>{t("form.maxPrintSpeed")}</label>
           <input type="number" step="1" min="0" className={inputClass}
             value={form.maxPrintSpeed}
             onChange={(e) => setForm({ ...form, maxPrintSpeed: e.target.value })}
           />
         </div>
         <div>
-          <label className={labelClass}>Z Offset (mm)</label>
+          <label className={labelClass}>{t("form.zOffset")}</label>
           <input type="number" step="0.001" className={inputClass}
             value={form.zOffset}
             onChange={(e) => setForm({ ...form, zOffset: e.target.value })}
-            placeholder="e.g. -0.05"
+            placeholder={t("form.placeholder.zOffset")}
           />
         </div>
       </div>
 
       <fieldset className="border border-gray-300 rounded p-4">
-        <legend className="text-sm font-medium px-2">Temperatures (°C)</legend>
+        <legend className="text-sm font-medium px-2">{t("form.section.temperatures")}</legend>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className={labelClass}>Nozzle</label>
+            <label className={labelClass}>{t("form.nozzleTemp")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1061,7 +1062,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Nozzle (1st Layer)</label>
+            <label className={labelClass}>{t("form.nozzleFirstLayer")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1075,7 +1076,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Bed</label>
+            <label className={labelClass}>{t("form.bedTemp")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1089,7 +1090,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Bed (1st Layer)</label>
+            <label className={labelClass}>{t("form.bedFirstLayer")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1103,7 +1104,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Chamber</label>
+            <label className={labelClass}>{t("form.chamberTemp")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1117,7 +1118,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Standby (dual extrusion)</label>
+            <label className={labelClass}>{t("form.standbyTemp")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1131,7 +1132,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Nozzle Range Min</label>
+            <label className={labelClass}>{t("form.nozzleRangeMin")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1142,11 +1143,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                   temperatures: { ...form.temperatures, nozzleRangeMin: e.target.value },
                 })
               }
-              placeholder="Safe minimum"
+              placeholder={t("form.placeholder.safeMinimum")}
             />
           </div>
           <div>
-            <label className={labelClass}>Nozzle Range Max</label>
+            <label className={labelClass}>{t("form.nozzleRangeMax")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1157,7 +1158,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                   temperatures: { ...form.temperatures, nozzleRangeMax: e.target.value },
                 })
               }
-              placeholder="Safe maximum"
+              placeholder={t("form.placeholder.safeMaximum")}
             />
           </div>
         </div>
@@ -1165,7 +1166,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         {/* Per-bed-type temperatures */}
         {form.bedTypeTemps.length > 0 && (
           <div className="mt-3 space-y-2">
-            <p className="text-xs text-gray-400 font-medium uppercase">Per-Bed-Type Temperatures</p>
+            <p className="text-xs text-gray-400 font-medium uppercase">{t("form.perBedTypeTemps")}</p>
             {form.bedTypeTemps.map((bt, idx) => (
               <div key={idx} className="grid grid-cols-4 gap-2 items-end">
                 <div>
@@ -1173,32 +1174,32 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                     const updated = [...form.bedTypeTemps];
                     updated[idx] = { ...bt, bedType: e.target.value };
                     setForm({ ...form, bedTypeTemps: updated });
-                  }} placeholder="Bed type" />
+                  }} placeholder={t("form.placeholder.bedType")} />
                 </div>
                 <div>
                   <input type="number" className={inputClass} value={bt.temperature} onChange={(e) => {
                     const updated = [...form.bedTypeTemps];
                     updated[idx] = { ...bt, temperature: e.target.value };
                     setForm({ ...form, bedTypeTemps: updated });
-                  }} placeholder="Temp" />
+                  }} placeholder={t("form.placeholder.temp")} />
                 </div>
                 <div>
                   <input type="number" className={inputClass} value={bt.firstLayerTemperature} onChange={(e) => {
                     const updated = [...form.bedTypeTemps];
                     updated[idx] = { ...bt, firstLayerTemperature: e.target.value };
                     setForm({ ...form, bedTypeTemps: updated });
-                  }} placeholder="1st layer" />
+                  }} placeholder={t("form.placeholder.firstLayer")} />
                 </div>
                 <button type="button" className="text-red-500 text-sm hover:underline" onClick={() => {
                   setForm({ ...form, bedTypeTemps: form.bedTypeTemps.filter((_, i) => i !== idx) });
-                }}>Remove</button>
+                }}>{t("form.remove")}</button>
               </div>
             ))}
           </div>
         )}
         <button type="button" className="mt-2 text-xs text-blue-600 hover:underline" onClick={() => {
           setForm({ ...form, bedTypeTemps: [...form.bedTypeTemps, { bedType: "", temperature: "", firstLayerTemperature: "" }] });
-        }}>+ Add Bed Type</button>
+        }}>{t("form.addBedType")}</button>
       </fieldset>
 
       <div>
@@ -1208,43 +1209,43 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           className="text-sm text-blue-600 hover:underline flex items-center gap-1"
         >
           <span className="text-xs">{showAdvanced ? "▾" : "▸"}</span>
-          {showAdvanced ? "Hide" : "Show"} advanced settings
-          <span className="text-gray-400 font-normal">(shrinkage, fan, retraction, flags)</span>
+          {showAdvanced ? t("form.hideAdvanced") : t("form.showAdvanced")}
+          <span className="text-gray-400 font-normal">({t("form.advancedHint")})</span>
         </button>
       </div>
 
       {showAdvanced && (<>
       <fieldset className="border border-gray-300 rounded p-4">
-        <legend className="text-sm font-medium px-2">Shrinkage Compensation</legend>
+        <legend className="text-sm font-medium px-2">{t("form.section.shrinkage")}</legend>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className={labelClass}>XY (%)</label>
+            <label className={labelClass}>{t("form.shrinkageXY")}</label>
             <input
               type="text"
               className={inputClass}
               value={form.shrinkageXY}
               onChange={(e) => setForm({ ...form, shrinkageXY: e.target.value })}
-              placeholder="e.g. 0.2%"
+              placeholder={t("form.placeholder.shrinkage")}
             />
           </div>
           <div>
-            <label className={labelClass}>Z (%)</label>
+            <label className={labelClass}>{t("form.shrinkageZ")}</label>
             <input
               type="text"
               className={inputClass}
               value={form.shrinkageZ}
               onChange={(e) => setForm({ ...form, shrinkageZ: e.target.value })}
-              placeholder="e.g. 0.2%"
+              placeholder={t("form.placeholder.shrinkage")}
             />
           </div>
         </div>
       </fieldset>
 
       <fieldset className="border border-gray-300 rounded p-4">
-        <legend className="text-sm font-medium px-2">Fan Settings</legend>
+        <legend className="text-sm font-medium px-2">{t("form.section.fan")}</legend>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className={labelClass}>Min Speed (%)</label>
+            <label className={labelClass}>{t("form.fanMinSpeed")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1253,7 +1254,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Max Speed (%)</label>
+            <label className={labelClass}>{t("form.fanMaxSpeed")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1262,7 +1263,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Bridge Speed (%)</label>
+            <label className={labelClass}>{t("form.fanBridgeSpeed")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1271,7 +1272,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Disable First Layers</label>
+            <label className={labelClass}>{t("form.fanDisableFirstLayers")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1280,48 +1281,48 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Overhang Speed (%)</label>
+            <label className={labelClass}>{t("form.overhangFanSpeed")}</label>
             <input type="number" className={inputClass}
               value={form.overhangFanSpeed}
               onChange={(e) => setForm({ ...form, overhangFanSpeed: e.target.value })}
             />
           </div>
           <div>
-            <label className={labelClass}>Aux/Chamber Fan (%)</label>
+            <label className={labelClass}>{t("form.auxFanSpeed")}</label>
             <input type="number" className={inputClass}
               value={form.auxFanSpeed}
               onChange={(e) => setForm({ ...form, auxFanSpeed: e.target.value })}
             />
           </div>
           <div>
-            <label className={labelClass}>Fan Below Layer Time (s)</label>
+            <label className={labelClass}>{t("form.fanBelowLayerTime")}</label>
             <input type="number" className={inputClass}
               value={form.fanBelowLayerTime}
               onChange={(e) => setForm({ ...form, fanBelowLayerTime: e.target.value })}
-              placeholder="e.g. 60"
+              placeholder={t("form.placeholder.fanBelowLayerTime")}
             />
           </div>
           <div>
-            <label className={labelClass}>Slow Down Min Speed (mm/s)</label>
+            <label className={labelClass}>{t("form.slowDownMinSpeed")}</label>
             <input type="number" className={inputClass}
               value={form.slowDownMinSpeed}
               onChange={(e) => setForm({ ...form, slowDownMinSpeed: e.target.value })}
-              placeholder="e.g. 15"
+              placeholder={t("form.placeholder.slowDownMinSpeed")}
             />
           </div>
         </div>
         <div className="flex items-center gap-2 mt-3">
           <input type="checkbox" id="airFiltration" checked={form.activateAirFiltration}
             onChange={(e) => setForm({ ...form, activateAirFiltration: e.target.checked })} className="w-4 h-4" />
-          <label htmlFor="airFiltration" className="text-sm font-medium">Activate air filtration</label>
+          <label htmlFor="airFiltration" className="text-sm font-medium">{t("form.activateAirFiltration")}</label>
         </div>
       </fieldset>
 
       <fieldset className="border border-gray-300 rounded p-4">
-        <legend className="text-sm font-medium px-2">Retraction</legend>
+        <legend className="text-sm font-medium px-2">{t("form.section.retraction")}</legend>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <label className={labelClass}>Length (mm)</label>
+            <label className={labelClass}>{t("form.retractLength")}</label>
             <input
               type="number"
               step="0.1"
@@ -1331,7 +1332,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Speed (mm/s)</label>
+            <label className={labelClass}>{t("form.retractSpeed")}</label>
             <input
               type="number"
               className={inputClass}
@@ -1340,7 +1341,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Z Lift (mm)</label>
+            <label className={labelClass}>{t("form.retractZLift")}</label>
             <input
               type="number"
               step="0.01"
@@ -1350,47 +1351,47 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             />
           </div>
           <div>
-            <label className={labelClass}>Min Travel (mm)</label>
+            <label className={labelClass}>{t("form.retractMinTravel")}</label>
             <input type="number" step="0.1" className={inputClass}
               value={form.retractMinTravel}
               onChange={(e) => setForm({ ...form, retractMinTravel: e.target.value })}
-              placeholder="e.g. 2"
+              placeholder={t("form.placeholder.retractMinTravel")}
             />
           </div>
         </div>
         <div className="flex items-center gap-2 mt-3">
           <input type="checkbox" id="wipe" checked={form.wipe}
             onChange={(e) => setForm({ ...form, wipe: e.target.checked })} className="w-4 h-4" />
-          <label htmlFor="wipe" className="text-sm font-medium">Enable wipe</label>
+          <label htmlFor="wipe" className="text-sm font-medium">{t("form.enableWipe")}</label>
         </div>
       </fieldset>
 
       <fieldset className="border border-gray-300 rounded p-4">
-        <legend className="text-sm font-medium px-2">Multi-Material (MMU/AMS)</legend>
+        <legend className="text-sm font-medium px-2">{t("form.section.multiMaterial")}</legend>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div>
-            <label className={labelClass}>Loading Speed (mm/s)</label>
+            <label className={labelClass}>{t("form.loadingSpeed")}</label>
             <input type="number" step="0.1" className={inputClass}
               value={form.filamentLoadingSpeed}
               onChange={(e) => setForm({ ...form, filamentLoadingSpeed: e.target.value })}
             />
           </div>
           <div>
-            <label className={labelClass}>Unloading Speed (mm/s)</label>
+            <label className={labelClass}>{t("form.unloadingSpeed")}</label>
             <input type="number" step="0.1" className={inputClass}
               value={form.filamentUnloadingSpeed}
               onChange={(e) => setForm({ ...form, filamentUnloadingSpeed: e.target.value })}
             />
           </div>
           <div>
-            <label className={labelClass}>Load Time (s)</label>
+            <label className={labelClass}>{t("form.loadTime")}</label>
             <input type="number" step="0.1" className={inputClass}
               value={form.filamentLoadTime}
               onChange={(e) => setForm({ ...form, filamentLoadTime: e.target.value })}
             />
           </div>
           <div>
-            <label className={labelClass}>Unload Time (s)</label>
+            <label className={labelClass}>{t("form.unloadTime")}</label>
             <input type="number" step="0.1" className={inputClass}
               value={form.filamentUnloadTime}
               onChange={(e) => setForm({ ...form, filamentUnloadTime: e.target.value })}
@@ -1398,40 +1399,40 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           </div>
         </div>
         <div className="mt-3">
-          <label className={labelClass}>Ramming Parameters</label>
+          <label className={labelClass}>{t("form.rammingParameters")}</label>
           <input className={inputClass}
             value={form.rammingParameters}
             onChange={(e) => setForm({ ...form, rammingParameters: e.target.value })}
-            placeholder="Comma-separated values"
+            placeholder={t("form.placeholder.rammingParameters")}
           />
         </div>
       </fieldset>
 
       <fieldset className="border border-gray-300 rounded p-4">
-        <legend className="text-sm font-medium px-2">Material Properties</legend>
+        <legend className="text-sm font-medium px-2">{t("form.section.materialProperties")}</legend>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
-          <label className={labelClass}>Glass Transition Tg (°C)</label>
+          <label className={labelClass}>{t("form.glassTempTransition")}</label>
           <input type="number" step="1" min="0" className={inputClass}
             value={form.glassTempTransition}
             onChange={(e) => setForm({ ...form, glassTempTransition: e.target.value })}
-            placeholder="e.g. 60"
+            placeholder={t("form.placeholder.glassTempTransition")}
           />
         </div>
         <div>
-          <label className={labelClass}>Heat Deflection HDT (°C)</label>
+          <label className={labelClass}>{t("form.heatDeflectionTemp")}</label>
           <input type="number" step="1" min="0" className={inputClass}
             value={form.heatDeflectionTemp}
             onChange={(e) => setForm({ ...form, heatDeflectionTemp: e.target.value })}
-            placeholder="e.g. 52"
+            placeholder={t("form.placeholder.heatDeflectionTemp")}
           />
         </div>
         <div>
-          <label className={labelClass}>HueForge TD</label>
+          <label className={labelClass}>{t("form.transmissionDistance")}</label>
           <input type="number" step="any" min="0" className={inputClass}
             value={form.transmissionDistance}
             onChange={(e) => setForm({ ...form, transmissionDistance: e.target.value })}
-            placeholder="e.g. 6.6"
+            placeholder={t("form.placeholder.transmissionDistance")}
           />
         </div>
         </div>
@@ -1439,7 +1440,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
-          <label className={labelClass}>Drying Temp (°C)</label>
+          <label className={labelClass}>{t("form.dryingTemp")}</label>
           <input
             className={inputClass}
             type="number"
@@ -1447,11 +1448,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             min="0"
             value={form.dryingTemperature}
             onChange={(e) => setForm({ ...form, dryingTemperature: e.target.value })}
-            placeholder="e.g. 45"
+            placeholder={t("form.placeholder.dryingTemp")}
           />
         </div>
         <div>
-          <label className={labelClass}>Drying Time (min)</label>
+          <label className={labelClass}>{t("form.dryingTime")}</label>
           <input
             className={inputClass}
             type="number"
@@ -1459,25 +1460,25 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             min="0"
             value={form.dryingTime}
             onChange={(e) => setForm({ ...form, dryingTime: e.target.value })}
-            placeholder="e.g. 480"
+            placeholder={t("form.placeholder.dryingTime")}
           />
         </div>
         <div>
-          <label className={labelClass}>Spool Type</label>
+          <label className={labelClass}>{t("form.spoolType")}</label>
           <select className={inputClass} value={form.spoolType}
             onChange={(e) => setForm({ ...form, spoolType: e.target.value })}>
             <option value="">—</option>
-            <option value="plastic">Plastic</option>
-            <option value="cardboard">Cardboard</option>
-            <option value="metal">Metal</option>
-            <option value="refill">Refill (no spool)</option>
+            <option value="plastic">{t("form.spoolType.plastic")}</option>
+            <option value="cardboard">{t("form.spoolType.cardboard")}</option>
+            <option value="metal">{t("form.spoolType.metal")}</option>
+            <option value="refill">{t("form.spoolType.refill")}</option>
           </select>
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className={labelClass}>Shore Hardness A</label>
+          <label className={labelClass}>{t("form.shoreHardnessA")}</label>
           <input
             className={inputClass}
             type="number"
@@ -1486,11 +1487,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             max="100"
             value={form.shoreHardnessA}
             onChange={(e) => setForm({ ...form, shoreHardnessA: e.target.value })}
-            placeholder="e.g. 95 (TPU/TPE)"
+            placeholder={t("form.placeholder.shoreHardnessA")}
           />
         </div>
         <div>
-          <label className={labelClass}>Shore Hardness D</label>
+          <label className={labelClass}>{t("form.shoreHardnessD")}</label>
           <input
             className={inputClass}
             type="number"
@@ -1499,33 +1500,33 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             max="100"
             value={form.shoreHardnessD}
             onChange={(e) => setForm({ ...form, shoreHardnessD: e.target.value })}
-            placeholder="e.g. 60 (rigid)"
+            placeholder={t("form.placeholder.shoreHardnessD")}
           />
         </div>
       </div>
 
       <fieldset className="border border-gray-300 rounded p-4">
-        <legend className="text-sm font-medium px-2">Material Tags</legend>
+        <legend className="text-sm font-medium px-2">{t("form.section.materialTags")}</legend>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
           {([
-            [4, "Abrasive"],
-            [13, "Water Soluble"],
-            [9, "Flexible"],
-            [31, "Carbon Fiber"],
-            [0, "Glass Fiber"],
-            [16, "Matte"],
-            [17, "Silk"],
-            [22, "Sparkle"],
-            [24, "Glow in the Dark"],
-            [25, "Color Changing"],
-            [71, "High Speed"],
-            [49, "Recycled"],
-            [2, "Transparent"],
-            [3, "Translucent"],
-            [19, "Wood Fill"],
-            [20, "Metal Fill"],
-            [12, "Biodegradable"],
-            [5, "Food Safe"],
+            [4, t("form.tag.abrasive")],
+            [13, t("form.tag.waterSoluble")],
+            [9, t("form.tag.flexible")],
+            [31, t("form.tag.carbonFiber")],
+            [0, t("form.tag.glassFiber")],
+            [16, t("form.tag.matte")],
+            [17, t("form.tag.silk")],
+            [22, t("form.tag.sparkle")],
+            [24, t("form.tag.glowInTheDark")],
+            [25, t("form.tag.colorChanging")],
+            [71, t("form.tag.highSpeed")],
+            [49, t("form.tag.recycled")],
+            [2, t("form.tag.transparent")],
+            [3, t("form.tag.translucent")],
+            [19, t("form.tag.woodFill")],
+            [20, t("form.tag.metalFill")],
+            [12, t("form.tag.biodegradable")],
+            [5, t("form.tag.foodSafe")],
           ] as [number, string][]).map(([val, label]) => (
             <label key={val} className="flex items-center gap-2 text-sm">
               <input
@@ -1555,9 +1556,9 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       </>)}
 
       <fieldset className="border border-gray-300 rounded p-4">
-        <legend className="text-sm font-medium px-2">Compatible Nozzles</legend>
+        <legend className="text-sm font-medium px-2">{t("form.section.compatibleNozzles")}</legend>
         {nozzlesLoading ? (
-          <p className="text-sm text-gray-400">Loading nozzles...</p>
+          <p className="text-sm text-gray-400">{t("form.loadingNozzles")}</p>
         ) : nozzles.length > 0 && (
           <div className="flex gap-2 mb-2">
             <button
@@ -1565,20 +1566,20 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
               onClick={() => setForm({ ...form, compatibleNozzles: nozzles.map((n) => n._id) })}
               className="text-xs text-blue-600 hover:underline"
             >
-              Select All
+              {t("form.selectAll")}
             </button>
             <button
               type="button"
               onClick={() => setForm({ ...form, compatibleNozzles: [] })}
               className="text-xs text-blue-600 hover:underline"
             >
-              Clear All
+              {t("form.clearAll")}
             </button>
           </div>
         )}
         {!nozzlesLoading && nozzles.length === 0 && (
           <p className="text-sm text-gray-500">
-            No nozzles defined yet. <a href="/nozzles/new" className="text-blue-600 hover:underline">Add one first.</a>
+            {t("form.noNozzlesDefined")} <a href="/nozzles/new" className="text-blue-600 hover:underline">{t("form.addOneFirst")}</a>
           </p>
         )}
         {nozzles.length > 0 && (
@@ -1614,10 +1615,10 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
       {form.compatibleNozzles.length > 0 && (
         <fieldset className="border border-gray-300 rounded p-4">
-          <legend className="text-sm font-medium px-2">Calibrations</legend>
+          <legend className="text-sm font-medium px-2">{t("form.section.calibrations")}</legend>
           <p className="text-xs text-gray-500 mb-3">
-            Per-nozzle overrides for calibration values. Leave blank to use base defaults.
-            {printers.length > 0 && " Select a printer tab for printer-specific calibrations."}
+            {t("form.calibrationsHint")}
+            {printers.length > 0 && ` ${t("form.calibrationsPrinterHint")}`}
           </p>
 
           {/* Printer selector tabs */}
@@ -1632,7 +1633,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                     : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
                 }`}
               >
-                Default (any printer)
+                {t("form.defaultAnyPrinter")}
               </button>
               {printers.map((p) => (
                 <button
@@ -1682,7 +1683,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                   </p>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1" title="Extrusion Multiplier — flow rate scaling factor (e.g. 0.95)">EM</label>
+                      <label className="block text-xs text-gray-500 mb-1" title={t("form.tooltip.em")}>{t("form.cal.em")}</label>
                       <input
                         type="number"
                         step="0.01"
@@ -1691,11 +1692,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         onChange={(e) =>
                           updateCalibration(key, "extrusionMultiplier", e.target.value)
                         }
-                        placeholder={defaultCal?.extrusionMultiplier || form.extrusionMultiplier || "base"}
+                        placeholder={defaultCal?.extrusionMultiplier || form.extrusionMultiplier || t("form.base")}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1" title="Maximum Volumetric Speed in mm³/s">Max Vol (mm³/s)</label>
+                      <label className="block text-xs text-gray-500 mb-1" title={t("form.tooltip.maxVol")}>{t("form.cal.maxVol")}</label>
                       <input
                         type="number"
                         step="0.1"
@@ -1704,11 +1705,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         onChange={(e) =>
                           updateCalibration(key, "maxVolumetricSpeed", e.target.value)
                         }
-                        placeholder={defaultCal?.maxVolumetricSpeed || form.maxVolumetricSpeed || "base"}
+                        placeholder={defaultCal?.maxVolumetricSpeed || form.maxVolumetricSpeed || t("form.base")}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1" title="Pressure Advance — compensates for filament compression (e.g. 0.053)">PA</label>
+                      <label className="block text-xs text-gray-500 mb-1" title={t("form.tooltip.pa")}>{t("form.cal.pa")}</label>
                       <input
                         type="number"
                         step="0.001"
@@ -1717,11 +1718,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         onChange={(e) =>
                           updateCalibration(key, "pressureAdvance", e.target.value)
                         }
-                        placeholder={defaultCal?.pressureAdvance || form.pressureAdvance || "base"}
+                        placeholder={defaultCal?.pressureAdvance || form.pressureAdvance || t("form.base")}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1" title="Retraction Length in mm">Retract (mm)</label>
+                      <label className="block text-xs text-gray-500 mb-1" title={t("form.tooltip.retractLength")}>{t("form.cal.retract")}</label>
                       <input
                         type="number"
                         step="0.1"
@@ -1730,11 +1731,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         onChange={(e) =>
                           updateCalibration(key, "retractLength", e.target.value)
                         }
-                        placeholder={defaultCal?.retractLength || form.retractLength || "base"}
+                        placeholder={defaultCal?.retractLength || form.retractLength || t("form.base")}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1" title="Retraction Speed in mm/s">Retract Speed (mm/s)</label>
+                      <label className="block text-xs text-gray-500 mb-1" title={t("form.tooltip.retractSpeed")}>{t("form.cal.retractSpeed")}</label>
                       <input
                         type="number"
                         className={inputClass}
@@ -1742,11 +1743,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         onChange={(e) =>
                           updateCalibration(key, "retractSpeed", e.target.value)
                         }
-                        placeholder={defaultCal?.retractSpeed || form.retractSpeed || "base"}
+                        placeholder={defaultCal?.retractSpeed || form.retractSpeed || t("form.base")}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs text-gray-500 mb-1" title="Z Lift — nozzle raises by this amount during retraction">Z Lift (mm)</label>
+                      <label className="block text-xs text-gray-500 mb-1" title={t("form.tooltip.zLift")}>{t("form.cal.zLift")}</label>
                       <input
                         type="number"
                         step="0.01"
@@ -1755,7 +1756,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                         onChange={(e) =>
                           updateCalibration(key, "retractLift", e.target.value)
                         }
-                        placeholder={defaultCal?.retractLift || form.retractLift || "base"}
+                        placeholder={defaultCal?.retractLift || form.retractLift || t("form.base")}
                       />
                     </div>
                   </div>
@@ -1768,11 +1769,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
       <fieldset className="border border-gray-300 rounded p-4">
         <legend className="text-sm font-medium px-2">
-          Presets
-          <span className="text-gray-400 font-normal ml-1">(e.g., shore hardness variants)</span>
+          {t("form.section.presets")}
+          <span className="text-gray-400 font-normal ml-1">({t("form.presetsHint")})</span>
         </legend>
         <p className="text-xs text-gray-500 mb-3">
-          Define named presets with different temperature and extrusion multiplier settings.
+          {t("form.presetsDescription")}
         </p>
         {presets.length > 0 && (
           <div className="space-y-3">
@@ -1787,68 +1788,68 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                     className={inputClass}
                     value={preset.label}
                     onChange={(e) => updatePreset(idx, "label", e.target.value)}
-                    placeholder="e.g. Shore 85A"
+                    placeholder={t("form.placeholder.presetLabel")}
                     required
                   />
                   <button
                     type="button"
                     onClick={() => removePreset(idx)}
                     className="text-red-500 hover:text-red-700 text-sm flex-shrink-0 px-2"
-                    title="Remove preset"
+                    title={t("form.removePreset")}
                   >
                     ✕
                   </button>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1" title="Extrusion Multiplier">EM</label>
+                    <label className="block text-xs text-gray-500 mb-1" title={t("form.tooltip.em")}>{t("form.cal.em")}</label>
                     <input
                       type="number"
                       step="0.01"
                       className={inputClass}
                       value={preset.extrusionMultiplier}
                       onChange={(e) => updatePreset(idx, "extrusionMultiplier", e.target.value)}
-                      placeholder={form.extrusionMultiplier || "base"}
+                      placeholder={form.extrusionMultiplier || t("form.base")}
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Nozzle (°C)</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t("form.preset.nozzle")}</label>
                     <input
                       type="number"
                       className={inputClass}
                       value={preset.nozzle}
                       onChange={(e) => updatePreset(idx, "nozzle", e.target.value)}
-                      placeholder={form.temperatures.nozzle || "base"}
+                      placeholder={form.temperatures.nozzle || t("form.base")}
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Nozzle 1st (°C)</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t("form.preset.nozzleFirst")}</label>
                     <input
                       type="number"
                       className={inputClass}
                       value={preset.nozzleFirstLayer}
                       onChange={(e) => updatePreset(idx, "nozzleFirstLayer", e.target.value)}
-                      placeholder={form.temperatures.nozzleFirstLayer || "base"}
+                      placeholder={form.temperatures.nozzleFirstLayer || t("form.base")}
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Bed (°C)</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t("form.preset.bed")}</label>
                     <input
                       type="number"
                       className={inputClass}
                       value={preset.bed}
                       onChange={(e) => updatePreset(idx, "bed", e.target.value)}
-                      placeholder={form.temperatures.bed || "base"}
+                      placeholder={form.temperatures.bed || t("form.base")}
                     />
                   </div>
                   <div>
-                    <label className="block text-xs text-gray-500 mb-1">Bed 1st (°C)</label>
+                    <label className="block text-xs text-gray-500 mb-1">{t("form.preset.bedFirst")}</label>
                     <input
                       type="number"
                       className={inputClass}
                       value={preset.bedFirstLayer}
                       onChange={(e) => updatePreset(idx, "bedFirstLayer", e.target.value)}
-                      placeholder={form.temperatures.bedFirstLayer || "base"}
+                      placeholder={form.temperatures.bedFirstLayer || t("form.base")}
                     />
                   </div>
                 </div>
@@ -1861,13 +1862,13 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           onClick={addPreset}
           className="mt-2 text-sm text-blue-600 hover:underline"
         >
-          + Add Preset
+          {t("form.addPreset")}
         </button>
       </fieldset>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label className={labelClass}>Diameter (mm)</label>
+          <label className={labelClass}>{t("form.diameter")}</label>
           <input
             type="number"
             step="0.01"
@@ -1877,28 +1878,28 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           />
         </div>
         <div>
-          <label className={labelClass}>Inherits (base profile name)</label>
+          <label className={labelClass}>{t("form.inherits")}</label>
           <input
             className={inputClass}
             value={form.inherits}
             onChange={(e) => setForm({ ...form, inherits: e.target.value })}
-            placeholder="e.g. Spectrum PCTG @COREONE"
+            placeholder={t("form.placeholder.inherits")}
           />
         </div>
       </div>
 
       <div>
-        <label className={labelClass}>TDS Link (Technical Data Sheet)</label>
+        <label className={labelClass}>{t("form.tdsUrl")}</label>
         <input
           type="url"
           className={inputClass}
           value={form.tdsUrl}
           onChange={(e) => setForm({ ...form, tdsUrl: e.target.value })}
-          placeholder="https://vendor.com/filament-tds.pdf"
+          placeholder={t("form.placeholder.tdsUrl")}
         />
         {!form.tdsUrl && tdsSuggestions.length > 0 && (
           <div className="mt-1">
-            <p className="text-xs text-gray-500 mb-1">From other {form.vendor} filaments:</p>
+            <p className="text-xs text-gray-500 mb-1">{t("form.tdsFromVendor", { vendor: form.vendor })}</p>
             <div className="flex flex-wrap gap-1">
               {tdsSuggestions.map((s) => (
                 <button
@@ -1907,7 +1908,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                   onClick={() => setForm({ ...form, tdsUrl: s.tdsUrl })}
                   className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded hover:bg-blue-200 dark:hover:bg-blue-800"
                 >
-                  Use from {s.name}
+                  {t("form.useFrom", { name: s.name })}
                 </button>
               ))}
             </div>
@@ -1916,35 +1917,35 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       </div>
 
       <fieldset className="border border-gray-300 rounded p-4">
-        <legend className="text-sm font-medium px-2">G-Code</legend>
+        <legend className="text-sm font-medium px-2">{t("form.section.gcode")}</legend>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className={labelClass}>Start G-Code</label>
+            <label className={labelClass}>{t("form.startGcode")}</label>
             <textarea className={inputClass} rows={3}
               value={form.startGcode}
               onChange={(e) => setForm({ ...form, startGcode: e.target.value })}
-              placeholder="e.g. M572 S0.053"
+              placeholder={t("form.placeholder.startGcode")}
             />
           </div>
           <div>
-            <label className={labelClass}>End G-Code</label>
+            <label className={labelClass}>{t("form.endGcode")}</label>
             <textarea className={inputClass} rows={3}
               value={form.endGcode}
               onChange={(e) => setForm({ ...form, endGcode: e.target.value })}
-              placeholder="e.g. G1 E-2 F1500"
+              placeholder={t("form.placeholder.endGcode")}
             />
           </div>
         </div>
       </fieldset>
 
       <div>
-        <label className={labelClass}>Notes</label>
+        <label className={labelClass}>{t("form.notes")}</label>
         <textarea
           className={inputClass}
           rows={4}
           value={form.notes}
           onChange={(e) => setForm({ ...form, notes: e.target.value })}
-          placeholder="Any notes about this filament..."
+          placeholder={t("form.placeholder.notes")}
         />
       </div>
 
@@ -1953,7 +1954,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         disabled={saving}
         className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
       >
-        {saving ? "Saving..." : initialData ? "Update Filament" : "Create Filament"}
+        {saving ? t("form.saving") : initialData ? t("form.updateFilament") : t("form.createFilament")}
       </button>
     </form>
   );

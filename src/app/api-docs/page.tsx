@@ -4,10 +4,13 @@ import { useEffect } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import "swagger-ui-react/swagger-ui.css";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 const SwaggerUI = dynamic(() => import("swagger-ui-react"), { ssr: false });
 
 export default function ApiDocsPage() {
+  const { t } = useTranslation();
+
   // Suppress known React deprecation warnings from swagger-ui-react internals
   useEffect(() => {
     const origWarn = console.error;
@@ -25,7 +28,7 @@ export default function ApiDocsPage() {
     <div className="min-h-screen">
       <div className="max-w-7xl mx-auto px-4 pt-6 pb-2">
         <Link href="/" className="text-blue-600 hover:underline text-sm">
-          &larr; Back to filaments
+          &larr; {t("apiDocs.backToFilaments")}
         </Link>
       </div>
       <div className="swagger-wrapper">

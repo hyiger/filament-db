@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface Nozzle {
   _id: string;
@@ -31,6 +32,7 @@ interface Props {
 }
 
 export default function PrinterForm({ initialData, onSubmit }: Props) {
+  const { t } = useTranslation();
   const [form, setForm] = useState<PrinterFormData>({
     name: initialData?.name || "",
     manufacturer: initialData?.manufacturer || "",
@@ -118,7 +120,7 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
     <form onSubmit={handleSubmit} className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className={labelClass}>Manufacturer *</label>
+          <label className={labelClass}>{t("printers.form.manufacturer")} *</label>
           <input
             className={inputClass}
             value={form.manufacturer}
@@ -127,12 +129,12 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
               const autoName = autoGenerateName(manufacturer, form.printerModel);
               updateForm({ manufacturer, ...(autoName != null ? { name: autoName } : {}) });
             }}
-            placeholder="e.g. Prusa, Bambu Lab"
+            placeholder={t("printers.form.manufacturerPlaceholder")}
             required
           />
         </div>
         <div>
-          <label className={labelClass}>Model *</label>
+          <label className={labelClass}>{t("printers.form.model")} *</label>
           <input
             className={inputClass}
             value={form.printerModel}
@@ -141,37 +143,37 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
               const autoName = autoGenerateName(form.manufacturer, printerModel);
               updateForm({ printerModel, ...(autoName != null ? { name: autoName } : {}) });
             }}
-            placeholder="e.g. Core One, X1C"
+            placeholder={t("printers.form.modelPlaceholder")}
             required
           />
         </div>
       </div>
 
       <div>
-        <label className={labelClass}>Name *</label>
+        <label className={labelClass}>{t("printers.form.name")} *</label>
         <input
           className={inputClass}
           value={form.name}
           onChange={(e) => updateForm({ name: e.target.value })}
-          placeholder="Auto-generated from manufacturer + model"
+          placeholder={t("printers.form.namePlaceholder")}
           required
         />
         <p className="text-xs text-gray-500 mt-1">
-          Auto-generated from manufacturer and model. Edit to customize.
+          {t("printers.form.nameHint")}
         </p>
       </div>
 
       {nozzlesFetchError && (
         <div className="px-3 py-2 bg-yellow-900/30 border border-yellow-800 rounded text-sm text-yellow-300">
-          Could not load nozzles. Check that the server is running and try again.
+          {t("printers.form.nozzlesLoadError")}
         </div>
       )}
 
       {nozzles.length > 0 && (
         <div>
-          <label className={labelClass}>Installed Nozzles</label>
+          <label className={labelClass}>{t("printers.form.nozzles")}</label>
           <p className="text-xs text-gray-500 mb-2">
-            Select the nozzles installed or available for this printer.
+            {t("printers.form.nozzlesHint")}
           </p>
           <div className="grid grid-cols-2 gap-2">
             {nozzles.map((n) => (
@@ -196,13 +198,13 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
       )}
 
       <div>
-        <label className={labelClass}>Notes</label>
+        <label className={labelClass}>{t("printers.form.notes")}</label>
         <textarea
           className={inputClass}
           rows={3}
           value={form.notes}
           onChange={(e) => updateForm({ notes: e.target.value })}
-          placeholder="Optional notes about this printer..."
+          placeholder={t("printers.form.notesPlaceholder")}
         />
       </div>
 
@@ -211,7 +213,7 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
         disabled={saving}
         className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
       >
-        {saving ? "Saving..." : initialData ? "Update Printer" : "Create Printer"}
+        {saving ? t("printers.form.saving") : initialData ? t("printers.form.update") : t("printers.form.create")}
       </button>
     </form>
   );

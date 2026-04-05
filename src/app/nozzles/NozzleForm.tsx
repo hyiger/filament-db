@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface NozzleFormData {
   name: string;
@@ -40,6 +41,7 @@ const NOZZLE_TYPES = [
 const COMMON_DIAMETERS = ["0.1", "0.15", "0.2", "0.25", "0.3", "0.35", "0.4", "0.5", "0.6", "0.7", "0.8", "1.0", "1.2", "1.4", "1.6", "1.8", "2.0"];
 
 export default function NozzleForm({ initialData, onSubmit }: Props) {
+  const { t } = useTranslation();
   const [form, setForm] = useState<NozzleFormData>({
     name: initialData?.name || "",
     diameter: initialData?.diameter?.toString() || "0.4",
@@ -101,19 +103,19 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className={labelClass}>Name *</label>
+        <label className={labelClass}>{t("nozzles.form.name")} *</label>
         <input
           className={inputClass}
           value={form.name}
           onChange={(e) => updateForm({ name: e.target.value })}
-          placeholder="e.g. CoreOne 0.4 Brass"
+          placeholder={t("nozzles.form.namePlaceholder")}
           required
         />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className={labelClass}>Diameter (mm) *</label>
+          <label className={labelClass}>{t("nozzles.form.diameter")} *</label>
           <input
             className={inputClass}
             type="number"
@@ -123,7 +125,7 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
             list="common-diameters"
             value={form.diameter}
             onChange={(e) => updateForm({ diameter: e.target.value })}
-            placeholder="e.g. 0.4"
+            placeholder={t("nozzles.form.diameterPlaceholder")}
             required
           />
           <datalist id="common-diameters">
@@ -133,7 +135,7 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
           </datalist>
         </div>
         <div>
-          <label className={labelClass}>Type *</label>
+          <label className={labelClass}>{t("nozzles.form.type")} *</label>
           <select
             className={inputClass}
             value={form.type}
@@ -157,7 +159,7 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
           className="w-4 h-4"
         />
         <label htmlFor="highFlow" className="text-sm font-medium">
-          High Flow nozzle
+          {t("nozzles.form.highFlow")}
         </label>
       </div>
 
@@ -170,18 +172,18 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
           className="w-4 h-4"
         />
         <label htmlFor="hardened" className="text-sm font-medium">
-          Hardened nozzle
+          {t("nozzles.form.hardened")}
         </label>
       </div>
 
       <div>
-        <label className={labelClass}>Notes</label>
+        <label className={labelClass}>{t("nozzles.form.notes")}</label>
         <textarea
           className={inputClass}
           rows={3}
           value={form.notes}
           onChange={(e) => updateForm({ notes: e.target.value })}
-          placeholder="Optional notes about this nozzle..."
+          placeholder={t("nozzles.form.notesPlaceholder")}
         />
       </div>
 
@@ -190,7 +192,7 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
         disabled={saving}
         className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
       >
-        {saving ? "Saving..." : initialData ? "Update Nozzle" : "Create Nozzle"}
+        {saving ? t("nozzles.form.saving") : initialData ? t("nozzles.form.update") : t("nozzles.form.create")}
       </button>
     </form>
   );

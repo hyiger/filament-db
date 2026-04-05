@@ -3,10 +3,12 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useNfcContext, type NfcTagReadResult } from "./NfcProvider";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function NfcReadDialog() {
   const router = useRouter();
   const { tagReadResult, dismissTagRead } = useNfcContext();
+  const { t } = useTranslation();
 
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -109,14 +111,14 @@ export default function NfcReadDialog() {
         {/* Error state */}
         {error ? (
           <>
-            <h2 id="nfc-dialog-title" className="text-xl font-bold text-gray-900 dark:text-white mb-4">NFC Read Error</h2>
+            <h2 id="nfc-dialog-title" className="text-xl font-bold text-gray-900 dark:text-white mb-4">{t("nfc.readDialog.errorTitle")}</h2>
             <div className="text-red-600 dark:text-red-400 mb-6">{error}</div>
             <div className="flex justify-end">
               <button
                 onClick={dismissTagRead}
                 className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
               >
-                Dismiss
+                {t("nfc.readDialog.dismiss")}
               </button>
             </div>
           </>
@@ -127,7 +129,7 @@ export default function NfcReadDialog() {
               <svg className="w-5 h-5 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
-              <h2 id="nfc-dialog-title" className="text-xl font-bold text-gray-900 dark:text-white">Found in Database</h2>
+              <h2 id="nfc-dialog-title" className="text-xl font-bold text-gray-900 dark:text-white">{t("nfc.readDialog.found")}</h2>
             </div>
 
             <div className="flex items-center gap-3 bg-gray-100 dark:bg-gray-800 rounded-lg p-4 mb-4">
@@ -150,19 +152,19 @@ export default function NfcReadDialog() {
                 onClick={dismissTagRead}
                 className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
               >
-                Dismiss
+                {t("nfc.readDialog.dismiss")}
               </button>
               <button
                 onClick={handleCreateNew}
                 className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
               >
-                Create New
+                {t("nfc.readDialog.createNew")}
               </button>
               <button
                 onClick={() => handleGoToFilament(match._id)}
                 className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-500"
               >
-                View Filament
+                {t("nfc.readDialog.viewFilament")}
               </button>
             </div>
           </>
@@ -173,7 +175,7 @@ export default function NfcReadDialog() {
               <svg className="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0" />
               </svg>
-              <h2 id="nfc-dialog-title" className="text-xl font-bold text-gray-900 dark:text-white">Unknown Filament</h2>
+              <h2 id="nfc-dialog-title" className="text-xl font-bold text-gray-900 dark:text-white">{t("nfc.readDialog.unknownFilament")}</h2>
             </div>
 
             <div className="flex items-center gap-3 mb-4">
@@ -185,7 +187,7 @@ export default function NfcReadDialog() {
               )}
               <div>
                 <div className="text-gray-900 dark:text-white font-semibold">
-                  {data.materialName || "Unknown"}
+                  {data.materialName || t("nfc.readDialog.unknown")}
                 </div>
                 <div className="text-gray-500 dark:text-gray-400 text-sm">
                   {data.brandName}{data.materialType ? ` · ${data.materialType}` : ""}
@@ -198,7 +200,7 @@ export default function NfcReadDialog() {
             {/* Similar filaments — offer to create as variant */}
             {candidates && candidates.length > 0 && (
               <div className="mt-4">
-                <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">Similar filaments -- add as color variant?</div>
+                <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">{t("nfc.readDialog.similarFilaments")}</div>
                 <div className="space-y-1">
                   {candidates.map((c) => (
                     <div
@@ -214,13 +216,13 @@ export default function NfcReadDialog() {
                         onClick={() => handleGoToFilament(c._id)}
                         className="text-blue-400 hover:text-blue-300 text-xs flex-shrink-0"
                       >
-                        View
+                        {t("nfc.readDialog.view")}
                       </button>
                       <button
                         onClick={() => handleCreateAsVariant(c._id)}
                         className="text-amber-400 hover:text-amber-300 text-xs flex-shrink-0"
                       >
-                        + Variant
+                        {t("nfc.readDialog.addVariant")}
                       </button>
                     </div>
                   ))}
@@ -233,13 +235,13 @@ export default function NfcReadDialog() {
                 onClick={dismissTagRead}
                 className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
               >
-                Dismiss
+                {t("nfc.readDialog.dismiss")}
               </button>
               <button
                 onClick={handleCreateNew}
                 className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-500"
               >
-                Create New Filament
+                {t("nfc.readDialog.createNewFilament")}
               </button>
             </div>
           </>
@@ -251,23 +253,24 @@ export default function NfcReadDialog() {
 }
 
 function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) {
+  const { t } = useTranslation();
   return (
     <div className="grid grid-cols-2 gap-2 text-sm">
       {data.materialName && (
-        <Stat label="Material Name" value={data.materialName} />
+        <Stat label={t("nfc.readDialog.labelMaterialName")} value={data.materialName} />
       )}
       {data.brandName && (
-        <Stat label="Brand" value={data.brandName} />
+        <Stat label={t("nfc.readDialog.labelBrand")} value={data.brandName} />
       )}
       {data.materialType && (
-        <Stat label="Material Type" value={data.materialType} />
+        <Stat label={t("nfc.readDialog.labelMaterialType")} value={data.materialType} />
       )}
       {data.materialAbbreviation && data.materialAbbreviation !== data.materialType && (
-        <Stat label="Abbreviation" value={data.materialAbbreviation} />
+        <Stat label={t("nfc.readDialog.labelAbbreviation")} value={data.materialAbbreviation} />
       )}
       {data.color && (
         <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded">
-          <div className="text-gray-500 dark:text-gray-400 text-xs">Color</div>
+          <div className="text-gray-500 dark:text-gray-400 text-xs">{t("nfc.readDialog.labelColor")}</div>
           <div className="flex items-center gap-2">
             <div
               className="w-4 h-4 rounded-full border border-gray-300 dark:border-gray-600"
@@ -278,46 +281,46 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
         </div>
       )}
       {data.diameter != null && (
-        <Stat label="Diameter" value={`${data.diameter.toFixed(2)} mm`} />
+        <Stat label={t("nfc.readDialog.labelDiameter")} value={`${data.diameter.toFixed(2)} mm`} />
       )}
       {data.density != null && (
-        <Stat label="Density" value={`${data.density.toFixed(2)} g/cm³`} />
+        <Stat label={t("nfc.readDialog.labelDensity")} value={`${data.density.toFixed(2)} g/cm³`} />
       )}
       {data.weightGrams != null && (
-        <Stat label="Net Weight (Nominal)" value={`${data.weightGrams} g`} />
+        <Stat label={t("nfc.readDialog.labelNetWeight")} value={`${data.weightGrams} g`} />
       )}
       {data.actualWeightGrams != null && data.actualWeightGrams !== data.weightGrams && (
-        <Stat label="Actual Remaining" value={`${data.actualWeightGrams} g`} />
+        <Stat label={t("nfc.readDialog.labelActualRemaining")} value={`${data.actualWeightGrams} g`} />
       )}
       {data.emptySpoolWeight != null && (
-        <Stat label="Spool Weight" value={`${data.emptySpoolWeight} g`} />
+        <Stat label={t("nfc.readDialog.labelSpoolWeight")} value={`${data.emptySpoolWeight} g`} />
       )}
       {data.nozzleTemp != null && (
-        <Stat label="Nozzle Temp" value={`${data.nozzleTempMin ?? "?"}–${data.nozzleTemp}°C`} />
+        <Stat label={t("nfc.readDialog.labelNozzleTemp")} value={`${data.nozzleTempMin ?? "?"}–${data.nozzleTemp}°C`} />
       )}
       {data.preheatTemp != null && (
-        <Stat label="Preheat Temp" value={`${data.preheatTemp}°C`} />
+        <Stat label={t("nfc.readDialog.labelPreheatTemp")} value={`${data.preheatTemp}°C`} />
       )}
       {data.bedTemp != null && (
-        <Stat label="Bed Temp" value={`${data.bedTempMin ?? "?"}–${data.bedTemp}°C`} />
+        <Stat label={t("nfc.readDialog.labelBedTemp")} value={`${data.bedTempMin ?? "?"}–${data.bedTemp}°C`} />
       )}
       {data.chamberTemp != null && (
-        <Stat label="Chamber Temp" value={`${data.chamberTemp}°C`} />
+        <Stat label={t("nfc.readDialog.labelChamberTemp")} value={`${data.chamberTemp}°C`} />
       )}
       {data.dryingTemperature != null && (
-        <Stat label="Drying Temp" value={`${data.dryingTemperature}°C`} />
+        <Stat label={t("nfc.readDialog.labelDryingTemp")} value={`${data.dryingTemperature}°C`} />
       )}
       {data.dryingTime != null && (
-        <Stat label="Drying Time" value={`${Math.floor(data.dryingTime / 60)}h ${data.dryingTime % 60}m`} />
+        <Stat label={t("nfc.readDialog.labelDryingTime")} value={`${Math.floor(data.dryingTime / 60)}h ${data.dryingTime % 60}m`} />
       )}
       {data.transmissionDistance != null && (
-        <Stat label="HueForge TD" value={String(data.transmissionDistance)} />
+        <Stat label={t("nfc.readDialog.labelHueForgeTD")} value={String(data.transmissionDistance)} />
       )}
       {data.countryOfOrigin && (
-        <Stat label="Origin" value={data.countryOfOrigin} />
+        <Stat label={t("nfc.readDialog.labelOrigin")} value={data.countryOfOrigin} />
       )}
       {data.spoolUid && (
-        <Stat label="Instance ID" value={data.spoolUid} />
+        <Stat label={t("nfc.readDialog.labelInstanceId")} value={data.spoolUid} />
       )}
     </div>
   );

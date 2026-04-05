@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface Nozzle {
   _id: string;
@@ -20,13 +21,14 @@ export default function NozzlesPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const { toast } = useToast();
+  const { t } = useTranslation();
 
   const fetchNozzles = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     try {
       const res = await fetch("/api/nozzles", { signal });
       if (!res.ok) {
-        toast("Failed to load nozzles", "error");
+        toast(t("nozzles.loadError"), "error");
         setLoading(false);
         return;
       }
@@ -36,10 +38,10 @@ export default function NozzlesPage() {
       setLoading(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      toast("Failed to load nozzles", "error");
+      toast(t("nozzles.loadError"), "error");
       setLoading(false);
     }
-  }, [toast]);
+  }, [toast, t]);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -64,20 +66,20 @@ export default function NozzlesPage() {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Delete nozzle "${name}"?`)) return;
+    if (!confirm(t("nozzles.deleteConfirm", { name }))) return;
     const res = await fetch(`/api/nozzles/${id}`, { method: "DELETE" });
     if (!res.ok) {
       const body = await res.json().catch(() => null);
-      toast(body?.error || "Failed to delete nozzle", "error");
+      toast(body?.error || t("nozzles.deleteError"), "error");
       return;
     }
-    toast(`Deleted "${name}"`);
+    toast(t("nozzles.deleted", { name }));
     fetchNozzles();
   };
 
   const handleBulkDelete = async () => {
     const count = selected.size;
-    if (!confirm(`Delete ${count} nozzle${count !== 1 ? "s" : ""}?`)) return;
+    if (!confirm(t("nozzles.bulkDeleteConfirm", { count }))) return;
     setBulkDeleting(true);
     let deleted = 0;
     const errors: string[] = [];
@@ -88,10 +90,10 @@ export default function NozzlesPage() {
       } else {
         const body = await res.json().catch(() => null);
         const name = nozzles.find((n) => n._id === id)?.name ?? id;
-        errors.push(body?.error || `Failed to delete "${name}"`);
+        errors.push(body?.error || t("nozzles.deleteErrorNamed", { name }));
       }
     }
-    if (deleted > 0) toast(`Deleted ${deleted} nozzle${deleted !== 1 ? "s" : ""}`);
+    if (deleted > 0) toast(t("nozzles.bulkDeleted", { count: deleted }));
     if (errors.length > 0) toast(errors.join("; "), "error");
     setBulkDeleting(false);
     fetchNozzles();
@@ -101,45 +103,45 @@ export default function NozzlesPage() {
     <main className="max-w-4xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold">Nozzles</h1>
+          <h1 className="text-3xl font-bold">{t("nozzles.title")}</h1>
           <Link href="/" className="text-blue-600 hover:underline text-sm">
-            &larr; Back to filaments
+            &larr; {t("nozzles.backToFilaments")}
           </Link>
         </div>
         <Link
           href="/nozzles/new"
           className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
         >
-          + Add Nozzle
+          {t("nozzles.addNew")}
         </Link>
       </div>
 
       {selected.size > 0 && (
         <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-950/30 border border-red-800 rounded-lg">
-          <span className="text-sm text-red-300">{selected.size} selected</span>
+          <span className="text-sm text-red-300">{t("nozzles.selected", { count: selected.size })}</span>
           <button
             onClick={handleBulkDelete}
             disabled={bulkDeleting}
             className="px-3 py-1 bg-red-700 text-white rounded text-sm hover:bg-red-600 disabled:opacity-50"
           >
-            {bulkDeleting ? "Deleting..." : `Delete ${selected.size}`}
+            {bulkDeleting ? t("nozzles.deleting") : t("nozzles.deleteCount", { count: selected.size })}
           </button>
           <button
             onClick={() => setSelected(new Set())}
             className="text-sm text-gray-400 hover:text-gray-200"
           >
-            Clear
+            {t("nozzles.clear")}
           </button>
         </div>
       )}
 
       {loading ? (
-        <p className="text-gray-500">Loading...</p>
+        <p className="text-gray-500">{t("nozzles.loading")}</p>
       ) : nozzles.length === 0 ? (
         <div className="text-center py-12">
-          <p className="text-gray-500 mb-4">No nozzles defined yet.</p>
+          <p className="text-gray-500 mb-4">{t("nozzles.empty")}</p>
           <Link href="/nozzles/new" className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm">
-            + Add Your First Nozzle
+            {t("nozzles.addFirst")}
           </Link>
         </div>
       ) : (
@@ -155,13 +157,13 @@ export default function NozzlesPage() {
                     className="accent-red-600"
                   />
                 </th>
-                <th className="text-left py-3 px-2">Name</th>
-                <th className="text-right py-3 px-2">Diameter</th>
-                <th className="text-left py-3 px-2">Type</th>
-                <th className="text-center py-3 px-2">High Flow</th>
-                <th className="text-center py-3 px-2">Hardened</th>
-                <th className="text-left py-3 px-2">Notes</th>
-                <th className="text-right py-3 px-2">Actions</th>
+                <th className="text-left py-3 px-2">{t("nozzles.table.name")}</th>
+                <th className="text-right py-3 px-2">{t("nozzles.table.diameter")}</th>
+                <th className="text-left py-3 px-2">{t("nozzles.table.type")}</th>
+                <th className="text-center py-3 px-2">{t("nozzles.table.highFlow")}</th>
+                <th className="text-center py-3 px-2">{t("nozzles.table.hardened")}</th>
+                <th className="text-left py-3 px-2">{t("nozzles.table.notes")}</th>
+                <th className="text-right py-3 px-2">{t("nozzles.table.actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -188,7 +190,7 @@ export default function NozzlesPage() {
                   <td className="py-2 px-2 text-center">
                     {n.highFlow ? (
                       <span className="px-2 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 rounded text-xs">
-                        HF
+                        {t("nozzles.table.hfBadge")}
                       </span>
                     ) : (
                       "—"
@@ -197,7 +199,7 @@ export default function NozzlesPage() {
                   <td className="py-2 px-2 text-center">
                     {n.hardened ? (
                       <span className="px-2 py-0.5 bg-blue-200 dark:bg-blue-900 text-blue-800 dark:text-blue-200 rounded text-xs">
-                        H
+                        {t("nozzles.table.hBadge")}
                       </span>
                     ) : (
                       "—"
@@ -209,13 +211,13 @@ export default function NozzlesPage() {
                       href={`/nozzles/${n._id}/edit`}
                       className="text-blue-600 hover:underline mr-3 text-xs"
                     >
-                      Edit
+                      {t("nozzles.table.edit")}
                     </Link>
                     <button
                       onClick={() => handleDelete(n._id, n.name)}
                       className="text-red-600 hover:underline text-xs"
                     >
-                      Delete
+                      {t("nozzles.table.delete")}
                     </button>
                   </td>
                 </tr>

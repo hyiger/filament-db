@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface RemoteFilament {
   _id: string;
@@ -20,6 +21,7 @@ interface Props {
 type Step = "connect" | "select" | "confirm" | "importing";
 
 export default function ImportAtlasDialog({ onClose, onImported }: Props) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<Step>("connect");
   const [uri, setUri] = useState("");
   const [connecting, setConnecting] = useState(false);
@@ -72,7 +74,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "Connection failed");
+        setError(data.error || t("atlas.import.connectionFailed"));
         setConnecting(false);
         return;
       }
@@ -80,7 +82,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
       setSelected(new Set((data.filaments || []).map((f: RemoteFilament) => f._id)));
       setStep("select");
     } catch {
-      setError("Network error");
+      setError(t("atlas.import.networkError"));
     } finally {
       setConnecting(false);
     }
@@ -105,7 +107,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
 
   const handleImport = async () => {
     setStep("importing");
-    setImportProgress("Importing...");
+    setImportProgress(t("atlas.import.importing"));
     setError("");
     try {
       const res = await fetch("/api/filaments/import-atlas", {
@@ -115,14 +117,14 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "Import failed");
+        setError(data.error || t("atlas.import.importFailed"));
         setImportProgress("");
         setStep("select");
         return;
       }
       onImported(data.message);
     } catch {
-      setError("Network error during import");
+      setError(t("atlas.import.networkErrorDuringImport"));
       setImportProgress("");
       setStep("select");
     }
@@ -146,10 +148,10 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
           {/* Header */}
           <div className="p-6 pb-0">
             <h2 id="atlas-dialog-title" className="text-lg font-bold text-gray-900 dark:text-white mb-1">
-              {step === "connect" && "Import from MongoDB Atlas"}
-              {step === "select" && "Select Filaments to Import"}
-              {step === "confirm" && "Confirm Import"}
-              {step === "importing" && "Importing..."}
+              {step === "connect" && t("atlas.import.title")}
+              {step === "select" && t("atlas.import.selectTitle")}
+              {step === "confirm" && t("atlas.import.confirmTitle")}
+              {step === "importing" && t("atlas.import.importingTitle")}
             </h2>
           </div>
 
@@ -159,7 +161,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
             {step === "connect" && (
               <>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                  Enter a MongoDB Atlas connection string to browse and import filaments from another database.
+                  {t("atlas.import.description")}
                 </p>
                 <input
                   type="password"
@@ -183,15 +185,15 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
               <>
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-sm text-gray-500 dark:text-gray-400">
-                    {filaments.length} filament{filaments.length !== 1 ? "s" : ""} found
-                    {variantCount > 0 && ` (${parentCount} base, ${variantCount} variant${variantCount !== 1 ? "s" : ""})`}
+                    {t("atlas.import.filamentsFound", { count: filaments.length })}
+                    {variantCount > 0 && ` (${t("atlas.import.baseAndVariants", { baseCount: parentCount, variantCount })})`}
                   </span>
                   <button
                     type="button"
                     onClick={toggleAll}
                     className="text-xs text-blue-400 hover:text-blue-300"
                   >
-                    {selected.size === filaments.length ? "Deselect All" : "Select All"}
+                    {selected.size === filaments.length ? t("atlas.import.deselectAll") : t("atlas.import.selectAll")}
                   </button>
                 </div>
                 {error && (
@@ -231,10 +233,10 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
             {step === "confirm" && (
               <div className="text-sm text-gray-600 dark:text-gray-300">
                 <p className="mb-4">
-                  Import <strong className="text-gray-900 dark:text-white">{selected.size}</strong> filament{selected.size !== 1 ? "s" : ""} into your local database?
+                  {t("atlas.import.confirmMessage", { count: selected.size })}
                 </p>
                 <p className="text-gray-500">
-                  Existing filaments with the same name will be updated. New filaments will be created. Parent-variant relationships will not be preserved.
+                  {t("atlas.import.confirmDetails")}
                 </p>
               </div>
             )}
@@ -260,7 +262,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                   onClick={onClose}
                   className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
                 >
-                  Cancel
+                  {t("atlas.import.cancel")}
                 </button>
                 <button
                   type="button"
@@ -268,7 +270,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                   disabled={connecting || !uri.trim()}
                   className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-500 disabled:opacity-50"
                 >
-                  {connecting ? "Connecting..." : "Connect"}
+                  {connecting ? t("atlas.import.connecting") : t("atlas.import.connect")}
                 </button>
               </>
             )}
@@ -279,7 +281,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                   onClick={onClose}
                   className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
                 >
-                  Cancel
+                  {t("atlas.import.cancel")}
                 </button>
                 <button
                   type="button"
@@ -287,7 +289,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                   disabled={selected.size === 0}
                   className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-500 disabled:opacity-50"
                 >
-                  Import {selected.size} Filament{selected.size !== 1 ? "s" : ""}
+                  {t("atlas.import.importCount", { count: selected.size })}
                 </button>
               </>
             )}
@@ -298,21 +300,21 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                   onClick={() => setStep("select")}
                   className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
                 >
-                  Back
+                  {t("atlas.import.back")}
                 </button>
                 <button
                   type="button"
                   onClick={onClose}
                   className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
                 >
-                  Cancel
+                  {t("atlas.import.cancel")}
                 </button>
                 <button
                   type="button"
                   onClick={handleImport}
                   className="px-4 py-2 text-sm bg-green-600 text-white rounded hover:bg-green-500"
                 >
-                  Confirm Import
+                  {t("atlas.import.confirmImport")}
                 </button>
               </>
             )}

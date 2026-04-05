@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface SyncStatus {
   state: "idle" | "syncing" | "error" | "offline";
@@ -20,6 +21,7 @@ function formatRelativeTime(iso: string): string {
 }
 
 export default function SyncStatusIndicator() {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [mode, setMode] = useState<string>("");
   const [isFallback, setIsFallback] = useState(false);
@@ -131,7 +133,7 @@ export default function SyncStatusIndicator() {
           : "bg-red-900/40 text-red-400"
       }`}>
         <span className={`w-1.5 h-1.5 rounded-full ${online ? "bg-green-500" : "bg-red-500"}`} />
-        {online ? "Connected" : "Offline"}
+        {online ? t("sync.status.connected") : t("sync.status.offline")}
       </span>
     );
   }
@@ -141,7 +143,7 @@ export default function SyncStatusIndicator() {
     return (
       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs bg-gray-700 text-gray-300">
         <span className="w-1.5 h-1.5 rounded-full bg-gray-500" />
-        Local
+        {t("sync.status.local")}
       </span>
     );
   }
@@ -157,7 +159,7 @@ export default function SyncStatusIndicator() {
           : "bg-amber-900/40 text-amber-400"
       }`}>
         <span className={`w-1.5 h-1.5 rounded-full ${connected ? "bg-green-500" : "bg-amber-500"}`} />
-        {connected ? "Connected" : "No Connection"}
+        {connected ? t("sync.status.connected") : t("sync.status.noConnection")}
       </span>
     );
   }
@@ -171,7 +173,7 @@ export default function SyncStatusIndicator() {
         bg: "bg-amber-900/40",
         dot: "bg-amber-500",
         text: "text-amber-400",
-        label: isFallback ? "Offline — using local data" : "Offline",
+        label: isFallback ? t("sync.status.offlineLocalData") : t("sync.status.offline"),
       };
     }
     switch (status.state) {
@@ -180,14 +182,14 @@ export default function SyncStatusIndicator() {
           bg: "bg-blue-900/40",
           dot: "bg-blue-400 animate-pulse",
           text: "text-blue-300",
-          label: status.progress || "Syncing...",
+          label: status.progress || t("sync.status.syncing"),
         };
       case "error":
         return {
           bg: "bg-red-900/40",
           dot: "bg-red-500",
           text: "text-red-300",
-          label: "Sync error",
+          label: t("sync.status.syncError"),
         };
       case "idle":
         return {
@@ -195,15 +197,15 @@ export default function SyncStatusIndicator() {
           dot: "bg-green-500",
           text: "text-green-400",
           label: status.lastSyncAt
-            ? `Synced ${formatRelativeTime(status.lastSyncAt)}`
-            : "Connected",
+            ? t("sync.status.synced", { time: formatRelativeTime(status.lastSyncAt) })
+            : t("sync.status.connected"),
         };
       default:
         return {
           bg: "bg-gray-700",
           dot: "bg-gray-500",
           text: "text-gray-300",
-          label: "Hybrid",
+          label: t("sync.status.hybrid"),
         };
     }
   })();
@@ -225,27 +227,27 @@ export default function SyncStatusIndicator() {
           className="absolute top-full right-0 mt-1.5 w-72 bg-gray-800 border border-gray-700 rounded-lg shadow-xl p-3 z-50 text-xs"
         >
           <div className="text-gray-300 mb-2">
-            <strong>Mode:</strong>{" "}
+            <strong>{t("sync.tooltip.mode")}:</strong>{" "}
             {mode === "hybrid"
-              ? "Hybrid (Local + Cloud)"
+              ? t("sync.tooltip.modeHybrid")
               : isFallback
-                ? "Atlas (local fallback active)"
-                : "Atlas (Cloud)"}
+                ? t("sync.tooltip.modeAtlasFallback")
+                : t("sync.tooltip.modeAtlas")}
           </div>
           <div className="text-gray-300 mb-2">
-            <strong>Network:</strong>{" "}
+            <strong>{t("sync.tooltip.network")}:</strong>{" "}
             <span className={online ? "text-green-400" : "text-amber-400"}>
-              {online ? "Online" : "Offline"}
+              {online ? t("sync.tooltip.online") : t("sync.tooltip.offline")}
             </span>
           </div>
           {status.lastSyncAt && (
             <div className="text-gray-400 mb-2">
-              <strong>Last sync:</strong> {new Date(status.lastSyncAt).toLocaleString()}
+              <strong>{t("sync.tooltip.lastSync")}:</strong> {new Date(status.lastSyncAt).toLocaleString()}
             </div>
           )}
           {status.error && (
             <div className="text-red-400 mb-2 break-words">
-              <strong>Error:</strong> {status.error}
+              <strong>{t("sync.tooltip.error")}:</strong> {status.error}
             </div>
           )}
           <button
@@ -253,7 +255,7 @@ export default function SyncStatusIndicator() {
             disabled={status.state === "syncing" || !online}
             className="w-full px-3 py-1.5 bg-blue-600 text-white rounded hover:bg-blue-500 disabled:opacity-50 mt-1"
           >
-            {status.state === "syncing" ? "Syncing..." : !online ? "Offline" : "Sync Now"}
+            {status.state === "syncing" ? t("sync.tooltip.syncing") : !online ? t("sync.tooltip.offline") : t("sync.tooltip.syncNow")}
           </button>
         </div>
       )}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface PrusamentScrapeResult {
   spoolId: string;
@@ -51,6 +52,7 @@ export default function PrusamentImportDialog({
   onImported,
   targetFilamentId,
 }: Props) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<Step>("input");
   const [spoolInput, setSpoolInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -120,7 +122,7 @@ export default function PrusamentImportDialog({
       );
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "Lookup failed");
+        setError(data.error || t("prusament.import.lookupFailed"));
         setLoading(false);
         return;
       }
@@ -154,7 +156,7 @@ export default function PrusamentImportDialog({
 
       setStep("preview");
     } catch {
-      setError("Network error");
+      setError(t("prusament.import.networkError"));
     } finally {
       setLoading(false);
     }
@@ -179,14 +181,14 @@ export default function PrusamentImportDialog({
 
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error || "Import failed");
+        setError(data.error || t("prusament.import.importFailed"));
         setStep("preview");
         return;
       }
 
       onImported(data.message);
     } catch {
-      setError("Network error during import");
+      setError(t("prusament.import.networkErrorDuringImport"));
       setStep("preview");
     }
   };
@@ -200,7 +202,7 @@ export default function PrusamentImportDialog({
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b dark:border-zinc-700">
-          <h2 className="text-lg font-semibold">Import Prusament Spool</h2>
+          <h2 className="text-lg font-semibold">{t("prusament.import.title")}</h2>
           <button
             onClick={onClose}
             className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 text-xl leading-none"
@@ -220,15 +222,14 @@ export default function PrusamentImportDialog({
           {step === "input" && (
             <>
               <p className="text-sm text-zinc-600 dark:text-zinc-400">
-                Enter a Prusament spool ID or paste the full URL from the QR
-                code on your spool.
+                {t("prusament.import.description")}
               </p>
               <input
                 type="text"
                 value={spoolInput}
                 onChange={(e) => setSpoolInput(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleLookup()}
-                placeholder="e.g. c6974284da or https://prusament.com/spool/?spoolId=..."
+                placeholder={t("prusament.import.placeholder")}
                 className="w-full px-3 py-2 border rounded dark:bg-zinc-800 dark:border-zinc-700 focus:ring-2 focus:ring-orange-500 focus:border-orange-500 outline-none"
                 autoFocus
               />
@@ -237,14 +238,14 @@ export default function PrusamentImportDialog({
                   onClick={onClose}
                   className="px-4 py-2 text-sm border rounded hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
-                  Cancel
+                  {t("prusament.import.cancel")}
                 </button>
                 <button
                   onClick={handleLookup}
                   disabled={loading || !spoolInput.trim()}
                   className="px-4 py-2 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 disabled:opacity-50"
                 >
-                  {loading ? "Looking up..." : "Look Up"}
+                  {loading ? t("prusament.import.lookingUp") : t("prusament.import.lookUp")}
                 </button>
               </div>
             </>
@@ -264,40 +265,40 @@ export default function PrusamentImportDialog({
                     <div>
                       <div className="font-medium">{spool.productName}</div>
                       <div className="text-xs text-zinc-500">
-                        {spool.colorName} &middot; Spool {spool.spoolId}
+                        {spool.colorName} &middot; {t("prusament.import.spool")} {spool.spoolId}
                       </div>
                     </div>
                   </div>
                 </div>
                 <div className="grid grid-cols-2 gap-x-4 gap-y-1 px-4 py-3 text-sm">
-                  <div className="text-zinc-500">Material</div>
+                  <div className="text-zinc-500">{t("prusament.import.material")}</div>
                   <div>{spool.material}</div>
-                  <div className="text-zinc-500">Diameter</div>
+                  <div className="text-zinc-500">{t("prusament.import.diameter")}</div>
                   <div>
                     {spool.diameterAvg.toFixed(2)} mm (avg) &plusmn;{" "}
                     {spool.diameterStdDev?.toFixed(1) ?? "?"} &micro;m
                   </div>
-                  <div className="text-zinc-500">Net weight</div>
+                  <div className="text-zinc-500">{t("prusament.import.netWeight")}</div>
                   <div>{spool.netWeight} g</div>
-                  <div className="text-zinc-500">Spool weight</div>
+                  <div className="text-zinc-500">{t("prusament.import.spoolWeight")}</div>
                   <div>{spool.spoolWeight} g</div>
-                  <div className="text-zinc-500">Total weight</div>
+                  <div className="text-zinc-500">{t("prusament.import.totalWeight")}</div>
                   <div className="font-medium">{spool.totalWeight} g</div>
-                  <div className="text-zinc-500">Length</div>
+                  <div className="text-zinc-500">{t("prusament.import.length")}</div>
                   <div>{Math.round(spool.lengthMeters)} m</div>
-                  <div className="text-zinc-500">Nozzle temp</div>
+                  <div className="text-zinc-500">{t("prusament.import.nozzleTemp")}</div>
                   <div>
                     {spool.nozzleTempMin}&ndash;{spool.nozzleTempMax} &deg;C
                   </div>
-                  <div className="text-zinc-500">Bed temp</div>
+                  <div className="text-zinc-500">{t("prusament.import.bedTemp")}</div>
                   <div>
                     {spool.bedTempMin}&ndash;{spool.bedTempMax} &deg;C
                   </div>
-                  <div className="text-zinc-500">Manufactured</div>
+                  <div className="text-zinc-500">{t("prusament.import.manufactured")}</div>
                   <div>{spool.manufactureDate.split(" ")[0]}</div>
                   {spool.priceUsd && (
                     <>
-                      <div className="text-zinc-500">Price</div>
+                      <div className="text-zinc-500">{t("prusament.import.price")}</div>
                       <div>${spool.priceUsd}</div>
                     </>
                   )}
@@ -307,7 +308,7 @@ export default function PrusamentImportDialog({
               {/* Action selector */}
               <div className="space-y-3">
                 <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">
-                  Import as:
+                  {t("prusament.import.importAs")}
                 </label>
 
                 <label className="flex items-start gap-2 p-3 border rounded-lg cursor-pointer hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800">
@@ -321,11 +322,10 @@ export default function PrusamentImportDialog({
                   />
                   <div>
                     <div className="text-sm font-medium">
-                      New filament
+                      {t("prusament.import.newFilament")}
                     </div>
                     <div className="text-xs text-zinc-500">
-                      Create &ldquo;Prusament {spool.material}{" "}
-                      {spool.colorName}&rdquo; with this spool
+                      {t("prusament.import.createDescription", { material: spool.material, color: spool.colorName })}
                     </div>
                   </div>
                 </label>
@@ -341,7 +341,7 @@ export default function PrusamentImportDialog({
                   />
                   <div className="flex-1">
                     <div className="text-sm font-medium">
-                      Add spool to existing filament
+                      {t("prusament.import.addToExisting")}
                     </div>
                     {matches.length > 0 ? (
                       <select
@@ -352,7 +352,7 @@ export default function PrusamentImportDialog({
                         }}
                         className="mt-1 w-full text-sm px-2 py-1.5 border rounded dark:bg-zinc-800 dark:border-zinc-700"
                       >
-                        <option value="">Select a filament...</option>
+                        <option value="">{t("prusament.import.selectFilament")}</option>
                         {matches.map((f) => (
                           <option key={f._id} value={f._id}>
                             {f.name}
@@ -361,7 +361,7 @@ export default function PrusamentImportDialog({
                       </select>
                     ) : (
                       <div className="text-xs text-zinc-500 mt-1">
-                        No existing {spool.material} filaments found
+                        {t("prusament.import.noExistingFilaments", { material: spool.material })}
                       </div>
                     )}
                   </div>
@@ -377,7 +377,7 @@ export default function PrusamentImportDialog({
                   }}
                   className="px-4 py-2 text-sm border rounded hover:bg-zinc-50 dark:border-zinc-700 dark:hover:bg-zinc-800"
                 >
-                  Back
+                  {t("prusament.import.back")}
                 </button>
                 <button
                   onClick={handleImport}
@@ -386,7 +386,7 @@ export default function PrusamentImportDialog({
                   }
                   className="px-4 py-2 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 disabled:opacity-50"
                 >
-                  Import
+                  {t("prusament.import.import")}
                 </button>
               </div>
             </>
@@ -414,7 +414,7 @@ export default function PrusamentImportDialog({
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                 />
               </svg>
-              Importing spool...
+              {t("prusament.import.importingSpool")}
             </div>
           )}
         </div>

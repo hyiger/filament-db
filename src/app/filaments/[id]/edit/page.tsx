@@ -5,11 +5,13 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
 import { useToast } from "@/components/Toast";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function EditFilament() {
   const params = useParams();
   const router = useRouter();
   const { toast } = useToast();
+  const { t } = useTranslation();
   const [filament, setFilament] = useState(null);
   const [notFound, setNotFound] = useState(false);
   const [fetchError, setFetchError] = useState(false);
@@ -34,36 +36,36 @@ export default function EditFilament() {
       body: JSON.stringify(data),
     });
     if (res.ok) {
-      toast("Filament updated");
+      toast(t("edit.toast.updated"));
       router.push(`/filaments/${params.id}`);
     } else {
       const body = await res.json().catch(() => null);
-      toast(body?.error || "Failed to update filament", "error");
+      toast(body?.error || t("edit.toast.updateFailed"), "error");
     }
   };
 
   if (notFound) return (
     <div className="p-8">
-      <p className="text-red-500 mb-4">Filament not found. It may have been deleted.</p>
-      <Link href="/" className="text-blue-600 hover:underline text-sm">&larr; Back to Filaments</Link>
+      <p className="text-red-500 mb-4">{t("detail.error.notFound")}</p>
+      <Link href="/" className="text-blue-600 hover:underline text-sm">&larr; {t("detail.backToFilaments")}</Link>
     </div>
   );
   if (fetchError) return (
     <div className="p-8">
-      <p className="text-red-500 mb-4">Failed to load filament. Please try again.</p>
-      <Link href="/" className="text-blue-600 hover:underline text-sm">&larr; Back to Filaments</Link>
+      <p className="text-red-500 mb-4">{t("detail.error.loadFailed")}</p>
+      <Link href="/" className="text-blue-600 hover:underline text-sm">&larr; {t("detail.backToFilaments")}</Link>
     </div>
   );
-  if (!filament) return <p className="p-8 text-gray-500">Loading...</p>;
+  if (!filament) return <p className="p-8 text-gray-500">{t("common.loading")}</p>;
 
   return (
     <main className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
         <Link href={`/filaments/${params.id}`} className="text-blue-600 hover:underline text-sm">
-          &larr; Back to detail
+          &larr; {t("edit.backToDetail")}
         </Link>
       </div>
-      <h1 className="text-2xl font-bold mb-6">Edit Filament</h1>
+      <h1 className="text-2xl font-bold mb-6">{t("edit.title")}</h1>
       <FilamentForm initialData={filament} onSubmit={handleSubmit} />
     </main>
   );

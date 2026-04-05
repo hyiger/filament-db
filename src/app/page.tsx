@@ -8,6 +8,7 @@ import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 import NfcStatus from "@/components/NfcStatus";
 import { useCurrency } from "@/hooks/useCurrency";
+import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
 
 type Filament = FilamentSummary;
@@ -75,6 +76,7 @@ interface GroupedFilament {
 }
 
 function FilamentStats({ filaments }: { filaments: Filament[] }) {
+  const { t } = useTranslation();
   const byType = useMemo(() => {
     const counts = new Map<string, number>();
     for (const f of filaments) {
@@ -112,7 +114,7 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-800">
       {/* By Type */}
       <div>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">By Type</h3>
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t("filaments.stats.byType")}</h3>
         <div className="space-y-1.5">
           {byType.map(([type, count]) => (
             <div key={type} className="flex items-center gap-2 text-sm">
@@ -131,7 +133,7 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
 
       {/* By Vendor */}
       <div>
-        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">By Vendor</h3>
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{t("filaments.stats.byVendor")}</h3>
         <div className="space-y-1.5">
           {byVendor.map(([vendor, count]) => (
             <div key={vendor} className="flex items-center gap-2 text-sm">
@@ -151,7 +153,7 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
       {/* By Color */}
       <div>
         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-          Colors ({colorGroups.length})
+          {t("filaments.stats.colors", { count: colorGroups.length })}
         </h3>
         <div className="flex flex-wrap gap-1.5">
           {colorGroups.map(({ color, count }) => (
@@ -178,6 +180,7 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
 }
 
 export default function Home() {
+  const { t } = useTranslation();
   const { symbol: currencySymbol } = useCurrency();
   const [filaments, setFilaments] = useState<Filament[]>([]);
   const [loading, setLoading] = useState(true);
@@ -230,7 +233,7 @@ export default function Home() {
     try {
       const res = await fetch(`/api/filaments?${params}`, { signal: controller.signal });
       if (!res.ok) {
-        toast("Failed to load filaments", "error");
+        toast(t("filaments.loadError"), "error");
         setLoading(false);
         return;
       }
@@ -238,18 +241,18 @@ export default function Home() {
       setFilaments(data);
       // Derive filter options from unfiltered results (initial load / no filters)
       if (!search && !typeFilter && !vendorFilter) {
-        const t = [...new Set(data.map((f: Filament) => f.type))].sort() as string[];
-        const v = [...new Set(data.map((f: Filament) => f.vendor))].sort() as string[];
-        setTypes(t);
-        setVendors(v);
+        const typeList = [...new Set(data.map((f: Filament) => f.type))].sort() as string[];
+        const vendorList = [...new Set(data.map((f: Filament) => f.vendor))].sort() as string[];
+        setTypes(typeList);
+        setVendors(vendorList);
       }
       setLoading(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
-      toast("Failed to load filaments", "error");
+      toast(t("filaments.loadError"), "error");
       setLoading(false);
     }
-  }, [search, typeFilter, vendorFilter, toast]);
+  }, [search, typeFilter, vendorFilter, toast, t]);
 
   useEffect(() => {
     setMounted(true);
@@ -372,7 +375,7 @@ export default function Home() {
 
   const handleBulkDelete = async () => {
     const count = selected.size;
-    if (!confirm(`Delete ${count} filament${count !== 1 ? "s" : ""}?`)) return;
+    if (!confirm(t("filaments.deleteConfirm", { count }))) return;
     setBulkDeleting(true);
     let deleted = 0;
     const errors: string[] = [];
@@ -383,10 +386,10 @@ export default function Home() {
       } else {
         const body = await res.json().catch(() => null);
         const name = filaments.find((f) => f._id === id)?.name ?? id;
-        errors.push(body?.error || `Failed to delete "${name}"`);
+        errors.push(body?.error || t("filaments.deleteError", { name }));
       }
     }
-    if (deleted > 0) toast(`Deleted ${deleted} filament${deleted !== 1 ? "s" : ""}`);
+    if (deleted > 0) toast(t("filaments.deletedCount", { count: deleted }));
     if (errors.length > 0) toast(errors.join("; "), "error");
     setBulkDeleting(false);
     setSelected(new Set());
@@ -420,10 +423,10 @@ export default function Home() {
         setTypes([...new Set(allData.map((f: Filament) => f.type))].sort() as string[]);
         setVendors([...new Set(allData.map((f: Filament) => f.vendor))].sort() as string[]);
       } else {
-        toast(`Import failed: ${data.error}`, "error");
+        toast(t("filaments.importFailed", { error: data.error }), "error");
       }
     } catch {
-      toast("Import failed: network error", "error");
+      toast(t("filaments.importNetworkError"), "error");
     } finally {
       setImporting(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -464,7 +467,7 @@ export default function Home() {
         </Link>
         {isVariant && (
           <span className="ml-1.5 text-[10px] text-gray-400 bg-gray-200 dark:bg-gray-800 px-1 py-0.5 rounded">
-            variant
+            {t("filaments.variant")}
           </span>
         )}
       </td>
@@ -490,7 +493,7 @@ export default function Home() {
           if (pct == null) return <span className="text-gray-400">—</span>;
           const color = pct > 25 ? "bg-green-500" : pct > 10 ? "bg-yellow-500" : "bg-red-500";
           return (
-            <div className="flex items-center gap-1.5 justify-end" title={`${pct}% remaining${spoolCt > 1 ? ` (${spoolCt} spools)` : ""}`}>
+            <div className="flex items-center gap-1.5 justify-end" title={spoolCt > 1 ? t("filaments.remainingWithSpools", { pct, spools: spoolCt }) : t("filaments.remaining", { pct })}>
               <div className="w-12 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                 <div className={`h-2 rounded-full ${color}`} style={{ width: `${pct}%` }} />
               </div>
@@ -505,7 +508,7 @@ export default function Home() {
           href={`/filaments/${f._id}/edit`}
           className="text-blue-600 hover:underline text-xs"
         >
-          Edit
+          {t("common.edit")}
         </Link>
       </td>
     </tr>
@@ -533,7 +536,7 @@ export default function Home() {
               <button
                 onClick={() => toggleExpanded(f._id)}
                 className="text-gray-400 hover:text-gray-600 text-xs w-4 flex-shrink-0"
-                title={isExpanded ? "Collapse variants" : "Expand variants"}
+                title={isExpanded ? t("filaments.collapseVariants") : t("filaments.expandVariants")}
               >
                 {isExpanded ? "▾" : "▸"}
               </button>
@@ -552,7 +555,7 @@ export default function Home() {
               {f.name}
             </Link>
             <span className="ml-1.5 text-[10px] text-gray-500 bg-gray-200 dark:bg-gray-800 px-1 py-0.5 rounded">
-              {group.variants.length} color{group.variants.length !== 1 ? "s" : ""}
+              {t("filaments.colorCount", { count: group.variants.length })}
             </span>
           </td>
           <td className="py-2 px-2">{f.vendor}</td>
@@ -576,7 +579,7 @@ export default function Home() {
               if (pct == null) return <span className="text-gray-400">—</span>;
               const color = pct > 25 ? "bg-green-500" : pct > 10 ? "bg-yellow-500" : "bg-red-500";
               return (
-                <div className="flex items-center gap-1.5 justify-end" title={`${pct}% remaining`}>
+                <div className="flex items-center gap-1.5 justify-end" title={t("filaments.remaining", { pct })}>
                   <div className="w-12 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
                     <div className={`h-2 rounded-full ${color}`} style={{ width: `${pct}%` }} />
                   </div>
@@ -590,7 +593,7 @@ export default function Home() {
               href={`/filaments/${f._id}/edit`}
               className="text-blue-600 hover:underline text-xs"
             >
-              Edit
+              {t("common.edit")}
             </Link>
           </td>
         </tr>
@@ -634,7 +637,7 @@ export default function Home() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-bold">Filament DB</h1>
+            <h1 className="text-3xl font-bold">{t("filaments.title")}</h1>
             <span className="text-sm text-gray-500 font-mono self-end mb-0.5">v{process.env.APP_VERSION}</span>
             <SyncStatusIndicator />
             <NfcStatus />
@@ -645,7 +648,7 @@ export default function Home() {
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
               </svg>
-              Settings
+              {t("common.settings")}
             </Link>
           </div>
         </div>
@@ -656,7 +659,7 @@ export default function Home() {
               onClick={() => setShowImportExport((s) => !s)}
               className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm flex items-center gap-1.5"
             >
-              Import / Export
+              {t("filaments.importExport")}
               <svg className={`w-3.5 h-3.5 transition-transform ${showImportExport ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
               </svg>
@@ -668,14 +671,14 @@ export default function Home() {
                   className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
                 >
                   <span className="w-2 h-2 rounded-full bg-orange-500" />
-                  Prusament QR
+                  {t("filaments.import.prusamentQR")}
                 </button>
                 <button
                   onClick={() => { setShowImportExport(false); setShowAtlasImport(true); }}
                   className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
                 >
                   <span className="w-2 h-2 rounded-full bg-purple-500" />
-                  Import from Atlas
+                  {t("filaments.import.fromAtlas")}
                 </button>
                 <a
                   href="/openprinttag"
@@ -683,7 +686,7 @@ export default function Home() {
                   onClick={() => setShowImportExport(false)}
                 >
                   <span className="w-2 h-2 rounded-full bg-teal-500" />
-                  Browse OpenPrintTag DB
+                  {t("filaments.import.browseOpenPrintTag")}
                 </a>
                 <button
                   onClick={() => { setShowImportExport(false); fileInputRef.current?.click(); }}
@@ -691,11 +694,11 @@ export default function Home() {
                   className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-50 flex items-center gap-2"
                 >
                   <span className="w-2 h-2 rounded-full bg-amber-500" />
-                  {importing ? "Importing..." : "Import File (INI / CSV / XLSX)"}
+                  {importing ? t("filaments.import.importing") : t("filaments.import.file")}
                 </button>
                 <div className="border-t border-gray-600 my-1" />
                 <div className="px-4 py-1">
-                  <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Export</span>
+                  <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t("filaments.export")}</span>
                 </div>
                 {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
                 <a
@@ -704,7 +707,7 @@ export default function Home() {
                   onClick={() => setShowImportExport(false)}
                 >
                   <span className="w-2 h-2 rounded-full bg-green-500" />
-                  INI (PrusaSlicer)
+                  {t("filaments.export.ini")}
                 </a>
                 {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
                 <a
@@ -713,7 +716,7 @@ export default function Home() {
                   onClick={() => setShowImportExport(false)}
                 >
                   <span className="w-2 h-2 rounded-full bg-green-500" />
-                  CSV
+                  {t("filaments.export.csv")}
                 </a>
                 {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
                 <a
@@ -722,7 +725,7 @@ export default function Home() {
                   onClick={() => setShowImportExport(false)}
                 >
                   <span className="w-2 h-2 rounded-full bg-green-500" />
-                  Excel (XLSX)
+                  {t("filaments.export.xlsx")}
                 </a>
               </div>
             )}
@@ -731,7 +734,7 @@ export default function Home() {
             href="/filaments/new"
             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
           >
-            + Add Filament
+            {t("filaments.addNew")}
           </Link>
         </div>
       </div>
@@ -744,11 +747,11 @@ export default function Home() {
             className="text-sm text-gray-500 hover:text-gray-300 flex items-center gap-1 mb-2"
           >
             <span>{showStats ? "▾" : "▸"}</span>
-            <span>{filaments.length} filament{filaments.length !== 1 ? "s" : ""}</span>
+            <span>{t("filaments.stats.total", { count: filaments.length })}</span>
             <span className="text-gray-600">·</span>
-            <span>{types.length} type{types.length !== 1 ? "s" : ""}</span>
+            <span>{t("filaments.stats.typeCount", { count: types.length })}</span>
             <span className="text-gray-600">·</span>
-            <span>{vendors.length} vendor{vendors.length !== 1 ? "s" : ""}</span>
+            <span>{t("filaments.stats.vendorCount", { count: vendors.length })}</span>
           </button>
           {showStats && <FilamentStats filaments={filaments} />}
         </div>
@@ -757,7 +760,7 @@ export default function Home() {
       <div className="flex gap-3 mb-4 flex-wrap">
         <input
           type="text"
-          placeholder="Search by name..."
+          placeholder={t("common.search")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="px-3 py-2 border border-gray-300 rounded text-sm bg-transparent"
@@ -767,10 +770,10 @@ export default function Home() {
           onChange={(e) => setTypeFilter(e.target.value)}
           className="px-3 py-2 border border-gray-300 rounded text-sm bg-transparent"
         >
-          <option value="">All Types</option>
-          {types.map((t) => (
-            <option key={t} value={t}>
-              {t}
+          <option value="">{t("filaments.filter.allTypes")}</option>
+          {types.map((tp) => (
+            <option key={tp} value={tp}>
+              {tp}
             </option>
           ))}
         </select>
@@ -779,10 +782,10 @@ export default function Home() {
           onChange={(e) => setVendorFilter(e.target.value)}
           className="px-3 py-2 border border-gray-300 rounded text-sm bg-transparent"
         >
-          <option value="">All Vendors</option>
-          {vendors.map((v) => (
-            <option key={v} value={v}>
-              {v}
+          <option value="">{t("filaments.filter.allVendors")}</option>
+          {vendors.map((vn) => (
+            <option key={vn} value={vn}>
+              {vn}
             </option>
           ))}
         </select>
@@ -790,28 +793,28 @@ export default function Home() {
 
       {selected.size > 0 && (
         <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-950/30 border border-red-800 rounded-lg">
-          <span className="text-sm text-red-300">{selected.size} selected</span>
+          <span className="text-sm text-red-300">{t("filaments.bulk.selected", { count: selected.size })}</span>
           <button
             onClick={handleBulkDelete}
             disabled={bulkDeleting}
             className="px-3 py-1 bg-red-700 text-white rounded text-sm hover:bg-red-600 disabled:opacity-50"
           >
-            {bulkDeleting ? "Deleting..." : `Delete ${selected.size}`}
+            {bulkDeleting ? t("filaments.bulk.deleting") : t("filaments.bulk.delete", { count: selected.size })}
           </button>
           <button
             onClick={() => setSelected(new Set())}
             className="text-sm text-gray-400 hover:text-gray-200"
           >
-            Clear
+            {t("common.clear")}
           </button>
         </div>
       )}
       </div>{/* end sticky header */}
 
       {loading ? (
-        <p className="text-gray-500">Loading...</p>
+        <p className="text-gray-500">{t("common.loading")}</p>
       ) : filaments.length === 0 ? (
-        <p className="text-gray-500">No filaments found.</p>
+        <p className="text-gray-500">{t("filaments.noResults")}</p>
       ) : (
         <div>
           <table className="w-full text-sm border-collapse min-w-[800px]">
@@ -825,7 +828,7 @@ export default function Home() {
                     className="accent-red-600"
                   />
                 </th>
-                <th className="text-left py-3 px-2">Color</th>
+                <th className="text-left py-3 px-2">{t("filaments.table.color")}</th>
                 {(["name", "vendor", "type", "nozzle", "bed", "cost", "remaining"] as SortKey[]).map((col) => (
                   <th
                     key={col}
@@ -834,14 +837,14 @@ export default function Home() {
                     role="columnheader"
                     tabIndex={0}
                     onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); handleSort(col); } }}
-                    title={`Sort by ${col === "nozzle" ? "nozzle temp" : col === "bed" ? "bed temp" : col === "remaining" ? "remaining filament" : col}`}
+                    title={t("filaments.table.sortBy", { column: t(`filaments.table.${col}`) })}
                     aria-sort={sortKey === col ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
                   >
-                    {col === "nozzle" ? "Nozzle" : col === "bed" ? "Bed" : col === "remaining" ? "Spool" : col.charAt(0).toUpperCase() + col.slice(1)}{" "}
+                    {t(`filaments.table.${col}`)}{" "}
                     <SortIcon column={col} sortKey={sortKey} sortDir={sortDir} />
                   </th>
                 ))}
-                <th className="text-right py-3 px-2">Actions</th>
+                <th className="text-right py-3 px-2">{t("filaments.table.actions")}</th>
               </tr>
             </thead>
             <tbody>
