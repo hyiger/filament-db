@@ -56,13 +56,13 @@ export default async function dbConnect() {
 
   // One-time migration: backfill instanceId for existing filaments
   if (!cached.migrated) {
-    cached.migrated = true;
     try {
       const { backfillInstanceIds } = await import("@/models/Filament");
       const count = await backfillInstanceIds();
       if (count > 0) {
         console.log(`[migration] Backfilled instanceId for ${count} filament(s)`);
       }
+      cached.migrated = true;
     } catch (err) {
       console.error("[migration] Failed to backfill instanceIds:", err);
     }

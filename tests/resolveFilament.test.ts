@@ -142,9 +142,9 @@ describe("resolveFilament", () => {
     expect(result._inherited).not.toContain("cost");
   });
 
-  it("inherits compatibleNozzles when variant has none", () => {
+  it("inherits compatibleNozzles when variant has undefined", () => {
     const parent = makeParent();
-    const variant = makeVariant();
+    const variant = makeVariant({ compatibleNozzles: undefined });
     const result = resolveFilament(variant, parent);
     expect(result.compatibleNozzles).toEqual(["nozzle-1", "nozzle-2"]);
     expect(result._inherited).toContain("compatibleNozzles");
@@ -158,9 +158,9 @@ describe("resolveFilament", () => {
     expect(result._inherited).not.toContain("compatibleNozzles");
   });
 
-  it("inherits calibrations when variant has none", () => {
+  it("inherits calibrations when variant has undefined", () => {
     const parent = makeParent();
-    const variant = makeVariant();
+    const variant = makeVariant({ calibrations: undefined });
     const result = resolveFilament(variant, parent);
     expect(result.calibrations).toHaveLength(1);
     expect(result._inherited).toContain("calibrations");
@@ -230,11 +230,11 @@ describe("resolveFilament", () => {
     expect(result._inherited).toContain("netFilamentWeight");
   });
 
-  it("inherits presets when variant has none", () => {
+  it("inherits presets when variant has undefined", () => {
     const parent = makeParent({
       presets: [{ label: "Default", extrusionMultiplier: 0.95, temperatures: { nozzle: 275, nozzleFirstLayer: null, bed: null, bedFirstLayer: null } }],
     });
-    const variant = makeVariant({ presets: [] });
+    const variant = makeVariant({ presets: undefined });
     const result = resolveFilament(variant, parent);
     expect(result.presets).toHaveLength(1);
     expect(result._inherited).toContain("presets");
@@ -306,9 +306,9 @@ describe("resolveFilament", () => {
     expect(result._deletedAt).toBe(deletedAt);
   });
 
-  it("inherits optTags from parent when variant has none", () => {
+  it("inherits optTags from parent when variant has undefined", () => {
     const parent = makeParent({ optTags: [1, 2, 4] });
-    const variant = makeVariant({ optTags: [] });
+    const variant = makeVariant({ optTags: undefined });
     const result = resolveFilament(variant, parent);
     expect(result.optTags).toEqual([1, 2, 4]);
     expect(result._inherited).toContain("optTags");
@@ -322,10 +322,10 @@ describe("resolveFilament", () => {
     expect(result._inherited).not.toContain("optTags");
   });
 
-  it("inherits bedTypeTemps from parent when variant has none", () => {
+  it("inherits bedTypeTemps from parent when variant has undefined", () => {
     const parentBedTemps = [{ bedType: "Textured PEI", temperature: 85, firstLayerTemperature: 90 }];
     const parent = makeParent({ bedTypeTemps: parentBedTemps });
-    const variant = makeVariant({ bedTypeTemps: [] });
+    const variant = makeVariant({ bedTypeTemps: undefined });
     const result = resolveFilament(variant, parent);
     expect(result.bedTypeTemps).toEqual(parentBedTemps);
     expect(result._inherited).toContain("bedTypeTemps");
@@ -346,6 +346,52 @@ describe("resolveFilament", () => {
     const variant = makeVariant({ totalWeight: 800 });
     const result = resolveFilament(variant, parent);
     expect(result.totalWeight).toBe(800);
+  });
+
+  // --- #57: explicit empty array does NOT inherit from parent ---
+
+  it("does not inherit compatibleNozzles when variant has explicit empty array", () => {
+    const parent = makeParent({ compatibleNozzles: ["nozzle-1", "nozzle-2"] });
+    const variant = makeVariant({ compatibleNozzles: [] });
+    const result = resolveFilament(variant, parent);
+    expect(result.compatibleNozzles).toEqual([]);
+    expect(result._inherited).not.toContain("compatibleNozzles");
+  });
+
+  it("does not inherit optTags when variant has explicit empty array", () => {
+    const parent = makeParent({ optTags: [1, 2, 4] });
+    const variant = makeVariant({ optTags: [] });
+    const result = resolveFilament(variant, parent);
+    expect(result.optTags).toEqual([]);
+    expect(result._inherited).not.toContain("optTags");
+  });
+
+  it("does not inherit calibrations when variant has explicit empty array", () => {
+    const parent = makeParent();
+    const variant = makeVariant({ calibrations: [] });
+    const result = resolveFilament(variant, parent);
+    expect(result.calibrations).toEqual([]);
+    expect(result._inherited).not.toContain("calibrations");
+  });
+
+  it("does not inherit presets when variant has explicit empty array", () => {
+    const parent = makeParent({
+      presets: [{ label: "Default", extrusionMultiplier: 0.95, temperatures: {} }],
+    });
+    const variant = makeVariant({ presets: [] });
+    const result = resolveFilament(variant, parent);
+    expect(result.presets).toEqual([]);
+    expect(result._inherited).not.toContain("presets");
+  });
+
+  it("does not inherit bedTypeTemps when variant has explicit empty array", () => {
+    const parent = makeParent({
+      bedTypeTemps: [{ bedType: "Textured PEI", temperature: 85 }],
+    });
+    const variant = makeVariant({ bedTypeTemps: [] });
+    const result = resolveFilament(variant, parent);
+    expect(result.bedTypeTemps).toEqual([]);
+    expect(result._inherited).not.toContain("bedTypeTemps");
   });
 });
 

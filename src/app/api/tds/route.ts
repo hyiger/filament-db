@@ -27,8 +27,15 @@ export async function GET() {
 
 /** PUT /api/tds — save AI API key (web mode) */
 export async function PUT(request: NextRequest) {
+  let body;
   try {
-    const { apiKey, provider = "gemini" } = await request.json();
+    body = await request.json();
+  } catch {
+    return errorResponse("Invalid JSON in request body", 400);
+  }
+
+  try {
+    const { apiKey, provider = "gemini" } = body;
     if (!apiKey || typeof apiKey !== "string") {
       return errorResponse("API key is required", 400);
     }
@@ -123,7 +130,13 @@ export async function POST(request: NextRequest) {
     }
 
     // ── URL-based extraction (JSON body) ──
-    const { url, apiKey: bodyKey, provider: bodyProvider } = await request.json();
+    let jsonBody;
+    try {
+      jsonBody = await request.json();
+    } catch {
+      return errorResponse("Invalid JSON in request body", 400);
+    }
+    const { url, apiKey: bodyKey, provider: bodyProvider } = jsonBody;
 
     if (!url || typeof url !== "string") {
       return errorResponse("URL is required", 400);

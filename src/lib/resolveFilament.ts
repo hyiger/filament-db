@@ -97,8 +97,8 @@ export function resolveFilament(
     }
   }
 
-  // Resolve compatibleNozzles — use variant's if it has any, otherwise parent's
-  if (filament.compatibleNozzles?.length > 0) {
+  // Resolve compatibleNozzles — use variant's if defined (even empty), otherwise parent's
+  if (filament.compatibleNozzles !== undefined) {
     resolved.compatibleNozzles = filament.compatibleNozzles;
   } else {
     resolved.compatibleNozzles = parent.compatibleNozzles || [];
@@ -107,8 +107,8 @@ export function resolveFilament(
     }
   }
 
-  // Resolve optTags — use variant's if it has any, otherwise parent's
-  if (filament.optTags?.length > 0) {
+  // Resolve optTags — use variant's if defined (even empty), otherwise parent's
+  if (filament.optTags !== undefined) {
     resolved.optTags = filament.optTags;
   } else {
     resolved.optTags = parent.optTags || [];
@@ -117,8 +117,8 @@ export function resolveFilament(
     }
   }
 
-  // Resolve bedTypeTemps — use variant's if it has any, otherwise parent's
-  if (filament.bedTypeTemps?.length > 0) {
+  // Resolve bedTypeTemps — use variant's if defined (even empty), otherwise parent's
+  if (filament.bedTypeTemps !== undefined) {
     resolved.bedTypeTemps = filament.bedTypeTemps;
   } else {
     resolved.bedTypeTemps = parent.bedTypeTemps || [];
@@ -127,8 +127,8 @@ export function resolveFilament(
     }
   }
 
-  // Resolve calibrations — use variant's if it has any, otherwise parent's
-  if (filament.calibrations?.length > 0) {
+  // Resolve calibrations — use variant's if defined (even empty), otherwise parent's
+  if (filament.calibrations !== undefined) {
     resolved.calibrations = filament.calibrations;
   } else {
     resolved.calibrations = parent.calibrations || [];
@@ -137,8 +137,8 @@ export function resolveFilament(
     }
   }
 
-  // Resolve presets — use variant's if it has any, otherwise parent's
-  if (filament.presets?.length > 0) {
+  // Resolve presets — use variant's if defined (even empty), otherwise parent's
+  if (filament.presets !== undefined) {
     resolved.presets = filament.presets;
   } else {
     resolved.presets = parent.presets || [];

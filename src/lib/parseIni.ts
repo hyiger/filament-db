@@ -70,7 +70,13 @@ export function parseIniFilaments(content: string): FilamentData[] {
 
       const sectionName = sectionMatch[1];
       if (sectionName.startsWith("filament:")) {
-        currentName = sectionName.substring("filament:".length);
+        const parsedName = sectionName.substring("filament:".length).trim();
+        if (!parsedName) {
+          currentName = null;
+          currentSettings = {};
+          continue;
+        }
+        currentName = parsedName;
         currentSettings = {};
       } else {
         currentName = null;

@@ -28,10 +28,17 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("Invalid JSON in request body", 400);
+  }
+
   try {
     await dbConnect();
     const { id } = await params;
-    const body = await request.json();
     delete body._id;
     delete body._deletedAt;
     delete body.createdAt;

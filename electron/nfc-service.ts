@@ -231,6 +231,7 @@ export class NfcService extends EventEmitter {
     // ISO 15693 Read Single Block: flags(02) cmd(20) block_num
     const cmd = Buffer.from([0xff, 0xfb, 0x00, 0x00, 0x02, 0x20, blockNum]);
     const response = await this.transmit(cmd, BLOCK_SIZE + 10, protocol);
+    if (response.length < 2) throw new Error("Truncated NFC response");
     if (this.checkSW(response)) {
       return response.subarray(0, response.length - 2);
     }

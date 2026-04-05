@@ -313,6 +313,7 @@ export default function FilamentDetail() {
         <div
           className="w-10 h-10 rounded-full border-2 border-gray-300 flex-shrink-0"
           style={{ backgroundColor: filament.color }}
+          aria-label={`Color swatch: ${filament.color}`}
         />
         <div className="min-w-0">
           <h1 className="text-2xl font-bold">{filament.name}</h1>
@@ -422,6 +423,7 @@ export default function FilamentDetail() {
                 <div
                   className="w-5 h-5 rounded-full border border-gray-300"
                   style={{ backgroundColor: v.color }}
+                  aria-label={`Color swatch: ${v.color}`}
                 />
                 <span className="text-sm">{v.name}</span>
                 {v.cost != null && (

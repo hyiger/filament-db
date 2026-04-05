@@ -6,10 +6,16 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
   try {
     await dbConnect();
     const { id } = await params;
-    const body = await request.json();
 
     const filament = await Filament.findOneAndUpdate(
       { _id: id, _deletedAt: null },

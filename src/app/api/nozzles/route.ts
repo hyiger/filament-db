@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     const highFlow = searchParams.get("highFlow");
 
     const filter: Record<string, unknown> = { _deletedAt: null };
-    if (diameter) filter.diameter = parseFloat(diameter);
+    if (diameter) { const v = parseFloat(diameter); if (!isNaN(v)) filter.diameter = v; }
     if (type) filter.type = type;
     if (highFlow) filter.highFlow = highFlow === "true";
 
@@ -25,10 +25,17 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("Invalid JSON in request body", 400);
+  }
+
   try {
     await dbConnect();
 
-    const body = await request.json();
     delete body._id;
     delete body._deletedAt;
     delete body.createdAt;

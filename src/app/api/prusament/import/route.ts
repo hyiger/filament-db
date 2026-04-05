@@ -83,26 +83,24 @@ export async function POST(request: NextRequest) {
   // action === "create" — create a new filament
   const name = `Prusament ${spool.material} ${spool.colorName}`;
 
-  // Check for existing filament with same name
-  const existing = await Filament.findOne({ name, _deletedAt: null }).lean();
-  if (existing) {
-    // Add spool to existing instead
-    const updated = await Filament.findOneAndUpdate(
-      { _id: existing._id },
-      {
-        $push: {
-          spools: {
-            label: spoolLabel,
-            totalWeight: spool.totalWeight,
-          },
+  // Atomically check for existing filament with same name and add spool if found
+  const existingUpdated = await Filament.findOneAndUpdate(
+    { name, _deletedAt: null },
+    {
+      $push: {
+        spools: {
+          label: spoolLabel,
+          totalWeight: spool.totalWeight,
         },
       },
-      { new: true },
-    ).lean();
+    },
+    { new: true },
+  ).lean();
 
+  if (existingUpdated) {
     return NextResponse.json({
       action: "add-spool",
-      filament: updated,
+      filament: existingUpdated,
       message: `Filament "${name}" already exists. Added spool ${spool.spoolId}.`,
     });
   }

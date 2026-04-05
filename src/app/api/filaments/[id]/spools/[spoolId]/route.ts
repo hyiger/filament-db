@@ -6,10 +6,16 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; spoolId: string }> }
 ) {
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
   try {
     await dbConnect();
     const { id, spoolId } = await params;
-    const body = await request.json();
 
     const update: Record<string, unknown> = {};
     if (body.totalWeight !== undefined) update["spools.$.totalWeight"] = body.totalWeight;

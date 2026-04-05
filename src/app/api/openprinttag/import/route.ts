@@ -18,8 +18,15 @@ import {
  * (upsert by name + vendor).
  */
 export async function POST(request: NextRequest) {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
   try {
-    const body = await request.json();
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  try {
     const slugs: string[] = body.slugs;
 
     if (!Array.isArray(slugs) || slugs.length === 0) {
@@ -56,47 +63,70 @@ export async function POST(request: NextRequest) {
         // The unique index is on { name } where _deletedAt is null, so we
         // must query by name alone to avoid a duplicate-key error when the
         // same name exists under a different vendor.
-        const existing = await Filament.findOne({
-          name,
-          _deletedAt: null,
-        });
+        //
+        // Use findOneAndUpdate to atomically find-and-update, avoiding a
+        // race where two concurrent imports could both see "no existing"
+        // and both try to create, causing a duplicate-key error.
+
+        // Always include the OpenPrintTag reference in settings
+        const optUpdateFields: Record<string, unknown> = {
+          "settings.openprinttag_uuid":
+            (payload.settings as Record<string, string>).openprinttag_uuid,
+          "settings.openprinttag_slug":
+            (payload.settings as Record<string, string>).openprinttag_slug,
+        };
+
+        // Build conditional updates: only set fields that are currently null.
+        const conditionalDefaults: Record<string, unknown> = {};
+        if (payload.density != null)
+          conditionalDefaults.density = payload.density;
+        if (payload.color && payload.color !== "#808080")
+          conditionalDefaults.color = payload.color;
+        if (payload.transmissionDistance != null)
+          conditionalDefaults.transmissionDistance = payload.transmissionDistance;
+        if (payload.dryingTemperature != null)
+          conditionalDefaults.dryingTemperature = payload.dryingTemperature;
+        if (payload.dryingTime != null)
+          conditionalDefaults.dryingTime = payload.dryingTime;
+        if (payload.shoreHardnessD != null)
+          conditionalDefaults.shoreHardnessD = payload.shoreHardnessD;
+
+        const existing = await Filament.findOneAndUpdate(
+          { name, _deletedAt: null, vendor },
+          { $set: optUpdateFields },
+          { new: true },
+        );
 
         if (existing) {
-          // Only update if the vendor matches — don't silently merge data
-          // from a different brand into an unrelated filament.
-          if (existing.vendor !== vendor) {
-            errors.push(
-              `${material.name}: skipped — a filament named "${name}" already exists under vendor "${existing.vendor}"`,
-            );
-            continue;
-          }
+          // Apply conditional defaults (only set if currently null) in a
+          // second update — $set alone cannot express "set if null".
+          const conditionalSet: Record<string, unknown> = {};
+          if (conditionalDefaults.density != null && existing.density == null)
+            conditionalSet.density = conditionalDefaults.density;
+          if (conditionalDefaults.color && existing.color === "#808080")
+            conditionalSet.color = conditionalDefaults.color;
+          if (conditionalDefaults.transmissionDistance != null && existing.transmissionDistance == null)
+            conditionalSet.transmissionDistance = conditionalDefaults.transmissionDistance;
+          if (conditionalDefaults.dryingTemperature != null && existing.dryingTemperature == null)
+            conditionalSet.dryingTemperature = conditionalDefaults.dryingTemperature;
+          if (conditionalDefaults.dryingTime != null && existing.dryingTime == null)
+            conditionalSet.dryingTime = conditionalDefaults.dryingTime;
+          if (conditionalDefaults.shoreHardnessD != null && existing.shoreHardnessD == null)
+            conditionalSet.shoreHardnessD = conditionalDefaults.shoreHardnessD;
 
-          // Update with new data but don't overwrite user calibrations/settings
-          const updateFields: Record<string, unknown> = {};
-          if (payload.density != null && existing.density == null)
-            updateFields.density = payload.density;
-          if (payload.color && payload.color !== "#808080" && existing.color === "#808080")
-            updateFields.color = payload.color;
-          if (payload.transmissionDistance != null && existing.transmissionDistance == null)
-            updateFields.transmissionDistance = payload.transmissionDistance;
-          if (payload.dryingTemperature != null && existing.dryingTemperature == null)
-            updateFields.dryingTemperature = payload.dryingTemperature;
-          if (payload.dryingTime != null && existing.dryingTime == null)
-            updateFields.dryingTime = payload.dryingTime;
-          if (payload.shoreHardnessD != null && existing.shoreHardnessD == null)
-            updateFields.shoreHardnessD = payload.shoreHardnessD;
-
-          // Always update the OpenPrintTag reference in settings
-          updateFields["settings.openprinttag_uuid"] =
-            (payload.settings as Record<string, string>).openprinttag_uuid;
-          updateFields["settings.openprinttag_slug"] =
-            (payload.settings as Record<string, string>).openprinttag_slug;
-
-          if (Object.keys(updateFields).length > 0) {
-            await Filament.findByIdAndUpdate(existing._id, { $set: updateFields });
+          if (Object.keys(conditionalSet).length > 0) {
+            await Filament.findByIdAndUpdate(existing._id, { $set: conditionalSet });
           }
           updated++;
         } else {
+          // Check if a filament exists with a different vendor (name collision)
+          const nameCollision = await Filament.findOne({ name, _deletedAt: null }).lean();
+          if (nameCollision) {
+            errors.push(
+              `${material.name}: skipped — a filament named "${name}" already exists under vendor "${nameCollision.vendor}"`,
+            );
+            continue;
+          }
           await Filament.create(payload);
           created++;
         }

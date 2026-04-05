@@ -5,7 +5,11 @@ import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 
-// Simple in-memory mutex to prevent concurrent restore operations
+// Simple in-memory mutex to prevent concurrent restore operations.
+// Limitation: this only guards within a single Node.js process. In a
+// horizontally-scaled deployment each instance would have its own flag,
+// so concurrent restores from different instances would not be blocked.
+// This is acceptable for a single-instance desktop app.
 let restoreInProgress = false;
 
 const OID_RE = /^[a-f0-9]{24}$/i;

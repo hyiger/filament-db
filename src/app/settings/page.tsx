@@ -65,10 +65,12 @@ export default function SettingsPage() {
 
   // Load config
   useEffect(() => {
+    const controller = new AbortController();
     const api = window.electronAPI;
     if (api?.getConfig) {
       // Electron mode — check electron-store
       api.getConfig().then((cfg) => {
+        if (controller.signal.aborted) return;
         if (cfg.aiApiKey || cfg.geminiApiKey) {
           setAiConfigured(true);
         }
@@ -84,20 +86,24 @@ export default function SettingsPage() {
       }).catch(() => {});
     } else {
       // Web mode — check API
-      fetch("/api/tds").then((r) => r.json()).then((d) => {
+      fetch("/api/tds", { signal: controller.signal }).then((r) => r.json()).then((d) => {
         setAiConfigured(d.configured);
         if (d.provider) setAiProvider(d.provider);
       }).catch(() => {});
     }
+    return () => { controller.abort(); };
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
     const api = window.electronAPI;
     if (!api?.nfcGetStatus) return;
     setIsElectron(true);
-    api.nfcGetStatus().then(setNfcStatus).catch(() => {});
+    api.nfcGetStatus().then((s) => {
+      if (!controller.signal.aborted) setNfcStatus(s);
+    }).catch(() => {});
     const unsub = api.onNfcStatusChange(setNfcStatus);
-    return () => { unsub(); };
+    return () => { controller.abort(); unsub(); };
   }, []);
 
   // Auto-dismiss erase confirmation when tag is removed

@@ -165,6 +165,7 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
               <div
                 className="w-6 h-6 rounded-full border border-gray-400 dark:border-gray-600"
                 style={{ backgroundColor: color }}
+                aria-label={`Color swatch: ${color}`}
               />
               {count > 1 && (
                 <span className="absolute -top-1.5 -right-1.5 bg-gray-700 text-white text-[9px] w-3.5 h-3.5 rounded-full flex items-center justify-center leading-none">
@@ -455,6 +456,7 @@ export default function Home() {
             className={`${isVariant ? "w-5 h-5" : "w-6 h-6"} rounded-full border border-gray-300`}
             style={{ backgroundColor: f.color }}
             title={f.color}
+            aria-label={`Color swatch: ${f.color}`}
           />
         </div>
       </td>
@@ -544,6 +546,7 @@ export default function Home() {
                 className="w-6 h-6 rounded-full border border-gray-300"
                 style={{ backgroundColor: f.color }}
                 title={f.color}
+                aria-label={`Color swatch: ${f.color}`}
               />
             </div>
           </td>
@@ -611,6 +614,7 @@ export default function Home() {
                     <div
                       className="w-4 h-4 rounded-full border border-gray-400 hover:ring-2 hover:ring-blue-400 transition-all"
                       style={{ backgroundColor: v.color }}
+                      aria-label={`Color swatch: ${v.color}`}
                     />
                   </Link>
                 ))}

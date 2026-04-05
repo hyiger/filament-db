@@ -275,4 +275,35 @@ temperature = 200
     const result = parseIniFilaments(content);
     expect(result[0].type).toBe("Unknown");
   });
+
+  // --- #66: empty section name after colon is skipped ---
+
+  it("skips filament section with empty name after colon", () => {
+    const content = `
+[filament:]
+filament_vendor = Ghost
+filament_type = PLA
+temperature = 200
+
+[filament:Real Filament]
+filament_vendor = Legit
+filament_type = PETG
+temperature = 240
+`;
+    const result = parseIniFilaments(content);
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe("Real Filament");
+    expect(result[0].vendor).toBe("Legit");
+  });
+
+  it("skips filament section with whitespace-only name after colon", () => {
+    const content = `
+[filament:   ]
+filament_vendor = Ghost
+filament_type = PLA
+temperature = 200
+`;
+    const result = parseIniFilaments(content);
+    expect(result).toHaveLength(0);
+  });
 });

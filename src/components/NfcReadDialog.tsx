@@ -136,6 +136,7 @@ export default function NfcReadDialog() {
               <div
                 className="w-10 h-10 rounded-full border border-gray-300 dark:border-gray-600 flex-shrink-0"
                 style={{ backgroundColor: match.color || "#808080" }}
+                aria-label={`Color swatch: ${match.color || "#808080"}`}
               />
               <div className="min-w-0">
                 <div className="text-gray-900 dark:text-white font-semibold truncate">{match.name}</div>
@@ -183,6 +184,7 @@ export default function NfcReadDialog() {
                 <div
                   className="w-8 h-8 rounded-full border border-gray-300 dark:border-gray-600 flex-shrink-0"
                   style={{ backgroundColor: data.color }}
+                  aria-label={`Color swatch: ${data.color}`}
                 />
               )}
               <div>
@@ -210,6 +212,7 @@ export default function NfcReadDialog() {
                       <div
                         className="w-4 h-4 rounded-full border border-gray-300 dark:border-gray-600 flex-shrink-0"
                         style={{ backgroundColor: c.color || "#808080" }}
+                        aria-label={`Color swatch: ${c.color || "#808080"}`}
                       />
                       <span className="text-gray-900 dark:text-white truncate flex-1">{c.name}</span>
                       <button
@@ -275,6 +278,7 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
             <div
               className="w-4 h-4 rounded-full border border-gray-300 dark:border-gray-600"
               style={{ backgroundColor: data.color }}
+              aria-label={`Color swatch: ${data.color}`}
             />
             <span className="text-gray-900 dark:text-white">{data.color}</span>
           </div>
