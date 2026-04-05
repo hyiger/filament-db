@@ -9,7 +9,11 @@ directories:
 
 icon: assets/icon.png
 
-asar: false
+asar: true
+asarUnpack:
+  - node_modules/@pokusew/pcsclite/**/*
+  - node_modules/nfc-pcsc/**/*
+  - node_modules/mongodb-memory-server-core/**/*
 npmRebuild: false
 
 files:
