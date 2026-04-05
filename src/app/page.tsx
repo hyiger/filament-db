@@ -634,10 +634,10 @@ export default function Home() {
         />
       )}
       <div ref={stickyHeaderRef} className="sticky top-0 z-20 bg-white dark:bg-gray-950 pb-3 -mt-8 pt-8 border-b border-gray-200 dark:border-gray-800 shadow-sm">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-3xl font-bold">{t("filaments.title")}</h1>
+      <div className="flex items-start justify-between gap-4 mb-6 flex-wrap">
+        <div className="min-w-0">
+          <div className="flex items-center gap-3 flex-wrap">
+            <h1 className="text-3xl font-bold whitespace-nowrap">{t("filaments.title")}</h1>
             <span className="text-sm text-gray-500 font-mono self-end mb-0.5">v{process.env.APP_VERSION}</span>
             <SyncStatusIndicator />
             <NfcStatus />
@@ -652,7 +652,7 @@ export default function Home() {
             </Link>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 shrink-0">
           {/* Import / Export dropdown */}
           <div className="relative" ref={importExportRef}>
             <button
