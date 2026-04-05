@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { extractSpoolData } from "@/lib/prusament";
 
 /** Shape of the spoolData JSON embedded in the Prusament spool page. */
 interface PrusamentSpoolData {
@@ -111,27 +112,23 @@ export async function GET(request: NextRequest) {
     }
 
     // Extract the spoolData JSON from the page.
-    // It appears as: var spoolData = '{...}'; or spoolData = "{...}"
-    const match = html.match(/var\s+spoolData\s*=\s*'({[\s\S]*?})'\s*;/)
-      ?? html.match(/var\s+spoolData\s*=\s*"({[\s\S]*?})"\s*;/);
-
-    if (!match) {
-      // Check if the page indicates spool not found
-      if (html.includes("Spool not found") || html.includes("404")) {
-        return NextResponse.json(
-          { error: `Spool "${cleanId}" not found on Prusament` },
-          { status: 404 },
-        );
-      }
-      return NextResponse.json(
-        { error: "Could not extract spool data from Prusament page" },
-        { status: 502 },
-      );
-    }
-
     let raw: PrusamentSpoolData;
     try {
-      raw = JSON.parse(match[1]);
+      const parsed = extractSpoolData(html);
+      if (!parsed) {
+        // Check if the page indicates spool not found
+        if (html.includes("Spool not found") || html.includes("404")) {
+          return NextResponse.json(
+            { error: `Spool "${cleanId}" not found on Prusament` },
+            { status: 404 },
+          );
+        }
+        return NextResponse.json(
+          { error: "Could not extract spool data from Prusament page" },
+          { status: 502 },
+        );
+      }
+      raw = parsed as PrusamentSpoolData;
     } catch {
       return NextResponse.json(
         { error: "Failed to parse spool data JSON" },

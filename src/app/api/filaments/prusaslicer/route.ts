@@ -52,16 +52,24 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // If a variant's parent isn't in the filtered results, fetch it
-    for (const f of filaments) {
-      if (f.parentId && !parentMap.has(f.parentId.toString())) {
-        const parent = await Filament.findById(f.parentId)
-          .populate("calibrations.nozzle")
-          .populate("calibrations.printer")
-          .lean();
-        if (parent) {
-          parentMap.set(parent._id.toString(), parent);
-        }
+    // If a variant's parent isn't in the filtered results, batch-fetch missing parents
+    const missingParentIds = [
+      ...new Set(
+        filaments
+          .filter((f) => f.parentId && !parentMap.has(f.parentId.toString()))
+          .map((f) => f.parentId!.toString()),
+      ),
+    ];
+    if (missingParentIds.length > 0) {
+      const missingParents = await Filament.find({
+        _id: { $in: missingParentIds },
+        _deletedAt: null,
+      })
+        .populate("calibrations.nozzle")
+        .populate("calibrations.printer")
+        .lean();
+      for (const parent of missingParents) {
+        parentMap.set(parent._id.toString(), parent);
       }
     }
 

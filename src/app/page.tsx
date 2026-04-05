@@ -236,6 +236,13 @@ export default function Home() {
       }
       const data = await res.json();
       setFilaments(data);
+      // Derive filter options from unfiltered results (initial load / no filters)
+      if (!search && !typeFilter && !vendorFilter) {
+        const t = [...new Set(data.map((f: Filament) => f.type))].sort() as string[];
+        const v = [...new Set(data.map((f: Filament) => f.vendor))].sort() as string[];
+        setTypes(t);
+        setVendors(v);
+      }
       setLoading(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") return;
@@ -246,21 +253,6 @@ export default function Home() {
 
   useEffect(() => {
     setMounted(true);
-  }, []);
-
-  useEffect(() => {
-    fetch("/api/filaments")
-      .then((r) => {
-        if (!r.ok) throw new Error("Failed to fetch");
-        return r.json();
-      })
-      .then((data: Filament[]) => {
-        const t = [...new Set(data.map((f) => f.type))].sort();
-        const v = [...new Set(data.map((f) => f.vendor))].sort();
-        setTypes(t);
-        setVendors(v);
-      })
-      .catch(() => {});
   }, []);
 
   // Close import/export dropdown on outside click

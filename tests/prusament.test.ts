@@ -1,18 +1,5 @@
 import { describe, it, expect } from "vitest";
-
-/**
- * Test the Prusament spool data extraction logic.
- * We test the regex and JSON parsing that the API route uses,
- * without needing to make actual HTTP requests.
- */
-
-function extractSpoolData(html: string) {
-  const match =
-    html.match(/var\s+spoolData\s*=\s*'({[\s\S]*?})'\s*;/) ??
-    html.match(/var\s+spoolData\s*=\s*"({[\s\S]*?})"\s*;/);
-  if (!match) return null;
-  return JSON.parse(match[1]);
-}
+import { extractSpoolData } from "@/lib/prusament";
 
 const sampleHtml = `
 <html>

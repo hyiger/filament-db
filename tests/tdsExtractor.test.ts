@@ -454,6 +454,29 @@ describe("tdsExtractor", () => {
       expect(apiUrl).toContain("anthropic.com");
     });
 
+    it("routes to OpenAI provider for file uploads", async () => {
+      const openaiResponse = {
+        choices: [{ message: { content: '{"name": "GPT File", "type": "ASA"}' } }],
+      };
+
+      let apiUrl = "";
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+        apiUrl = url;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(openaiResponse),
+        });
+      }));
+
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const buffer = Buffer.from("ASA filament specs");
+      const result = await extractFromTdsContent(buffer, "text/plain", "sk-test", "openai");
+
+      expect(result.success).toBe(true);
+      expect(result.data?.name).toBe("GPT File");
+      expect(apiUrl).toContain("openai.com");
+    });
+
     it("rejects PDF input for OpenAI provider with informative error", async () => {
       vi.stubGlobal("fetch", vi.fn());
 
@@ -464,6 +487,54 @@ describe("tdsExtractor", () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain("OpenAI provider does not support PDF");
       expect(result.error).toContain("Gemini or Claude");
+    });
+  });
+
+  describe("validateApiKey", () => {
+    it("returns true for valid Gemini key", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+      const { validateApiKey } = await import("@/lib/tdsExtractor");
+      const result = await validateApiKey("gemini", "valid-gemini-key");
+      expect(result).toBe(true);
+    });
+
+    it("returns false for invalid Gemini key", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 403 }));
+      const { validateApiKey } = await import("@/lib/tdsExtractor");
+      const result = await validateApiKey("gemini", "invalid-key");
+      expect(result).toBe(false);
+    });
+
+    it("returns true for valid Claude key", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, status: 200 }));
+      const { validateApiKey } = await import("@/lib/tdsExtractor");
+      const result = await validateApiKey("claude", "sk-ant-valid");
+      expect(result).toBe(true);
+      const fetchCall = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(fetchCall[0]).toContain("anthropic.com");
+    });
+
+    it("returns false for invalid Claude key (401)", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 401 }));
+      const { validateApiKey } = await import("@/lib/tdsExtractor");
+      const result = await validateApiKey("claude", "sk-ant-invalid");
+      expect(result).toBe(false);
+    });
+
+    it("returns true for valid OpenAI key", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true }));
+      const { validateApiKey } = await import("@/lib/tdsExtractor");
+      const result = await validateApiKey("openai", "sk-valid");
+      expect(result).toBe(true);
+      const fetchCall = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(fetchCall[0]).toContain("openai.com");
+    });
+
+    it("returns false for unknown provider", async () => {
+      vi.stubGlobal("fetch", vi.fn());
+      const { validateApiKey } = await import("@/lib/tdsExtractor");
+      const result = await validateApiKey("unknown" as never, "any-key");
+      expect(result).toBe(false);
     });
   });
 });

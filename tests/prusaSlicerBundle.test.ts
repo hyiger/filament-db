@@ -212,6 +212,42 @@ describe("filamentToSlicerKeys", () => {
     const keys = filamentToSlicerKeys(filament);
     expect(keys.filament_settings_id).toBe("Original Slicer ID");
   });
+
+  it("null structured fields must not emit nil; settings bag nil is preserved", () => {
+    const filament = {
+      name: "Nil Test",
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      density: null, // structured field is null
+      cost: null, // structured field is null
+      temperatures: {},
+      settings: {
+        filament_density: null, // settings bag nil — should be removed by set()
+        cooling: null, // settings bag nil with no structured field — preserved
+        fan_always_on: "1",
+      },
+    };
+
+    const keys = filamentToSlicerKeys(filament);
+
+    // Structured field density is null AND settings bag has nil for filament_density:
+    // set() should delete the nil from settings bag so it doesn't emit "nil"
+    expect(keys).not.toHaveProperty("filament_density");
+
+    // Settings bag nil for a key with no corresponding structured field is preserved
+    // (means "inherit from parent" in PrusaSlicer)
+    expect(keys.cooling).toBeNull();
+
+    // Verify the INI output: settings bag nil emits "nil"
+    const bundle = generatePrusaSlicerBundle([filament]);
+    expect(bundle).toContain("cooling = nil");
+    // filament_density must NOT appear as nil
+    expect(bundle).not.toContain("filament_density = nil");
+    // Normal settings bag values still work
+    expect(bundle).toContain("fan_always_on = 1");
+  });
 });
 
 describe("generatePrusaSlicerBundle", () => {
