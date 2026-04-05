@@ -257,6 +257,11 @@
   "sync.tooltip.syncing": "Syncing...",
   "sync.tooltip.syncNow": "Sync Now",
 
+  "sync.time.justNow": "just now",
+  "sync.time.minutesAgo": "{count}m ago",
+  "sync.time.hoursAgo": "{count}h ago",
+  "sync.time.daysAgo": "{count}d ago",
+
   "openprinttag.title": "OpenPrintTag Database",
   "openprinttag.subtitle": "{fdmCount} FDM filaments across {brandCount} brands",
   "openprinttag.slaFiltered": "{slaCount} SLA resins filtered out",

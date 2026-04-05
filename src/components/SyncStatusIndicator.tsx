@@ -10,14 +10,14 @@ interface SyncStatus {
   progress: string | null;
 }
 
-function formatRelativeTime(iso: string): string {
+function formatRelativeTime(iso: string, t: (key: string, params?: Record<string, string | number>) => string): string {
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return t("sync.time.justNow");
+  if (mins < 60) return t("sync.time.minutesAgo", { count: mins });
   const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
+  if (hours < 24) return t("sync.time.hoursAgo", { count: hours });
+  return t("sync.time.daysAgo", { count: Math.floor(hours / 24) });
 }
 
 export default function SyncStatusIndicator() {
@@ -197,7 +197,7 @@ export default function SyncStatusIndicator() {
           dot: "bg-green-500",
           text: "text-green-400",
           label: status.lastSyncAt
-            ? t("sync.status.synced", { time: formatRelativeTime(status.lastSyncAt) })
+            ? t("sync.status.synced", { time: formatRelativeTime(status.lastSyncAt, t) })
             : t("sync.status.connected"),
         };
       default:

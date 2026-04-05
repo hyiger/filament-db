@@ -257,6 +257,11 @@
   "sync.tooltip.syncing": "Synchronisiere…",
   "sync.tooltip.syncNow": "Jetzt synchronisieren",
 
+  "sync.time.justNow": "gerade eben",
+  "sync.time.minutesAgo": "vor {count} Min.",
+  "sync.time.hoursAgo": "vor {count} Std.",
+  "sync.time.daysAgo": "vor {count} T.",
+
   "openprinttag.title": "OpenPrintTag-Datenbank",
   "openprinttag.subtitle": "{fdmCount} FDM-Filamente von {brandCount} Marken",
   "openprinttag.slaFiltered": "{slaCount} SLA-Harze herausgefiltert",
