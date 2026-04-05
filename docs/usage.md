@@ -1,5 +1,7 @@
 # Using the Application
 
+[< Back to README](../README.md)
+
 ## Browsing Filaments
 
 The home page displays all filaments in a sortable table with columns for color, name, vendor, type, nozzle temperature, bed temperature, cost, and remaining spool percentage.
@@ -151,7 +153,7 @@ If you have defined printers, **printer tabs** appear above the calibration fiel
 
 This lets you store different PA, EM, and retraction values for the same filament on different printers (e.g., a Prusa Core One vs. a Bambu H2D).
 
-Leave fields blank to use the filament's base defaults. When exporting to INI, filaments with printer-specific calibrations generate sections like `[filament:Name PrinterName NozzleSize]`, while default calibrations generate `[filament:Name NozzleSize]`.
+Leave fields blank to use the filament's base defaults. The INI export uses a single-section-per-filament architecture: each filament produces one `[filament:Name]` section with its base settings. Calibration overrides (EM, PA, max volumetric speed, retraction) are not embedded in the INI — the PrusaSlicer fork fetches them dynamically via `GET /api/filaments/{id}/calibration` when you switch printer or nozzle.
 
 ---
 

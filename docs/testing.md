@@ -1,5 +1,7 @@
 # Testing
 
+[< Back to README](../README.md)
+
 ## Overview
 
 The project uses [Vitest](https://vitest.dev/) with [mongodb-memory-server](https://github.com/typegoose/mongodb-memory-server) for in-memory database testing. Tests enforce coverage thresholds on all library and model files.
@@ -26,7 +28,7 @@ tests/
 ├── openprinttag-decode.test.ts # OpenPrintTag decoder tests (36 tests)
 ├── ndef.test.ts                # NDEF wrap/parse + format/erase tests (25 tests)
 ├── nfc-roundtrip.test.ts       # NFC encode→decode roundtrip tests (6 tests)
-├── resolveFilament.test.ts     # Parent/variant resolution + spool inheritance + hasVariants tests (24 tests)
+├── resolveFilament.test.ts     # Parent/variant resolution + spool inheritance + hasVariants tests (25 tests)
 ├── parseIni.test.ts            # INI parser tests (18 tests)
 ├── prusament.test.ts           # Prusament spool data extraction tests (8 tests)
 ├── tdsExtractor.test.ts        # TDS AI extraction tests — Gemini/Claude/OpenAI providers, file uploads (14 tests)
@@ -37,7 +39,7 @@ tests/
 ├── mongodb.test.ts             # DB connection + migration tests (10 tests)
 ├── importFilaments.test.ts     # CSV/XLSX import mapping + upsert + skip report tests (18 tests)
 ├── exportFilaments.test.ts     # CSV/XLSX export column mapping tests (11 tests)
-├── prusaSlicerBundle.test.ts   # PrusaSlicer INI bundle generation tests (19 tests)
+├── prusaSlicerBundle.test.ts   # PrusaSlicer INI bundle generation tests (17 tests)
 └── openprinttagBrowser.test.ts # OpenPrintTag database browser + completeness scoring tests (36 tests)
 ```
 

@@ -1,5 +1,7 @@
 # Troubleshooting
 
+[< Back to README](../README.md)
+
 ## "MongoServerError: bad auth" when running seed script
 
 Your MongoDB Atlas username or password is incorrect. Double-check the credentials in `.env.local`. If your password contains special characters (`@`, `#`, `%`, etc.), URL-encode them. For example, `p@ssword` becomes `p%40ssword`.
@@ -48,7 +50,7 @@ If the filament ID in the URL doesn't exist, the page will show "Filament not fo
 
 ## INI export is missing some filaments
 
-Filaments with per-nozzle calibrations are exported as separate sections per nozzle (e.g., `[filament:Name 0.4mm]`). The original filament name without a nozzle suffix will not appear if it has calibrations. Filaments without calibrations export normally.
+Each filament is exported as a single `[filament:Name]` section regardless of calibrations. Calibration values (EM, pressure advance, max volumetric speed, retraction) are not baked into the INI — they are applied dynamically at print time via the `/api/filaments/{id}/calibration` endpoint (used by the PrusaSlicer fork). If a filament is missing from the export, check that it has a name and is not soft-deleted.
 
 ## Desktop app: macOS app hangs or won't open after installation
 

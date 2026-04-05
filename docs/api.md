@@ -1,5 +1,7 @@
 # API Reference
 
+[< Back to README](../README.md)
+
 > **Interactive docs**: Browse and test all endpoints in the [Swagger UI](/api-docs) — an interactive OpenAPI 3.0 explorer built into the app.
 
 ## Filaments
@@ -24,6 +26,8 @@
 | `POST` | `/api/filaments/parse-ini` | Parse an INI file and return filament profiles without saving |
 | `POST` | `/api/filaments/import-atlas` | Connect to a remote MongoDB Atlas database and import filaments |
 | `GET` | `/api/filaments/:id/openprinttag` | Download OpenPrintTag binary for a filament |
+| `GET` | `/api/filaments/:id/calibration` | Get calibration data for a filament and nozzle diameter |
+| `POST` | `/api/filaments/:id` | Sync a filament preset back from PrusaSlicer |
 
 ### Spools
 
@@ -147,6 +151,53 @@ Returns:
 
 Existing filaments with the same name are updated; new filaments are created. Parent-variant relationships from the remote database are not preserved.
 
+### GET /api/filaments/:id/calibration
+
+Returns calibration data for a specific filament and nozzle diameter. The `{id}` parameter may be a URL-encoded preset name (e.g. `The%20K8%20PC`) or a MongoDB ObjectId. Variant filaments inherit calibrations from their parent.
+
+Query parameters:
+- `nozzle_diameter` (required) -- nozzle diameter in mm (e.g. `0.4`)
+
+Returns on success:
+```json
+{
+  "filament": "Prusament PETG Prusa Galaxy Black",
+  "nozzle": { "diameter": 0.4, "name": "Brass 0.4mm", "highFlow": false },
+  "printer": "My MK4" ,
+  "calibration": {
+    "pressureAdvance": 0.045,
+    "maxVolumetricSpeed": 15,
+    "extrusionMultiplier": 1.0,
+    "retractLength": 0.6,
+    "retractSpeed": 45,
+    "retractLift": 0.2
+  }
+}
+```
+
+Returns 400 if `nozzle_diameter` is missing. Returns 404 with an `available` array of `{ diameter, name }` objects if no calibration matches the requested diameter.
+
+Used by the PrusaSlicer fork to auto-adjust filament settings when the user switches printer presets.
+
+### POST /api/filaments/:id
+
+Sync a filament preset back from PrusaSlicer. The `{id}` parameter may be a URL-encoded preset name or a MongoDB ObjectId.
+
+Send a JSON body:
+```json
+{ "config": { "temperature": "215", "filament_density": "1.24", "my_custom_key": "value" } }
+```
+
+Recognised PrusaSlicer INI keys (`filament_type`, `filament_vendor`, `filament_colour`, `filament_diameter`, `filament_density`, `filament_cost`, `filament_spool_weight`, `filament_max_volumetric_speed`, `temperature`, `first_layer_temperature`, `bed_temperature`, `first_layer_bed_temperature`, `filament_shrinkage_compensation_xy`, `filament_shrinkage_compensation_z`, `filament_soluble`, `filament_abrasive`) are reverse-mapped to structured DB fields. All remaining keys are merged into the filament's `settings` passthrough bag.
+
+Returns:
+```json
+{
+  "message": "Synced 12 settings for \"Prusament PETG Prusa Galaxy Black\"",
+  "filamentId": "64a1b2c3d4e5f6a7b8c9d0e1"
+}
+```
+
 ### GET /api/filaments/:id/openprinttag
 
 Downloads the filament as an OpenPrintTag CBOR binary (`.bin` file). The binary can be written to an NFC-V (ISO 15693) tag or used with other OpenPrintTag-compatible tools.
@@ -202,12 +253,13 @@ Import a PrusaSlicer INI config bundle. Send the INI text as the raw request bod
 Returns:
 ```json
 {
-  "message": "Imported 15 filaments (12 new, 3 updated)",
-  "total": 15,
   "created": 12,
-  "updated": 3
+  "updated": 3,
+  "filaments": ["Prusament PLA Galaxy Black", "Prusament PETG Orange", "..."]
 }
 ```
+
+`filaments` is an array of the preset names that were imported.
 
 ---
 
@@ -448,8 +500,9 @@ Removes the stored API key and resets the provider to the default (Gemini).
 
 ### POST /api/tds
 
-Extract filament properties from a Technical Data Sheet URL using AI. Send a JSON body:
+Extract filament properties from a Technical Data Sheet using AI. Accepts two input modes:
 
+**URL-based** -- Send a JSON body:
 ```json
 { "url": "https://example.com/filament-tds.pdf", "apiKey": "optional-key", "provider": "gemini" }
 ```
@@ -457,6 +510,17 @@ Extract filament properties from a Technical Data Sheet URL using AI. Send a JSO
 - `url` (required) -- URL to a TDS document (PDF or web page)
 - `apiKey` (optional) -- API key to use. Falls back to environment variable (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`) or the stored key from PUT.
 - `provider` (optional) -- AI provider to use. Falls back to the stored provider.
+
+**File upload** -- Upload via `multipart/form-data` with a `file` field (max 10 MB). PDF and plain-text files are supported. Additional form fields `apiKey` and `provider` are also accepted.
+
+```
+POST /api/tds
+Content-Type: multipart/form-data
+
+file=<PDF or text file>
+apiKey=<optional>
+provider=<optional>
+```
 
 Returns:
 ```json

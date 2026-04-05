@@ -3,9 +3,9 @@
   "configurations": [
     {
       "name": "dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
-      "port": 3000,
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": ["-c", "PATH=/opt/homebrew/bin:$PATH npm run dev"],
+      "port": 3456,
       "autoPort": true
     }
   ]

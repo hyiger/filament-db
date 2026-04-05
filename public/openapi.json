@@ -20,6 +20,9 @@
     { "name": "Nozzles", "description": "Manage nozzle definitions" },
     { "name": "Printers", "description": "Manage printer profiles" },
     { "name": "Prusament", "description": "Prusament spool scraping and import" },
+    { "name": "PrusaSlicer", "description": "PrusaSlicer config bundle export and import" },
+    { "name": "OpenPrintTag", "description": "OpenPrintTag community database browser and import" },
+    { "name": "TDS", "description": "Technical Data Sheet AI extraction" },
     { "name": "Snapshot", "description": "Database backup and restore" },
     { "name": "Setup", "description": "Database connectivity" }
   ],
@@ -190,6 +193,60 @@
           }
         }
       },
+      "post": {
+        "tags": ["Filaments"],
+        "summary": "Sync filament from PrusaSlicer",
+        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields (type, vendor, color, diameter, density, cost, spoolWeight, maxVolumetricSpeed, temperatures, shrinkageXY, shrinkageZ, soluble, abrasive); all other keys are merged into the settings passthrough bag.",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["config"],
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "PrusaSlicer INI key-value pairs to sync back (e.g. filament_type, temperature, bed_temperature)"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Sync successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string", "example": "Synced 12 settings for \"Prusament PLA Galaxy Black\"" },
+                    "filamentId": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No config provided",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Filament not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "500": {
+            "description": "Sync failed",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      },
       "delete": {
         "tags": ["Filaments"],
         "summary": "Delete filament",
@@ -257,6 +314,95 @@
                 "schema": { "$ref": "#/components/schemas/Error" }
               }
             }
+          }
+        }
+      }
+    },
+    "/api/filaments/{id}/calibration": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "Get calibration for nozzle diameter",
+        "description": "Returns calibration data for a specific filament and nozzle diameter. Looks up the filament by URL-encoded name or ObjectId, resolves variant inheritance, then finds the calibration entry whose nozzle diameter matches the query param. Used by PrusaSlicer to auto-adjust filament settings when the user switches printer presets.",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" },
+          {
+            "name": "nozzle_diameter",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "number" },
+            "description": "Nozzle diameter in mm (e.g. 0.4)",
+            "example": 0.4
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Calibration data for the matched nozzle",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "filament": { "type": "string", "description": "Filament name" },
+                    "nozzle": {
+                      "type": "object",
+                      "properties": {
+                        "diameter": { "type": "number" },
+                        "name": { "type": "string" },
+                        "highFlow": { "type": "boolean" }
+                      }
+                    },
+                    "printer": { "type": "string", "nullable": true, "description": "Printer name, or null if calibration is not printer-specific" },
+                    "calibration": {
+                      "type": "object",
+                      "properties": {
+                        "pressureAdvance": { "type": "number", "nullable": true },
+                        "maxVolumetricSpeed": { "type": "number", "nullable": true },
+                        "extrusionMultiplier": { "type": "number", "nullable": true },
+                        "retractLength": { "type": "number", "nullable": true },
+                        "retractSpeed": { "type": "number", "nullable": true },
+                        "retractLift": { "type": "number", "nullable": true }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid nozzle_diameter",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Filament not found or no calibration for that nozzle diameter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    { "$ref": "#/components/schemas/Error" },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "available": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "diameter": { "type": "number" },
+                              "name": { "type": "string" }
+                            }
+                          },
+                          "description": "List of nozzle diameters that do have calibration data"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
           }
         }
       }
@@ -1427,8 +1573,11 @@
         "properties": {
           "nozzle": { "type": "number", "nullable": true, "description": "Nozzle temperature in °C" },
           "nozzleFirstLayer": { "type": "number", "nullable": true, "description": "First layer nozzle temperature" },
+          "nozzleRangeMin": { "type": "number", "nullable": true, "description": "Minimum recommended nozzle temperature in °C" },
+          "nozzleRangeMax": { "type": "number", "nullable": true, "description": "Maximum recommended nozzle temperature in °C" },
           "bed": { "type": "number", "nullable": true, "description": "Bed temperature in °C" },
-          "bedFirstLayer": { "type": "number", "nullable": true, "description": "First layer bed temperature" }
+          "bedFirstLayer": { "type": "number", "nullable": true, "description": "First layer bed temperature" },
+          "standby": { "type": "number", "nullable": true, "description": "Standby/idle nozzle temperature in °C" }
         }
       },
       "Calibration": {
@@ -1487,6 +1636,31 @@
           "dryingTemperature": { "type": "number", "nullable": true, "description": "Recommended drying temperature in °C" },
           "dryingTime": { "type": "number", "nullable": true, "description": "Recommended drying time in minutes" },
           "transmissionDistance": { "type": "number", "nullable": true, "description": "HueForge transmission distance" },
+          "glassTempTransition": { "type": "number", "nullable": true, "description": "Glass transition temperature in °C (Tg)" },
+          "heatDeflectionTemp": { "type": "number", "nullable": true, "description": "Heat deflection temperature in °C" },
+          "shoreHardnessA": { "type": "number", "nullable": true, "description": "Shore A hardness (flexible/TPU filaments)" },
+          "shoreHardnessD": { "type": "number", "nullable": true, "description": "Shore D hardness" },
+          "shrinkageXY": { "type": "number", "nullable": true, "description": "XY-plane shrinkage compensation percentage" },
+          "shrinkageZ": { "type": "number", "nullable": true, "description": "Z-axis shrinkage compensation percentage" },
+          "minPrintSpeed": { "type": "number", "nullable": true, "description": "Minimum recommended print speed in mm/s" },
+          "maxPrintSpeed": { "type": "number", "nullable": true, "description": "Maximum recommended print speed in mm/s" },
+          "spoolType": { "type": "string", "nullable": true, "description": "Spool form factor (e.g. Standard, Refill, Cardboard)" },
+          "colorName": { "type": "string", "nullable": true, "description": "Human-readable color name (e.g. Galaxy Black)" },
+          "syncId": { "type": "string", "nullable": true, "description": "External sync identifier (e.g. PrusaSlicer preset name)" },
+          "optTags": { "type": "array", "items": { "type": "integer" }, "description": "Optional tag flags (bit field values)" },
+          "bedTypeTemps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "bedType": { "type": "string", "description": "Bed surface type (e.g. Textured PEI, Cool Plate, Engineering Plate)" },
+                "temperature": { "type": "number", "nullable": true },
+                "firstLayerTemperature": { "type": "number", "nullable": true }
+              },
+              "required": ["bedType"]
+            },
+            "description": "Per-bed-surface-type temperature overrides"
+          },
           "abrasive": { "type": "boolean", "default": false, "description": "Whether the filament is abrasive" },
           "soluble": { "type": "boolean", "default": false, "description": "Whether the filament is soluble (support material)" },
           "spools": {
@@ -1541,6 +1715,33 @@
           "spoolWeight": { "type": "number", "nullable": true },
           "netFilamentWeight": { "type": "number", "nullable": true },
           "totalWeight": { "type": "number", "nullable": true },
+          "dryingTemperature": { "type": "number", "nullable": true },
+          "dryingTime": { "type": "number", "nullable": true },
+          "transmissionDistance": { "type": "number", "nullable": true },
+          "glassTempTransition": { "type": "number", "nullable": true },
+          "heatDeflectionTemp": { "type": "number", "nullable": true },
+          "shoreHardnessA": { "type": "number", "nullable": true },
+          "shoreHardnessD": { "type": "number", "nullable": true },
+          "shrinkageXY": { "type": "number", "nullable": true },
+          "shrinkageZ": { "type": "number", "nullable": true },
+          "minPrintSpeed": { "type": "number", "nullable": true },
+          "maxPrintSpeed": { "type": "number", "nullable": true },
+          "spoolType": { "type": "string", "nullable": true },
+          "colorName": { "type": "string", "nullable": true },
+          "syncId": { "type": "string", "nullable": true },
+          "optTags": { "type": "array", "items": { "type": "integer" } },
+          "bedTypeTemps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "bedType": { "type": "string" },
+                "temperature": { "type": "number", "nullable": true },
+                "firstLayerTemperature": { "type": "number", "nullable": true }
+              },
+              "required": ["bedType"]
+            }
+          },
           "tdsUrl": { "type": "string", "nullable": true },
           "inherits": { "type": "string", "nullable": true },
           "parentId": { "type": "string", "nullable": true },

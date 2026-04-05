@@ -1,5 +1,7 @@
 # Setup Guide
 
+[< Back to README](../README.md)
+
 ## Option 1: Desktop App (easiest)
 
 Download the latest installer for your platform from [GitHub Releases](https://github.com/hyiger/filament-db/releases):
@@ -88,7 +90,7 @@ volumes:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `MONGODB_URI` | Yes | MongoDB connection string |
-| `PORT` | No | Server port (default: `3456`) |
+| `PORT` | No | Server port inside the container (default: `3000`) |
 | `GEMINI_API_KEY` | No | Google Gemini API key for TDS extraction |
 | `ANTHROPIC_API_KEY` | No | Anthropic Claude API key for TDS extraction |
 | `OPENAI_API_KEY` | No | OpenAI API key for TDS extraction |
@@ -208,7 +210,7 @@ The AI API key enables the "Import from TDS" feature, which uses AI to extract f
 
 ```bash
 npm run dev                   # development at http://localhost:3456
-npm run build && npm start    # production
+npm run build && npm start    # production at http://localhost:3000 (set PORT=3456 to match dev)
 ```
 
 #### Desktop App (from source)
@@ -218,7 +220,7 @@ npm run electron:dev          # development mode
 npm run electron:build        # build installer for your platform
 ```
 
-> **Port:** Filament DB always runs on port **3456** — dev, desktop, and Docker (mapped from container port 3000). The [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) defaults to `http://localhost:3456`.
+> **Port:** `npm run dev` and the desktop app run on port **3456**. Docker exposes port 3000 internally, mapped to 3456 on the host via `-p 3456:3000`. `npm start` (production) defaults to port **3000** unless `PORT=3456` is set. The [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) defaults to `http://localhost:3456`.
 
 ---
 

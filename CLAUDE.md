@@ -75,6 +75,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 ## PrusaSlicer Integration
 
 - **Config bundle API**: `GET /api/filaments/prusaslicer` exports filaments as PrusaSlicer INI bundle; `POST` imports bundles back
+- **Calibration API**: `GET /api/filaments/{id}/calibration?nozzle_diameter=0.4` returns per-nozzle calibration data (extrusion multiplier, pressure advance, max volumetric speed, retraction); used by PrusaSlicer to auto-adjust filament settings when the user switches printer presets
 - **Field mapping**: `src/lib/prusaSlicerBundle.ts` maps structured DB fields → PrusaSlicer INI keys, merges with `settings` bag
 - **Nil handling**: Structured DB fields that are null must NOT emit `nil` in the INI output — PrusaSlicer interprets nil as "reset to zero" for numeric fields. Only settings bag nil values (meaning "inherit from parent") are preserved.
 - **PrusaSlicer fork**: [hyiger/PrusaSlicer](https://github.com/hyiger/PrusaSlicer) has a `FilamentDB` module that fetches presets on startup via the REST API
@@ -85,7 +86,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 - **Page**: `/openprinttag` — browse the OpenPrintTag community database (11k+ materials)
 - **API**: `GET /api/openprinttag` fetches GitHub tarball, parses YAML, filters to FFF, caches 1 hour
 - **Import**: `POST /api/openprinttag/import` with `{ slugs: [...] }` — upserts by name
-- **Completeness scoring**: 0–10 scale (color, density, temps, hardness, TD, drying, chamber, photos, url)
+- **Completeness scoring**: 0–10 scale (color, density, print temps, bed temps, drying temp, hardness, TD, chamber, photos, url)
 - **Tiers**: rich (7–10 green), partial (4–6 yellow), stub (0–3 grey/dimmed)
 
 Note: SLIX2 NFC tags have write-protected block 79. The NDEF wrapper reserves the last 4 bytes (`usableMemory = tagMemorySize - 4`).

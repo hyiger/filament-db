@@ -1,5 +1,7 @@
 # Desktop App
 
+[< Back to README](../README.md)
+
 Filament DB can be packaged as an installable desktop application for macOS, Windows, and Linux using Electron.
 
 ## Installing

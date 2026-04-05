@@ -43,7 +43,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 ### Developer
 - **REST API** -- full CRUD endpoints for filaments, nozzles, and printers
-- **PrusaSlicer API** -- `GET /api/filaments/prusaslicer` exports filaments as a PrusaSlicer-compatible INI config bundle (one section per filament); calibration overrides are applied dynamically via `GET /api/filaments/:name/calibration`; `POST` imports bundles back
+- **PrusaSlicer API** -- `GET /api/filaments/prusaslicer` exports filaments as a PrusaSlicer-compatible INI config bundle (one section per filament); calibration overrides are applied dynamically via `GET /api/filaments/{id}/calibration`; `POST` imports bundles back
 - **API documentation** -- interactive Swagger UI at `/api-docs` with OpenAPI 3.0 spec
 
 ## Tech Stack
