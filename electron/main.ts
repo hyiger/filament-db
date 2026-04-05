@@ -331,6 +331,7 @@ ipcMain.handle("get-config", () => {
     aiApiKey: store.get("aiApiKey") as string,
     aiProvider: store.get("aiProvider") as string,
     currency: store.get("currency") as string,
+    locale: store.get("locale") as string,
   };
 });
 
@@ -342,6 +343,7 @@ ipcMain.handle("save-config", async (_event, config: {
   aiApiKey?: string;
   aiProvider?: string;
   currency?: string;
+  locale?: string;
 }) => {
   // Update individual fields
   if (config.connectionMode !== undefined) {
@@ -361,6 +363,9 @@ ipcMain.handle("save-config", async (_event, config: {
   }
   if (config.currency !== undefined) {
     store.set("currency", config.currency);
+  }
+  if (config.locale !== undefined) {
+    store.set("locale", config.locale);
   }
 
   // Legacy: if only mongodbUri is sent (old atlas-only flow)
