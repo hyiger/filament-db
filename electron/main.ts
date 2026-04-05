@@ -9,6 +9,11 @@ import { SyncService, SyncStatus } from "./sync-service";
 export type ConnectionMode = "atlas" | "offline" | "hybrid";
 
 const store = new Store({
+  // NOTE: This key is embedded in the binary and provides no real security,
+  // but it cannot be removed without breaking existing installations whose
+  // config files were encrypted with it. A future migration to OS-level
+  // credential storage (safeStorage) would replace this.
+  encryptionKey: "filament-db-secure-key",
   defaults: {
     mongodbUri: "",
     connectionMode: "" as ConnectionMode, // empty = not yet configured
