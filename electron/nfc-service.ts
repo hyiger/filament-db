@@ -63,11 +63,27 @@ export class NfcService extends EventEmitter {
         this.updateStatus({ readerConnected: true, readerName: reader.name });
       }
 
+      let firstStatus = true;
       reader.on("status", (status: CardReaderStatus) => {
         const changes = reader.state ^ status.state;
-        if (!changes) return;
         const isPresent = !!(status.state & reader.SCARD_STATE_PRESENT);
         const isEmpty = !!(status.state & reader.SCARD_STATE_EMPTY);
+        if (!changes) return;
+
+        // Ignore the first status event per reader — it reflects the reader's
+        // initial state which can falsely report SCARD_STATE_PRESENT on some
+        // interfaces (e.g. the SAM slot on Linux reports present=true with no
+        // tag). We must skip setting readerPresent here too, otherwise the SAM
+        // reader's phantom "present" permanently blocks tag removal detection.
+        if (firstStatus) {
+          firstStatus = false;
+          if (isPresent && !isEmpty && status.atr?.length) {
+            // ATR present means a tag is genuinely on the reader at startup
+            this.readerPresent.set(reader.name, true);
+            this.updateStatus({ tagPresent: true, tagUid: null });
+          }
+          return;
+        }
 
         // Track each reader's presence independently
         this.readerPresent.set(reader.name, isPresent && !isEmpty);
@@ -125,7 +141,7 @@ export class NfcService extends EventEmitter {
 
   private disconnectReader(reader: CardReader): Promise<void> {
     return new Promise((resolve) => {
-      reader.disconnect(reader.SCARD_LEAVE_CARD, () => resolve());
+      reader.disconnect(reader.SCARD_UNPOWER_CARD, () => resolve());
     });
   }
 
@@ -145,6 +161,13 @@ export class NfcService extends EventEmitter {
       const settleDelay = Math.max(1000, 3000 - msSinceDiscovery);
       console.log(`[NFC] Reader recently discovered, waiting ${settleDelay}ms for drivers to settle`);
       await new Promise(r => setTimeout(r, settleDelay));
+    }
+
+    // On Linux (especially Raspberry Pi), the PC/SC daemon may not finish
+    // enumerating the tag before the status event fires. Give it a brief
+    // head-start before the first connect attempt.
+    if (process.platform === "linux") {
+      await new Promise(r => setTimeout(r, 500));
     }
 
     // Try each reader instance with SHARED mode.
@@ -298,6 +321,7 @@ export class NfcService extends EventEmitter {
         for (let j = 0; j < BLOCK_SIZE && offset + j < tagMemory.length; j++) {
           blockData[j] = tagMemory[offset + j];
         }
+
         await this.writeBlock(protocol, i, blockData);
 
         // Small delay for EEPROM programming time

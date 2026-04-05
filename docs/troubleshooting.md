@@ -52,6 +52,16 @@ If the filament ID in the URL doesn't exist, the page will show "Filament not fo
 
 Each filament is exported as a single `[filament:Name]` section regardless of calibrations. Calibration values (EM, pressure advance, max volumetric speed, retraction) are not baked into the INI — they are applied dynamically at print time via the `/api/filaments/{id}/calibration` endpoint (used by the PrusaSlicer fork). If a filament is missing from the export, check that it has a name and is not soft-deleted.
 
+## "Blocked cross-origin request" in dev mode
+
+If you access the dev server from a hostname other than `localhost` (e.g. `http://myhost.local:3456`), Next.js blocks the hot-reload WebSocket connection. Add your hostname to `ALLOWED_DEV_ORIGINS` in `.env.local`:
+
+```
+ALLOWED_DEV_ORIGINS=myhost.local
+```
+
+Multiple hostnames can be comma-separated. Restart the dev server after changing this value. This only affects development — production builds are not affected.
+
 ## Desktop app: macOS app hangs or won't open after installation
 
 macOS Gatekeeper blocks the app because it is not notarized with an Apple Developer ID. Remove the quarantine flag by running in Terminal:

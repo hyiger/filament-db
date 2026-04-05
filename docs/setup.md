@@ -94,6 +94,7 @@ volumes:
 | `GEMINI_API_KEY` | No | Google Gemini API key for TDS extraction |
 | `ANTHROPIC_API_KEY` | No | Anthropic Claude API key for TDS extraction |
 | `OPENAI_API_KEY` | No | OpenAI API key for TDS extraction |
+| `ALLOWED_DEV_ORIGINS` | No | Comma-separated hostnames allowed to access the dev server (e.g. `myhost.local`) |
 
 ### Building from Source
 
@@ -199,6 +200,14 @@ GEMINI_API_KEY=your-gemini-key
 ```
 
 The AI API key enables the "Import from TDS" feature, which uses AI to extract filament properties from Technical Data Sheets. You can also configure this in the Settings page instead of using environment variables.
+
+If you access the dev server from another device on your network (e.g. a Raspberry Pi at `myhost.local`), add the hostname to allow cross-origin dev requests:
+
+```
+ALLOWED_DEV_ORIGINS=myhost.local
+```
+
+Multiple hostnames can be comma-separated (e.g. `myhost.local,other.local`).
 
 > **Note:** If your password contains special characters (`@`, `#`, `%`, etc.), you must URL-encode them. For example, `p@ssword` becomes `p%40ssword`.
 

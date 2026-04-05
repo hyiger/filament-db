@@ -5,6 +5,9 @@ const pkg = JSON.parse(readFileSync("./package.json", "utf-8"));
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  allowedDevOrigins: process.env.ALLOWED_DEV_ORIGINS
+    ? process.env.ALLOWED_DEV_ORIGINS.split(",").map(s => s.trim())
+    : [],
   env: {
     APP_VERSION: pkg.version,
   },

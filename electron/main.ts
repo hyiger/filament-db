@@ -497,6 +497,19 @@ ipcMain.handle("nfc-read-tag", async () => {
 ipcMain.handle("nfc-write-tag", async (_event, payload: number[], productUrl?: string) => {
   if (!nfcService) throw new Error("NFC not initialized");
   await withIpcTimeout(() => nfcService!.writeTag(new Uint8Array(payload), productUrl), "nfc-write-tag");
+
+  // After a successful write, schedule a delayed read-back so the UI shows
+  // the updated tag data. We delay to let the disconnect settle — reading
+  // immediately after disconnect can leave pcscd in a bad state on Linux.
+  setTimeout(() => {
+    if (!nfcService) return;
+    nfcService.readTag()
+      .then((data) => {
+        mainWindow?.webContents.send("nfc-tag-detected", { data });
+      })
+      .catch(() => { /* best-effort */ });
+  }, 2000);
+
   return { success: true };
 });
 
