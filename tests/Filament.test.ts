@@ -333,6 +333,74 @@ describe("Filament Model", () => {
     await filament.save();
     expect(filament.instanceId).toBe("custom-id-123");
   });
+
+  it("supports parentId for variant relationships", async () => {
+    const parent = await Filament.create({
+      name: "Parent PLA",
+      vendor: "Test",
+      type: "PLA",
+    });
+
+    const variant = await Filament.create({
+      name: "Variant PLA - Red",
+      vendor: "Test",
+      type: "PLA",
+      parentId: parent._id,
+    });
+
+    expect(variant.parentId.toString()).toBe(parent._id.toString());
+  });
+
+  it("can query variants by parentId", async () => {
+    const parent = await Filament.create({
+      name: "Parent PETG",
+      vendor: "Test",
+      type: "PETG",
+    });
+
+    await Filament.create({
+      name: "Variant PETG - Blue",
+      vendor: "Test",
+      type: "PETG",
+      parentId: parent._id,
+    });
+    await Filament.create({
+      name: "Variant PETG - Green",
+      vendor: "Test",
+      type: "PETG",
+      parentId: parent._id,
+    });
+
+    const variants = await Filament.find({ parentId: parent._id, _deletedAt: null });
+    expect(variants).toHaveLength(2);
+  });
+
+  it("countDocuments returns variant count for a parent", async () => {
+    const parent = await Filament.create({
+      name: "Parent ASA",
+      vendor: "Test",
+      type: "ASA",
+    });
+
+    await Filament.create({
+      name: "Variant ASA - Black",
+      vendor: "Test",
+      type: "ASA",
+      parentId: parent._id,
+    });
+
+    const variantCount = await Filament.countDocuments({ parentId: parent._id, _deletedAt: null });
+    expect(variantCount).toBe(1);
+
+    // Soft-delete the variant
+    await Filament.findOneAndUpdate(
+      { name: "Variant ASA - Black" },
+      { _deletedAt: new Date() },
+    );
+
+    const activeCount = await Filament.countDocuments({ parentId: parent._id, _deletedAt: null });
+    expect(activeCount).toBe(0);
+  });
 });
 
 describe("backfillInstanceIds", () => {

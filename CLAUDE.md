@@ -50,9 +50,20 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 - **IPC pattern**: `ipcMain.handle()` in `electron/main.ts`, exposed via `contextBridge` in `electron/preload.ts`, typed in `src/types/electron.d.ts`
 - **OpenPrintTag**: CBOR encoder in `src/lib/openprinttag.ts`, NDEF wrapping in `electron/ndef.ts`. CBOR aux_region_offset must point to valid CBOR within the NDEF payload (Prusa app requirement)
 
+## Internationalization (i18n)
+
+- **Framework**: Custom React Context-based i18n (no external library), following the useCurrency pattern
+- **Provider**: `src/i18n/TranslationProvider.tsx` — provides `t(key, params?)`, `locale`, `setLocale`
+- **Locales**: `src/i18n/locales/en.json` (English), `src/i18n/locales/de.json` (German) — 737+ flat key-value pairs
+- **Interpolation**: `{paramName}` tokens in translation strings, e.g. `t("sync.time.minutesAgo", { count: 5 })`
+- **Fallback chain**: current locale → English → raw key
+- **Persistence**: electron-store (desktop) or localStorage (web), key `filamentdb-locale`
+- **Settings**: Language selector in Settings page (same toggle-button pattern as Currency)
+- **Adding a language**: Create `src/i18n/locales/xx.json` with all keys, add entry to `LOCALES` array in `src/i18n/index.ts`
+
 ## Testing
 
-- 427 tests across 17 files
+- 430 tests across 17 files
 - Coverage thresholds: 80% lines/statements, 90% functions, 75% branches
 - Setup file: `tests/setup.ts` (mongodb-memory-server)
 - Tests run in CI on Node 20 and 22

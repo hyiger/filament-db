@@ -160,6 +160,7 @@ export default function PrintersPage() {
                     type="checkbox"
                     checked={selected.size === printers.length && printers.length > 0}
                     onChange={toggleAll}
+                    aria-label={t("filaments.bulk.selectAll") || "Select all"}
                     className="accent-red-600"
                   />
                 </th>
@@ -182,6 +183,7 @@ export default function PrintersPage() {
                       type="checkbox"
                       checked={selected.has(p._id)}
                       onChange={() => toggleSelect(p._id)}
+                      aria-label={p.name || "Select"}
                       className="accent-red-600"
                     />
                   </td>

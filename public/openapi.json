@@ -3,7 +3,7 @@
   "info": {
     "title": "Filament DB API",
     "description": "REST API for managing 3D printing filament profiles, nozzles, and printers. Supports filament inheritance (parent/variant), per-printer per-nozzle calibrations, INI profile export/import, and OpenPrintTag NFC binary generation.",
-    "version": "1.7.3",
+    "version": "1.8.4",
     "license": {
       "name": "MIT"
     }
@@ -1670,7 +1670,10 @@
               "properties": {
                 "_id": { "type": "string" },
                 "label": { "type": "string" },
-                "totalWeight": { "type": "number", "nullable": true }
+                "totalWeight": { "type": "number", "nullable": true },
+                "lotNumber": { "type": "string", "nullable": true, "description": "Manufacturer lot or batch number" },
+                "purchaseDate": { "type": "string", "format": "date", "nullable": true, "description": "Date the spool was purchased" },
+                "openedDate": { "type": "string", "format": "date", "nullable": true, "description": "Date the spool was opened" }
               }
             },
             "description": "Individual spool entries with weights"

@@ -48,19 +48,21 @@ export async function POST(request: NextRequest) {
   delete body.createdAt;
   delete body.updatedAt;
   delete body.__v;
-
-  // Validate that all referenced nozzle IDs exist and are active
-  if (body.installedNozzles?.length > 0) {
-    const activeCount = await Nozzle.countDocuments({
-      _id: { $in: body.installedNozzles },
-      _deletedAt: null,
-    });
-    if (activeCount !== body.installedNozzles.length) {
-      return errorResponse("One or more selected nozzles no longer exist.", 400);
-    }
-  }
+  delete body.instanceId;
+  delete body.syncId;
 
   try {
+    // Validate that all referenced nozzle IDs exist and are active
+    if (body.installedNozzles?.length > 0) {
+      const activeCount = await Nozzle.countDocuments({
+        _id: { $in: body.installedNozzles },
+        _deletedAt: null,
+      });
+      if (activeCount !== body.installedNozzles.length) {
+        return errorResponse("One or more selected nozzles no longer exist.", 400);
+      }
+    }
+
     const printer = await Printer.create(body);
     return NextResponse.json(printer, { status: 201 });
   } catch (err: unknown) {

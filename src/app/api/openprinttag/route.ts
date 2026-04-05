@@ -24,7 +24,7 @@ export async function GET(request: Request) {
   } catch (err) {
     console.error("OpenPrintTag fetch error:", err);
     return NextResponse.json(
-      { error: "Failed to fetch OpenPrintTag database", detail: String(err) },
+      { error: "Failed to fetch OpenPrintTag database", detail: err instanceof Error ? err.message : "Unknown error" },
       { status: 500 },
     );
   }

@@ -877,7 +877,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
             }}
             onKeyDown={(e) => {
               if (!typeDropdownOpen) return;
-              const filtered = filamentTypes.filter((t) => !form.type || t.includes(form.type));
+              const filtered = filamentTypes.filter((ft) => !form.type || ft.includes(form.type));
               if (e.key === "ArrowDown") { e.preventDefault(); setTypeHighlight((h) => Math.min(h + 1, filtered.length - 1)); }
               else if (e.key === "ArrowUp") { e.preventDefault(); setTypeHighlight((h) => Math.max(h - 1, 0)); }
               else if (e.key === "Enter" && typeHighlight >= 0 && filtered[typeHighlight]) {
@@ -896,21 +896,21 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
           {typeDropdownOpen && (
             <ul id="type-listbox" role="listbox" aria-labelledby="type-label" className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
               {filamentTypes
-                .filter((t) => !form.type || t.includes(form.type))
-                .map((t, i) => (
+                .filter((ft) => !form.type || ft.includes(form.type))
+                .map((ft, i) => (
                   <li
-                    key={t}
+                    key={ft}
                     id={`type-opt-${i}`}
                     role="option"
-                    aria-selected={t === form.type}
-                    className={`px-3 py-1.5 cursor-pointer text-gray-100 hover:bg-gray-700 ${i === typeHighlight ? "bg-gray-600" : ""} ${t === form.type ? "bg-gray-700 font-semibold" : ""}`}
+                    aria-selected={ft === form.type}
+                    className={`px-3 py-1.5 cursor-pointer text-gray-100 hover:bg-gray-700 ${i === typeHighlight ? "bg-gray-600" : ""} ${ft === form.type ? "bg-gray-700 font-semibold" : ""}`}
                     onMouseDown={(e) => {
                       e.preventDefault();
-                      setForm({ ...form, type: t });
+                      setForm({ ...form, type: ft });
                       setTypeDropdownOpen(false);
                     }}
                   >
-                    {t}
+                    {ft}
                   </li>
                 ))}
               {form.type && !filamentTypes.includes(form.type) && (
@@ -1543,7 +1543,7 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
                     ...updates,
                     optTags: checked
                       ? [...new Set([...prev.optTags, val])]
-                      : prev.optTags.filter((t) => t !== val),
+                      : prev.optTags.filter((ft) => ft !== val),
                   }));
                 }}
                 className="w-4 h-4"

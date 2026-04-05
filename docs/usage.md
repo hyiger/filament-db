@@ -105,6 +105,12 @@ Sync uses **last-write-wins** conflict resolution: if the same filament was edit
 
 ---
 
+## Language
+
+Go to **Settings** and use the **Language** toggle to switch between English and German. The setting is persisted in the desktop app's config (or localStorage in the web app) and takes effect immediately across all pages.
+
+---
+
 ## Managing Nozzles
 
 Go to **Settings** and click **Nozzles** to view, create, edit, and delete nozzle profiles.

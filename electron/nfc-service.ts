@@ -288,7 +288,16 @@ export class NfcService extends EventEmitter {
         try {
           const bd = await this.readBlock(protocol, i);
           bd.copy(allData, i * BLOCK_SIZE);
-        } catch { break; }
+        } catch {
+          // Retry once for transient RF errors
+          try {
+            const bd = await this.readBlock(protocol, i);
+            bd.copy(allData, i * BLOCK_SIZE);
+            continue;
+          } catch {
+            break; // Give up — likely past readable memory
+          }
+        }
       }
 
       const cborPayload = parseNdefFromTag(allData);
@@ -304,16 +313,11 @@ export class NfcService extends EventEmitter {
 
       const tagMemory = wrapNdefForTag(cborPayload, tagMemorySize, productUrl);
 
-      // Only write blocks up through the TLV terminator (0xFE), not the zero-padded tail.
-      // The last block on SLIX2 tags (block 79) may be write-protected (config/password area).
-      let lastDataByte = 0;
-      for (let i = tagMemory.length - 1; i >= 0; i--) {
-        if (tagMemory[i] !== 0x00) {
-          lastDataByte = i;
-          break;
-        }
-      }
-      const numBlocks = Math.ceil((lastDataByte + 1) / BLOCK_SIZE);
+      // Write all blocks through the full payload length to ensure zero-padding
+      // is written to the tag (required for correct NDEF parsing by some readers).
+      // The last block on SLIX2 tags (block 79) may be write-protected, so we
+      // catch and stop on write errors below.
+      const numBlocks = Math.ceil(tagMemory.length / BLOCK_SIZE);
 
       for (let i = 0; i < numBlocks; i++) {
         const offset = i * BLOCK_SIZE;
@@ -322,7 +326,12 @@ export class NfcService extends EventEmitter {
           blockData[j] = tagMemory[offset + j];
         }
 
-        await this.writeBlock(protocol, i, blockData);
+        try {
+          await this.writeBlock(protocol, i, blockData);
+        } catch {
+          // Last block(s) may be write-protected on SLIX2 (config area) — stop
+          break;
+        }
 
         // Small delay for EEPROM programming time
         if (i < numBlocks - 1) {

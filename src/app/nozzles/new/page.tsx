@@ -4,10 +4,12 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import NozzleForm from "@/app/nozzles/NozzleForm";
 import { useToast } from "@/components/Toast";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function NewNozzle() {
   const router = useRouter();
   const { toast } = useToast();
+  const { t } = useTranslation();
 
   const handleSubmit = async (data: Record<string, unknown>) => {
     const res = await fetch("/api/nozzles", {
@@ -16,11 +18,11 @@ export default function NewNozzle() {
       body: JSON.stringify(data),
     });
     if (res.ok) {
-      toast("Nozzle created");
+      toast(t("nozzles.created"));
       router.push("/nozzles");
     } else {
       const body = await res.json().catch(() => null);
-      toast(body?.error || "Failed to create nozzle", "error");
+      toast(body?.error || t("nozzles.createError"), "error");
     }
   };
 
@@ -28,10 +30,10 @@ export default function NewNozzle() {
     <main className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
         <Link href="/nozzles" className="text-blue-600 hover:underline text-sm">
-          &larr; Back to nozzles
+          {t("nozzles.backToNozzles")}
         </Link>
       </div>
-      <h1 className="text-2xl font-bold mb-6">Add New Nozzle</h1>
+      <h1 className="text-2xl font-bold mb-6">{t("nozzles.addNewTitle")}</h1>
       <NozzleForm onSubmit={handleSubmit} />
     </main>
   );

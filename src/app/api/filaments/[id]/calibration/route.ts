@@ -117,7 +117,7 @@ export async function GET(
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return NextResponse.json(
-      { error: "Failed to fetch calibration", details: message },
+      { error: "Failed to fetch calibration", detail: message },
       { status: 500 }
     );
   }

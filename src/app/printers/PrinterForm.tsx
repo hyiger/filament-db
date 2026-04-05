@@ -60,13 +60,18 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
   }, [dirty]);
 
   useEffect(() => {
-    fetch("/api/nozzles")
+    const ac = new AbortController();
+    fetch("/api/nozzles", { signal: ac.signal })
       .then((r) => {
         if (!r.ok) throw new Error("fetch failed");
         return r.json();
       })
       .then(setNozzles)
-      .catch(() => setNozzlesFetchError(true));
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setNozzlesFetchError(true);
+      });
+    return () => ac.abort();
   }, []);
 
   // Auto-generate name from manufacturer + model (for new printers only)

@@ -114,7 +114,8 @@ function NewFilamentContent() {
   // Initialize from ?parentId= query param
   useEffect(() => {
     if (parentId) {
-      fetch(`/api/filaments/${parentId}`)
+      const ac = new AbortController();
+      fetch(`/api/filaments/${parentId}`, { signal: ac.signal })
         .then((r) => (r.ok ? r.json() : null))
         .then((parent) => {
           if (parent) {
@@ -127,17 +128,24 @@ function NewFilamentContent() {
             setFormKey((k) => k + 1);
           }
         })
-        .catch(() => {})
+        .catch((err) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+        })
         .finally(() => setParentLoading(false));
+      return () => ac.abort();
     }
   }, [parentId]);
 
   // Fetch clone options
   useEffect(() => {
-    fetch("/api/filaments/parents")
+    const ac = new AbortController();
+    fetch("/api/filaments/parents", { signal: ac.signal })
       .then((r) => r.json())
       .then(setCloneOptions)
-      .catch(() => {});
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+      });
+    return () => ac.abort();
   }, []);
 
   // Close dropdowns on outside click

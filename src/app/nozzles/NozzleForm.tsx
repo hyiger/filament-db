@@ -141,9 +141,9 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
             value={form.type}
             onChange={(e) => updateForm({ type: e.target.value })}
           >
-            {NOZZLE_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
+            {NOZZLE_TYPES.map((ntype) => (
+              <option key={ntype} value={ntype}>
+                {ntype}
               </option>
             ))}
           </select>

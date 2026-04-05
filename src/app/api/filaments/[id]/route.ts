@@ -64,6 +64,9 @@ export async function PUT(
     delete body._deletedAt;
     delete body.createdAt;
     delete body.updatedAt;
+    delete body.__v;
+    delete body.instanceId;
+    delete body.syncId;
 
     // Validate parentId if provided
     if (body.parentId) {
@@ -78,6 +81,11 @@ export async function PUT(
       // Prevent self-reference
       if (body.parentId === id) {
         return errorResponse("Cannot be your own parent", 400);
+      }
+      // Prevent converting a parent to a variant while it has children
+      const variantCount = await Filament.countDocuments({ parentId: id, _deletedAt: null });
+      if (variantCount > 0) {
+        return errorResponse("Cannot set parent on a filament that has variants — remove variants first", 400);
       }
     }
 

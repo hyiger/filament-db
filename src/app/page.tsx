@@ -186,6 +186,7 @@ export default function Home() {
   const [filaments, setFilaments] = useState<Filament[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [typeFilter, setTypeFilter] = useState("");
   const [vendorFilter, setVendorFilter] = useState("");
   const [types, setTypes] = useState<string[]>([]);
@@ -208,6 +209,13 @@ export default function Home() {
   const { toast } = useToast();
 
   const fetchFilamentsRef = useRef<AbortController | null>(null);
+
+  // Debounce search input by 300ms
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   // Track sticky header height for positioning the table thead below it
   useEffect(() => {
     const el = stickyHeaderRef.current;
@@ -227,7 +235,7 @@ export default function Home() {
 
     setLoading(true);
     const params = new URLSearchParams();
-    if (search) params.set("search", search);
+    if (debouncedSearch) params.set("search", debouncedSearch);
     if (typeFilter) params.set("type", typeFilter);
     if (vendorFilter) params.set("vendor", vendorFilter);
 
@@ -241,7 +249,7 @@ export default function Home() {
       const data = await res.json();
       setFilaments(data);
       // Derive filter options from unfiltered results (initial load / no filters)
-      if (!search && !typeFilter && !vendorFilter) {
+      if (!debouncedSearch && !typeFilter && !vendorFilter) {
         const typeList = [...new Set(data.map((f: Filament) => f.type))].sort() as string[];
         const vendorList = [...new Set(data.map((f: Filament) => f.vendor))].sort() as string[];
         setTypes(typeList);
@@ -253,7 +261,7 @@ export default function Home() {
       toast(t("filaments.loadError"), "error");
       setLoading(false);
     }
-  }, [search, typeFilter, vendorFilter, toast, t]);
+  }, [debouncedSearch, typeFilter, vendorFilter, toast, t]);
 
   useEffect(() => {
     setMounted(true);
@@ -446,6 +454,7 @@ export default function Home() {
           type="checkbox"
           checked={selected.has(f._id)}
           onChange={() => toggleSelect(f._id)}
+          aria-label={f.name || "Select"}
           className="accent-red-600"
         />
       </td>
@@ -530,6 +539,7 @@ export default function Home() {
               type="checkbox"
               checked={selected.has(f._id)}
               onChange={() => toggleSelect(f._id)}
+              aria-label={f.name || "Select"}
               className="accent-red-600"
             />
           </td>
@@ -829,6 +839,7 @@ export default function Home() {
                     type="checkbox"
                     checked={selected.size === allFilamentIds.length && allFilamentIds.length > 0}
                     onChange={toggleAll}
+                    aria-label={t("filaments.bulk.selectAll") || "Select all"}
                     className="accent-red-600"
                   />
                 </th>

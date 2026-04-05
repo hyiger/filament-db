@@ -151,7 +151,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     console.error("OpenPrintTag import error:", err);
     return NextResponse.json(
-      { error: "Import failed", detail: String(err) },
+      { error: "Import failed", detail: err instanceof Error ? err.message : "Unknown error" },
       { status: 500 },
     );
   }

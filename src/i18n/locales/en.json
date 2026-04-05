@@ -773,5 +773,11 @@
   "setup.serverError": "Server error",
   "setup.needAccount": "Need an account?",
   "setup.signUpAt": "Sign up at",
-  "setup.webConnectionSuccess": "Connected! Redirecting..."
+  "setup.webConnectionSuccess": "Connected! Redirecting...",
+  "nozzles.created": "Nozzle created",
+  "nozzles.createError": "Failed to create nozzle",
+  "nozzles.addNewTitle": "Add New Nozzle",
+  "printers.created": "Printer created",
+  "printers.createError": "Failed to create printer",
+  "printers.addNewTitle": "Add New Printer"
 }

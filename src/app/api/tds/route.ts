@@ -142,7 +142,8 @@ export async function POST(request: NextRequest) {
       return errorResponse("URL is required", 400);
     }
 
-    const provider: AiProvider = bodyProvider || storedProvider || "gemini";
+    const provider: AiProvider = (bodyProvider && ["gemini", "claude", "openai"].includes(bodyProvider))
+      ? bodyProvider as AiProvider : storedProvider || "gemini";
     const apiKey = resolveApiKey(bodyKey, provider);
 
     if (!apiKey) {

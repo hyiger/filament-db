@@ -40,6 +40,9 @@ export async function POST(request: NextRequest) {
     delete body._deletedAt;
     delete body.createdAt;
     delete body.updatedAt;
+    delete body.__v;
+    delete body.instanceId;
+    delete body.syncId;
     const nozzle = await Nozzle.create(body);
     return NextResponse.json(nozzle, { status: 201 });
   } catch (err) {

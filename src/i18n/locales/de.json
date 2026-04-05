@@ -773,5 +773,11 @@
   "setup.serverError": "Serverfehler",
   "setup.needAccount": "Noch kein Konto?",
   "setup.signUpAt": "Registrieren Sie sich bei",
-  "setup.webConnectionSuccess": "Verbunden! Weiterleitung…"
+  "setup.webConnectionSuccess": "Verbunden! Weiterleitung…",
+  "nozzles.created": "Düse erstellt",
+  "nozzles.createError": "Düse konnte nicht erstellt werden",
+  "nozzles.addNewTitle": "Neue Düse hinzufügen",
+  "printers.created": "Drucker erstellt",
+  "printers.createError": "Drucker konnte nicht erstellt werden",
+  "printers.addNewTitle": "Neuen Drucker hinzufügen"
 }

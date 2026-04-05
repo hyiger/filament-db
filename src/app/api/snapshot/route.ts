@@ -145,15 +145,14 @@ async function restoreSnapshot(request: NextRequest) {
       const text = await file.text();
       snapshot = JSON.parse(text);
     } else {
-      const contentLength = parseInt(request.headers.get("content-length") || "0");
-      if (contentLength > MAX_SNAPSHOT_SIZE) {
-        const sizeMB = (contentLength / (1024 * 1024)).toFixed(1);
+      const text = await request.text();
+      if (text.length > MAX_SNAPSHOT_SIZE) {
         return NextResponse.json(
-          { error: `Request too large (${sizeMB} MB). Maximum snapshot size is 50 MB.` },
+          { error: `Snapshot too large (max ${MAX_SNAPSHOT_SIZE / 1024 / 1024}MB)` },
           { status: 413 },
         );
       }
-      snapshot = await request.json();
+      snapshot = JSON.parse(text);
     }
   } catch {
     return NextResponse.json({ error: "Invalid JSON in snapshot file" }, { status: 400 });

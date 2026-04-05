@@ -198,13 +198,17 @@ export default function PrusamentImportDialog({
       <div
         ref={dialogRef}
         tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="prusament-import-title"
         className="bg-white dark:bg-zinc-900 rounded-lg shadow-xl w-full max-w-lg mx-4 max-h-[90vh] overflow-y-auto outline-none"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b dark:border-zinc-700">
-          <h2 className="text-lg font-semibold">{t("prusament.import.title")}</h2>
+          <h2 id="prusament-import-title" className="text-lg font-semibold">{t("prusament.import.title")}</h2>
           <button
             onClick={onClose}
+            aria-label="Close"
             className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 text-xl leading-none"
           >
             &times;

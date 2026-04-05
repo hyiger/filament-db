@@ -143,9 +143,14 @@ export class SyncService extends EventEmitter {
 
       // Sync filaments with nozzle, printer, and parent reference remapping
       this.updateStatus({ progress: "Syncing filaments..." });
+      const filamentTransform = this.buildFilamentRefsTransform(
+        localNozzleBySyncId, remoteNozzleBySyncId,
+        localPrinterBySyncId, remotePrinterBySyncId,
+        localFilamentBySyncId, remoteFilamentBySyncId,
+      );
       const filamentResult = await this.syncCollection(
         localDb, remoteDb, "filaments",
-        (doc, direction) => this.remapFilamentRefs(doc, direction, localNozzleBySyncId, remoteNozzleBySyncId, localPrinterBySyncId, remotePrinterBySyncId, localFilamentBySyncId, remoteFilamentBySyncId)
+        filamentTransform,
       );
 
       const results = [nozzleResult, printerResult, filamentResult];
@@ -343,85 +348,85 @@ export class SyncService extends EventEmitter {
   }
 
   /**
-   * Remap nozzle and printer ObjectId references in filament documents.
-   * compatibleNozzles, calibrations.nozzle, and calibrations.printer need
-   * to point to the correct IDs on the target side.
-   * Maps use syncId as the stable key (survives renames).
+   * Build a transform function for filament reference remapping.
+   * Precomputes all reverse lookup maps (ID → syncId) once, so the
+   * per-document transform is O(1) per reference instead of O(N).
    */
-  private remapFilamentRefs(
-    doc: Document,
-    direction: "toLocal" | "toRemote",
+  private buildFilamentRefsTransform(
     localNozzleBySyncId: Map<string, ObjectId>,
     remoteNozzleBySyncId: Map<string, ObjectId>,
     localPrinterBySyncId: Map<string, ObjectId>,
     remotePrinterBySyncId: Map<string, ObjectId>,
     localFilamentBySyncId: Map<string, ObjectId>,
     remoteFilamentBySyncId: Map<string, ObjectId>,
-  ): Document {
-    const sourceNozzleMap = direction === "toLocal" ? remoteNozzleBySyncId : localNozzleBySyncId;
-    const targetNozzleMap = direction === "toLocal" ? localNozzleBySyncId : remoteNozzleBySyncId;
-    const sourcePrinterMap = direction === "toLocal" ? remotePrinterBySyncId : localPrinterBySyncId;
-    const targetPrinterMap = direction === "toLocal" ? localPrinterBySyncId : remotePrinterBySyncId;
+  ): (doc: Document, direction: "toLocal" | "toRemote") => Document {
+    // Build reverse maps once (source ID → syncId) for both directions
+    const buildReverse = (map: Map<string, ObjectId>) => {
+      const reverse = new Map<string, string>();
+      for (const [syncId, id] of map) {
+        reverse.set(id.toString(), syncId);
+      }
+      return reverse;
+    };
 
-    // Build source ID → syncId reverse lookups
-    const sourceNozzleIdToSyncId = new Map<string, string>();
-    for (const [syncId, id] of sourceNozzleMap) {
-      sourceNozzleIdToSyncId.set(id.toString(), syncId);
-    }
-    const sourcePrinterIdToSyncId = new Map<string, string>();
-    for (const [syncId, id] of sourcePrinterMap) {
-      sourcePrinterIdToSyncId.set(id.toString(), syncId);
-    }
+    const localNozzleIdToSyncId = buildReverse(localNozzleBySyncId);
+    const remoteNozzleIdToSyncId = buildReverse(remoteNozzleBySyncId);
+    const localPrinterIdToSyncId = buildReverse(localPrinterBySyncId);
+    const remotePrinterIdToSyncId = buildReverse(remotePrinterBySyncId);
+    const localFilamentIdToSyncId = buildReverse(localFilamentBySyncId);
+    const remoteFilamentIdToSyncId = buildReverse(remoteFilamentBySyncId);
 
-    // Remap compatibleNozzles
-    if (Array.isArray(doc.compatibleNozzles)) {
-      doc.compatibleNozzles = doc.compatibleNozzles
-        .map((id: ObjectId) => {
-          const syncId = sourceNozzleIdToSyncId.get(id.toString());
-          return syncId ? targetNozzleMap.get(syncId) : null;
-        })
-        .filter(Boolean);
-    }
+    return (doc: Document, direction: "toLocal" | "toRemote"): Document => {
+      const sourceNozzleIdToSyncId = direction === "toLocal" ? remoteNozzleIdToSyncId : localNozzleIdToSyncId;
+      const targetNozzleMap = direction === "toLocal" ? localNozzleBySyncId : remoteNozzleBySyncId;
+      const sourcePrinterIdToSyncId = direction === "toLocal" ? remotePrinterIdToSyncId : localPrinterIdToSyncId;
+      const targetPrinterMap = direction === "toLocal" ? localPrinterBySyncId : remotePrinterBySyncId;
 
-    // Remap calibrations.nozzle and calibrations.printer
-    if (Array.isArray(doc.calibrations)) {
-      doc.calibrations = doc.calibrations
-        .map((cal: Document) => {
-          if (!cal.nozzle) return cal;
-          const nozzleSyncId = sourceNozzleIdToSyncId.get(cal.nozzle.toString());
-          const targetNozzleId = nozzleSyncId ? targetNozzleMap.get(nozzleSyncId) : null;
-          if (!targetNozzleId) return null; // Drop calibration if nozzle doesn't exist on target
-
-          const remapped = { ...cal, nozzle: targetNozzleId };
-
-          // Remap printer reference if present
-          if (cal.printer) {
-            const printerSyncId = sourcePrinterIdToSyncId.get(cal.printer.toString());
-            const targetPrinterId = printerSyncId ? targetPrinterMap.get(printerSyncId) : null;
-            remapped.printer = targetPrinterId || null;
-          }
-
-          return remapped;
-        })
-        .filter(Boolean);
-    }
-
-    // Remap parentId (variant → parent relationship)
-    if (doc.parentId) {
-      const sourceFilamentMap = direction === "toLocal" ? remoteFilamentBySyncId : localFilamentBySyncId;
-      const targetFilamentMap = direction === "toLocal" ? localFilamentBySyncId : remoteFilamentBySyncId;
-
-      const sourceFilamentIdToSyncId = new Map<string, string>();
-      for (const [syncId, id] of sourceFilamentMap) {
-        sourceFilamentIdToSyncId.set(id.toString(), syncId);
+      // Remap compatibleNozzles
+      if (Array.isArray(doc.compatibleNozzles)) {
+        doc.compatibleNozzles = doc.compatibleNozzles
+          .map((id: ObjectId) => {
+            const syncId = sourceNozzleIdToSyncId.get(id.toString());
+            return syncId ? targetNozzleMap.get(syncId) : null;
+          })
+          .filter(Boolean);
       }
 
-      const parentSyncId = sourceFilamentIdToSyncId.get(doc.parentId.toString());
-      const targetParentId = parentSyncId ? targetFilamentMap.get(parentSyncId) : null;
-      doc.parentId = targetParentId || null;
-    }
+      // Remap calibrations.nozzle and calibrations.printer
+      if (Array.isArray(doc.calibrations)) {
+        doc.calibrations = doc.calibrations
+          .map((cal: Document) => {
+            if (!cal.nozzle) return cal;
+            const nozzleSyncId = sourceNozzleIdToSyncId.get(cal.nozzle.toString());
+            const targetNozzleId = nozzleSyncId ? targetNozzleMap.get(nozzleSyncId) : null;
+            if (!targetNozzleId) return null; // Drop calibration if nozzle doesn't exist on target
 
-    return doc;
+            const remapped = { ...cal, nozzle: targetNozzleId };
+
+            // Remap printer reference if present
+            if (cal.printer) {
+              const printerSyncId = sourcePrinterIdToSyncId.get(cal.printer.toString());
+              const targetPrinterId = printerSyncId ? targetPrinterMap.get(printerSyncId) : null;
+              remapped.printer = targetPrinterId || null;
+            }
+
+            return remapped;
+          })
+          .filter(Boolean);
+      }
+
+      // Remap parentId (variant → parent relationship)
+      if (doc.parentId) {
+        const sourceFilamentIdToSyncId = direction === "toLocal" ? remoteFilamentIdToSyncId : localFilamentIdToSyncId;
+        const targetFilamentMap = direction === "toLocal" ? localFilamentBySyncId : remoteFilamentBySyncId;
+
+        const parentSyncId = sourceFilamentIdToSyncId.get(doc.parentId.toString());
+        const targetParentId = parentSyncId ? targetFilamentMap.get(parentSyncId) : null;
+        doc.parentId = targetParentId || null;
+      }
+
+      return doc;
+    };
   }
 
   destroy() {

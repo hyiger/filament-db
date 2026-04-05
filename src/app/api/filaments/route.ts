@@ -14,18 +14,22 @@ export async function GET(request: NextRequest) {
     return errorResponse("Database connection failed", 500, getErrorMessage(err));
   }
 
-  const searchParams = request.nextUrl.searchParams;
-  const type = searchParams.get("type");
-  const vendor = searchParams.get("vendor");
-  const search = searchParams.get("search");
+  try {
+    const searchParams = request.nextUrl.searchParams;
+    const type = searchParams.get("type");
+    const vendor = searchParams.get("vendor");
+    const search = searchParams.get("search");
 
-  const filter: Record<string, unknown> = { _deletedAt: null };
-  if (type) filter.type = type;
-  if (vendor) filter.vendor = vendor;
-  if (search) filter.name = { $regex: escapeRegex(search), $options: "i" };
+    const filter: Record<string, unknown> = { _deletedAt: null };
+    if (type) filter.type = type;
+    if (vendor) filter.vendor = vendor;
+    if (search) filter.name = { $regex: escapeRegex(search), $options: "i" };
 
-  const filaments = await Filament.find(filter).sort({ name: 1 }).lean();
-  return NextResponse.json(filaments);
+    const filaments = await Filament.find(filter).sort({ name: 1 }).lean();
+    return NextResponse.json(filaments);
+  } catch (err) {
+    return errorResponse("Failed to fetch filaments", 500, getErrorMessage(err));
+  }
 }
 
 export async function POST(request: NextRequest) {
@@ -47,18 +51,9 @@ export async function POST(request: NextRequest) {
   delete body._deletedAt;
   delete body.createdAt;
   delete body.updatedAt;
-
-  // Validate parentId if provided
-  if (body.parentId) {
-    const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null }).lean();
-    if (!parent) {
-      return errorResponse("Parent filament not found", 400);
-    }
-    // Prevent nested inheritance (parent cannot itself be a variant)
-    if (parent.parentId) {
-      return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
-    }
-  }
+  delete body.__v;
+  delete body.instanceId;
+  delete body.syncId;
 
   // If an initial totalWeight is provided, auto-create a spool entry
   if (body.totalWeight != null && (!body.spools || body.spools.length === 0)) {
@@ -67,6 +62,18 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    // Validate parentId if provided
+    if (body.parentId) {
+      const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null }).lean();
+      if (!parent) {
+        return errorResponse("Parent filament not found", 400);
+      }
+      // Prevent nested inheritance (parent cannot itself be a variant)
+      if (parent.parentId) {
+        return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
+      }
+    }
+
     const filament = await Filament.create(body);
     return NextResponse.json(filament, { status: 201 });
   } catch (err: unknown) {

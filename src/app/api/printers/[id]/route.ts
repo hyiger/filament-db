@@ -43,6 +43,9 @@ export async function PUT(
     delete body._deletedAt;
     delete body.createdAt;
     delete body.updatedAt;
+    delete body.__v;
+    delete body.instanceId;
+    delete body.syncId;
 
     // Validate that all referenced nozzle IDs exist and are active
     if (body.installedNozzles?.length > 0) {

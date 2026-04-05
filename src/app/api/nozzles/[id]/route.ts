@@ -41,6 +41,9 @@ export async function PUT(
     delete body._deletedAt;
     delete body.createdAt;
     delete body.updatedAt;
+    delete body.__v;
+    delete body.instanceId;
+    delete body.syncId;
     const nozzle = await Nozzle.findOneAndUpdate(
       { _id: id, _deletedAt: null },
       body,

@@ -154,6 +154,7 @@ export default function NozzlesPage() {
                     type="checkbox"
                     checked={selected.size === nozzles.length && nozzles.length > 0}
                     onChange={toggleAll}
+                    aria-label={t("filaments.bulk.selectAll") || "Select all"}
                     className="accent-red-600"
                   />
                 </th>
@@ -177,6 +178,7 @@ export default function NozzlesPage() {
                       type="checkbox"
                       checked={selected.has(n._id)}
                       onChange={() => toggleSelect(n._id)}
+                      aria-label={n.name || "Select"}
                       className="accent-red-600"
                     />
                   </td>

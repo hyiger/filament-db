@@ -33,7 +33,7 @@ tests/
 ├── prusament.test.ts           # Prusament spool data extraction tests (8 tests)
 ├── tdsExtractor.test.ts        # TDS AI extraction tests — Gemini/Claude/OpenAI providers, file uploads (14 tests)
 ├── apiErrorHandler.test.ts     # API error handler utility tests (10 tests)
-├── Filament.test.ts            # Filament model + spool CRUD + soft-delete + instanceId tests (24 tests)
+├── Filament.test.ts            # Filament model + spool CRUD + soft-delete + instanceId + variant tests (27 tests)
 ├── Printer.test.ts             # Printer model + unique constraints + soft-delete tests (12 tests)
 ├── Nozzle.test.ts              # Nozzle model tests (9 tests)
 ├── mongodb.test.ts             # DB connection + migration tests (10 tests)
@@ -43,7 +43,7 @@ tests/
 └── openprinttagBrowser.test.ts # OpenPrintTag database browser + completeness scoring tests (36 tests)
 ```
 
-**Total: 427 tests across 17 test files**
+**Total: 430+ tests across 17 test files**
 
 ## Coverage Thresholds
 
