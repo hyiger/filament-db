@@ -31,7 +31,7 @@ let mainWindow: BrowserWindow | null = null;
 let serverProcess: UtilityProcess | null = null;
 let nfcService: NfcService | null = null;
 let syncService: SyncService | null = null;
-const PORT = 3456;
+const PORT = parseInt(process.env.PORT || "3456", 10);
 
 function getAppURL(urlPath = "/") {
   return `http://localhost:${PORT}${urlPath}`;

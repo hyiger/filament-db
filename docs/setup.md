@@ -229,7 +229,105 @@ npm run electron:dev          # development mode
 npm run electron:build        # build installer for your platform
 ```
 
-> **Port:** `npm run dev` and the desktop app run on port **3456**. Docker exposes port 3000 internally, mapped to 3456 on the host via `-p 3456:3000`. `npm start` (production) defaults to port **3000** unless `PORT=3456` is set. The [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) defaults to `http://localhost:3456`.
+> **Port:** `npm run dev` and the desktop app run on port **3456**. Docker exposes port 3000 internally, mapped to 3456 on the host via `-p 3456:3000`. `npm start` (production) defaults to port **3000** unless `PORT=3456` is set. The desktop app also respects the `PORT` environment variable. The [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) defaults to `http://localhost:3456`.
+
+---
+
+## Running as a Linux Service
+
+You can run Filament DB as a systemd service so it starts automatically on boot. This is useful for headless servers or a Raspberry Pi that serves as a dedicated filament database on your network.
+
+These instructions assume you installed the `.deb` package from [GitHub Releases](https://github.com/hyiger/filament-db/releases). If running from source, adjust the paths accordingly (`WorkingDirectory` to your repo's `.next/standalone/` and `ExecStart` to `node server.js`).
+
+### 1. Configure environment
+
+Create or edit `/opt/Filament DB/.env` with your MongoDB connection string:
+
+```bash
+sudo tee "/opt/Filament DB/.env" > /dev/null <<'EOF'
+MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/filament-db?appName=Filaments
+PORT=3456
+HOSTNAME=0.0.0.0
+EOF
+sudo chmod 600 "/opt/Filament DB/.env"
+```
+
+`HOSTNAME=0.0.0.0` makes the server listen on all network interfaces so other devices on your network can reach it.
+
+### 2. Create the service
+
+```bash
+sudo tee /etc/systemd/system/filament-db.service > /dev/null <<'EOF'
+[Unit]
+Description=Filament DB
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=your-username
+WorkingDirectory=/opt/Filament DB/resources/app/standalone
+ExecStart=/usr/bin/node server.js
+EnvironmentFile=/opt/Filament DB/.env
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+Replace `your-username` with your Linux user account.
+
+### 3. Enable and start
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable filament-db
+sudo systemctl start filament-db
+```
+
+The web app will now be available at `http://<hostname>:3456` and will start automatically on boot.
+
+### Useful commands
+
+```bash
+sudo systemctl status filament-db      # check service status
+sudo systemctl restart filament-db      # restart after an upgrade
+sudo systemctl stop filament-db         # stop the service
+journalctl -u filament-db -f            # tail the logs
+```
+
+### Using NFC alongside the service
+
+The desktop app includes NFC tag read/write support which requires direct USB access to an NFC reader. Since the web service and desktop app both start a Next.js server, run the desktop app on a different port so the web service stays available to PrusaSlicer and other network clients:
+
+```bash
+PORT=3457 "/opt/Filament DB/filament-db"
+```
+
+Or create a convenience script:
+
+```bash
+cat > ~/nfc.sh <<'SCRIPT'
+#!/bin/bash
+echo "Starting Filament DB desktop for NFC (port 3457)..."
+echo "Web service stays running on port 3456."
+PORT=3457 "/opt/Filament DB/filament-db"
+SCRIPT
+chmod +x ~/nfc.sh
+```
+
+Then run `~/nfc.sh` whenever you need NFC. The web service continues running on port 3456 uninterrupted.
+
+### Upgrading
+
+After installing a new `.deb` release, restart the service to pick up the changes:
+
+```bash
+sudo dpkg -i FilamentDB-x.x.x-linux-arm64.deb
+sudo systemctl restart filament-db
+```
 
 ---
 

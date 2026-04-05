@@ -87,7 +87,7 @@ See the [Setup Guide](docs/setup.md) for detailed instructions.
 | Document | Description |
 |----------|-------------|
 | [Tutorial](docs/tutorial.md) | Step-by-step walkthrough of every feature, from first launch to NFC |
-| [Setup Guide](docs/setup.md) | Installation, Docker, MongoDB Atlas setup, running as web or desktop app |
+| [Setup Guide](docs/setup.md) | Installation, Docker, MongoDB Atlas setup, running as web or desktop app, Linux systemd service |
 | [Desktop App](docs/desktop.md) | Electron desktop app: building, packaging, and releasing |
 | [Importing & Exporting](docs/importing.md) | PrusaSlicer config export, web UI import, CLI seed script, INI export |
 | [Usage Guide](docs/usage.md) | Browsing, filtering, sorting, editing filaments, nozzle management, calibrations, TDS links |
