@@ -84,7 +84,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 
 - **Page**: `/openprinttag` — browse the OpenPrintTag community database (11k+ materials)
 - **API**: `GET /api/openprinttag` fetches GitHub tarball, parses YAML, filters to FFF, caches 1 hour
-- **Import**: `POST /api/openprinttag/import` with `{ slugs: [...] }` — upserts by name+vendor
+- **Import**: `POST /api/openprinttag/import` with `{ slugs: [...] }` — upserts by name
 - **Completeness scoring**: 0–10 scale (color, density, temps, hardness, TD, drying, chamber, photos, url)
 - **Tiers**: rich (7–10 green), partial (4–6 yellow), stub (0–3 grey/dimmed)
 

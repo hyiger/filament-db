@@ -141,11 +141,11 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
           aria-modal="true"
           aria-labelledby="atlas-dialog-title"
           tabIndex={-1}
-          className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-lg w-full mx-4 pointer-events-auto outline-none flex flex-col max-h-[85vh]"
+          className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-2xl max-w-lg w-full mx-4 pointer-events-auto outline-none flex flex-col max-h-[85vh]"
         >
           {/* Header */}
           <div className="p-6 pb-0">
-            <h2 id="atlas-dialog-title" className="text-lg font-bold text-white mb-1">
+            <h2 id="atlas-dialog-title" className="text-lg font-bold text-gray-900 dark:text-white mb-1">
               {step === "connect" && "Import from MongoDB Atlas"}
               {step === "select" && "Select Filaments to Import"}
               {step === "confirm" && "Confirm Import"}
@@ -158,12 +158,12 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
             {/* Step 1: Connection string */}
             {step === "connect" && (
               <>
-                <p className="text-sm text-gray-400 mb-4">
+                <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
                   Enter a MongoDB Atlas connection string to browse and import filaments from another database.
                 </p>
                 <input
                   type="password"
-                  className="w-full px-3 py-2 border border-gray-600 rounded text-sm bg-transparent text-gray-100 mb-3"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent text-gray-900 dark:text-gray-100 mb-3"
                   value={uri}
                   onChange={(e) => setUri(e.target.value)}
                   placeholder="mongodb+srv://user:pass@cluster.mongodb.net/"
@@ -171,7 +171,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                   autoFocus
                 />
                 {error && (
-                  <div className="p-3 bg-red-900/30 border border-red-800 rounded text-sm text-red-300 mb-3">
+                  <div className="p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded text-sm text-red-600 dark:text-red-300 mb-3">
                     {error}
                   </div>
                 )}
@@ -182,7 +182,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
             {step === "select" && (
               <>
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-sm text-gray-400">
+                  <span className="text-sm text-gray-500 dark:text-gray-400">
                     {filaments.length} filament{filaments.length !== 1 ? "s" : ""} found
                     {variantCount > 0 && ` (${parentCount} base, ${variantCount} variant${variantCount !== 1 ? "s" : ""})`}
                   </span>
@@ -195,14 +195,14 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                   </button>
                 </div>
                 {error && (
-                  <div className="p-3 bg-red-900/30 border border-red-800 rounded text-sm text-red-300 mb-3">
+                  <div className="p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded text-sm text-red-600 dark:text-red-300 mb-3">
                     {error}
                   </div>
                 )}
                 <ul className="space-y-1 max-h-[50vh] overflow-y-auto">
                   {filaments.map((f) => (
                     <li key={f._id}>
-                      <label className="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-800 cursor-pointer text-sm">
+                      <label className="flex items-center gap-2 px-3 py-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 cursor-pointer text-sm">
                         <input
                           type="checkbox"
                           checked={selected.has(f._id)}
@@ -213,7 +213,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                           className="w-4 h-4 rounded-full border border-gray-500 flex-shrink-0"
                           style={{ backgroundColor: f.color || "#808080" }}
                         />
-                        <span className={`flex-1 truncate ${f.parentId ? "text-gray-400 pl-3" : "text-white"}`}>
+                        <span className={`flex-1 truncate ${f.parentId ? "text-gray-500 dark:text-gray-400 pl-3" : "text-gray-900 dark:text-white"}`}>
                           {f.parentId && <span className="text-gray-600 mr-1">↳</span>}
                           {f.name}
                         </span>
@@ -229,9 +229,9 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
 
             {/* Step 3: Confirm */}
             {step === "confirm" && (
-              <div className="text-sm text-gray-300">
+              <div className="text-sm text-gray-600 dark:text-gray-300">
                 <p className="mb-4">
-                  Import <strong className="text-white">{selected.size}</strong> filament{selected.size !== 1 ? "s" : ""} into your local database?
+                  Import <strong className="text-gray-900 dark:text-white">{selected.size}</strong> filament{selected.size !== 1 ? "s" : ""} into your local database?
                 </p>
                 <p className="text-gray-500">
                   Existing filaments with the same name will be updated. New filaments will be created. Parent-variant relationships will not be preserved.
@@ -241,7 +241,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
 
             {/* Step 4: Importing */}
             {step === "importing" && (
-              <div className="flex items-center gap-3 text-sm text-gray-300">
+              <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-300">
                 <svg className="w-5 h-5 animate-spin text-blue-400" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -258,7 +258,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-4 py-2 text-sm text-gray-300 hover:text-white border border-gray-600 rounded hover:border-gray-500"
+                  className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
                 >
                   Cancel
                 </button>
@@ -277,7 +277,7 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-4 py-2 text-sm text-gray-300 hover:text-white border border-gray-600 rounded hover:border-gray-500"
+                  className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
                 >
                   Cancel
                 </button>
@@ -296,14 +296,14 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                 <button
                   type="button"
                   onClick={() => setStep("select")}
-                  className="px-4 py-2 text-sm text-gray-300 hover:text-white border border-gray-600 rounded hover:border-gray-500"
+                  className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
                 >
                   Back
                 </button>
                 <button
                   type="button"
                   onClick={onClose}
-                  className="px-4 py-2 text-sm text-gray-300 hover:text-white border border-gray-600 rounded hover:border-gray-500"
+                  className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
                 >
                   Cancel
                 </button>

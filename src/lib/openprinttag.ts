@@ -674,7 +674,14 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
     const tagValues = [...tagSet].sort((a, b) => a - b);
     encodeCBORKey(buf, OPT_KEY.TAGS);
     // Encode as CBOR array (major type 4)
-    buf.push(0x80 | tagValues.length); // definite array with N items
+    // Encode CBOR definite array header (major type 4)
+    if (tagValues.length < 24) {
+      buf.push(0x80 | tagValues.length);
+    } else if (tagValues.length < 256) {
+      buf.push(0x98, tagValues.length);
+    } else {
+      buf.push(0x99, tagValues.length >> 8, tagValues.length & 0xff);
+    }
     for (const tag of tagValues) {
       encodeCBORUint(buf, tag);
     }

@@ -144,9 +144,7 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
   }
 
   return new Promise((resolve, reject) => {
-    const appPath = isDev
-      ? path.join(__dirname, "..")
-      : path.join(__dirname, "..");
+    const appPath = path.join(__dirname, "..");
     const serverPath = path.join(appPath, "standalone", "server.js");
 
     const env: Record<string, string> = {
@@ -526,7 +524,7 @@ app.whenReady().then(async () => {
         serverProcess.on("exit", (code) => {
           if (code !== null && code !== 0) {
             console.error(`Server crashed with exit code ${code}, attempting restart...`);
-            startProductionServer(mongoUri || undefined)
+            startProductionServer((store.get("mongodbUri") as string) || undefined)
               .then(() => {
                 console.log("Server restarted successfully after crash");
                 mainWindow?.reload();

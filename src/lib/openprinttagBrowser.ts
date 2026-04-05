@@ -109,9 +109,7 @@ const TAG_STRING_TO_OPT: Record<string, string> = {
   recycled: "RECYCLED",
   high_speed: "HIGH_SPEED",
   glitter: "SPARKLE",
-  blend: "BLEND",
   industrially_compostable: "BIODEGRADABLE",
-  filtration_recommended: "FILTRATION_RECOMMENDED",
 };
 
 // ── Completeness scoring ───────────────────────────────────────────────
@@ -198,11 +196,11 @@ export function parseBrandYaml(
  * Parse a single material YAML file into an OPTMaterial (or null if SLA/invalid).
  */
 export function parseMaterialYaml(
-  content: string,
+  content: string | Record<string, unknown>,
   brandMap: Map<string, { name: string; country?: string }>,
 ): OPTMaterial | null {
   try {
-    const raw = parseYaml(content) as Record<string, unknown>;
+    const raw = (typeof content === "string" ? parseYaml(content) : content) as Record<string, unknown>;
     if (!raw || !raw.slug || !raw.name) return null;
 
     // Filter: FFF only
@@ -374,7 +372,7 @@ export async function fetchOpenPrintTagDatabase(): Promise<OPTDatabase> {
           continue;
         }
 
-        const material = parseMaterialYaml(content, brandMap);
+        const material = parseMaterialYaml(raw, brandMap);
         if (material) materials.push(material);
       } catch {
         // Skip unparseable files

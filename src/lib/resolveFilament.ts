@@ -37,6 +37,8 @@ const INHERITABLE_FIELDS = [
   "spoolType",
   "tdsUrl",
   "inherits",
+  "shrinkageXY",
+  "shrinkageZ",
 ];
 
 /**

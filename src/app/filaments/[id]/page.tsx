@@ -45,6 +45,7 @@ export default function FilamentDetail() {
   const [showTdsPreview, setShowTdsPreview] = useState(false);
   const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag } = useNfcContext();
   const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
+  const nfcWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { toast } = useToast();
 
   const [notFound, setNotFound] = useState(false);
@@ -57,15 +58,22 @@ export default function FilamentDetail() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [showPrusamentImport, setShowPrusamentImport] = useState(false);
 
+  // Clear NFC write timeout on unmount
   useEffect(() => {
-    fetch(`/api/filaments/${params.id}`)
+    return () => { if (nfcWriteTimerRef.current) clearTimeout(nfcWriteTimerRef.current); };
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/filaments/${params.id}`, { signal: controller.signal })
       .then((r) => {
         if (r.status === 404) { setNotFound(true); return null; }
         if (!r.ok) { setFetchError("Failed to load filament. Please try again."); return null; }
         return r.json();
       })
       .then((data) => { if (data) setFilament(data); })
-      .catch(() => setFetchError("Could not connect to the server."));
+      .catch((err) => { if (err.name !== "AbortError") setFetchError("Could not connect to the server."); });
+    return () => controller.abort();
   }, [params.id]);
 
   const handleNfcWrite = async () => {
@@ -109,10 +117,12 @@ export default function FilamentDetail() {
         || `https://filamentdb.app/filament/${encodeURIComponent(filament.vendor)}/${encodeURIComponent(filament.name)}`;
       await writeTag(payload, productUrl);
       setNfcWriteSuccess(true);
-      setTimeout(() => setNfcWriteSuccess(null), 3000);
+      if (nfcWriteTimerRef.current) clearTimeout(nfcWriteTimerRef.current);
+      nfcWriteTimerRef.current = setTimeout(() => setNfcWriteSuccess(null), 3000);
     } catch {
       setNfcWriteSuccess(false);
-      setTimeout(() => setNfcWriteSuccess(null), 5000);
+      if (nfcWriteTimerRef.current) clearTimeout(nfcWriteTimerRef.current);
+      nfcWriteTimerRef.current = setTimeout(() => setNfcWriteSuccess(null), 5000);
     }
   };
 
@@ -153,11 +163,13 @@ export default function FilamentDetail() {
       await writeTag(payload, productUrl);
       setNfcWriteSuccess(true);
       toast(`NFC tag updated: ${Math.round(actualRemaining)}g remaining`);
-      setTimeout(() => setNfcWriteSuccess(null), 3000);
+      if (nfcWriteTimerRef.current) clearTimeout(nfcWriteTimerRef.current);
+      nfcWriteTimerRef.current = setTimeout(() => setNfcWriteSuccess(null), 3000);
     } catch {
       setNfcWriteSuccess(false);
       toast("Failed to write NFC tag", "error");
-      setTimeout(() => setNfcWriteSuccess(null), 5000);
+      if (nfcWriteTimerRef.current) clearTimeout(nfcWriteTimerRef.current);
+      nfcWriteTimerRef.current = setTimeout(() => setNfcWriteSuccess(null), 5000);
     }
   };
 
@@ -768,6 +780,7 @@ export default function FilamentDetail() {
                 className="w-full bg-white"
                 style={{ height: "80vh" }}
                 title="Technical Data Sheet"
+                sandbox="allow-same-origin allow-scripts"
               />
             </div>
           )}

@@ -88,7 +88,7 @@ volumes:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `MONGODB_URI` | Yes | MongoDB connection string |
-| `PORT` | No | Server port (default: `3000`) |
+| `PORT` | No | Server port (default: `3456`) |
 | `GEMINI_API_KEY` | No | Google Gemini API key for TDS extraction |
 | `ANTHROPIC_API_KEY` | No | Anthropic Claude API key for TDS extraction |
 | `OPENAI_API_KEY` | No | OpenAI API key for TDS extraction |

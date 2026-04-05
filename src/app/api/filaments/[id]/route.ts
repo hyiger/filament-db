@@ -129,11 +129,11 @@ export async function POST(
     if (config.filament_type) update.type = config.filament_type;
     if (config.filament_vendor) update.vendor = config.filament_vendor;
     if (config.filament_colour) update.color = config.filament_colour;
-    if (config.filament_diameter) update.diameter = parseFloat(config.filament_diameter);
-    if (config.filament_density) update.density = parseFloat(config.filament_density);
-    if (config.filament_cost) update.cost = parseFloat(config.filament_cost);
-    if (config.filament_spool_weight) update.spoolWeight = parseFloat(config.filament_spool_weight);
-    if (config.filament_max_volumetric_speed) update.maxVolumetricSpeed = parseFloat(config.filament_max_volumetric_speed);
+    if (config.filament_diameter) { const v = parseFloat(config.filament_diameter); if (!isNaN(v)) update.diameter = v; }
+    if (config.filament_density) { const v = parseFloat(config.filament_density); if (!isNaN(v)) update.density = v; }
+    if (config.filament_cost) { const v = parseFloat(config.filament_cost); if (!isNaN(v)) update.cost = v; }
+    if (config.filament_spool_weight) { const v = parseFloat(config.filament_spool_weight); if (!isNaN(v)) update.spoolWeight = v; }
+    if (config.filament_max_volumetric_speed) { const v = parseFloat(config.filament_max_volumetric_speed); if (!isNaN(v)) update.maxVolumetricSpeed = v; }
 
     // Temperatures
     if (config.temperature) temps.nozzle = parseInt(config.temperature);
@@ -142,8 +142,8 @@ export async function POST(
     if (config.first_layer_bed_temperature) temps.bedFirstLayer = parseInt(config.first_layer_bed_temperature);
 
     // Shrinkage
-    if (config.filament_shrinkage_compensation_xy) update.shrinkageXY = parseFloat(config.filament_shrinkage_compensation_xy);
-    if (config.filament_shrinkage_compensation_z) update.shrinkageZ = parseFloat(config.filament_shrinkage_compensation_z);
+    if (config.filament_shrinkage_compensation_xy) { const v = parseFloat(config.filament_shrinkage_compensation_xy); if (!isNaN(v)) update.shrinkageXY = v; }
+    if (config.filament_shrinkage_compensation_z) { const v = parseFloat(config.filament_shrinkage_compensation_z); if (!isNaN(v)) update.shrinkageZ = v; }
 
     // Flags
     if (config.filament_soluble) update.soluble = config.filament_soluble === "1";
@@ -199,8 +199,8 @@ export async function DELETE(
       );
     }
 
-    const filament = await Filament.findByIdAndUpdate(
-      id,
+    const filament = await Filament.findOneAndUpdate(
+      { _id: id, _deletedAt: null },
       { _deletedAt: new Date() },
       { new: true }
     ).lean();

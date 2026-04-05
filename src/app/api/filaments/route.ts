@@ -3,6 +3,10 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { getErrorMessage, errorResponse, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export async function GET(request: NextRequest) {
   try {
     await dbConnect();
@@ -18,7 +22,7 @@ export async function GET(request: NextRequest) {
   const filter: Record<string, unknown> = { _deletedAt: null };
   if (type) filter.type = type;
   if (vendor) filter.vendor = vendor;
-  if (search) filter.name = { $regex: search, $options: "i" };
+  if (search) filter.name = { $regex: escapeRegex(search), $options: "i" };
 
   const filaments = await Filament.find(filter).sort({ name: 1 }).lean();
   return NextResponse.json(filaments);
@@ -31,7 +35,13 @@ export async function POST(request: NextRequest) {
     return errorResponse("Database connection failed", 500, getErrorMessage(err));
   }
 
-  const body = await request.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("Invalid JSON in request body", 400);
+  }
 
   // Validate parentId if provided
   if (body.parentId) {

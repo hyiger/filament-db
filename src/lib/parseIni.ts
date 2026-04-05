@@ -1,3 +1,5 @@
+// Note: this type is specific to PrusaSlicer INI parsing and differs from
+// the shared Filament types in src/types/filament.ts (which cover DB documents).
 export interface FilamentData {
   name: string;
   vendor: string;

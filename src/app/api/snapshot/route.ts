@@ -122,12 +122,21 @@ async function restoreSnapshot(request: NextRequest) {
 
   const contentType = request.headers.get("content-type") || "";
 
+  const MAX_SNAPSHOT_SIZE = 50 * 1024 * 1024; // 50 MB
+
   try {
     if (contentType.includes("multipart/form-data")) {
       const formData = await request.formData();
       const file = formData.get("file") as File | null;
       if (!file) {
         return NextResponse.json({ error: "No file provided" }, { status: 400 });
+      }
+      if (file.size > MAX_SNAPSHOT_SIZE) {
+        const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+        return NextResponse.json(
+          { error: `File too large (${sizeMB} MB). Maximum snapshot size is 50 MB.` },
+          { status: 413 },
+        );
       }
       const text = await file.text();
       snapshot = JSON.parse(text);

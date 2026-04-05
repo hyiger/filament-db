@@ -412,8 +412,8 @@ export default function SettingsPage() {
           {modeResult && (
             <div className={`mt-3 text-sm px-3 py-2 rounded ${
               modeResult.ok
-                ? "bg-green-900/50 text-green-300 border border-green-800"
-                : "bg-red-900/50 text-red-300 border border-red-800"
+                ? "bg-green-50 dark:bg-green-900/50 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800"
+                : "bg-red-50 dark:bg-red-900/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800"
             }`}>
               {modeResult.message}
             </div>
@@ -422,8 +422,8 @@ export default function SettingsPage() {
       )}
 
       {/* Database Snapshots */}
-      <div className="mt-8 pt-6 border-t border-gray-800">
-        <h2 className="text-lg font-semibold text-gray-200 mb-1">Database Snapshots</h2>
+      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">Database Snapshots</h2>
         <p className="text-sm text-gray-500 mb-4">
           Download a full backup of all filaments, nozzles, and printers, or restore from a previous snapshot.
         </p>
@@ -449,7 +449,7 @@ export default function SettingsPage() {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={restoring}
-            className="px-4 py-2 bg-gray-700 text-white rounded text-sm hover:bg-gray-600 disabled:opacity-50 transition-colors inline-flex items-center gap-2"
+            className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white rounded text-sm hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-50 transition-colors inline-flex items-center gap-2"
           >
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
@@ -461,8 +461,8 @@ export default function SettingsPage() {
         {restoreResult && (
           <div className={`mt-3 text-sm px-3 py-2 rounded ${
             restoreResult.ok
-              ? "bg-green-900/50 text-green-300 border border-green-800"
-              : "bg-red-900/50 text-red-300 border border-red-800"
+              ? "bg-green-50 dark:bg-green-900/50 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800"
+              : "bg-red-50 dark:bg-red-900/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800"
           }`}>
             {restoreResult.message}
           </div>
@@ -470,8 +470,8 @@ export default function SettingsPage() {
       </div>
 
       {/* AI Features — Provider & API Key */}
-      <div className="mt-8 pt-6 border-t border-gray-800">
-        <h2 className="text-lg font-semibold text-gray-200 mb-1">AI Features</h2>
+      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
+        <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">AI Features</h2>
         <p className="text-sm text-gray-500 mb-4">
           Configure an AI provider to enable extraction of filament properties from Technical Data Sheets (TDS).
           Get a free API key from your chosen provider.
@@ -479,7 +479,7 @@ export default function SettingsPage() {
 
         <div className="flex items-center gap-2 mb-4">
           <span className={`inline-block w-2.5 h-2.5 rounded-full ${aiConfigured ? "bg-green-500" : "bg-gray-600"}`} />
-          <span className="text-sm text-gray-400">
+          <span className="text-sm text-gray-500 dark:text-gray-400">
             {aiConfigured
               ? `${AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider} configured`
               : "No API key configured"}
@@ -498,7 +498,7 @@ export default function SettingsPage() {
                 className={`px-3 py-1.5 text-sm rounded border transition-colors ${
                   aiProvider === p.id
                     ? "border-blue-500 bg-blue-600/20 text-blue-300"
-                    : "border-gray-700 text-gray-400 hover:border-gray-500 hover:text-gray-300"
+                    : "border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
                 }`}
               >
                 {p.name}
@@ -527,12 +527,12 @@ export default function SettingsPage() {
               value={aiKey}
               onChange={(e) => setAiKey(e.target.value)}
               placeholder={aiConfigured ? "••••••••••••••••" : "Enter API key"}
-              className="w-full px-3 py-2 bg-transparent border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600"
+              className="w-full px-3 py-2 bg-transparent border border-gray-300 dark:border-gray-700 rounded text-sm text-gray-800 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-blue-600"
             />
             <button
               type="button"
               onClick={() => setShowAiKey((s) => !s)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs"
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 text-xs"
             >
               {showAiKey ? "Hide" : "Show"}
             </button>
@@ -591,7 +591,7 @@ export default function SettingsPage() {
                 setAiConfigured(false);
                 setAiResult({ ok: true, message: "API key removed" });
               }}
-              className="px-4 py-2 bg-gray-700 text-white rounded text-sm hover:bg-gray-600 transition-colors"
+              className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white rounded text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"
             >
               Remove Key
             </button>
@@ -601,8 +601,8 @@ export default function SettingsPage() {
         {aiResult && (
           <div className={`mt-3 text-sm px-3 py-2 rounded ${
             aiResult.ok
-              ? "bg-green-900/50 text-green-300 border border-green-800"
-              : "bg-red-900/50 text-red-300 border border-red-800"
+              ? "bg-green-50 dark:bg-green-900/50 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800"
+              : "bg-red-50 dark:bg-red-900/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800"
           }`}>
             {aiResult.message}
           </div>
@@ -611,8 +611,8 @@ export default function SettingsPage() {
 
       {/* NFC Tools (Electron only) */}
       {isElectron && (
-        <div className="mt-8 pt-6 border-t border-gray-800">
-          <h2 className="text-lg font-semibold text-gray-200 mb-1">NFC Tools</h2>
+        <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
+          <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">NFC Tools</h2>
           <p className="text-sm text-gray-500 mb-4">
             Format or erase NFC tags. Place a tag on the reader before using these tools.
           </p>
@@ -625,7 +625,7 @@ export default function SettingsPage() {
                   ? "bg-yellow-500"
                   : "bg-gray-600"
             }`} />
-            <span className="text-sm text-gray-400">
+            <span className="text-sm text-gray-500 dark:text-gray-400">
               {nfcStatus.tagPresent
                 ? `Tag detected${nfcStatus.tagUid ? ` (${nfcStatus.tagUid.slice(-8).toUpperCase()})` : ""}`
                 : nfcStatus.readerConnected
@@ -638,7 +638,7 @@ export default function SettingsPage() {
             <button
               onClick={() => { setShowFormatConfirm(true); setFormatResult(null); }}
               disabled={formatting || !nfcStatus.tagPresent}
-              className="px-4 py-2 bg-gray-700 text-white rounded text-sm hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-2"
+              className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white rounded text-sm hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-2"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 9.75 14.25 12m0 0 2.25 2.25M14.25 12l2.25-2.25M14.25 12 12 14.25m-2.58 4.92-6.374-6.375a1.125 1.125 0 0 1 0-1.59L9.42 4.83a1.125 1.125 0 0 1 1.59 0l6.375 6.375a1.125 1.125 0 0 1 0 1.59l-6.375 6.375a1.125 1.125 0 0 1-1.59 0Z" />
@@ -660,7 +660,7 @@ export default function SettingsPage() {
                 </button>
                 <button
                   onClick={() => setShowFormatConfirm(false)}
-                  className="px-3 py-1.5 text-gray-400 hover:text-gray-200 text-sm transition-colors"
+                  className="px-3 py-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-sm transition-colors"
                 >
                   Cancel
                 </button>
@@ -671,8 +671,8 @@ export default function SettingsPage() {
           {formatResult && (
             <div className={`mt-3 text-sm px-3 py-2 rounded ${
               formatResult.ok
-                ? "bg-green-900/50 text-green-300 border border-green-800"
-                : "bg-red-900/50 text-red-300 border border-red-800"
+                ? "bg-green-50 dark:bg-green-900/50 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800"
+                : "bg-red-50 dark:bg-red-900/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800"
             }`}>
               {formatResult.message}
             </div>
@@ -747,7 +747,7 @@ export default function SettingsPage() {
               </button>
               <button
                 onClick={() => { setShowDeleteConfirm(false); setDeleteInput(""); }}
-                className="px-3 py-1.5 text-gray-400 hover:text-gray-200 text-sm transition-colors"
+                className="px-3 py-1.5 text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-sm transition-colors"
               >
                 Cancel
               </button>
@@ -758,15 +758,15 @@ export default function SettingsPage() {
         {deleteResult && (
           <div className={`mt-3 text-sm px-3 py-2 rounded ${
             deleteResult.ok
-              ? "bg-green-900/50 text-green-300 border border-green-800"
-              : "bg-red-900/50 text-red-300 border border-red-800"
+              ? "bg-green-50 dark:bg-green-900/50 text-green-700 dark:text-green-300 border border-green-200 dark:border-green-800"
+              : "bg-red-50 dark:bg-red-900/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800"
           }`}>
             {deleteResult.message}
           </div>
         )}
       </div>
 
-      <div className="mt-8 pt-6 border-t border-gray-800">
+      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
         <p className="text-xs text-gray-600">
           Filament DB v{process.env.APP_VERSION}
         </p>

@@ -224,9 +224,6 @@ function decodeCBORItem(
 
       if (additional === 27) {
         // Float64
-        const ab = new ArrayBuffer(8);
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const _dv = new DataView(ab);
         // argument is already the 64-bit value but JS loses precision
         // Re-read from the original data
         const f64Offset = offset - 8;

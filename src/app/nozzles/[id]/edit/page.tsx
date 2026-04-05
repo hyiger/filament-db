@@ -15,14 +15,16 @@ export default function EditNozzle() {
   const [fetchError, setFetchError] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/nozzles/${params.id}`)
+    const controller = new AbortController();
+    fetch(`/api/nozzles/${params.id}`, { signal: controller.signal })
       .then((r) => {
         if (r.status === 404) { setNotFound(true); return null; }
         if (!r.ok) { setFetchError(true); return null; }
         return r.json();
       })
       .then((data) => { if (data) setNozzle(data); })
-      .catch(() => setFetchError(true));
+      .catch((err) => { if (err.name !== "AbortError") setFetchError(true); });
+    return () => controller.abort();
   }, [params.id]);
 
   const handleSubmit = async (data: Record<string, unknown>) => {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseIniFilaments } from "@/lib/parseIni";
+import { checkFileSize } from "@/lib/apiErrorHandler";
 
 export async function POST(request: NextRequest) {
   const formData = await request.formData();
@@ -8,6 +9,9 @@ export async function POST(request: NextRequest) {
   if (!file) {
     return NextResponse.json({ error: "No file provided" }, { status: 400 });
   }
+
+  const sizeError = checkFileSize(file);
+  if (sizeError) return sizeError;
 
   const content = await file.text();
   const filaments = parseIniFilaments(content);

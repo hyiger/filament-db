@@ -14,9 +14,20 @@ import type { PrusamentScrapeResult } from "../route";
  *   action      – "create" | "add-spool"
  */
 export async function POST(request: NextRequest) {
-  await dbConnect();
+  try {
+    await dbConnect();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: "Database connection failed", detail: message }, { status: 500 });
+  }
 
-  const body = await request.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
+  }
   const spool: PrusamentScrapeResult = body.spool;
   const action: string = body.action; // "create" or "add-spool"
   const filamentId: string | undefined = body.filamentId;

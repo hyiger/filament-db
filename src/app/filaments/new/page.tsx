@@ -553,9 +553,9 @@ function NewFilamentContent() {
                   <p className="text-xs text-gray-500 mt-2">
                     Uses AI to extract filament properties.
                     {" "}
-                    <a href="/settings" className="text-blue-400 hover:text-blue-300 underline">
+                    <Link href="/settings" className="text-blue-400 hover:text-blue-300 underline">
                       Configure API key
-                    </a>
+                    </Link>
                   </p>
                 </div>
               )}

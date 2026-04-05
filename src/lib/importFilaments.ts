@@ -281,6 +281,9 @@ export async function upsertImportRows(
           nozzleFirstLayer: temps.nozzleFirstLayer ?? null,
           bed: temps.bed ?? null,
           bedFirstLayer: temps.bedFirstLayer ?? null,
+          nozzleRangeMin: temps.nozzleRangeMin ?? null,
+          nozzleRangeMax: temps.nozzleRangeMax ?? null,
+          standby: temps.standby ?? null,
         };
       }
       if (softDeleted) {

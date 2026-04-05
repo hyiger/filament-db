@@ -12,9 +12,9 @@ Your IP address is not whitelisted in MongoDB Atlas. Go to **Security > Network 
 
 The INI file might not contain custom filament profiles, or the file path is incorrect. Verify the file contains `[filament:...]` sections by opening it in a text editor.
 
-## Port 3000 already in use
+## Port 3456 already in use
 
-Another process is using port 3000. Either stop that process or run on a different port:
+Another process is using port 3456. Either stop that process or run on a different port:
 
 ```bash
 npm run dev -- -p 3001

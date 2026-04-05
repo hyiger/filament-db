@@ -63,98 +63,116 @@ export interface PrusamentScrapeResult {
  * Fetches a Prusament spool page and extracts the embedded spoolData JSON.
  */
 export async function GET(request: NextRequest) {
-  const spoolId = request.nextUrl.searchParams.get("spoolId")?.trim();
-  if (!spoolId) {
-    return NextResponse.json(
-      { error: "spoolId query parameter is required" },
-      { status: 400 },
-    );
-  }
-
-  // Accept either a bare ID or a full URL
-  const cleanId = spoolId.includes("spoolId=")
-    ? new URL(spoolId).searchParams.get("spoolId") ?? spoolId
-    : spoolId;
-
-  const pageUrl = `https://prusament.com/spool/?spoolId=${encodeURIComponent(cleanId)}`;
-
-  let html: string;
   try {
-    const res = await fetch(pageUrl, {
-      headers: { "User-Agent": "FilamentDB/1.0" },
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
+    const spoolId = request.nextUrl.searchParams.get("spoolId")?.trim();
+    if (!spoolId) {
       return NextResponse.json(
-        { error: `Prusament returned HTTP ${res.status}` },
+        { error: "spoolId query parameter is required" },
+        { status: 400 },
+      );
+    }
+
+    // Accept either a bare ID or a full URL
+    let cleanId: string;
+    if (spoolId.includes("spoolId=")) {
+      try {
+        cleanId = new URL(spoolId).searchParams.get("spoolId") ?? spoolId;
+      } catch {
+        return NextResponse.json(
+          { error: "Invalid URL in spoolId parameter" },
+          { status: 400 },
+        );
+      }
+    } else {
+      cleanId = spoolId;
+    }
+
+    const pageUrl = `https://prusament.com/spool/?spoolId=${encodeURIComponent(cleanId)}`;
+
+    let html: string;
+    try {
+      const res = await fetch(pageUrl, {
+        headers: { "User-Agent": "FilamentDB/1.0" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) {
+        return NextResponse.json(
+          { error: `Prusament returned HTTP ${res.status}` },
+          { status: 502 },
+        );
+      }
+      html = await res.text();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Network error";
+      return NextResponse.json(
+        { error: `Failed to fetch Prusament page: ${msg}` },
         { status: 502 },
       );
     }
-    html = await res.text();
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "Network error";
-    return NextResponse.json(
-      { error: `Failed to fetch Prusament page: ${msg}` },
-      { status: 502 },
-    );
-  }
 
-  // Extract the spoolData JSON from the page.
-  // It appears as: var spoolData = '{...}'; or spoolData = "{...}"
-  const match = html.match(/var\s+spoolData\s*=\s*'({[\s\S]*?})'\s*;/)
-    ?? html.match(/var\s+spoolData\s*=\s*"({[\s\S]*?})"\s*;/);
+    // Extract the spoolData JSON from the page.
+    // It appears as: var spoolData = '{...}'; or spoolData = "{...}"
+    const match = html.match(/var\s+spoolData\s*=\s*'({[\s\S]*?})'\s*;/)
+      ?? html.match(/var\s+spoolData\s*=\s*"({[\s\S]*?})"\s*;/);
 
-  if (!match) {
-    // Check if the page indicates spool not found
-    if (html.includes("Spool not found") || html.includes("404")) {
+    if (!match) {
+      // Check if the page indicates spool not found
+      if (html.includes("Spool not found") || html.includes("404")) {
+        return NextResponse.json(
+          { error: `Spool "${cleanId}" not found on Prusament` },
+          { status: 404 },
+        );
+      }
       return NextResponse.json(
-        { error: `Spool "${cleanId}" not found on Prusament` },
-        { status: 404 },
+        { error: "Could not extract spool data from Prusament page" },
+        { status: 502 },
       );
     }
+
+    let raw: PrusamentSpoolData;
+    try {
+      raw = JSON.parse(match[1]);
+    } catch {
+      return NextResponse.json(
+        { error: "Failed to parse spool data JSON" },
+        { status: 502 },
+      );
+    }
+
+    const f = raw.filament;
+    const result: PrusamentScrapeResult = {
+      spoolId: cleanId,
+      productName: f.name,
+      material: f.material,
+      colorName: f.color_name,
+      colorHex: f.color_rgb.startsWith("#") ? f.color_rgb : `#${f.color_rgb}`,
+      diameter: 1.75, // Prusament is always 1.75
+      diameterAvg: raw.diameter_avg,
+      diameterStdDev: raw.standard_deviation ?? null,
+      ovality: raw.ovality,
+      netWeight: raw.weight,
+      spoolWeight: raw.spool_weight,
+      totalWeight: raw.weight + raw.spool_weight,
+      lengthMeters: raw.length,
+      nozzleTempMin: f.he_min,
+      nozzleTempMax: f.he_max,
+      bedTempMin: f.hb_min,
+      bedTempMax: f.hb_max,
+      manufactureDate: raw.manufacture_date,
+      country: raw.country,
+      goodsId: raw.ff_goods_id,
+      priceUsd: raw.price_usd ?? null,
+      priceEur: raw.price_eur ?? null,
+      photoUrl: f.photo_url,
+      pageUrl,
+    };
+
+    return NextResponse.json(result);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json(
-      { error: "Could not extract spool data from Prusament page" },
-      { status: 502 },
+      { error: "Internal server error", detail: message },
+      { status: 500 },
     );
   }
-
-  let raw: PrusamentSpoolData;
-  try {
-    raw = JSON.parse(match[1]);
-  } catch {
-    return NextResponse.json(
-      { error: "Failed to parse spool data JSON" },
-      { status: 502 },
-    );
-  }
-
-  const f = raw.filament;
-  const result: PrusamentScrapeResult = {
-    spoolId: cleanId,
-    productName: f.name,
-    material: f.material,
-    colorName: f.color_name,
-    colorHex: f.color_rgb.startsWith("#") ? f.color_rgb : `#${f.color_rgb}`,
-    diameter: 1.75, // Prusament is always 1.75
-    diameterAvg: raw.diameter_avg,
-    diameterStdDev: raw.standard_deviation ?? null,
-    ovality: raw.ovality,
-    netWeight: raw.weight,
-    spoolWeight: raw.spool_weight,
-    totalWeight: raw.weight + raw.spool_weight,
-    lengthMeters: raw.length,
-    nozzleTempMin: f.he_min,
-    nozzleTempMax: f.he_max,
-    bedTempMin: f.hb_min,
-    bedTempMax: f.hb_max,
-    manufactureDate: raw.manufacture_date,
-    country: raw.country,
-    goodsId: raw.ff_goods_id,
-    priceUsd: raw.price_usd ?? null,
-    priceEur: raw.price_eur ?? null,
-    photoUrl: f.photo_url,
-    pageUrl,
-  };
-
-  return NextResponse.json(result);
 }

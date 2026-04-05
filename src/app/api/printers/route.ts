@@ -35,7 +35,13 @@ export async function POST(request: NextRequest) {
     return errorResponse("Database connection failed", 500, getErrorMessage(err));
   }
 
-  const body = await request.json();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let body: any;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse("Invalid JSON in request body", 400);
+  }
 
   // Validate that all referenced nozzle IDs exist and are active
   if (body.installedNozzles?.length > 0) {

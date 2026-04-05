@@ -11,8 +11,8 @@ export default function SettingsError({
 }) {
   return (
     <div className="max-w-2xl mx-auto p-8 text-center">
-      <h2 className="text-xl font-bold text-red-400 mb-2">Failed to load settings</h2>
-      <p className="text-gray-400 text-sm mb-6">
+      <h2 className="text-xl font-bold text-red-600 dark:text-red-400 mb-2">Failed to load settings</h2>
+      <p className="text-gray-600 dark:text-gray-400 text-sm mb-6">
         {error.message || "An unexpected error occurred."}
       </p>
       <div className="flex gap-3 justify-center">
@@ -24,7 +24,7 @@ export default function SettingsError({
         </button>
         <Link
           href="/"
-          className="px-6 py-2 bg-gray-700 text-white rounded hover:bg-gray-600"
+          className="px-6 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white rounded hover:bg-gray-300 dark:hover:bg-gray-600"
         >
           Go home
         </Link>

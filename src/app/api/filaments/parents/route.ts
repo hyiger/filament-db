@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
  * Returns filaments that can be used as parents (i.e., not already variants themselves).
  * Optionally filter by vendor or search string.
@@ -19,7 +23,7 @@ export async function GET(request: NextRequest) {
       _deletedAt: null,
     };
     if (search) {
-      filter.name = { $regex: search, $options: "i" };
+      filter.name = { $regex: escapeRegex(search), $options: "i" };
     }
     if (exclude) {
       filter._id = { $ne: exclude };

@@ -116,7 +116,7 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
         <div className="space-y-1.5">
           {byType.map(([type, count]) => (
             <div key={type} className="flex items-center gap-2 text-sm">
-              <span className="w-16 truncate text-gray-300 font-medium">{type}</span>
+              <span className="w-16 truncate text-gray-600 dark:text-gray-300 font-medium">{type}</span>
               <div className="flex-1 bg-gray-200 dark:bg-gray-800 rounded-full h-3">
                 <div
                   className="h-3 rounded-full bg-blue-500"
