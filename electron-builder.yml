@@ -9,11 +9,7 @@ directories:
 
 icon: assets/icon.png
 
-asar: true
-asarUnpack:
-  - node_modules/@pokusew/pcsclite/**/*
-  - node_modules/nfc-pcsc/**/*
-  - node_modules/mongodb-memory-server-core/**/*
+asar: false
 npmRebuild: false
 
 files:
@@ -66,6 +62,8 @@ nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   artifactName: "FilamentDB-${version}-windows-${arch}-setup.${ext}"
+
+compression: normal
 
 linux:
   category: Utility
