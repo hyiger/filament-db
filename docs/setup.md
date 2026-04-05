@@ -202,7 +202,7 @@ The AI API key enables the "Import from TDS" feature, which uses AI to extract f
 
 > **Note:** If your password contains special characters (`@`, `#`, `%`, etc.), you must URL-encode them. For example, `p@ssword` becomes `p%40ssword`.
 
-> **Note:** The desktop app does not use `.env.local` -- it prompts for the connection string on first launch and stores it in an encrypted local config file (see [Desktop App](desktop.md) for storage locations). In offline and hybrid modes, the desktop app runs an embedded local MongoDB instance automatically.
+> **Note:** The desktop app does not use `.env.local` -- it prompts for the connection string on first launch and stores it in a locally persisted config file (see [Desktop App](desktop.md) for storage locations). In offline and hybrid modes, the desktop app runs an embedded local MongoDB instance automatically.
 
 ### Running
 

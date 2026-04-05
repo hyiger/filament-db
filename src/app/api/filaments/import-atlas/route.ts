@@ -26,12 +26,28 @@ export async function POST(request: NextRequest) {
 
   try {
     await client.connect();
-    const db = client.db("filament-db");
+
+    // Parse database name from connection string, default to "filament-db"
+    let dbName = "filament-db";
+    try {
+      const parsed = new URL(uri.replace("mongodb+srv://", "https://").replace("mongodb://", "https://"));
+      const pathDb = parsed.pathname.replace("/", "").split("?")[0];
+      if (pathDb) dbName = pathDb;
+    } catch { /* use default */ }
+    const db = client.db(dbName);
 
     // If filament IDs provided, import them
     if (body.filamentIds && Array.isArray(body.filamentIds)) {
       const { ObjectId } = await import("mongodb");
-      const objectIds = body.filamentIds.map((id: string) => new ObjectId(id));
+
+      // Validate IDs before constructing ObjectId
+      const ids = body.filamentIds.map((id: string) => String(id).trim());
+      const invalidIds = ids.filter((id: string) => !/^[a-f0-9]{24}$/i.test(id));
+      if (invalidIds.length > 0) {
+        return NextResponse.json({ error: `Invalid filament ID(s): ${invalidIds.join(", ")}` }, { status: 400 });
+      }
+
+      const objectIds = ids.map((id: string) => new ObjectId(id));
       const remoteFilaments = await db
         .collection("filaments")
         .find({ _id: { $in: objectIds } })

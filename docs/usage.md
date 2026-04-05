@@ -244,7 +244,7 @@ On the **Settings** page under **AI Features**:
 - **Remove Key** — clears the stored key
 - **Status indicator** — green dot when configured, gray when not
 
-In the desktop app, the API key is stored in the encrypted local config file. In the web app, set the key via the Settings page or use environment variables (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`).
+In the desktop app, the API key is stored in the locally persisted config file. In the web app, set the key via the Settings page or use environment variables (`GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`).
 
 ---
 

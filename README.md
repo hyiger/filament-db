@@ -27,7 +27,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 ### Import / Export
 - **PrusaSlicer** -- import and export INI config bundles via browser upload or CLI
-- **PrusaSlicer integration** -- live sync of filament presets to a [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) via REST API; presets appear in the filament dropdown on startup with calibrated values baked in
+- **PrusaSlicer integration** -- live sync of filament presets to a [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) via REST API; presets appear in the filament dropdown on startup, with per-nozzle calibration overrides applied dynamically via the calibration API
 - **OpenPrintTag database** -- browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) (11,000+ materials from 97 brands), filter by type/brand/data quality, and selectively import filaments with completeness scoring
 - **CSV / XLSX** -- import and export spreadsheets with column mapping
 - **Prusament QR** -- scan a spool QR code or enter spool ID to auto-import specs, temps, weights, and pricing
@@ -122,7 +122,7 @@ filament-db/
 │   ├── hooks/               # Custom hooks (useNfc, useCurrency)
 │   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder, TDS extractor, PrusaSlicer bundle generator, OpenPrintTag DB browser
 │   └── models/              # Mongoose schemas (Filament, Nozzle, Printer)
-├── tests/                   # Vitest unit tests (399 tests across 17 files)
+├── tests/                   # Vitest unit tests (427 tests across 17 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   ├── release.yml          # CD: build desktop installers on version tags (4 platforms)
