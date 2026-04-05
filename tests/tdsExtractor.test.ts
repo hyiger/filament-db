@@ -453,5 +453,17 @@ describe("tdsExtractor", () => {
       expect(result.data?.name).toBe("Claude File");
       expect(apiUrl).toContain("anthropic.com");
     });
+
+    it("rejects PDF input for OpenAI provider with informative error", async () => {
+      vi.stubGlobal("fetch", vi.fn());
+
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const pdfBuffer = Buffer.from("fake-pdf-content");
+      const result = await extractFromTdsContent(pdfBuffer, "application/pdf", "sk-test", "openai");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("OpenAI provider does not support PDF");
+      expect(result.error).toContain("Gemini or Claude");
+    });
   });
 });

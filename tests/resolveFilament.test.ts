@@ -273,6 +273,80 @@ describe("resolveFilament", () => {
     expect(result.settings.chamber_temperature).toBe("40");
     expect(result._inherited).toContain("settings");
   });
+
+  it("copies colorName from variant (never inherited)", () => {
+    const parent = makeParent({ colorName: "Prusa Orange" });
+    const variant = makeVariant({ colorName: "Galaxy Black" });
+    const result = resolveFilament(variant, parent);
+    expect(result.colorName).toBe("Galaxy Black");
+    expect(result._inherited).not.toContain("colorName");
+  });
+
+  it("does not inherit colorName when variant has none", () => {
+    const parent = makeParent({ colorName: "Prusa Orange" });
+    const variant = makeVariant({ colorName: undefined });
+    const result = resolveFilament(variant, parent);
+    expect(result.colorName).toBeUndefined();
+    expect(result._inherited).not.toContain("colorName");
+  });
+
+  it("copies instanceId and syncId from variant (never inherited)", () => {
+    const parent = makeParent({ instanceId: "parent-inst", syncId: "parent-sync" });
+    const variant = makeVariant({ instanceId: "variant-inst", syncId: "variant-sync" });
+    const result = resolveFilament(variant, parent);
+    expect(result.instanceId).toBe("variant-inst");
+    expect(result.syncId).toBe("variant-sync");
+  });
+
+  it("copies _deletedAt from variant (never inherited)", () => {
+    const deletedAt = new Date();
+    const parent = makeParent({ _deletedAt: null });
+    const variant = makeVariant({ _deletedAt: deletedAt });
+    const result = resolveFilament(variant, parent);
+    expect(result._deletedAt).toBe(deletedAt);
+  });
+
+  it("inherits optTags from parent when variant has none", () => {
+    const parent = makeParent({ optTags: [1, 2, 4] });
+    const variant = makeVariant({ optTags: [] });
+    const result = resolveFilament(variant, parent);
+    expect(result.optTags).toEqual([1, 2, 4]);
+    expect(result._inherited).toContain("optTags");
+  });
+
+  it("uses variant optTags when it has them", () => {
+    const parent = makeParent({ optTags: [1, 2] });
+    const variant = makeVariant({ optTags: [8] });
+    const result = resolveFilament(variant, parent);
+    expect(result.optTags).toEqual([8]);
+    expect(result._inherited).not.toContain("optTags");
+  });
+
+  it("inherits bedTypeTemps from parent when variant has none", () => {
+    const parentBedTemps = [{ bedType: "Textured PEI", temperature: 85, firstLayerTemperature: 90 }];
+    const parent = makeParent({ bedTypeTemps: parentBedTemps });
+    const variant = makeVariant({ bedTypeTemps: [] });
+    const result = resolveFilament(variant, parent);
+    expect(result.bedTypeTemps).toEqual(parentBedTemps);
+    expect(result._inherited).toContain("bedTypeTemps");
+  });
+
+  it("uses variant bedTypeTemps when it has them", () => {
+    const parentBedTemps = [{ bedType: "Textured PEI", temperature: 85 }];
+    const variantBedTemps = [{ bedType: "Smooth PEI", temperature: 90 }];
+    const parent = makeParent({ bedTypeTemps: parentBedTemps });
+    const variant = makeVariant({ bedTypeTemps: variantBedTemps });
+    const result = resolveFilament(variant, parent);
+    expect(result.bedTypeTemps).toEqual(variantBedTemps);
+    expect(result._inherited).not.toContain("bedTypeTemps");
+  });
+
+  it("copies totalWeight from variant (never inherited)", () => {
+    const parent = makeParent({ totalWeight: 1200 });
+    const variant = makeVariant({ totalWeight: 800 });
+    const result = resolveFilament(variant, parent);
+    expect(result.totalWeight).toBe(800);
+  });
 });
 
 describe("hasVariants", () => {

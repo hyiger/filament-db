@@ -30,6 +30,10 @@ export async function PUT(
     await dbConnect();
     const { id } = await params;
     const body = await request.json();
+    delete body._id;
+    delete body._deletedAt;
+    delete body.createdAt;
+    delete body.updatedAt;
     const nozzle = await Nozzle.findOneAndUpdate(
       { _id: id, _deletedAt: null },
       body,
@@ -79,8 +83,8 @@ export async function DELETE(
       );
     }
 
-    const nozzle = await Nozzle.findByIdAndUpdate(
-      id,
+    const nozzle = await Nozzle.findOneAndUpdate(
+      { _id: id, _deletedAt: null },
       { _deletedAt: new Date() },
       { new: true }
     ).lean();

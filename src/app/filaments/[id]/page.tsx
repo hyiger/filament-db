@@ -188,7 +188,7 @@ export default function FilamentDetail() {
         body: JSON.stringify({ totalWeight: val }),
       });
       if (res.ok) {
-        setFilament({ ...filament, totalWeight: val });
+        setFilament(prev => prev ? { ...prev, totalWeight: val } : prev);
         toast("Weight updated");
         setWeightInput("");
       } else {
@@ -211,7 +211,7 @@ export default function FilamentDetail() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setFilament({ ...filament, spools: updated.spools });
+        setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
         toast("Spool added");
       } else {
         toast("Failed to add spool", "error");
@@ -231,7 +231,7 @@ export default function FilamentDetail() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setFilament({ ...filament, spools: updated.spools });
+        setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
         toast("Spool updated");
       } else {
         toast("Failed to update spool", "error");
@@ -250,7 +250,7 @@ export default function FilamentDetail() {
       });
       if (res.ok) {
         const updated = await res.json();
-        setFilament({ ...filament, spools: updated.spools });
+        setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
         toast("Spool removed");
       } else {
         toast("Failed to remove spool", "error");
@@ -278,7 +278,7 @@ export default function FilamentDetail() {
       });
       if (clearRes.ok) {
         const added = await addRes.json();
-        setFilament({ ...filament, spools: added.spools, totalWeight: null });
+        setFilament(prev => prev ? { ...prev, spools: added.spools, totalWeight: null } : prev);
         toast("Migrated to spool tracking");
       }
     } catch {

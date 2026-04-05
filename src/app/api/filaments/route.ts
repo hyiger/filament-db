@@ -43,6 +43,11 @@ export async function POST(request: NextRequest) {
     return errorResponse("Invalid JSON in request body", 400);
   }
 
+  delete body._id;
+  delete body._deletedAt;
+  delete body.createdAt;
+  delete body.updatedAt;
+
   // Validate parentId if provided
   if (body.parentId) {
     const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null }).lean();

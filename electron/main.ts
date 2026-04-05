@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, utilityProcess, UtilityProcess } from "electron";
+import { app, BrowserWindow, ipcMain, dialog, utilityProcess, UtilityProcess, shell, session } from "electron";
 import path from "path";
 import Store from "electron-store";
 import http from "http";
@@ -9,7 +9,6 @@ import { SyncService, SyncStatus } from "./sync-service";
 export type ConnectionMode = "atlas" | "offline" | "hybrid";
 
 const store = new Store({
-  encryptionKey: "filament-db-secure-key",
   defaults: {
     mongodbUri: "",
     connectionMode: "" as ConnectionMode, // empty = not yet configured
@@ -21,6 +20,7 @@ const store = new Store({
 });
 
 const isDev = !app.isPackaged;
+let isQuitting = false;
 let mainWindow: BrowserWindow | null = null;
 let serverProcess: UtilityProcess | null = null;
 let nfcService: NfcService | null = null;
@@ -47,6 +47,17 @@ function createWindow(urlPath = "/") {
   });
 
   mainWindow.loadURL(getAppURL(urlPath));
+
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    const appUrl = getAppURL();
+    if (!url.startsWith(appUrl)) {
+      event.preventDefault();
+    }
+  });
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: "deny" };
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -487,6 +498,15 @@ ipcMain.handle("nfc-format-tag", async () => {
 // ── App lifecycle ──
 
 app.whenReady().then(async () => {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": ["default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws://localhost:* http://localhost:*; font-src 'self' data:;"],
+      },
+    });
+  });
+
   const connectionMode = store.get("connectionMode") as ConnectionMode;
 
   let mongoUri: string | null = null;
@@ -604,24 +624,18 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {
-  stopServer();
   if (process.platform !== "darwin") {
+    stopServer();
     app.quit();
   }
 });
 
-app.on("before-quit", async () => {
+app.on("before-quit", (event) => {
+  if (isQuitting) return;
+  isQuitting = true;
+  event.preventDefault();
   stopServer();
-
-  if (syncService) {
-    syncService.destroy();
-    syncService = null;
-  }
-
-  if (nfcService) {
-    nfcService.destroy();
-    nfcService = null;
-  }
-
-  await stopLocalMongo();
+  if (syncService) syncService.destroy();
+  if (nfcService) nfcService.destroy();
+  stopLocalMongo().finally(() => app.quit());
 });

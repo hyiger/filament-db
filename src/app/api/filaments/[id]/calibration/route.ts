@@ -55,7 +55,7 @@ export async function GET(
 
     // Resolve variant inheritance
     if (filament.parentId) {
-      const parent = await Filament.findById(filament.parentId)
+      const parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
         .populate("calibrations.nozzle")
         .populate("calibrations.printer")
         .lean();

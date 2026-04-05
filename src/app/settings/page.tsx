@@ -298,7 +298,7 @@ export default function SettingsPage() {
                     <span className="text-xl">{m.icon}</span>
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
-                        <span className={`text-sm font-medium ${isActive ? "text-blue-400" : "text-gray-200"}`}>
+                        <span className={`text-sm font-medium ${isActive ? "text-blue-600 dark:text-blue-400" : "text-gray-700 dark:text-gray-200"}`}>
                           {m.label}
                         </span>
                         {isActive && (
@@ -316,7 +316,7 @@ export default function SettingsPage() {
           {/* URI input for modes that need it */}
           {showUriInput && pendingMode && (
             <div className="mt-3 p-4 border border-gray-700 rounded-lg bg-gray-900/50">
-              <label className="block text-sm font-medium text-gray-300 mb-1">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 MongoDB Atlas Connection String
               </label>
               <input
@@ -324,7 +324,7 @@ export default function SettingsPage() {
                 value={atlasUri}
                 onChange={(e) => setAtlasUri(e.target.value)}
                 placeholder="mongodb+srv://user:pass@cluster.mongodb.net/filament-db"
-                className="w-full px-3 py-2 bg-transparent border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600 mb-2"
+                className="w-full px-3 py-2 bg-transparent border border-gray-700 rounded text-sm text-gray-700 dark:text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600 mb-2"
                 autoFocus
               />
               <p className="text-xs text-gray-500 mb-3">

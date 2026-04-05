@@ -112,7 +112,7 @@ interface TdsContent {
  */
 async function fetchTdsContent(url: string): Promise<TdsContent> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const timeout = setTimeout(() => controller.abort(), 30_000);
 
   try {
     const res = await fetch(url, {
@@ -339,16 +339,7 @@ async function callOpenAI(
   const contentParts: any[] = [];
 
   if (content.type === "pdf") {
-    // OpenAI doesn't support PDF directly via the chat API;
-    // we pass the base64 as a data URL in an image_url block for vision,
-    // but PDFs aren't images. For now, we can't do native PDF with OpenAI.
-    // Workaround: we'll describe it as a file and hope the model handles it.
-    // Actually, OpenAI supports file uploads but not inline PDF in chat.
-    // Best approach: pass base64 as text content (not ideal but functional).
-    contentParts.push({
-      type: "text",
-      text: `[This is a base64-encoded PDF document. Decode and analyze it.]\n\nBase64 PDF data (first 10000 chars): ${content.data.slice(0, 10000)}\n\n${EXTRACTION_PROMPT}`,
-    });
+    throw new Error("OpenAI provider does not support PDF input. Please use Gemini or Claude for PDF Technical Data Sheets, or provide a URL to an HTML/text version.");
   } else {
     contentParts.push({
       type: "text",

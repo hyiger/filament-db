@@ -332,10 +332,10 @@ function parseNdefRecord(
     } else {
       if (offset + 4 > data.length) throw new Error("NDEF record truncated: incomplete payload length");
       payloadLength =
-        (data[offset] << 24) |
+        ((data[offset] << 24) |
         (data[offset + 1] << 16) |
         (data[offset + 2] << 8) |
-        data[offset + 3];
+        data[offset + 3]) >>> 0;
       offset += 4;
     }
 

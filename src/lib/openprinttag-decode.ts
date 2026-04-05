@@ -15,11 +15,15 @@ import { OPT_KEY, MATERIAL_TYPE, OPT_TAG_TO_NAME, decodeCBORFloat16 } from "./op
 // Meta and main maps share key numbers 0-3 with different meanings,
 // so we build separate lookup tables.
 const META_KEYS = new Set(["MAIN_REGION_OFFSET", "MAIN_REGION_SIZE", "AUX_REGION_OFFSET", "AUX_REGION_SIZE"]);
+const AUX_KEYS = new Set(["AUX_CONSUMED_WEIGHT"]);
 const META_KEY_TO_NAME: Record<number, string> = {};
 const MAIN_KEY_TO_NAME: Record<number, string> = {};
 for (const [name, key] of Object.entries(OPT_KEY)) {
   if (META_KEYS.has(name)) {
     META_KEY_TO_NAME[key] = name;
+  } else if (AUX_KEYS.has(name)) {
+    // Aux keys occupy a separate key space (auxiliary CBOR region);
+    // skip them to avoid overwriting main/identity keys in MAIN_KEY_TO_NAME.
   } else {
     MAIN_KEY_TO_NAME[key] = name;
   }

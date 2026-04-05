@@ -13,7 +13,7 @@
 type FilamentDoc = Record<string, any>;
 
 /** Fields that are always variant-specific and never inherited */
-const VARIANT_ONLY_FIELDS = ["_id", "name", "color", "parentId", "spools", "createdAt", "updatedAt", "__v"];
+const VARIANT_ONLY_FIELDS = ["_id", "name", "color", "colorName", "parentId", "spools", "createdAt", "updatedAt", "__v", "instanceId", "syncId", "_deletedAt", "totalWeight"];
 
 /** Numeric/string fields that can be inherited from parent */
 const INHERITABLE_FIELDS = [
@@ -104,6 +104,26 @@ export function resolveFilament(
     resolved.compatibleNozzles = parent.compatibleNozzles || [];
     if (parent.compatibleNozzles?.length > 0) {
       inherited.push("compatibleNozzles");
+    }
+  }
+
+  // Resolve optTags — use variant's if it has any, otherwise parent's
+  if (filament.optTags?.length > 0) {
+    resolved.optTags = filament.optTags;
+  } else {
+    resolved.optTags = parent.optTags || [];
+    if (parent.optTags?.length > 0) {
+      inherited.push("optTags");
+    }
+  }
+
+  // Resolve bedTypeTemps — use variant's if it has any, otherwise parent's
+  if (filament.bedTypeTemps?.length > 0) {
+    resolved.bedTypeTemps = filament.bedTypeTemps;
+  } else {
+    resolved.bedTypeTemps = parent.bedTypeTemps || [];
+    if (parent.bedTypeTemps?.length > 0) {
+      inherited.push("bedTypeTemps");
     }
   }
 

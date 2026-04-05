@@ -29,6 +29,10 @@ export async function POST(request: NextRequest) {
     await dbConnect();
 
     const body = await request.json();
+    delete body._id;
+    delete body._deletedAt;
+    delete body.createdAt;
+    delete body.updatedAt;
     const nozzle = await Nozzle.create(body);
     return NextResponse.json(nozzle, { status: 201 });
   } catch (err) {

@@ -520,6 +520,27 @@ describe("decodeOpenPrintTagBinary", () => {
     expect(decoded.aux).toEqual({});
   });
 
+  it("does not confuse aux keys with main keys (key 0 collision fix)", () => {
+    // AUX_CONSUMED_WEIGHT and INSTANCE_UUID both use key 0 in their respective regions.
+    // The decoder must not let aux key names leak into MAIN_KEY_TO_NAME.
+    const input: OpenPrintTagInput = {
+      materialName: "Collision Test",
+      brandName: "Brand",
+      materialType: "PLA",
+      weightGrams: 1000,
+      consumedWeight: 500,
+    };
+    const binary = generateOpenPrintTagBinary(input);
+    const decoded = decodeOpenPrintTagBinary(binary);
+
+    // Main region should have correct field names, not "AUX_CONSUMED_WEIGHT"
+    expect(decoded.materialName).toBe("Collision Test");
+    // Aux region should correctly decode consumed weight
+    expect(decoded.consumedWeight).toBe(500);
+    // The main map should not contain AUX_CONSUMED_WEIGHT as a key
+    expect(decoded.main).not.toHaveProperty("AUX_CONSUMED_WEIGHT");
+  });
+
   it("omits shore hardness when not provided", () => {
     const input: OpenPrintTagInput = {
       materialName: "Plain PLA",

@@ -32,6 +32,10 @@ export async function PUT(
     await dbConnect();
     const { id } = await params;
     const body = await request.json();
+    delete body._id;
+    delete body._deletedAt;
+    delete body.createdAt;
+    delete body.updatedAt;
 
     // Validate that all referenced nozzle IDs exist and are active
     if (body.installedNozzles?.length > 0) {
@@ -78,8 +82,8 @@ export async function DELETE(
       );
     }
 
-    const printer = await Printer.findByIdAndUpdate(
-      id,
+    const printer = await Printer.findOneAndUpdate(
+      { _id: id, _deletedAt: null },
       { _deletedAt: new Date() },
       { new: true }
     ).lean();

@@ -27,22 +27,30 @@ export default function PrintersPage() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const { toast } = useToast();
 
-  const fetchPrinters = useCallback(async () => {
+  const fetchPrinters = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
-    const res = await fetch("/api/printers");
-    if (!res.ok) {
+    try {
+      const res = await fetch("/api/printers", { signal });
+      if (!res.ok) {
+        toast("Failed to load printers", "error");
+        setLoading(false);
+        return;
+      }
+      const data = await res.json();
+      setPrinters(data);
+      setSelected(new Set());
+      setLoading(false);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       toast("Failed to load printers", "error");
       setLoading(false);
-      return;
     }
-    const data = await res.json();
-    setPrinters(data);
-    setSelected(new Set());
-    setLoading(false);
   }, [toast]);
 
   useEffect(() => {
-    fetchPrinters(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetching on mount
+    const ac = new AbortController();
+    fetchPrinters(ac.signal); // eslint-disable-line react-hooks/set-state-in-effect -- data fetching on mount
+    return () => ac.abort();
   }, [fetchPrinters]);
 
   const toggleSelect = (id: string) => {

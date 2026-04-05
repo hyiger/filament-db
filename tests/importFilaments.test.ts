@@ -240,4 +240,46 @@ describe("upsertImportRows", () => {
     expect(doc!.temperatures.bed).toBe(60);
     expect(doc!.temperatures.bedFirstLayer).toBe(65);
   });
+
+  it("imports nozzleRangeMin, nozzleRangeMax, and standby temps on create", async () => {
+    await upsertImportRows([
+      {
+        name: "Range Temp Test",
+        vendor: "V",
+        type: "PLA",
+        nozzleTemp: 210,
+        nozzleRangeMin: 190,
+        nozzleRangeMax: 230,
+        standbyTemp: 150,
+      },
+    ]);
+
+    const doc = await Filament.findOne({ name: "Range Temp Test" });
+    expect(doc!.temperatures.nozzle).toBe(210);
+    expect(doc!.temperatures.nozzleRangeMin).toBe(190);
+    expect(doc!.temperatures.nozzleRangeMax).toBe(230);
+    expect(doc!.temperatures.standby).toBe(150);
+  });
+
+  it("updates nozzleRangeMin/Max/standby via dot-notation without overwriting other temps", async () => {
+    await Filament.create({
+      name: "Range Update Test",
+      vendor: "V",
+      type: "PLA",
+      temperatures: { nozzle: 200, bed: 55, nozzleRangeMin: 180, nozzleRangeMax: 220, standby: 140 },
+    });
+
+    // Update only nozzleRangeMin -- others should remain
+    const result = await upsertImportRows([
+      { name: "Range Update Test", vendor: "V", type: "PLA", nozzleRangeMin: 185 },
+    ]);
+
+    expect(result.updated).toBe(1);
+    const doc = await Filament.findOne({ name: "Range Update Test" });
+    expect(doc!.temperatures.nozzleRangeMin).toBe(185);
+    expect(doc!.temperatures.nozzleRangeMax).toBe(220);
+    expect(doc!.temperatures.standby).toBe(140);
+    expect(doc!.temperatures.nozzle).toBe(200);
+    expect(doc!.temperatures.bed).toBe(55);
+  });
 });

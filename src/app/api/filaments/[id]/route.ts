@@ -53,6 +53,10 @@ export async function PUT(
     await dbConnect();
     const { id } = await params;
     const body = await request.json();
+    delete body._id;
+    delete body._deletedAt;
+    delete body.createdAt;
+    delete body.updatedAt;
 
     // Validate parentId if provided
     if (body.parentId) {
@@ -136,10 +140,10 @@ export async function POST(
     if (config.filament_max_volumetric_speed) { const v = parseFloat(config.filament_max_volumetric_speed); if (!isNaN(v)) update.maxVolumetricSpeed = v; }
 
     // Temperatures
-    if (config.temperature) temps.nozzle = parseInt(config.temperature);
-    if (config.first_layer_temperature) temps.nozzleFirstLayer = parseInt(config.first_layer_temperature);
-    if (config.bed_temperature) temps.bed = parseInt(config.bed_temperature);
-    if (config.first_layer_bed_temperature) temps.bedFirstLayer = parseInt(config.first_layer_bed_temperature);
+    if (config.temperature) { const v = parseInt(config.temperature); if (!isNaN(v)) temps.nozzle = v; }
+    if (config.first_layer_temperature) { const v = parseInt(config.first_layer_temperature); if (!isNaN(v)) temps.nozzleFirstLayer = v; }
+    if (config.bed_temperature) { const v = parseInt(config.bed_temperature); if (!isNaN(v)) temps.bed = v; }
+    if (config.first_layer_bed_temperature) { const v = parseInt(config.first_layer_bed_temperature); if (!isNaN(v)) temps.bedFirstLayer = v; }
 
     // Shrinkage
     if (config.filament_shrinkage_compensation_xy) { const v = parseFloat(config.filament_shrinkage_compensation_xy); if (!isNaN(v)) update.shrinkageXY = v; }

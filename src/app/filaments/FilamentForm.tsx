@@ -300,7 +300,8 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
 
   // Fetch distinct filament types from DB and merge with defaults
   useEffect(() => {
-    fetch("/api/filaments/types")
+    const ac = new AbortController();
+    fetch("/api/filaments/types", { signal: ac.signal })
       .then((r) => {
         if (!r.ok) throw new Error();
         return r.json();
@@ -309,31 +310,36 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
         const merged = Array.from(new Set([...DEFAULT_FILAMENT_TYPES, ...dbTypes])).sort();
         setFilamentTypes(merged);
       })
-      .catch(() => addFetchError("filament types"));
+      .catch(() => { if (!ac.signal.aborted) addFetchError("filament types"); });
+    return () => ac.abort();
   }, []);
 
   // Fetch distinct vendors from DB
   useEffect(() => {
-    fetch("/api/filaments/vendors")
+    const ac = new AbortController();
+    fetch("/api/filaments/vendors", { signal: ac.signal })
       .then((r) => {
         if (!r.ok) throw new Error();
         return r.json();
       })
       .then((v: string[]) => setVendorOptions(v))
-      .catch(() => addFetchError("vendors"));
+      .catch(() => { if (!ac.signal.aborted) addFetchError("vendors"); });
+    return () => ac.abort();
   }, []);
 
   // Fetch potential parent filaments
   useEffect(() => {
+    const ac = new AbortController();
     const exclude = initialData?._id || "";
-    fetch(`/api/filaments/parents${exclude ? `?exclude=${exclude}` : ""}`)
+    fetch(`/api/filaments/parents${exclude ? `?exclude=${exclude}` : ""}`, { signal: ac.signal })
       .then((r) => {
         if (!r.ok) throw new Error();
         return r.json();
       })
       .then(setParentOptions)
-      .catch(() => addFetchError("parent filaments"))
-      .finally(() => setParentsLoading(false));
+      .catch(() => { if (!ac.signal.aborted) addFetchError("parent filaments"); })
+      .finally(() => { if (!ac.signal.aborted) setParentsLoading(false); });
+    return () => ac.abort();
   }, [initialData?._id]);
 
   // Close dropdowns on outside click
@@ -356,14 +362,17 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
   // Fetch TDS suggestions from other filaments with same vendor
   useEffect(() => {
     if (!form.vendor) return;
-    fetch(`/api/filaments?vendor=${encodeURIComponent(form.vendor)}`)
+    const ac = new AbortController();
+    fetch(`/api/filaments?vendor=${encodeURIComponent(form.vendor)}`, { signal: ac.signal })
       .then((r) => r.json())
       .then((data: { name: string; tdsUrl?: string }[]) => {
         const suggestions = data
           .filter((f) => f.tdsUrl && f.name !== form.name)
           .map((f) => ({ name: f.name, tdsUrl: f.tdsUrl! }));
         setTdsSuggestions(suggestions);
-      });
+      })
+      .catch((err) => { if (!ac.signal.aborted) console.error(err); });
+    return () => ac.abort();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.vendor]);
 
@@ -445,25 +454,29 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
   };
 
   useEffect(() => {
-    fetch("/api/nozzles")
+    const ac = new AbortController();
+    fetch("/api/nozzles", { signal: ac.signal })
       .then((r) => {
         if (!r.ok) throw new Error();
         return r.json();
       })
       .then(setNozzles)
-      .catch(() => addFetchError("nozzles"))
-      .finally(() => setNozzlesLoading(false));
+      .catch(() => { if (!ac.signal.aborted) addFetchError("nozzles"); })
+      .finally(() => { if (!ac.signal.aborted) setNozzlesLoading(false); });
+    return () => ac.abort();
   }, []);
 
   useEffect(() => {
-    fetch("/api/printers")
+    const ac = new AbortController();
+    fetch("/api/printers", { signal: ac.signal })
       .then((r) => {
         if (!r.ok) throw new Error();
         return r.json();
       })
       .then(setPrinters)
-      .catch(() => addFetchError("printers"))
-      .finally(() => setPrintersLoading(false));
+      .catch(() => { if (!ac.signal.aborted) addFetchError("printers"); })
+      .finally(() => { if (!ac.signal.aborted) setPrintersLoading(false); });
+    return () => ac.abort();
   }, []);
 
   const toggleNozzle = (id: string) => {

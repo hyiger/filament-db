@@ -21,22 +21,30 @@ export default function NozzlesPage() {
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const { toast } = useToast();
 
-  const fetchNozzles = useCallback(async () => {
+  const fetchNozzles = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
-    const res = await fetch("/api/nozzles");
-    if (!res.ok) {
+    try {
+      const res = await fetch("/api/nozzles", { signal });
+      if (!res.ok) {
+        toast("Failed to load nozzles", "error");
+        setLoading(false);
+        return;
+      }
+      const data = await res.json();
+      setNozzles(data);
+      setSelected(new Set());
+      setLoading(false);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return;
       toast("Failed to load nozzles", "error");
       setLoading(false);
-      return;
     }
-    const data = await res.json();
-    setNozzles(data);
-    setSelected(new Set());
-    setLoading(false);
   }, [toast]);
 
   useEffect(() => {
-    fetchNozzles(); // eslint-disable-line react-hooks/set-state-in-effect -- data fetching on mount
+    const ac = new AbortController();
+    fetchNozzles(ac.signal); // eslint-disable-line react-hooks/set-state-in-effect -- data fetching on mount
+    return () => ac.abort();
   }, [fetchNozzles]);
 
   const toggleSelect = (id: string) => {

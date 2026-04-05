@@ -95,8 +95,8 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
   };
 
   const inputClass =
-    "w-full px-3 py-2 border border-gray-300 rounded text-sm bg-transparent";
-  const labelClass = "block text-sm font-medium mb-1";
+    "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-gray-100 bg-transparent";
+  const labelClass = "block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1";
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">

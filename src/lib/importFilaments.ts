@@ -259,6 +259,9 @@ export async function upsertImportRows(
     if (row.nozzleFirstLayerTemp !== undefined) temps.nozzleFirstLayer = row.nozzleFirstLayerTemp ?? null;
     if (row.bedTemp !== undefined) temps.bed = row.bedTemp ?? null;
     if (row.bedFirstLayerTemp !== undefined) temps.bedFirstLayer = row.bedFirstLayerTemp ?? null;
+    if (row.nozzleRangeMin !== undefined) temps.nozzleRangeMin = row.nozzleRangeMin ?? null;
+    if (row.nozzleRangeMax !== undefined) temps.nozzleRangeMax = row.nozzleRangeMax ?? null;
+    if (row.standbyTemp !== undefined) temps.standby = row.standbyTemp ?? null;
 
     const existing = activeByName.get(row.name);
     if (existing) {
