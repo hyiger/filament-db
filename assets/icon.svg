@@ -1,100 +1,46 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1a1a2e"/>
-      <stop offset="100%" stop-color="#16213e"/>
-    </linearGradient>
-    <linearGradient id="filament" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#FF8C00"/>
-      <stop offset="50%" stop-color="#FF6600"/>
-      <stop offset="100%" stop-color="#E85D00"/>
-    </linearGradient>
-    <linearGradient id="flange" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#5a5a6a"/>
-      <stop offset="100%" stop-color="#3a3a4a"/>
-    </linearGradient>
-    <linearGradient id="db-body" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#4ECDC4"/>
-      <stop offset="100%" stop-color="#2AB7AD"/>
-    </linearGradient>
-    <linearGradient id="db-top" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#6EE7DF"/>
-      <stop offset="100%" stop-color="#4ECDC4"/>
-    </linearGradient>
-  </defs>
+<svg width="512" height="512" viewBox="0 0 140 140" xmlns="http://www.w3.org/2000/svg">
+  <rect x="0" y="0" width="140" height="140" rx="28" fill="#0f172a"/>
 
-  <!-- Background rounded square -->
-  <rect x="0" y="0" width="1024" height="1024" rx="200" fill="url(#bg)"/>
+  <!-- Bottom spool - teal -->
+  <ellipse cx="38" cy="112" rx="22" ry="6" fill="#0d9488" stroke="#0a7a70" stroke-width="1"/>
+  <rect x="20" y="90" width="36" height="22" fill="#14b8a6" stroke="none"/>
+  <line x1="16" y1="90" x2="16" y2="112" stroke="#0d9488" stroke-width="1"/>
+  <line x1="60" y1="90" x2="60" y2="112" stroke="#0d9488" stroke-width="1"/>
+  <rect x="16" y="109" width="44" height="4" rx="1.5" fill="#0d9488" stroke="#0a7a70" stroke-width="0.75"/>
+  <ellipse cx="38" cy="90" rx="22" ry="6" fill="#2dd4bf" stroke="#0d9488" stroke-width="1"/>
+  <rect x="16" y="88" width="44" height="4" rx="1.5" fill="#0d9488" stroke="#0a7a70" stroke-width="0.75"/>
+  <ellipse cx="38" cy="90" rx="8" ry="3" fill="#0a7a70" stroke="#087669" stroke-width="0.75"/>
 
-  <!-- Outer flange ring -->
-  <circle cx="512" cy="512" r="390" fill="url(#flange)" opacity="0.5"/>
-  <circle cx="512" cy="512" r="390" fill="none" stroke="#6a6a7a" stroke-width="6" opacity="0.6"/>
+  <!-- Middle spool - amber -->
+  <ellipse cx="38" cy="78" rx="22" ry="6" fill="#b45309" stroke="#a34a08" stroke-width="1"/>
+  <rect x="20" y="56" width="36" height="22" fill="#f59e0b" stroke="none"/>
+  <line x1="16" y1="56" x2="16" y2="78" stroke="#d97706" stroke-width="1"/>
+  <line x1="60" y1="56" x2="60" y2="78" stroke="#d97706" stroke-width="1"/>
+  <rect x="16" y="75" width="44" height="4" rx="1.5" fill="#d97706" stroke="#b45309" stroke-width="0.75"/>
+  <ellipse cx="38" cy="56" rx="22" ry="6" fill="#fbbf24" stroke="#d97706" stroke-width="1"/>
+  <rect x="16" y="54" width="44" height="4" rx="1.5" fill="#d97706" stroke="#b45309" stroke-width="0.75"/>
+  <ellipse cx="38" cy="56" rx="8" ry="3" fill="#b45309" stroke="#a34a08" stroke-width="0.75"/>
 
-  <!-- Filament wrap band -->
-  <circle cx="512" cy="512" r="370" fill="url(#filament)" opacity="0.95"/>
+  <!-- Top spool - blue -->
+  <ellipse cx="38" cy="44" rx="22" ry="6" fill="#1d4ed8" stroke="#1a44c0" stroke-width="1"/>
+  <rect x="20" y="22" width="36" height="22" fill="#3b82f6" stroke="none"/>
+  <line x1="16" y1="22" x2="16" y2="44" stroke="#2563eb" stroke-width="1"/>
+  <line x1="60" y1="22" x2="60" y2="44" stroke="#2563eb" stroke-width="1"/>
+  <rect x="16" y="41" width="44" height="4" rx="1.5" fill="#2563eb" stroke="#1d4ed8" stroke-width="0.75"/>
+  <ellipse cx="38" cy="22" rx="22" ry="6" fill="#60a5fa" stroke="#3b82f6" stroke-width="1"/>
+  <rect x="16" y="20" width="44" height="4" rx="1.5" fill="#2563eb" stroke="#1d4ed8" stroke-width="0.75"/>
+  <ellipse cx="38" cy="22" rx="8" ry="3" fill="#1d4ed8" stroke="#1a44c0" stroke-width="0.75"/>
 
-  <!-- Filament wrap texture rings -->
-  <circle cx="512" cy="512" r="360" fill="none" stroke="#FF9933" stroke-width="5" opacity="0.35"/>
-  <circle cx="512" cy="512" r="340" fill="none" stroke="#FF7700" stroke-width="4" opacity="0.3"/>
-  <circle cx="512" cy="512" r="320" fill="none" stroke="#FF9933" stroke-width="5" opacity="0.25"/>
-  <circle cx="512" cy="512" r="300" fill="none" stroke="#FF7700" stroke-width="4" opacity="0.2"/>
-  <circle cx="512" cy="512" r="280" fill="none" stroke="#FF9933" stroke-width="3" opacity="0.15"/>
-
-  <!-- Inner flange ring -->
-  <circle cx="512" cy="512" r="260" fill="url(#flange)" opacity="0.7"/>
-  <circle cx="512" cy="512" r="260" fill="none" stroke="#6a6a7a" stroke-width="5" opacity="0.5"/>
-
-  <!-- Hub background -->
-  <circle cx="512" cy="512" r="240" fill="url(#bg)" opacity="0.9"/>
-
-  <!-- === Database icon in the center hub === -->
-
-  <!-- DB cylinder body -->
-  <path d="M 392 420 L 392 610 Q 392 660 512 660 Q 632 660 632 610 L 632 420"
-        fill="url(#db-body)" opacity="0.9"/>
-
-  <!-- DB cylinder body side strokes -->
-  <line x1="392" y1="420" x2="392" y2="610" stroke="#2AB7AD" stroke-width="3" opacity="0.6"/>
-  <line x1="632" y1="420" x2="632" y2="610" stroke="#2AB7AD" stroke-width="3" opacity="0.6"/>
-
-  <!-- DB bottom ellipse -->
-  <ellipse cx="512" cy="610" rx="120" ry="50" fill="url(#db-body)" opacity="0.8"/>
-  <ellipse cx="512" cy="610" rx="120" ry="50" fill="none" stroke="#2AB7AD" stroke-width="3" opacity="0.5"/>
-
-  <!-- DB middle disk (data tier line) -->
-  <ellipse cx="512" cy="515" rx="120" ry="40" fill="url(#db-body)" opacity="0.5"/>
-  <ellipse cx="512" cy="515" rx="120" ry="40" fill="none" stroke="#6EE7DF" stroke-width="2.5" opacity="0.7"/>
-
-  <!-- DB top ellipse (lid) -->
-  <ellipse cx="512" cy="420" rx="120" ry="50" fill="url(#db-top)" opacity="0.95"/>
-  <ellipse cx="512" cy="420" rx="120" ry="50" fill="none" stroke="#6EE7DF" stroke-width="3" opacity="0.6"/>
-
-  <!-- Data dots on DB face for detail -->
-  <circle cx="460" cy="470" r="8" fill="#6EE7DF" opacity="0.6"/>
-  <circle cx="490" cy="470" r="8" fill="#6EE7DF" opacity="0.6"/>
-  <circle cx="520" cy="470" r="8" fill="#6EE7DF" opacity="0.4"/>
-
-  <circle cx="460" cy="560" r="8" fill="#6EE7DF" opacity="0.5"/>
-  <circle cx="490" cy="560" r="8" fill="#6EE7DF" opacity="0.5"/>
-  <circle cx="520" cy="560" r="8" fill="#6EE7DF" opacity="0.3"/>
-  <circle cx="550" cy="560" r="8" fill="#6EE7DF" opacity="0.5"/>
-
-  <!-- Loose filament end trailing off the spool -->
-  <path d="M 852 512 Q 900 470 915 400 Q 930 340 900 290"
-        fill="none" stroke="url(#filament)" stroke-width="14" stroke-linecap="round" opacity="0.85"/>
-
-  <!-- NFC icon (bottom-right corner): card with radio waves above -->
-  <g transform="translate(770, 720)">
-    <!-- NFC card/tag rectangle -->
-    <rect x="0" y="60" width="160" height="105" rx="16" fill="#6EE7DF" opacity="0.95"/>
-    <!-- NFC text on card -->
-    <text x="80" y="128" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-weight="bold" font-size="52" fill="#1a1a2e" opacity="0.9">NFC</text>
-    <!-- Radio waves above the card -->
-    <path d="M 55 50 Q 80 30 105 50" fill="none" stroke="#6EE7DF" stroke-width="10" stroke-linecap="round" opacity="0.95"/>
-    <path d="M 38 30 Q 80 -2 122 30" fill="none" stroke="#6EE7DF" stroke-width="10" stroke-linecap="round" opacity="0.7"/>
-    <path d="M 20 10 Q 80 -35 140 10" fill="none" stroke="#6EE7DF" stroke-width="10" stroke-linecap="round" opacity="0.45"/>
-  </g>
-
-  <!-- Subtle highlight/shine on the spool -->
-  <ellipse cx="420" cy="380" rx="100" ry="60" fill="white" opacity="0.05" transform="rotate(-30 420 380)"/>
+  <!-- Color bars -->
+  <rect x="90" y="20" width="30" height="5" rx="1.5" fill="#3b82f6"/>
+  <rect x="90" y="29" width="30" height="5" rx="1.5" fill="#ef4444"/>
+  <rect x="90" y="38" width="30" height="5" rx="1.5" fill="#f59e0b"/>
+  <rect x="90" y="47" width="30" height="5" rx="1.5" fill="#10b981"/>
+  <rect x="90" y="56" width="30" height="5" rx="1.5" fill="#8b5cf6"/>
+  <rect x="90" y="65" width="30" height="5" rx="1.5" fill="#ec4899"/>
+  <rect x="90" y="74" width="30" height="5" rx="1.5" fill="#06b6d4"/>
+  <rect x="90" y="83" width="30" height="5" rx="1.5" fill="#f97316"/>
+  <rect x="90" y="92" width="30" height="5" rx="1.5" fill="#a3e635"/>
+  <rect x="90" y="101" width="30" height="5" rx="1.5" fill="#a78bfa"/>
+  <rect x="90" y="110" width="30" height="5" rx="1.5" fill="#fbbf24"/>
 </svg>
