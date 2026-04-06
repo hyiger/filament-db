@@ -446,6 +446,10 @@
   "edit.backToDetail": "Back to detail",
   "edit.toast.updated": "Filament updated",
   "edit.toast.updateFailed": "Failed to update filament",
+  "edit.unsaved.title": "Unsaved Changes",
+  "edit.unsaved.message": "You have unsaved changes. Are you sure you want to leave? Your changes will be lost.",
+  "edit.unsaved.cancel": "Keep Editing",
+  "edit.unsaved.discard": "Discard Changes",
 
   "new.title": "Add New Filament",
   "new.fromNfc": "New Filament from NFC Tag",

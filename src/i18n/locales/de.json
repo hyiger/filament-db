@@ -446,6 +446,10 @@
   "edit.backToDetail": "Zurück zur Detailansicht",
   "edit.toast.updated": "Filament aktualisiert",
   "edit.toast.updateFailed": "Filament konnte nicht aktualisiert werden",
+  "edit.unsaved.title": "Ungespeicherte Änderungen",
+  "edit.unsaved.message": "Sie haben ungespeicherte Änderungen. Möchten Sie die Seite wirklich verlassen? Ihre Änderungen gehen verloren.",
+  "edit.unsaved.cancel": "Weiter bearbeiten",
+  "edit.unsaved.discard": "Änderungen verwerfen",
 
   "new.title": "Neues Filament hinzufügen",
   "new.fromNfc": "Neues Filament von NFC-Tag",

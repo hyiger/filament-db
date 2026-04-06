@@ -5,6 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import NozzleForm from "@/app/nozzles/NozzleForm";
 import { useToast } from "@/components/Toast";
+import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
+import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function EditNozzle() {
@@ -15,6 +17,11 @@ export default function EditNozzle() {
   const [nozzle, setNozzle] = useState(null);
   const [notFound, setNotFound] = useState(false);
   const [fetchError, setFetchError] = useState(false);
+
+  const {
+    onDirtyChange, showUnsavedDialog, handleBack,
+    confirmNav, cancelNav, pendingNav,
+  } = useUnsavedChanges("/nozzles");
 
   useEffect(() => {
     const controller = new AbortController();
@@ -44,6 +51,11 @@ export default function EditNozzle() {
     }
   };
 
+  const handleDiscard = () => {
+    confirmNav();
+    router.push(pendingNav ?? "/nozzles");
+  };
+
   if (notFound) return (
     <div className="p-8">
       <p className="text-red-500 mb-4">{t("nozzles.notFound")}</p>
@@ -61,12 +73,16 @@ export default function EditNozzle() {
   return (
     <main className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
-        <Link href="/nozzles" className="text-blue-600 hover:underline text-sm">
+        <Link href="/nozzles" className="text-blue-600 hover:underline text-sm" onClick={handleBack}>
           &larr; {t("nozzles.backToNozzles")}
         </Link>
       </div>
       <h1 className="text-2xl font-bold mb-6">{t("nozzles.editTitle")}</h1>
-      <NozzleForm initialData={nozzle} onSubmit={handleSubmit} />
+      <NozzleForm initialData={nozzle} onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
+
+      {showUnsavedDialog && (
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+      )}
     </main>
   );
 }

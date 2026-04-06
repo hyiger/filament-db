@@ -29,9 +29,10 @@ interface PrinterInitialData {
 interface Props {
   initialData?: PrinterInitialData;
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
-export default function PrinterForm({ initialData, onSubmit }: Props) {
+export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Props) {
   const { t } = useTranslation();
   const [form, setForm] = useState<PrinterFormData>({
     name: initialData?.name || "",
@@ -58,6 +59,11 @@ export default function PrinterForm({ initialData, onSubmit }: Props) {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirty]);
+
+  // Notify parent of dirty state changes
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   useEffect(() => {
     const ac = new AbortController();

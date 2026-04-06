@@ -24,6 +24,7 @@ interface NozzleInitialData {
 interface Props {
   initialData?: NozzleInitialData;
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const NOZZLE_TYPES = [
@@ -40,7 +41,7 @@ const NOZZLE_TYPES = [
 
 const COMMON_DIAMETERS = ["0.1", "0.15", "0.2", "0.25", "0.3", "0.35", "0.4", "0.5", "0.6", "0.7", "0.8", "1.0", "1.2", "1.4", "1.6", "1.8", "2.0"];
 
-export default function NozzleForm({ initialData, onSubmit }: Props) {
+export default function NozzleForm({ initialData, onSubmit, onDirtyChange }: Props) {
   const { t } = useTranslation();
   const [form, setForm] = useState<NozzleFormData>({
     name: initialData?.name || "",
@@ -64,6 +65,11 @@ export default function NozzleForm({ initialData, onSubmit }: Props) {
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirty]);
+
+  // Notify parent of dirty state changes
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   const updateForm = (updates: Partial<NozzleFormData>) => {
     setForm((f) => ({ ...f, ...updates }));

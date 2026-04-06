@@ -5,7 +5,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
 import { useToast } from "@/components/Toast";
+import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 import { useNfcContext } from "@/components/NfcProvider";
+import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface FilamentOption {
@@ -26,6 +28,14 @@ function NewFilamentContent() {
   const [initialData, setInitialData] = useState<Record<string, unknown> | undefined>(undefined);
   const [formKey, setFormKey] = useState(0);
   const [titleKey, setTitleKey] = useState("new.title");
+
+  const {
+    dirtyRef, onDirtyChange, showUnsavedDialog, handleBack,
+    guardLink, confirmNav, cancelNav, pendingNav,
+  } = useUnsavedChanges("/");
+
+  // Pending populate-from action (held while confirmation is shown)
+  const pendingPopulateRef = useRef<(() => void) | null>(null);
 
   // INI picker state
   const [iniFilaments, setIniFilaments] = useState<Record<string, unknown>[] | null>(null);
@@ -54,6 +64,17 @@ function NewFilamentContent() {
   // Parent loading for ?parentId= query param
   const parentId = searchParams.get("parentId");
   const [parentLoading, setParentLoading] = useState(!!parentId);
+
+  /** Guard populate-from actions: if dirty, stash the action and show confirm dialog */
+  const guardPopulate = (action: () => void) => {
+    if (dirtyRef.current) {
+      pendingPopulateRef.current = action;
+      setShowPopulateDialog(true);
+    } else {
+      action();
+    }
+  };
+  const [showPopulateDialog, setShowPopulateDialog] = useState(false);
 
   const handleSubmit = async (data: Record<string, unknown>) => {
     const res = await fetch("/api/filaments", {
@@ -214,7 +235,7 @@ function NewFilamentContent() {
     const { filaments } = await res.json();
     if (filaments.length === 1) {
       // Single profile — populate directly
-      applyIniFilament(filaments[0]);
+      guardPopulate(() => applyIniFilament(filaments[0]));
     } else {
       // Multiple profiles — show picker
       setIniFilaments(filaments);
@@ -234,6 +255,14 @@ function NewFilamentContent() {
     const input = prusamentInput.trim();
     if (!input) return;
 
+    if (dirtyRef.current) {
+      guardPopulate(() => { handlePrusamentFetch(input); });
+      return;
+    }
+    handlePrusamentFetch(input);
+  };
+
+  const handlePrusamentFetch = async (input: string) => {
     setPrusamentLoading(true);
     try {
       // Extract spoolId from URL or use as-is
@@ -334,6 +363,14 @@ function NewFilamentContent() {
     const url = tdsUrl.trim();
     if (!url) return;
 
+    if (dirtyRef.current) {
+      guardPopulate(() => { handleTdsFetch(url); });
+      return;
+    }
+    handleTdsFetch(url);
+  };
+
+  const handleTdsFetch = async (url: string) => {
     setTdsLoading(true);
     try {
       const { apiKey, provider } = await getAiConfig();
@@ -364,6 +401,14 @@ function NewFilamentContent() {
     if (!file) return;
     e.target.value = ""; // reset so same file can be re-selected
 
+    if (dirtyRef.current) {
+      guardPopulate(() => { handleTdsFileFetch(file); });
+      return;
+    }
+    handleTdsFileFetch(file);
+  };
+
+  const handleTdsFileFetch = async (file: File) => {
     setTdsLoading(true);
     try {
       const { apiKey, provider } = await getAiConfig();
@@ -396,6 +441,14 @@ function NewFilamentContent() {
   const handleClone = async (id: string) => {
     setCloneOpen(false);
     setCloneSearch("");
+    if (dirtyRef.current) {
+      guardPopulate(() => { handleCloneFetch(id); });
+      return;
+    }
+    handleCloneFetch(id);
+  };
+
+  const handleCloneFetch = async (id: string) => {
     const res = await fetch(`/api/filaments/${id}`);
     if (!res.ok) {
       toast(t("new.toast.loadFailed"), "error");
@@ -435,7 +488,7 @@ function NewFilamentContent() {
   return (
     <main className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
-        <Link href="/" className="text-blue-600 hover:underline text-sm">
+        <Link href="/" className="text-blue-600 hover:underline text-sm" onClick={handleBack}>
           &larr; {t("detail.back")}
         </Link>
       </div>
@@ -563,7 +616,7 @@ function NewFilamentContent() {
                   <p className="text-xs text-gray-500 mt-2">
                     {t("new.tds.aiDescription")}
                     {" "}
-                    <Link href="/settings" className="text-blue-400 hover:text-blue-300 underline">
+                    <Link href="/settings" className="text-blue-400 hover:text-blue-300 underline" onClick={guardLink("/settings")}>
                       {t("new.tds.configureApiKey")}
                     </Link>
                   </p>
@@ -677,7 +730,7 @@ function NewFilamentContent() {
                     <button
                       type="button"
                       className="w-full text-left px-3 py-2 rounded hover:bg-gray-800 flex items-center gap-2 text-sm"
-                      onClick={() => applyIniFilament(f)}
+                      onClick={() => guardPopulate(() => applyIniFilament(f))}
                     >
                       <div
                         className="w-4 h-4 rounded-full border border-gray-500 flex-shrink-0"
@@ -703,7 +756,26 @@ function NewFilamentContent() {
         </>
       )}
 
-      <FilamentForm key={formKey} initialData={initialData} onSubmit={handleSubmit} />
+      <FilamentForm key={formKey} initialData={initialData} onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
+
+      {showUnsavedDialog && (
+        <UnsavedChangesDialog
+          onCancel={cancelNav}
+          onDiscard={() => { confirmNav(); router.push(pendingNav ?? "/"); }}
+        />
+      )}
+
+      {showPopulateDialog && (
+        <UnsavedChangesDialog
+          onCancel={() => { setShowPopulateDialog(false); pendingPopulateRef.current = null; }}
+          onDiscard={() => {
+            setShowPopulateDialog(false);
+            dirtyRef.current = false;
+            pendingPopulateRef.current?.();
+            pendingPopulateRef.current = null;
+          }}
+        />
+      )}
     </main>
   );
 }

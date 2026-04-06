@@ -128,6 +128,7 @@ type FilamentInitialData = Record<string, any>;
 interface Props {
   initialData?: FilamentInitialData;
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 const DEFAULT_FILAMENT_TYPES = [
@@ -153,7 +154,7 @@ function extractPressureAdvance(data: Record<string, unknown> | undefined): stri
   return match ? match[1] : "";
 }
 
-export default function FilamentForm({ initialData, onSubmit }: Props) {
+export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: Props) {
   const { symbol: currencySymbol } = useCurrency();
   const { t } = useTranslation();
   const [nozzles, setNozzles] = useState<NozzleOption[]>([]);
@@ -269,6 +270,11 @@ export default function FilamentForm({ initialData, onSubmit }: Props) {
       setDirty(true);
     }
   }, [form]);
+
+  // Notify parent of dirty state changes
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   const [showAdvanced, setShowAdvanced] = useState(() => {
     // Auto-expand if any advanced fields have values

@@ -4,12 +4,19 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import PrinterForm from "@/app/printers/PrinterForm";
 import { useToast } from "@/components/Toast";
+import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
+import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function NewPrinter() {
   const router = useRouter();
   const { toast } = useToast();
   const { t } = useTranslation();
+
+  const {
+    onDirtyChange, showUnsavedDialog, handleBack,
+    confirmNav, cancelNav, pendingNav,
+  } = useUnsavedChanges("/printers");
 
   const handleSubmit = async (data: Record<string, unknown>) => {
     const res = await fetch("/api/printers", {
@@ -26,15 +33,24 @@ export default function NewPrinter() {
     }
   };
 
+  const handleDiscard = () => {
+    confirmNav();
+    router.push(pendingNav ?? "/printers");
+  };
+
   return (
     <main className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
-        <Link href="/printers" className="text-blue-600 hover:underline text-sm">
+        <Link href="/printers" className="text-blue-600 hover:underline text-sm" onClick={handleBack}>
           {t("printers.backToPrinters")}
         </Link>
       </div>
       <h1 className="text-2xl font-bold mb-6">{t("printers.addNewTitle")}</h1>
-      <PrinterForm onSubmit={handleSubmit} />
+      <PrinterForm onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
+
+      {showUnsavedDialog && (
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+      )}
     </main>
   );
 }

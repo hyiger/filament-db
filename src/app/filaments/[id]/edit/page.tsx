@@ -5,6 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
 import { useToast } from "@/components/Toast";
+import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
+import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function EditFilament() {
@@ -15,6 +17,12 @@ export default function EditFilament() {
   const [filament, setFilament] = useState(null);
   const [notFound, setNotFound] = useState(false);
   const [fetchError, setFetchError] = useState(false);
+
+  const detailUrl = `/filaments/${params.id}`;
+  const {
+    onDirtyChange, showUnsavedDialog, handleBack,
+    confirmNav, cancelNav, pendingNav,
+  } = useUnsavedChanges(detailUrl);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -37,11 +45,16 @@ export default function EditFilament() {
     });
     if (res.ok) {
       toast(t("edit.toast.updated"));
-      router.push(`/filaments/${params.id}`);
+      router.push(detailUrl);
     } else {
       const body = await res.json().catch(() => null);
       toast(body?.error || t("edit.toast.updateFailed"), "error");
     }
+  };
+
+  const handleDiscard = () => {
+    confirmNav();
+    router.push(pendingNav ?? detailUrl);
   };
 
   if (notFound) return (
@@ -61,12 +74,16 @@ export default function EditFilament() {
   return (
     <main className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
-        <Link href={`/filaments/${params.id}`} className="text-blue-600 hover:underline text-sm">
+        <Link href={detailUrl} className="text-blue-600 hover:underline text-sm" onClick={handleBack}>
           &larr; {t("edit.backToDetail")}
         </Link>
       </div>
       <h1 className="text-2xl font-bold mb-6">{t("edit.title")}</h1>
-      <FilamentForm initialData={filament} onSubmit={handleSubmit} />
+      <FilamentForm initialData={filament} onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
+
+      {showUnsavedDialog && (
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+      )}
     </main>
   );
 }
