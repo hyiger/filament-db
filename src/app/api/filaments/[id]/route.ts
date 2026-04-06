@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament, { IFilament } from "@/models/Filament";
-import "@/models/Nozzle";
+import Nozzle from "@/models/Nozzle";
 import "@/models/Printer";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
@@ -179,6 +179,65 @@ export async function POST(
     if (Object.keys(temps).length > 0) {
       const existing = (filament.temperatures as Record<string, unknown>) || {};
       update.temperatures = { ...existing, ...temps };
+    }
+
+    // Update per-nozzle calibration data when nozzle_diameter is provided.
+    // PrusaSlicer can pass ?nozzle_diameter=0.4 so the API knows which
+    // calibration entry to update with EM, PA, retraction, etc.
+    const nozzleDiameterParam = request.nextUrl.searchParams.get("nozzle_diameter");
+    const nozzleDiameter = nozzleDiameterParam ? parseFloat(nozzleDiameterParam) : NaN;
+    if (!isNaN(nozzleDiameter) && nozzleDiameter > 0) {
+      const calFields: Record<string, number | null> = {};
+      if (config.extrusion_multiplier) {
+        const v = parseFloat(config.extrusion_multiplier);
+        if (!isNaN(v)) calFields.extrusionMultiplier = v;
+      }
+      if (config.pressure_advance_value || config.pressure_advance) {
+        const raw = config.pressure_advance_value || config.pressure_advance;
+        const v = parseFloat(raw);
+        if (!isNaN(v)) calFields.pressureAdvance = v;
+      }
+      if (config.filament_retract_length) {
+        const v = config.filament_retract_length === "nil" ? null : parseFloat(config.filament_retract_length);
+        calFields.retractLength = v !== null && !isNaN(v) ? v : null;
+      }
+      if (config.filament_retract_speed) {
+        const v = config.filament_retract_speed === "nil" ? null : parseFloat(config.filament_retract_speed);
+        calFields.retractSpeed = v !== null && !isNaN(v) ? v : null;
+      }
+      if (config.filament_retract_lift) {
+        const v = config.filament_retract_lift === "nil" ? null : parseFloat(config.filament_retract_lift);
+        calFields.retractLift = v !== null && !isNaN(v) ? v : null;
+      }
+
+      if (Object.keys(calFields).length > 0) {
+        // Find the nozzle by diameter among this filament's compatible nozzles
+        const compatIds = (filament.compatibleNozzles || []).map((n: unknown) => String(n));
+        if (compatIds.length > 0) {
+          const matchingNozzle = await Nozzle.findOne({
+            _id: { $in: compatIds },
+            diameter: nozzleDiameter,
+            _deletedAt: null,
+          }).lean();
+
+          if (matchingNozzle) {
+            const nozzleId = String(matchingNozzle._id);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const calibrations = [...((filament.calibrations as any[]) || [])];
+            const idx = calibrations.findIndex(
+              (cal) => String(cal.nozzle) === nozzleId && !cal.printer,
+            );
+            if (idx >= 0) {
+              // Update existing calibration entry
+              Object.assign(calibrations[idx], calFields);
+            } else {
+              // Create new calibration entry for this nozzle
+              calibrations.push({ nozzle: nozzleId, printer: null, ...calFields });
+            }
+            update.calibrations = calibrations;
+          }
+        }
+      }
     }
 
     // Everything else goes into the settings bag
