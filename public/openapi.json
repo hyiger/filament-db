@@ -3,7 +3,7 @@
   "info": {
     "title": "Filament DB API",
     "description": "REST API for managing 3D printing filament profiles, nozzles, and printers. Supports filament inheritance (parent/variant), per-printer per-nozzle calibrations, INI profile export/import, and OpenPrintTag NFC binary generation.",
-    "version": "1.9.1",
+    "version": "1.9.2",
     "license": {
       "name": "MIT"
     }
