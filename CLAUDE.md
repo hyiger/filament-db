@@ -63,7 +63,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 
 ## Testing
 
-- 430 tests across 17 files
+- 443 tests across 17 files
 - Coverage thresholds: 80% lines/statements, 90% functions, 75% branches
 - Setup file: `tests/setup.ts` (mongodb-memory-server)
 - Tests run in CI on Node 20 and 22
@@ -86,7 +86,9 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 ## PrusaSlicer Integration
 
 - **Config bundle API**: `GET /api/filaments/prusaslicer` exports filaments as PrusaSlicer INI bundle; `POST` imports bundles back
-- **Calibration API**: `GET /api/filaments/{id}/calibration?nozzle_diameter=0.4` returns per-nozzle calibration data (extrusion multiplier, pressure advance, max volumetric speed, retraction); used by PrusaSlicer to auto-adjust filament settings when the user switches printer presets
+- **Calibration API**: `GET /api/filaments/{id}/calibration?nozzle_diameter=0.4&high_flow=0|1` returns per-nozzle calibration data (extrusion multiplier, pressure advance, max volumetric speed, retraction); used by PrusaSlicer to auto-adjust filament settings when the user switches printer presets. Optional `high_flow` param disambiguates standard vs high-flow nozzles at the same diameter.
+- **Spool check API**: `GET /api/filaments/{id}/spool-check?weight=42.5` checks whether any spool has enough remaining filament (by weight in grams) for a print job. PrusaSlicer calls this after slicing to warn if insufficient filament.
+- **Sync with calibration context**: `POST /api/filaments/{id}?nozzle_diameter=0.4&high_flow=0|1` accepts optional query params so PrusaSlicer can write calibration-related keys (EM, PA, retraction) to the correct per-nozzle calibration entry
 - **Field mapping**: `src/lib/prusaSlicerBundle.ts` maps structured DB fields → PrusaSlicer INI keys, merges with `settings` bag
 - **Nil handling**: Structured DB fields that are null must NOT emit `nil` in the INI output — PrusaSlicer interprets nil as "reset to zero" for numeric fields. Only settings bag nil values (meaning "inherit from parent") are preserved.
 - **PrusaSlicer Filament Edition**: [hyiger/PrusaSlicer](https://github.com/hyiger/PrusaSlicer) has a `FilamentDB` module that fetches presets on startup via the REST API, syncs changes back with per-nozzle calibration context

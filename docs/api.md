@@ -27,6 +27,7 @@
 | `POST` | `/api/filaments/import-atlas` | Connect to a remote MongoDB Atlas database and import filaments |
 | `GET` | `/api/filaments/:id/openprinttag` | Download OpenPrintTag binary for a filament |
 | `GET` | `/api/filaments/:id/calibration` | Get calibration data for a filament and nozzle diameter |
+| `GET` | `/api/filaments/:id/spool-check` | Check if a spool has enough filament for a print job |
 | `POST` | `/api/filaments/:id` | Sync a filament preset back from PrusaSlicer |
 
 ### Spools
@@ -157,6 +158,7 @@ Returns calibration data for a specific filament and nozzle diameter. The `{id}`
 
 Query parameters:
 - `nozzle_diameter` (required) -- nozzle diameter in mm (e.g. `0.4`)
+- `high_flow` (optional) -- `0` or `1`. When provided, only matches nozzles with the corresponding `highFlow` flag. Disambiguates standard vs high-flow nozzles at the same diameter.
 
 Returns on success:
 ```json
@@ -183,6 +185,10 @@ Used by PrusaSlicer Filament Edition to auto-adjust filament settings when the u
 
 Sync a filament preset back from PrusaSlicer. The `{id}` parameter may be a URL-encoded preset name or a MongoDB ObjectId.
 
+Query parameters:
+- `nozzle_diameter` (optional) -- nozzle diameter in mm (e.g. `0.4`). When provided, calibration-related keys (`extrusion_multiplier`, `pressure_advance`, `filament_retract_length`, `filament_retract_speed`, `filament_retract_lift`) are written to the matching per-nozzle calibration entry instead of the settings bag.
+- `high_flow` (optional) -- `0` or `1`. Used with `nozzle_diameter` to disambiguate standard vs high-flow nozzles at the same diameter.
+
 Send a JSON body:
 ```json
 { "config": { "temperature": "215", "filament_density": "1.24", "my_custom_key": "value" } }
@@ -197,6 +203,36 @@ Returns:
   "filamentId": "64a1b2c3d4e5f6a7b8c9d0e1"
 }
 ```
+
+### GET /api/filaments/:id/spool-check
+
+Checks whether any spool of this filament has enough remaining filament (by weight) for a print job. The `{id}` parameter may be a URL-encoded preset name or a MongoDB ObjectId.
+
+Query parameters:
+- `weight` (required) -- estimated filament weight in grams
+
+Returns:
+```json
+{
+  "ok": true,
+  "filament": "Prusament PETG Prusa Galaxy Black",
+  "requiredWeightG": 42.5,
+  "requiredLengthM": 14.03,
+  "spools": [
+    {
+      "id": "default",
+      "label": "Default",
+      "remainingWeightG": 864,
+      "remainingLengthM": 285.12,
+      "enough": true
+    }
+  ]
+}
+```
+
+If no spool has enough filament, `ok` is `false` and a `warning` string is included describing the shortfall. If the filament has no spools or no spool weight data, returns `ok: true` (no data = no warning).
+
+Returns 400 if `weight` is missing or invalid. Returns 404 if the filament is not found.
 
 ### GET /api/filaments/:id/openprinttag
 

@@ -196,9 +196,21 @@
       "post": {
         "tags": ["Filaments"],
         "summary": "Sync filament from PrusaSlicer",
-        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields (type, vendor, color, diameter, density, cost, spoolWeight, maxVolumetricSpeed, temperatures, shrinkageXY, shrinkageZ, soluble, abrasive); all other keys are merged into the settings passthrough bag.",
+        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields. When nozzle_diameter and high_flow are provided, calibration-related keys (extrusion_multiplier, pressure_advance, retract settings) are written to the matching per-nozzle calibration entry.",
         "parameters": [
-          { "$ref": "#/components/parameters/FilamentId" }
+          { "$ref": "#/components/parameters/FilamentId" },
+          {
+            "name": "nozzle_diameter",
+            "in": "query",
+            "schema": { "type": "number" },
+            "description": "Active nozzle diameter in mm. When provided, calibration keys are written to the matching per-nozzle calibration entry."
+          },
+          {
+            "name": "high_flow",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["0", "1"] },
+            "description": "Whether the nozzle is high-flow. Disambiguates same-diameter nozzles (e.g. 0.4mm vs 0.4mm HF)."
+          }
         ],
         "requestBody": {
           "required": true,
@@ -332,6 +344,12 @@
             "schema": { "type": "number" },
             "description": "Nozzle diameter in mm (e.g. 0.4)",
             "example": 0.4
+          },
+          {
+            "name": "high_flow",
+            "in": "query",
+            "schema": { "type": "string", "enum": ["0", "1"] },
+            "description": "Filter by high-flow nozzle flag. Disambiguates same-diameter nozzles (e.g. 0.4mm vs 0.4mm HF)."
           }
         ],
         "responses": {
@@ -399,6 +417,68 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "Server error",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/api/filaments/{id}/spool-check": {
+      "get": {
+        "tags": ["Spools"],
+        "summary": "Check spool sufficiency for a print job",
+        "description": "Checks whether any spool of this filament has enough remaining filament (by weight in grams) for a print job. If no spools or no spool weight data exists, returns ok: true (no data = no warning). Used by PrusaSlicer to warn after slicing if insufficient filament.",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" },
+          {
+            "name": "weight",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "number" },
+            "description": "Estimated filament weight in grams for the print job",
+            "example": 42.5
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Spool check result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": { "type": "boolean", "description": "True if at least one spool has enough remaining filament" },
+                    "filament": { "type": "string", "description": "Filament name" },
+                    "requiredWeightG": { "type": "number", "description": "Required weight in grams" },
+                    "requiredLengthM": { "type": "number", "nullable": true, "description": "Required length in meters (null if density/diameter unavailable)" },
+                    "warning": { "type": "string", "description": "Human-readable warning when ok is false" },
+                    "spools": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": { "type": "string" },
+                          "label": { "type": "string" },
+                          "remainingWeightG": { "type": "number" },
+                          "remainingLengthM": { "type": "number", "nullable": true },
+                          "enough": { "type": "boolean" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid weight param",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Filament not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
           },
           "500": {
             "description": "Server error",

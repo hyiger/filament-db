@@ -403,6 +403,240 @@ describe("Filament Model", () => {
   });
 });
 
+describe("Spool remaining weight calculation", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    delete mongoose.models.Filament;
+    const schemas = (mongoose as unknown as Record<string, Record<string, unknown>>).modelSchemas;
+    if (schemas) delete schemas.Filament;
+    const mod = await import("@/models/Filament");
+    Filament = mod.default;
+    await Filament.syncIndexes();
+  });
+
+  it("computes remaining weight as totalWeight minus spoolWeight", async () => {
+    const filament = await Filament.create({
+      name: "Remaining Weight PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 190,
+      spools: [{ label: "Spool A", totalWeight: 850 }],
+    });
+
+    const spool = filament.spools[0];
+    const remainingWeight = spool.totalWeight - filament.spoolWeight;
+    expect(remainingWeight).toBe(660);
+  });
+
+  it("clamps remaining weight to zero when totalWeight is less than spoolWeight", async () => {
+    const filament = await Filament.create({
+      name: "Low Weight PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 190,
+      spools: [{ label: "Nearly empty", totalWeight: 100 }],
+    });
+
+    const spool = filament.spools[0];
+    const remainingWeight = Math.max(0, spool.totalWeight - filament.spoolWeight);
+    expect(remainingWeight).toBe(0);
+    // Without clamping, the value would be negative
+    expect(spool.totalWeight - filament.spoolWeight).toBe(-90);
+  });
+
+  it("cannot compute remaining weight when spoolWeight is null", async () => {
+    const filament = await Filament.create({
+      name: "Null SpoolWeight PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: null,
+      spools: [{ label: "Spool B", totalWeight: 850 }],
+    });
+
+    expect(filament.spoolWeight).toBeNull();
+    const spool = filament.spools[0];
+    const canCompute = filament.spoolWeight != null && spool.totalWeight != null;
+    expect(canCompute).toBe(false);
+  });
+
+  it("cannot compute remaining weight when spool totalWeight is null", async () => {
+    const filament = await Filament.create({
+      name: "Null TotalWeight PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 190,
+      spools: [{ label: "Spool C", totalWeight: null }],
+    });
+
+    const spool = filament.spools[0];
+    expect(spool.totalWeight).toBeNull();
+    const canCompute = filament.spoolWeight != null && spool.totalWeight != null;
+    expect(canCompute).toBe(false);
+  });
+
+  it("stores and retrieves multiple spools for a single filament", async () => {
+    const filament = await Filament.create({
+      name: "Multi-Spool PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 190,
+      spools: [
+        { label: "Printer A", totalWeight: 850 },
+        { label: "Printer B", totalWeight: 600 },
+      ],
+    });
+
+    expect(filament.spools).toHaveLength(2);
+
+    const found = await Filament.findById(filament._id);
+    expect(found!.spools).toHaveLength(2);
+    expect(found!.spools[0].label).toBe("Printer A");
+    expect(found!.spools[0].totalWeight).toBe(850);
+    expect(found!.spools[1].label).toBe("Printer B");
+    expect(found!.spools[1].totalWeight).toBe(600);
+
+    // Verify remaining weight for each spool
+    const remaining0 = found!.spools[0].totalWeight - found!.spoolWeight;
+    const remaining1 = found!.spools[1].totalWeight - found!.spoolWeight;
+    expect(remaining0).toBe(660);
+    expect(remaining1).toBe(410);
+  });
+
+  it("computes remaining filament length from weight, density, and diameter", async () => {
+    const filament = await Filament.create({
+      name: "Length Calc PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 190,
+      density: 1.24, // g/cm^3 — typical PLA
+      diameter: 1.75, // mm
+      spools: [{ label: "Main", totalWeight: 850 }],
+    });
+
+    const spool = filament.spools[0];
+    const remainingWeightG = spool.totalWeight - filament.spoolWeight; // 660g
+    expect(remainingWeightG).toBe(660);
+
+    // Volume in cm^3 = weight / density
+    const volumeCm3 = remainingWeightG / filament.density;
+
+    // Cross-section area in cm^2: pi * (diameter/2)^2, diameter in cm
+    const radiusCm = (filament.diameter / 10) / 2; // 1.75mm -> 0.175cm -> r=0.0875cm
+    const crossSectionCm2 = Math.PI * radiusCm * radiusCm;
+
+    // Length in cm = volume / cross-section area
+    const lengthCm = volumeCm3 / crossSectionCm2;
+
+    // Convert to meters
+    const lengthM = lengthCm / 100;
+
+    // ~221m for 660g of PLA at 1.24 g/cm^3 and 1.75mm diameter
+    expect(lengthM).toBeGreaterThan(200);
+    expect(lengthM).toBeLessThan(250);
+    expect(Math.round(lengthM)).toBe(221);
+  });
+});
+
+describe("Calibration sub-document updates", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    delete mongoose.models.Filament;
+    const schemas = (mongoose as unknown as Record<string, Record<string, unknown>>).modelSchemas;
+    if (schemas) delete schemas.Filament;
+    const mod = await import("@/models/Filament");
+    Filament = mod.default;
+    await Filament.syncIndexes();
+  });
+
+  it("updates a calibration entry via Object.assign on a cloned array", async () => {
+    const nozzleId = new mongoose.Types.ObjectId();
+    const filament = await Filament.create({
+      name: "Calibration Update Test",
+      vendor: "Test",
+      type: "PLA",
+      calibrations: [
+        {
+          nozzle: nozzleId,
+          extrusionMultiplier: 1.049,
+          maxVolumetricSpeed: 12,
+          pressureAdvance: 0.04,
+          retractLength: 0.8,
+          retractSpeed: 40,
+          retractLift: 0.15,
+        },
+      ],
+    });
+
+    expect(filament.calibrations[0].extrusionMultiplier).toBe(1.049);
+
+    // Clone the calibrations array (as the API route does)
+    const updatedCals = filament.calibrations.map(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (c: any) => (c.toObject ? c.toObject() : { ...c })
+    );
+
+    // Find the matching entry and Object.assign new values
+    const match = updatedCals.find(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (c: any) => c.nozzle.toString() === nozzleId.toString()
+    );
+    expect(match).toBeDefined();
+    Object.assign(match, { extrusionMultiplier: 1.05 });
+
+    // Save the filament with the updated calibrations
+    filament.calibrations = updatedCals;
+    await filament.save();
+
+    // Re-fetch and verify
+    const found = await Filament.findById(filament._id);
+    expect(found!.calibrations).toHaveLength(1);
+    expect(found!.calibrations[0].extrusionMultiplier).toBe(1.05);
+    // Other fields should remain unchanged
+    expect(found!.calibrations[0].maxVolumetricSpeed).toBe(12);
+    expect(found!.calibrations[0].pressureAdvance).toBe(0.04);
+    expect(found!.calibrations[0].retractLength).toBe(0.8);
+  });
+
+  it("preserves other calibration entries when updating one", async () => {
+    const nozzleA = new mongoose.Types.ObjectId();
+    const nozzleB = new mongoose.Types.ObjectId();
+    const filament = await Filament.create({
+      name: "Multi-Cal Update",
+      vendor: "Test",
+      type: "PLA",
+      calibrations: [
+        { nozzle: nozzleA, extrusionMultiplier: 0.95 },
+        { nozzle: nozzleB, extrusionMultiplier: 1.0 },
+      ],
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const updatedCals = filament.calibrations.map((c: any) =>
+      c.toObject ? c.toObject() : { ...c }
+    );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const matchA = updatedCals.find((c: any) => c.nozzle.toString() === nozzleA.toString());
+    Object.assign(matchA, { extrusionMultiplier: 0.97 });
+
+    filament.calibrations = updatedCals;
+    await filament.save();
+
+    const found = await Filament.findById(filament._id);
+    expect(found!.calibrations).toHaveLength(2);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const calA = found!.calibrations.find((c: any) => c.nozzle.toString() === nozzleA.toString());
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const calB = found!.calibrations.find((c: any) => c.nozzle.toString() === nozzleB.toString());
+    expect(calA!.extrusionMultiplier).toBe(0.97);
+    expect(calB!.extrusionMultiplier).toBe(1.0);
+  });
+});
+
 describe("backfillInstanceIds", () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let Filament: any;

@@ -275,6 +275,12 @@ The tracker aggregates stats across all spools, showing total remaining weight a
 
 If a filament has a `totalWeight` value but no spools array, a **"Migrate to spool tracking"** button converts the single weight into a spool entry.
 
+### Spool Check (PrusaSlicer Integration)
+
+When using PrusaSlicer Filament Edition, a spool check runs automatically after slicing. PrusaSlicer queries the Filament DB API with the estimated print weight and compares it to the remaining filament on each spool. If no spool has enough material, a warning notification appears in PrusaSlicer.
+
+The check requires that the filament has a **spool weight** (empty spool) set and at least one spool with a **total weight** (current scale reading). If no weight data is available, the check is silently skipped.
+
 ---
 
 ## Prusament Spool Import
@@ -371,6 +377,10 @@ If you use [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer)
 1. Start Filament DB (desktop app or web at `http://localhost:3456`)
 2. Launch PrusaSlicer Filament Edition
 3. Your filament presets appear in the filament dropdown; calibration values (EM, max volumetric speed, pressure advance, retraction) are applied dynamically when you switch printer/nozzle
+
+### Spool Check (Insufficient Filament Warning)
+
+PrusaSlicer Filament Edition can check after slicing whether the selected spool has enough filament for the print. It calls `GET /api/filaments/{name}/spool-check?weight=XX` with the estimated filament weight in grams. If no spool has enough remaining filament, PrusaSlicer displays a warning with the shortfall amount. This requires spool tracking to be set up with current weights (see [Spool Tracking](#spool-tracking)).
 
 ### Manual INI Export/Import
 
