@@ -167,14 +167,14 @@ Stub entries (completeness score 0-3) are rendered at 50% opacity to indicate mi
 
 ## PrusaSlicer Live Sync
 
-If you are using the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Filament DB integration, filament presets sync automatically via REST API:
+If you are using [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer), filament presets sync automatically via REST API:
 
-1. Build and run the PrusaSlicer fork (see the fork's README for build instructions)
+1. Build and run PrusaSlicer Filament Edition (see the fork's README for build instructions)
 2. Start Filament DB (desktop app or web at `http://localhost:3456`)
 3. In PrusaSlicer, filament presets from Filament DB appear in the filament dropdown on startup
 4. Calibration values (EM, max volumetric speed, pressure advance, retraction) are applied dynamically when the printer/nozzle changes — they are fetched via `GET /api/filaments/:name/calibration`
 
-The PrusaSlicer fork fetches base presets from `GET /api/filaments/prusaslicer` on startup (one section per filament). Calibration overrides are requested separately per printer/nozzle context. You can also import a PrusaSlicer config bundle back into Filament DB via `POST /api/filaments/prusaslicer`.
+PrusaSlicer Filament Edition fetches base presets from `GET /api/filaments/prusaslicer` on startup (one section per filament). Calibration overrides are requested separately per printer/nozzle context. You can also import a PrusaSlicer config bundle back into Filament DB via `POST /api/filaments/prusaslicer`.
 
 ---
 

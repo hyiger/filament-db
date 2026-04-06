@@ -177,7 +177,7 @@ Returns on success:
 
 Returns 400 if `nozzle_diameter` is missing. Returns 404 with an `available` array of `{ diameter, name }` objects if no calibration matches the requested diameter.
 
-Used by the PrusaSlicer fork to auto-adjust filament settings when the user switches printer presets.
+Used by PrusaSlicer Filament Edition to auto-adjust filament settings when the user switches printer presets.
 
 ### POST /api/filaments/:id
 
@@ -237,7 +237,7 @@ Remove a spool from a filament. Returns the updated filament document.
 
 ### GET /api/filaments/prusaslicer
 
-Exports all filaments as a PrusaSlicer-compatible INI config bundle with one `[filament:Name]` section per filament. Structured DB fields (temperatures, density, cost, max volumetric speed, shrinkage) are mapped to their PrusaSlicer INI equivalents and merged with the `settings` passthrough bag. Calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are NOT baked into the bundle — they are applied dynamically by the PrusaSlicer fork via `GET /api/filaments/:name/calibration` when the printer/nozzle context changes.
+Exports all filaments as a PrusaSlicer-compatible INI config bundle with one `[filament:Name]` section per filament. Structured DB fields (temperatures, density, cost, max volumetric speed, shrinkage) are mapped to their PrusaSlicer INI equivalents and merged with the `settings` passthrough bag. Calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are NOT baked into the bundle — they are applied dynamically by PrusaSlicer Filament Edition via `GET /api/filaments/:name/calibration` when the printer/nozzle context changes.
 
 Query parameters:
 - `type` -- filter by filament type (e.g. `PLA`, `PETG`)

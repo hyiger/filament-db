@@ -89,7 +89,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 - **Calibration API**: `GET /api/filaments/{id}/calibration?nozzle_diameter=0.4` returns per-nozzle calibration data (extrusion multiplier, pressure advance, max volumetric speed, retraction); used by PrusaSlicer to auto-adjust filament settings when the user switches printer presets
 - **Field mapping**: `src/lib/prusaSlicerBundle.ts` maps structured DB fields → PrusaSlicer INI keys, merges with `settings` bag
 - **Nil handling**: Structured DB fields that are null must NOT emit `nil` in the INI output — PrusaSlicer interprets nil as "reset to zero" for numeric fields. Only settings bag nil values (meaning "inherit from parent") are preserved.
-- **PrusaSlicer fork**: [hyiger/PrusaSlicer](https://github.com/hyiger/PrusaSlicer) has a `FilamentDB` module that fetches presets on startup via the REST API
+- **PrusaSlicer Filament Edition**: [hyiger/PrusaSlicer](https://github.com/hyiger/PrusaSlicer) has a `FilamentDB` module that fetches presets on startup via the REST API, syncs changes back with per-nozzle calibration context
 - **Port**: All modes (dev, desktop, Docker) use port **3456** (hardcoded in `electron/main.ts`, `next dev -p 3456` for dev). PrusaSlicer defaults to `http://localhost:3456`.
 
 ## OpenPrintTag Database Browser

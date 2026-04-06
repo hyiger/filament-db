@@ -229,7 +229,7 @@ npm run electron:dev          # development mode
 npm run electron:build        # build installer for your platform
 ```
 
-> **Port:** `npm run dev` and the desktop app run on port **3456**. Docker exposes port 3000 internally, mapped to 3456 on the host via `-p 3456:3000`. `npm start` (production) defaults to port **3000** unless `PORT=3456` is set. The desktop app also respects the `PORT` environment variable. The [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) defaults to `http://localhost:3456`.
+> **Port:** `npm run dev` and the desktop app run on port **3456**. Docker exposes port 3000 internally, mapped to 3456 on the host via `-p 3456:3000`. `npm start` (production) defaults to port **3000** unless `PORT=3456` is set. The desktop app also respects the `PORT` environment variable. [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer) defaults to `http://localhost:3456`.
 
 ---
 

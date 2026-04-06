@@ -12,7 +12,7 @@
  *
  * One section is generated per filament. Calibration overrides (extrusion
  * multiplier, pressure advance, retraction, max volumetric speed) are applied
- * dynamically by the PrusaSlicer fork via `GET /api/filaments/:name/calibration`
+ * dynamically by PrusaSlicer Filament Edition via `GET /api/filaments/:name/calibration`
  * when the printer/nozzle context changes — they are NOT baked into the bundle.
  *
  * The structured DB fields always take precedence — they represent the canonical

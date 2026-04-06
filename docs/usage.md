@@ -159,7 +159,7 @@ If you have defined printers, **printer tabs** appear above the calibration fiel
 
 This lets you store different PA, EM, and retraction values for the same filament on different printers (e.g., a Prusa Core One vs. a Bambu H2D).
 
-Leave fields blank to use the filament's base defaults. The INI export uses a single-section-per-filament architecture: each filament produces one `[filament:Name]` section with its base settings. Calibration overrides (EM, PA, max volumetric speed, retraction) are not embedded in the INI — the PrusaSlicer fork fetches them dynamically via `GET /api/filaments/{id}/calibration` when you switch printer or nozzle.
+Leave fields blank to use the filament's base defaults. The INI export uses a single-section-per-filament architecture: each filament produces one `[filament:Name]` section with its base settings. Calibration overrides (EM, PA, max volumetric speed, retraction) are not embedded in the INI — PrusaSlicer Filament Edition fetches them dynamically via `GET /api/filaments/{id}/calibration` when you switch printer or nozzle.
 
 ---
 
@@ -364,12 +364,12 @@ Click any material row to expand a detail panel with three columns:
 
 ## PrusaSlicer Integration
 
-### Live Sync (PrusaSlicer Fork)
+### Live Sync (PrusaSlicer Filament Edition)
 
-If you use the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Filament DB integration, filament presets load automatically from Filament DB on startup:
+If you use [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer), filament presets load automatically from Filament DB on startup:
 
 1. Start Filament DB (desktop app or web at `http://localhost:3456`)
-2. Launch the PrusaSlicer fork
+2. Launch PrusaSlicer Filament Edition
 3. Your filament presets appear in the filament dropdown; calibration values (EM, max volumetric speed, pressure advance, retraction) are applied dynamically when you switch printer/nozzle
 
 ### Manual INI Export/Import

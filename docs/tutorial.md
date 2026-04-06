@@ -307,7 +307,7 @@ To turn an existing standalone filament into a variant:
 2. A `.ini` file downloads containing all your filaments as `[filament:Name]` sections — one section per filament.
 3. In PrusaSlicer, go to **File > Import > Import Config Bundle** and select the file.
 
-Calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are not included in the exported INI — they are applied dynamically by the PrusaSlicer fork via the calibration API when the printer/nozzle context changes.
+Calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are not included in the exported INI — they are applied dynamically by PrusaSlicer Filament Edition via the calibration API when the printer/nozzle context changes.
 
 ---
 
@@ -458,12 +458,12 @@ Discover filaments from 97 brands in the [OpenPrintTag community database](https
 
 ## Step 17: PrusaSlicer Integration
 
-### Live Sync with PrusaSlicer Fork
+### Live Sync with PrusaSlicer Filament Edition
 
-If you use the [PrusaSlicer fork](https://github.com/hyiger/PrusaSlicer) with Filament DB integration:
+If you use [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer):
 
 1. Start Filament DB (desktop app or web)
-2. Launch the PrusaSlicer fork — it fetches filament presets from Filament DB automatically
+2. Launch PrusaSlicer Filament Edition — it fetches filament presets from Filament DB automatically
 3. Your filaments appear in the filament dropdown; calibration values (EM, max volumetric speed, PA, retraction) are applied dynamically when you switch printer/nozzle
 4. Edit filaments in Filament DB, restart PrusaSlicer, and the updated values appear automatically
 
