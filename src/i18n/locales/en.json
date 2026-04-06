@@ -54,6 +54,7 @@
   "common.cancel": "Cancel",
   "nozzles.title": "Nozzles",
   "nozzles.backToFilaments": "Back to filaments",
+  "nozzles.backToSettings": "Back to settings",
   "nozzles.addNew": "+ Add Nozzle",
   "nozzles.addFirst": "+ Add Your First Nozzle",
   "nozzles.empty": "No nozzles defined yet.",
@@ -100,6 +101,7 @@
   "nozzles.form.create": "Create Nozzle",
   "printers.title": "Printers",
   "printers.backToFilaments": "Back to filaments",
+  "printers.backToSettings": "Back to settings",
   "printers.addNew": "+ Add Printer",
   "printers.addFirst": "+ Add Your First Printer",
   "printers.empty": "No printers defined yet. Add a printer to start tracking per-printer calibrations.",
@@ -330,6 +332,7 @@
   "openprinttag.detail.photoLink": "Photo ↗",
 
   "apiDocs.backToFilaments": "Back to filaments",
+  "apiDocs.backToSettings": "Back to settings",
 
   "error.title": "Something went wrong",
   "error.unexpected": "An unexpected error occurred.",

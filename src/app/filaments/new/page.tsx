@@ -61,9 +61,10 @@ function NewFilamentContent() {
   const [cloneHighlight, setCloneHighlight] = useState(-1);
   const cloneRef = useRef<HTMLDivElement>(null);
 
-  // Parent loading for ?parentId= query param
+  // Parent loading for ?parentId= or ?cloneId= query param
   const parentId = searchParams.get("parentId");
-  const [parentLoading, setParentLoading] = useState(!!parentId);
+  const cloneId = searchParams.get("cloneId");
+  const [parentLoading, setParentLoading] = useState(!!parentId || !!cloneId);
 
   /** Guard populate-from actions: if dirty, stash the action and show confirm dialog */
   const guardPopulate = (action: () => void) => {
@@ -156,6 +157,29 @@ function NewFilamentContent() {
       return () => ac.abort();
     }
   }, [parentId]);
+
+  // Initialize from ?cloneId= query param (full clone from detail page)
+  useEffect(() => {
+    if (cloneId) {
+      const ac = new AbortController();
+      fetch(`/api/filaments/${cloneId}`, { signal: ac.signal })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((filament) => {
+          if (filament) {
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+            const { _id, _variants, _inherited, parentId: _pid, createdAt, updatedAt, __v, ...rest } = filament;
+            setInitialData({ ...rest, name: `${rest.name} (${t("new.copySuffix")})` });
+            setTitleKey("new.cloneTitle");
+            setFormKey((k) => k + 1);
+          }
+        })
+        .catch((err) => {
+          if (err instanceof DOMException && err.name === "AbortError") return;
+        })
+        .finally(() => setParentLoading(false));
+      return () => ac.abort();
+    }
+  }, [cloneId, t]);
 
   // Fetch clone options
   useEffect(() => {
@@ -471,7 +495,7 @@ function NewFilamentContent() {
       f.vendor.toLowerCase().includes(cloneSearch.toLowerCase())
   ).slice(0, 20);
 
-  if (parentId && parentLoading) {
+  if ((parentId || cloneId) && parentLoading) {
     return (
       <main className="max-w-2xl mx-auto px-4 py-8">
         <div className="mb-4">

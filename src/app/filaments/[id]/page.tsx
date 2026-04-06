@@ -378,7 +378,7 @@ export default function FilamentDetail() {
           </button>
           {!isVariant && (
             <Link
-              href={`/filaments/new?parentId=${filament._id}`}
+              href={`/filaments/new?cloneId=${filament._id}`}
               className="px-4 py-2 bg-amber-600 text-white rounded hover:bg-amber-700 text-sm inline-flex items-center gap-1.5"
               title={t("detail.clone.title")}
             >

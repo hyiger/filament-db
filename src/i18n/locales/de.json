@@ -54,6 +54,7 @@
   "common.cancel": "Abbrechen",
   "nozzles.title": "Düsen",
   "nozzles.backToFilaments": "Zurück zu Filamenten",
+  "nozzles.backToSettings": "Zurück zu Einstellungen",
   "nozzles.addNew": "+ Düse hinzufügen",
   "nozzles.addFirst": "+ Erste Düse hinzufügen",
   "nozzles.empty": "Noch keine Düsen definiert.",
@@ -100,6 +101,7 @@
   "nozzles.form.create": "Düse erstellen",
   "printers.title": "Drucker",
   "printers.backToFilaments": "Zurück zu Filamenten",
+  "printers.backToSettings": "Zurück zu Einstellungen",
   "printers.addNew": "+ Drucker hinzufügen",
   "printers.addFirst": "+ Ersten Drucker hinzufügen",
   "printers.empty": "Noch keine Drucker definiert. Fügen Sie einen Drucker hinzu, um druckerspezifische Kalibrierungen zu verfolgen.",
@@ -330,6 +332,7 @@
   "openprinttag.detail.photoLink": "Foto ↗",
 
   "apiDocs.backToFilaments": "Zurück zu Filamenten",
+  "apiDocs.backToSettings": "Zurück zu Einstellungen",
 
   "error.title": "Etwas ist schiefgelaufen",
   "error.unexpected": "Ein unerwarteter Fehler ist aufgetreten.",

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, utilityProcess, UtilityProcess, shell, session } from "electron";
+import { app, BrowserWindow, Menu, ipcMain, dialog, utilityProcess, UtilityProcess, shell, session } from "electron";
 import path from "path";
 import Store from "electron-store";
 import http from "http";
@@ -68,6 +68,57 @@ function createWindow(urlPath = "/") {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+
+  // Application menu with zoom shortcuts (required for Windows/Linux)
+  const isMac = process.platform === "darwin";
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(isMac ? [{ role: "appMenu" as const }] : []),
+    {
+      label: "File",
+      submenu: [
+        isMac ? { role: "close" as const } : { role: "quit" as const },
+      ],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" as const },
+        { role: "redo" as const },
+        { type: "separator" as const },
+        { role: "cut" as const },
+        { role: "copy" as const },
+        { role: "paste" as const },
+        { role: "selectAll" as const },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" as const },
+        { role: "forceReload" as const },
+        { role: "toggleDevTools" as const },
+        { type: "separator" as const },
+        { role: "resetZoom" as const },
+        { role: "zoomIn" as const },
+        { role: "zoomOut" as const },
+        { type: "separator" as const },
+        { role: "togglefullscreen" as const },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" as const },
+        ...(isMac ? [
+          { type: "separator" as const },
+          { role: "front" as const },
+        ] : [
+          { role: "close" as const },
+        ]),
+      ],
+    },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function waitForServer(port: number, timeoutMs = 30000): Promise<void> {

@@ -469,7 +469,7 @@ export default function Home() {
           />
         </div>
       </td>
-      <td className="py-2 px-2">
+      <td className="py-2 px-2 min-w-[200px]">
         <Link
           href={`/filaments/${f._id}`}
           className="text-blue-600 hover:underline"
@@ -560,7 +560,7 @@ export default function Home() {
               />
             </div>
           </td>
-          <td className="py-2 px-2">
+          <td className="py-2 px-2 min-w-[200px]">
             <Link
               href={`/filaments/${f._id}`}
               className="text-blue-600 hover:underline"
