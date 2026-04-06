@@ -182,8 +182,9 @@ export async function POST(
     }
 
     // Update per-nozzle calibration data when nozzle_diameter is provided.
-    // PrusaSlicer can pass ?nozzle_diameter=0.4 so the API knows which
-    // calibration entry to update with EM, PA, retraction, etc.
+    // PrusaSlicer passes ?nozzle_diameter=0.4&high_flow=0|1 so the API
+    // knows which calibration entry to update with EM, PA, retraction, etc.
+    // The high_flow flag disambiguates e.g. 0.4mm standard vs 0.4mm HF.
     const nozzleDiameterParam = request.nextUrl.searchParams.get("nozzle_diameter");
     const nozzleDiameter = nozzleDiameterParam ? parseFloat(nozzleDiameterParam) : NaN;
     if (!isNaN(nozzleDiameter) && nozzleDiameter > 0) {
@@ -211,14 +212,23 @@ export async function POST(
       }
 
       if (Object.keys(calFields).length > 0) {
-        // Find the nozzle by diameter among this filament's compatible nozzles
+        // Find the nozzle by diameter (and optionally high_flow) among
+        // this filament's compatible nozzles. The high_flow param
+        // disambiguates e.g. 0.4mm Diamondback vs 0.4mm HF.
         const compatIds = (filament.compatibleNozzles || []).map((n: unknown) => String(n));
         if (compatIds.length > 0) {
-          const matchingNozzle = await Nozzle.findOne({
+          const highFlowParam = request.nextUrl.searchParams.get("high_flow");
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const nozzleQuery: Record<string, any> = {
             _id: { $in: compatIds },
             diameter: nozzleDiameter,
             _deletedAt: null,
-          }).lean();
+          };
+          // Only filter by highFlow when the param is explicitly provided
+          if (highFlowParam !== null) {
+            nozzleQuery.highFlow = highFlowParam === "1";
+          }
+          const matchingNozzle = await Nozzle.findOne(nozzleQuery).lean();
 
           if (matchingNozzle) {
             const nozzleId = String(matchingNozzle._id);

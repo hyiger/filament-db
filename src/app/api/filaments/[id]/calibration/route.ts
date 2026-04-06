@@ -77,10 +77,16 @@ export async function GET(
       retractLift?: number;
     }>;
 
-    // Find best match: exact diameter match
-    const match = calibrations.find(
-      (cal) => cal.nozzle && Math.abs((cal.nozzle.diameter || 0) - nozzleDiameter) < 0.01
-    );
+    // Find best match: exact diameter match, optionally filtered by high_flow
+    const highFlowParam = searchParams.get("high_flow");
+    const match = calibrations.find((cal) => {
+      if (!cal.nozzle || Math.abs((cal.nozzle.diameter || 0) - nozzleDiameter) >= 0.01)
+        return false;
+      // When high_flow is explicitly specified, only match nozzles with that flag
+      if (highFlowParam !== null)
+        return cal.nozzle.highFlow === (highFlowParam === "1");
+      return true;
+    });
 
     if (!match) {
       return NextResponse.json(
