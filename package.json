@@ -7,6 +7,9 @@
     "email": "hyiger@users.noreply.github.com"
   },
   "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
   "main": "electron-dist/main.js",
   "scripts": {
     "dev": "next dev -p 3456",

@@ -5,6 +5,7 @@ const pkg = JSON.parse(readFileSync("./package.json", "utf-8"));
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  transpilePackages: ["@filament-db/shared"],
   allowedDevOrigins: process.env.ALLOWED_DEV_ORIGINS
     ? process.env.ALLOWED_DEV_ORIGINS.split(",").map(s => s.trim())
     : [],

@@ -19,7 +19,9 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@filament-db/shared": ["./packages/shared/src"],
+      "@filament-db/shared/*": ["./packages/shared/src/*"]
     }
   },
   "include": [

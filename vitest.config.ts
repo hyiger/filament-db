@@ -22,6 +22,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      "@filament-db/shared": path.resolve(__dirname, "./packages/shared/src"),
     },
   },
 });

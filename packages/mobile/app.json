@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "Filament DB",
+    "slug": "filament-db",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "filamentdb",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.filamentdb.app",
+      "infoPlist": {
+        "NFCReaderUsageDescription": "Filament DB uses NFC to read and write OpenPrintTag filament data on NFC-V tags.",
+        "com.apple.developer.nfc.readersession.iso15693.select-identifiers": ["*"]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#1a1a2e"
+      },
+      "package": "com.filamentdb.app",
+      "permissions": ["android.permission.NFC"]
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "react-native-nfc-manager",
+        {
+          "nfcPermission": "Filament DB uses NFC to read and write OpenPrintTag filament data.",
+          "selectIdentifiers": ["*"],
+          "systemCodes": []
+        }
+      ]
+    ]
+  }
+}
