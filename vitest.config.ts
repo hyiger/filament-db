@@ -8,7 +8,22 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov", "json-summary"],
-      include: ["src/lib/**", "src/models/**"],
+      all: true,
+      include: [
+        "src/lib/**",
+        "src/models/**",
+        "packages/shared/src/openprinttag/**",
+        "packages/shared/src/logic/**",
+        "packages/shared/src/ndef/**",
+      ],
+      exclude: [
+        "src/lib/openprinttag.ts",
+        "src/lib/openprinttag-decode.ts",
+        "src/lib/resolveFilament.ts",
+        "**/index.ts",
+        "packages/shared/src/logic/spoolCheck.ts",
+        "packages/shared/src/logic/validation.ts",
+      ],
       thresholds: {
         lines: 80,
         functions: 90,
