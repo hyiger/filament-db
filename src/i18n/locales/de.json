@@ -786,5 +786,7 @@
   "nozzles.addNewTitle": "Neue Düse hinzufügen",
   "printers.created": "Drucker erstellt",
   "printers.createError": "Drucker konnte nicht erstellt werden",
-  "printers.addNewTitle": "Neuen Drucker hinzufügen"
+  "printers.addNewTitle": "Neuen Drucker hinzufügen",
+  "settings.aiCostNote.gemini": "Google Gemini bietet ein kostenloses Kontingent (15 Anfragen/Minute). Keine Kosten bei normaler Nutzung.",
+  "settings.aiCostNote.paid": "API-Aufrufe an {provider} werden pro Nutzung berechnet. Aktuelle Preise finden Sie auf der Preisseite Ihres Anbieters."
 }

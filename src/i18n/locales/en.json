@@ -786,5 +786,7 @@
   "nozzles.addNewTitle": "Add New Nozzle",
   "printers.created": "Printer created",
   "printers.createError": "Failed to create printer",
-  "printers.addNewTitle": "Add New Printer"
+  "printers.addNewTitle": "Add New Printer",
+  "settings.aiCostNote.gemini": "Google Gemini offers a free tier (15 requests/minute). No charges for typical usage.",
+  "settings.aiCostNote.paid": "API calls to {provider} are billed per use. Check your provider's pricing page for current rates."
 }
