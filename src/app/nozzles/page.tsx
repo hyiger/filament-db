@@ -108,7 +108,7 @@ export default function NozzlesPage() {
             <Link href="/" className="text-blue-600 hover:underline text-sm">
               &larr; {t("nozzles.backToFilaments")}
             </Link>
-            <span className="text-gray-300 dark:text-gray-600">|</span>
+            <span className="text-gray-400 dark:text-gray-600">|</span>
             <Link href="/settings" className="text-blue-600 hover:underline text-sm">
               &larr; {t("nozzles.backToSettings")}
             </Link>
@@ -123,8 +123,8 @@ export default function NozzlesPage() {
       </div>
 
       {selected.size > 0 && (
-        <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-950/30 border border-red-800 rounded-lg">
-          <span className="text-sm text-red-300">{t("nozzles.selected", { count: selected.size })}</span>
+        <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg">
+          <span className="text-sm text-red-600 dark:text-red-300">{t("nozzles.selected", { count: selected.size })}</span>
           <button
             onClick={handleBulkDelete}
             disabled={bulkDeleting}
@@ -134,7 +134,7 @@ export default function NozzlesPage() {
           </button>
           <button
             onClick={() => setSelected(new Set())}
-            className="text-sm text-gray-400 hover:text-gray-200"
+            className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
           >
             {t("nozzles.clear")}
           </button>

@@ -114,7 +114,7 @@ export default function PrintersPage() {
             <Link href="/" className="text-blue-600 hover:underline text-sm">
               &larr; {t("printers.backToFilaments")}
             </Link>
-            <span className="text-gray-300 dark:text-gray-600">|</span>
+            <span className="text-gray-400 dark:text-gray-600">|</span>
             <Link href="/settings" className="text-blue-600 hover:underline text-sm">
               &larr; {t("printers.backToSettings")}
             </Link>

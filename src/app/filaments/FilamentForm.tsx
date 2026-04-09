@@ -645,7 +645,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       {fetchErrors.length > 0 && (
-        <div className="px-3 py-2 bg-yellow-900/30 border border-yellow-800 rounded text-sm text-yellow-300">
+        <div className="px-3 py-2 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded text-sm text-yellow-700 dark:text-yellow-300">
           {t("form.fetchError", { items: fetchErrors.join(", ") })}
         </div>
       )}
@@ -728,7 +728,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               placeholder={t("form.placeholder.parentSearch")}
             />
             {parentDropdownOpen && (
-              <ul id="parent-listbox" role="listbox" className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
+              <ul id="parent-listbox" role="listbox" className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg">
                 {parentOptions
                   .filter((p) =>
                     !parentSearch ||
@@ -742,7 +742,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                       id={`parent-opt-${i}`}
                       role="option"
                       aria-selected={p._id === form.parentId}
-                      className={`px-3 py-2 cursor-pointer text-gray-100 hover:bg-gray-700 flex items-center gap-2 ${i === parentHighlight ? "bg-gray-600" : ""}`}
+                      className={`px-3 py-2 cursor-pointer text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 ${i === parentHighlight ? "bg-gray-100 dark:bg-gray-600" : ""}`}
                       onMouseDown={(e) => {
                         e.preventDefault();
                         setForm({
@@ -824,7 +824,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             required
           />
           {vendorDropdownOpen && (
-            <ul id="vendor-listbox" role="listbox" aria-labelledby="vendor-label" className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
+            <ul id="vendor-listbox" role="listbox" aria-labelledby="vendor-label" className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg">
               {vendorOptions
                 .filter((v) => !form.vendor || v.toLowerCase().includes(form.vendor.toLowerCase()))
                 .map((v, i) => (
@@ -833,7 +833,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                     id={`vendor-opt-${i}`}
                     role="option"
                     aria-selected={v === form.vendor}
-                    className={`px-3 py-1.5 cursor-pointer text-gray-100 hover:bg-gray-700 ${i === vendorHighlight ? "bg-gray-600" : ""} ${v === form.vendor ? "bg-gray-700 font-semibold" : ""}`}
+                    className={`px-3 py-1.5 cursor-pointer text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 ${i === vendorHighlight ? "bg-gray-100 dark:bg-gray-600" : ""} ${v === form.vendor ? "bg-gray-200 dark:bg-gray-700 font-semibold" : ""}`}
                     onMouseDown={(e) => {
                       e.preventDefault();
                       setForm({ ...form, vendor: v });
@@ -847,7 +847,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                 <li
                   role="option"
                   aria-selected={false}
-                  className="px-3 py-1.5 cursor-pointer text-green-400 hover:bg-gray-700 border-t border-gray-600"
+                  className="px-3 py-1.5 cursor-pointer text-green-600 dark:text-green-400 hover:bg-gray-100 dark:hover:bg-gray-700 border-t border-gray-200 dark:border-gray-600"
                   onMouseDown={(e) => {
                     e.preventDefault();
                     setVendorOptions((prev) => Array.from(new Set([...prev, form.vendor])).sort());
@@ -900,7 +900,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             required
           />
           {typeDropdownOpen && (
-            <ul id="type-listbox" role="listbox" aria-labelledby="type-label" className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-gray-800 border border-gray-600 rounded shadow-lg">
+            <ul id="type-listbox" role="listbox" aria-labelledby="type-label" className="absolute z-50 w-full mt-1 max-h-48 overflow-y-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded shadow-lg">
               {filamentTypes
                 .filter((ft) => !form.type || ft.includes(form.type))
                 .map((ft, i) => (
@@ -909,7 +909,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                     id={`type-opt-${i}`}
                     role="option"
                     aria-selected={ft === form.type}
-                    className={`px-3 py-1.5 cursor-pointer text-gray-100 hover:bg-gray-700 ${i === typeHighlight ? "bg-gray-600" : ""} ${ft === form.type ? "bg-gray-700 font-semibold" : ""}`}
+                    className={`px-3 py-1.5 cursor-pointer text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 ${i === typeHighlight ? "bg-gray-100 dark:bg-gray-600" : ""} ${ft === form.type ? "bg-gray-200 dark:bg-gray-700 font-semibold" : ""}`}
                     onMouseDown={(e) => {
                       e.preventDefault();
                       setForm({ ...form, type: ft });
@@ -923,7 +923,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                 <li
                   role="option"
                   aria-selected={false}
-                  className="px-3 py-1.5 cursor-pointer text-green-400 hover:bg-gray-700 border-t border-gray-600"
+                  className="px-3 py-1.5 cursor-pointer text-green-600 dark:text-green-400 hover:bg-gray-100 dark:hover:bg-gray-700 border-t border-gray-200 dark:border-gray-600"
                   onMouseDown={(e) => {
                     e.preventDefault();
                     setFilamentTypes((prev) => Array.from(new Set([...prev, form.type])).sort());
@@ -973,6 +973,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           <input
             type="number"
             step="0.01"
+            min="0"
             className={inputClass}
             value={form.density}
             onChange={(e) => setForm({ ...form, density: e.target.value })}
@@ -994,6 +995,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               onChange={(e) => setForm({ ...form, netFilamentWeight: e.target.value })}
               placeholder={t("form.placeholder.netFilament")}
             />
+            <p className="text-xs text-gray-400 mt-1">{t("form.netFilamentHint")}</p>
           </div>
           <div>
             <label className={labelClass}>{t("form.emptySpool")}</label>
@@ -1006,6 +1008,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               onChange={(e) => setForm({ ...form, spoolWeight: e.target.value })}
               placeholder={t("form.placeholder.emptySpool")}
             />
+            <p className="text-xs text-gray-400 mt-1">{t("form.emptySpoolHint")}</p>
           </div>
           <div>
             <label className={labelClass}>{t("form.initialWeight")}</label>
@@ -1057,6 +1060,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             <label className={labelClass}>{t("form.nozzleTemp")}</label>
             <input
               type="number"
+              min="0"
               className={inputClass}
               value={form.temperatures.nozzle}
               onChange={(e) =>
@@ -1071,6 +1075,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             <label className={labelClass}>{t("form.nozzleFirstLayer")}</label>
             <input
               type="number"
+              min="0"
               className={inputClass}
               value={form.temperatures.nozzleFirstLayer}
               onChange={(e) =>
@@ -1085,6 +1090,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             <label className={labelClass}>{t("form.bedTemp")}</label>
             <input
               type="number"
+              min="0"
               className={inputClass}
               value={form.temperatures.bed}
               onChange={(e) =>
@@ -1099,6 +1105,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             <label className={labelClass}>{t("form.bedFirstLayer")}</label>
             <input
               type="number"
+              min="0"
               className={inputClass}
               value={form.temperatures.bedFirstLayer}
               onChange={(e) =>
@@ -1113,6 +1120,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             <label className={labelClass}>{t("form.chamberTemp")}</label>
             <input
               type="number"
+              min="0"
               className={inputClass}
               value={form.temperatures.chamber}
               onChange={(e) =>
@@ -1127,6 +1135,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             <label className={labelClass}>{t("form.standbyTemp")}</label>
             <input
               type="number"
+              min="0"
               className={inputClass}
               value={form.temperatures.standby}
               onChange={(e) =>
@@ -1141,6 +1150,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             <label className={labelClass}>{t("form.nozzleRangeMin")}</label>
             <input
               type="number"
+              min="0"
               className={inputClass}
               value={form.temperatures.nozzleRangeMin}
               onChange={(e) =>
@@ -1156,6 +1166,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             <label className={labelClass}>{t("form.nozzleRangeMax")}</label>
             <input
               type="number"
+              min="0"
               className={inputClass}
               value={form.temperatures.nozzleRangeMax}
               onChange={(e) =>
@@ -1183,14 +1194,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                   }} placeholder={t("form.placeholder.bedType")} />
                 </div>
                 <div>
-                  <input type="number" className={inputClass} value={bt.temperature} onChange={(e) => {
+                  <input type="number" min="0" className={inputClass} value={bt.temperature} onChange={(e) => {
                     const updated = [...form.bedTypeTemps];
                     updated[idx] = { ...bt, temperature: e.target.value };
                     setForm({ ...form, bedTypeTemps: updated });
                   }} placeholder={t("form.placeholder.temp")} />
                 </div>
                 <div>
-                  <input type="number" className={inputClass} value={bt.firstLayerTemperature} onChange={(e) => {
+                  <input type="number" min="0" className={inputClass} value={bt.firstLayerTemperature} onChange={(e) => {
                     const updated = [...form.bedTypeTemps];
                     updated[idx] = { ...bt, firstLayerTemperature: e.target.value };
                     setForm({ ...form, bedTypeTemps: updated });

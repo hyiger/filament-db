@@ -528,6 +528,8 @@
   "form.placeholder.netFilament": "z.B. 1000",
   "form.placeholder.emptySpool": "z.B. 250",
   "form.placeholder.initialWeight": "Spule auf Waage wiegen",
+  "form.netFilamentHint": "Filamentgewicht ohne Spule (aus TDS oder Verpackung).",
+  "form.emptySpoolHint": "Gewicht der leeren Spulenrolle (ohne Filament).",
   "form.initialWeightHint": "Erstellt Ihre erste Spule. Weitere können auf der Detailseite hinzugefügt werden.",
   "form.minPrintSpeed": "Min. Druckgeschwindigkeit (mm/s)",
   "form.maxPrintSpeed": "Max. Druckgeschwindigkeit (mm/s)",

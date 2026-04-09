@@ -254,6 +254,13 @@ export default function FilamentDetail() {
         const updated = await res.json();
         setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
         toast(t("detail.spool.removed"));
+        // Re-focus the document body after confirm() dialog steals focus,
+        // so subsequent input fields remain clickable/typeable (#97)
+        requestAnimationFrame(() => {
+          if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+          }
+        });
       } else {
         toast(t("detail.spool.removeFailed"), "error");
       }

@@ -528,6 +528,8 @@
   "form.placeholder.netFilament": "e.g. 1000",
   "form.placeholder.emptySpool": "e.g. 250",
   "form.placeholder.initialWeight": "Weigh spool on scale",
+  "form.netFilamentHint": "Filament weight without the spool (from TDS or packaging).",
+  "form.emptySpoolHint": "Weight of the empty spool reel (without filament).",
   "form.initialWeightHint": "Creates your first spool. Add more from the detail page.",
   "form.minPrintSpeed": "Min Print Speed (mm/s)",
   "form.maxPrintSpeed": "Max Print Speed (mm/s)",
