@@ -8,7 +8,7 @@
   },
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/shared"
   ],
   "main": "electron-dist/main.js",
   "scripts": {

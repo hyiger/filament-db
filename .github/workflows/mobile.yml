@@ -51,8 +51,12 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Install root dependencies
+      - name: Install root + shared dependencies
         run: npm ci
+
+      - name: Install mobile dependencies
+        working-directory: packages/mobile
+        run: npm install
 
       - name: Setup Expo
         uses: expo/expo-github-action@v8
