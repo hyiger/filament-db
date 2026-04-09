@@ -17,6 +17,11 @@ import { sanitizeFields } from "@filament-db/shared/logic/validation";
 // Default database name — matches the existing web/desktop app
 const DB_NAME = "filament-db";
 
+/** Convert a string ID to a BSON ObjectId for Atlas queries. */
+function oid(id: string): Realm.BSON.ObjectId {
+  return new Realm.BSON.ObjectId(id);
+}
+
 class AtlasService {
   private app: Realm.App | null = null;
   private _db: globalThis.Realm.Services.MongoDB.MongoDBDatabase | null = null;
@@ -76,7 +81,7 @@ class AtlasService {
 
     get: async (id: string): Promise<FilamentDetail> => {
       const doc = await this.db.collection("filaments").findOne({
-        _id: { $oid: id },
+        _id: oid(id),
         _deletedAt: null,
       });
       if (!doc) throw new Error(`Filament not found: ${id}`);
@@ -96,7 +101,7 @@ class AtlasService {
       // Populate compatible nozzles
       if (resolved.compatibleNozzles?.length) {
         const nozzleIds = resolved.compatibleNozzles.map((n: unknown) =>
-          typeof n === "string" ? { $oid: n } : n
+          typeof n === "string" ? oid(n) : n
         );
         const nozzles = await this.db.collection("nozzles").find({
           _id: { $in: nozzleIds },
@@ -110,13 +115,13 @@ class AtlasService {
         for (const cal of resolved.calibrations) {
           if (cal.nozzle) {
             const nozzle = await this.db.collection("nozzles").findOne({
-              _id: typeof cal.nozzle === "string" ? { $oid: cal.nozzle } : cal.nozzle,
+              _id: typeof cal.nozzle === "string" ? oid(cal.nozzle) : cal.nozzle,
             });
             if (nozzle) cal.nozzle = nozzle;
           }
           if (cal.printer) {
             const printer = await this.db.collection("printers").findOne({
-              _id: typeof cal.printer === "string" ? { $oid: cal.printer } : cal.printer,
+              _id: typeof cal.printer === "string" ? oid(cal.printer) : cal.printer,
             });
             if (printer) cal.printer = printer;
           }
@@ -151,7 +156,7 @@ class AtlasService {
     update: async (id: string, data: Partial<FilamentDetail>): Promise<FilamentDetail> => {
       const clean = sanitizeFields(data as Record<string, unknown>);
       await this.db.collection("filaments").updateOne(
-        { _id: { $oid: id } },
+        { _id: oid(id) },
         { $set: { ...clean, updatedAt: new Date() } },
       );
       return this.filaments.get(id);
@@ -160,14 +165,14 @@ class AtlasService {
     delete: async (id: string): Promise<void> => {
       // Check for variants
       const variantCount = await this.db.collection("filaments").count({
-        parentId: { $oid: id },
+        parentId: oid(id),
         _deletedAt: null,
       });
       if (variantCount > 0) {
         throw new Error(`Cannot delete: filament has ${variantCount} variant(s)`);
       }
       await this.db.collection("filaments").updateOne(
-        { _id: { $oid: id } },
+        { _id: oid(id) },
         { $set: { _deletedAt: new Date() } },
       );
     },
@@ -196,7 +201,7 @@ class AtlasService {
   spools = {
     add: async (filamentId: string, data: { label: string; totalWeight?: number | null }): Promise<void> => {
       await this.db.collection("filaments").updateOne(
-        { _id: { $oid: filamentId } },
+        { _id: oid(filamentId) },
         {
           $push: {
             spools: {
@@ -217,16 +222,16 @@ class AtlasService {
       if (data.totalWeight !== undefined) setFields["spools.$.totalWeight"] = data.totalWeight;
 
       await this.db.collection("filaments").updateOne(
-        { _id: { $oid: filamentId }, "spools._id": { $oid: spoolId } },
+        { _id: oid(filamentId), "spools._id": oid(spoolId) },
         { $set: setFields },
       );
     },
 
     delete: async (filamentId: string, spoolId: string): Promise<void> => {
       await this.db.collection("filaments").updateOne(
-        { _id: { $oid: filamentId } },
+        { _id: oid(filamentId) },
         {
-          $pull: { spools: { _id: { $oid: spoolId } } },
+          $pull: { spools: { _id: oid(spoolId) } },
           $set: { updatedAt: new Date() },
         },
       );
@@ -249,7 +254,7 @@ class AtlasService {
 
     get: async (id: string): Promise<NozzleDetail> => {
       const doc = await this.db.collection("nozzles").findOne({
-        _id: { $oid: id },
+        _id: oid(id),
         _deletedAt: null,
       });
       if (!doc) throw new Error(`Nozzle not found: ${id}`);
@@ -270,7 +275,7 @@ class AtlasService {
     update: async (id: string, data: Partial<NozzleDetail>): Promise<NozzleDetail> => {
       const clean = sanitizeFields(data as Record<string, unknown>);
       await this.db.collection("nozzles").updateOne(
-        { _id: { $oid: id } },
+        { _id: oid(id) },
         { $set: { ...clean, updatedAt: new Date() } },
       );
       return this.nozzles.get(id);
@@ -281,8 +286,8 @@ class AtlasService {
       const filamentRef = await this.db.collection("filaments").count({
         _deletedAt: null,
         $or: [
-          { compatibleNozzles: { $oid: id } },
-          { "calibrations.nozzle": { $oid: id } },
+          { compatibleNozzles: oid(id) },
+          { "calibrations.nozzle": oid(id) },
         ],
       });
       if (filamentRef > 0) {
@@ -291,14 +296,14 @@ class AtlasService {
 
       const printerRef = await this.db.collection("printers").count({
         _deletedAt: null,
-        installedNozzles: { $oid: id },
+        installedNozzles: oid(id),
       });
       if (printerRef > 0) {
         throw new Error(`Cannot delete: nozzle is installed in ${printerRef} printer(s)`);
       }
 
       await this.db.collection("nozzles").updateOne(
-        { _id: { $oid: id } },
+        { _id: oid(id) },
         { $set: { _deletedAt: new Date() } },
       );
     },
@@ -331,7 +336,7 @@ class AtlasService {
 
     get: async (id: string): Promise<PrinterDetail> => {
       const doc = await this.db.collection("printers").findOne({
-        _id: { $oid: id },
+        _id: oid(id),
         _deletedAt: null,
       });
       if (!doc) throw new Error(`Printer not found: ${id}`);
@@ -362,7 +367,7 @@ class AtlasService {
     update: async (id: string, data: Partial<PrinterDetail>): Promise<PrinterDetail> => {
       const clean = sanitizeFields(data as Record<string, unknown>);
       await this.db.collection("printers").updateOne(
-        { _id: { $oid: id } },
+        { _id: oid(id) },
         { $set: { ...clean, updatedAt: new Date() } },
       );
       return this.printers.get(id);
@@ -372,14 +377,14 @@ class AtlasService {
       // Referential integrity check
       const filamentRef = await this.db.collection("filaments").count({
         _deletedAt: null,
-        "calibrations.printer": { $oid: id },
+        "calibrations.printer": oid(id),
       });
       if (filamentRef > 0) {
         throw new Error(`Cannot delete: printer is referenced by ${filamentRef} filament(s)`);
       }
 
       await this.db.collection("printers").updateOne(
-        { _id: { $oid: id } },
+        { _id: oid(id) },
         { $set: { _deletedAt: new Date() } },
       );
     },

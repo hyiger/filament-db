@@ -76,7 +76,7 @@ export default function FilamentDetailScreen() {
         <View style={styles.actions}>
           <TouchableOpacity
             style={[styles.actionButton, { backgroundColor: colors.primary }]}
-            onPress={() => router.push(`/filaments/${id}/edit` as never)}
+            onPress={() => router.push({ pathname: "/filaments/new", params: { editId: id } })}
           >
             <Text style={styles.actionText}>{t("common.edit")}</Text>
           </TouchableOpacity>
