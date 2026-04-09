@@ -51,6 +51,9 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Install PC/SC development headers
+        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
+
       - name: Install root + shared dependencies
         run: npm ci
 

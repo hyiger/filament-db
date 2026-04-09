@@ -8,7 +8,8 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov", "json-summary"],
-      all: true,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ...({ all: true } as any),
       include: [
         "src/lib/**",
         "src/models/**",
