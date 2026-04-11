@@ -259,6 +259,11 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
   const { t } = useTranslation();
   return (
     <div className="grid grid-cols-2 gap-2 text-sm">
+      {data.tagSource === "bambu" && (
+        <div className="col-span-2 text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 px-3 py-1.5 rounded">
+          {t("nfc.readDialog.bambuReadOnly")}
+        </div>
+      )}
       {data.materialName && (
         <Stat label={t("nfc.readDialog.labelMaterialName")} value={data.materialName} />
       )}
@@ -325,6 +330,12 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
       )}
       {data.spoolUid && (
         <Stat label={t("nfc.readDialog.labelInstanceId")} value={data.spoolUid} />
+      )}
+      {data.filamentLength != null && (
+        <Stat label={t("nfc.readDialog.labelFilamentLength")} value={`${data.filamentLength} m`} />
+      )}
+      {data.productionDate && (
+        <Stat label={t("nfc.readDialog.labelProductionDate")} value={data.productionDate.replace(/_/g, "-").replace(/-(\d{2})-(\d{2})$/, " $1:$2")} />
       )}
     </div>
   );

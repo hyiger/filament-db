@@ -3,6 +3,7 @@ export type {
   FilamentVariant,
   FilamentNozzle,
   FilamentPrinter,
+  FilamentBedType,
   FilamentCalibration,
   FilamentPreset,
   FilamentSpool,

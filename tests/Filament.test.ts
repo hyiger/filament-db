@@ -116,6 +116,66 @@ describe("Filament Model", () => {
     expect(filament.calibrations[0].pressureAdvance).toBe(0.053);
   });
 
+  it("stores expanded calibration fields (bedType, temps, fans)", async () => {
+    const nozzleId = new mongoose.Types.ObjectId();
+    const printerId = new mongoose.Types.ObjectId();
+    const bedTypeId = new mongoose.Types.ObjectId();
+    const filament = await Filament.create({
+      name: "Expanded Cal Test",
+      vendor: "Test",
+      type: "PLA",
+      calibrations: [
+        {
+          nozzle: nozzleId,
+          printer: printerId,
+          bedType: bedTypeId,
+          extrusionMultiplier: 0.95,
+          pressureAdvance: 0.04,
+          nozzleTemp: 210,
+          nozzleTempFirstLayer: 215,
+          bedTemp: 60,
+          bedTempFirstLayer: 65,
+          chamberTemp: 35,
+          fanMinSpeed: 20,
+          fanMaxSpeed: 100,
+          fanBridgeSpeed: 100,
+        },
+      ],
+    });
+
+    expect(filament.calibrations).toHaveLength(1);
+    const cal = filament.calibrations[0];
+    expect(cal.bedType.toString()).toBe(bedTypeId.toString());
+    expect(cal.printer.toString()).toBe(printerId.toString());
+    expect(cal.nozzleTemp).toBe(210);
+    expect(cal.nozzleTempFirstLayer).toBe(215);
+    expect(cal.bedTemp).toBe(60);
+    expect(cal.bedTempFirstLayer).toBe(65);
+    expect(cal.chamberTemp).toBe(35);
+    expect(cal.fanMinSpeed).toBe(20);
+    expect(cal.fanMaxSpeed).toBe(100);
+    expect(cal.fanBridgeSpeed).toBe(100);
+  });
+
+  it("defaults new calibration fields to null", async () => {
+    const nozzleId = new mongoose.Types.ObjectId();
+    const filament = await Filament.create({
+      name: "Cal Defaults Test",
+      vendor: "Test",
+      type: "PLA",
+      calibrations: [{ nozzle: nozzleId }],
+    });
+
+    const cal = filament.calibrations[0];
+    expect(cal.bedType).toBeNull();
+    expect(cal.nozzleTemp).toBeNull();
+    expect(cal.bedTemp).toBeNull();
+    expect(cal.chamberTemp).toBeNull();
+    expect(cal.fanMinSpeed).toBeNull();
+    expect(cal.fanMaxSpeed).toBeNull();
+    expect(cal.fanBridgeSpeed).toBeNull();
+  });
+
   it("stores settings as mixed type", async () => {
     const filament = await Filament.create({
       name: "Settings Test",

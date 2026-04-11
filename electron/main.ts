@@ -33,6 +33,20 @@ let nfcService: NfcService | null = null;
 let syncService: SyncService | null = null;
 const PORT = parseInt(process.env.PORT || "3456", 10);
 
+// ── Single-instance lock ──
+// Prevent multiple app windows / duplicate servers on the same port.
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+
+app.on("second-instance", () => {
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  }
+});
+
 function getAppURL(urlPath = "/") {
   return `http://localhost:${PORT}${urlPath}`;
 }
@@ -714,3 +728,5 @@ app.on("before-quit", (event) => {
   if (nfcService) nfcService.destroy();
   stopLocalMongo().finally(() => app.quit());
 });
+
+} // end single-instance lock else block

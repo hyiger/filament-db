@@ -23,15 +23,30 @@ export interface FilamentPrinter {
   name: string;
 }
 
+export interface FilamentBedType {
+  _id: string;
+  name: string;
+  material: string;
+}
+
 export interface FilamentCalibration {
   printer: FilamentPrinter | null;
   nozzle: FilamentNozzle & { highFlow: boolean };
+  bedType: FilamentBedType | null;
   extrusionMultiplier: number | null;
   maxVolumetricSpeed: number | null;
   pressureAdvance: number | null;
   retractLength: number | null;
   retractSpeed: number | null;
   retractLift: number | null;
+  nozzleTemp: number | null;
+  nozzleTempFirstLayer: number | null;
+  bedTemp: number | null;
+  bedTempFirstLayer: number | null;
+  chamberTemp: number | null;
+  fanMinSpeed: number | null;
+  fanMaxSpeed: number | null;
+  fanBridgeSpeed: number | null;
 }
 
 export interface FilamentPreset {

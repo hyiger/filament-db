@@ -159,20 +159,30 @@ Returns calibration data for a specific filament and nozzle diameter. The `{id}`
 Query parameters:
 - `nozzle_diameter` (required) -- nozzle diameter in mm (e.g. `0.4`)
 - `high_flow` (optional) -- `0` or `1`. When provided, only matches nozzles with the corresponding `highFlow` flag. Disambiguates standard vs high-flow nozzles at the same diameter.
+- `bed_type` (optional) -- bed type name or ID. When provided, returns calibration values specific to that bed surface. Falls back to: bed-type-specific match → no-bed-type match → first diameter match.
 
 Returns on success:
 ```json
 {
   "filament": "Prusament PETG Prusa Galaxy Black",
   "nozzle": { "diameter": 0.4, "name": "Brass 0.4mm", "highFlow": false },
-  "printer": "My MK4" ,
+  "printer": "My MK4",
+  "bedType": { "name": "Smooth PEI", "material": "PEI" },
   "calibration": {
     "pressureAdvance": 0.045,
     "maxVolumetricSpeed": 15,
     "extrusionMultiplier": 1.0,
     "retractLength": 0.6,
     "retractSpeed": 45,
-    "retractLift": 0.2
+    "retractLift": 0.2,
+    "nozzleTemp": 240,
+    "nozzleTempFirstLayer": 245,
+    "bedTemp": 80,
+    "bedTempFirstLayer": 85,
+    "chamberTemp": null,
+    "fanMinSpeed": null,
+    "fanMaxSpeed": null,
+    "fanBridgeSpeed": null
   }
 }
 ```
@@ -501,6 +511,36 @@ Soft-delete a printer by ID (sets `_deletedAt` timestamp). Cannot delete a print
 
 ---
 
+## Bed Types
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/bed-types` | List all bed types. Query params: `material` |
+| `POST` | `/api/bed-types` | Create a new bed type |
+| `GET` | `/api/bed-types/:id` | Get a single bed type by ID |
+| `PUT` | `/api/bed-types/:id` | Update a bed type by ID |
+| `DELETE` | `/api/bed-types/:id` | Soft-delete a bed type (blocked if referenced by filament calibrations) |
+
+### GET /api/bed-types
+
+Returns an array of bed type documents sorted by name. Supports optional query parameters:
+
+- `material` -- filter by material (e.g., `PEI`, `Glass`)
+
+### POST /api/bed-types
+
+Create a new bed type. Required fields: `name`, `material`.
+
+### PUT /api/bed-types/:id
+
+Update a bed type. Send a JSON body with the fields to update.
+
+### DELETE /api/bed-types/:id
+
+Soft-delete a bed type by ID (sets `_deletedAt` timestamp). Cannot delete a bed type that is referenced by filament calibrations. Returns `{ message: "Deleted" }`.
+
+---
+
 ## TDS Extraction (AI)
 
 | Method | Endpoint | Description |
@@ -605,7 +645,7 @@ Extracted fields include: name, vendor, type, density, diameter, temperatures (n
 
 ### GET /api/snapshot
 
-Downloads a JSON snapshot of the entire database, including all filaments, nozzles, and printers (including soft-deleted documents). The snapshot preserves `_id` values, timestamps, and references so it can be restored exactly.
+Downloads a JSON snapshot of the entire database, including all filaments, nozzles, printers, and bed types (including soft-deleted documents). The snapshot preserves `_id` values, timestamps, and references so it can be restored exactly.
 
 Returns a JSON file with `Content-Disposition: attachment` header.
 

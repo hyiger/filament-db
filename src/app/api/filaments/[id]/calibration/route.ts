@@ -3,14 +3,18 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import "@/models/Nozzle";
 import "@/models/Printer";
+import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
 
 /**
- * GET /api/filaments/{id}/calibration?nozzle_diameter=0.4
+ * GET /api/filaments/{id}/calibration?nozzle_diameter=0.4&bed_type=Smooth+PEI
  *
  * Returns calibration data for a specific filament and nozzle diameter.
  * Looks up the filament by name (URL-encoded) or ObjectId, then finds
  * the calibration entry whose nozzle diameter matches the query param.
+ *
+ * Optional bed_type param filters by bed type name or ID.
+ * Falls back to a calibration without bed type if no bed-type-specific match.
  *
  * Used by PrusaSlicer to auto-adjust filament settings when the user
  * switches printer presets (which have different nozzle sizes).
@@ -37,12 +41,14 @@ export async function GET(
     let filament = await Filament.findOne({ name: decodedName, _deletedAt: null })
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")
+      .populate("calibrations.bedType")
       .lean();
 
     if (!filament && /^[a-f0-9]{24}$/i.test(id)) {
       filament = await Filament.findOne({ _id: id, _deletedAt: null })
         .populate("calibrations.nozzle")
         .populate("calibrations.printer")
+        .populate("calibrations.bedType")
         .lean();
     }
 
@@ -58,6 +64,7 @@ export async function GET(
       const parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
         .populate("calibrations.nozzle")
         .populate("calibrations.printer")
+        .populate("calibrations.bedType")
         .lean();
       if (parent) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -69,24 +76,53 @@ export async function GET(
     const calibrations = ((filament as NonNullable<typeof filament>).calibrations || []) as Array<{
       nozzle?: { diameter?: number; name?: string; highFlow?: boolean };
       printer?: { name?: string };
+      bedType?: { _id?: string; name?: string; material?: string } | null;
       extrusionMultiplier?: number;
       maxVolumetricSpeed?: number;
       pressureAdvance?: number;
       retractLength?: number;
       retractSpeed?: number;
       retractLift?: number;
+      nozzleTemp?: number;
+      nozzleTempFirstLayer?: number;
+      bedTemp?: number;
+      bedTempFirstLayer?: number;
+      chamberTemp?: number;
+      fanMinSpeed?: number;
+      fanMaxSpeed?: number;
+      fanBridgeSpeed?: number;
     }>;
 
-    // Find best match: exact diameter match, optionally filtered by high_flow
+    // Find best match: exact diameter match, optionally filtered by high_flow and bed_type
     const highFlowParam = searchParams.get("high_flow");
-    const match = calibrations.find((cal) => {
+    const bedTypeParam = searchParams.get("bed_type");
+
+    const diameterMatches = calibrations.filter((cal) => {
       if (!cal.nozzle || Math.abs((cal.nozzle.diameter || 0) - nozzleDiameter) >= 0.01)
         return false;
-      // When high_flow is explicitly specified, only match nozzles with that flag
       if (highFlowParam !== null)
         return cal.nozzle.highFlow === (highFlowParam === "1");
       return true;
     });
+
+    let match = diameterMatches[0];
+
+    if (bedTypeParam) {
+      // Try to find a bed-type-specific match first
+      const bedTypeMatch = diameterMatches.find((cal) => {
+        if (!cal.bedType) return false;
+        return cal.bedType.name === bedTypeParam || cal.bedType._id?.toString() === bedTypeParam;
+      });
+      if (bedTypeMatch) {
+        match = bedTypeMatch;
+      } else {
+        // Fall back to a calibration without bed type
+        match = diameterMatches.find((cal) => !cal.bedType) || match;
+      }
+    } else {
+      // No bed_type specified — prefer entries without bed type
+      match = diameterMatches.find((cal) => !cal.bedType) || match;
+    }
 
     if (!match) {
       return NextResponse.json(
@@ -111,6 +147,7 @@ export async function GET(
         highFlow: match.nozzle?.highFlow,
       },
       printer: match.printer?.name || null,
+      bedType: match.bedType ? { name: match.bedType.name, material: match.bedType.material } : null,
       calibration: {
         pressureAdvance: match.pressureAdvance ?? null,
         maxVolumetricSpeed: match.maxVolumetricSpeed ?? null,
@@ -118,6 +155,14 @@ export async function GET(
         retractLength: match.retractLength ?? null,
         retractSpeed: match.retractSpeed ?? null,
         retractLift: match.retractLift ?? null,
+        nozzleTemp: match.nozzleTemp ?? null,
+        nozzleTempFirstLayer: match.nozzleTempFirstLayer ?? null,
+        bedTemp: match.bedTemp ?? null,
+        bedTempFirstLayer: match.bedTempFirstLayer ?? null,
+        chamberTemp: match.chamberTemp ?? null,
+        fanMinSpeed: match.fanMinSpeed ?? null,
+        fanMaxSpeed: match.fanMaxSpeed ?? null,
+        fanBridgeSpeed: match.fanBridgeSpeed ?? null,
       },
     });
   } catch (err) {

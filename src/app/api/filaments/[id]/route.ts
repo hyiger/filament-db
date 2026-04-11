@@ -3,6 +3,7 @@ import dbConnect from "@/lib/mongodb";
 import Filament, { IFilament } from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import "@/models/Printer";
+import "@/models/BedType";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 
@@ -17,6 +18,7 @@ export async function GET(
       .populate("compatibleNozzles")
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")
+      .populate("calibrations.bedType")
       .lean();
     if (!filament) {
       return errorResponse("Not found", 404);

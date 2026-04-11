@@ -329,6 +329,16 @@ Go to **Settings** and click **Printers**.
 - **Delete** -- click Delete to remove a printer. If any filament calibrations reference it, deletion is blocked.
 - **Create** -- click + Add Printer to add a new one.
 
+### Bed Types
+
+Go to **Settings** and click **Bed Types**.
+
+- **Create** -- click + Add Bed Type to define a bed surface (e.g., "Smooth PEI", "Textured PEI", "G10/FR4").
+- **Edit** -- click Edit next to any bed type to change its name, material, or notes.
+- **Delete** -- click Delete to remove a bed type. If any filament calibrations reference it, deletion is blocked.
+
+Once bed types are defined, the calibration section in the filament form shows a bed type selector so you can store per-bed-type overrides for temperatures, fan settings, and calibration values.
+
 ---
 
 ## Step 13: NFC Tags (Desktop App Only)
@@ -340,7 +350,8 @@ NFC features require the Electron desktop app plus hardware. Skip this section i
 | Item | Details |
 |------|---------|
 | **Reader** | ACS ACR1552U USB (~$40-50) |
-| **Tags** | NXP ICODE SLIX2 (ISO 15693, 320 bytes) |
+| **OpenPrintTag tags** | NXP ICODE SLIX2 (ISO 15693, 320 bytes) — read/write |
+| **Bambu Lab spools** | MIFARE Classic tags on Bambu filament spools — read-only (auto-detected) |
 | **macOS driver** | Install [ifd-acsccid.bundle](https://www.acs.com.hk/en/drivers/) from ACS |
 | **Linux / RPi driver** | `sudo apt install pcscd libpcsclite-dev` (standard `ccid` driver) |
 | **Windows driver** | None needed — built-in Microsoft CCID driver works |
@@ -359,10 +370,11 @@ A small colored dot appears in the header:
 
 1. Plug in the ACR1552U. The status dot turns **yellow**.
 2. Place a tagged spool on the reader. The dot turns **green**.
-3. The app auto-reads the tag and shows a dialog:
+3. The app auto-detects the tag type (OpenPrintTag or Bambu Lab) and reads it. A dialog appears:
    - **Match found** -- shows the matched filament with a **View Filament** link.
    - **No match** -- shows the decoded tag data (material, brand, temps, density, etc.) with a **Create New Filament** button that pre-fills the form with everything from the tag.
    - **Similar filaments** -- if no exact match but the vendor or type is close, candidates appear. Click **+ Variant** next to one to create the tag's filament as a color variant of an existing parent.
+   - **Bambu Lab spools** -- shows a "read-only" badge with production date and filament length. The create/import flow works the same — only writing back is disabled.
 4. Click **Dismiss** to close the dialog.
 
 ### Writing a Tag

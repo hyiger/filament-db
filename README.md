@@ -21,8 +21,9 @@ A desktop and web application for managing 3D printing filament profiles. Import
 ### Hardware Integration
 - **Printers** -- define printers with manufacturer, model, and installed nozzles
 - **Nozzles** -- define nozzles by diameter, type, high-flow, and hardened attributes
-- **Per-printer per-nozzle calibration** -- store EM, max volumetric speed, pressure advance, and retraction values per printer/nozzle combination
-- **NFC tag read/write/erase** -- read, write, and erase [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags using an ACR1552U reader (desktop app)
+- **Bed types** -- define bed surfaces (Smooth PEI, Textured PEI, G10/FR4, Glass, etc.) for per-bed-type calibration
+- **Per-printer per-nozzle per-bed-type calibration** -- store EM, max volumetric speed, pressure advance, retraction, temperature overrides, and fan settings per printer/nozzle/bed-type combination
+- **NFC tag read/write/erase** -- read, write, and erase [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags and read Bambu Lab MIFARE Classic spool tags using an ACR1552U reader (desktop app)
 - **Instance IDs** -- unique per-filament identifier (5-byte hex, Prusament-compatible), written to NFC tags
 
 ### Import / Export
@@ -43,7 +44,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Atlas sync** -- automatic bidirectional sync with MongoDB Atlas using last-write-wins conflict resolution
 
 ### Developer
-- **REST API** -- full CRUD endpoints for filaments, nozzles, and printers
+- **REST API** -- full CRUD endpoints for filaments, nozzles, printers, and bed types
 - **PrusaSlicer API** -- `GET /api/filaments/prusaslicer` exports filaments as a PrusaSlicer-compatible INI config bundle (one section per filament); calibration overrides are applied dynamically via `GET /api/filaments/{id}/calibration`; `POST` imports bundles back
 - **API documentation** -- interactive Swagger UI at `/api-docs` with OpenAPI 3.0 spec
 
@@ -92,7 +93,7 @@ See the [Setup Guide](docs/setup.md) for detailed instructions.
 | [Desktop App](docs/desktop.md) | Electron desktop app: building, packaging, and releasing |
 | [Importing & Exporting](docs/importing.md) | PrusaSlicer config export, web UI import, CLI seed script, INI export |
 | [Usage Guide](docs/usage.md) | Browsing, filtering, sorting, editing filaments, nozzle management, calibrations, TDS links |
-| [NFC Tags](docs/nfc.md) | Reading and writing OpenPrintTag NFC tags with the ACR1552U reader |
+| [NFC Tags](docs/nfc.md) | Reading/writing OpenPrintTag and reading Bambu Lab NFC spool tags with the ACR1552U reader |
 | [API Reference](docs/api.md) | REST API endpoints for filaments, nozzles, and printers (also available as [interactive Swagger UI](/api-docs)) |
 | [Testing](docs/testing.md) | Running tests, coverage thresholds, CI/CD with GitHub Actions |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and solutions |
@@ -108,6 +109,7 @@ filament-db/
 │   ├── app/
 │   │   ├── api/filaments/   # Filament REST API (CRUD, import, export, match, types, vendors, parents)
 │   │   ├── api/nozzles/     # Nozzle REST API (CRUD)
+│   │   ├── api/bed-types/    # Bed Type REST API (CRUD)
 │   │   ├── api/printers/    # Printer REST API (CRUD)
 │   │   ├── api/prusament/    # Prusament spool scraping and import
 │   │   ├── api/openprinttag/ # OpenPrintTag database browser and import
@@ -118,12 +120,13 @@ filament-db/
 │   │   ├── filaments/       # Filament pages (list, detail, edit, new)
 │   │   ├── openprinttag/    # OpenPrintTag community database browser
 │   │   ├── nozzles/         # Nozzle pages (list, edit, new)
+│   │   ├── bed-types/       # Bed Type pages (list, edit, new)
 │   │   └── printers/        # Printer pages (list, edit, new)
 │   ├── components/          # React components (NFC status, dialogs, providers)
 │   ├── hooks/               # Custom hooks (useNfc, useCurrency)
 │   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder, TDS extractor, PrusaSlicer bundle generator, OpenPrintTag DB browser
-│   └── models/              # Mongoose schemas (Filament, Nozzle, Printer)
-├── tests/                   # Vitest unit tests (443 tests across 17 files)
+│   └── models/              # Mongoose schemas (Filament, Nozzle, Printer, BedType)
+├── tests/                   # Vitest unit tests (488 tests across 19 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   ├── release.yml          # CD: build desktop installers on version tags (4 platforms)

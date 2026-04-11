@@ -3,6 +3,7 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import "@/models/Nozzle";
 import "@/models/Printer";
+import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { generatePrusaSlicerBundle } from "@/lib/prusaSlicerBundle";
 import { parseIniFilaments } from "@/lib/parseIni";
@@ -42,6 +43,7 @@ export async function GET(request: NextRequest) {
       .sort({ name: 1 })
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")
+      .populate("calibrations.bedType")
       .lean();
 
     // Build parent lookup for resolving variants
@@ -67,6 +69,7 @@ export async function GET(request: NextRequest) {
       })
         .populate("calibrations.nozzle")
         .populate("calibrations.printer")
+        .populate("calibrations.bedType")
         .lean();
       for (const parent of missingParents) {
         parentMap.set(parent._id.toString(), parent);

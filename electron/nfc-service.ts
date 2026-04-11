@@ -15,6 +15,7 @@ import { EventEmitter } from "events";
 import pcsclite from "@pokusew/pcsclite";
 import { wrapNdefForTag, parseNdefFromTag } from "./ndef";
 import { decodeOpenPrintTagBinary, type DecodedOpenPrintTag } from "../src/lib/openprinttag-decode";
+import { deriveBambuKeys, parseBambuBlocks, bambuToDecodedTag } from "./bambu-tag";
 
 export interface NfcStatus {
   readerConnected: boolean;
@@ -201,7 +202,7 @@ export class NfcService extends EventEmitter {
     }
 
     throw new Error(
-      "Cannot connect to tag — the reader detected the tag but no driver supports ISO 15693. " +
+      "Cannot connect to tag — the reader detected a tag but could not establish a connection. " +
       "Try removing and replacing the tag.",
     );
   }
@@ -273,35 +274,132 @@ export class NfcService extends EventEmitter {
     throw new Error(`Write block ${blockNum} failed: SW=${response.toString("hex")}`);
   }
 
+  // ── ISO 14443 / MIFARE Classic operations ───────────────────────
+
+  /** Get tag UID via PC/SC pseudo-APDU. Succeeds on ISO 14443 tags. */
+  private async getUID(protocol: number): Promise<Buffer> {
+    const cmd = Buffer.from([0xff, 0xca, 0x00, 0x00, 0x00]);
+    const resp = await this.transmit(cmd, 20, protocol);
+    if (!this.checkSW(resp)) throw new Error("Get UID failed");
+    return resp.subarray(0, resp.length - 2);
+  }
+
+  /** Load a 6-byte MIFARE authentication key into a reader key slot. */
+  private async loadMifareKey(protocol: number, keySlot: number, key: Buffer): Promise<void> {
+    const cmd = Buffer.alloc(11);
+    cmd[0] = 0xff; cmd[1] = 0x82; cmd[2] = 0x00; cmd[3] = keySlot;
+    cmd[4] = 0x06;
+    key.copy(cmd, 5);
+    const resp = await this.transmit(cmd, 10, protocol);
+    if (!this.checkSW(resp)) throw new Error(`Load MIFARE key slot ${keySlot} failed`);
+  }
+
+  /** Authenticate a MIFARE Classic block with a loaded key. */
+  private async authenticateMifareBlock(
+    protocol: number, blockNum: number, keyType: number, keySlot: number,
+  ): Promise<void> {
+    const cmd = Buffer.from([
+      0xff, 0x86, 0x00, 0x00, 0x05,
+      0x01, 0x00, blockNum, keyType, keySlot,
+    ]);
+    const resp = await this.transmit(cmd, 10, protocol);
+    if (!this.checkSW(resp)) throw new Error(`Auth block ${blockNum} failed`);
+  }
+
+  /** Read a single 16-byte MIFARE Classic block. */
+  private async readMifareBlock(protocol: number, blockNum: number): Promise<Buffer> {
+    const cmd = Buffer.from([0xff, 0xb0, 0x00, blockNum, 0x10]);
+    const resp = await this.transmit(cmd, 20, protocol);
+    if (!this.checkSW(resp)) throw new Error(`Read MIFARE block ${blockNum} failed`);
+    return resp.subarray(0, resp.length - 2);
+  }
+
+  /**
+   * Read a Bambu Lab MIFARE Classic tag. Derives sector keys from the UID,
+   * authenticates each sector, and parses the proprietary data format.
+   */
+  private async readBambuTag(protocol: number): Promise<DecodedOpenPrintTag> {
+    const uid = await this.getUID(protocol);
+    const keys = deriveBambuKeys(uid);
+
+    const blocks: (Buffer | undefined)[] = [];
+
+    // Read sectors 0–9 (data). Sectors 10–15 contain RSA signature — skip.
+    for (let sector = 0; sector < 10; sector++) {
+      const firstBlock = sector * 4;
+      const key = keys[sector];
+
+      await this.loadMifareKey(protocol, 0, key);
+      await this.authenticateMifareBlock(protocol, firstBlock, 0x60, 0); // Key A
+
+      // Read 3 data blocks per sector (block 3 of each sector is the trailer)
+      for (let i = 0; i < 3; i++) {
+        const blockNum = firstBlock + i;
+        try {
+          blocks[blockNum] = await this.readMifareBlock(protocol, blockNum);
+        } catch {
+          blocks[blockNum] = Buffer.alloc(16);
+        }
+      }
+    }
+
+    const bambuData = parseBambuBlocks(blocks);
+    return bambuToDecodedTag(bambuData);
+  }
+
   // ── High-level operations ───────────────────────────────────────
 
-  async readTag(): Promise<DecodedOpenPrintTag> {
-    return this.withConnection(async (protocol) => {
-      const block0 = await this.readBlock(protocol, 0);
-      const mlen = block0[2];
-      const numBlocks = Math.min(Math.ceil((mlen * 8) / BLOCK_SIZE), DEFAULT_BLOCK_COUNT);
+  /** Read an OpenPrintTag (NFC-V / ISO 15693) tag. */
+  private async readOpenPrintTag(protocol: number): Promise<DecodedOpenPrintTag> {
+    const block0 = await this.readBlock(protocol, 0);
+    const mlen = block0[2];
+    const numBlocks = Math.min(Math.ceil((mlen * 8) / BLOCK_SIZE), DEFAULT_BLOCK_COUNT);
 
-      const allData = Buffer.alloc(numBlocks * BLOCK_SIZE);
-      block0.copy(allData, 0);
+    const allData = Buffer.alloc(numBlocks * BLOCK_SIZE);
+    block0.copy(allData, 0);
 
-      for (let i = 1; i < numBlocks; i++) {
+    for (let i = 1; i < numBlocks; i++) {
+      try {
+        const bd = await this.readBlock(protocol, i);
+        bd.copy(allData, i * BLOCK_SIZE);
+      } catch {
+        // Retry once for transient RF errors
         try {
           const bd = await this.readBlock(protocol, i);
           bd.copy(allData, i * BLOCK_SIZE);
+          continue;
         } catch {
-          // Retry once for transient RF errors
-          try {
-            const bd = await this.readBlock(protocol, i);
-            bd.copy(allData, i * BLOCK_SIZE);
-            continue;
-          } catch {
-            break; // Give up — likely past readable memory
-          }
+          break; // Give up — likely past readable memory
         }
       }
+    }
 
-      const cborPayload = parseNdefFromTag(allData);
-      return decodeOpenPrintTagBinary(cborPayload);
+    const cborPayload = parseNdefFromTag(allData);
+    return decodeOpenPrintTagBinary(cborPayload);
+  }
+
+  /**
+   * Read a tag, auto-detecting its type.
+   *
+   * The ACR1552U returns a UID for both ISO 14443 and ISO 15693 tags via
+   * FF CA, so Get UID alone can't distinguish tag types. Instead we try
+   * the full Bambu MIFARE Classic read (auth + block reads). If auth
+   * fails, the tag isn't Bambu — fall through to ISO 15693 OpenPrintTag.
+   */
+  async readTag(): Promise<DecodedOpenPrintTag> {
+    // Try Bambu (MIFARE Classic) first
+    try {
+      return await this.withConnection(async (protocol) => {
+        return await this.readBambuTag(protocol);
+      });
+    } catch {
+      // Auth or read failed — not a Bambu tag, fall through to OpenPrintTag
+    }
+
+    // Reconnect for ISO 15693 (OpenPrintTag) — a fresh connection ensures
+    // the reader isn't in a stale state after a failed MIFARE auth attempt.
+    return this.withConnection(async (protocol) => {
+      return this.readOpenPrintTag(protocol);
     });
   }
 

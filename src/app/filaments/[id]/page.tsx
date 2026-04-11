@@ -9,7 +9,7 @@ import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
 import { useToast } from "@/components/Toast";
 import { useCurrency } from "@/hooks/useCurrency";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
-import type { FilamentDetail } from "@/types/filament";
+import type { FilamentDetail, FilamentCalibration } from "@/types/filament";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 type Filament = FilamentDetail;
@@ -254,6 +254,13 @@ export default function FilamentDetail() {
         const updated = await res.json();
         setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
         toast(t("detail.spool.removed"));
+        // Re-focus the document body after confirm() dialog steals focus,
+        // so subsequent input fields remain clickable/typeable (#97)
+        requestAnimationFrame(() => {
+          if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+          }
+        });
       } else {
         toast(t("detail.spool.removeFailed"), "error");
       }
@@ -629,6 +636,9 @@ export default function FilamentDetail() {
                   if (!groups.has(key)) groups.set(key, []);
                   groups.get(key)!.push(cal);
                 }
+                const hasBedTypes = filament.calibrations.some((c) => (c as FilamentCalibration).bedType);
+                const hasTemps = filament.calibrations.some((c) => { const e = c as FilamentCalibration; return e.nozzleTemp || e.bedTemp || e.chamberTemp; });
+                const hasFans = filament.calibrations.some((c) => { const e = c as FilamentCalibration; return e.fanMinSpeed || e.fanMaxSpeed || e.fanBridgeSpeed; });
                 return Array.from(groups.entries()).map(([groupKey, cals]) => (
                   <div key={groupKey}>
                     {groups.size > 1 && (
@@ -640,48 +650,82 @@ export default function FilamentDetail() {
                       <thead>
                         <tr className="border-b border-gray-300">
                           <th className="text-left py-2 px-2">{t("detail.calibration.nozzle")}</th>
+                          {hasBedTypes && <th className="text-left py-2 px-2">{t("detail.calibration.bedType")}</th>}
                           <th className="text-right py-2 px-2">{t("detail.calibration.em")}</th>
                           <th className="text-right py-2 px-2">{t("detail.calibration.maxVol")}</th>
                           <th className="text-right py-2 px-2">{t("detail.calibration.pa")}</th>
                           <th className="text-right py-2 px-2">{t("detail.calibration.retract")}</th>
                           <th className="text-right py-2 px-2">{t("detail.calibration.speed")}</th>
                           <th className="text-right py-2 px-2">{t("detail.calibration.zLift")}</th>
+                          {hasTemps && (
+                            <>
+                              <th className="text-right py-2 px-2">{t("detail.calibration.nozzleTemp")}</th>
+                              <th className="text-right py-2 px-2">{t("detail.calibration.bedTempShort")}</th>
+                            </>
+                          )}
+                          {hasFans && <th className="text-right py-2 px-2">{t("detail.calibration.fan")}</th>}
                         </tr>
                       </thead>
                       <tbody>
-                        {cals.map((cal, i) => (
+                        {cals.map((cal, i) => {
+                          // Extended calibration fields added in bed-types feature
+                          const ext = cal as FilamentCalibration;
+                          return (
                           <tr
                             key={i}
                             className="border-b border-gray-200 dark:border-gray-800"
                           >
                             <td className="py-2 px-2">
-                              {cal.nozzle?.name || "—"}
+                              {cal.nozzle?.name || "\u2014"}
                               {cal.nozzle?.highFlow && (
                                 <span className="ml-1.5 px-1.5 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 rounded text-xs">
                                   HF
                                 </span>
                               )}
                             </td>
+                            {hasBedTypes && (
+                              <td className="py-2 px-2">
+                                {ext.bedType ? ext.bedType.name : "\u2014"}
+                              </td>
+                            )}
                             <td className="py-2 px-2 text-right">
-                              {cal.extrusionMultiplier ?? "—"}
+                              {cal.extrusionMultiplier ?? "\u2014"}
                             </td>
                             <td className="py-2 px-2 text-right">
-                              {cal.maxVolumetricSpeed ? `${cal.maxVolumetricSpeed}` : "—"}
+                              {cal.maxVolumetricSpeed ? `${cal.maxVolumetricSpeed}` : "\u2014"}
                             </td>
                             <td className="py-2 px-2 text-right">
-                              {cal.pressureAdvance ?? "—"}
+                              {cal.pressureAdvance ?? "\u2014"}
                             </td>
                             <td className="py-2 px-2 text-right">
-                              {cal.retractLength ? `${cal.retractLength}mm` : "—"}
+                              {cal.retractLength ? `${cal.retractLength}mm` : "\u2014"}
                             </td>
                             <td className="py-2 px-2 text-right">
-                              {cal.retractSpeed ? `${cal.retractSpeed}` : "—"}
+                              {cal.retractSpeed ? `${cal.retractSpeed}` : "\u2014"}
                             </td>
                             <td className="py-2 px-2 text-right">
-                              {cal.retractLift ? `${cal.retractLift}mm` : "—"}
+                              {cal.retractLift ? `${cal.retractLift}mm` : "\u2014"}
                             </td>
+                            {hasTemps && (
+                              <>
+                                <td className="py-2 px-2 text-right">
+                                  {ext.nozzleTemp ? `${ext.nozzleTemp}\u00b0` : "\u2014"}
+                                </td>
+                                <td className="py-2 px-2 text-right">
+                                  {ext.bedTemp ? `${ext.bedTemp}\u00b0` : "\u2014"}
+                                </td>
+                              </>
+                            )}
+                            {hasFans && (
+                              <td className="py-2 px-2 text-right">
+                                {ext.fanMinSpeed || ext.fanMaxSpeed
+                                  ? `${ext.fanMinSpeed ?? "\u2014"}/${ext.fanMaxSpeed ?? "\u2014"}%`
+                                  : "\u2014"}
+                              </td>
+                            )}
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>

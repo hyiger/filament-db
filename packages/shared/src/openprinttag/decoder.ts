@@ -68,6 +68,11 @@ export interface DecodedOpenPrintTag {
   tagNames?: string[];
   consumedWeight?: number;
   aux?: Record<string, unknown>;
+  // Tag source identification
+  tagSource?: "openprinttag" | "bambu";
+  // Bambu-specific fields
+  productionDate?: string;   // "YYYY_MM_DD_HH_MM"
+  filamentLength?: number;   // meters
 }
 
 // ── CBOR decoding primitives ────────────────────────────────────────
@@ -281,7 +286,7 @@ export function decodeOpenPrintTagBinary(data: Uint8Array): DecodedOpenPrintTag 
   }
 
   // Build convenience fields
-  const result: DecodedOpenPrintTag = { meta, main };
+  const result: DecodedOpenPrintTag = { meta, main, tagSource: "openprinttag" };
 
   if (main.MATERIAL_NAME !== undefined) {
     result.materialName = main.MATERIAL_NAME as string;

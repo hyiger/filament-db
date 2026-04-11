@@ -24,7 +24,7 @@ npm run electron:build   # Full Electron build pipeline
 - **Desktop**: Electron with esbuild-compiled main/preload (`electron/`)
 - **Database**: Mongoose ODM with MongoDB Atlas (cloud), embedded MongoDB (offline), or hybrid mode
 - **Tests**: Vitest with mongodb-memory-server; coverage enforced on `src/lib/` and `src/models/`
-- **NFC**: nfc-pcsc + @pokusew/pcsclite (native module, requires PC/SC headers on Linux)
+- **NFC**: nfc-pcsc + @pokusew/pcsclite (native module, requires PC/SC headers on Linux). Reads OpenPrintTag (NFC-V/ISO 15693) and Bambu Lab MIFARE Classic (ISO 14443-3A) tags
 
 ## Project Layout
 
@@ -33,9 +33,9 @@ src/app/            App Router pages + API routes
 src/components/     React components (NfcProvider, Toast, dialogs)
 src/hooks/          Custom hooks (useNfc, useCurrency)
 src/lib/            Core logic (openprinttag CBOR, NDEF, TDS extraction, INI parser, PrusaSlicer bundle, OpenPrintTag DB browser)
-src/models/         Mongoose schemas (Filament, Nozzle, Printer)
+src/models/         Mongoose schemas (Filament, Nozzle, Printer, BedType)
 src/types/          TypeScript type defs (electron.d.ts, filament.ts)
-electron/           Electron main process (main.ts, preload.ts, ndef.ts)
+electron/           Electron main process (main.ts, preload.ts, ndef.ts, bambu-tag.ts)
 tests/              Vitest tests (mirrors src structure)
 scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 ```
@@ -49,6 +49,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 - **Electron config**: electron-store for desktop persistence (connection mode, AI keys, currency); localStorage fallback in web mode
 - **IPC pattern**: `ipcMain.handle()` in `electron/main.ts`, exposed via `contextBridge` in `electron/preload.ts`, typed in `src/types/electron.d.ts`
 - **OpenPrintTag**: CBOR encoder in `src/lib/openprinttag.ts`, NDEF wrapping in `electron/ndef.ts`. CBOR aux_region_offset must point to valid CBOR within the NDEF payload (Prusa app requirement)
+- **Bambu NFC**: MIFARE Classic decoder in `electron/bambu-tag.ts`. HKDF-SHA256 key derivation from UID, binary block parser, maps to `DecodedOpenPrintTag`. Read-only (RSA-2048 signed tags)
 
 ## Internationalization (i18n)
 
@@ -63,7 +64,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 
 ## Testing
 
-- 443 tests across 17 files
+- 488 tests across 19 files
 - Coverage thresholds: 80% lines/statements, 90% functions, 75% branches
 - Setup file: `tests/setup.ts` (mongodb-memory-server)
 - Tests run in CI on Node 20 and 22

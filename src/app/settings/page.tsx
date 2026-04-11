@@ -180,7 +180,7 @@ export default function SettingsPage() {
         {t("settings.subtitle")}
       </p>
 
-      <div className="grid gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         <Link
           href="/nozzles"
           className="block p-5 rounded-lg border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 hover:bg-gray-100 dark:hover:bg-gray-900/50 transition-colors group"
@@ -211,6 +211,25 @@ export default function SettingsPage() {
               </h2>
               <p className="text-sm text-gray-500 mt-1">
                 {t("settings.printersDesc")}
+              </p>
+            </div>
+            <svg className="w-5 h-5 text-gray-600 group-hover:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            </svg>
+          </div>
+        </Link>
+
+        <Link
+          href="/bed-types"
+          className="block p-5 rounded-lg border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 hover:bg-gray-100 dark:hover:bg-gray-900/50 transition-colors group"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 group-hover:text-black dark:group-hover:text-white">
+                {t("settings.bedTypes")}
+              </h2>
+              <p className="text-sm text-gray-500 mt-1">
+                {t("settings.bedTypesDesc")}
               </p>
             </div>
             <svg className="w-5 h-5 text-gray-600 group-hover:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -253,7 +272,7 @@ export default function SettingsPage() {
               onClick={() => setCurrency(c.code as CurrencyCode)}
               className={`px-4 py-2 text-sm rounded border transition-colors ${
                 currency === c.code
-                  ? "border-blue-500 bg-blue-600/20 text-blue-400 dark:text-blue-300"
+                  ? "border-blue-500 bg-blue-50 dark:bg-blue-600/20 text-blue-600 dark:text-blue-300"
                   : "border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500 hover:text-gray-800 dark:hover:text-gray-300"
               }`}
             >
@@ -277,7 +296,7 @@ export default function SettingsPage() {
               onClick={() => setLocale(l.code)}
               className={`px-4 py-2 text-sm rounded border transition-colors ${
                 locale === l.code
-                  ? "border-blue-500 bg-blue-600/20 text-blue-400 dark:text-blue-300"
+                  ? "border-blue-500 bg-blue-50 dark:bg-blue-600/20 text-blue-600 dark:text-blue-300"
                   : "border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500 hover:text-gray-800 dark:hover:text-gray-300"
               }`}
             >
@@ -333,7 +352,7 @@ export default function SettingsPage() {
                           {m.label}
                         </span>
                         {isActive && (
-                          <span className="text-xs px-1.5 py-0.5 bg-blue-600/30 text-blue-300 rounded">{t("settings.connectionCurrent")}</span>
+                          <span className="text-xs px-1.5 py-0.5 bg-blue-100 dark:bg-blue-600/30 text-blue-600 dark:text-blue-300 rounded">{t("settings.connectionCurrent")}</span>
                         )}
                       </div>
                       <p className="text-xs text-gray-500 mt-0.5">{m.description}</p>
@@ -346,7 +365,7 @@ export default function SettingsPage() {
 
           {/* URI input for modes that need it */}
           {showUriInput && pendingMode && (
-            <div className="mt-3 p-4 border border-gray-700 rounded-lg bg-gray-900/50">
+            <div className="mt-3 p-4 border border-gray-300 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-900/50">
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
                 {t("settings.atlasConnectionString")}
               </label>
@@ -355,7 +374,7 @@ export default function SettingsPage() {
                 value={atlasUri}
                 onChange={(e) => setAtlasUri(e.target.value)}
                 placeholder="mongodb+srv://user:pass@cluster.mongodb.net/filament-db"
-                className="w-full px-3 py-2 bg-transparent border border-gray-700 rounded text-sm text-gray-700 dark:text-gray-200 placeholder-gray-600 focus:outline-none focus:border-blue-600 mb-2"
+                className="w-full px-3 py-2 bg-transparent border border-gray-300 dark:border-gray-700 rounded text-sm text-gray-700 dark:text-gray-200 placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-blue-600 mb-2"
                 autoFocus
               />
               <p className="text-xs text-gray-500 mb-3">
@@ -400,7 +419,7 @@ export default function SettingsPage() {
                 </button>
                 <button
                   onClick={() => { setPendingMode(""); setShowUriInput(false); setAtlasUri(""); setModeResult(null); }}
-                  className="px-3 py-1.5 text-gray-400 hover:text-gray-200 text-sm transition-colors"
+                  className="px-3 py-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 text-sm transition-colors"
                 >
                   {t("common.cancel")}
                 </button>
@@ -433,7 +452,7 @@ export default function SettingsPage() {
               </button>
               <button
                 onClick={() => { setPendingMode(""); setModeResult(null); }}
-                className="px-3 py-1.5 text-gray-400 hover:text-gray-200 text-sm transition-colors"
+                className="px-3 py-1.5 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 text-sm transition-colors"
               >
                 {t("common.cancel")}
               </button>
@@ -535,6 +554,13 @@ export default function SettingsPage() {
               </button>
             ))}
           </div>
+        </div>
+
+        {/* Cost info note */}
+        <div className="mb-3 text-xs px-3 py-2 rounded border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">
+          {aiProvider === "gemini"
+            ? t("settings.aiCostNote.gemini")
+            : t("settings.aiCostNote.paid", { provider: AI_PROVIDERS.find((p) => p.id === aiProvider)?.name || aiProvider })}
         </div>
 
         {/* API key link */}
