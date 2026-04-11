@@ -101,7 +101,7 @@ export default function NozzlesPage() {
 
   return (
     <main className="max-w-4xl mx-auto px-4 py-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">{t("nozzles.title")}</h1>
           <div className="flex gap-3">
