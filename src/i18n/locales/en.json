@@ -219,6 +219,9 @@
   "nfc.readDialog.labelHueForgeTD": "HueForge TD",
   "nfc.readDialog.labelOrigin": "Origin",
   "nfc.readDialog.labelInstanceId": "Instance ID",
+  "nfc.readDialog.labelFilamentLength": "Filament Length",
+  "nfc.readDialog.labelProductionDate": "Production Date",
+  "nfc.readDialog.bambuReadOnly": "Bambu Lab spool (read-only)",
 
   "nfc.status.noReader": "No NFC reader",
   "nfc.status.readyPlaceTag": "Ready — place tag",
