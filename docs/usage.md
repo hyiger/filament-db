@@ -124,6 +124,19 @@ Each nozzle has:
 
 ---
 
+## Managing Bed Types
+
+Go to **Settings** and click **Bed Types** to view, create, edit, and delete bed type profiles.
+
+Each bed type has:
+- **Name** (e.g., "Smooth PEI", "Textured PEI", "G10/FR4")
+- **Material** -- the surface material (PEI, Textured PEI, Spring Steel, Glass, G10/FR4, BuildTak, PEX, Polypropylene, Other)
+- **Notes**
+
+Bed types are used in calibrations to store per-printer per-nozzle per-bed-type override values. They cannot be deleted if they are referenced by any filament calibrations.
+
+---
+
 ## Managing Printers
 
 Go to **Settings** and click **Printers** to view, create, edit, and delete printer profiles.
@@ -143,12 +156,23 @@ Printers cannot be deleted if they are referenced by any filament calibrations. 
 
 When editing a filament, the **"Calibrations"** section appears below the compatible nozzles checkboxes. For each selected nozzle, you can enter override values for:
 
+**Calibration fields:**
 - Extrusion Multiplier (EM)
 - Max Volumetric Speed (mm³/s)
 - Pressure Advance (PA)
 - Retraction Length (mm)
 - Retraction Speed (mm/s)
 - Z Lift (mm)
+
+**Temperature overrides** (per calibration entry):
+- Nozzle Temp / Nozzle First Layer Temp
+- Bed Temp / Bed First Layer Temp
+- Chamber Temp
+
+**Fan settings** (per calibration entry):
+- Min Fan Speed (%)
+- Max Fan Speed (%)
+- Bridge Fan Speed (%)
 
 ### Per-Printer Calibrations
 
@@ -157,9 +181,13 @@ If you have defined printers, **printer tabs** appear above the calibration fiel
 - **Default tab** -- calibration values that apply when no printer-specific override exists
 - **Printer tabs** -- calibration values specific to that printer. Placeholder values show the default calibration value so you can see what you're overriding.
 
-This lets you store different PA, EM, and retraction values for the same filament on different printers (e.g., a Prusa Core One vs. a Bambu H2D).
+### Per-Bed-Type Calibrations
 
-Leave fields blank to use the filament's base defaults. The INI export uses a single-section-per-filament architecture: each filament produces one `[filament:Name]` section with its base settings. Calibration overrides (EM, PA, max volumetric speed, retraction) are not embedded in the INI — PrusaSlicer Filament Edition fetches them dynamically via `GET /api/filaments/{id}/calibration` when you switch printer or nozzle.
+If you have defined bed types, a **bed type selector** appears within each nozzle section. Select a bed type (or "Any bed" for the default) to enter calibration values specific to that bed surface.
+
+This lets you store different temperatures, PA, EM, and retraction values for the same filament on different printer + nozzle + bed type combinations (e.g., smooth PEI on a Prusa Core One vs. textured PEI on a Bambu H2D).
+
+Leave fields blank to use the filament's base defaults. Top-level filament temperatures remain as manufacturer-recommended defaults. The INI export uses a single-section-per-filament architecture: each filament produces one `[filament:Name]` section with its base settings. Calibration overrides are not embedded in the INI — PrusaSlicer Filament Edition fetches them dynamically via `GET /api/filaments/{id}/calibration` when you switch printer or nozzle.
 
 ---
 
@@ -179,14 +207,15 @@ On the detail page:
 
 ## NFC Tags (Desktop App Only)
 
-The desktop app supports reading and writing OpenPrintTag NFC-V tags. See the [NFC documentation](nfc.md) for hardware requirements and setup.
+The desktop app supports reading and writing OpenPrintTag NFC-V tags and reading Bambu Lab MIFARE Classic spool tags. See the [NFC documentation](nfc.md) for hardware requirements and setup.
 
 ### Reading Tags
 
-Place a tag on the reader -- the app auto-reads it and shows a dialog:
+Place a tag on the reader -- the app auto-detects the tag type (OpenPrintTag or Bambu Lab) and reads it. A dialog appears showing:
 
 - **Match found**: Shows the matching filament with a link to view it
 - **No match**: Shows the decoded data with an option to create a new filament (form pre-filled with tag data)
+- **Bambu Lab spools**: Displays a "read-only" badge since Bambu tags cannot be written; also shows production date and filament length
 
 ### Writing Tags
 

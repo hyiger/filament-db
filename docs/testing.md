@@ -28,12 +28,14 @@ tests/
 ├── openprinttag-decode.test.ts # OpenPrintTag decoder tests (36 tests)
 ├── ndef.test.ts                # NDEF wrap/parse + format/erase tests (25 tests)
 ├── nfc-roundtrip.test.ts       # NFC encode→decode roundtrip tests (6 tests)
+├── bambu-tag.test.ts           # Bambu Lab MIFARE Classic tag decoder tests (33 tests)
 ├── resolveFilament.test.ts     # Parent/variant resolution + spool inheritance + hasVariants tests (25 tests)
 ├── parseIni.test.ts            # INI parser tests (18 tests)
 ├── prusament.test.ts           # Prusament spool data extraction tests (8 tests)
 ├── tdsExtractor.test.ts        # TDS AI extraction tests — Gemini/Claude/OpenAI providers, file uploads (14 tests)
 ├── apiErrorHandler.test.ts     # API error handler utility tests (10 tests)
-├── Filament.test.ts            # Filament model + spool CRUD + soft-delete + instanceId + variant + calibration tests (35 tests)
+├── Filament.test.ts            # Filament model + spool CRUD + soft-delete + instanceId + variant + calibration tests (37 tests)
+├── BedType.test.ts             # BedType model + validation + unique constraints + soft-delete tests (9 tests)
 ├── Printer.test.ts             # Printer model + unique constraints + soft-delete tests (12 tests)
 ├── Nozzle.test.ts              # Nozzle model + high-flow matching tests (12 tests)
 ├── mongodb.test.ts             # DB connection + migration tests (10 tests)
@@ -43,7 +45,7 @@ tests/
 └── openprinttagBrowser.test.ts # OpenPrintTag database browser + completeness scoring tests (36 tests)
 ```
 
-**Total: 443+ tests across 17 test files**
+**Total: 488 tests across 19 test files**
 
 ## Coverage Thresholds
 
