@@ -48,12 +48,21 @@ export interface IFilament extends Document {
   calibrations: {
     printer: mongoose.Types.ObjectId | null;
     nozzle: mongoose.Types.ObjectId;
+    bedType: mongoose.Types.ObjectId | null;
     extrusionMultiplier: number | null;
     maxVolumetricSpeed: number | null;
     pressureAdvance: number | null;
     retractLength: number | null;
     retractSpeed: number | null;
     retractLift: number | null;
+    nozzleTemp: number | null;
+    nozzleTempFirstLayer: number | null;
+    bedTemp: number | null;
+    bedTempFirstLayer: number | null;
+    chamberTemp: number | null;
+    fanMinSpeed: number | null;
+    fanMaxSpeed: number | null;
+    fanBridgeSpeed: number | null;
   }[];
   presets: {
     label: string;
@@ -125,12 +134,21 @@ const FilamentSchema = new Schema<IFilament>(
       {
         printer: { type: Schema.Types.ObjectId, ref: "Printer", default: null },
         nozzle: { type: Schema.Types.ObjectId, ref: "Nozzle", required: true },
+        bedType: { type: Schema.Types.ObjectId, ref: "BedType", default: null },
         extrusionMultiplier: { type: Number, default: null },
         maxVolumetricSpeed: { type: Number, default: null },
         pressureAdvance: { type: Number, default: null },
         retractLength: { type: Number, default: null },
         retractSpeed: { type: Number, default: null },
         retractLift: { type: Number, default: null },
+        nozzleTemp: { type: Number, default: null },
+        nozzleTempFirstLayer: { type: Number, default: null },
+        bedTemp: { type: Number, default: null },
+        bedTempFirstLayer: { type: Number, default: null },
+        chamberTemp: { type: Number, default: null },
+        fanMinSpeed: { type: Number, default: null },
+        fanMaxSpeed: { type: Number, default: null },
+        fanBridgeSpeed: { type: Number, default: null },
       },
     ],
     presets: [

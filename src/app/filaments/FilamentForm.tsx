@@ -103,6 +103,12 @@ interface NozzleOption {
   highFlow: boolean;
 }
 
+interface BedTypeOption {
+  _id: string;
+  name: string;
+  material: string;
+}
+
 interface CalibrationEntry {
   extrusionMultiplier: string;
   maxVolumetricSpeed: string;
@@ -110,6 +116,14 @@ interface CalibrationEntry {
   retractLength: string;
   retractSpeed: string;
   retractLift: string;
+  nozzleTemp: string;
+  nozzleTempFirstLayer: string;
+  bedTemp: string;
+  bedTempFirstLayer: string;
+  chamberTemp: string;
+  fanMinSpeed: string;
+  fanMaxSpeed: string;
+  fanBridgeSpeed: string;
 }
 
 interface PresetEntry {
@@ -161,7 +175,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
   const [nozzlesLoading, setNozzlesLoading] = useState(true);
   const [printers, setPrinters] = useState<PrinterOption[]>([]);
   const [printersLoading, setPrintersLoading] = useState(true);
+  const [bedTypes, setBedTypes] = useState<BedTypeOption[]>([]);
+  const [bedTypesLoading, setBedTypesLoading] = useState(true);
   const [selectedPrinter, setSelectedPrinter] = useState<string>("default");
+  const [selectedBedType, setSelectedBedType] = useState<string>("any");
   const [parentOptions, setParentOptions] = useState<ParentOption[]>([]);
   const [parentsLoading, setParentsLoading] = useState(true);
   const [parentSearch, setParentSearch] = useState("");
@@ -384,8 +401,25 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.vendor]);
 
-  const calKey = (printerId: string | null, nozzleId: string) =>
-    `${printerId || "default"}:${nozzleId}`;
+  const calKey = (printerId: string | null, nozzleId: string, bedTypeId: string | null = null) =>
+    `${printerId || "default"}:${nozzleId}:${bedTypeId || "any"}`;
+
+  const emptyCalibrationEntry: CalibrationEntry = {
+    extrusionMultiplier: "",
+    maxVolumetricSpeed: "",
+    pressureAdvance: "",
+    retractLength: "",
+    retractSpeed: "",
+    retractLift: "",
+    nozzleTemp: "",
+    nozzleTempFirstLayer: "",
+    bedTemp: "",
+    bedTempFirstLayer: "",
+    chamberTemp: "",
+    fanMinSpeed: "",
+    fanMaxSpeed: "",
+    fanBridgeSpeed: "",
+  };
 
   const getInitialCalibrations = (): Record<string, CalibrationEntry> => {
     const cals: Record<string, CalibrationEntry> = {};
@@ -396,13 +430,24 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
       const printerId = cal.printer
         ? (typeof cal.printer === "string" ? cal.printer : cal.printer._id)
         : null;
-      cals[calKey(printerId, nozzleId)] = {
+      const bedTypeId = cal.bedType
+        ? (typeof cal.bedType === "string" ? cal.bedType : cal.bedType._id)
+        : null;
+      cals[calKey(printerId, nozzleId, bedTypeId)] = {
         extrusionMultiplier: cal.extrusionMultiplier?.toString() || "",
         maxVolumetricSpeed: cal.maxVolumetricSpeed?.toString() || "",
         pressureAdvance: cal.pressureAdvance?.toString() || "",
         retractLength: cal.retractLength?.toString() || "",
         retractSpeed: cal.retractSpeed?.toString() || "",
         retractLift: cal.retractLift?.toString() || "",
+        nozzleTemp: cal.nozzleTemp?.toString() || "",
+        nozzleTempFirstLayer: cal.nozzleTempFirstLayer?.toString() || "",
+        bedTemp: cal.bedTemp?.toString() || "",
+        bedTempFirstLayer: cal.bedTempFirstLayer?.toString() || "",
+        chamberTemp: cal.chamberTemp?.toString() || "",
+        fanMinSpeed: cal.fanMinSpeed?.toString() || "",
+        fanMaxSpeed: cal.fanMaxSpeed?.toString() || "",
+        fanBridgeSpeed: cal.fanBridgeSpeed?.toString() || "",
       };
     }
     return cals;
@@ -448,14 +493,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     setCalibrations((prev) => ({
       ...prev,
       [key]: {
-        ...(prev[key] || {
-          extrusionMultiplier: "",
-          maxVolumetricSpeed: "",
-          pressureAdvance: "",
-          retractLength: "",
-          retractSpeed: "",
-          retractLift: "",
-        }),
+        ...(prev[key] || emptyCalibrationEntry),
         [field]: value,
       },
     }));
@@ -484,6 +522,19 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
       .then(setPrinters)
       .catch(() => { if (!ac.signal.aborted) addFetchError("printers"); })
       .finally(() => { if (!ac.signal.aborted) setPrintersLoading(false); });
+    return () => ac.abort();
+  }, []);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    fetch("/api/bed-types", { signal: ac.signal })
+      .then((r) => {
+        if (!r.ok) throw new Error();
+        return r.json();
+      })
+      .then(setBedTypes)
+      .catch(() => { if (!ac.signal.aborted) addFetchError("bed types"); })
+      .finally(() => { if (!ac.signal.aborted) setBedTypesLoading(false); });
     return () => ac.abort();
   }, []);
 
@@ -588,16 +639,25 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             return form.compatibleNozzles.includes(nozzleId);
           })
           .map(([key, cal]) => {
-            const [printerId, nozzleId] = key.split(":");
+            const [printerId, nozzleId, bedTypeId] = key.split(":");
             return {
               printer: printerId === "default" ? null : printerId,
               nozzle: nozzleId,
+              bedType: bedTypeId === "any" ? null : bedTypeId,
               extrusionMultiplier: parseNum(cal.extrusionMultiplier),
               maxVolumetricSpeed: parseNum(cal.maxVolumetricSpeed),
               pressureAdvance: parseNum(cal.pressureAdvance),
               retractLength: parseNum(cal.retractLength),
               retractSpeed: parseNum(cal.retractSpeed),
               retractLift: parseNum(cal.retractLift),
+              nozzleTemp: parseNum(cal.nozzleTemp),
+              nozzleTempFirstLayer: parseNum(cal.nozzleTempFirstLayer),
+              bedTemp: parseNum(cal.bedTemp),
+              bedTempFirstLayer: parseNum(cal.bedTempFirstLayer),
+              chamberTemp: parseNum(cal.chamberTemp),
+              fanMinSpeed: parseNum(cal.fanMinSpeed),
+              fanMaxSpeed: parseNum(cal.fanMaxSpeed),
+              fanBridgeSpeed: parseNum(cal.fanBridgeSpeed),
             };
           }),
         spoolWeight: parseNum(form.spoolWeight),
@@ -1669,22 +1729,49 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             </div>
           )}
 
+          {/* Bed type selector tabs */}
+          {!bedTypesLoading && bedTypes.length > 0 && (
+            <div className="flex flex-wrap gap-1 mb-4 border-b border-gray-200 dark:border-gray-700 pb-2">
+              <button
+                type="button"
+                onClick={() => setSelectedBedType("any")}
+                className={`px-3 py-1.5 text-sm rounded-t ${
+                  selectedBedType === "any"
+                    ? "bg-blue-600 text-white"
+                    : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+                }`}
+              >
+                {t("form.cal.anyBed")}
+              </button>
+              {bedTypes.map((b) => (
+                <button
+                  key={b._id}
+                  type="button"
+                  onClick={() => setSelectedBedType(b._id)}
+                  className={`px-3 py-1.5 text-sm rounded-t ${
+                    selectedBedType === b._id
+                      ? "bg-blue-600 text-white"
+                      : "bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700"
+                  }`}
+                >
+                  {b.name}
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="space-y-4">
             {form.compatibleNozzles.map((nozzleId) => {
               const nozzle = nozzles.find((n) => n._id === nozzleId);
               if (!nozzle) return null;
-              const key = calKey(selectedPrinter === "default" ? null : selectedPrinter, nozzleId);
-              const cal = calibrations[key] || {
-                extrusionMultiplier: "",
-                maxVolumetricSpeed: "",
-                pressureAdvance: "",
-                retractLength: "",
-                retractSpeed: "",
-                retractLift: "",
-              };
-              // Show default values as placeholders when viewing printer-specific calibrations
-              const defaultKey = calKey(null, nozzleId);
-              const defaultCal = selectedPrinter !== "default" ? calibrations[defaultKey] : undefined;
+              const printerId = selectedPrinter === "default" ? null : selectedPrinter;
+              const bedTypeId = selectedBedType === "any" ? null : selectedBedType;
+              const key = calKey(printerId, nozzleId, bedTypeId);
+              const cal = calibrations[key] || emptyCalibrationEntry;
+              // Show default values as placeholders when viewing printer/bed-specific calibrations
+              const defaultKey = calKey(null, nozzleId, null);
+              const isOverride = selectedPrinter !== "default" || selectedBedType !== "any";
+              const defaultCal = isOverride ? calibrations[defaultKey] : undefined;
               return (
                 <div
                   key={key}
@@ -1774,6 +1861,102 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                           updateCalibration(key, "retractLift", e.target.value)
                         }
                         placeholder={defaultCal?.retractLift || form.retractLift || t("form.base")}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Temperature overrides */}
+                  <p className="text-xs font-medium text-gray-500 mt-3 mb-2">{t("form.cal.tempOverrides")}</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t("form.cal.nozzleTemp")}</label>
+                      <input
+                        type="number"
+                        className={inputClass}
+                        value={cal.nozzleTemp}
+                        onChange={(e) => updateCalibration(key, "nozzleTemp", e.target.value)}
+                        placeholder={defaultCal?.nozzleTemp || form.temperatures.nozzle || t("form.base")}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t("form.cal.nozzleTempFirstLayer")}</label>
+                      <input
+                        type="number"
+                        className={inputClass}
+                        value={cal.nozzleTempFirstLayer}
+                        onChange={(e) => updateCalibration(key, "nozzleTempFirstLayer", e.target.value)}
+                        placeholder={defaultCal?.nozzleTempFirstLayer || form.temperatures.nozzleFirstLayer || t("form.base")}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t("form.cal.bedTemp")}</label>
+                      <input
+                        type="number"
+                        className={inputClass}
+                        value={cal.bedTemp}
+                        onChange={(e) => updateCalibration(key, "bedTemp", e.target.value)}
+                        placeholder={defaultCal?.bedTemp || form.temperatures.bed || t("form.base")}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t("form.cal.bedTempFirstLayer")}</label>
+                      <input
+                        type="number"
+                        className={inputClass}
+                        value={cal.bedTempFirstLayer}
+                        onChange={(e) => updateCalibration(key, "bedTempFirstLayer", e.target.value)}
+                        placeholder={defaultCal?.bedTempFirstLayer || form.temperatures.bedFirstLayer || t("form.base")}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t("form.cal.chamberTemp")}</label>
+                      <input
+                        type="number"
+                        className={inputClass}
+                        value={cal.chamberTemp}
+                        onChange={(e) => updateCalibration(key, "chamberTemp", e.target.value)}
+                        placeholder={defaultCal?.chamberTemp || t("form.base")}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Fan settings */}
+                  <p className="text-xs font-medium text-gray-500 mt-3 mb-2">{t("form.cal.fanSettings")}</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t("form.cal.fanMin")}</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        className={inputClass}
+                        value={cal.fanMinSpeed}
+                        onChange={(e) => updateCalibration(key, "fanMinSpeed", e.target.value)}
+                        placeholder={defaultCal?.fanMinSpeed || t("form.base")}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t("form.cal.fanMax")}</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        className={inputClass}
+                        value={cal.fanMaxSpeed}
+                        onChange={(e) => updateCalibration(key, "fanMaxSpeed", e.target.value)}
+                        placeholder={defaultCal?.fanMaxSpeed || t("form.base")}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">{t("form.cal.fanBridge")}</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        className={inputClass}
+                        value={cal.fanBridgeSpeed}
+                        onChange={(e) => updateCalibration(key, "fanBridgeSpeed", e.target.value)}
+                        placeholder={defaultCal?.fanBridgeSpeed || t("form.base")}
                       />
                     </div>
                   </div>

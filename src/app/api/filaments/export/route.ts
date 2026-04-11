@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import "@/models/Nozzle";
+import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { generatePrusaSlicerBundle } from "@/lib/prusaSlicerBundle";
 
@@ -13,6 +14,7 @@ export async function GET() {
       .sort({ name: 1 })
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")
+      .populate("calibrations.bedType")
       .lean();
 
     // Build a parent lookup for resolving variants
