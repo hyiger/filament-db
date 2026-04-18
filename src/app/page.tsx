@@ -469,7 +469,7 @@ export default function Home() {
           />
         </div>
       </td>
-      <td className="py-2 px-2 min-w-[200px]">
+      <td className="py-2 px-2 min-w-[260px] break-words">
         <Link
           href={`/filaments/${f._id}`}
           className="text-blue-600 hover:underline"
@@ -560,7 +560,7 @@ export default function Home() {
               />
             </div>
           </td>
-          <td className="py-2 px-2 min-w-[200px]">
+          <td className="py-2 px-2 min-w-[260px] break-words">
             <Link
               href={`/filaments/${f._id}`}
               className="text-blue-600 hover:underline"
@@ -831,7 +831,7 @@ export default function Home() {
         <p className="text-gray-500">{t("filaments.noResults")}</p>
       ) : (
         <div>
-          <table className="w-full text-sm border-collapse min-w-[800px]">
+          <table className="w-full text-sm border-collapse min-w-[900px]">
             <thead className="sticky z-10 bg-white dark:bg-gray-950 shadow-[0_1px_0_0_rgba(209,213,219,0.5)]" style={{ top: `${stickyHeaderHeight}px` }}>
               <tr className="border-b border-gray-300">
                 <th className="py-3 px-2 w-8">

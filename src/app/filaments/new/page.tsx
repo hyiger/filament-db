@@ -166,9 +166,12 @@ function NewFilamentContent() {
         .then((r) => (r.ok ? r.json() : null))
         .then((filament) => {
           if (filament) {
+            // Strip identity fields, but inherit the source's parent (or use source as parent)
+            // so the clone is registered as a variant.
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { _id, _variants, _inherited, parentId: _pid, createdAt, updatedAt, __v, ...rest } = filament;
-            setInitialData({ ...rest, name: `${rest.name} (${t("new.copySuffix")})` });
+            const { _id, _variants, _inherited, parentId: srcParentId, createdAt, updatedAt, __v, ...rest } = filament;
+            const parentId = srcParentId || _id;
+            setInitialData({ ...rest, parentId, name: `${rest.name} (${t("new.copySuffix")})` });
             setTitleKey("new.cloneTitle");
             setFormKey((k) => k + 1);
           }
@@ -479,10 +482,13 @@ function NewFilamentContent() {
       return;
     }
     const filament = await res.json();
-    // Strip identity fields — keep everything else as a template
+    // Strip identity fields — keep everything else as a template.
+    // Inherit the source's parent if it has one, otherwise use the source as the parent
+    // so the clone is registered as a variant.
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { _id, _variants, _inherited, parentId: _pid, createdAt, updatedAt, __v, ...rest } = filament;
-    setInitialData({ ...rest, name: `${rest.name} (${t("new.copySuffix")})` });
+    const { _id, _variants, _inherited, parentId: srcParentId, createdAt, updatedAt, __v, ...rest } = filament;
+    const parentId = srcParentId || _id;
+    setInitialData({ ...rest, parentId, name: `${rest.name} (${t("new.copySuffix")})` });
     setTitleKey("new.cloneTitle");
     setFormKey((k) => k + 1);
     toast(t("new.toast.populatedFromClone"));

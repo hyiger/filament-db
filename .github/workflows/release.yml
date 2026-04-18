@@ -14,9 +14,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS Intel — use macos-13 (last Intel runner) so the native module
+          # compiles natively for x86_64. Building x64 dmgs from an arm64 host
+          # produces dmgs that contain arm64 .node binaries (issue #105).
+          - os: macos-13
+            platform: mac
+            arch: x64
           - os: macos-latest
             platform: mac
-            arch: ""
+            arch: arm64
           - os: windows-latest
             platform: win
             arch: ""
@@ -81,8 +87,8 @@ jobs:
           npm run electron:fixlinks
           npm run electron:compile
 
-      - name: Rebuild native modules and package (default)
-        if: matrix.arch == '' || matrix.arch == 'x64'
+      - name: Rebuild native modules and package (default — host arch matches target)
+        if: matrix.platform != 'linux-arm64'
         run: |
           npm run electron:rebuild
           npx electron-builder --config electron-builder.yml ${{ matrix.arch != '' && format('--{0}', matrix.arch) || '' }}

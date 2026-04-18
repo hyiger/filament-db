@@ -1001,12 +1001,39 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div>
           <label className={labelClass}>{t("form.color")}</label>
-          <input
-            type="color"
-            className="w-full h-10 rounded border border-gray-300 cursor-pointer"
-            value={form.color}
-            onChange={(e) => setForm({ ...form, color: e.target.value })}
-          />
+          <div className="flex gap-2">
+            <input
+              type="color"
+              aria-label={t("form.color")}
+              className="h-10 w-12 rounded border border-gray-300 dark:border-gray-600 cursor-pointer bg-transparent flex-shrink-0"
+              value={form.color}
+              onChange={(e) => setForm({ ...form, color: e.target.value })}
+            />
+            <input
+              type="text"
+              inputMode="text"
+              className={`${inputClass} font-mono uppercase`}
+              value={form.color}
+              placeholder="#RRGGBB"
+              maxLength={7}
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                // Allow incremental typing: prepend # if missing, keep only hex chars
+                let v = raw.startsWith("#") ? raw : `#${raw}`;
+                v = "#" + v.slice(1).replace(/[^0-9a-fA-F]/g, "");
+                setForm({ ...form, color: v.slice(0, 7) });
+              }}
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                // Expand 3-digit shorthand on blur (e.g. #abc → #aabbcc)
+                const m = v.match(/^#([0-9a-fA-F]{3})$/);
+                if (m) {
+                  const [r, g, b] = m[1].split("");
+                  setForm({ ...form, color: `#${r}${r}${g}${g}${b}${b}` });
+                }
+              }}
+            />
+          </div>
         </div>
         <div>
           <label className={labelClass}>{t("form.colorName")}</label>
