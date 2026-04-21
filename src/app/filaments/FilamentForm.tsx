@@ -101,6 +101,7 @@ interface NozzleOption {
   diameter: number;
   type: string;
   highFlow: boolean;
+  printers?: { _id: string; name: string }[];
 }
 
 interface BedTypeOption {
@@ -1710,6 +1711,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                       HF
                     </span>
                   )}
+                  {n.printers && n.printers.length > 0 && (
+                    <span className="ml-1.5 text-xs text-indigo-700 dark:text-indigo-300">
+                      · {n.printers.map((p) => p.name).join(", ")}
+                    </span>
+                  )}
                 </span>
               </label>
             ))}
@@ -1809,6 +1815,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                     {nozzle.highFlow && (
                       <span className="ml-1.5 px-1.5 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 rounded text-xs">
                         HF
+                      </span>
+                    )}
+                    {nozzle.printers && nozzle.printers.length > 0 && (
+                      <span className="ml-1.5 text-xs font-normal text-indigo-700 dark:text-indigo-300">
+                        · {nozzle.printers.map((p) => p.name).join(", ")}
                       </span>
                     )}
                   </p>

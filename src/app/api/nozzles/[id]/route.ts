@@ -16,7 +16,16 @@ export async function GET(
     if (!nozzle) {
       return errorResponse("Not found", 404);
     }
-    return NextResponse.json(nozzle);
+    // Attach the list of printers this nozzle is installed in (reverse lookup
+    // through Printer.installedNozzles) so the edit form can show the current
+    // assignment.
+    const printers = await Printer.find({
+      _deletedAt: null,
+      installedNozzles: id,
+    })
+      .select("_id name")
+      .lean();
+    return NextResponse.json({ ...nozzle, printers });
   } catch (err) {
     return errorResponse("Failed to fetch nozzle", 500, getErrorMessage(err));
   }
@@ -44,6 +53,18 @@ export async function PUT(
     delete body.__v;
     delete body.instanceId;
     delete body.syncId;
+
+    // If the client sent `printerIds`, sync Printer.installedNozzles to match:
+    // any printer in the list gets this nozzle added, any other printer that
+    // currently has it installed gets it removed. This lets the nozzle edit
+    // form manage the assignment from the nozzle side while the Printer form
+    // continues to manage it from the printer side.
+    const printerIds: string[] | undefined = Array.isArray(body.printerIds)
+      ? body.printerIds
+      : undefined;
+    delete body.printerIds;
+    delete body.printers; // never persist the enrichment on the Nozzle doc
+
     const nozzle = await Nozzle.findOneAndUpdate(
       { _id: id, _deletedAt: null },
       body,
@@ -52,6 +73,22 @@ export async function PUT(
     if (!nozzle) {
       return errorResponse("Not found", 404);
     }
+
+    if (printerIds !== undefined) {
+      // Add this nozzle to every printer in the list (idempotent)
+      if (printerIds.length > 0) {
+        await Printer.updateMany(
+          { _id: { $in: printerIds }, _deletedAt: null },
+          { $addToSet: { installedNozzles: id } }
+        );
+      }
+      // Remove this nozzle from any other printer that currently has it
+      await Printer.updateMany(
+        { _id: { $nin: printerIds }, _deletedAt: null, installedNozzles: id },
+        { $pull: { installedNozzles: id } }
+      );
+    }
+
     return NextResponse.json(nozzle);
   } catch (err) {
     return errorResponse("Failed to update nozzle", 500, getErrorMessage(err));
