@@ -5,6 +5,7 @@ import NfcProvider from "./NfcProvider";
 import NfcReadDialog from "./NfcReadDialog";
 import ToastProvider from "./Toast";
 import ThemeProvider from "./ThemeProvider";
+import UpdateBanner from "./UpdateBanner";
 import { TranslationProvider } from "@/i18n/TranslationProvider";
 
 export default function ClientProviders({ children }: { children: ReactNode }) {
@@ -13,6 +14,7 @@ export default function ClientProviders({ children }: { children: ReactNode }) {
       <TranslationProvider>
         <ToastProvider>
           <NfcProvider>
+            <UpdateBanner />
             {children}
             <NfcReadDialog />
           </NfcProvider>

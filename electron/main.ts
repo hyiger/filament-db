@@ -5,6 +5,7 @@ import http from "http";
 import { NfcService } from "./nfc-service";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
+import { initAutoUpdater } from "./auto-updater";
 
 export type ConnectionMode = "atlas" | "offline" | "hybrid";
 
@@ -67,6 +68,9 @@ function createWindow(urlPath = "/") {
   });
 
   mainWindow.loadURL(getAppURL(urlPath));
+
+  // Start the auto-updater bound to this window. No-ops in dev.
+  initAutoUpdater(mainWindow);
 
   mainWindow.webContents.on("will-navigate", (event, url) => {
     const appUrl = getAppURL();
