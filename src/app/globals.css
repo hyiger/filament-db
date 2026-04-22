@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/**
+ * Dark mode is now class-based: the ThemeProvider adds `.dark` to <html>
+ * when either (a) the user picked dark mode explicitly, or (b) they picked
+ * "system" and the OS is in dark mode. Without the ThemeProvider mounted
+ * (SSR), the inline script in RootLayout sets the class before first paint
+ * to avoid FOUC.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
   --background: #ffffff;
   --foreground: #171717;
@@ -12,11 +21,9 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html.dark {
+  --background: #0a0a0a;
+  --foreground: #ededed;
 }
 
 body {
