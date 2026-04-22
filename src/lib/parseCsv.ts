@@ -20,12 +20,27 @@ export interface CsvParseOptions {
    * resulting row is an object keyed by header name. If false, rows are
    * returned as string[] arrays. */
   header?: boolean;
+  /** Cap on the number of data rows the parser will emit. Defaults to 10,000
+   * — enough for any realistic spool inventory paste, cheap to enforce, and
+   * prevents an accidental multi-MB export from locking the UI. Set
+   * explicitly to raise/lower. */
+  maxRows?: number;
+}
+
+/** Thrown when the input exceeds `maxRows`. Caller can distinguish this
+ * from a parse error by instanceof. */
+export class CsvRowLimitExceededError extends Error {
+  constructor(public readonly limit: number) {
+    super(`CSV exceeds maximum row count (${limit})`);
+    this.name = "CsvRowLimitExceededError";
+  }
 }
 
 export function parseCsv(
   input: string,
   opts: CsvParseOptions = { header: true },
 ): Array<Record<string, string>> | string[][] {
+  const maxRows = opts.maxRows ?? 10_000;
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -72,6 +87,7 @@ export function parseCsv(
       row = [];
       i++;
       if (input[i] === "\n") i++;
+      if (rows.length > maxRows) throw new CsvRowLimitExceededError(maxRows);
       continue;
     }
     if (ch === "\n") {
@@ -80,6 +96,7 @@ export function parseCsv(
       field = "";
       row = [];
       i++;
+      if (rows.length > maxRows) throw new CsvRowLimitExceededError(maxRows);
       continue;
     }
     field += ch;
@@ -90,6 +107,7 @@ export function parseCsv(
   if (field.length > 0 || row.length > 0) {
     row.push(field);
     rows.push(row);
+    if (rows.length > maxRows) throw new CsvRowLimitExceededError(maxRows);
   }
 
   // Strip outer whitespace from unquoted strings — we keep quoted values

@@ -31,10 +31,13 @@ export default function ShareManagementPage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [publishing, setPublishing] = useState(false);
-  const [origin, setOrigin] = useState("");
+  // Lazy initializer so the origin is captured once on first render without
+  // an effect. `window` is undefined during SSR, so fall back to empty.
+  const [origin] = useState<string>(() =>
+    typeof window !== "undefined" ? window.location.origin : "",
+  );
 
   useEffect(() => {
-    setOrigin(window.location.origin);
     const ac = new AbortController();
     Promise.all([
       fetch("/api/share", { signal: ac.signal }).then((r) => (r.ok ? r.json() : [])),

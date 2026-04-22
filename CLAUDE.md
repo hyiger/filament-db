@@ -29,14 +29,16 @@ npm run electron:build   # Full Electron build pipeline
 ## Project Layout
 
 ```
-src/app/            App Router pages + API routes
-src/components/     React components (NfcProvider, Toast, dialogs)
+src/app/            App Router pages + API routes (incl. v1.11: dashboard, locations, analytics, share, compare)
+src/app/api/        REST API (incl. v1.11: /locations, /print-history, /analytics, /share, /spools/import)
+src/components/     React components (NfcProvider, Toast, dialogs, ThemeProvider, UpdateBanner, AppNav)
 src/hooks/          Custom hooks (useNfc, useCurrency)
-src/lib/            Core logic (openprinttag CBOR, NDEF, TDS extraction, INI parser, PrusaSlicer bundle, OpenPrintTag DB browser)
-src/models/         Mongoose schemas (Filament, Nozzle, Printer, BedType)
+src/i18n/           Translations + provider (en, de)
+src/lib/            Core logic (openprinttag CBOR, NDEF, TDS extraction, INI parser, CSV parser, image compression, theme init script, spool validator, PrusaSlicer bundle, OpenPrintTag DB browser)
+src/models/         Mongoose schemas (Filament, Nozzle, Printer, BedType, Location, PrintHistory, SharedCatalog)
 src/types/          TypeScript type defs (electron.d.ts, filament.ts)
-electron/           Electron main process (main.ts, preload.ts, ndef.ts, bambu-tag.ts)
-tests/              Vitest tests (mirrors src structure)
+electron/           Electron main process (main.ts, preload.ts, ndef.ts, bambu-tag.ts, auto-updater.ts)
+tests/              Vitest tests — unit + Mongoose model + Next.js route (mirrors src structure)
 scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 ```
 
@@ -64,9 +66,9 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 
 ## Testing
 
-- 488 tests across 19 files
-- Coverage thresholds: 80% lines/statements, 90% functions, 75% branches
-- Setup file: `tests/setup.ts` (mongodb-memory-server)
+- 635+ tests across 35+ files (unit + Mongoose model + Next.js route handlers)
+- Coverage thresholds: 80% lines/statements, 90% functions, 75% branches (enforced on `src/lib/**` and `src/models/**`; `src/lib/compressImage.ts` is excluded because its main flow is DOM-only)
+- Setup file: `tests/setup.ts` (mongodb-memory-server). **Caveat**: setup wipes `mongoose.models` between tests; route-level tests that use `.populate(...)` must re-register models in `beforeEach` by calling `mongoose.model(name, schema)` directly (see `tests/locations-route.test.ts` for the pattern).
 - Tests run in CI on Node 20 and 22
 
 ## CI/CD
@@ -102,5 +104,17 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 - **Import**: `POST /api/openprinttag/import` with `{ slugs: [...] }` — upserts by name
 - **Completeness scoring**: 0–10 scale (color, density, print temps, bed temps, drying temp, hardness, TD, chamber, photos, url)
 - **Tiers**: rich (7–10 green), partial (4–6 yellow), stub (0–3 grey/dimmed)
+
+## v1.11 Features
+
+- **Locations**: `src/models/Location.ts` + `src/app/api/locations`. Spools reference `locationId`. Delete is refused while any spool still references the location.
+- **Print history**: `src/models/PrintHistory.ts` + `src/app/api/print-history`. Top-level job ledger. POST does two-pass validation (fetch all filaments → validate existence → mutate + save) wrapped in a Mongoose transaction when available, with a sequential-saves fallback for standalone mongod. Spool `usageHistory` entries it writes are tagged `source: "job"`.
+- **Analytics**: `src/app/api/analytics`. Aggregates from PrintHistory plus `spool.usageHistory` entries with `source === "manual"` (direct-edit entries only, to avoid double-counting job entries).
+- **Shared catalogs**: `src/models/SharedCatalog.ts` + `src/app/api/share`. Publishes a static snapshot of filaments + referenced nozzles/printers/bed-types under an auto-generated slug. Public GET uses `findOneAndUpdate($inc)` for atomic view counting.
+- **Dashboard / Compare / Analytics pages**: `/dashboard`, `/compare`, `/analytics` under `src/app/`.
+- **System theme**: `src/components/ThemeProvider.tsx` + `src/lib/themeInitScript.ts`. The init script runs inline before React mounts to avoid light-flash on dark-mode cold loads.
+- **Auto-update**: `electron/auto-updater.ts`. IPC handlers registered unconditionally so the renderer can always call `update-get-status`; mutating actions short-circuit to `{ ok: false, error: "dev-mode" }` when `!app.isPackaged`. The install dialog accepts an optional `strings` IPC argument so the OS-native dialog honours the user's current locale (renderer owns the i18n catalog).
+- **Spool bulk CSV import**: `src/app/api/spools/import`. Row limit 10,000 (enforced inside `parseCsv`, throws `CsvRowLimitExceededError`). Auto-creates locations by name.
+- **Spool validation**: `src/lib/validateSpoolBody.ts`. `photoDataUrl` MIME allow-list is narrow (JPEG/PNG/GIF/WebP/AVIF/HEIC) — SVG is explicitly rejected because `<script>` inside SVG can execute in some rendering contexts.
 
 Note: SLIX2 NFC tags have write-protected block 79. The NDEF wrapper reserves the last 4 bytes (`usableMemory = tagMemorySize - 4`).

@@ -43,6 +43,24 @@ Your configuration is stored in an encrypted local file (using `electron-store` 
 
 In offline and hybrid modes, the local database files are stored under the same directory in a `mongodb-data/` subfolder.
 
+## Auto-Update *(v1.11)*
+
+The packaged app polls GitHub Releases for new versions and surfaces a banner at the top of the window when an update is available. The lifecycle:
+
+1. **available** — the banner offers **Download** (fetches in the background) and **View release** (opens the GitHub release page).
+2. **downloading** — the banner shows a progress bar.
+3. **ready** — the banner offers **Restart & install**. Clicking brings up a native confirmation dialog whose strings are passed from the renderer so they honour your current locale.
+4. **error** — the banner switches to amber and exposes a **View release** link as a manual fallback.
+
+**Platform-specific behaviour:**
+- **macOS**: unsigned builds cannot auto-install through Gatekeeper; the app surfaces the "view release page" fallback so you can download the new DMG manually. Signed builds install cleanly.
+- **Windows**: unsigned NSIS installers auto-install fine. The user sees a SmartScreen warning the next time the app launches.
+- **Linux**: AppImage updates work when the app was launched via AppImageLauncher or a similar integration. `.deb` builds are not auto-updated — use your package manager instead.
+
+**How it finds updates:** the release workflow produces `latest-mac.yml`, `latest-linux.yml`, and `latest-linux-arm64.yml` on every `v*` tag. `electron-updater` reads those manifests from the GitHub release on startup (with a 20-second delay so the UI has time to mount) and every 6 hours while the app is running.
+
+**In dev:** the IPC handlers are always registered but short-circuit to `{ ok: false, error: "dev-mode" }` for mutating actions so the banner never triggers in a packaged-false run.
+
 ## Building from Source
 
 ### Development

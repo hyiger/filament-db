@@ -19,6 +19,14 @@ interface NfcStatus {
   tagUid: string | null;
 }
 
+interface UpdateInstallStrings {
+  title: string;
+  message: string;
+  detail: string;
+  installButton: string;
+  laterButton: string;
+}
+
 contextBridge.exposeInMainWorld("electronAPI", {
   // Config
   getConfig: () => ipcRenderer.invoke("get-config"),
@@ -74,7 +82,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   updateGetStatus: () => ipcRenderer.invoke("update-get-status"),
   updateCheck: () => ipcRenderer.invoke("update-check"),
   updateDownload: () => ipcRenderer.invoke("update-download"),
-  updateInstall: () => ipcRenderer.invoke("update-install"),
+  updateInstall: (strings?: UpdateInstallStrings) =>
+    ipcRenderer.invoke("update-install", strings),
   updateOpenReleasePage: () => ipcRenderer.invoke("update-open-release-page"),
   onUpdateStatus: (callback: (status: unknown) => void) => {
     const handler = (_event: IpcRendererEvent, status: unknown) => callback(status);
