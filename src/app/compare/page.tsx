@@ -76,11 +76,11 @@ function ComparePageInner() {
 
   useEffect(() => {
     if (selectedIds.length === 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing derived state
       setComparison([]);
       return;
     }
     const ac = new AbortController();
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch lifecycle state
     setLoading(true);
     fetch(`/api/filaments/compare?ids=${selectedIds.join(",")}`, { signal: ac.signal })
       .then((r) => (r.ok ? r.json() : []))
