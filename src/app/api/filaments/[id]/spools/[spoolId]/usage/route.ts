@@ -29,6 +29,11 @@ export async function POST(
   if (typeof body.grams !== "number" || !Number.isFinite(body.grams) || body.grams <= 0) {
     return errorResponse("grams must be a positive number", 400);
   }
+  // Label + notes length bounds keep pathological input from bloating the
+  // subdocument. 200 is generous for any realistic job name.
+  if (typeof body.jobLabel === "string" && body.jobLabel.length > 200) {
+    return errorResponse("jobLabel must be 200 characters or fewer", 400);
+  }
   const jobLabel = typeof body.jobLabel === "string" ? body.jobLabel : "";
   const date = body.date ? new Date(body.date) : new Date();
 
@@ -43,9 +48,9 @@ export async function POST(
     if (!filament) {
       return errorResponse("Filament or spool not found", 404);
     }
-    // spools is typed as ISpool[] in our interface but at runtime is a
-    // Mongoose DocumentArray that supports .id(). Use Array.find for a
-    // type-clean lookup, then cast for subdoc mutation.
+    // Array.find keeps the lookup strictly typed against our ISpool[]
+    // interface; Mongoose's runtime DocumentArray also exposes .id() but
+    // that's untyped in the interface and would need a cast to use.
     const spool = filament.spools.find((s) => String(s._id) === spoolId);
     if (!spool) {
       return errorResponse("Spool not found", 404);

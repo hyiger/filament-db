@@ -17,17 +17,24 @@ export async function GET(
     await dbConnect();
     const { slug } = await params;
 
-    const catalog = await SharedCatalog.findOne({ slug });
+    // Atomic find-and-increment. Using read-modify-write here (findOne +
+    // save) races under concurrent viewers: each reader sees the same count
+    // and increments it by one, so simultaneous hits silently drop updates.
+    // findOneAndUpdate with $inc is one round-trip and collision-safe.
+    const catalog = await SharedCatalog.findOneAndUpdate(
+      { slug },
+      { $inc: { viewCount: 1 } },
+      { new: true },
+    );
     if (!catalog) {
       return errorResponse("Shared catalog not found", 404);
     }
     if (catalog.expiresAt && catalog.expiresAt < new Date()) {
+      // We've already incremented the view count on an expired catalog;
+      // that's acceptable — analytics on unpublished shares is harmless
+      // and the alternative is a second round-trip to re-check expiry.
       return errorResponse("Shared catalog has expired", 410);
     }
-
-    // Increment view count (best-effort, not blocking on error)
-    catalog.viewCount = (catalog.viewCount || 0) + 1;
-    await catalog.save().catch(() => {});
 
     return NextResponse.json({
       slug: catalog.slug,

@@ -736,3 +736,141 @@ describe("backfillInstanceIds", () => {
     expect(count).toBe(0);
   });
 });
+
+describe("Filament Model — v1.11 spool fields", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    delete mongoose.models.Filament;
+    const schemas = (mongoose as unknown as Record<string, Record<string, unknown>>).modelSchemas;
+    if (schemas) delete schemas.Filament;
+    const mod = await import("@/models/Filament");
+    Filament = mod.default;
+  });
+
+  // v1.11 introduced several spool-level fields (location, photo, retired,
+  // dryCycles, usageHistory) plus filament-level lowStockThreshold. The
+  // rest of the app (analytics, low-stock chips, dry-reminder banner)
+  // relies on the exact shape; cover them at the model layer so a schema
+  // regression fails loudly rather than silently breaking downstream code.
+
+  it("persists spool location/photo/retired fields", async () => {
+    const filament = await Filament.create({
+      name: "Cabinet Spool",
+      vendor: "Test",
+      type: "PLA",
+      spools: [
+        {
+          label: "In cabinet",
+          totalWeight: 800,
+          locationId: new mongoose.Types.ObjectId(),
+          photoDataUrl: "data:image/jpeg;base64,/9j/4AAQ",
+          retired: true,
+        },
+      ],
+    });
+
+    const fresh = await Filament.findById(filament._id);
+    expect(fresh.spools[0].locationId).toBeDefined();
+    expect(fresh.spools[0].photoDataUrl).toBe("data:image/jpeg;base64,/9j/4AAQ");
+    expect(fresh.spools[0].retired).toBe(true);
+  });
+
+  it("defaults retired=false, photoDataUrl=null, locationId=null", async () => {
+    const filament = await Filament.create({
+      name: "v1.11 Defaults",
+      vendor: "Test",
+      type: "PLA",
+      spools: [{ label: "", totalWeight: 1000 }],
+    });
+    expect(filament.spools[0].retired).toBe(false);
+    expect(filament.spools[0].photoDataUrl).toBeNull();
+    expect(filament.spools[0].locationId).toBeNull();
+  });
+
+  it("appends dryCycles subdocuments", async () => {
+    const filament = await Filament.create({
+      name: "Dry Cycles",
+      vendor: "Test",
+      type: "PETG",
+      spools: [
+        {
+          label: "",
+          totalWeight: 900,
+          dryCycles: [
+            { date: new Date("2026-03-01"), tempC: 65, durationMin: 240, notes: "pre-print" },
+            { date: new Date("2026-03-15"), tempC: 65, durationMin: 240, notes: "" },
+          ],
+        },
+      ],
+    });
+    const fresh = await Filament.findById(filament._id);
+    expect(fresh.spools[0].dryCycles).toHaveLength(2);
+    expect(fresh.spools[0].dryCycles[0].tempC).toBe(65);
+    expect(fresh.spools[0].dryCycles[0].durationMin).toBe(240);
+    expect(fresh.spools[0].dryCycles[0].notes).toBe("pre-print");
+  });
+
+  it("appends usageHistory with all enum source values", async () => {
+    const filament = await Filament.create({
+      name: "Usage History",
+      vendor: "Test",
+      type: "PLA",
+      spools: [
+        {
+          label: "",
+          totalWeight: 800,
+          usageHistory: [
+            { grams: 50, jobLabel: "benchy", date: new Date(), source: "manual" },
+            { grams: 30, jobLabel: "calibration", date: new Date(), source: "slicer" },
+            { grams: 20, jobLabel: "via-history", date: new Date(), source: "job" },
+            { grams: 10, jobLabel: "nfc-scan", date: new Date(), source: "nfc" },
+          ],
+        },
+      ],
+    });
+    const fresh = await Filament.findById(filament._id);
+    expect(fresh.spools[0].usageHistory).toHaveLength(4);
+    expect(fresh.spools[0].usageHistory.map((u: { source: string }) => u.source)).toEqual([
+      "manual", "slicer", "job", "nfc",
+    ]);
+  });
+
+  it("rejects usageHistory.source values outside the enum", async () => {
+    await expect(
+      Filament.create({
+        name: "Bad Source",
+        vendor: "Test",
+        type: "PLA",
+        spools: [
+          {
+            totalWeight: 500,
+            usageHistory: [
+              { grams: 10, jobLabel: "x", date: new Date(), source: "bogus" },
+            ],
+          },
+        ],
+      }),
+    ).rejects.toThrow();
+  });
+
+  it("stores lowStockThreshold and rejects negatives", async () => {
+    const filament = await Filament.create({
+      name: "Low Stock",
+      vendor: "Test",
+      type: "PLA",
+      lowStockThreshold: 150,
+    });
+    expect(filament.lowStockThreshold).toBe(150);
+
+    await expect(
+      Filament.create({
+        name: "Negative Threshold",
+        vendor: "Test",
+        type: "PLA",
+        lowStockThreshold: -5,
+      }),
+    ).rejects.toThrow();
+  });
+});

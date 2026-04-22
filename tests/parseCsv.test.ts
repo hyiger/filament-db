@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCsv } from "@/lib/parseCsv";
+import { parseCsv, CsvRowLimitExceededError } from "@/lib/parseCsv";
 
 describe("parseCsv", () => {
   it("parses a basic header+rows CSV", () => {
@@ -77,5 +77,20 @@ describe("parseCsv", () => {
     const csv = "a,b\n  1  ,  2  \n";
     const rows = parseCsv(csv) as Array<Record<string, string>>;
     expect(rows[0]).toEqual({ a: "1", b: "2" });
+  });
+
+  it("throws CsvRowLimitExceededError beyond maxRows", () => {
+    // 6 physical rows (header + 5), limit 4 → we process 4 and then hit
+    // the cap. The exact count depends on header handling; what matters
+    // is that a malicious multi-million-row file doesn't silently load.
+    const csv = "a\n1\n2\n3\n4\n5\n";
+    expect(() => parseCsv(csv, { header: true, maxRows: 4 })).toThrow(CsvRowLimitExceededError);
+  });
+
+  it("allows a large but under-limit file when maxRows is raised", () => {
+    const body = Array.from({ length: 50 }, (_, i) => `${i}`).join("\n");
+    const csv = `a\n${body}\n`;
+    const rows = parseCsv(csv, { header: true, maxRows: 100 }) as Array<Record<string, string>>;
+    expect(rows).toHaveLength(50);
   });
 });

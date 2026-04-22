@@ -41,7 +41,17 @@ export default function UpdateBanner() {
   if (hidden) return null;
 
   const handleDownload = () => window.electronAPI!.updateDownload();
-  const handleInstall = () => window.electronAPI!.updateInstall();
+  const handleInstall = () =>
+    // Passing the renderer-localized strings through to the OS native
+    // dialog in the main process. Main has no i18n catalog; without this
+    // the dialog would hard-code English regardless of the user's locale.
+    window.electronAPI!.updateInstall({
+      title: t("update.dialog.title"),
+      message: t("update.dialog.message"),
+      detail: t("update.dialog.detail"),
+      installButton: t("update.dialog.install"),
+      laterButton: t("update.dialog.later"),
+    });
   const handleOpenPage = () => window.electronAPI!.updateOpenReleasePage();
   const handleDismiss = () => setDismissedVersion(status.version ?? "");
 

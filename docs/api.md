@@ -725,3 +725,201 @@ Tests a MongoDB Atlas connection. Send a JSON body:
 ```
 
 Returns `{ success: true, message: "Connection successful" }` on success, or a 400 error with the failure reason. Used by the desktop app's setup wizard to validate the connection before saving.
+
+---
+
+## Locations (v1.11)
+
+Locations are where physical spools live — dryboxes, shelves, cabinets, AMS units. Each spool may optionally reference a single location.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET`    | `/api/locations`        | List all non-deleted locations (sorted by name). Query params: `kind`, `stats=true` (attach spoolCount + totalGrams per location) |
+| `POST`   | `/api/locations`        | Create a location. Returns 409 on duplicate name. |
+| `GET`    | `/api/locations/:id`    | Fetch a single location |
+| `PUT`    | `/api/locations/:id`    | Update mutable fields |
+| `DELETE` | `/api/locations/:id`    | Soft-delete. Returns 400 if any spool still references this location — reassign those spools first. |
+
+### Location document shape
+
+```json
+{
+  "_id": "…",
+  "name": "Drybox #1",
+  "kind": "drybox",          // free-form: "drybox", "shelf", "cabinet", "printer"
+  "humidity": 35,             // optional %RH (0–100), user-updated
+  "notes": "Kept in the garage"
+}
+```
+
+### GET /api/locations?stats=true
+
+When stats are requested the response is enriched with live inventory counts, computed via a single aggregation over `Filament.spools`:
+
+```json
+[
+  { "_id": "…", "name": "Drybox #1", "kind": "drybox", "spoolCount": 3, "totalGrams": 2450 }
+]
+```
+
+Retired spools (`spool.retired === true`) are excluded from the counts.
+
+---
+
+## Print History (v1.11)
+
+Per-job ledger of print runs. Decrements spool weights, appends spool-level usageHistory entries tagged `source: "job"`, and keeps a top-level record for analytics.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET`  | `/api/print-history` | List print jobs (desc by `startedAt`). Query: `filamentId`, `printerId`, `limit` (default 100, max 1000) |
+| `POST` | `/api/print-history` | Record a print job (see body below) |
+
+### POST /api/print-history
+
+```json
+{
+  "jobLabel": "benchy.3mf",
+  "printerId": "optional-printer-id",
+  "startedAt": "2026-04-22T10:00:00Z",
+  "source": "prusaslicer",
+  "notes": "optional free-form",
+  "usage": [
+    { "filamentId": "…", "spoolId": "optional", "grams": 42 },
+    { "filamentId": "…", "grams": 8 }
+  ]
+}
+```
+
+Validations:
+- `jobLabel` is required, max 200 chars.
+- `usage` must have 1–100 entries, each with a valid `filamentId` and non-negative `grams`.
+- `notes` is truncated to 2000 chars.
+- `source` must be one of `manual | prusaslicer | orcaslicer | bambu | other`; unknown values default to `manual`.
+
+Every referenced filament is fetched and validated **before** any mutation. If any one is missing the whole request aborts with 404 and no spool weights are touched. The writes run inside a MongoDB transaction when the deployment supports it (Atlas always does), and fall back to sequential saves on standalone mongod.
+
+Response: the created `PrintHistory` document, `201`.
+
+---
+
+## Analytics (v1.11)
+
+Aggregates PrintHistory rows plus any manual per-spool usageHistory entries (the ones users logged directly on the spool UI without going through `/api/print-history`).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/analytics?days=30` | Usage analytics for the last N days (7–365, default 30) |
+
+### Response
+
+```json
+{
+  "since": "2026-03-23T00:00:00Z",
+  "days": 30,
+  "totals": { "grams": 3240, "cost": 82.50, "jobs": 17 },
+  "usageByDay": [{ "date": "2026-03-23", "grams": 0 }, …],
+  "byFilament":  [{ "_id": "…", "name": "PLA Black", "vendor": "Vendor A", "cost": 25, "grams": 1200 }, …],
+  "byVendor":    [{ "vendor": "Vendor A", "grams": 2100 }, …],
+  "byPrinter":   [{ "_id": "…", "name": "Core One", "grams": 1900 }, …]
+}
+```
+
+`usageHistory` entries are only pulled in when `source === "manual"`. Entries with `source: "job"` or `"slicer"` are owned by a PrintHistory row and already counted in the primary aggregation — including them here would double-count the same grams.
+
+---
+
+## Share (v1.11)
+
+Publishes a static snapshot of selected filaments with their referenced nozzles/printers/bed types, served under a short slug so another user (or another machine) can import the set.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET`    | `/api/share`            | List catalogs you've published (newest first) |
+| `POST`   | `/api/share`            | Publish a new catalog |
+| `GET`    | `/api/share/:slug`      | Public fetch. Atomically increments `viewCount`. Returns 410 when expired. |
+| `DELETE` | `/api/share/:slug`      | Unpublish |
+
+### POST /api/share
+
+```json
+{
+  "title": "My favourite PLAs",
+  "description": "Optional markdown-ish summary",
+  "filamentIds": ["…", "…"],
+  "expiresAt": "2026-12-31T00:00:00Z"
+}
+```
+
+Validations:
+- `title` is required, max 200 chars. `description` max 5000 chars.
+- `filamentIds` must have 1–500 entries.
+
+The server collects every nozzle / printer / bedType referenced by the selected filaments and denormalises all of them into the catalog payload. Later edits to the source filaments do not change what subsequent viewers download — the snapshot is static.
+
+### GET /api/share/:slug
+
+Response includes `viewCount` (incremented atomically via `$inc`) and the full denormalised payload. Use this as the source of truth for importing on the destination side.
+
+---
+
+## Spool Usage & Dry Cycles (v1.11)
+
+Per-spool ledger endpoints. Used by the spool detail UI to log direct weight consumption and dry-box cycles.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/filaments/:id/spools/:spoolId/usage`       | Log grams used on this spool. Decrements `totalWeight` (clamped at 0) and appends a `usageHistory` entry tagged `source: "manual"`. |
+| `POST` | `/api/filaments/:id/spools/:spoolId/dry-cycles`  | Log a drying cycle. All fields optional; `date` defaults to now. |
+
+### POST .../usage
+
+```json
+{ "grams": 120, "jobLabel": "optional", "date": "optional ISO string" }
+```
+
+`grams` must be > 0. `jobLabel` max 200 chars.
+
+### POST .../dry-cycles
+
+```json
+{ "date": "optional ISO", "tempC": 65, "durationMin": 240, "notes": "pre-print dry" }
+```
+
+All fields optional. Unspecified numeric fields are stored as `null`.
+
+---
+
+## Bulk Spool Import (CSV) (v1.11)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/spools/import` | Bulk-create spools from CSV |
+
+Accepts either:
+- `Content-Type: text/csv` with the raw CSV body
+- `Content-Type: application/json` with `{ "csv": "…" }`
+
+### Required columns
+
+- `filament` — matched to `Filament.name`; `vendor` disambiguates duplicates
+- `totalWeight` — non-negative grams
+
+### Optional columns
+
+- `vendor`, `label`, `lotNumber`, `purchaseDate` (ISO), `openedDate`, `location` (name — auto-created if it doesn't already exist)
+
+Each row is processed independently; per-row errors are reported in the response without aborting the batch:
+
+```json
+{
+  "imported": 12,
+  "failed": 2,
+  "results": [
+    { "row": 2, "ok": true, "filament": "PLA Black" },
+    { "row": 3, "ok": false, "error": "No filament named \"Unknown\"" }
+  ]
+}
+```
+
+A single request is capped at 10,000 rows by `parseCsv`; beyond that the request is rejected with 400.

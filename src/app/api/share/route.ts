@@ -48,8 +48,19 @@ export async function POST(request: NextRequest) {
   if (typeof body.title !== "string" || body.title.trim().length === 0) {
     return errorResponse("title is required", 400);
   }
+  // Length bounds keep a pathological publisher from writing multi-MB
+  // documents into the shared catalog; the UI surfaces far smaller caps.
+  if (body.title.length > 200) {
+    return errorResponse("title must be 200 characters or fewer", 400);
+  }
+  if (typeof body.description === "string" && body.description.length > 5000) {
+    return errorResponse("description must be 5000 characters or fewer", 400);
+  }
   if (!Array.isArray(body.filamentIds) || body.filamentIds.length === 0) {
     return errorResponse("filamentIds must be a non-empty array", 400);
+  }
+  if (body.filamentIds.length > 500) {
+    return errorResponse("filamentIds may contain at most 500 entries", 400);
   }
 
   try {

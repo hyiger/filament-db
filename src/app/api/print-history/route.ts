@@ -80,8 +80,18 @@ export async function POST(request: NextRequest) {
   if (typeof body.jobLabel !== "string" || body.jobLabel.trim() === "") {
     return errorResponse("jobLabel is required", 400);
   }
+  // Guard against arbitrarily long strings in fields that go straight to
+  // the database. 200 for labels, 2000 for free-form notes — these are
+  // generous for real usage but stop a malicious client from stuffing
+  // megabytes into a single document.
+  if (body.jobLabel.length > 200) {
+    return errorResponse("jobLabel must be 200 characters or fewer", 400);
+  }
   if (!Array.isArray(body.usage) || body.usage.length === 0) {
     return errorResponse("usage must be a non-empty array", 400);
+  }
+  if (body.usage.length > 100) {
+    return errorResponse("usage may contain at most 100 entries", 400);
   }
   for (const u of body.usage) {
     if (!u || typeof u !== "object") {
@@ -101,7 +111,7 @@ export async function POST(request: NextRequest) {
     ? body.source
     : "manual";
   const startedAt = body.startedAt ? new Date(body.startedAt) : new Date();
-  const notes = typeof body.notes === "string" ? body.notes : "";
+  const notes = typeof body.notes === "string" ? body.notes.slice(0, 2000) : "";
   const printerId =
     typeof body.printerId === "string" && mongoose.Types.ObjectId.isValid(body.printerId)
       ? body.printerId
@@ -182,21 +192,62 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Persist. We save filaments first so the PrintHistory record only exists
-    // when its referenced spool weights are already updated. A failure here
-    // can still leave filaments partially saved, but the PrintHistory row
-    // won't materialise, so the user sees a 500 and can retry — they won't
-    // see a ghost job in the history list.
-    await Promise.all(filaments.map((f) => f.save()));
+    // Persist. Prefer a transaction so a mid-write failure rolls back any
+    // already-applied spool mutations, matching the reviewer's ask for
+    // "transactions or defer all saves until validation passes" (we do
+    // both). Transactions require a replica set — Atlas deployments have
+    // this by default, local mongod may not. On a standalone server
+    // startSession().withTransaction() throws with a specific error, so
+    // we fall back to sequential saves. The fallback keeps the fix for
+    // the original reviewer concern (the 404-in-middle case) but can't
+    // protect against a mid-batch write failure on non-replicated setups.
+    let history;
+    try {
+      const session = await mongoose.startSession();
+      try {
+        await session.withTransaction(async () => {
+          for (const f of filaments) {
+            await f.save({ session });
+          }
+          const created = await PrintHistory.create(
+            [{
+              jobLabel: body.jobLabel.trim(),
+              printerId,
+              usage: resolvedUsage,
+              startedAt,
+              source,
+              notes,
+            }],
+            { session },
+          );
+          history = created[0];
+        });
+      } finally {
+        await session.endSession();
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isTxnUnsupported =
+        msg.includes("Transaction numbers are only allowed") ||
+        msg.includes("not supported on standalone") ||
+        msg.includes("IllegalOperation");
+      if (!isTxnUnsupported) throw err;
 
-    const history = await PrintHistory.create({
-      jobLabel: body.jobLabel.trim(),
-      printerId,
-      usage: resolvedUsage,
-      startedAt,
-      source,
-      notes,
-    });
+      // Fallback path for non-replicated mongod (offline/test). Sequential
+      // saves so a mid-loop failure is localized rather than spawning
+      // concurrent partial commits across the array.
+      for (const f of filaments) {
+        await f.save();
+      }
+      history = await PrintHistory.create({
+        jobLabel: body.jobLabel.trim(),
+        printerId,
+        usage: resolvedUsage,
+        startedAt,
+        source,
+        notes,
+      });
+    }
 
     return NextResponse.json(history, { status: 201 });
   } catch (err) {

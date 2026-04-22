@@ -39,7 +39,92 @@ function emit(update: Partial<UpdateInfo>) {
 export function initAutoUpdater(win: BrowserWindow) {
   mainWindow = win;
 
-  // In dev, electron-updater throws when app.isPackaged is false. Skip there.
+  // IPC surface is registered unconditionally so the dev-mode renderer can
+  // still call update-get-status (and friends) without crashing with
+  // "No handler registered". In dev, the mutating handlers short-circuit
+  // with a "dev-mode" error instead of touching the real updater, which
+  // electron-updater refuses to run when app.isPackaged is false.
+  ipcMain.handle("update-get-status", () => currentState);
+
+  ipcMain.handle("update-check", async () => {
+    if (!app.isPackaged) return { ok: false, error: "dev-mode" };
+    try {
+      await autoUpdater.checkForUpdates();
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      emit({ state: "error", error: message });
+      return { ok: false, error: message };
+    }
+  });
+
+  ipcMain.handle("update-download", async () => {
+    if (!app.isPackaged) return { ok: false, error: "dev-mode" };
+    if (currentState.state !== "available") return { ok: false, error: "No update available" };
+    try {
+      await autoUpdater.downloadUpdate();
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      emit({ state: "error", error: message });
+      return { ok: false, error: message };
+    }
+  });
+
+  ipcMain.handle("update-install", async (_evt, strings?: {
+    title?: string;
+    message?: string;
+    detail?: string;
+    installButton?: string;
+    laterButton?: string;
+  }) => {
+    if (!app.isPackaged) return { ok: false, error: "dev-mode" };
+    if (currentState.state !== "ready") {
+      return { ok: false, error: "No update ready to install" };
+    }
+    // Strings are optionally passed from the renderer so the OS-native
+    // dialog can honour the user's current locale. The renderer owns the
+    // i18n catalog; this module has no access to it. English defaults
+    // apply when no strings are provided (unit tests, older renderers).
+    const version = currentState.version ?? "";
+    const message = (strings?.message ?? `Install Filament DB v{version}?`).replace(
+      "{version}",
+      version,
+    );
+    const choice = await dialog.showMessageBox(mainWindow!, {
+      type: "info",
+      title: strings?.title ?? "Install update",
+      message,
+      detail:
+        strings?.detail ??
+        "The app will restart to apply the update. Any unsaved work may be lost.",
+      buttons: [
+        strings?.installButton ?? "Restart & install",
+        strings?.laterButton ?? "Later",
+      ],
+      defaultId: 0,
+      cancelId: 1,
+    });
+    if (choice.response === 0) {
+      setImmediate(() => autoUpdater.quitAndInstall(false, true));
+    }
+    return { ok: true };
+  });
+
+  // Opens the GitHub release page — useful for macOS where unsigned auto-
+  // install is blocked by Gatekeeper and the user has to download manually.
+  ipcMain.handle("update-open-release-page", async () => {
+    const version = currentState.version;
+    const url = version
+      ? `https://github.com/hyiger/filament-db/releases/tag/v${version}`
+      : "https://github.com/hyiger/filament-db/releases/latest";
+    await shell.openExternal(url);
+    return { ok: true };
+  });
+
+  // In dev, electron-updater throws when app.isPackaged is false. Skip the
+  // listener + polling setup; the stub handlers above keep the renderer
+  // happy without touching the real updater.
   if (!app.isPackaged) {
     emit({ state: "idle" });
     return;
@@ -79,58 +164,4 @@ export function initAutoUpdater(win: BrowserWindow) {
     () => autoUpdater.checkForUpdates().catch(() => {}),
     6 * 60 * 60 * 1000,
   );
-
-  // IPC surface for the renderer. Matches the shape used elsewhere in this
-  // file — one handler per action, all argument-validated.
-  ipcMain.handle("update-get-status", () => currentState);
-  ipcMain.handle("update-check", async () => {
-    try {
-      await autoUpdater.checkForUpdates();
-      return { ok: true };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      emit({ state: "error", error: message });
-      return { ok: false, error: message };
-    }
-  });
-  ipcMain.handle("update-download", async () => {
-    if (currentState.state !== "available") return { ok: false, error: "No update available" };
-    try {
-      await autoUpdater.downloadUpdate();
-      return { ok: true };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      emit({ state: "error", error: message });
-      return { ok: false, error: message };
-    }
-  });
-  ipcMain.handle("update-install", async () => {
-    if (currentState.state !== "ready") {
-      return { ok: false, error: "No update ready to install" };
-    }
-    const choice = await dialog.showMessageBox(mainWindow!, {
-      type: "info",
-      title: "Install update",
-      message: `Install Filament DB v${currentState.version}?`,
-      detail:
-        "The app will restart to apply the update. Any unsaved work may be lost.",
-      buttons: ["Restart & install", "Later"],
-      defaultId: 0,
-      cancelId: 1,
-    });
-    if (choice.response === 0) {
-      setImmediate(() => autoUpdater.quitAndInstall(false, true));
-    }
-    return { ok: true };
-  });
-  // Opens the GitHub release page — useful for macOS where unsigned auto-
-  // install is blocked by Gatekeeper and the user has to download manually.
-  ipcMain.handle("update-open-release-page", async () => {
-    const version = currentState.version;
-    const url = version
-      ? `https://github.com/hyiger/filament-db/releases/tag/v${version}`
-      : "https://github.com/hyiger/filament-db/releases/latest";
-    await shell.openExternal(url);
-    return { ok: true };
-  });
 }
