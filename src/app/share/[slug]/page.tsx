@@ -6,6 +6,31 @@ import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
+interface SharedFilament {
+  _id: string;
+  name: string;
+  vendor: string;
+  type: string;
+  color: string;
+  cost?: number | null;
+  density?: number | null;
+  temperatures?: { nozzle?: number | null; bed?: number | null };
+  compatibleNozzles?: string[];
+  calibrations?: {
+    nozzle?: string | null;
+    printer?: string | null;
+    bedType?: string | null;
+    [k: string]: unknown;
+  }[];
+  [k: string]: unknown;
+}
+
+interface SharedRef {
+  _id: string;
+  name: string;
+  [k: string]: unknown;
+}
+
 interface SharedPayload {
   slug: string;
   title: string;
@@ -15,19 +40,10 @@ interface SharedPayload {
   payload: {
     version: number;
     createdAt: string;
-    filaments: {
-      _id: string;
-      name: string;
-      vendor: string;
-      type: string;
-      color: string;
-      cost?: number | null;
-      density?: number | null;
-      temperatures?: { nozzle?: number | null; bed?: number | null };
-    }[];
-    nozzles?: unknown[];
-    printers?: unknown[];
-    bedTypes?: unknown[];
+    filaments: SharedFilament[];
+    nozzles?: SharedRef[];
+    printers?: SharedRef[];
+    bedTypes?: SharedRef[];
   };
 }
 
@@ -79,16 +95,107 @@ export default function SharedCatalogPage() {
     setImporting(true);
     try {
       const filtered = data.payload.filaments.filter((f) => selectedIds.has(f._id));
-      // Reuse the import-JSON handler on the filaments endpoint via a
-      // multipart-style payload. Simpler: POST one at a time, letting the
-      // server's duplicate-key handler surface conflicts.
+
+      // Figure out which nozzle / printer / bedType references are actually
+      // used by the filaments the user chose. We don't rehydrate unused
+      // records — that would pollute the destination database with clutter
+      // the importer didn't opt into.
+      const neededNozzleIds = new Set<string>();
+      const neededPrinterIds = new Set<string>();
+      const neededBedTypeIds = new Set<string>();
+      for (const f of filtered) {
+        for (const nid of f.compatibleNozzles || []) {
+          if (nid) neededNozzleIds.add(String(nid));
+        }
+        for (const cal of f.calibrations || []) {
+          if (cal.nozzle) neededNozzleIds.add(String(cal.nozzle));
+          if (cal.printer) neededPrinterIds.add(String(cal.printer));
+          if (cal.bedType) neededBedTypeIds.add(String(cal.bedType));
+        }
+      }
+
+      // Helper: POST one reference record; if it 409s (existing record
+      // with the same unique key), GET the destination's matching record
+      // by name and use that _id instead. Falls back to the source _id
+      // only if both the POST and the duplicate-resolution lookup fail
+      // — in which case the resulting filament calibration ref will still
+      // dangle, but that's no worse than before this fix.
+      async function rehydrate(
+        endpoint: string,
+        records: SharedRef[],
+        idSet: Set<string>,
+      ): Promise<Map<string, string>> {
+        const map = new Map<string, string>();
+        for (const r of records) {
+          if (!idSet.has(String(r._id))) continue;
+          const res = await fetch(endpoint, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...r, _id: undefined }),
+          });
+          if (res.ok) {
+            const created = await res.json();
+            map.set(String(r._id), String(created._id));
+            continue;
+          }
+          if (res.status === 409) {
+            // Same-named record already exists on the destination. Look it
+            // up so we can reuse its _id rather than leaving a dangling ref.
+            const listRes = await fetch(endpoint);
+            if (listRes.ok) {
+              const list: SharedRef[] = await listRes.json();
+              const match = list.find((x) => x.name === r.name);
+              if (match) {
+                map.set(String(r._id), String(match._id));
+                continue;
+              }
+            }
+          }
+          // Last-resort: keep the source _id. Mapping below will drop any
+          // still-unresolved references rather than write an invalid
+          // ObjectId into the filament.
+        }
+        return map;
+      }
+
+      const [nozzleMap, printerMap, bedTypeMap] = await Promise.all([
+        rehydrate("/api/nozzles", data.payload.nozzles ?? [], neededNozzleIds),
+        rehydrate("/api/printers", data.payload.printers ?? [], neededPrinterIds),
+        rehydrate("/api/bed-types", data.payload.bedTypes ?? [], neededBedTypeIds),
+      ]);
+
+      // Remap every id reference on each filament so the destination
+      // calibrations/compatibleNozzles point at real local records.
+      // Unresolved ids are dropped — better a missing reference than a
+      // pointer to a random document on the destination.
+      const remapped = filtered.map((f) => {
+        const compatibleNozzles = (f.compatibleNozzles || [])
+          .map((nid) => nozzleMap.get(String(nid)))
+          .filter((x): x is string => Boolean(x));
+        const calibrations = (f.calibrations || [])
+          .map((cal) => ({
+            ...cal,
+            nozzle: cal.nozzle ? nozzleMap.get(String(cal.nozzle)) ?? null : null,
+            printer: cal.printer ? printerMap.get(String(cal.printer)) ?? null : null,
+            bedType: cal.bedType ? bedTypeMap.get(String(cal.bedType)) ?? null : null,
+          }))
+          // Calibrations require a nozzle; drop any that we couldn't map.
+          .filter((cal) => cal.nozzle);
+        return {
+          ...f,
+          _id: undefined,
+          compatibleNozzles,
+          calibrations,
+        };
+      });
+
       let created = 0;
       const conflicts: string[] = [];
-      for (const f of filtered) {
+      for (const f of remapped) {
         const res = await fetch("/api/filaments", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...f, _id: undefined }),
+          body: JSON.stringify(f),
         });
         if (res.ok) {
           created++;

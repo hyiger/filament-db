@@ -95,13 +95,17 @@ export async function GET(request: NextRequest) {
 
     // Also incorporate per-spool manual usage entries that don't have a
     // matching PrintHistory record — users who log usage directly on a
-    // spool shouldn't disappear from analytics.
+    // spool (not through /api/print-history) shouldn't disappear from
+    // analytics.
     for (const f of filaments) {
       for (const s of f.spools || []) {
         for (const u of s.usageHistory || []) {
           const uDate = new Date(u.date as unknown as string | Date);
           if (uDate < since) continue;
-          // Skip slicer-sourced entries; those are already counted via PrintHistory.
+          // Only "manual" means "logged directly on the spool UI without a
+          // PrintHistory record". "job" and "slicer" entries are owned by a
+          // PrintHistory row and already counted in the first loop above;
+          // including them here would double-count the same grams.
           if (u.source !== "manual") continue;
           const dayKey = uDate.toISOString().slice(0, 10);
           byDay.set(dayKey, (byDay.get(dayKey) ?? 0) + u.grams);

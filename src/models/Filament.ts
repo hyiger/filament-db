@@ -21,7 +21,17 @@ export interface IUsageEntry {
   /** Free-form job label: slicer filename, "calibration", printer name, etc. */
   jobLabel: string;
   date: Date;
-  source: "manual" | "slicer" | "nfc";
+  /**
+   * Origin of the entry:
+   *   - "manual": user logged usage directly on the spool UI (NOT via /api/print-history).
+   *   - "slicer": a slicer integration posted through /api/print-history with a slicer source.
+   *   - "job":    anything else that went through /api/print-history (including
+   *               a user-posted "manual" job). Analytics treats "job" + "slicer" as
+   *               already-accounted-for via PrintHistory records, so it only
+   *               picks up "manual" entries from the fallback loop.
+   *   - "nfc":    written by an NFC read.
+   */
+  source: "manual" | "slicer" | "job" | "nfc";
 }
 
 export interface ISpool {
@@ -223,7 +233,7 @@ const FilamentSchema = new Schema<IFilament>(
             date: { type: Date, required: true, default: Date.now },
             source: {
               type: String,
-              enum: ["manual", "slicer", "nfc"],
+              enum: ["manual", "slicer", "job", "nfc"],
               default: "manual",
             },
           },
