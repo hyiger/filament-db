@@ -39,7 +39,10 @@ describe("snapshot route — bedTypes round-trip", () => {
     const res = await GET();
     const snapshot = await res.json();
 
-    expect(snapshot.version).toBe(2);
+    // Snapshot version bumps whenever a new collection joins the payload —
+    // v3 added locations + printHistory on top of v2's bedTypes. Older
+    // versions still restore (see the v1 test below).
+    expect(snapshot.version).toBeGreaterThanOrEqual(2);
     expect(Array.isArray(snapshot.collections.bedTypes)).toBe(true);
     expect(snapshot.collections.bedTypes).toHaveLength(2);
     const names = snapshot.collections.bedTypes.map((b: { name: string }) => b.name).sort();
