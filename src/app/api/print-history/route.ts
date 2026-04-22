@@ -53,13 +53,17 @@ export async function GET(request: NextRequest) {
  *
  * For each usage entry:
  *   - Appends a usageHistory entry to the referenced spool (or to the first
- *     non-retired spool if no spoolId is given).
+ *     non-retired spool if no spoolId is given). These are tagged with
+ *     `source: "job"` so analytics knows they're already represented in the
+ *     PrintHistory record and doesn't double-count them.
  *   - Decrements spool.totalWeight by `grams` (clamped at 0 — prevents
  *     negative weights when a bad estimate comes in).
  * Then persists the top-level PrintHistory record for queryable reporting.
  *
- * On any spool-update error, the whole operation aborts and the DB is left
- * untouched.
+ * Atomicity: all referenced filaments are fetched and validated FIRST. Only
+ * if every one is found do we apply the in-memory mutations and save. This
+ * prevents a partial write where spool weights mutate but no PrintHistory
+ * record gets created (e.g. because a later usage entry 404s).
  */
 export async function POST(request: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -106,25 +110,38 @@ export async function POST(request: NextRequest) {
   try {
     await dbConnect();
 
-    // Apply each usage entry: append to spool.usageHistory + decrement weight.
+    const usage = body.usage as {
+      filamentId: string;
+      spoolId?: string;
+      grams: number;
+    }[];
+
+    // Pass 1: fetch every referenced filament up front so we can validate
+    // existence before mutating anything. A missing filament aborts the
+    // whole request with 404 and the DB stays untouched.
+    const uniqueIds = Array.from(new Set(usage.map((u) => u.filamentId)));
+    const filaments = await Filament.find({
+      _id: { $in: uniqueIds },
+      _deletedAt: null,
+    });
+    const byId = new Map(filaments.map((f) => [String(f._id), f]));
+    for (const u of usage) {
+      if (!byId.has(u.filamentId)) {
+        return errorResponse(`Filament not found: ${u.filamentId}`, 404);
+      }
+    }
+
+    // Pass 2: apply mutations to in-memory docs. A single filament can be
+    // referenced by multiple usage entries in one job, so we mutate the
+    // shared doc instance and save each filament once at the end.
     const resolvedUsage: {
       filamentId: mongoose.Types.ObjectId;
       spoolId: mongoose.Types.ObjectId | null;
       grams: number;
     }[] = [];
 
-    for (const u of body.usage as {
-      filamentId: string;
-      spoolId?: string;
-      grams: number;
-    }[]) {
-      const filament = await Filament.findOne({
-        _id: u.filamentId,
-        _deletedAt: null,
-      });
-      if (!filament) {
-        return errorResponse(`Filament not found: ${u.filamentId}`, 404);
-      }
+    for (const u of usage) {
+      const filament = byId.get(u.filamentId)!;
 
       // Pick the target spool: explicit spoolId, else first non-retired spool
       // with non-null totalWeight, else the first non-retired spool.
@@ -138,7 +155,6 @@ export async function POST(request: NextRequest) {
       }
 
       if (spool) {
-        // Decrement weight (clamp at 0). Skip if weight not tracked.
         if (typeof spool.totalWeight === "number") {
           spool.totalWeight = Math.max(0, spool.totalWeight - u.grams);
         }
@@ -147,7 +163,10 @@ export async function POST(request: NextRequest) {
           grams: u.grams,
           jobLabel: body.jobLabel.trim(),
           date: startedAt,
-          source: source === "manual" ? "manual" : "slicer",
+          // "job" tags this as owned by a PrintHistory record. Analytics
+          // filters these out of the per-spool fallback so totals aren't
+          // double-counted against the aggregated PrintHistory pass.
+          source: "job",
         });
         resolvedUsage.push({
           filamentId: filament._id,
@@ -155,16 +174,20 @@ export async function POST(request: NextRequest) {
           grams: u.grams,
         });
       } else {
-        // No spools at all — still record the usage at the filament level
         resolvedUsage.push({
           filamentId: filament._id,
           spoolId: null,
           grams: u.grams,
         });
       }
-
-      await filament.save();
     }
+
+    // Persist. We save filaments first so the PrintHistory record only exists
+    // when its referenced spool weights are already updated. A failure here
+    // can still leave filaments partially saved, but the PrintHistory row
+    // won't materialise, so the user sees a 500 and can retry — they won't
+    // see a ghost job in the history list.
+    await Promise.all(filaments.map((f) => f.save()));
 
     const history = await PrintHistory.create({
       jobLabel: body.jobLabel.trim(),
