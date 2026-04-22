@@ -19,6 +19,10 @@ export type SpoolValidation =
       lotNumber?: string | null;
       purchaseDate?: string | null;
       openedDate?: string | null;
+      // v1.11 additions
+      locationId?: string | null;
+      photoDataUrl?: string | null;
+      retired?: boolean;
     }
   | { ok: false; error: string };
 
@@ -75,6 +79,43 @@ export function validateSpoolBody(
         return { ok: false, error: `${field} must be a string or null` };
       }
     }
+  }
+
+  // locationId: string (an ObjectId) or null
+  if (b.locationId !== undefined) {
+    if (b.locationId === null) {
+      result.locationId = null;
+    } else if (typeof b.locationId === "string") {
+      result.locationId = b.locationId;
+    } else {
+      return { ok: false, error: "locationId must be a string or null" };
+    }
+  }
+
+  // photoDataUrl: data URL string (roughly validated) or null. A 5MB hard
+  // cap here is a safety net — the UI compresses to ~200KB.
+  if (b.photoDataUrl !== undefined) {
+    if (b.photoDataUrl === null) {
+      result.photoDataUrl = null;
+    } else if (typeof b.photoDataUrl === "string") {
+      if (b.photoDataUrl.length > 5 * 1024 * 1024) {
+        return { ok: false, error: "photoDataUrl exceeds 5MB limit" };
+      }
+      if (b.photoDataUrl !== "" && !/^data:image\/[a-z.+-]+;base64,/i.test(b.photoDataUrl)) {
+        return { ok: false, error: "photoDataUrl must be an image data URL" };
+      }
+      result.photoDataUrl = b.photoDataUrl === "" ? null : b.photoDataUrl;
+    } else {
+      return { ok: false, error: "photoDataUrl must be a string or null" };
+    }
+  }
+
+  // retired: boolean
+  if (b.retired !== undefined) {
+    if (typeof b.retired !== "boolean") {
+      return { ok: false, error: "retired must be a boolean" };
+    }
+    result.retired = b.retired;
   }
 
   return result;
