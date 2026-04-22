@@ -67,4 +67,20 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.removeListener("nfc-tag-detected", handler);
     };
   },
+
+  // Auto-update (Electron only). State lifecycle:
+  //   idle → checking → (available | not-available) → downloading → ready
+  //                                                                ↳ error
+  updateGetStatus: () => ipcRenderer.invoke("update-get-status"),
+  updateCheck: () => ipcRenderer.invoke("update-check"),
+  updateDownload: () => ipcRenderer.invoke("update-download"),
+  updateInstall: () => ipcRenderer.invoke("update-install"),
+  updateOpenReleasePage: () => ipcRenderer.invoke("update-open-release-page"),
+  onUpdateStatus: (callback: (status: unknown) => void) => {
+    const handler = (_event: IpcRendererEvent, status: unknown) => callback(status);
+    ipcRenderer.on("update-status", handler);
+    return () => {
+      ipcRenderer.removeListener("update-status", handler);
+    };
+  },
 });

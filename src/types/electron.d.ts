@@ -40,6 +40,22 @@ interface ElectronAPI {
     tagUid: string | null;
   }) => void) => () => void;
   onNfcTagRead: (callback: (data: unknown) => void) => () => void;
+
+  // Auto-update
+  updateGetStatus: () => Promise<UpdateStatus>;
+  updateCheck: () => Promise<{ ok: boolean; error?: string }>;
+  updateDownload: () => Promise<{ ok: boolean; error?: string }>;
+  updateInstall: () => Promise<{ ok: boolean; error?: string }>;
+  updateOpenReleasePage: () => Promise<{ ok: boolean }>;
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void;
+}
+
+export interface UpdateStatus {
+  state: "idle" | "checking" | "available" | "downloading" | "ready" | "error" | "not-available";
+  version?: string;
+  releaseNotes?: string;
+  progress?: { percent: number; bytesPerSecond: number };
+  error?: string;
 }
 
 declare global {
