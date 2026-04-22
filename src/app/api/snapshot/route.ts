@@ -5,6 +5,8 @@ import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
+import Location from "@/models/Location";
+import PrintHistory from "@/models/PrintHistory";
 
 // Simple in-memory mutex to prevent concurrent restore operations.
 // Limitation: this only guards within a single Node.js process. In a
@@ -15,8 +17,27 @@ let restoreInProgress = false;
 
 const OID_RE = /^[a-f0-9]{24}$/i;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
-const OID_FIELDS = new Set(["_id", "parentId", "printer", "nozzle", "bedType"]);
-const DATE_FIELDS = new Set(["createdAt", "updatedAt", "_deletedAt"]);
+const OID_FIELDS = new Set([
+  "_id",
+  "parentId",
+  "printer",
+  "nozzle",
+  "bedType",
+  "locationId",
+  "printerId",
+  "filamentId",
+  "spoolId",
+]);
+const DATE_FIELDS = new Set([
+  "createdAt",
+  "updatedAt",
+  "_deletedAt",
+  "purchaseDate",
+  "openedDate",
+  "startedAt",
+  "date",
+  "expiresAt",
+]);
 
 /**
  * Recursively restore ObjectId and Date fields that were serialized as strings.
@@ -60,24 +81,29 @@ function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
 export async function GET() {
   await dbConnect();
 
-  const [filaments, nozzles, printers, bedTypes] = await Promise.all([
-    Filament.find({}).lean(),
-    Nozzle.find({}).lean(),
-    Printer.find({}).lean(),
-    BedType.find({}).lean(),
-  ]);
+  const [filaments, nozzles, printers, bedTypes, locations, printHistory] =
+    await Promise.all([
+      Filament.find({}).lean(),
+      Nozzle.find({}).lean(),
+      Printer.find({}).lean(),
+      BedType.find({}).lean(),
+      Location.find({}).lean(),
+      PrintHistory.find({}).lean(),
+    ]);
 
-  // Snapshot version bumped to 2 to signal that the bedTypes collection is
-  // present. Restores of version-1 snapshots still work — bedTypes will be
-  // empty in that case — but clients can detect missing data and warn.
+  // Snapshot version 3 adds locations + printHistory. v2 snapshots (with
+  // bedTypes but no locations/printHistory) still restore cleanly. v1
+  // snapshots (without bedTypes either) also still restore.
   const snapshot = {
-    version: 2,
+    version: 3,
     createdAt: new Date().toISOString(),
     collections: {
       filaments,
       nozzles,
       printers,
       bedTypes,
+      locations,
+      printHistory,
     },
   };
 
@@ -128,6 +154,8 @@ async function restoreSnapshot(request: NextRequest) {
       nozzles?: unknown[];
       printers?: unknown[];
       bedTypes?: unknown[];
+      locations?: unknown[];
+      printHistory?: unknown[];
     };
   };
 
@@ -178,14 +206,25 @@ async function restoreSnapshot(request: NextRequest) {
     nozzles = [],
     printers = [],
     bedTypes = [],
+    locations = [],
+    printHistory = [],
   } = snapshot.collections;
 
   // --- Safety: snapshot the current DB so we can roll back on failure ---
-  const [backupFilaments, backupNozzles, backupPrinters, backupBedTypes] = await Promise.all([
+  const [
+    backupFilaments,
+    backupNozzles,
+    backupPrinters,
+    backupBedTypes,
+    backupLocations,
+    backupPrintHistory,
+  ] = await Promise.all([
     Filament.find({}).lean(),
     Nozzle.find({}).lean(),
     Printer.find({}).lean(),
     BedType.find({}).lean(),
+    Location.find({}).lean(),
+    PrintHistory.find({}).lean(),
   ]);
 
   try {
@@ -195,12 +234,21 @@ async function restoreSnapshot(request: NextRequest) {
       Printer.deleteMany({}),
       Filament.deleteMany({}),
       BedType.deleteMany({}),
+      Location.deleteMany({}),
+      PrintHistory.deleteMany({}),
     ]);
 
     // Insert snapshot data (order matters: reference targets before referrers
-    // — nozzles, printers, and bedTypes all exist before filaments that
-    // reference them via calibrations)
-    const results = { filaments: 0, nozzles: 0, printers: 0, bedTypes: 0 };
+    // — nozzles, printers, bedTypes, locations all exist before filaments
+    // that reference them via calibrations / spools.locationId)
+    const results = {
+      filaments: 0,
+      nozzles: 0,
+      printers: 0,
+      bedTypes: 0,
+      locations: 0,
+      printHistory: 0,
+    };
 
     if (nozzles.length > 0) {
       const docs = (nozzles as Record<string, unknown>[]).map(restoreTypes);
@@ -220,10 +268,22 @@ async function restoreSnapshot(request: NextRequest) {
       results.bedTypes = bedTypes.length;
     }
 
+    if (locations.length > 0) {
+      const docs = (locations as Record<string, unknown>[]).map(restoreTypes);
+      await Location.insertMany(docs, { lean: true, ordered: false });
+      results.locations = locations.length;
+    }
+
     if (filaments.length > 0) {
       const docs = (filaments as Record<string, unknown>[]).map(restoreTypes);
       await Filament.insertMany(docs, { lean: true, ordered: false });
       results.filaments = filaments.length;
+    }
+
+    if (printHistory.length > 0) {
+      const docs = (printHistory as Record<string, unknown>[]).map(restoreTypes);
+      await PrintHistory.insertMany(docs, { lean: true, ordered: false });
+      results.printHistory = printHistory.length;
     }
 
     return NextResponse.json({
@@ -238,11 +298,15 @@ async function restoreSnapshot(request: NextRequest) {
         Printer.deleteMany({}),
         Filament.deleteMany({}),
         BedType.deleteMany({}),
+        Location.deleteMany({}),
+        PrintHistory.deleteMany({}),
       ]);
       if (backupNozzles.length > 0) await Nozzle.insertMany(backupNozzles, { ordered: false });
       if (backupPrinters.length > 0) await Printer.insertMany(backupPrinters, { ordered: false });
       if (backupBedTypes.length > 0) await BedType.insertMany(backupBedTypes, { ordered: false });
+      if (backupLocations.length > 0) await Location.insertMany(backupLocations, { ordered: false });
       if (backupFilaments.length > 0) await Filament.insertMany(backupFilaments, { ordered: false });
+      if (backupPrintHistory.length > 0) await PrintHistory.insertMany(backupPrintHistory, { ordered: false });
     } catch (rollbackErr) {
       // Rollback itself failed — report it so the user knows data may be lost
       const detail = err instanceof Error ? err.message : String(err);
