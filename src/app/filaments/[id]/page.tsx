@@ -9,6 +9,7 @@ import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
 import { useToast } from "@/components/Toast";
 import { useCurrency } from "@/hooks/useCurrency";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
+import CopyButton from "@/components/CopyButton";
 import type { FilamentDetail, FilamentCalibration } from "@/types/filament";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
@@ -327,7 +328,10 @@ export default function FilamentDetail() {
           <p className="text-gray-500">
             {filament.vendor} &middot; {filament.type}
             {filament.instanceId && (
-              <span className="ml-2 text-xs font-mono text-gray-400">{filament.instanceId}</span>
+              <span className="ml-2 inline-flex items-center gap-1 text-xs font-mono text-gray-400">
+                {filament.instanceId}
+                <CopyButton value={filament.instanceId} />
+              </span>
             )}
             {isVariant && (
               <span className="ml-2 text-xs bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded">
@@ -609,7 +613,7 @@ export default function FilamentDetail() {
                 onClick={() => handleAddSpool()}
                 className="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
               >
-                + Add Spool
+                + {t("detail.addSpool")}
               </button>
             )}
           </div>

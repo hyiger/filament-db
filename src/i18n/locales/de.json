@@ -52,6 +52,8 @@
   "common.clear": "Leeren",
   "common.confirm": "Bestätigen",
   "common.cancel": "Abbrechen",
+  "common.copy": "{value} kopieren",
+  "common.copied": "Kopiert!",
   "nozzles.title": "Düsen",
   "nozzles.backToFilaments": "Zurück zu Filamenten",
   "nozzles.backToSettings": "Zurück zu Einstellungen",

@@ -5,6 +5,8 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface BedTypeTempEntry {
+  /** Client-only stable row id for React keys. Stripped before API submission. */
+  _uid: string;
   bedType: string;
   temperature: string;
   firstLayerTemperature: string;
@@ -128,12 +130,27 @@ interface CalibrationEntry {
 }
 
 interface PresetEntry {
+  /** Client-only stable row id for React keys. Stripped before API submission. */
+  _uid: string;
   label: string;
   extrusionMultiplier: string;
   nozzle: string;
   nozzleFirstLayer: string;
   bed: string;
   bedFirstLayer: string;
+}
+
+/**
+ * Generate a stable unique id for a client-side list row. Using crypto.randomUUID
+ * when available (secure contexts only) with a math-random fallback for legacy
+ * environments. Rows need this because using the array index as a React key
+ * causes input focus / cursor state to jump when a mid-list row is deleted.
+ */
+function makeUid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `uid_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -213,6 +230,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
       chamber: getSettingVal(initialData, "chamber_temperature"),
     },
     bedTypeTemps: (initialData?.bedTypeTemps || []).map((bt: Record<string, unknown>) => ({
+      _uid: makeUid(),
       bedType: (bt.bedType as string) || "",
       temperature: bt.temperature?.toString() || "",
       firstLayerTemperature: bt.firstLayerTemperature?.toString() || "",
@@ -462,6 +480,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     if (!initialData?.presets) return [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return initialData.presets.map((p: any) => ({
+      _uid: makeUid(),
       label: p.label || "",
       extrusionMultiplier: p.extrusionMultiplier?.toString() || "",
       nozzle: p.temperatures?.nozzle?.toString() || "",
@@ -476,7 +495,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
   const addPreset = () => {
     setPresets((prev) => [
       ...prev,
-      { label: "", extrusionMultiplier: "", nozzle: "", nozzleFirstLayer: "", bed: "", bedFirstLayer: "" },
+      { _uid: makeUid(), label: "", extrusionMultiplier: "", nozzle: "", nozzleFirstLayer: "", bed: "", bedFirstLayer: "" },
     ]);
   };
 
@@ -1273,7 +1292,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           <div className="mt-3 space-y-2">
             <p className="text-xs text-gray-400 font-medium uppercase">{t("form.perBedTypeTemps")}</p>
             {form.bedTypeTemps.map((bt, idx) => (
-              <div key={idx} className="grid grid-cols-4 gap-2 items-end">
+              <div key={bt._uid} className="grid grid-cols-4 gap-2 items-end">
                 <div>
                   <input className={inputClass} value={bt.bedType} onChange={(e) => {
                     const updated = [...form.bedTypeTemps];
@@ -1303,7 +1322,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           </div>
         )}
         <button type="button" className="mt-2 text-xs text-blue-600 hover:underline" onClick={() => {
-          setForm({ ...form, bedTypeTemps: [...form.bedTypeTemps, { bedType: "", temperature: "", firstLayerTemperature: "" }] });
+          setForm({ ...form, bedTypeTemps: [...form.bedTypeTemps, { _uid: makeUid(), bedType: "", temperature: "", firstLayerTemperature: "" }] });
         }}>{t("form.addBedType")}</button>
       </fieldset>
 
@@ -2017,7 +2036,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           <div className="space-y-3">
             {presets.map((preset, idx) => (
               <div
-                key={idx}
+                key={preset._uid}
                 className="border border-gray-200 dark:border-gray-700 rounded p-3"
               >
                 <div className="flex items-center gap-2 mb-2">

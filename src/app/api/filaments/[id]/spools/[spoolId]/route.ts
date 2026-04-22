@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
+import { validateSpoolBody } from "@/lib/validateSpoolBody";
 
 export async function PUT(
   request: NextRequest,
@@ -13,13 +14,28 @@ export async function PUT(
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
+  // Reject non-numeric totalWeight and non-string label up front so we
+  // never persist bad types via the positional `$` operator (which
+  // bypasses Mongoose subdocument validation).
+  const validation = validateSpoolBody(body, { partial: true });
+  if (!validation.ok) {
+    return NextResponse.json({ error: validation.error }, { status: 400 });
+  }
+
   try {
     await dbConnect();
     const { id, spoolId } = await params;
 
     const update: Record<string, unknown> = {};
-    if (body.totalWeight !== undefined) update["spools.$.totalWeight"] = body.totalWeight;
-    if (body.label !== undefined) update["spools.$.label"] = body.label;
+    if (validation.totalWeight !== undefined) update["spools.$.totalWeight"] = validation.totalWeight;
+    if (validation.label !== undefined) update["spools.$.label"] = validation.label;
+
+    if (Object.keys(update).length === 0) {
+      return NextResponse.json(
+        { error: "No updatable fields provided" },
+        { status: 400 },
+      );
+    }
 
     const filament = await Filament.findOneAndUpdate(
       { _id: id, _deletedAt: null, "spools._id": spoolId },

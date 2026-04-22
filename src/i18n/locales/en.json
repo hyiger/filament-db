@@ -52,6 +52,8 @@
   "common.clear": "Clear",
   "common.confirm": "Confirm",
   "common.cancel": "Cancel",
+  "common.copy": "Copy {value}",
+  "common.copied": "Copied!",
   "nozzles.title": "Nozzles",
   "nozzles.backToFilaments": "Back to filaments",
   "nozzles.backToSettings": "Back to settings",

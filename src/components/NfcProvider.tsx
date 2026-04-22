@@ -73,10 +73,20 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
 
       try {
         const res = await fetch(`/api/filaments/match?${params}`);
-        const { match, candidates } = await res.json();
+        if (!res.ok) {
+          // Non-2xx: show the tag data without match info, but don't try
+          // to parse the body as if it's a match result — a 5xx error body
+          // parses as {error: "..."} which would leave match/candidates
+          // as undefined and render nothing useful.
+          setTagReadResult({ data: event.data, match: null, candidates: [] });
+          return;
+        }
+        const parsed = await res.json();
+        const match = parsed?.match ?? null;
+        const candidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
         setTagReadResult({ data: event.data, match, candidates });
       } catch {
-        // Show tag data even if matching fails
+        // Network failure — still show tag data so the user can act on it
         setTagReadResult({ data: event.data, match: null, candidates: [] });
       }
     });

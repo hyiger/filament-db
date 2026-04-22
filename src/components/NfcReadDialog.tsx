@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useNfcContext, type NfcTagReadResult } from "./NfcProvider";
+import CopyButton from "./CopyButton";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function NfcReadDialog() {
@@ -329,7 +330,7 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
         <Stat label={t("nfc.readDialog.labelOrigin")} value={data.countryOfOrigin} />
       )}
       {data.spoolUid && (
-        <Stat label={t("nfc.readDialog.labelInstanceId")} value={data.spoolUid} />
+        <Stat label={t("nfc.readDialog.labelInstanceId")} value={data.spoolUid} copyable />
       )}
       {data.filamentLength != null && (
         <Stat label={t("nfc.readDialog.labelFilamentLength")} value={`${data.filamentLength} m`} />
@@ -341,11 +342,22 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
+function Stat({
+  label,
+  value,
+  copyable = false,
+}: {
+  label: string;
+  value: string;
+  copyable?: boolean;
+}) {
   return (
     <div className="bg-gray-100 dark:bg-gray-800 px-3 py-2 rounded">
       <div className="text-gray-500 dark:text-gray-400 text-xs">{label}</div>
-      <div className="text-gray-900 dark:text-white">{value}</div>
+      <div className="text-gray-900 dark:text-white flex items-center gap-1.5">
+        <span className={copyable ? "font-mono text-sm break-all" : ""}>{value}</span>
+        {copyable && <CopyButton value={value} />}
+      </div>
     </div>
   );
 }
