@@ -5,6 +5,7 @@ import "@/models/Nozzle";
 import "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
+import { calibrationToOrcaSlicerKeys } from "@/lib/orcaSlicerBundle";
 
 /**
  * GET /api/filaments/{id}/calibration?nozzle_diameter=0.4&bed_type=Smooth+PEI
@@ -16,8 +17,10 @@ import { resolveFilament } from "@/lib/resolveFilament";
  * Optional bed_type param filters by bed type name or ID.
  * Falls back to a calibration without bed type if no bed-type-specific match.
  *
- * Used by PrusaSlicer to auto-adjust filament settings when the user
- * switches printer presets (which have different nozzle sizes).
+ * Optional format=orcaslicer returns OrcaSlicer key names with array values.
+ *
+ * Used by PrusaSlicer and OrcaSlicer to auto-adjust filament settings when
+ * the user switches printer presets (which have different nozzle sizes).
  */
 export async function GET(
   request: NextRequest,
@@ -137,6 +140,23 @@ export async function GET(
         },
         { status: 404 }
       );
+    }
+
+    // OrcaSlicer format: return calibration with OrcaSlicer key names and array values
+    const formatParam = searchParams.get("format");
+    if (formatParam === "orcaslicer") {
+      const orcaKeys = calibrationToOrcaSlicerKeys(match);
+      return NextResponse.json({
+        filament: (filament as NonNullable<typeof filament>).name,
+        nozzle: {
+          diameter: match.nozzle?.diameter,
+          name: match.nozzle?.name,
+          highFlow: match.nozzle?.highFlow,
+        },
+        printer: match.printer?.name || null,
+        bedType: match.bedType ? { name: match.bedType.name, material: match.bedType.material } : null,
+        calibration_orca: orcaKeys,
+      });
     }
 
     return NextResponse.json({

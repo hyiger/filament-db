@@ -31,6 +31,7 @@ export async function GET(
         .populate("compatibleNozzles")
         .populate("calibrations.nozzle")
         .populate("calibrations.printer")
+        .populate("calibrations.bedType")
         .lean();
       resolved = resolveFilament(filament, parent);
     }

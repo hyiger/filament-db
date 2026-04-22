@@ -4,7 +4,7 @@ import Store from "electron-store";
 import http from "http";
 import { NfcService } from "./nfc-service";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
-import { SyncService, SyncStatus } from "./sync-service";
+import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
 
 export type ConnectionMode = "atlas" | "offline" | "hybrid";
 
@@ -334,7 +334,7 @@ async function resolveMongoUri(): Promise<string | null> {
         connectTimeoutMS: 5000,
       });
       await client.connect();
-      await client.db("filament-db").command({ ping: 1 });
+      await client.db(getDbNameFromUri(atlasUri)).command({ ping: 1 });
       await client.close();
 
       store.set("mongodbUri", atlasUri);

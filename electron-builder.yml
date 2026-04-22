@@ -46,11 +46,12 @@ files:
 
 mac:
   category: public.app-category.utilities
+  # Do NOT hardcode arch here. The release workflow passes --arm64 or --x64
+  # per matrix job, and electron-builder treats CLI arch flags as additive
+  # when a target has an arch list, so both archs would be built per job.
+  # Leaving arch unset means the CLI flag alone determines what gets built.
   target:
-    - target: dmg
-      arch:
-        - x64
-        - arm64
+    - dmg
 
 win:
   target:

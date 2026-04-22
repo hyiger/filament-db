@@ -2,6 +2,29 @@ import { EventEmitter } from "events";
 import { randomUUID } from "crypto";
 import { MongoClient, ObjectId, Document } from "mongodb";
 
+/**
+ * Extract the database name from a MongoDB connection URI.
+ *
+ * The DB name is the path segment after the authority:
+ *   mongodb+srv://user:pass@cluster.mongodb.net/my-db?retryWrites=true
+ *                                                └─ "my-db"
+ *
+ * Falls back to "filament-db" if the URI has no explicit DB path, matching
+ * the app's historical default so upgrading users keep working against the
+ * same database.
+ */
+export function getDbNameFromUri(uri: string): string {
+  try {
+    // Normalise scheme so the URL parser accepts mongodb[+srv]:// URIs
+    const normalised = uri.replace(/^mongodb(\+srv)?:\/\//, "http://");
+    const url = new URL(normalised);
+    const db = url.pathname.replace(/^\//, "");
+    return db || "filament-db";
+  } catch {
+    return "filament-db";
+  }
+}
+
 export interface SyncStatus {
   state: "idle" | "syncing" | "error" | "offline";
   lastSyncAt: string | null;
@@ -59,7 +82,7 @@ export class SyncService extends EventEmitter {
     });
     try {
       await client.connect();
-      await client.db("filament-db").command({ ping: 1 });
+      await client.db(getDbNameFromUri(this.atlasUri)).command({ ping: 1 });
       return true;
     } catch {
       return false;
@@ -105,8 +128,8 @@ export class SyncService extends EventEmitter {
       await local.connect();
       await remote.connect();
 
-      const localDb = local.db("filament-db");
-      const remoteDb = remote.db("filament-db");
+      const localDb = local.db(getDbNameFromUri(this.localUri));
+      const remoteDb = remote.db(getDbNameFromUri(this.atlasUri));
 
       // Sync nozzles first (filaments and printers reference them)
       this.updateStatus({ progress: "Syncing nozzles..." });
@@ -401,7 +424,7 @@ export class SyncService extends EventEmitter {
             const targetNozzleId = nozzleSyncId ? targetNozzleMap.get(nozzleSyncId) : null;
             if (!targetNozzleId) return null; // Drop calibration if nozzle doesn't exist on target
 
-            const remapped = { ...cal, nozzle: targetNozzleId };
+            const remapped: Document = { ...cal, nozzle: targetNozzleId };
 
             // Remap printer reference if present
             if (cal.printer) {

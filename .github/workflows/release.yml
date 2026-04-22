@@ -14,9 +14,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macOS — both builds run on macos-latest (Apple Silicon). The x64
+          # build cross-compiles pcsclite via electron-rebuild --arch=x64 so
+          # the resulting dmg ships a true x86_64 .node. The macos-13 Intel
+          # runner was tried earlier but GitHub's queue for it is unusable
+          # (>18h waits) as Apple Silicon has become the default.
           - os: macos-latest
             platform: mac
-            arch: ""
+            arch: arm64
+          - os: macos-latest
+            platform: mac-x64-cross
+            arch: x64
           - os: windows-latest
             platform: win
             arch: ""
@@ -81,11 +89,27 @@ jobs:
           npm run electron:fixlinks
           npm run electron:compile
 
-      - name: Rebuild native modules and package (default)
-        if: matrix.arch == '' || matrix.arch == 'x64'
+      - name: Rebuild native modules and package (default — host arch matches target)
+        if: matrix.platform != 'linux-arm64' && matrix.platform != 'mac-x64-cross'
         run: |
           npm run electron:rebuild
           npx electron-builder --config electron-builder.yml ${{ matrix.arch != '' && format('--{0}', matrix.arch) || '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rebuild native modules and package (macOS x64 cross-compile on arm64)
+        if: matrix.platform == 'mac-x64-cross'
+        run: |
+          # Cross-compile pcsclite for x86_64 on the Apple Silicon runner.
+          # Xcode ships both arch toolchains, and PCSC.framework is a system
+          # framework available for both, so this just works once --arch is set.
+          npx electron-rebuild -f -o @pokusew/pcsclite --arch=x64
+          # Sanity-check: the compiled .node must actually be x86_64. If
+          # electron-rebuild silently fell back to host arch this line fails
+          # fast rather than shipping an arm64 binary inside an x64 dmg.
+          file node_modules/@pokusew/pcsclite/build/Release/pcsclite.node | tee /tmp/arch-check.txt
+          grep -q "x86_64" /tmp/arch-check.txt
+          npx electron-builder --config electron-builder.yml --x64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

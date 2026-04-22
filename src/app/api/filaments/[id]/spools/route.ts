@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
+import { validateSpoolBody } from "@/lib/validateSpoolBody";
 
 export async function POST(
   request: NextRequest,
@@ -13,6 +14,13 @@ export async function POST(
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
+  // Reject non-numeric totalWeight and non-string label up front so Mongoose
+  // doesn't silently store bad types that break downstream weight math.
+  const validation = validateSpoolBody(body);
+  if (!validation.ok) {
+    return NextResponse.json({ error: validation.error }, { status: 400 });
+  }
+
   try {
     await dbConnect();
     const { id } = await params;
@@ -22,8 +30,8 @@ export async function POST(
       {
         $push: {
           spools: {
-            label: body.label || "",
-            totalWeight: body.totalWeight ?? null,
+            label: validation.label,
+            totalWeight: validation.totalWeight,
           },
         },
       },

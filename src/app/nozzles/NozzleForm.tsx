@@ -3,6 +3,11 @@
 import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
+interface PrinterOption {
+  _id: string;
+  name: string;
+}
+
 interface NozzleFormData {
   name: string;
   diameter: string;
@@ -10,6 +15,7 @@ interface NozzleFormData {
   highFlow: boolean;
   hardened: boolean;
   notes: string;
+  printerIds: string[];
 }
 
 interface NozzleInitialData {
@@ -19,6 +25,7 @@ interface NozzleInitialData {
   highFlow?: boolean;
   hardened?: boolean;
   notes?: string;
+  printers?: PrinterOption[];
 }
 
 interface Props {
@@ -50,10 +57,22 @@ export default function NozzleForm({ initialData, onSubmit, onDirtyChange }: Pro
     highFlow: initialData?.highFlow || false,
     hardened: initialData?.hardened || false,
     notes: initialData?.notes || "",
+    printerIds: initialData?.printers?.map((p) => p._id) || [],
   });
+  const [printers, setPrinters] = useState<PrinterOption[]>([]);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const savedRef = useRef(false);
+
+  // Load the list of printers for the "Installed in" picker
+  useEffect(() => {
+    const ac = new AbortController();
+    fetch("/api/printers", { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: PrinterOption[]) => setPrinters(data))
+      .catch(() => {});
+    return () => ac.abort();
+  }, []);
 
   // Warn on unsaved changes when navigating away
   useEffect(() => {
@@ -76,6 +95,16 @@ export default function NozzleForm({ initialData, onSubmit, onDirtyChange }: Pro
     setDirty(true);
   };
 
+  const togglePrinter = (id: string) => {
+    setForm((f) => ({
+      ...f,
+      printerIds: f.printerIds.includes(id)
+        ? f.printerIds.filter((x) => x !== id)
+        : [...f.printerIds, id],
+    }));
+    setDirty(true);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
@@ -94,6 +123,7 @@ export default function NozzleForm({ initialData, onSubmit, onDirtyChange }: Pro
         highFlow: form.highFlow,
         hardened: form.hardened,
         notes: form.notes,
+        printerIds: form.printerIds,
       });
       savedRef.current = true;
       setDirty(false);
@@ -180,6 +210,35 @@ export default function NozzleForm({ initialData, onSubmit, onDirtyChange }: Pro
         <label htmlFor="hardened" className="text-sm font-medium">
           {t("nozzles.form.hardened")}
         </label>
+      </div>
+
+      <div>
+        <label className={labelClass}>{t("nozzles.form.installedIn")}</label>
+        <p className="text-xs text-gray-500 mb-2">{t("nozzles.form.installedInHint")}</p>
+        {printers.length === 0 ? (
+          <p className="text-xs text-gray-400">{t("nozzles.form.noPrinters")}</p>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            {printers.map((p) => (
+              <label
+                key={p._id}
+                className={`flex items-center gap-2 p-2 rounded border cursor-pointer text-sm ${
+                  form.printerIds.includes(p._id)
+                    ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={form.printerIds.includes(p._id)}
+                  onChange={() => togglePrinter(p._id)}
+                  className="w-4 h-4"
+                />
+                <span>{p.name}</span>
+              </label>
+            ))}
+          </div>
+        )}
       </div>
 
       <div>

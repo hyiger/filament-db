@@ -5,6 +5,8 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface BedTypeTempEntry {
+  /** Client-only stable row id for React keys. Stripped before API submission. */
+  _uid: string;
   bedType: string;
   temperature: string;
   firstLayerTemperature: string;
@@ -101,6 +103,7 @@ interface NozzleOption {
   diameter: number;
   type: string;
   highFlow: boolean;
+  printers?: { _id: string; name: string }[];
 }
 
 interface BedTypeOption {
@@ -127,12 +130,27 @@ interface CalibrationEntry {
 }
 
 interface PresetEntry {
+  /** Client-only stable row id for React keys. Stripped before API submission. */
+  _uid: string;
   label: string;
   extrusionMultiplier: string;
   nozzle: string;
   nozzleFirstLayer: string;
   bed: string;
   bedFirstLayer: string;
+}
+
+/**
+ * Generate a stable unique id for a client-side list row. Using crypto.randomUUID
+ * when available (secure contexts only) with a math-random fallback for legacy
+ * environments. Rows need this because using the array index as a React key
+ * causes input focus / cursor state to jump when a mid-list row is deleted.
+ */
+function makeUid(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `uid_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -212,6 +230,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
       chamber: getSettingVal(initialData, "chamber_temperature"),
     },
     bedTypeTemps: (initialData?.bedTypeTemps || []).map((bt: Record<string, unknown>) => ({
+      _uid: makeUid(),
       bedType: (bt.bedType as string) || "",
       temperature: bt.temperature?.toString() || "",
       firstLayerTemperature: bt.firstLayerTemperature?.toString() || "",
@@ -461,6 +480,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     if (!initialData?.presets) return [];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return initialData.presets.map((p: any) => ({
+      _uid: makeUid(),
       label: p.label || "",
       extrusionMultiplier: p.extrusionMultiplier?.toString() || "",
       nozzle: p.temperatures?.nozzle?.toString() || "",
@@ -475,7 +495,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
   const addPreset = () => {
     setPresets((prev) => [
       ...prev,
-      { label: "", extrusionMultiplier: "", nozzle: "", nozzleFirstLayer: "", bed: "", bedFirstLayer: "" },
+      { _uid: makeUid(), label: "", extrusionMultiplier: "", nozzle: "", nozzleFirstLayer: "", bed: "", bedFirstLayer: "" },
     ]);
   };
 
@@ -1001,12 +1021,39 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div>
           <label className={labelClass}>{t("form.color")}</label>
-          <input
-            type="color"
-            className="w-full h-10 rounded border border-gray-300 cursor-pointer"
-            value={form.color}
-            onChange={(e) => setForm({ ...form, color: e.target.value })}
-          />
+          <div className="flex gap-2">
+            <input
+              type="color"
+              aria-label={t("form.color")}
+              className="h-10 w-12 rounded border border-gray-300 dark:border-gray-600 cursor-pointer bg-transparent flex-shrink-0"
+              value={form.color}
+              onChange={(e) => setForm({ ...form, color: e.target.value })}
+            />
+            <input
+              type="text"
+              inputMode="text"
+              className={`${inputClass} font-mono uppercase`}
+              value={form.color}
+              placeholder="#RRGGBB"
+              maxLength={7}
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                // Allow incremental typing: prepend # if missing, keep only hex chars
+                let v = raw.startsWith("#") ? raw : `#${raw}`;
+                v = "#" + v.slice(1).replace(/[^0-9a-fA-F]/g, "");
+                setForm({ ...form, color: v.slice(0, 7) });
+              }}
+              onBlur={(e) => {
+                const v = e.target.value.trim();
+                // Expand 3-digit shorthand on blur (e.g. #abc → #aabbcc)
+                const m = v.match(/^#([0-9a-fA-F]{3})$/);
+                if (m) {
+                  const [r, g, b] = m[1].split("");
+                  setForm({ ...form, color: `#${r}${r}${g}${g}${b}${b}` });
+                }
+              }}
+            />
+          </div>
         </div>
         <div>
           <label className={labelClass}>{t("form.colorName")}</label>
@@ -1245,7 +1292,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           <div className="mt-3 space-y-2">
             <p className="text-xs text-gray-400 font-medium uppercase">{t("form.perBedTypeTemps")}</p>
             {form.bedTypeTemps.map((bt, idx) => (
-              <div key={idx} className="grid grid-cols-4 gap-2 items-end">
+              <div key={bt._uid} className="grid grid-cols-4 gap-2 items-end">
                 <div>
                   <input className={inputClass} value={bt.bedType} onChange={(e) => {
                     const updated = [...form.bedTypeTemps];
@@ -1275,7 +1322,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           </div>
         )}
         <button type="button" className="mt-2 text-xs text-blue-600 hover:underline" onClick={() => {
-          setForm({ ...form, bedTypeTemps: [...form.bedTypeTemps, { bedType: "", temperature: "", firstLayerTemperature: "" }] });
+          setForm({ ...form, bedTypeTemps: [...form.bedTypeTemps, { _uid: makeUid(), bedType: "", temperature: "", firstLayerTemperature: "" }] });
         }}>{t("form.addBedType")}</button>
       </fieldset>
 
@@ -1683,6 +1730,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                       HF
                     </span>
                   )}
+                  {n.printers && n.printers.length > 0 && (
+                    <span className="ml-1.5 text-xs text-indigo-700 dark:text-indigo-300">
+                      · {n.printers.map((p) => p.name).join(", ")}
+                    </span>
+                  )}
                 </span>
               </label>
             ))}
@@ -1782,6 +1834,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                     {nozzle.highFlow && (
                       <span className="ml-1.5 px-1.5 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 rounded text-xs">
                         HF
+                      </span>
+                    )}
+                    {nozzle.printers && nozzle.printers.length > 0 && (
+                      <span className="ml-1.5 text-xs font-normal text-indigo-700 dark:text-indigo-300">
+                        · {nozzle.printers.map((p) => p.name).join(", ")}
                       </span>
                     )}
                   </p>
@@ -1979,7 +2036,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           <div className="space-y-3">
             {presets.map((preset, idx) => (
               <div
-                key={idx}
+                key={preset._uid}
                 className="border border-gray-200 dark:border-gray-700 rounded p-3"
               >
                 <div className="flex items-center gap-2 mb-2">

@@ -13,6 +13,7 @@ interface Nozzle {
   highFlow: boolean;
   hardened: boolean;
   notes: string;
+  printers?: { _id: string; name: string }[];
 }
 
 export default function NozzlesPage() {
@@ -101,7 +102,7 @@ export default function NozzlesPage() {
 
   return (
     <main className="max-w-4xl mx-auto px-4 py-8">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">{t("nozzles.title")}</h1>
           <div className="flex gap-3">
@@ -169,6 +170,7 @@ export default function NozzlesPage() {
                 <th className="text-left py-3 px-2">{t("nozzles.table.type")}</th>
                 <th className="text-center py-3 px-2">{t("nozzles.table.highFlow")}</th>
                 <th className="text-center py-3 px-2">{t("nozzles.table.hardened")}</th>
+                <th className="text-left py-3 px-2">{t("nozzles.table.installedIn")}</th>
                 <th className="text-left py-3 px-2">{t("nozzles.table.notes")}</th>
                 <th className="text-right py-3 px-2">{t("nozzles.table.actions")}</th>
               </tr>
@@ -211,6 +213,22 @@ export default function NozzlesPage() {
                       </span>
                     ) : (
                       "—"
+                    )}
+                  </td>
+                  <td className="py-2 px-2">
+                    {n.printers && n.printers.length > 0 ? (
+                      <div className="flex flex-wrap gap-1">
+                        {n.printers.map((p) => (
+                          <span
+                            key={p._id}
+                            className="px-1.5 py-0.5 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-800 dark:text-indigo-200 rounded text-xs"
+                          >
+                            {p.name}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <span className="text-gray-400 text-xs">—</span>
                     )}
                   </td>
                   <td className="py-2 px-2 text-gray-500 text-xs">{n.notes || "—"}</td>

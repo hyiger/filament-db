@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
+import Printer from "@/models/Printer";
 import { getErrorMessage, errorResponse, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 
 export async function GET(request: NextRequest) {
@@ -18,7 +19,29 @@ export async function GET(request: NextRequest) {
     if (highFlow) filter.highFlow = highFlow === "true";
 
     const nozzles = await Nozzle.find(filter).sort({ diameter: 1, type: 1 }).lean();
-    return NextResponse.json(nozzles);
+
+    // Attach the list of printers each nozzle is installed in, so the UI can
+    // differentiate otherwise-identical nozzles (e.g. a Diamondback 0.4 in the
+    // Core One vs. the H2D). Uses the reverse lookup through
+    // Printer.installedNozzles so no schema change is needed.
+    const printers = await Printer.find({ _deletedAt: null })
+      .select("_id name installedNozzles")
+      .lean();
+    const nozzleIdToPrinters = new Map<string, { _id: string; name: string }[]>();
+    for (const p of printers) {
+      for (const nid of p.installedNozzles || []) {
+        const key = String(nid);
+        const list = nozzleIdToPrinters.get(key) ?? [];
+        list.push({ _id: String(p._id), name: p.name });
+        nozzleIdToPrinters.set(key, list);
+      }
+    }
+    const enriched = nozzles.map((n) => ({
+      ...n,
+      printers: nozzleIdToPrinters.get(String(n._id)) ?? [],
+    }));
+
+    return NextResponse.json(enriched);
   } catch (err) {
     return errorResponse("Failed to fetch nozzles", 500, getErrorMessage(err));
   }
@@ -43,7 +66,23 @@ export async function POST(request: NextRequest) {
     delete body.__v;
     delete body.instanceId;
     delete body.syncId;
+    // Pull `printerIds` out — it's not a Nozzle field; we use it to update
+    // the reverse Printer.installedNozzles relationship after creation.
+    const printerIds: string[] | undefined = Array.isArray(body.printerIds)
+      ? body.printerIds
+      : undefined;
+    delete body.printerIds;
+    delete body.printers;
+
     const nozzle = await Nozzle.create(body);
+
+    if (printerIds && printerIds.length > 0) {
+      await Printer.updateMany(
+        { _id: { $in: printerIds }, _deletedAt: null },
+        { $addToSet: { installedNozzles: nozzle._id } }
+      );
+    }
+
     return NextResponse.json(nozzle, { status: 201 });
   } catch (err) {
     const dupResponse = handleDuplicateKeyError(err, "nozzle");
