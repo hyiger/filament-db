@@ -240,6 +240,25 @@ export default function SettingsPage() {
         </Link>
 
         <Link
+          href="/locations"
+          className="block p-5 rounded-lg border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 hover:bg-gray-100 dark:hover:bg-gray-900/50 transition-colors group"
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 group-hover:text-black dark:group-hover:text-white">
+                {t("settings.locations")}
+              </h2>
+              <p className="text-sm text-gray-500 mt-1">
+                {t("settings.locationsDesc")}
+              </p>
+            </div>
+            <svg className="w-5 h-5 text-gray-600 group-hover:text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            </svg>
+          </div>
+        </Link>
+
+        <Link
           href="/api-docs"
           className="block p-5 rounded-lg border border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-500 hover:bg-gray-100 dark:hover:bg-gray-900/50 transition-colors group"
         >
