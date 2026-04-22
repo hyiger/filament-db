@@ -133,10 +133,16 @@ export interface FilamentSummary {
   spools: {
     _id: string;
     totalWeight: number | null;
+    /** v1.11 — retired spools are excluded from inventory totals and list
+     * weight bars, but the spool itself remains for historical reference. */
+    retired?: boolean;
   }[];
   spoolWeight: number | null;
   netFilamentWeight: number | null;
   totalWeight: number | null;
+  /** v1.11 — remaining-grams threshold below which this filament is flagged
+   * as low stock in the list and on the dashboard. Null = not configured. */
+  lowStockThreshold?: number | null;
   temperatures: {
     nozzle: number | null;
     bed: number | null;
