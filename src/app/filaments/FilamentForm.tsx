@@ -69,6 +69,7 @@ interface FilamentFormData {
   spoolWeight: string;
   netFilamentWeight: string;
   totalWeight: string;
+  lowStockThreshold: string;
   spoolType: string;
   dryingTemperature: string;
   dryingTime: string;
@@ -271,6 +272,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     wipe: getSettingVal(initialData, "filament_wipe") === "1",
     spoolWeight: initialData?.spoolWeight?.toString() || "",
     netFilamentWeight: initialData?.netFilamentWeight?.toString() || "",
+    lowStockThreshold: initialData?.lowStockThreshold?.toString() || "",
     totalWeight: initialData?.totalWeight?.toString() || "",
     spoolType: initialData?.spoolType || "",
     dryingTemperature: initialData?.dryingTemperature?.toString() || "",
@@ -683,6 +685,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         spoolWeight: parseNum(form.spoolWeight),
         netFilamentWeight: parseNum(form.netFilamentWeight),
         totalWeight: parseNum(form.totalWeight),
+        lowStockThreshold: parseNum(form.lowStockThreshold),
         spoolType: form.spoolType || null,
         presets: presets
           .filter((p) => p.label.trim() !== "")
@@ -1129,6 +1132,19 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               placeholder={t("form.placeholder.initialWeight")}
             />
             <p className="text-xs text-gray-400 mt-1">{t("form.initialWeightHint")}</p>
+          </div>
+          <div>
+            <label className={labelClass}>{t("form.lowStockThreshold")}</label>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              className={inputClass}
+              value={form.lowStockThreshold}
+              onChange={(e) => setForm({ ...form, lowStockThreshold: e.target.value })}
+              placeholder={t("form.placeholder.lowStockThreshold")}
+            />
+            <p className="text-xs text-gray-400 mt-1">{t("form.lowStockThresholdHint")}</p>
           </div>
         </div>
       </fieldset>
