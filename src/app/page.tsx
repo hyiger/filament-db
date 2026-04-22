@@ -7,6 +7,7 @@ import ImportAtlasDialog from "@/components/ImportAtlasDialog";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 import NfcStatus from "@/components/NfcStatus";
+import QuickFilterChips, { type QuickFilter } from "@/components/QuickFilterChips";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
@@ -36,6 +37,39 @@ function getRemainingPct(f: Filament): number | null {
 function getSpoolCount(f: Filament): number {
   if (f.spools?.length > 0) return f.spools.length;
   return f.totalWeight != null ? 1 : 0;
+}
+
+/**
+ * Grams of filament remaining across all *non-retired* spools. Null if the
+ * filament isn't weight-tracked (no spool weight or no netFilamentWeight).
+ * Used for the low-stock chip + badge.
+ */
+function getRemainingGrams(f: Filament): number | null {
+  if (
+    !f.spools ||
+    f.spools.length === 0 ||
+    f.spoolWeight == null ||
+    f.netFilamentWeight == null
+  ) {
+    return null;
+  }
+  let grams = 0;
+  let any = false;
+  for (const s of f.spools) {
+    if (s.retired) continue;
+    if (s.totalWeight != null) {
+      grams += Math.max(0, s.totalWeight - f.spoolWeight);
+      any = true;
+    }
+  }
+  return any ? grams : null;
+}
+
+function isLowStock(f: Filament): boolean {
+  const threshold = f.lowStockThreshold;
+  if (!threshold || threshold <= 0) return false;
+  const remaining = getRemainingGrams(f);
+  return remaining !== null && remaining < threshold;
 }
 
 type SortKey = "name" | "vendor" | "type" | "nozzle" | "bed" | "cost" | "remaining";
@@ -189,6 +223,7 @@ export default function Home() {
   const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [typeFilter, setTypeFilter] = useState("");
   const [vendorFilter, setVendorFilter] = useState("");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
   const [types, setTypes] = useState<string[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [showStats, setShowStats] = useState(false);
@@ -284,13 +319,41 @@ export default function Home() {
   }, [fetchFilaments]);
 
   // Group filaments: parents with their variants, standalone filaments as-is
+  // Client-side quick filter (low stock / has spools / missing calibrations).
+  // Applied before grouping so a parent whose variants are filtered out is
+  // still shown standalone if it matches itself.
+  const quickFilterCounts = useMemo(() => {
+    const counts: Record<QuickFilter, number> = {
+      all: filaments.length,
+      lowStock: 0,
+      hasSpools: 0,
+      noCalibration: 0,
+    };
+    for (const f of filaments) {
+      if (isLowStock(f)) counts.lowStock++;
+      if ((f.spools?.length ?? 0) > 0) counts.hasSpools++;
+    }
+    return counts;
+  }, [filaments]);
+
+  const visibleFilaments = useMemo(() => {
+    if (quickFilter === "all") return filaments;
+    return filaments.filter((f) => {
+      if (quickFilter === "lowStock") return isLowStock(f);
+      if (quickFilter === "hasSpools") return (f.spools?.length ?? 0) > 0;
+      // noCalibration can't be determined from FilamentSummary alone —
+      // keeping the chip for future use (detail API would be needed).
+      return true;
+    });
+  }, [filaments, quickFilter]);
+
   const groupedFilaments = useMemo(() => {
     const parentMap = new Map<string, GroupedFilament>();
     const standalone: Filament[] = [];
     const variantsByParent = new Map<string, Filament[]>();
 
     // First pass: collect variants
-    for (const f of filaments) {
+    for (const f of visibleFilaments) {
       if (f.parentId) {
         const variants = variantsByParent.get(f.parentId) || [];
         variants.push(f);
@@ -299,7 +362,7 @@ export default function Home() {
     }
 
     // Second pass: build groups, resolving inherited fields for variants
-    for (const f of filaments) {
+    for (const f of visibleFilaments) {
       if (f.parentId) continue; // variants are handled by their parent
       const variants = (variantsByParent.get(f._id) || []).map((v) => ({
         ...v,
@@ -344,7 +407,7 @@ export default function Home() {
     });
 
     return all;
-  }, [filaments, sortKey, sortDir]);
+  }, [visibleFilaments, sortKey, sortDir]);
 
   const toggleExpanded = (parentId: string) => {
     setExpandedParents((prev) => {
@@ -479,6 +542,17 @@ export default function Home() {
         {isVariant && (
           <span className="ml-1.5 text-[10px] text-gray-400 bg-gray-200 dark:bg-gray-800 px-1 py-0.5 rounded">
             {t("filaments.variant")}
+          </span>
+        )}
+        {isLowStock(f) && (
+          <span
+            className="ml-1.5 text-[10px] text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/40 px-1.5 py-0.5 rounded"
+            title={t("filaments.lowStockTooltip", {
+              remaining: Math.round(getRemainingGrams(f) ?? 0),
+              threshold: Math.round(f.lowStockThreshold ?? 0),
+            })}
+          >
+            {t("filaments.lowStockBadge")}
           </span>
         )}
       </td>
@@ -772,6 +846,13 @@ export default function Home() {
       )}
 
       <div className="flex gap-3 mb-4 flex-wrap">
+        <div className="col-span-full">
+          <QuickFilterChips
+            active={quickFilter}
+            onChange={setQuickFilter}
+            counts={quickFilterCounts}
+          />
+        </div>
         <input
           type="text"
           placeholder={t("common.search")}
