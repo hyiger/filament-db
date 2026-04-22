@@ -60,6 +60,7 @@ export default function FilamentDetail() {
 
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [showPrusamentImport, setShowPrusamentImport] = useState(false);
+  const [locations, setLocations] = useState<{ _id: string; name: string; kind: string }[]>([]);
 
   // Clear NFC write timeout on unmount
   useEffect(() => {
@@ -78,6 +79,17 @@ export default function FilamentDetail() {
       .catch((err) => { if (err.name !== "AbortError") setFetchError(t("detail.error.connectionFailed")); });
     return () => controller.abort();
   }, [params.id, t]);
+
+  // Load locations once so the spool cards can show a picker without each
+  // spool re-fetching. Small list — OK to keep in state.
+  useEffect(() => {
+    const ac = new AbortController();
+    fetch("/api/locations", { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setLocations)
+      .catch(() => {});
+    return () => ac.abort();
+  }, []);
 
   const handleNfcWrite = async () => {
     if (!filament) return;
@@ -224,7 +236,16 @@ export default function FilamentDetail() {
     }
   };
 
-  const handleUpdateSpool = async (spoolId: string, data: { totalWeight?: number; label?: string }) => {
+  const handleUpdateSpool = async (
+    spoolId: string,
+    data: {
+      totalWeight?: number;
+      label?: string;
+      locationId?: string | null;
+      photoDataUrl?: string | null;
+      retired?: boolean;
+    },
+  ) => {
     if (!filament) return;
     try {
       const res = await fetch(`/api/filaments/${filament._id}/spools/${spoolId}`, {
@@ -241,6 +262,58 @@ export default function FilamentDetail() {
       }
     } catch {
       toast(t("detail.spool.updateFailed"), "error");
+    }
+  };
+
+  const handleLogDryCycle = async (
+    spoolId: string,
+    entry: { tempC?: number | null; durationMin?: number | null; notes?: string },
+  ) => {
+    if (!filament) return;
+    try {
+      const res = await fetch(
+        `/api/filaments/${filament._id}/spools/${spoolId}/dry-cycles`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(entry),
+        },
+      );
+      if (res.ok) {
+        const updated = await res.json();
+        setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
+        toast(t("detail.spool.dryLogged"));
+      } else {
+        toast(t("detail.spool.dryLogFailed"), "error");
+      }
+    } catch {
+      toast(t("detail.spool.dryLogFailed"), "error");
+    }
+  };
+
+  const handleLogUsage = async (
+    spoolId: string,
+    entry: { grams: number; jobLabel?: string },
+  ) => {
+    if (!filament) return;
+    try {
+      const res = await fetch(
+        `/api/filaments/${filament._id}/spools/${spoolId}/usage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(entry),
+        },
+      );
+      if (res.ok) {
+        const updated = await res.json();
+        setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
+        toast(t("detail.spool.usageLogged", { grams: entry.grams }));
+      } else {
+        toast(t("detail.spool.usageLogFailed"), "error");
+      }
+    } catch {
+      toast(t("detail.spool.usageLogFailed"), "error");
     }
   };
 
@@ -581,8 +654,14 @@ export default function FilamentDetail() {
                     key={spool._id}
                     spool={spool}
                     filament={filament}
+                    locations={locations}
                     onUpdateWeight={(weight) => handleUpdateSpool(spool._id, { totalWeight: weight })}
                     onUpdateLabel={(label) => handleUpdateSpool(spool._id, { label })}
+                    onUpdateLocation={(locationId) => handleUpdateSpool(spool._id, { locationId })}
+                    onUpdatePhoto={(dataUrl) => handleUpdateSpool(spool._id, { photoDataUrl: dataUrl })}
+                    onToggleRetire={(retired) => handleUpdateSpool(spool._id, { retired })}
+                    onLogDryCycle={(entry) => handleLogDryCycle(spool._id, entry)}
+                    onLogUsage={(entry) => handleLogUsage(spool._id, entry)}
                     onRemove={() => handleRemoveSpool(spool._id)}
                     onNfcWeightUpdate={(scaleWeight) => handleNfcWeightUpdate(scaleWeight)}
                     nfcAvailable={isElectron && nfcStatus.tagPresent}
@@ -891,22 +970,55 @@ export default function FilamentDetail() {
 }
 
 interface SpoolCardProps {
-  spool: Filament["spools"][number];
+  spool: Filament["spools"][number] & {
+    locationId?: string | null;
+    photoDataUrl?: string | null;
+    retired?: boolean;
+    dryCycles?: { date: string | Date; tempC: number | null; durationMin: number | null; notes: string }[];
+    usageHistory?: { grams: number; jobLabel: string; date: string | Date; source: string }[];
+  };
   filament: Filament;
+  locations: { _id: string; name: string; kind: string }[];
   onUpdateWeight: (weight: number) => void;
   onUpdateLabel: (label: string) => void;
+  onUpdateLocation: (locationId: string | null) => void;
+  onUpdatePhoto: (dataUrl: string | null) => void;
+  onToggleRetire: (retired: boolean) => void;
+  onLogDryCycle: (entry: { tempC?: number | null; durationMin?: number | null; notes?: string }) => void;
+  onLogUsage: (entry: { grams: number; jobLabel?: string }) => void;
   onRemove: () => void;
   onNfcWeightUpdate?: (scaleWeight: number) => void;
   nfcAvailable?: boolean;
   nfcWriting?: boolean;
 }
 
-function SpoolCard({ spool, filament, onUpdateWeight, onUpdateLabel, onRemove, onNfcWeightUpdate, nfcAvailable, nfcWriting }: SpoolCardProps) {
+function SpoolCard({
+  spool,
+  filament,
+  locations,
+  onUpdateWeight,
+  onUpdateLabel,
+  onUpdateLocation,
+  onUpdatePhoto,
+  onToggleRetire,
+  onLogDryCycle,
+  onLogUsage,
+  onRemove,
+  onNfcWeightUpdate,
+  nfcAvailable,
+  nfcWriting,
+}: SpoolCardProps) {
   const { t } = useTranslation();
   const [weightInput, setWeightInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelInput, setLabelInput] = useState(spool.label);
+  const [showMore, setShowMore] = useState(false);
+  const [dryTemp, setDryTemp] = useState("");
+  const [dryDuration, setDryDuration] = useState("");
+  const [usageGrams, setUsageGrams] = useState("");
+  const [usageLabel, setUsageLabel] = useState("");
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   const remaining = computeRemaining(filament, spool.totalWeight);
 
@@ -1026,6 +1138,179 @@ function SpoolCard({ spool, filament, onUpdateWeight, onUpdateLabel, onRemove, o
               {nfcWriting ? "..." : t("detail.nfc.updateNfc")}
             </button>
           )}
+        </div>
+      )}
+
+      {/* Location picker + retire + more toggle */}
+      <div className="mt-3 flex items-center gap-2 text-xs">
+        <label className="text-gray-500">{t("detail.spool.location")}:</label>
+        <select
+          className="px-2 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+          value={spool.locationId ?? ""}
+          onChange={(e) => onUpdateLocation(e.target.value || null)}
+        >
+          <option value="">—</option>
+          {locations.map((l) => (
+            <option key={l._id} value={l._id}>
+              {l.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={() => onToggleRetire(!spool.retired)}
+          className={`ml-auto px-2 py-0.5 rounded border transition-colors ${
+            spool.retired
+              ? "bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-700"
+              : "border-gray-300 dark:border-gray-600 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+          }`}
+          title={spool.retired ? t("detail.spool.restoreTitle") : t("detail.spool.retireTitle")}
+        >
+          {spool.retired ? t("detail.spool.retired") : t("detail.spool.retire")}
+        </button>
+        <button
+          type="button"
+          onClick={() => setShowMore((v) => !v)}
+          className="px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+        >
+          {showMore ? t("detail.spool.less") : t("detail.spool.more")}
+        </button>
+      </div>
+
+      {showMore && (
+        <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700 space-y-3 text-sm">
+          {/* Photo */}
+          <div>
+            <p className="text-xs text-gray-500 mb-1">{t("detail.spool.photo")}</p>
+            <div className="flex items-start gap-3">
+              {spool.photoDataUrl ? (
+                <div className="relative">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={spool.photoDataUrl}
+                    alt="Spool"
+                    className="w-24 h-24 object-cover rounded border border-gray-300 dark:border-gray-700"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onUpdatePhoto(null)}
+                    className="absolute -top-1 -right-1 w-5 h-5 rounded-full bg-red-600 text-white text-xs leading-none hover:bg-red-700"
+                    aria-label={t("detail.spool.removePhoto")}
+                  >
+                    ×
+                  </button>
+                </div>
+              ) : null}
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  const { compressImageToDataUrl } = await import("@/lib/compressImage");
+                  const dataUrl = await compressImageToDataUrl(file);
+                  if (dataUrl) onUpdatePhoto(dataUrl);
+                  if (photoInputRef.current) photoInputRef.current.value = "";
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => photoInputRef.current?.click()}
+                className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400"
+              >
+                {spool.photoDataUrl ? t("detail.spool.replacePhoto") : t("detail.spool.uploadPhoto")}
+              </button>
+            </div>
+          </div>
+
+          {/* Log dry cycle */}
+          <div>
+            <p className="text-xs text-gray-500 mb-1">
+              {t("detail.spool.dryCycles", { count: spool.dryCycles?.length ?? 0 })}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="1"
+                className="w-20 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+                placeholder={t("detail.spool.dryTemp")}
+                value={dryTemp}
+                onChange={(e) => setDryTemp(e.target.value)}
+              />
+              <input
+                type="number"
+                min="0"
+                step="1"
+                className="w-20 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+                placeholder={t("detail.spool.dryDuration")}
+                value={dryDuration}
+                onChange={(e) => setDryDuration(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  onLogDryCycle({
+                    tempC: dryTemp ? Number(dryTemp) : null,
+                    durationMin: dryDuration ? Number(dryDuration) : null,
+                  });
+                  setDryTemp("");
+                  setDryDuration("");
+                }}
+                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                {t("detail.spool.logDry")}
+              </button>
+            </div>
+            {spool.dryCycles && spool.dryCycles.length > 0 && (
+              <p className="text-xs text-gray-400 mt-1">
+                {t("detail.spool.lastDried", {
+                  date: new Date(spool.dryCycles[spool.dryCycles.length - 1].date).toLocaleDateString(),
+                })}
+              </p>
+            )}
+          </div>
+
+          {/* Log usage */}
+          <div>
+            <p className="text-xs text-gray-500 mb-1">
+              {t("detail.spool.usageHistory", { count: spool.usageHistory?.length ?? 0 })}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                className="w-20 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+                placeholder={t("detail.spool.usageGrams")}
+                value={usageGrams}
+                onChange={(e) => setUsageGrams(e.target.value)}
+              />
+              <input
+                type="text"
+                className="flex-1 min-w-0 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+                placeholder={t("detail.spool.usageJobLabel")}
+                value={usageLabel}
+                onChange={(e) => setUsageLabel(e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const g = Number(usageGrams);
+                  if (!Number.isFinite(g) || g <= 0) return;
+                  onLogUsage({ grams: g, jobLabel: usageLabel });
+                  setUsageGrams("");
+                  setUsageLabel("");
+                }}
+                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+              >
+                {t("detail.spool.logUsage")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

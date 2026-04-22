@@ -29,6 +29,12 @@ export async function PUT(
     const update: Record<string, unknown> = {};
     if (validation.totalWeight !== undefined) update["spools.$.totalWeight"] = validation.totalWeight;
     if (validation.label !== undefined) update["spools.$.label"] = validation.label;
+    if (validation.locationId !== undefined) update["spools.$.locationId"] = validation.locationId;
+    if (validation.photoDataUrl !== undefined) update["spools.$.photoDataUrl"] = validation.photoDataUrl;
+    if (validation.retired !== undefined) update["spools.$.retired"] = validation.retired;
+    if (validation.lotNumber !== undefined) update["spools.$.lotNumber"] = validation.lotNumber;
+    if (validation.purchaseDate !== undefined) update["spools.$.purchaseDate"] = validation.purchaseDate;
+    if (validation.openedDate !== undefined) update["spools.$.openedDate"] = validation.openedDate;
 
     if (Object.keys(update).length === 0) {
       return NextResponse.json(
