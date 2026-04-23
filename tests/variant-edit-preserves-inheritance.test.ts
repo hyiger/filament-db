@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { GET as getFilament, PUT as putFilament } from "@/app/api/filaments/[id]/route";
+import { POST as createFilament } from "@/app/api/filaments/route";
 
 /**
  * GH #106 regression guard.
@@ -163,6 +164,103 @@ describe("variant edit round-trip preserves inheritance", () => {
     const resolved = await resolvedRes.json();
     expect(resolved.cost).toBe(40); // variant's own override wins
     expect(resolved._inherited).not.toContain("cost");
+  });
+
+  it("diameter inheritance survives a variant edit round-trip (parent has non-default diameter)", async () => {
+    // Guard against a Codex-flagged regression: with raw=true the variant's
+    // diameter arrives as null; if the form defaulted null → "1.75" in its
+    // initial state and then submitted it as a number, any parent diameter
+    // other than 1.75 (say a 2.85mm filament) would be silently overridden
+    // on the variant on the very next save.
+    const parent = await Filament.create({
+      name: "Parent 2.85mm",
+      vendor: "Test",
+      type: "PLA",
+      diameter: 2.85,
+    });
+    const variant = await Filament.create({
+      name: "Variant of 2.85mm",
+      vendor: "Test",
+      type: "PLA",
+      parentId: parent._id,
+      // `diameter: null` mirrors what POST /api/filaments writes for a
+      // variant when the client doesn't supply an explicit diameter
+      // (Mongoose's schema default of 1.75 is bypassed there). Without
+      // this, the schema default would kick in and the variant would be
+      // created with diameter: 1.75 already overriding the parent — the
+      // very regression this test guards against.
+      diameter: null,
+    });
+
+    // Raw fetch returns diameter as null for the variant.
+    const rawReq = new NextRequest(`http://localhost/api/filaments/${variant._id}?raw=true`);
+    const rawRes = await getFilament(rawReq, { params: Promise.resolve({ id: String(variant._id) }) });
+    const rawBody = await rawRes.json();
+    expect(rawBody.diameter).toBeNull();
+
+    // Save the raw payload back unchanged — must not coerce null → 1.75.
+    const putReq = new NextRequest(`http://localhost/api/filaments/${variant._id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(rawBody),
+    });
+    await putFilament(putReq, { params: Promise.resolve({ id: String(variant._id) }) });
+
+    const fresh = await Filament.findById(variant._id);
+    expect(fresh.diameter).toBeNull();
+
+    // Resolved view still inherits the parent's 2.85.
+    const resolvedReq = new NextRequest(`http://localhost/api/filaments/${variant._id}`);
+    const resolvedRes = await getFilament(resolvedReq, { params: Promise.resolve({ id: String(variant._id) }) });
+    const resolved = await resolvedRes.json();
+    expect(resolved.diameter).toBe(2.85);
+    expect(resolved._inherited).toContain("diameter");
+  });
+
+  it("POST /api/filaments does not apply the 1.75 diameter default to variants", async () => {
+    // Covers the route-level half of the fix: creating a variant via the
+    // real API endpoint without passing a diameter must not trigger the
+    // Mongoose schema default. If it did, every newly-cloned variant would
+    // immediately override the parent's diameter.
+    const parent = await Filament.create({
+      name: "Route Parent 2.85mm",
+      vendor: "Test",
+      type: "PLA",
+      diameter: 2.85,
+    });
+
+    const req = new NextRequest("http://localhost/api/filaments", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Route Variant (no diameter)",
+        vendor: "Test",
+        type: "PLA",
+        color: "#ff0000",
+        parentId: String(parent._id),
+      }),
+    });
+    const res = await createFilament(req);
+    expect(res.status).toBe(201);
+    const created = await res.json();
+
+    const fresh = await Filament.findById(created._id);
+    expect(fresh.diameter).toBeNull();
+
+    // Non-variants are unaffected: the schema default still fills in 1.75.
+    const standaloneReq = new NextRequest("http://localhost/api/filaments", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Standalone (no diameter)",
+        vendor: "Test",
+        type: "PLA",
+      }),
+    });
+    const standaloneRes = await createFilament(standaloneReq);
+    const standalone = await standaloneRes.json();
+    const freshStandalone = await Filament.findById(standalone._id);
+    expect(freshStandalone.diameter).toBe(1.75);
   });
 
   it("PUT strips server-only response fields (_parent, _variants, _inherited) from the body", async () => {

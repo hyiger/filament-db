@@ -219,7 +219,13 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     colorName: initialData?.colorName || "",
     cost: initialData?.cost?.toString() || "",
     density: initialData?.density?.toString() || "",
-    diameter: initialData?.diameter?.toString() || "1.75",
+    // Variants leave diameter blank when inheriting from the parent — falling
+    // back to "1.75" here would paint a value into the input that the user
+    // never typed, and saving would persist 1.75 as an explicit override
+    // (even if the parent's diameter is e.g. 2.85). The submit-side fallback
+    // in handleSubmit keeps 1.75 as the default for standalone filaments.
+    diameter:
+      initialData?.diameter?.toString() || (initialData?.parentId ? "" : "1.75"),
     temperatures: {
       nozzle: initialData?.temperatures?.nozzle?.toString() || "",
       nozzleFirstLayer: initialData?.temperatures?.nozzleFirstLayer?.toString() || "",
