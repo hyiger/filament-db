@@ -773,6 +773,7 @@
   "new.toast.populatedFromClone": "Formular aus Klon befüllt",
 
   "form.fetchError": "{items} konnten nicht geladen werden. Einige Auswahlfelder sind möglicherweise leer. Prüfen Sie, ob der Server läuft.",
+  "form.variantHint": "Dies ist eine Variante von \"{parent}\". Felder, die du leer lässt, werden vom übergeordneten Filament geerbt — bearbeite das übergeordnete Filament, um alle Varianten auf einmal zu aktualisieren. Hier eingegebene Werte überschreiben nur diese Variante.",
   "form.name": "Name",
   "form.parentFilament": "Übergeordnetes Filament",
   "form.parentFilamentHint": "optional — für Farbvarianten",

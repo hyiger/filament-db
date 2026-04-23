@@ -219,7 +219,13 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     colorName: initialData?.colorName || "",
     cost: initialData?.cost?.toString() || "",
     density: initialData?.density?.toString() || "",
-    diameter: initialData?.diameter?.toString() || "1.75",
+    // Variants leave diameter blank when inheriting from the parent — falling
+    // back to "1.75" here would paint a value into the input that the user
+    // never typed, and saving would persist 1.75 as an explicit override
+    // (even if the parent's diameter is e.g. 2.85). The submit-side fallback
+    // in handleSubmit keeps 1.75 as the default for standalone filaments.
+    diameter:
+      initialData?.diameter?.toString() || (initialData?.parentId ? "" : "1.75"),
     temperatures: {
       nozzle: initialData?.temperatures?.nozzle?.toString() || "",
       nozzleFirstLayer: initialData?.temperatures?.nozzleFirstLayer?.toString() || "",
@@ -633,7 +639,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         colorName: form.colorName || null,
         cost: parseNum(form.cost),
         density: parseNum(form.density),
-        diameter: parseNum(form.diameter) ?? 1.75,
+        // Variants should inherit diameter from the parent when left blank;
+        // only apply the 1.75 fallback for standalone filaments (GH #106).
+        diameter: parseNum(form.diameter) ?? (form.parentId ? null : 1.75),
         temperatures: {
           nozzle: parseNum(form.temperatures.nozzle),
           nozzleFirstLayer: parseNum(form.temperatures.nozzleFirstLayer),
@@ -730,6 +738,19 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
       {fetchErrors.length > 0 && (
         <div className="px-3 py-2 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded text-sm text-yellow-700 dark:text-yellow-300">
           {t("form.fetchError", { items: fetchErrors.join(", ") })}
+        </div>
+      )}
+      {form.parentId && initialData?._parent && (
+        // Variant banner — without this users edit a clone, see the parent's
+        // values pre-filled (as they used to before GH #106 was fixed), and
+        // don't realise that clicking Save copies every field onto the
+        // child. Now the edit form fetches ?raw=true and shows only the
+        // variant's own overrides; inherited fields render blank. This
+        // banner spells that out so the empty inputs don't look buggy.
+        <div className="px-3 py-2 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded text-sm text-blue-800 dark:text-blue-200">
+          {t("form.variantHint", {
+            parent: (initialData._parent as { name?: string }).name ?? "parent",
+          })}
         </div>
       )}
 

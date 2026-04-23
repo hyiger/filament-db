@@ -348,50 +348,65 @@ describe("resolveFilament", () => {
     expect(result.totalWeight).toBe(800);
   });
 
-  // --- #57: explicit empty array does NOT inherit from parent ---
+  // --- GH #106: empty array on a variant inherits from parent ---
+  //
+  // Previously a variant's empty array (e.g. calibrations: []) was treated
+  // as an explicit "override to empty" — but Mongoose always materialises
+  // array fields as [] at load time, so variants silently lost inheritance
+  // the moment they were fetched. Treating empty === inherit fixes the
+  // ongoing parent→variant relationship reported in issue #106.
 
-  it("does not inherit compatibleNozzles when variant has explicit empty array", () => {
+  it("inherits compatibleNozzles when variant has empty array", () => {
     const parent = makeParent({ compatibleNozzles: ["nozzle-1", "nozzle-2"] });
     const variant = makeVariant({ compatibleNozzles: [] });
     const result = resolveFilament(variant, parent);
-    expect(result.compatibleNozzles).toEqual([]);
-    expect(result._inherited).not.toContain("compatibleNozzles");
+    expect(result.compatibleNozzles).toEqual(["nozzle-1", "nozzle-2"]);
+    expect(result._inherited).toContain("compatibleNozzles");
   });
 
-  it("does not inherit optTags when variant has explicit empty array", () => {
+  it("inherits optTags when variant has empty array", () => {
     const parent = makeParent({ optTags: [1, 2, 4] });
     const variant = makeVariant({ optTags: [] });
     const result = resolveFilament(variant, parent);
-    expect(result.optTags).toEqual([]);
-    expect(result._inherited).not.toContain("optTags");
+    expect(result.optTags).toEqual([1, 2, 4]);
+    expect(result._inherited).toContain("optTags");
   });
 
-  it("does not inherit calibrations when variant has explicit empty array", () => {
+  it("inherits calibrations when variant has empty array", () => {
     const parent = makeParent();
     const variant = makeVariant({ calibrations: [] });
     const result = resolveFilament(variant, parent);
-    expect(result.calibrations).toEqual([]);
-    expect(result._inherited).not.toContain("calibrations");
+    // Parent's calibrations were one entry per the makeParent helper.
+    expect(result.calibrations).toHaveLength(1);
+    expect(result._inherited).toContain("calibrations");
   });
 
-  it("does not inherit presets when variant has explicit empty array", () => {
+  it("inherits presets when variant has empty array", () => {
     const parent = makeParent({
       presets: [{ label: "Default", extrusionMultiplier: 0.95, temperatures: {} }],
     });
     const variant = makeVariant({ presets: [] });
     const result = resolveFilament(variant, parent);
-    expect(result.presets).toEqual([]);
-    expect(result._inherited).not.toContain("presets");
+    expect(result.presets).toHaveLength(1);
+    expect(result._inherited).toContain("presets");
   });
 
-  it("does not inherit bedTypeTemps when variant has explicit empty array", () => {
+  it("inherits bedTypeTemps when variant has empty array", () => {
     const parent = makeParent({
       bedTypeTemps: [{ bedType: "Textured PEI", temperature: 85 }],
     });
     const variant = makeVariant({ bedTypeTemps: [] });
     const result = resolveFilament(variant, parent);
-    expect(result.bedTypeTemps).toEqual([]);
-    expect(result._inherited).not.toContain("bedTypeTemps");
+    expect(result.bedTypeTemps).toHaveLength(1);
+    expect(result._inherited).toContain("bedTypeTemps");
+  });
+
+  it("variant's non-empty array overrides the parent's", () => {
+    const parent = makeParent({ compatibleNozzles: ["nozzle-1", "nozzle-2"] });
+    const variant = makeVariant({ compatibleNozzles: ["nozzle-3"] });
+    const result = resolveFilament(variant, parent);
+    expect(result.compatibleNozzles).toEqual(["nozzle-3"]);
+    expect(result._inherited).not.toContain("compatibleNozzles");
   });
 });
 

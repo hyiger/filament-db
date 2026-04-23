@@ -773,6 +773,7 @@
   "new.toast.populatedFromClone": "Form populated from clone",
 
   "form.fetchError": "Could not load {items}. Some dropdowns may be empty. Check that the server is running.",
+  "form.variantHint": "This is a variant of \"{parent}\". Any field you leave blank inherits from the parent — edit the parent to update all variants at once. Values you fill in here override the parent for this variant only.",
   "form.name": "Name",
   "form.parentFilament": "Parent Filament",
   "form.parentFilamentHint": "optional — for color variants",

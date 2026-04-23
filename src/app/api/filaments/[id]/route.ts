@@ -7,13 +7,31 @@ import "@/models/BedType";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 
+/**
+ * GET /api/filaments/{id}
+ *
+ * Returns a single filament with populated references. By default, if the
+ * filament is a variant (has parentId) its inheritable fields are resolved
+ * from its parent so the response is a complete view suitable for display.
+ *
+ * Pass `?raw=true` to skip inheritance resolution and receive the variant's
+ * own values. Fields the variant does not override come back as `null`
+ * (or empty). This is what the edit page needs — prefilling the form with
+ * resolved values and then saving would copy the parent's fields onto the
+ * variant and silently sever the inheritance link (GH #106).
+ *
+ * When `?raw=true` is passed on a parent, the response shape is unchanged
+ * (parents don't inherit from anything).
+ */
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     await dbConnect();
     const { id } = await params;
+    const raw = request.nextUrl.searchParams.get("raw") === "true";
+
     const filament = await Filament.findOne({ _id: id, _deletedAt: null })
       .populate("compatibleNozzles")
       .populate("calibrations.nozzle")
@@ -24,16 +42,20 @@ export async function GET(
       return errorResponse("Not found", 404);
     }
 
-    // If this is a variant, resolve inherited values from parent
+    // Resolve inheritance when displaying; skip when editing so the form
+    // only sees the variant's own overrides.
     let resolved: IFilament | ReturnType<typeof resolveFilament> = filament;
+    let parentDoc: IFilament | null = null;
     if (filament.parentId) {
-      const parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
+      parentDoc = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
         .populate("compatibleNozzles")
         .populate("calibrations.nozzle")
         .populate("calibrations.printer")
         .populate("calibrations.bedType")
-        .lean();
-      resolved = resolveFilament(filament, parent);
+        .lean()) as IFilament | null;
+      if (!raw && parentDoc) {
+        resolved = resolveFilament(filament, parentDoc);
+      }
     }
 
     // If this is a parent, include its variants
@@ -41,6 +63,17 @@ export async function GET(
       .select("name color cost")
       .sort({ name: 1 })
       .lean();
+
+    // In raw mode, attach the parent doc alongside so the edit UI can show
+    // "inherited from parent" placeholders for any field the variant left
+    // blank, without a second round-trip.
+    if (raw && parentDoc) {
+      return NextResponse.json({
+        ...resolved,
+        _variants: variants,
+        _parent: parentDoc,
+      });
+    }
 
     return NextResponse.json({ ...resolved, _variants: variants });
   } catch (err) {
@@ -70,6 +103,12 @@ export async function PUT(
     delete body.__v;
     delete body.instanceId;
     delete body.syncId;
+    // Server-side response-only fields that clients may echo back (e.g. the
+    // edit page fetches with ?raw=true and receives _parent / _variants /
+    // _inherited). Strip so they don't become persisted document fields.
+    delete body._parent;
+    delete body._variants;
+    delete body._inherited;
 
     // Validate parentId if provided
     if (body.parentId) {

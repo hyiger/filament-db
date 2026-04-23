@@ -26,7 +26,12 @@ export default function EditFilament() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`/api/filaments/${params.id}`, { signal: controller.signal })
+    // ?raw=true skips variant inheritance resolution on the server so the
+    // form sees only this filament's own overrides. Without it, the form
+    // prefill would include parent-inherited values and a Save would
+    // persist them as explicit overrides — severing the live parent link
+    // (GH #106).
+    fetch(`/api/filaments/${params.id}?raw=true`, { signal: controller.signal })
       .then((r) => {
         if (r.status === 404) { setNotFound(true); return null; }
         if (!r.ok) { setFetchError(true); return null; }
