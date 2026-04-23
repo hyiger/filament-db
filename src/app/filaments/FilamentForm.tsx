@@ -69,6 +69,7 @@ interface FilamentFormData {
   spoolWeight: string;
   netFilamentWeight: string;
   totalWeight: string;
+  lowStockThreshold: string;
   spoolType: string;
   dryingTemperature: string;
   dryingTime: string;
@@ -271,6 +272,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     wipe: getSettingVal(initialData, "filament_wipe") === "1",
     spoolWeight: initialData?.spoolWeight?.toString() || "",
     netFilamentWeight: initialData?.netFilamentWeight?.toString() || "",
+    lowStockThreshold: initialData?.lowStockThreshold?.toString() || "",
     totalWeight: initialData?.totalWeight?.toString() || "",
     spoolType: initialData?.spoolType || "",
     dryingTemperature: initialData?.dryingTemperature?.toString() || "",
@@ -683,6 +685,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         spoolWeight: parseNum(form.spoolWeight),
         netFilamentWeight: parseNum(form.netFilamentWeight),
         totalWeight: parseNum(form.totalWeight),
+        lowStockThreshold: parseNum(form.lowStockThreshold),
         spoolType: form.spoolType || null,
         presets: presets
           .filter((p) => p.label.trim() !== "")
@@ -1129,6 +1132,19 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               placeholder={t("form.placeholder.initialWeight")}
             />
             <p className="text-xs text-gray-400 mt-1">{t("form.initialWeightHint")}</p>
+          </div>
+          <div>
+            <label className={labelClass}>{t("form.lowStockThreshold")}</label>
+            <input
+              type="number"
+              step="1"
+              min="0"
+              className={inputClass}
+              value={form.lowStockThreshold}
+              onChange={(e) => setForm({ ...form, lowStockThreshold: e.target.value })}
+              placeholder={t("form.placeholder.lowStockThreshold")}
+            />
+            <p className="text-xs text-gray-400 mt-1">{t("form.lowStockThresholdHint")}</p>
           </div>
         </div>
       </fieldset>
@@ -1824,24 +1840,37 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               const defaultKey = calKey(null, nozzleId, null);
               const isOverride = selectedPrinter !== "default" || selectedBedType !== "any";
               const defaultCal = isOverride ? calibrations[defaultKey] : undefined;
+              // The calibration scope — shown in the card header so it's clear
+              // that switching the printer/bed tab stores values independently.
+              const printerName =
+                selectedPrinter === "default"
+                  ? t("form.cal.scope.anyPrinter")
+                  : printers.find((p) => p._id === selectedPrinter)?.name ?? "";
+              const bedName =
+                selectedBedType === "any"
+                  ? t("form.cal.scope.anyBed")
+                  : bedTypes.find((b) => b._id === selectedBedType)?.name ?? "";
               return (
                 <div
                   key={key}
                   className="border border-gray-200 dark:border-gray-700 rounded p-3"
                 >
-                  <p className="text-sm font-medium mb-2">
-                    {nozzle.name}
-                    {nozzle.highFlow && (
-                      <span className="ml-1.5 px-1.5 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 rounded text-xs">
-                        HF
-                      </span>
-                    )}
-                    {nozzle.printers && nozzle.printers.length > 0 && (
-                      <span className="ml-1.5 text-xs font-normal text-indigo-700 dark:text-indigo-300">
-                        · {nozzle.printers.map((p) => p.name).join(", ")}
-                      </span>
-                    )}
-                  </p>
+                  <div className="mb-2">
+                    <p className="text-sm font-medium">
+                      {nozzle.name}
+                      {nozzle.highFlow && (
+                        <span className="ml-1.5 px-1.5 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 rounded text-xs">
+                          HF
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                      {t("form.cal.scope.for", {
+                        printer: printerName,
+                        bed: bedName,
+                      })}
+                    </p>
+                  </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                     <div>
                       <label className="block text-xs text-gray-500 mb-1" title={t("form.tooltip.em")}>{t("form.cal.em")}</label>

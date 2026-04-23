@@ -1,12 +1,15 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import ImportAtlasDialog from "@/components/ImportAtlasDialog";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
+import SpoolCsvImportDialog from "@/components/SpoolCsvImportDialog";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 import NfcStatus from "@/components/NfcStatus";
+import AppNav from "@/components/AppNav";
+import QuickFilterChips, { type QuickFilter } from "@/components/QuickFilterChips";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
@@ -36,6 +39,39 @@ function getRemainingPct(f: Filament): number | null {
 function getSpoolCount(f: Filament): number {
   if (f.spools?.length > 0) return f.spools.length;
   return f.totalWeight != null ? 1 : 0;
+}
+
+/**
+ * Grams of filament remaining across all *non-retired* spools. Null if the
+ * filament isn't weight-tracked (no spool weight or no netFilamentWeight).
+ * Used for the low-stock chip + badge.
+ */
+function getRemainingGrams(f: Filament): number | null {
+  if (
+    !f.spools ||
+    f.spools.length === 0 ||
+    f.spoolWeight == null ||
+    f.netFilamentWeight == null
+  ) {
+    return null;
+  }
+  let grams = 0;
+  let any = false;
+  for (const s of f.spools) {
+    if (s.retired) continue;
+    if (s.totalWeight != null) {
+      grams += Math.max(0, s.totalWeight - f.spoolWeight);
+      any = true;
+    }
+  }
+  return any ? grams : null;
+}
+
+function isLowStock(f: Filament): boolean {
+  const threshold = f.lowStockThreshold;
+  if (!threshold || threshold <= 0) return false;
+  const remaining = getRemainingGrams(f);
+  return remaining !== null && remaining < threshold;
 }
 
 type SortKey = "name" | "vendor" | "type" | "nozzle" | "bed" | "cost" | "remaining";
@@ -189,16 +225,22 @@ export default function Home() {
   const [debouncedSearch, setDebouncedSearch] = useState(search);
   const [typeFilter, setTypeFilter] = useState("");
   const [vendorFilter, setVendorFilter] = useState("");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
   const [types, setTypes] = useState<string[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [showStats, setShowStats] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [importing, setImporting] = useState(false);
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const [showAtlasImport, setShowAtlasImport] = useState(false);
   const [showPrusamentImport, setShowPrusamentImport] = useState(false);
+  const [showSpoolCsvImport, setShowSpoolCsvImport] = useState(false);
   const [showImportExport, setShowImportExport] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
@@ -263,10 +305,6 @@ export default function Home() {
     }
   }, [debouncedSearch, typeFilter, vendorFilter, toast, t]);
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
   // Close import/export dropdown on outside click
   useEffect(() => {
     if (!showImportExport) return;
@@ -280,17 +318,49 @@ export default function Home() {
   }, [showImportExport]);
 
   useEffect(() => {
+    // Fetch whenever search/filter deps change. fetchFilaments sets loading=true
+    // synchronously, which the set-state-in-effect rule flags, but this is the
+    // standard fetch-on-param-change pattern with AbortController.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchFilaments();
   }, [fetchFilaments]);
 
   // Group filaments: parents with their variants, standalone filaments as-is
+  // Client-side quick filter (low stock / has spools / missing calibrations).
+  // Applied before grouping so a parent whose variants are filtered out is
+  // still shown standalone if it matches itself.
+  const quickFilterCounts = useMemo(() => {
+    const counts: Record<QuickFilter, number> = {
+      all: filaments.length,
+      lowStock: 0,
+      hasSpools: 0,
+      noCalibration: 0,
+    };
+    for (const f of filaments) {
+      if (isLowStock(f)) counts.lowStock++;
+      if ((f.spools?.length ?? 0) > 0) counts.hasSpools++;
+    }
+    return counts;
+  }, [filaments]);
+
+  const visibleFilaments = useMemo(() => {
+    if (quickFilter === "all") return filaments;
+    return filaments.filter((f) => {
+      if (quickFilter === "lowStock") return isLowStock(f);
+      if (quickFilter === "hasSpools") return (f.spools?.length ?? 0) > 0;
+      // noCalibration can't be determined from FilamentSummary alone —
+      // keeping the chip for future use (detail API would be needed).
+      return true;
+    });
+  }, [filaments, quickFilter]);
+
   const groupedFilaments = useMemo(() => {
     const parentMap = new Map<string, GroupedFilament>();
     const standalone: Filament[] = [];
     const variantsByParent = new Map<string, Filament[]>();
 
     // First pass: collect variants
-    for (const f of filaments) {
+    for (const f of visibleFilaments) {
       if (f.parentId) {
         const variants = variantsByParent.get(f.parentId) || [];
         variants.push(f);
@@ -299,7 +369,7 @@ export default function Home() {
     }
 
     // Second pass: build groups, resolving inherited fields for variants
-    for (const f of filaments) {
+    for (const f of visibleFilaments) {
       if (f.parentId) continue; // variants are handled by their parent
       const variants = (variantsByParent.get(f._id) || []).map((v) => ({
         ...v,
@@ -344,7 +414,7 @@ export default function Home() {
     });
 
     return all;
-  }, [filaments, sortKey, sortDir]);
+  }, [visibleFilaments, sortKey, sortDir]);
 
   const toggleExpanded = (parentId: string) => {
     setExpandedParents((prev) => {
@@ -479,6 +549,17 @@ export default function Home() {
         {isVariant && (
           <span className="ml-1.5 text-[10px] text-gray-400 bg-gray-200 dark:bg-gray-800 px-1 py-0.5 rounded">
             {t("filaments.variant")}
+          </span>
+        )}
+        {isLowStock(f) && (
+          <span
+            className="ml-1.5 text-[10px] text-red-700 dark:text-red-300 bg-red-100 dark:bg-red-900/40 px-1.5 py-0.5 rounded"
+            title={t("filaments.lowStockTooltip", {
+              remaining: Math.round(getRemainingGrams(f) ?? 0),
+              threshold: Math.round(f.lowStockThreshold ?? 0),
+            })}
+          >
+            {t("filaments.lowStockBadge")}
           </span>
         )}
       </td>
@@ -656,15 +737,7 @@ export default function Home() {
             <SyncStatusIndicator />
             <NfcStatus />
           </div>
-          <div className="flex gap-3">
-            <Link href="/settings" className="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200 text-sm flex items-center gap-1">
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
-                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-              </svg>
-              {t("common.settings")}
-            </Link>
-          </div>
+          <AppNav />
         </div>
         <div className="flex gap-2 shrink-0">
           {/* Import / Export dropdown */}
@@ -702,6 +775,13 @@ export default function Home() {
                   <span className="w-2 h-2 rounded-full bg-teal-500" />
                   {t("filaments.import.browseOpenPrintTag")}
                 </a>
+                <button
+                  onClick={() => { setShowImportExport(false); setShowSpoolCsvImport(true); }}
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                >
+                  <span className="w-2 h-2 rounded-full bg-blue-500" />
+                  {t("filaments.import.spoolCsv")}
+                </button>
                 <button
                   onClick={() => { setShowImportExport(false); fileInputRef.current?.click(); }}
                   disabled={importing}
@@ -772,6 +852,13 @@ export default function Home() {
       )}
 
       <div className="flex gap-3 mb-4 flex-wrap">
+        <div className="col-span-full">
+          <QuickFilterChips
+            active={quickFilter}
+            onChange={setQuickFilter}
+            counts={quickFilterCounts}
+          />
+        </div>
         <input
           type="text"
           placeholder={t("common.search")}
@@ -892,6 +979,15 @@ export default function Home() {
             toast(message, "success");
             fetchFilaments();
             setShowPrusamentImport(false);
+          }}
+        />
+      )}
+
+      {showSpoolCsvImport && (
+        <SpoolCsvImportDialog
+          onClose={() => setShowSpoolCsvImport(false)}
+          onImported={() => {
+            fetchFilaments();
           }}
         />
       )}

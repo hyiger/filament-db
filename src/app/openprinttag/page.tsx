@@ -293,6 +293,10 @@ export default function OpenPrintTagBrowser() {
   );
 
   useEffect(() => {
+    // Initial load + manual refresh button both go through fetchDatabase.
+    // fetchDatabase synchronously sets loading=true before awaiting, which
+    // trips the rule, but this is the standard fetch-on-mount pattern.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchDatabase();
   }, [fetchDatabase]);
 

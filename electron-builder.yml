@@ -74,3 +74,12 @@ linux:
   target:
     - target: AppImage
     - target: deb
+
+# electron-updater reads from this publish target at runtime. The CI workflow
+# already uploads latest-*.yml metadata files to the GitHub release, which is
+# what the updater polls. No token needed at install time — the check is an
+# unauthenticated GET against the releases API.
+publish:
+  - provider: github
+    owner: hyiger
+    repo: filament-db

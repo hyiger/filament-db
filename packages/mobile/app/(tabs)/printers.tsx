@@ -29,6 +29,9 @@ export default function PrintersTab() {
   }, [isConnected]);
 
   useEffect(() => {
+    // Standard fetch-on-mount: loadPrinters setStates synchronously before
+    // awaiting, which trips the rule.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadPrinters();
   }, [loadPrinters]);
 

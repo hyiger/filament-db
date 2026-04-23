@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { useIsElectron } from "@/hooks/useIsElectron";
 
 type ConnectionMode = "atlas" | "offline" | "hybrid" | "";
 
@@ -12,12 +13,8 @@ export default function SetupPage() {
   const [testing, setTesting] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [isElectron, setIsElectron] = useState(false);
+  const isElectron = useIsElectron();
   const [showUri, setShowUri] = useState(false);
-
-  useEffect(() => {
-    setIsElectron(!!window.electronAPI);
-  }, []);
 
   const handleAtlasConnect = async (e: React.FormEvent) => {
     e.preventDefault();

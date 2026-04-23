@@ -502,6 +502,69 @@ In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted fi
 
 ---
 
+## Step 19: Set Up Locations *(v1.11)*
+
+Before you reach for the spool tracker, it's worth describing where your physical spools live:
+
+1. Navigate to **Locations** (top nav) → `/locations`
+2. Click **+ Add Location**
+3. Give it a name (e.g. `Drybox #1`), pick a **kind** (shelf / drybox / cabinet / printer), and optionally record the humidity
+4. Repeat for every physical container you want to track
+
+Once you have at least one location, every spool you add (or edit) gains a **Location** dropdown. The Locations list view shows live inventory counts — number of spools and total grams on hand per location — so you can tell at a glance which drybox is almost empty.
+
+## Step 20: Configure Low-Stock Thresholds *(v1.11)*
+
+1. Edit any filament
+2. Under **Stock settings**, set **Low-stock threshold (g)** — e.g. `250` to be warned when under 250g remains across all spools
+3. Save
+
+The dashboard surfaces every filament under its threshold in the **Low stock** list. A small chip on the main filament list marks them too. Filaments without a threshold are never flagged.
+
+## Step 21: Log Print Jobs, Watch Analytics *(v1.11)*
+
+Each time you run a print, log it either from your slicer (via `/api/print-history`) or manually on the spool detail page (**Log usage** → enter grams). The app:
+
+- Decrements the spool's weight
+- Appends a `usageHistory` entry
+- Updates the **Analytics** dashboard
+
+Open **Analytics** (`/analytics`) to see consumption over the last 7 / 30 / 90 / 365 days, broken down by filament, vendor, and printer. Manual spool-edit entries and slicer-driven jobs show up in the same view without double-counting.
+
+## Step 22: Log Dry Cycles *(v1.11)*
+
+If you dry your filament before printing, log each cycle on the spool detail panel:
+
+1. Open the spool
+2. Click **+ Log dry cycle**
+3. Record temperature, duration, and any notes
+
+The dashboard's **Needs drying** list surfaces spools whose last cycle is older than 30 days.
+
+## Step 23: Share a Catalog *(v1.11)*
+
+Want to send a friend your exact PLA + PETG setup?
+
+1. Navigate to **Share** (`/share`)
+2. Click **+ New shared catalog**
+3. Pick filaments (multi-select), set a title, optional description, optional expiry
+4. Click **Publish** — you get back a short URL
+
+Recipients who open the URL see a read-only list. They can multi-select and click **Import selected** to pull the filaments (plus referenced nozzles/printers/bed-types) into their own instance. Same-named records on the destination are reused, so nothing gets duplicated.
+
+## Step 24: Compare Filaments *(v1.11)*
+
+On the filament list, tick the checkbox next to 2–4 rows and click **Compare**. The `/compare` page lays them out side-by-side — temperatures, cost, density, calibrations, and remaining weight — so you can pick the right one for a job.
+
+## Step 25: Bulk Import Spools from a Spreadsheet *(v1.11)*
+
+1. Export your inventory from a spreadsheet with columns: `filament, totalWeight` (required) plus optional `vendor, label, lotNumber, purchaseDate, openedDate, location`
+2. On the filament list, click **Import → Spools from CSV**
+3. Paste the CSV or upload the file
+4. Review the per-row results — any typos are flagged with the row number so you can fix and retry
+
+Missing locations are auto-created, so you don't need to seed locations in advance.
+
 ---
 
 ## Quick Reference
@@ -531,6 +594,15 @@ In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted fi
 | Erase NFC tag | Settings > NFC Tools > Erase Tag (desktop app) |
 | Export NFC binary | Detail page > Export OPT |
 | Track spools | Detail page > Spool Tracker > + Add Spool |
+| Assign spool to a location | Spool detail > Location dropdown |
+| Log manual spool usage | Spool detail > Log usage |
+| Log a dry cycle | Spool detail > + Log dry cycle |
+| View usage analytics | Top nav > Analytics |
+| Set low-stock threshold | Filament edit > Stock settings |
+| Compare filaments | List > select rows > Compare |
+| Publish a shared catalog | Top nav > Share > + New |
+| Import spools from CSV | Home > Import > Spools from CSV |
+| Switch theme | Settings > Theme |
 | Manual sync | Click status pill > Sync Now (desktop hybrid mode) |
 | Check connection status | Status pill next to "Filament DB" title |
 

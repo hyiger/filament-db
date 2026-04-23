@@ -18,9 +18,17 @@ export default defineConfig({
         "packages/shared/src/ndef/**",
       ],
       exclude: [
+        // Web-side files superseded by the shared package — the re-exports
+        // live at src/lib/*.ts but the covered implementation is in
+        // packages/shared/src/*.
         "src/lib/openprinttag.ts",
         "src/lib/openprinttag-decode.ts",
         "src/lib/resolveFilament.ts",
+        // DOM-only helper: uses Image, canvas, URL.createObjectURL — can't
+        // run in the Node test env. The pure helpers it exports
+        // (dataUrlSizeBytes) are still tested; excluded here only to keep
+        // function-coverage meaningful.
+        "src/lib/compressImage.ts",
         "**/index.ts",
         "packages/shared/src/logic/spoolCheck.ts",
         "packages/shared/src/logic/validation.ts",

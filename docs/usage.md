@@ -424,3 +424,92 @@ Even without the fork, you can manually sync:
 ## API Documentation
 
 Go to **Settings** and click **"API Documentation"** to open the interactive Swagger UI at `/api-docs`. This provides a browsable, testable interface for all REST API endpoints with full request/response schemas. The underlying OpenAPI 3.0 spec is available at `/api/openapi` (dynamically versioned from `package.json`).
+
+---
+
+## Dashboard *(v1.11)*
+
+The **Dashboard** page at `/dashboard` is the home of your inventory at a glance:
+
+- **Totals** — filament count, spool count, grams on hand, total cost on hand
+- **Low-stock warnings** — any filament whose aggregate remaining is under its per-filament `lowStockThreshold`. Clicking a row jumps to the filament detail.
+- **Needs drying** — spools whose most recent dry cycle is older than 30 days (configurable in settings later), grouped by filament type
+- **Quick links** — shortcut buttons to the filament list, analytics, locations, and share views
+
+Low-stock thresholds are set per filament on the edit page under **Stock settings → Low-stock threshold (g)**. A filament with no threshold is never flagged.
+
+## Locations *(v1.11)*
+
+The **Locations** page at `/locations` lets you describe where your physical spools live — dryboxes, shelves, cabinets, AMS units, and so on. Each location has:
+
+- **Name** (unique) and optional **kind** — free-form label used to group locations in pickers (`drybox`, `shelf`, `cabinet`, `printer`, etc.)
+- **Humidity %RH** — optional, user-updated. Useful for tracking conditions inside a drybox.
+- **Notes** — free-form.
+
+Once you've created at least one location, the spool detail panel gains a **Location** dropdown. Assign spools there and the list view stats show spool counts and total grams per location.
+
+**Delete protection:** the UI refuses to delete a location that's still referenced by any spool. Reassign those spools first, or retire them, and the delete will succeed.
+
+## Spool Photos, Retirement & Dry Cycles *(v1.11)*
+
+Each spool now has three additional ledgers accessible from its detail panel:
+
+- **Photo** — upload a JPEG/PNG (SVG is rejected for security). The file is downsampled to 1200px and compressed client-side to ~200KB before being stored inline on the spool subdocument, so there's no file-upload endpoint.
+- **Retired** — toggle to remove a spool from inventory totals, the PrusaSlicer spool-check endpoint, and the main spool list. History is preserved.
+- **Dry cycles** — log each drying session with optional temperature (°C), duration (minutes), and notes. The dashboard's "needs drying" warning reads from this log.
+- **Usage history** — each manual weight decrement (or slicer-driven print job) appends an entry tagged with its source (`manual`, `slicer`, `job`, `nfc`).
+
+## Bulk Spool CSV Import *(v1.11)*
+
+Click **Import → Spools from CSV** on the main list. Paste your CSV or upload a file with these columns:
+
+- **Required:** `filament`, `totalWeight`
+- **Optional:** `vendor` (disambiguates duplicate filament names), `label`, `lotNumber`, `purchaseDate` (YYYY-MM-DD), `openedDate`, `location` (auto-created if not found)
+
+The importer reports per-row success / failure, so a handful of typos won't abort the whole paste. Rows are capped at 10,000 per request.
+
+## Print History *(v1.11)*
+
+When a slicer (or a user) posts a print job to `/api/print-history`, two things happen:
+
+1. A `PrintHistory` document is created — the canonical record of what ran, on which printer, how many grams of each filament.
+2. Each referenced spool's `totalWeight` is decremented and a `usageHistory` entry is appended tagged `source: "job"`.
+
+These writes run inside a MongoDB transaction when the deployment supports it (Atlas replicas, hybrid mode) so a mid-write failure can't leave inventory out of sync with the history ledger.
+
+## Usage Analytics *(v1.11)*
+
+The **Analytics** page at `/analytics` draws from PrintHistory records plus any manual per-spool usage entries (the ones you logged directly on the spool UI without going through the print-history endpoint).
+
+- **Window**: 7, 30, 90, or 365 days
+- **Totals**: grams, estimated cost, jobs
+- **Usage by day**: bar chart
+- **Breakdown**: by filament, by vendor, by printer
+
+Manual job entries don't show up twice: entries tagged `source: "job"` or `"slicer"` are owned by a PrintHistory row and already counted in the primary aggregation. Only `source: "manual"` entries (true direct-edit logs) are added from the fallback pass.
+
+## Sharing a Catalog *(v1.11)*
+
+The **Share** page at `/share` lets you publish a static snapshot of selected filaments under a short slug. Use case: you want a friend to install the exact same PLA+PETG loadout you're running.
+
+1. Select the filaments you want to share (multi-select)
+2. Give the catalog a title + optional description, and optional expiry date
+3. Click **Publish** — the server collects every nozzle / printer / bed-type referenced by those filaments and denormalises everything into the payload, so the recipient gets a complete, consistent set
+
+**Public view** (`/share/{slug}`) — anyone with the link can browse the catalog, selectively import filaments into their own instance, and see a view counter that increments atomically. Published catalogs are static: later edits to the source filaments do not change what subsequent viewers download.
+
+**Importing** on the destination side rehydrates referenced entities first (nozzles, printers, bed-types), then creates the filaments with the correct local IDs. Same-named records on the destination are reused rather than duplicated; calibrations pointing at unresolvable references are dropped rather than saved dangling.
+
+## Filament Comparison *(v1.11)*
+
+The **Compare** page at `/compare` takes up to N filaments (pass via query string, or add from the filament list) and renders a side-by-side table of temperatures, cost, density, diameter, calibrations, and current remaining weight. Useful when deciding which of several similar filaments to use for a job.
+
+## System Theme *(v1.11)*
+
+Settings → **Theme**: choose **Light**, **Dark**, or **System**. System mode follows the OS `prefers-color-scheme` media query. An inline init script runs before React mounts so the first paint is already the correct theme — no dark-mode flicker on cold load.
+
+## Auto-Update (Desktop) *(v1.11)*
+
+A thin banner at the top of the app announces when a new version is available, downloads it in the background on request, and prompts for a restart-and-install when ready. All strings are localized — the native install confirmation dialog uses the renderer's current locale.
+
+On macOS, unsigned builds cannot auto-install through Gatekeeper. The banner surfaces a **View release** button as a fallback so you can download the DMG manually.

@@ -106,4 +106,45 @@ describe("validateSpoolBody (PUT semantics with partial: true)", () => {
     expect(validateSpoolBody({ totalWeight: "x" }, { partial: true }).ok).toBe(false);
     expect(validateSpoolBody({ label: false }, { partial: true }).ok).toBe(false);
   });
+
+  // Guard: the allow-list MIME regex in validateSpoolBody is narrower than
+  // "image/*" specifically so `image/svg+xml` can't slip through — SVGs
+  // can embed <script> that runs if the data URL is ever rendered in a
+  // context that doesn't treat it as a bitmap image.
+
+  it("accepts common raster image data URLs", () => {
+    for (const mime of ["jpeg", "jpg", "png", "gif", "webp", "avif", "heic", "heif"]) {
+      const r = validateSpoolBody({
+        photoDataUrl: `data:image/${mime};base64,AAAA`,
+      });
+      expect(r.ok).toBe(true);
+    }
+  });
+
+  it("rejects SVG data URLs", () => {
+    const r = validateSpoolBody({
+      photoDataUrl: "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects non-image data URLs", () => {
+    const r = validateSpoolBody({
+      photoDataUrl: "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
+    });
+    expect(r.ok).toBe(false);
+  });
+
+  it("rejects photoDataUrl over 5MB", () => {
+    const huge = "data:image/jpeg;base64," + "A".repeat(6 * 1024 * 1024);
+    const r = validateSpoolBody({ photoDataUrl: huge });
+    expect(r.ok).toBe(false);
+  });
+
+  it("treats empty photoDataUrl as null (UI clear-button path)", () => {
+    const r = validateSpoolBody({ photoDataUrl: "" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.photoDataUrl).toBeNull();
+  });
 });

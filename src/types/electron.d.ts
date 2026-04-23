@@ -40,6 +40,36 @@ interface ElectronAPI {
     tagUid: string | null;
   }) => void) => () => void;
   onNfcTagRead: (callback: (data: unknown) => void) => () => void;
+
+  // Auto-update
+  updateGetStatus: () => Promise<UpdateStatus>;
+  updateCheck: () => Promise<{ ok: boolean; error?: string }>;
+  updateDownload: () => Promise<{ ok: boolean; error?: string }>;
+  /**
+   * Triggers the confirm dialog + install. Optional `strings` lets the
+   * renderer pass translated strings for the OS-native dialog (renderer
+   * holds the i18n catalog; main process doesn't). Omit for English.
+   */
+  updateInstall: (strings?: UpdateInstallStrings) => Promise<{ ok: boolean; error?: string }>;
+  updateOpenReleasePage: () => Promise<{ ok: boolean }>;
+  onUpdateStatus: (callback: (status: UpdateStatus) => void) => () => void;
+}
+
+export interface UpdateStatus {
+  state: "idle" | "checking" | "available" | "downloading" | "ready" | "error" | "not-available";
+  version?: string;
+  releaseNotes?: string;
+  progress?: { percent: number; bytesPerSecond: number };
+  error?: string;
+}
+
+export interface UpdateInstallStrings {
+  title: string;
+  /** Use `{version}` as a placeholder for the update version. */
+  message: string;
+  detail: string;
+  installButton: string;
+  laterButton: string;
 }
 
 declare global {

@@ -13,7 +13,11 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Slicer parity** -- OrcaSlicer/BambuStudio/PrusaSlicer settings: overhang fan, aux fan, layer time thresholds, MMU/AMS params, start/end G-code, z-offset, air filtration
 - **Color variants** -- clone a filament as a color variant; inherited settings resolve automatically from the parent
 - **Presets** -- named parameter variants per filament (e.g., shore hardness profiles with different temps and extrusion multiplier)
-- **Spool tracking** -- track multiple spools per filament with individual weights, lot numbers, purchase/opened dates, and computed length from density and diameter
+- **Spool tracking** -- track multiple spools per filament with individual weights, lot numbers, purchase/opened dates, photos, location assignment, retirement flag, dry-cycle log, and per-spool usage history
+- **Locations** -- dedicated collection for dryboxes / shelves / cabinets / AMS slots with optional humidity readings; every spool can be assigned to one
+- **Low-stock thresholds** -- per-filament grams threshold surfaces inventory warnings on the dashboard and filament list chips
+- **Dashboard** -- at-a-glance counts, low-stock warnings, "needs drying" reminders, and shortcut links to every section
+- **Usage analytics** -- 7–365 day rolling window of grams consumed, cost, and jobs, broken down by day / filament / vendor / printer; draws from PrintHistory records plus manual per-spool entries
 - **Technical Data Sheets** -- link vendor TDS documents with inline preview pane and auto-suggestions from same-vendor filaments
 - **AI-powered TDS import** -- extract filament properties (temperatures, density, drying specs, Tg, HDT, shore hardness, speeds) from PDF or web TDS using Google Gemini, Anthropic Claude, or OpenAI ChatGPT
 - **Material defaults backfill** -- script to populate Tg, HDT, density, drying params, and speed ranges from curated defaults for 30+ material types
@@ -26,8 +30,14 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **NFC tag read/write/erase** -- read, write, and erase [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags and read Bambu Lab MIFARE Classic spool tags using an ACR1552U reader (desktop app)
 - **Instance IDs** -- unique per-filament identifier (5-byte hex, Prusament-compatible), written to NFC tags
 
+### Sharing & Comparison
+- **Shared catalogs** -- publish a static snapshot of selected filaments (with referenced nozzles/printers/bed-types) under a short public slug so another user or machine can import the set. Atomic view counts. Optional expiry.
+- **Compare view** -- side-by-side comparison of up to N filaments: temperatures, cost, density, calibrations, and calculated remaining material
+- **Print history** -- per-job ledger of grams consumed across multi-material prints, filterable by printer or filament, feeds the analytics dashboard
+
 ### Import / Export
 - **PrusaSlicer** -- import and export INI config bundles via browser upload or CLI
+- **Bulk spool import** -- paste or upload a CSV of spool rows (filament, weight, vendor, lot, dates, location); auto-creates missing locations and reports per-row errors
 - **PrusaSlicer Filament Edition** -- live bidirectional sync of filament presets with [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer) via REST API; presets appear in the filament dropdown on startup, changes sync back with per-nozzle calibration context, and calibration overrides are applied dynamically when switching printers/nozzles
 - **OpenPrintTag database** -- browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) (11,000+ materials from 97 brands), filter by type/brand/data quality, and selectively import filaments with completeness scoring
 - **CSV / XLSX** -- import and export spreadsheets with column mapping
@@ -39,9 +49,11 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 ### Desktop App
 - **Multi-language support** -- English and German, with easy addition of new languages
+- **System theme** -- light/dark/system toggle with no-flash init script; respects OS `prefers-color-scheme` in system mode
 - **Cross-platform** -- installable on macOS (.dmg), Windows (.exe), and Linux (.AppImage, .deb) including arm64 for Raspberry Pi
 - **Offline mode** -- embedded local MongoDB; choose cloud-only, hybrid, or fully offline
 - **Atlas sync** -- automatic bidirectional sync with MongoDB Atlas using last-write-wins conflict resolution
+- **Auto-update** -- in-app banner announces new versions, downloads in the background, and prompts to restart-and-install (localized); falls back to the GitHub release page on macOS since Gatekeeper blocks unsigned auto-install
 
 ### Developer
 - **REST API** -- full CRUD endpoints for filaments, nozzles, printers, and bed types
@@ -107,26 +119,37 @@ filament-db/
 ├── scripts/                 # CLI tools (seed import, icon generator, filament merge)
 ├── src/
 │   ├── app/
-│   │   ├── api/filaments/   # Filament REST API (CRUD, import, export, match, types, vendors, parents)
-│   │   ├── api/nozzles/     # Nozzle REST API (CRUD)
-│   │   ├── api/bed-types/    # Bed Type REST API (CRUD)
-│   │   ├── api/printers/    # Printer REST API (CRUD)
-│   │   ├── api/prusament/    # Prusament spool scraping and import
-│   │   ├── api/openprinttag/ # OpenPrintTag database browser and import
-│   │   ├── api/tds/          # AI-powered TDS extraction (Gemini/Claude/OpenAI)
-│   │   ├── api/setup/       # Connection test endpoint (for desktop setup wizard)
-│   │   ├── api-docs/        # Interactive Swagger UI (OpenAPI 3.0)
-│   │   ├── setup/           # First-launch setup wizard
-│   │   ├── filaments/       # Filament pages (list, detail, edit, new)
-│   │   ├── openprinttag/    # OpenPrintTag community database browser
-│   │   ├── nozzles/         # Nozzle pages (list, edit, new)
-│   │   ├── bed-types/       # Bed Type pages (list, edit, new)
-│   │   └── printers/        # Printer pages (list, edit, new)
-│   ├── components/          # React components (NFC status, dialogs, providers)
-│   ├── hooks/               # Custom hooks (useNfc, useCurrency)
-│   ├── lib/                 # DB connection, INI parser, OpenPrintTag encoder/decoder, TDS extractor, PrusaSlicer bundle generator, OpenPrintTag DB browser
-│   └── models/              # Mongoose schemas (Filament, Nozzle, Printer, BedType)
-├── tests/                   # Vitest unit tests (488 tests across 19 files)
+│   │   ├── api/filaments/      # Filament REST API (CRUD, import, export, match, types, vendors, parents)
+│   │   ├── api/nozzles/        # Nozzle REST API (CRUD)
+│   │   ├── api/bed-types/      # Bed Type REST API (CRUD)
+│   │   ├── api/printers/       # Printer REST API (CRUD)
+│   │   ├── api/locations/      # Location REST API (v1.11)
+│   │   ├── api/print-history/  # Print job ledger (v1.11)
+│   │   ├── api/analytics/      # Usage analytics aggregation (v1.11)
+│   │   ├── api/share/          # Public shared catalogs (v1.11)
+│   │   ├── api/spools/         # Bulk spool CSV import (v1.11)
+│   │   ├── api/prusament/      # Prusament spool scraping and import
+│   │   ├── api/openprinttag/   # OpenPrintTag database browser and import
+│   │   ├── api/tds/            # AI-powered TDS extraction (Gemini/Claude/OpenAI)
+│   │   ├── api/setup/          # Connection test endpoint (for desktop setup wizard)
+│   │   ├── api-docs/           # Interactive Swagger UI (OpenAPI 3.0)
+│   │   ├── setup/              # First-launch setup wizard
+│   │   ├── dashboard/          # Inventory / low-stock dashboard (v1.11)
+│   │   ├── locations/          # Location management pages (v1.11)
+│   │   ├── analytics/          # Usage analytics charts (v1.11)
+│   │   ├── share/              # Published catalogs list + public view (v1.11)
+│   │   ├── compare/            # Filament comparison view (v1.11)
+│   │   ├── filaments/          # Filament pages (list, detail, edit, new)
+│   │   ├── openprinttag/       # OpenPrintTag community database browser
+│   │   ├── nozzles/            # Nozzle pages (list, edit, new)
+│   │   ├── bed-types/          # Bed Type pages (list, edit, new)
+│   │   └── printers/           # Printer pages (list, edit, new)
+│   ├── components/             # React components (NFC, dialogs, providers, update banner, theme)
+│   ├── hooks/                  # Custom hooks (useNfc, useCurrency)
+│   ├── i18n/                   # Locale files + TranslationProvider (en, de)
+│   ├── lib/                    # DB connection, INI parser, CSV parser, image compression, OpenPrintTag encoder/decoder, TDS extractor, PrusaSlicer bundle, spool validator
+│   └── models/                 # Mongoose schemas (Filament, Nozzle, Printer, BedType, Location, PrintHistory, SharedCatalog)
+├── tests/                      # Vitest unit + route tests (635 tests across 35 files)
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   ├── release.yml          # CD: build desktop installers on version tags (4 platforms)

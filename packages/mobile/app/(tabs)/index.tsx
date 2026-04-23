@@ -38,6 +38,9 @@ export default function FilamentsTab() {
   }, [isConnected, search]);
 
   useEffect(() => {
+    // Standard fetch-on-param-change: loadFilaments setStates synchronously
+    // before awaiting, which trips the rule.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadFilaments();
   }, [loadFilaments]);
 

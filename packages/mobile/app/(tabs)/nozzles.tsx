@@ -29,6 +29,9 @@ export default function NozzlesTab() {
   }, [isConnected]);
 
   useEffect(() => {
+    // Standard fetch-on-mount: loadNozzles setStates synchronously before
+    // awaiting, which trips the rule.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     loadNozzles();
   }, [loadNozzles]);
 

@@ -5,6 +5,7 @@ import http from "http";
 import { NfcService } from "./nfc-service";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
+import { initAutoUpdater } from "./auto-updater";
 
 export type ConnectionMode = "atlas" | "offline" | "hybrid";
 
@@ -67,6 +68,9 @@ function createWindow(urlPath = "/") {
   });
 
   mainWindow.loadURL(getAppURL(urlPath));
+
+  // Start the auto-updater bound to this window. No-ops in dev.
+  initAutoUpdater(mainWindow);
 
   mainWindow.webContents.on("will-navigate", (event, url) => {
     const appUrl = getAppURL();
@@ -679,8 +683,10 @@ app.whenReady().then(async () => {
             mainWindow?.webContents.send("nfc-tag-detected", { data });
           })
           .catch((err) => {
-            // Blank/erased tags have no NDEF data — silently ignore
+            // Blank/erased tags have no NDEF data — tell the renderer so it
+            // can show an "empty tag" indication instead of silently ignoring.
             if (err.message?.includes("No NDEF TLV") || err.message?.includes("No NDEF record")) {
+              mainWindow?.webContents.send("nfc-tag-detected", { empty: true });
               return;
             }
             mainWindow?.webContents.send("nfc-tag-detected", { error: err.message });

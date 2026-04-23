@@ -15,6 +15,7 @@ interface FilamentMatch {
 export interface NfcTagReadResult {
   data?: DecodedOpenPrintTag;
   error?: string;
+  empty?: boolean;
   match?: FilamentMatch | null;
   candidates?: FilamentMatch[];
 }
@@ -57,9 +58,14 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
     if (!isElectron) return;
     const api = window.electronAPI!;
     const unsub = api.onNfcTagRead(async (raw: unknown) => {
-      const event = raw as { data?: DecodedOpenPrintTag; error?: string };
+      const event = raw as { data?: DecodedOpenPrintTag; error?: string; empty?: boolean };
       if (event.error) {
         setTagReadResult({ error: event.error });
+        return;
+      }
+
+      if (event.empty) {
+        setTagReadResult({ empty: true });
         return;
       }
 
