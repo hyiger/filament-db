@@ -102,6 +102,9 @@ function NewFilamentContent() {
       const bedMin = searchParams.get("bedMin") ? Number(searchParams.get("bedMin")) : null;
       const weight = searchParams.get("weight") ? Number(searchParams.get("weight")) : null;
 
+      // Syncing external URL state into form initial data. Can't be derived
+      // because the form is controlled elsewhere via formKey remounts.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setInitialData({
         name: searchParams.get("name") || "",
         vendor: searchParams.get("vendor") || "",
@@ -217,6 +220,8 @@ function NewFilamentContent() {
   useEffect(() => {
     if (!tagReadResult?.data) return;
     const data = tagReadResult.data;
+    // Syncing NFC tag payload into form initial data — same pattern as above.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setInitialData({
       name: data.materialName || "",
       vendor: data.brandName || "",

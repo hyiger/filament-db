@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import NfcStatus from "@/components/NfcStatus";
@@ -141,7 +141,7 @@ export default function FilamentDetail() {
     }
   };
 
-  const handleNfcWeightUpdate = async (scaleWeight: number) => {
+  const handleNfcWeightUpdate = useCallback(async (scaleWeight: number) => {
     if (!filament || filament.spoolWeight == null) return;
     const actualRemaining = Math.max(0, scaleWeight - filament.spoolWeight);
     setNfcWriteSuccess(null);
@@ -186,7 +186,7 @@ export default function FilamentDetail() {
       if (nfcWriteTimerRef.current) clearTimeout(nfcWriteTimerRef.current);
       nfcWriteTimerRef.current = setTimeout(() => setNfcWriteSuccess(null), 5000);
     }
-  };
+  }, [filament, writeTag, toast, t]);
 
   const handleWeightUpdate = async () => {
     if (!filament) return;
@@ -618,7 +618,12 @@ export default function FilamentDetail() {
                   <button
                     onClick={() => {
                       const val = parseFloat(weightInput);
+                      // handleNfcWeightUpdate reads a timeout ref internally, but
+                      // this arrow is an onClick handler so the ref is accessed
+                      // post-render. The rule can't infer that through a named
+                      // helper, so silence here.
                       if (!isNaN(val) && val > 0) {
+                        // eslint-disable-next-line react-hooks/refs
                         handleNfcWeightUpdate(val);
                       } else if (filament.totalWeight != null) {
                         handleNfcWeightUpdate(filament.totalWeight);
