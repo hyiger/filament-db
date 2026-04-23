@@ -64,18 +64,36 @@ describe("/api/spools/import", () => {
     expect(fresh.spools[0].totalWeight).toBe(950);
   });
 
-  it("disambiguates by vendor when two filaments share a name", async () => {
-    await Filament.create({ name: "PLA Black", vendor: "Vendor A", type: "PLA" });
-    const b = await Filament.create({ name: "PLA Black", vendor: "Vendor B", type: "PLA" });
+  it("uses the CSV vendor to guard against mismatched filament names", async () => {
+    // Schema enforces unique `name` among non-deleted filaments, so two rows
+    // can't actually share a name. But the importer still filters by vendor
+    // when it's supplied in the CSV, as a safety check: if the CSV says a
+    // vendor the DB row doesn't match, the row should fail rather than
+    // quietly attach the spool to the wrong filament.
+    const target = await Filament.create({ name: "PLA Black", vendor: "Vendor A", type: "PLA" });
 
-    const csv =
+    // Matching vendor — should import successfully.
+    const csvMatching =
       "filament,vendor,totalWeight\n" +
-      `PLA Black,Vendor B,800\n`;
-    const res = await importSpools(csvRequest(csv));
-    const body = await res.json();
-    expect(body.imported).toBe(1);
+      `PLA Black,Vendor A,800\n`;
+    const okRes = await importSpools(csvRequest(csvMatching));
+    const okBody = await okRes.json();
+    expect(okBody.imported).toBe(1);
+    expect(okBody.failed).toBe(0);
 
-    const fresh = await Filament.findById(b._id);
+    // Wrong vendor — should fail the row rather than match by name alone.
+    const csvMismatching =
+      "filament,vendor,totalWeight\n" +
+      `PLA Black,Vendor B,900\n`;
+    const failRes = await importSpools(csvRequest(csvMismatching));
+    const failBody = await failRes.json();
+    expect(failBody.imported).toBe(0);
+    expect(failBody.failed).toBe(1);
+    const failedRow = failBody.results.find((r: { ok: boolean; error?: string }) => !r.ok);
+    expect(failedRow.error).toMatch(/Vendor B/);
+
+    const fresh = await Filament.findById(target._id);
+    expect(fresh.spools).toHaveLength(1);
     expect(fresh.spools[0].totalWeight).toBe(800);
   });
 
