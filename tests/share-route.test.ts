@@ -129,6 +129,57 @@ describe("/api/share", () => {
       );
       expect(res.status).toBe(404);
     });
+
+    it("strips spool inventory + PII fields from the published payload", async () => {
+      // Regression: previously the full Filament.find().lean() result was
+      // stored in payload, exposing lot numbers, purchase/open dates,
+      // photos, location ids, dry cycle + usage history, and
+      // lowStockThreshold to anyone with the share link.
+      const nozzle = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "brass" });
+      const filament = await Filament.create({
+        name: "Privacy PLA",
+        vendor: "TestCo",
+        type: "PLA",
+        compatibleNozzles: [nozzle._id],
+        lowStockThreshold: 250,
+        totalWeight: 1000,
+        instanceId: "abc-123",
+        spools: [
+          {
+            label: "private",
+            totalWeight: 800,
+            lotNumber: "SECRET-LOT-42",
+            purchaseDate: new Date("2025-01-01"),
+            openedDate: new Date("2025-02-01"),
+          },
+        ],
+      });
+
+      const res = await createShare(
+        postReq({
+          title: "Shareable",
+          filamentIds: [String(filament._id)],
+        }),
+      );
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      const saved = await SharedCatalog.findOne({ slug: body.slug });
+      const shared = saved.payload.filaments[0];
+
+      // Profile data still present.
+      expect(shared.name).toBe("Privacy PLA");
+      expect(shared.vendor).toBe("TestCo");
+
+      // Inventory + PII stripped.
+      expect(shared.spools).toBeUndefined();
+      expect(shared.lowStockThreshold).toBeUndefined();
+      expect(shared.instanceId).toBeUndefined();
+      expect(shared.totalWeight).toBeUndefined();
+
+      // Serialised payload as a string must not contain the secret lot number
+      // (guards against re-adding a leaky field by another name).
+      expect(JSON.stringify(saved.payload)).not.toContain("SECRET-LOT-42");
+    });
   });
 
   describe("GET /api/share/[slug]", () => {
