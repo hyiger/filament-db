@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import React, { useEffect, useState, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import ImportAtlasDialog from "@/components/ImportAtlasDialog";
@@ -232,7 +232,11 @@ export default function Home() {
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [importing, setImporting] = useState(false);
-  const [mounted, setMounted] = useState(false);
+  const mounted = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
   const [showAtlasImport, setShowAtlasImport] = useState(false);
   const [showPrusamentImport, setShowPrusamentImport] = useState(false);
@@ -301,10 +305,6 @@ export default function Home() {
     }
   }, [debouncedSearch, typeFilter, vendorFilter, toast, t]);
 
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
   // Close import/export dropdown on outside click
   useEffect(() => {
     if (!showImportExport) return;
@@ -318,6 +318,10 @@ export default function Home() {
   }, [showImportExport]);
 
   useEffect(() => {
+    // Fetch whenever search/filter deps change. fetchFilaments sets loading=true
+    // synchronously, which the set-state-in-effect rule flags, but this is the
+    // standard fetch-on-param-change pattern with AbortController.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchFilaments();
   }, [fetchFilaments]);
 

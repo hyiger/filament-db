@@ -6,6 +6,7 @@ import { CURRENCIES, useCurrency, type CurrencyCode } from "@/hooks/useCurrency"
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { LOCALES } from "@/i18n";
 import { useTheme, type ThemePreference } from "@/components/ThemeProvider";
+import { useIsElectron } from "@/hooks/useIsElectron";
 
 export default function SettingsPage() {
   const { t, locale, setLocale } = useTranslation();
@@ -53,7 +54,7 @@ export default function SettingsPage() {
   const [testingConnection, setTestingConnection] = useState(false);
 
   // NFC state (Electron only)
-  const [isElectron, setIsElectron] = useState(false);
+  const isElectron = useIsElectron();
   const [nfcStatus, setNfcStatus] = useState<{
     readerConnected: boolean;
     readerName: string | null;
@@ -99,7 +100,6 @@ export default function SettingsPage() {
     const controller = new AbortController();
     const api = window.electronAPI;
     if (!api?.nfcGetStatus) return;
-    setIsElectron(true);
     api.nfcGetStatus().then((s) => {
       if (!controller.signal.aborted) setNfcStatus(s);
     }).catch(() => {});
@@ -107,12 +107,9 @@ export default function SettingsPage() {
     return () => { controller.abort(); unsub(); };
   }, []);
 
-  // Auto-dismiss erase confirmation when tag is removed
-  useEffect(() => {
-    if (!nfcStatus.tagPresent && showFormatConfirm) {
-      setShowFormatConfirm(false);
-    }
-  }, [nfcStatus.tagPresent, showFormatConfirm]);
+  // Hide the erase confirmation whenever the tag isn't present.
+  // Derived in render rather than via effect so a cascading setState isn't needed.
+  const showFormatConfirmVisible = showFormatConfirm && nfcStatus.tagPresent;
 
   const handleFormat = async () => {
     setShowFormatConfirm(false);
@@ -713,7 +710,7 @@ export default function SettingsPage() {
             </span>
           </div>
 
-          {!showFormatConfirm ? (
+          {!showFormatConfirmVisible ? (
             <button
               onClick={() => { setShowFormatConfirm(true); setFormatResult(null); }}
               disabled={formatting || !nfcStatus.tagPresent}
