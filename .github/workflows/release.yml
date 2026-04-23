@@ -131,6 +131,13 @@ jobs:
       - name: Upload release artifacts
         uses: softprops/action-gh-release@v2
         with:
-          files: dist-electron/FilamentDB-*
+          # Installers (FilamentDB-*) AND the electron-updater metadata files
+          # (latest-mac.yml, latest-mac-x64.yml, latest-linux.yml,
+          # latest-linux-arm64.yml, latest.yml). Without the yml files the
+          # auto-updater cannot resolve the newest release and every update
+          # check fails with a 404.
+          files: |
+            dist-electron/FilamentDB-*
+            dist-electron/latest*.yml
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
