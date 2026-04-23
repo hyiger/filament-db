@@ -66,12 +66,12 @@ export async function POST(request: NextRequest) {
   try {
     await dbConnect();
 
-    const filaments = await Filament.find({
+    const rawFilaments = await Filament.find({
       _id: { $in: body.filamentIds },
       _deletedAt: null,
     }).lean();
 
-    if (filaments.length === 0) {
+    if (rawFilaments.length === 0) {
       return errorResponse("No matching filaments found", 404);
     }
 
@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     const nozzleIds = new Set<string>();
     const printerIds = new Set<string>();
     const bedTypeIds = new Set<string>();
-    for (const f of filaments) {
+    for (const f of rawFilaments) {
       for (const nid of f.compatibleNozzles || []) nozzleIds.add(String(nid));
       for (const cal of f.calibrations || []) {
         if (cal.nozzle) nozzleIds.add(String(cal.nozzle));
@@ -94,6 +94,26 @@ export async function POST(request: NextRequest) {
       Printer.find({ _id: { $in: Array.from(printerIds) }, _deletedAt: null }).lean(),
       BedType.find({ _id: { $in: Array.from(bedTypeIds) }, _deletedAt: null }).lean(),
     ]);
+
+    // Strip per-instance inventory + PII fields that aren't part of the
+    // sharable profile: spools (lot numbers, purchase/open dates, photos,
+    // location refs, dry/usage history), lowStockThreshold, instanceId,
+    // and legacy totalWeight. Recipients can still import the profile and
+    // populate their own spools.
+    const filaments = rawFilaments.map((f) => {
+      const {
+        spools: _spools,
+        lowStockThreshold: _lowStockThreshold,
+        instanceId: _instanceId,
+        totalWeight: _totalWeight,
+        ...publicFields
+      } = f;
+      void _spools;
+      void _lowStockThreshold;
+      void _instanceId;
+      void _totalWeight;
+      return publicFields;
+    });
 
     const payload = {
       version: 1,

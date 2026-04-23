@@ -110,6 +110,49 @@ describe("print-history POST", () => {
     expect(historyCount).toBe(0);
   });
 
+  it("rejects an invalid spoolId before mutating anything", async () => {
+    // Regression: previously a caller could supply a spoolId that didn't
+    // exist on the referenced filament and the handler would silently fall
+    // through to "first spool" — debiting the wrong inventory and
+    // persisting the caller's invalid id to PrintHistory.
+    const f = await Filament.create({
+      name: "Spool Guard",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [
+        { label: "A", totalWeight: 1000 },
+        { label: "B", totalWeight: 800 },
+      ],
+    });
+
+    const bogusSpool = new mongoose.Types.ObjectId().toString();
+    const res = await postPrintHistory(
+      makeReq({
+        jobLabel: "test-spool-guard",
+        source: "manual",
+        usage: [
+          { filamentId: String(f._id), spoolId: bogusSpool, grams: 50 },
+        ],
+      }),
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/[Ss]pool/);
+
+    // Filament is untouched — neither spool got charged.
+    const after = await Filament.findById(f._id);
+    expect(after.spools[0].totalWeight).toBe(1000);
+    expect(after.spools[1].totalWeight).toBe(800);
+    expect(after.spools[0].usageHistory).toHaveLength(0);
+    expect(after.spools[1].usageHistory).toHaveLength(0);
+
+    // No PrintHistory row created.
+    const historyCount = await PrintHistory.countDocuments({});
+    expect(historyCount).toBe(0);
+  });
+
   it("applies updates across multiple filaments when all are valid", async () => {
     const a = await Filament.create({
       name: "Multi A",

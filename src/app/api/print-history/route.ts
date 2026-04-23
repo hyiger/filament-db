@@ -136,8 +136,24 @@ export async function POST(request: NextRequest) {
     });
     const byId = new Map(filaments.map((f) => [String(f._id), f]));
     for (const u of usage) {
-      if (!byId.has(u.filamentId)) {
+      const filament = byId.get(u.filamentId);
+      if (!filament) {
         return errorResponse(`Filament not found: ${u.filamentId}`, 404);
+      }
+      // If the caller named a specific spool, confirm it exists on this
+      // filament before we mutate anything. Otherwise an invalid or stale
+      // spoolId silently falls through to "first spool" in pass 2 and
+      // debits the wrong inventory.
+      if (u.spoolId) {
+        const hasSpool = filament.spools.some(
+          (s) => String(s._id) === u.spoolId,
+        );
+        if (!hasSpool) {
+          return errorResponse(
+            `Spool not found on filament ${u.filamentId}: ${u.spoolId}`,
+            400,
+          );
+        }
       }
     }
 

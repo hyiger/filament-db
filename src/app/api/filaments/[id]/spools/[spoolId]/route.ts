@@ -67,14 +67,20 @@ export async function DELETE(
     await dbConnect();
     const { id, spoolId } = await params;
 
+    // Require the spool to exist on the filament. Without this guard, a
+    // $pull with a missing spoolId is a silent no-op — the client gets a
+    // 200 and can't tell whether the delete actually happened.
     const filament = await Filament.findOneAndUpdate(
-      { _id: id, _deletedAt: null },
+      { _id: id, _deletedAt: null, "spools._id": spoolId },
       { $pull: { spools: { _id: spoolId } } },
       { new: true }
     ).lean();
 
     if (!filament) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Filament or spool not found" },
+        { status: 404 },
+      );
     }
     return NextResponse.json(filament);
   } catch (err) {
