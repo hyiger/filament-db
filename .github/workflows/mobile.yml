@@ -1,0 +1,139 @@
+name: Mobile Build
+
+on:
+  push:
+    tags:
+      - "mobile-v*"
+  pull_request:
+    paths:
+      - "packages/mobile/**"
+      - "packages/shared/**"
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "EAS build profile"
+        required: true
+        default: "preview"
+        type: choice
+        options:
+          - development
+          - preview
+          - production
+      platform:
+        description: "Platform to build"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - ios
+          - android
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.platform == 'all' && fromJSON('["ios", "android"]') || fromJSON(format('["{0}"]', github.event.inputs.platform))) || fromJSON('["ios", "android"]') }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install PC/SC development headers
+        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
+
+      - name: Install root + shared dependencies
+        run: npm ci
+
+      - name: Install mobile dependencies
+        working-directory: packages/mobile
+        run: npm install
+
+      - name: Setup Expo
+        uses: expo/expo-github-action@v8
+        with:
+          eas-version: latest
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Determine build profile
+        id: profile
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "profile=${{ github.event.inputs.profile }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == refs/tags/mobile-v* ]]; then
+            echo "profile=production" >> "$GITHUB_OUTPUT"
+          else
+            echo "profile=preview" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Android: wait for build, download APK, and upload to GitHub release
+      - name: Build Android (${{ steps.profile.outputs.profile }})
+        if: matrix.platform == 'android'
+        working-directory: packages/mobile
+        run: |
+          eas build \
+            --platform android \
+            --profile ${{ steps.profile.outputs.profile }} \
+            --non-interactive \
+            --wait \
+            --json > /tmp/eas-build-result.json 2>/dev/null || true
+          cat /tmp/eas-build-result.json
+
+      - name: Download Android APK
+        if: matrix.platform == 'android' && startsWith(github.ref, 'refs/tags/mobile-v')
+        working-directory: packages/mobile
+        run: |
+          BUILD_URL=$(jq -r '.[0].artifacts.buildUrl // empty' /tmp/eas-build-result.json)
+          if [ -z "$BUILD_URL" ]; then
+            echo "::error::No build artifact URL found"
+            exit 1
+          fi
+          # Extract version from tag (mobile-v1.0.0 -> 1.0.0)
+          VERSION="${GITHUB_REF_NAME#mobile-v}"
+          curl -L -o "FilamentDB-${VERSION}.apk" "$BUILD_URL"
+          echo "apk_path=packages/mobile/FilamentDB-${VERSION}.apk" >> "$GITHUB_ENV"
+          echo "apk_name=FilamentDB-${VERSION}.apk" >> "$GITHUB_ENV"
+
+      - name: Upload APK to GitHub Release
+        if: matrix.platform == 'android' && startsWith(github.ref, 'refs/tags/mobile-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.apk_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # iOS: submit to EAS (no artifact download — distributed via TestFlight)
+      - name: Build iOS (${{ steps.profile.outputs.profile }})
+        if: matrix.platform == 'ios'
+        working-directory: packages/mobile
+        run: |
+          eas build \
+            --platform ios \
+            --profile ${{ steps.profile.outputs.profile }} \
+            --non-interactive \
+            --no-wait
+
+      - name: Summary
+        run: |
+          echo "### 📱 Mobile Build" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Platform:** ${{ matrix.platform }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Profile:** ${{ steps.profile.outputs.profile }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Trigger:** ${{ github.event_name }}" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ matrix.platform }}" = "android" ] && [[ "${{ github.ref }}" == refs/tags/mobile-v* ]]; then
+            echo "- **APK:** Uploaded to GitHub Release ✅" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "${{ matrix.platform }}" = "ios" ]; then
+            echo "- **iOS:** Check build status at [expo.dev](https://expo.dev)" >> "$GITHUB_STEP_SUMMARY"
+          fi
