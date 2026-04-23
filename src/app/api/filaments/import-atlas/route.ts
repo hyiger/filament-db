@@ -70,12 +70,18 @@ export async function POST(request: NextRequest) {
         // Strip every foreign-ObjectId reference — they point at documents
         // in the *source* Atlas database and won't resolve locally. Leaving
         // them would surface as dangling refs in calibration/nozzle UIs.
-        delete filamentData.parentId;
-        delete filamentData.compatibleNozzles;
+        //
+        // Set these to explicit empty values rather than `delete`ing them so
+        // that when `Filament.updateOne(..., filamentData)` runs on an
+        // existing row, Mongoose actually *clears* the previously-stored
+        // Atlas values. Keys absent from the update doc would otherwise
+        // leave stale Atlas IDs in place on re-import/update.
+        filamentData.parentId = null;
+        filamentData.compatibleNozzles = [];
         filamentData.calibrations = [];
         if (Array.isArray(filamentData.spools)) {
           for (const s of filamentData.spools) {
-            if (s && typeof s === "object") delete s.locationId;
+            if (s && typeof s === "object") s.locationId = null;
           }
         }
 
