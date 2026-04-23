@@ -386,6 +386,8 @@
   "printers.form.create": "Drucker erstellen",
 
   "nfc.readDialog.errorTitle": "NFC-Lesefehler",
+  "nfc.readDialog.emptyTitle": "Leerer Tag",
+  "nfc.readDialog.emptyBody": "Dieser Tag enthält keine Filament-Daten. Öffne die Detailseite eines Filaments, um Daten darauf zu schreiben.",
   "nfc.readDialog.dismiss": "Schließen",
   "nfc.readDialog.found": "In Datenbank gefunden",
   "nfc.readDialog.createNew": "Neu erstellen",

@@ -386,6 +386,8 @@
   "printers.form.create": "Create Printer",
 
   "nfc.readDialog.errorTitle": "NFC Read Error",
+  "nfc.readDialog.emptyTitle": "Empty Tag",
+  "nfc.readDialog.emptyBody": "This tag has no filament data. Open a filament's detail page to write data to it.",
   "nfc.readDialog.dismiss": "Dismiss",
   "nfc.readDialog.found": "Found in Database",
   "nfc.readDialog.createNew": "Create New",
