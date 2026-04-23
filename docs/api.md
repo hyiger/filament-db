@@ -309,6 +309,47 @@ Returns:
 
 ---
 
+## OrcaSlicer Profiles
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/filaments/orcaslicer` | Export filaments as OrcaSlicer-compatible JSON profiles |
+| `POST` | `/api/filaments/:name-or-id/orcaslicer` | Sync filament settings back from OrcaSlicer |
+
+### GET /api/filaments/orcaslicer
+
+Exports filaments as an array of OrcaSlicer-compatible JSON profiles. Structured DB fields map to OrcaSlicer keys (e.g. `nozzle_temperature`, `hot_plate_temp`, `filament_flow_ratio`) with values wrapped in single-element arrays per OrcaSlicer's multi-extruder convention. Parent/variant inheritance is resolved before export.
+
+Query parameters:
+- `type` -- filter by filament type (e.g. `PLA`, `PETG`)
+- `vendor` -- filter by vendor name
+- `ids` -- comma-separated list of filament IDs
+
+Returns `application/json`: an array of OrcaSlicer profile objects.
+
+### POST /api/filaments/:name-or-id/orcaslicer
+
+Sync filament settings back from OrcaSlicer. The path segment is the URL-encoded filament name OR a 24-char hex ObjectId; the route tries name first and falls back to id.
+
+Request body is a JSON object with any combination of OrcaSlicer keys. Recognised structured keys (`type`, `vendor`, `color`, `density`, `cost`, `diameter`, `maxVolumetricSpeed`, `temperatures`) are written to the corresponding DB fields; any other top-level keys are merged into the `settings` passthrough bag so they round-trip cleanly on the next export.
+
+Returns:
+```json
+{
+  "success": true,
+  "filament": "Prusament PLA Galaxy Black",
+  "updated": ["temperatures", "density", "settings"],
+  "settingsAdded": ["filament_start_gcode"]
+}
+```
+
+- `updated` -- top-level fields modified on the filament document.
+- `settingsAdded` -- unknown keys that were preserved in the `settings` bag.
+
+404 if the filament name / id doesn't resolve; 400 if the body isn't valid JSON.
+
+---
+
 ## OpenPrintTag Database
 
 | Method | Endpoint | Description |
@@ -923,3 +964,45 @@ Each row is processed independently; per-row errors are reported in the response
 ```
 
 A single request is capped at 10,000 rows by `parseCsv`; beyond that the request is rejected with 400.
+
+---
+
+## Internal helper endpoints
+
+These endpoints back specific pages in the first-party UI. Shapes are tuned for those pages and may change without notice across minor releases — external consumers should use the documented public APIs above instead.
+
+### GET /api/dashboard (v1.11)
+
+Aggregate summary for the dashboard page — counts, total remaining grams, low-stock filaments, spools due for a dry cycle, and the 10 most recent print-history entries — computed server-side in a single round trip.
+
+Returns:
+```json
+{
+  "counts": {
+    "filaments": 48,
+    "nozzles": 3,
+    "printers": 2,
+    "bedTypes": 4,
+    "spools": 62,
+    "retiredSpools": 5
+  },
+  "totalGrams": 38250,
+  "lowStock": [
+    { "_id": "…", "name": "PETG Black", "vendor": "…", "color": "#000", "remainingGrams": 120, "threshold": 500 }
+  ],
+  "dryDue": [
+    { "filamentId": "…", "filamentName": "Nylon X", "spoolId": "…", "spoolLabel": "Spool #2", "lastDried": "2025-12-01T…" }
+  ],
+  "recentPrintHistory": [
+    { "_id": "…", "jobLabel": "Benchy", "printerName": "MK4", "startedAt": "…", "source": "manual", "totalGrams": 12.4 }
+  ]
+}
+```
+
+`dryDue` is capped at 20 entries and only includes spools where the filament has a `dryingTemperature` set AND no dry cycle in the last 30 days.
+
+### GET /api/filaments/compare?ids=a,b,c (v1.11)
+
+Fetch multiple filaments for the comparison view in one round trip. `ids` is a comma-separated list (minimum 1, maximum 8). Returns filaments in the same order as the `ids` list, with `compatibleNozzles` and `calibrations.{nozzle,printer,bedType}` populated so the UI can render names directly.
+
+`400` if `ids` is missing, empty, or over 8.
