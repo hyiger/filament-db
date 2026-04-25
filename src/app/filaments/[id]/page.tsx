@@ -88,6 +88,13 @@ export default function FilamentDetail() {
    * already-resolved verdict.
    */
   const embedCheckAbortRef = useRef<AbortController | null>(null);
+  /** Inline "+ Add Spool" form state — used for both the regular and the
+   * first-spool entry points. Was previously a one-click create with no
+   * confirmation; users would land on a blank spool with no idea what
+   * had just happened. */
+  const [addSpoolForm, setAddSpoolForm] = useState<
+    { open: boolean; label: string; totalWeight: string }
+  >({ open: false, label: "", totalWeight: "" });
   const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag } = useNfcContext();
   const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
   const nfcWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -716,7 +723,7 @@ export default function FilamentDetail() {
                 <button
                   onClick={handleWeightUpdate}
                   disabled={weightSaving || !weightInput}
-                  className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                  className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400"
                 >
                   {weightSaving ? "..." : t("common.save")}
                 </button>
@@ -779,32 +786,114 @@ export default function FilamentDetail() {
                     nfcWriting={nfcWriting}
                   />
                 ))}
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleAddSpool()}
-                    className="flex-1 py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
-                  >
-                    + {t("detail.addSpool")}
-                  </button>
-                  <button
-                    onClick={() => setShowPrusamentImport(true)}
-                    className="py-2 px-3 border-2 border-dashed border-orange-300 dark:border-orange-700 rounded-lg text-sm text-orange-500 hover:border-orange-400 hover:text-orange-600 transition-colors"
-                    title={t("detail.spool.prusamentImportTitle")}
-                  >
-                    + {t("detail.spool.prusamentQr")}
-                  </button>
-                </div>
+                {addSpoolForm.open ? (
+                  <div className="flex flex-wrap gap-2 items-stretch p-3 border border-blue-300 dark:border-blue-700 rounded-lg bg-blue-50/30 dark:bg-blue-950/20">
+                    <input
+                      type="text"
+                      autoFocus
+                      placeholder={t("detail.spool.addLabelPlaceholder")}
+                      value={addSpoolForm.label}
+                      onChange={(e) => setAddSpoolForm((s) => ({ ...s, label: e.target.value }))}
+                      className="flex-1 min-w-[10rem] px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder={t("detail.spool.addWeightPlaceholder")}
+                      value={addSpoolForm.totalWeight}
+                      onChange={(e) => setAddSpoolForm((s) => ({ ...s, totalWeight: e.target.value }))}
+                      className="w-32 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
+                    />
+                    <button
+                      onClick={async () => {
+                        const weight = addSpoolForm.totalWeight
+                          ? Number(addSpoolForm.totalWeight)
+                          : null;
+                        await handleAddSpool(addSpoolForm.label.trim(), weight);
+                        setAddSpoolForm({ open: false, label: "", totalWeight: "" });
+                      }}
+                      className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                    >
+                      {t("detail.spool.addCreate")}
+                    </button>
+                    <button
+                      onClick={() =>
+                        setAddSpoolForm({ open: false, label: "", totalWeight: "" })
+                      }
+                      className="px-4 py-1.5 border border-gray-300 dark:border-gray-700 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-800"
+                    >
+                      {t("common.cancel")}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setAddSpoolForm({ open: true, label: "", totalWeight: "" })}
+                      className="flex-1 py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                    >
+                      + {t("detail.addSpool")}
+                    </button>
+                    <button
+                      onClick={() => setShowPrusamentImport(true)}
+                      className="py-2 px-3 border-2 border-dashed border-orange-300 dark:border-orange-700 rounded-lg text-sm text-orange-500 hover:border-orange-400 hover:text-orange-600 transition-colors"
+                      title={t("detail.spool.prusamentImportTitle")}
+                    >
+                      + {t("detail.spool.prusamentQr")}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
             {/* Add first spool button when no weight data exists yet */}
             {!hasSpools && filament.totalWeight == null && filament.spoolWeight != null && (
-              <button
-                onClick={() => handleAddSpool()}
-                className="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
-              >
-                + {t("detail.addSpool")}
-              </button>
+              addSpoolForm.open ? (
+                <div className="flex flex-wrap gap-2 items-stretch p-3 border border-blue-300 dark:border-blue-700 rounded-lg bg-blue-50/30 dark:bg-blue-950/20">
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder={t("detail.spool.addLabelPlaceholder")}
+                    value={addSpoolForm.label}
+                    onChange={(e) => setAddSpoolForm((s) => ({ ...s, label: e.target.value }))}
+                    className="flex-1 min-w-[10rem] px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder={t("detail.spool.addWeightPlaceholder")}
+                    value={addSpoolForm.totalWeight}
+                    onChange={(e) => setAddSpoolForm((s) => ({ ...s, totalWeight: e.target.value }))}
+                    className="w-32 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
+                  />
+                  <button
+                    onClick={async () => {
+                      const weight = addSpoolForm.totalWeight
+                        ? Number(addSpoolForm.totalWeight)
+                        : null;
+                      await handleAddSpool(addSpoolForm.label.trim(), weight);
+                      setAddSpoolForm({ open: false, label: "", totalWeight: "" });
+                    }}
+                    className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                  >
+                    {t("detail.spool.addCreate")}
+                  </button>
+                  <button
+                    onClick={() => setAddSpoolForm({ open: false, label: "", totalWeight: "" })}
+                    className="px-4 py-1.5 border border-gray-300 dark:border-gray-700 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setAddSpoolForm({ open: true, label: "", totalWeight: "" })}
+                  className="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                >
+                  + {t("detail.addSpool")}
+                </button>
+              )
             )}
           </div>
         );
@@ -1414,6 +1503,12 @@ function SpoolCard({
               />
               <button
                 type="button"
+                // Require at least one of (temp, duration) — empty cycles
+                // are accidental clicks; the dashboard's "needs drying"
+                // list keys off the timestamp, not the metric values, so
+                // a blank cycle would still mark the spool as recently
+                // dried and silently mask a real overdue.
+                disabled={!dryTemp && !dryDuration}
                 onClick={() => {
                   onLogDryCycle({
                     tempC: dryTemp ? Number(dryTemp) : null,
@@ -1422,7 +1517,7 @@ function SpoolCard({
                   setDryTemp("");
                   setDryDuration("");
                 }}
-                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400"
               >
                 {t("detail.spool.logDry")}
               </button>
@@ -1460,6 +1555,13 @@ function SpoolCard({
               />
               <button
                 type="button"
+                // Disable until grams is a positive number. The earlier
+                // version validated inside onClick but kept the button
+                // active blue, so a user who logged 25g once could come
+                // back, see (apparently) cleared inputs, click again,
+                // and not know whether their click did nothing or
+                // re-posted the previous value.
+                disabled={!(Number(usageGrams) > 0)}
                 onClick={() => {
                   const g = Number(usageGrams);
                   if (!Number.isFinite(g) || g <= 0) return;
@@ -1467,7 +1569,7 @@ function SpoolCard({
                   setUsageGrams("");
                   setUsageLabel("");
                 }}
-                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400"
               >
                 {t("detail.spool.logUsage")}
               </button>

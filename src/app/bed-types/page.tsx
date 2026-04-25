@@ -153,7 +153,7 @@ export default function BedTypesPage() {
                     type="checkbox"
                     checked={selected.size === bedTypes.length && bedTypes.length > 0}
                     onChange={toggleAll}
-                    aria-label={t("filaments.bulk.selectAll") || "Select all"}
+                    aria-label={t("bedTypes.bulk.selectAll") || "Select all"}
                     className="accent-red-600"
                   />
                 </th>

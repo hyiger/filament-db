@@ -68,7 +68,7 @@ export async function PUT(
     const nozzle = await Nozzle.findOneAndUpdate(
       { _id: id, _deletedAt: null },
       body,
-      { new: true, runValidators: true }
+      { returnDocument: "after", runValidators: true }
     ).lean();
     if (!nozzle) {
       return errorResponse("Not found", 404);
@@ -133,7 +133,7 @@ export async function DELETE(
     const nozzle = await Nozzle.findOneAndUpdate(
       { _id: id, _deletedAt: null },
       { _deletedAt: new Date() },
-      { new: true }
+      { returnDocument: "after" }
     ).lean();
     if (!nozzle) {
       return errorResponse("Not found", 404);

@@ -1150,7 +1150,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               onChange={(e) => setForm({ ...form, totalWeight: e.target.value })}
               placeholder={t("form.placeholder.initialWeight")}
             />
-            <p className="text-xs text-gray-400 mt-1">{t("form.initialWeightHint")}</p>
+            <p className="text-xs text-gray-400 mt-1">
+              {initialData?._id
+                ? t("form.initialWeightHintEdit")
+                : t("form.initialWeightHint")}
+            </p>
           </div>
           <div>
             <label className={labelClass}>{t("form.lowStockThreshold")}</label>

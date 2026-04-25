@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
         const existing = await Filament.findOneAndUpdate(
           { name, _deletedAt: null, vendor },
           { $set: optUpdateFields },
-          { new: true },
+          { returnDocument: "after" },
         );
 
         if (existing) {
