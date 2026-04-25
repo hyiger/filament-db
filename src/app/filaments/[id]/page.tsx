@@ -69,9 +69,17 @@ export default function FilamentDetail() {
     filament?.tdsUrl && embedCheck?.tdsUrl === filament.tdsUrl
       ? embedCheck.state
       : "idle";
-  /** ID of the filament whose `name` matches the current filament's
-   *  `inherits` field, if any — used to render Inherits-from as a link. */
-  const [inheritsTargetId, setInheritsTargetId] = useState<string | null>(null);
+  /** Lookup result for the current filament's `inherits` PrusaSlicer-style
+   *  parent name. Stamped with the inheritsName the lookup was for so a
+   *  filament-prop change can't expose a stale (wrong) target id while the
+   *  next fetch is still in flight — same pattern as embedCheck above. */
+  const [inheritsLookup, setInheritsLookup] = useState<
+    { inheritsName: string; targetId: string | null } | null
+  >(null);
+  const inheritsTargetId =
+    filament?.inherits && inheritsLookup?.inheritsName === filament.inherits
+      ? inheritsLookup.targetId
+      : null;
   const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag } = useNfcContext();
   const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
   const nfcWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -118,9 +126,11 @@ export default function FilamentDetail() {
   }, []);
 
   // If this filament has an `inherits` PrusaSlicer-style parent name, look up
-  // whether any filament in the DB matches it exactly so we can render the
-  // line as a clickable link to that filament's detail page. The state stays
-  // null until the fetch resolves; the render falls back to plain text.
+  // whether any filament in the DB matches it exactly. The result is stored
+  // stamped with the inheritsName it was for, and the derived
+  // `inheritsTargetId` above only returns it when the stamp matches the
+  // *current* filament's inherits — so a same-route navigation can't render
+  // a stale link to the previous filament's parent.
   useEffect(() => {
     if (!filament?.inherits) return;
     const inheritsName = filament.inherits;
@@ -129,7 +139,7 @@ export default function FilamentDetail() {
       .then((r) => (r.ok ? r.json() : []))
       .then((rows: { _id: string; name: string }[]) => {
         const match = rows.find((row) => row.name === inheritsName);
-        if (match?._id) setInheritsTargetId(match._id);
+        setInheritsLookup({ inheritsName, targetId: match?._id ?? null });
       })
       .catch(() => {});
     return () => ac.abort();
