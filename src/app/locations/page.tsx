@@ -169,7 +169,7 @@ export default function LocationsPage() {
                       selected.size === locations.length && locations.length > 0
                     }
                     onChange={toggleAll}
-                    aria-label={t("filaments.bulk.selectAll") || "Select all"}
+                    aria-label={t("locations.bulk.selectAll") || "Select all"}
                     className="accent-red-600"
                   />
                 </th>

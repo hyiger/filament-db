@@ -46,7 +46,7 @@ export async function PUT(
     const filament = await Filament.findOneAndUpdate(
       { _id: id, _deletedAt: null, "spools._id": spoolId },
       { $set: update },
-      { new: true }
+      { returnDocument: "after" }
     ).lean();
 
     if (!filament) {
@@ -73,7 +73,7 @@ export async function DELETE(
     const filament = await Filament.findOneAndUpdate(
       { _id: id, _deletedAt: null, "spools._id": spoolId },
       { $pull: { spools: { _id: spoolId } } },
-      { new: true }
+      { returnDocument: "after" }
     ).lean();
 
     if (!filament) {

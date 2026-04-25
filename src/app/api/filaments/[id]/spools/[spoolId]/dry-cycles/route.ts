@@ -42,7 +42,7 @@ export async function POST(
     const filament = await Filament.findOneAndUpdate(
       { _id: id, _deletedAt: null, "spools._id": spoolId },
       { $push: { "spools.$.dryCycles": entry } },
-      { new: true },
+      { returnDocument: "after" },
     ).lean();
     if (!filament) {
       return errorResponse("Filament or spool not found", 404);

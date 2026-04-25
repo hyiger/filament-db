@@ -24,7 +24,7 @@ export async function GET(
     const catalog = await SharedCatalog.findOneAndUpdate(
       { slug },
       { $inc: { viewCount: 1 } },
-      { new: true },
+      { returnDocument: "after" },
     );
     if (!catalog) {
       return errorResponse("Shared catalog not found", 404);

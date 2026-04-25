@@ -35,7 +35,7 @@ export async function POST(
           },
         },
       },
-      { new: true }
+      { returnDocument: "after" }
     ).lean();
 
     if (!filament) {

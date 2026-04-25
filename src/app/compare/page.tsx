@@ -160,7 +160,16 @@ function ComparePageInner() {
     },
     {
       label: t("compare.row.dryingTime"),
-      get: (f) => (f.dryingTime != null ? `${f.dryingTime} h` : "—"),
+      // dryingTime is stored in MINUTES (see Filament.ts canonical-unit
+      // comment). Render as Xh Ym, the same shape NfcReadDialog uses.
+      get: (f) => {
+        if (f.dryingTime == null) return "—";
+        const h = Math.floor(f.dryingTime / 60);
+        const m = f.dryingTime % 60;
+        if (h === 0) return `${m}m`;
+        if (m === 0) return `${h}h`;
+        return `${h}h ${m}m`;
+      },
     },
     {
       label: t("compare.row.glassTemp"),
