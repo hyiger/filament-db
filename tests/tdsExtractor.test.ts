@@ -1,11 +1,72 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // We test the internal parsing/cleaning logic by importing the module
-// and mocking fetch for the Gemini API calls
+// and mocking fetch for the Gemini API calls.
+//
+// dns.lookup is mocked at the module level: the real extractor calls it
+// inside its SSRF guard before fetch, and the fake-timer rate-limit test
+// would otherwise hang waiting on real-time DNS while wall time is frozen.
+// The mock returns a public address so the guard sees example.com as
+// external; tests that exercise the guard's reject paths use literal IPs
+// or non-http schemes that short-circuit before reaching this lookup.
+vi.mock("node:dns/promises", () => ({
+  lookup: vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]),
+}));
 
 describe("tdsExtractor", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  describe("SSRF guard (assertExternalUrl)", () => {
+    // The guard runs before fetch, so a URL that fails validation never
+    // reaches the network. We confirm by stubbing fetch to throw if it's
+    // ever called — the test passes only if the guard short-circuits.
+    const denyFetch = () => {
+      vi.stubGlobal("fetch", vi.fn().mockImplementation(() => {
+        throw new Error("FETCH SHOULD NOT BE CALLED — guard should have blocked");
+      }));
+    };
+
+    it("rejects loopback URLs", async () => {
+      denyFetch();
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("http://127.0.0.1/tds.pdf", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/private|internal/i);
+    });
+
+    it("rejects RFC1918 private IPs", async () => {
+      denyFetch();
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("http://10.0.0.5/tds.pdf", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/private|internal/i);
+    });
+
+    it("rejects the AWS/GCP/Azure metadata IP (169.254.169.254)", async () => {
+      denyFetch();
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("http://169.254.169.254/latest/meta-data/", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/private|internal/i);
+    });
+
+    it("rejects file:// and other non-http(s) schemes", async () => {
+      denyFetch();
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("file:///etc/passwd", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/scheme/i);
+    });
+
+    it("rejects IPv6 loopback (::1)", async () => {
+      denyFetch();
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("http://[::1]/tds.pdf", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/private|internal/i);
+    });
   });
 
   describe("extractFromTds", () => {
@@ -88,7 +149,10 @@ describe("tdsExtractor", () => {
                   bed: 60,
                 },
                 dryingTemperature: 55,
-                dryingTime: 4,
+                // The prompt now asks for minutes (480 = 8h). Older mocks
+                // used 4 here, which would silently render as 4 minutes
+                // downstream — see src/models/Filament.ts dryingTime comment.
+                dryingTime: 480,
                 glassTempTransition: 60,
                 heatDeflectionTemp: null,
                 shoreHardnessA: null,

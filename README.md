@@ -149,7 +149,7 @@ filament-db/
 │   ├── i18n/                   # Locale files + TranslationProvider (en, de)
 │   ├── lib/                    # DB connection, INI parser, CSV parser, image compression, OpenPrintTag encoder/decoder, TDS extractor, PrusaSlicer bundle, spool validator
 │   └── models/                 # Mongoose schemas (Filament, Nozzle, Printer, BedType, Location, PrintHistory, SharedCatalog)
-├── tests/                      # Vitest unit + route tests (635 tests across 35 files)
+├── tests/                      # Vitest unit + route + Mongoose model + electron sync tests
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   ├── release.yml          # CD: build desktop installers on version tags (4 platforms)

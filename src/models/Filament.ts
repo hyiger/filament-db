@@ -122,6 +122,11 @@ export interface IFilament extends Document {
    * shows a low-stock indicator on the dashboard and list. Null = disabled. */
   lowStockThreshold: number | null;
   dryingTemperature: number | null;
+  /** Drying time in MINUTES (480 = 8 hours). The form input, CSV export header,
+   * and NfcReadDialog all assume minutes; TDS extractor converts hours→minutes
+   * at the boundary. Other code paths (compare page, OpenPrintTag display)
+   * historically rendered this value with an "h" suffix — those are display
+   * bugs against this canonical unit and should be fixed if they surface. */
   dryingTime: number | null;
   transmissionDistance: number | null;
   glassTempTransition: number | null;
