@@ -508,9 +508,17 @@ export class SyncService extends EventEmitter {
         return { ...spool, locationId: correctId };
       });
       if (changed) {
+        // CRITICAL: do NOT bump updatedAt. This repair runs before the
+        // filament-sync last-write-wins comparison; bumping the timestamp
+        // here would make the repaired side look "newest" purely because
+        // we touched it, and a subsequent push could overwrite genuinely
+        // newer edits on the *other* side that haven't synced yet.
+        // Preserving updatedAt lets the existing comparison resolve the
+        // sync correctly: equal timestamps → no action needed (both sides
+        // now consistent), unequal → real edit recency wins.
         await db.collection("filaments").updateOne(
           { _id: f._id },
-          { $set: { spools: newSpools, updatedAt: new Date() } },
+          { $set: { spools: newSpools } },
         );
         repaired++;
       }
