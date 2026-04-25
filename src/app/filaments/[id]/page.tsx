@@ -80,6 +80,14 @@ export default function FilamentDetail() {
     filament?.inherits && inheritsLookup?.inheritsName === filament.inherits
       ? inheritsLookup.targetId
       : null;
+  /**
+   * AbortController for the in-flight embed-check fetch. Lets a new toggle
+   * (e.g. user navigates A→B and opens B's preview before A's probe has
+   * resolved) cancel the previous request and ignore its eventual reply,
+   * so a late-arriving response can't overwrite a newer in-flight or
+   * already-resolved verdict.
+   */
+  const embedCheckAbortRef = useRef<AbortController | null>(null);
   const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag } = useNfcContext();
   const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
   const nfcWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -162,13 +170,29 @@ export default function FilamentDetail() {
     setPreviewOpenFor(tdsUrl);
     // Skip if we already have a verdict for this exact tdsUrl this session.
     if (embedCheck?.tdsUrl === tdsUrl) return;
+
+    // Cancel any in-flight probe so a late response from the *previous*
+    // toggle (different filament, different tdsUrl) can't overwrite this
+    // one's verdict and snap the open preview back to "idle".
+    embedCheckAbortRef.current?.abort();
+    const ac = new AbortController();
+    embedCheckAbortRef.current = ac;
+
     setEmbedCheck({ tdsUrl, state: "checking" });
     try {
-      const res = await fetch(`/api/embed-check?url=${encodeURIComponent(tdsUrl)}`);
+      const res = await fetch(`/api/embed-check?url=${encodeURIComponent(tdsUrl)}`, {
+        signal: ac.signal,
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: { embeddable: boolean } = await res.json();
+      // Defence in depth: even if the abort raced and we read the body,
+      // skip the write if our controller is no longer the latest one.
+      if (embedCheckAbortRef.current !== ac) return;
       setEmbedCheck({ tdsUrl, state: data.embeddable ? "allowed" : "blocked" });
-    } catch {
+    } catch (err) {
+      // Aborted requests are intentional, not errors — just drop them.
+      if ((err as { name?: string })?.name === "AbortError") return;
+      if (embedCheckAbortRef.current !== ac) return;
       setEmbedCheck({ tdsUrl, state: "error" });
     }
   };
