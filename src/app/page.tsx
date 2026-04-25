@@ -727,7 +727,7 @@ export default function Home() {
           className="hidden"
         />
       )}
-      <div ref={stickyHeaderRef} className="sticky top-0 z-20 bg-white dark:bg-gray-950 pb-3 -mt-8 pt-8 border-b border-gray-200 dark:border-gray-800 shadow-sm">
+      <div ref={stickyHeaderRef} className="sticky top-[var(--app-header-h)] z-20 bg-white dark:bg-gray-950 pb-3 -mt-8 pt-8 border-b border-gray-200 dark:border-gray-800 shadow-sm">
       <div className="flex items-start justify-between gap-4 mb-6 flex-wrap">
         <div className="min-w-0">
           <div className="flex items-center gap-3 flex-wrap">

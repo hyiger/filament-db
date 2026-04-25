@@ -118,4 +118,127 @@ describe("/api/embed-check", () => {
     expect(body.embeddable).toBe(false);
     expect(body.reason).toMatch(/ECONNREFUSED/);
   });
+
+  // Codex P1 follow-up: redirect-based SSRF.
+  describe("redirect handling (manual, per-hop revalidation)", () => {
+    it("rejects a public URL that 302-redirects to a private IP (the SSRF gap)", async () => {
+      // First fetch: public host returns 302 → http://10.0.0.5/secret
+      // The route should re-run assertExternalUrl on the redirect target,
+      // which throws because 10.0.0.5 is RFC1918 — and never issue the
+      // second fetch.
+      const fetchMock = vi.fn().mockImplementationOnce(() =>
+        Promise.resolve({
+          status: 302,
+          headers: new Headers({ location: "http://10.0.0.5/secret" }),
+          body: { cancel: () => Promise.resolve() },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { body } = await callRoute("https://attacker.example.com/start");
+      expect(body.embeddable).toBe(false);
+      expect(body.reason).toMatch(/private|internal/i);
+      // Critical: the second fetch (to the private IP) must NOT have happened.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a redirect to the AWS/GCP/Azure metadata IP", async () => {
+      const fetchMock = vi.fn().mockImplementationOnce(() =>
+        Promise.resolve({
+          status: 302,
+          headers: new Headers({ location: "http://169.254.169.254/latest/meta-data/" }),
+          body: { cancel: () => Promise.resolve() },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { body } = await callRoute("https://example.com/innocuous");
+      expect(body.embeddable).toBe(false);
+      expect(body.reason).toMatch(/private|internal/i);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a redirect to a non-http(s) scheme (e.g. file://)", async () => {
+      const fetchMock = vi.fn().mockImplementationOnce(() =>
+        Promise.resolve({
+          status: 302,
+          headers: new Headers({ location: "file:///etc/passwd" }),
+          body: { cancel: () => Promise.resolve() },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { body } = await callRoute("https://example.com/innocuous");
+      expect(body.embeddable).toBe(false);
+      expect(body.reason).toMatch(/scheme/i);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("follows a public→public redirect chain and inspects the final response's headers", async () => {
+      // 302 → 301 → 200 (with X-Frame-Options: DENY on the final response).
+      // dns.lookup is mocked to return a public IP for any hostname.
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 302,
+          headers: new Headers({ location: "https://b.example.com/redirected" }),
+          body: { cancel: () => Promise.resolve() },
+        })
+        .mockResolvedValueOnce({
+          status: 301,
+          headers: new Headers({ location: "https://c.example.com/final" }),
+          body: { cancel: () => Promise.resolve() },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: new Headers({ "x-frame-options": "DENY" }),
+          body: { cancel: () => Promise.resolve() },
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      const { body } = await callRoute("https://a.example.com/start");
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(body.embeddable).toBe(false);
+      expect(body.reason).toMatch(/x-frame-options/i);
+    });
+
+    it("resolves a relative Location header against the previous URL", async () => {
+      // First fetch: 302 with Location: "/redirected" (no scheme/host).
+      // Should be resolved against the request URL.
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 302,
+          headers: new Headers({ location: "/elsewhere" }),
+          body: { cancel: () => Promise.resolve() },
+        })
+        .mockResolvedValueOnce({
+          ok: true, status: 200, statusText: "OK",
+          headers: new Headers(),
+          body: { cancel: () => Promise.resolve() },
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      await callRoute("https://example.com/path/start");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const secondCallUrl = fetchMock.mock.calls[1][0];
+      expect(secondCallUrl).toBe("https://example.com/elsewhere");
+    });
+
+    it("aborts after MAX_REDIRECTS (5) hops", async () => {
+      // Always redirect to the next hop. Should stop after 5 follow attempts
+      // and return embeddable: false with a "too many redirects" reason.
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        const next = url.replace(/\/(\d+)$/, (_, n) => `/${Number(n) + 1}`);
+        return Promise.resolve({
+          status: 302,
+          headers: new Headers({ location: next }),
+          body: { cancel: () => Promise.resolve() },
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { body } = await callRoute("https://example.com/0");
+      expect(body.embeddable).toBe(false);
+      expect(body.reason).toMatch(/too many redirects/i);
+      // 6 calls = initial + MAX_REDIRECTS (5) follow attempts before bailing.
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+    });
+  });
 });

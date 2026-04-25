@@ -449,7 +449,7 @@ export default function OpenPrintTagBrowser() {
   return (
     <div className="min-h-screen bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
       {/* Header */}
-      <div className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 sticky top-0 z-20">
+      <div className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 sticky top-[var(--app-header-h)] z-20">
         <div className="max-w-[1600px] mx-auto px-4 py-3">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3">
@@ -498,7 +498,7 @@ export default function OpenPrintTagBrowser() {
 
       <div className="max-w-[1600px] mx-auto flex">
         {/* Sidebar */}
-        <aside className="w-64 flex-shrink-0 border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 h-[calc(100vh-64px)] sticky top-[64px] overflow-y-auto">
+        <aside className="w-64 flex-shrink-0 border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 h-[calc(100vh-var(--app-header-h)-64px)] sticky top-[calc(var(--app-header-h)+64px)] overflow-y-auto">
           {/* Search */}
           <div className="p-3 border-b border-gray-200 dark:border-gray-700">
             <input
@@ -624,7 +624,7 @@ export default function OpenPrintTagBrowser() {
         {/* Main content */}
         <main className="flex-1 min-w-0">
           {/* Toolbar */}
-          <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30 flex items-center justify-between sticky top-[64px] z-10">
+          <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/30 flex items-center justify-between sticky top-[calc(var(--app-header-h)+64px)] z-10">
             <div className="flex items-center gap-3">
               <label className="flex items-center gap-2 text-sm">
                 <input
