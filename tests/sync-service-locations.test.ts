@@ -478,6 +478,14 @@ describe("SyncService — locations and spool.locationId remap", () => {
     const localVariantId = new ObjectId();
     const remoteVariantId = new ObjectId();
 
+    // CRITICAL: every row uses the SAME timestamp — corresponding local and
+    // remote rows must have exactly equal updatedAt so syncCollection's
+    // last-write-wins skip fires (no merge), leaving the repair pass as the
+    // ONLY thing that could change parentId. With per-row `new Date()` calls
+    // the timestamps drift by milliseconds and Node 22 was fast enough to
+    // make remote slightly newer, which silently triggered LWW and made the
+    // assertion flap.
+    const sharedTimestamp = new Date();
     for (const [db, parentAId, parentBId, variantId, variantParentId] of [
       [localDb, localParentAId, localParentBId, localVariantId, localParentAId],
       [remoteDb, remoteParentAId, remoteParentBId, remoteVariantId, remoteParentBId],
@@ -485,19 +493,19 @@ describe("SyncService — locations and spool.locationId remap", () => {
       await db.collection("filaments").insertOne({
         _id: parentAId, syncId: parentASyncId,
         name: "Parent A", vendor: "Test", type: "PLA",
-        _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+        _deletedAt: null, createdAt: sharedTimestamp, updatedAt: sharedTimestamp,
         parentId: null,
       });
       await db.collection("filaments").insertOne({
         _id: parentBId, syncId: parentBSyncId,
         name: "Parent B", vendor: "Test", type: "PLA",
-        _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+        _deletedAt: null, createdAt: sharedTimestamp, updatedAt: sharedTimestamp,
         parentId: null,
       });
       await db.collection("filaments").insertOne({
         _id: variantId, syncId: variantSyncId,
         name: "Variant", vendor: "Test", type: "PLA",
-        _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+        _deletedAt: null, createdAt: sharedTimestamp, updatedAt: sharedTimestamp,
         parentId: variantParentId,
       });
     }
