@@ -333,7 +333,6 @@ describe("SyncService — locations and spool.locationId remap", () => {
   });
 
   it("clears spool.locationId to null when the dangling reference has no syncId match anywhere", async () => {
-    const localDb = localClient.db("filament-db");
     const remoteDb = remoteClient.db("filament-db");
 
     // No locations at all on either side — but a remote filament still
@@ -351,5 +350,70 @@ describe("SyncService — locations and spool.locationId remap", () => {
 
     const remoteFilament = await remoteDb.collection("filaments").findOne({ name: "PLA w/ orphan ref" });
     expect(remoteFilament?.spools[0].locationId).toBeNull();
+  });
+
+  // Codex P1 follow-up to PR #119 — guards against data loss in the repair pass.
+  it("repair pass preserves updatedAt so subsequent filament sync respects real edit recency", async () => {
+    const localDb = localClient.db("filament-db");
+    const remoteDb = remoteClient.db("filament-db");
+
+    // Reconciled location on both sides (different ObjectIds, shared syncId).
+    const sharedLocSyncId = "shared-loc";
+    const localLocId = new ObjectId();
+    const remoteLocId = new ObjectId();
+    await localDb.collection("locations").insertOne({
+      _id: localLocId, syncId: sharedLocSyncId,
+      name: "Drybox", kind: "drybox", humidity: null, notes: "",
+      _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+    });
+    await remoteDb.collection("locations").insertOne({
+      _id: remoteLocId, syncId: sharedLocSyncId,
+      name: "Drybox", kind: "drybox", humidity: null, notes: "",
+      _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+    });
+
+    // Setup: the user just edited filament F on LOCAL (newer updatedAt) — say
+    // they bumped nozzle temp from 215 to 220. Local's spool happens to be
+    // already correct.
+    // REMOTE has the older snapshot of F (nozzle 215) AND a dangling
+    // spool.locationId (carries localLocId from some pre-#116 sync).
+    //
+    // Pre-fix, the repair pass on remote bumped updatedAt to "now" — which
+    // would have made remote *appear* newer than local at the filament-sync
+    // step, pushing the stale nozzle=215 over local's correct nozzle=220.
+    // Test asserts that doesn't happen.
+    const sharedFilamentSyncId = "f-shared";
+    const remoteOlderTime = new Date(Date.now() - 60_000);
+    const localNewerTime = new Date();
+    await localDb.collection("filaments").insertOne({
+      _id: new ObjectId(), syncId: sharedFilamentSyncId,
+      name: "PLA Black", vendor: "Test", type: "PLA",
+      temperatures: { nozzle: 220 }, // user's recent edit
+      _deletedAt: null, createdAt: remoteOlderTime, updatedAt: localNewerTime,
+      spools: [{ _id: new ObjectId(), label: "Spool A", totalWeight: 1000, locationId: localLocId }],
+    });
+    await remoteDb.collection("filaments").insertOne({
+      _id: new ObjectId(), syncId: sharedFilamentSyncId,
+      name: "PLA Black", vendor: "Test", type: "PLA",
+      temperatures: { nozzle: 215 }, // stale value
+      _deletedAt: null, createdAt: remoteOlderTime, updatedAt: remoteOlderTime,
+      // Dangling: points at LOCAL's location ObjectId, which doesn't exist on remote.
+      spools: [{ _id: new ObjectId(), label: "Spool A", totalWeight: 1000, locationId: localLocId }],
+    });
+
+    sync = makeSync();
+    await sync.sync();
+
+    // Local's newer nozzle temp must win the merge — both sides should now
+    // see 220, NOT remote's stale 215.
+    const localF = await localDb.collection("filaments").findOne({ syncId: sharedFilamentSyncId });
+    const remoteF = await remoteDb.collection("filaments").findOne({ syncId: sharedFilamentSyncId });
+    expect(localF?.temperatures?.nozzle).toBe(220);
+    expect(remoteF?.temperatures?.nozzle).toBe(220);
+
+    // And the spool ref ends up correct on both sides via the filament push
+    // transform (not via the repair, which never touched local at all).
+    expect(localF?.spools[0].locationId.toString()).toBe(localLocId.toString());
+    expect(remoteF?.spools[0].locationId.toString()).toBe(remoteLocId.toString());
   });
 });
