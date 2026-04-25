@@ -109,6 +109,8 @@
   "common.compare": "Vergleichen",
   "common.analytics": "Analyse",
   "common.share": "Teilen",
+  "nav.openMenu": "Navigationsmenü öffnen",
+  "nav.closeMenu": "Navigationsmenü schließen",
   "update.available": "Update verfügbar: Filament DB v{version}",
   "update.downloading": "Update wird heruntergeladen… {percent}%",
   "update.ready": "Update heruntergeladen: v{version}. Zum Installieren neu starten.",

@@ -167,12 +167,6 @@ export default function SettingsPage() {
 
   return (
     <main className="max-w-3xl mx-auto px-4 py-8">
-      <div className="mb-6">
-        <Link href="/" className="text-blue-600 hover:underline text-sm">
-          &larr; {t("settings.backToFilaments")}
-        </Link>
-      </div>
-
       <h1 className="text-3xl font-bold mb-2">{t("settings.title")}</h1>
       <p className="text-gray-500 text-sm mb-8">
         {t("settings.subtitle")}
