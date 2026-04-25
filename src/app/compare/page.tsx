@@ -198,11 +198,6 @@ function ComparePageInner() {
 
   return (
     <main className="max-w-7xl mx-auto px-4 py-8">
-      <div className="mb-4">
-        <Link href="/" className="text-blue-600 hover:underline text-sm">
-          &larr; {t("compare.backToFilaments")}
-        </Link>
-      </div>
       <h1 className="text-3xl font-bold mb-2">{t("compare.title")}</h1>
       <p className="text-sm text-gray-500 mb-6">{t("compare.subtitle")}</p>
 

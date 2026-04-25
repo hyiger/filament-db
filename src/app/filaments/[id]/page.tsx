@@ -56,6 +56,9 @@ export default function FilamentDetail() {
    */
   const [tdsEmbedState, setTdsEmbedState] =
     useState<"idle" | "checking" | "allowed" | "blocked" | "error">("idle");
+  /** ID of the filament whose `name` matches the current filament's
+   *  `inherits` field, if any — used to render Inherits-from as a link. */
+  const [inheritsTargetId, setInheritsTargetId] = useState<string | null>(null);
   const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag } = useNfcContext();
   const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
   const nfcWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -100,6 +103,24 @@ export default function FilamentDetail() {
       .catch(() => {});
     return () => ac.abort();
   }, []);
+
+  // If this filament has an `inherits` PrusaSlicer-style parent name, look up
+  // whether any filament in the DB matches it exactly so we can render the
+  // line as a clickable link to that filament's detail page. The state stays
+  // null until the fetch resolves; the render falls back to plain text.
+  useEffect(() => {
+    if (!filament?.inherits) return;
+    const inheritsName = filament.inherits;
+    const ac = new AbortController();
+    fetch(`/api/filaments?search=${encodeURIComponent(inheritsName)}`, { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: { _id: string; name: string }[]) => {
+        const match = rows.find((row) => row.name === inheritsName);
+        if (match?._id) setInheritsTargetId(match._id);
+      })
+      .catch(() => {});
+    return () => ac.abort();
+  }, [filament?.inherits]);
 
   // Probe whether the TDS URL allows iframe embedding. Done in a click
   // handler (not an effect) because the "set state to 'checking' then
@@ -1000,7 +1021,17 @@ export default function FilamentDetail() {
 
       {filament.inherits && (
         <p className="text-sm text-gray-500 mb-4">
-          {t("detail.inheritsFrom")}: <span className="font-mono">{filament.inherits}</span>
+          {t("detail.inheritsFrom")}:{" "}
+          {inheritsTargetId ? (
+            <Link
+              href={`/filaments/${inheritsTargetId}`}
+              className="font-mono text-blue-600 hover:underline"
+            >
+              {filament.inherits}
+            </Link>
+          ) : (
+            <span className="font-mono">{filament.inherits}</span>
+          )}
         </p>
       )}
 

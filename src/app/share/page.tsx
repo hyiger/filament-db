@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import CopyButton from "@/components/CopyButton";
 import { useTranslation } from "@/i18n/TranslationProvider";
@@ -111,11 +110,6 @@ export default function ShareManagementPage() {
 
   return (
     <main className="max-w-4xl mx-auto px-4 py-8">
-      <div className="mb-4">
-        <Link href="/" className="text-blue-600 hover:underline text-sm">
-          &larr; {t("share.backToFilaments")}
-        </Link>
-      </div>
       <h1 className="text-3xl font-bold mb-2">{t("share.title")}</h1>
       <p className="text-sm text-gray-500 mb-6">{t("share.subtitle")}</p>
 

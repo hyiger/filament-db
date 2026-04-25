@@ -8,7 +8,6 @@ import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SpoolCsvImportDialog from "@/components/SpoolCsvImportDialog";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 import NfcStatus from "@/components/NfcStatus";
-import AppNav from "@/components/AppNav";
 import QuickFilterChips, { type QuickFilter } from "@/components/QuickFilterChips";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
@@ -737,7 +736,6 @@ export default function Home() {
             <SyncStatusIndicator />
             <NfcStatus />
           </div>
-          <AppNav />
         </div>
         <div className="flex gap-2 shrink-0">
           {/* Import / Export dropdown */}

@@ -102,10 +102,6 @@ export default function BedTypesPage() {
         <div>
           <h1 className="text-3xl font-bold">{t("bedTypes.title")}</h1>
           <div className="flex gap-3">
-            <Link href="/" className="text-blue-600 hover:underline text-sm">
-              &larr; {t("bedTypes.backToFilaments")}
-            </Link>
-            <span className="text-gray-400 dark:text-gray-600">|</span>
             <Link href="/settings" className="text-blue-600 hover:underline text-sm">
               &larr; {t("bedTypes.backToSettings")}
             </Link>

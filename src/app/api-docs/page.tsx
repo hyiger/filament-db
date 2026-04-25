@@ -28,10 +28,6 @@ export default function ApiDocsPage() {
     <div className="min-h-screen">
       <div className="max-w-7xl mx-auto px-4 pt-6 pb-2">
         <div className="flex gap-3">
-          <Link href="/" className="text-blue-600 hover:underline text-sm">
-            &larr; {t("apiDocs.backToFilaments")}
-          </Link>
-          <span className="text-gray-300 dark:text-gray-600">|</span>
           <Link href="/settings" className="text-blue-600 hover:underline text-sm">
             &larr; {t("apiDocs.backToSettings")}
           </Link>
