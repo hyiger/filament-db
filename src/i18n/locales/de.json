@@ -711,6 +711,12 @@
   "detail.tds.hide": "Technisches Datenblatt ausblenden",
   "detail.tds.openNewTab": "In neuem Tab öffnen",
   "detail.tds.title": "Technisches Datenblatt",
+  "detail.tds.checking": "Prüfe, ob die Seite Einbettung erlaubt…",
+  "detail.tds.blockedTitle": "Dieser Hersteller blockiert eingebettete Vorschauen",
+  "detail.tds.blockedBody": "Die Website des Herstellers verweigert das Einbetten (X-Frame-Options oder Content-Security-Policy). Öffne das Datenblatt direkt, um es anzusehen.",
+  "detail.tds.errorTitle": "Datenblatt nicht erreichbar",
+  "detail.tds.errorBody": "Die URL konnte nicht geprüft werden. Die Seite ist möglicherweise offline oder hinter einer Firewall. Versuche, sie direkt zu öffnen.",
+  "detail.tds.openExternal": "Datenblatt öffnen",
 
   "detail.settings.show": "Alle PrusaSlicer-Einstellungen anzeigen",
   "detail.settings.hide": "Alle PrusaSlicer-Einstellungen ausblenden",

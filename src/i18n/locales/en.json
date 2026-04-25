@@ -711,6 +711,12 @@
   "detail.tds.hide": "Hide Technical Data Sheet",
   "detail.tds.openNewTab": "Open in new tab",
   "detail.tds.title": "Technical Data Sheet",
+  "detail.tds.checking": "Checking whether this site allows embedding…",
+  "detail.tds.blockedTitle": "This vendor blocks in-page previews",
+  "detail.tds.blockedBody": "The vendor's site refuses to be embedded in another page (X-Frame-Options or Content-Security-Policy). Open the data sheet directly to view it.",
+  "detail.tds.errorTitle": "Couldn't reach the data sheet",
+  "detail.tds.errorBody": "We couldn't probe the URL. The site may be offline or behind a firewall. Try opening it directly.",
+  "detail.tds.openExternal": "Open data sheet",
 
   "detail.settings.show": "Show all PrusaSlicer settings",
   "detail.settings.hide": "Hide all PrusaSlicer settings",
