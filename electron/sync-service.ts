@@ -216,6 +216,16 @@ export class SyncService extends EventEmitter {
         filamentTransform,
       );
 
+      // Repair filaments whose parentId was dropped (or stale) when the
+      // syncCollection transform ran. The transform builds its target id
+      // map BEFORE the sync inserts — so on a fresh install the local map
+      // is empty and every variant's parentId gets nulled on first pull
+      // (GH #128). Same shape can also happen for any newly-created
+      // parent+variant pair pulled in the same cycle. This pass projects
+      // the truth from the *other* side via syncId maps that are now
+      // built against the post-sync state of both DBs.
+      await this.repairFilamentParentIds(localDb, remoteDb);
+
       const results = [nozzleResult, printerResult, locationResult, filamentResult];
       this.updateStatus({
         state: "idle",
@@ -525,6 +535,109 @@ export class SyncService extends EventEmitter {
     }
     if (repaired > 0) {
       console.log(`repairDanglingSpoolLocations: fixed ${repaired} ${sideLabel} filament(s)`);
+    }
+  }
+
+  /**
+   * Restore filament parentId references that the in-line transform couldn't
+   * resolve when syncCollection ran. The transform builds its target id map
+   * once at sync start — on a fresh install the local map is empty, so when
+   * a variant is pulled, the lookup `localFilamentBySyncId.get(syncId)` for
+   * its parent returns undefined and the variant gets `parentId: null` on
+   * first insert. Subsequent syncs see equal updatedAt and skip the row, so
+   * the wrong null persists forever (GH #128).
+   *
+   * This pass runs AFTER the main filament sync and uses freshly-rebuilt
+   * id maps. It projects the truth from the *other* side via the syncId
+   * map so a fresh install gets the parent links it should have. Conservative:
+   * only writes when current parentId is null-but-should-be-set, OR is set
+   * but dangling (points at a non-existent id on this side). Existing valid
+   * parentIds are left alone — last-write-wins on the next sync handles
+   * intentional user edits.
+   *
+   * Does NOT bump updatedAt — same rationale as repairDanglingSpoolLocations.
+   */
+  private async repairFilamentParentIds(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+  ): Promise<void> {
+    const lf = await localDb.collection("filaments").find({}).toArray();
+    const rf = await remoteDb.collection("filaments").find({}).toArray();
+
+    const localBySyncId = new Map<string, Document>();
+    const localIdToSyncId = new Map<string, string>();
+    for (const f of lf) {
+      if (f.syncId) {
+        localBySyncId.set(f.syncId as string, f);
+        localIdToSyncId.set(f._id.toString(), f.syncId as string);
+      }
+    }
+    const remoteBySyncId = new Map<string, Document>();
+    const remoteIdToSyncId = new Map<string, string>();
+    for (const f of rf) {
+      if (f.syncId) {
+        remoteBySyncId.set(f.syncId as string, f);
+        remoteIdToSyncId.set(f._id.toString(), f.syncId as string);
+      }
+    }
+
+    await this.repairSideParentIds(localDb, lf, localBySyncId, remoteBySyncId, remoteIdToSyncId, "local");
+    await this.repairSideParentIds(remoteDb, rf, remoteBySyncId, localBySyncId, localIdToSyncId, "remote");
+  }
+
+  private async repairSideParentIds(
+    db: ReturnType<MongoClient["db"]>,
+    sideFilaments: Document[],
+    sideBySyncId: Map<string, Document>,
+    otherBySyncId: Map<string, Document>,
+    otherIdToSyncId: Map<string, string>,
+    sideLabel: "local" | "remote",
+  ): Promise<void> {
+    const validIds = new Set(sideFilaments.map((f) => f._id.toString()));
+    let fixed = 0;
+
+    for (const f of sideFilaments) {
+      if (!f.syncId) continue;
+
+      const currentParentIdStr: string | null = f.parentId
+        ? f.parentId.toString()
+        : null;
+
+      // What should parentId be on this side, projected from the other side?
+      const counterpart = otherBySyncId.get(f.syncId as string);
+      let expected: ObjectId | null = null;
+      if (counterpart?.parentId) {
+        const parentSyncId = otherIdToSyncId.get(counterpart.parentId.toString());
+        if (parentSyncId) {
+          const sideParent = sideBySyncId.get(parentSyncId);
+          expected = (sideParent?._id as ObjectId | undefined) ?? null;
+        }
+      }
+
+      const isCurrentDangling =
+        currentParentIdStr != null && !validIds.has(currentParentIdStr);
+      const expectedStr = expected ? expected.toString() : null;
+
+      // Conservative: only repair the two clear-bug shapes. Don't touch
+      // valid-but-different parentIds (those are legitimate user edits and
+      // belong to the next last-write-wins cycle).
+      const shouldFix =
+        // Fresh-install null leak: should have a parent, currently null.
+        (currentParentIdStr == null && expected != null) ||
+        // Stale id pointing at nothing on this side.
+        (isCurrentDangling && currentParentIdStr !== expectedStr);
+
+      if (!shouldFix) continue;
+
+      await db.collection("filaments").updateOne(
+        { _id: f._id },
+        { $set: { parentId: expected } },
+      );
+      fixed++;
+    }
+
+    if (fixed > 0) {
+      console.log(`repairFilamentParentIds: fixed ${fixed} ${sideLabel} filament(s)`);
     }
   }
 
