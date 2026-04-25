@@ -43,7 +43,12 @@ interface SyncResult {
 /**
  * Bidirectional sync engine between local MongoDB and Atlas.
  * Uses last-write-wins conflict resolution based on updatedAt timestamps.
- * Nozzles are synced first so filament references can be remapped.
+ * Nozzles, printers, and locations are synced first so filaments (and their
+ * embedded spools) can have their references remapped onto the target DB's IDs.
+ *
+ * NOTE: bedtypes, printhistory, and sharedcatalogs are NOT synced yet — they
+ * were added in v1.11 alongside locations and have the same gap. They'll need
+ * the same treatment when their data starts diverging across desktops.
  */
 export class SyncService extends EventEmitter {
   private localUri: string;
@@ -154,6 +159,19 @@ export class SyncService extends EventEmitter {
       const localPrinterBySyncId = new Map(localPrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
       const remotePrinterBySyncId = new Map(remotePrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
 
+      // Sync locations before filaments so spool.locationId can be remapped.
+      // Locations are referenced from filaments[].spools[].locationId — a
+      // missing remap would either drop the reference or, worse, point at a
+      // wrong location on the target DB (GH #116).
+      this.updateStatus({ progress: "Syncing locations..." });
+      const locationResult = await this.syncCollection(localDb, remoteDb, "locations");
+
+      // Build location syncId→ID maps for spool reference remapping
+      const localLocations = await localDb.collection("locations").find({ _deletedAt: null }).toArray();
+      const remoteLocations = await remoteDb.collection("locations").find({ _deletedAt: null }).toArray();
+      const localLocationBySyncId = new Map(localLocations.filter(l => l.syncId).map(l => [l.syncId as string, l._id]));
+      const remoteLocationBySyncId = new Map(remoteLocations.filter(l => l.syncId).map(l => [l.syncId as string, l._id]));
+
       // Backfill filament syncIds before building maps (syncCollection does this too, but we need maps first)
       await this.backfillSyncIds(localDb.collection("filaments"));
       await this.backfillSyncIds(remoteDb.collection("filaments"));
@@ -164,19 +182,20 @@ export class SyncService extends EventEmitter {
       const localFilamentBySyncId = new Map(localFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
       const remoteFilamentBySyncId = new Map(remoteFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
 
-      // Sync filaments with nozzle, printer, and parent reference remapping
+      // Sync filaments with nozzle, printer, parent, and spool-location remapping
       this.updateStatus({ progress: "Syncing filaments..." });
       const filamentTransform = this.buildFilamentRefsTransform(
         localNozzleBySyncId, remoteNozzleBySyncId,
         localPrinterBySyncId, remotePrinterBySyncId,
         localFilamentBySyncId, remoteFilamentBySyncId,
+        localLocationBySyncId, remoteLocationBySyncId,
       );
       const filamentResult = await this.syncCollection(
         localDb, remoteDb, "filaments",
         filamentTransform,
       );
 
-      const results = [nozzleResult, printerResult, filamentResult];
+      const results = [nozzleResult, printerResult, locationResult, filamentResult];
       this.updateStatus({
         state: "idle",
         lastSyncAt: new Date().toISOString(),
@@ -382,6 +401,8 @@ export class SyncService extends EventEmitter {
     remotePrinterBySyncId: Map<string, ObjectId>,
     localFilamentBySyncId: Map<string, ObjectId>,
     remoteFilamentBySyncId: Map<string, ObjectId>,
+    localLocationBySyncId: Map<string, ObjectId>,
+    remoteLocationBySyncId: Map<string, ObjectId>,
   ): (doc: Document, direction: "toLocal" | "toRemote") => Document {
     // Build reverse maps once (source ID → syncId) for both directions
     const buildReverse = (map: Map<string, ObjectId>) => {
@@ -398,12 +419,16 @@ export class SyncService extends EventEmitter {
     const remotePrinterIdToSyncId = buildReverse(remotePrinterBySyncId);
     const localFilamentIdToSyncId = buildReverse(localFilamentBySyncId);
     const remoteFilamentIdToSyncId = buildReverse(remoteFilamentBySyncId);
+    const localLocationIdToSyncId = buildReverse(localLocationBySyncId);
+    const remoteLocationIdToSyncId = buildReverse(remoteLocationBySyncId);
 
     return (doc: Document, direction: "toLocal" | "toRemote"): Document => {
       const sourceNozzleIdToSyncId = direction === "toLocal" ? remoteNozzleIdToSyncId : localNozzleIdToSyncId;
       const targetNozzleMap = direction === "toLocal" ? localNozzleBySyncId : remoteNozzleBySyncId;
       const sourcePrinterIdToSyncId = direction === "toLocal" ? remotePrinterIdToSyncId : localPrinterIdToSyncId;
       const targetPrinterMap = direction === "toLocal" ? localPrinterBySyncId : remotePrinterBySyncId;
+      const sourceLocationIdToSyncId = direction === "toLocal" ? remoteLocationIdToSyncId : localLocationIdToSyncId;
+      const targetLocationMap = direction === "toLocal" ? localLocationBySyncId : remoteLocationBySyncId;
 
       // Remap compatibleNozzles
       if (Array.isArray(doc.compatibleNozzles)) {
@@ -446,6 +471,19 @@ export class SyncService extends EventEmitter {
         const parentSyncId = sourceFilamentIdToSyncId.get(doc.parentId.toString());
         const targetParentId = parentSyncId ? targetFilamentMap.get(parentSyncId) : null;
         doc.parentId = targetParentId || null;
+      }
+
+      // Remap spools[].locationId. Locations sync as their own collection but
+      // the ObjectIds differ across DBs, so each spool's locationId must be
+      // translated through the syncId map. Unknown locations clear to null
+      // rather than pointing at a wrong location on the target side.
+      if (Array.isArray(doc.spools)) {
+        doc.spools = doc.spools.map((spool: Document) => {
+          if (!spool.locationId) return spool;
+          const locSyncId = sourceLocationIdToSyncId.get(spool.locationId.toString());
+          const targetLocationId = locSyncId ? targetLocationMap.get(locSyncId) : null;
+          return { ...spool, locationId: targetLocationId || null };
+        });
       }
 
       return doc;
