@@ -46,6 +46,16 @@ export default function FilamentDetail() {
   const [filament, setFilament] = useState<Filament | null>(null);
   const [showAllSettings, setShowAllSettings] = useState(false);
   const [showTdsPreview, setShowTdsPreview] = useState(false);
+  /**
+   * Result of /api/embed-check for the current filament's tdsUrl.
+   *  - "idle":     not requested yet (preview hasn't been opened)
+   *  - "checking": probe in flight
+   *  - "allowed":  server says headers permit framing
+   *  - "blocked":  X-Frame-Options or CSP frame-ancestors will refuse
+   *  - "error":    network or guard failure (treat like blocked, fall back)
+   */
+  const [tdsEmbedState, setTdsEmbedState] =
+    useState<"idle" | "checking" | "allowed" | "blocked" | "error">("idle");
   const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag } = useNfcContext();
   const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
   const nfcWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -90,6 +100,30 @@ export default function FilamentDetail() {
       .catch(() => {});
     return () => ac.abort();
   }, []);
+
+  // Probe whether the TDS URL allows iframe embedding. Done in a click
+  // handler (not an effect) because the "set state to 'checking' then
+  // fetch" pattern in an effect would re-fire the effect on the very
+  // state change it just made, aborting its own request.
+  // Plain function (no useCallback) so React Compiler can memoize it
+  // — the manual deps would have to spell out `filament` to match the
+  // compiler's inference, which leaks more than we read.
+  const handleToggleTdsPreview = async () => {
+    const next = !showTdsPreview;
+    setShowTdsPreview(next);
+    if (!next) return;
+    if (!filament?.tdsUrl) return;
+    if (tdsEmbedState !== "idle") return; // already checked this session
+    setTdsEmbedState("checking");
+    try {
+      const res = await fetch(`/api/embed-check?url=${encodeURIComponent(filament.tdsUrl)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: { embeddable: boolean } = await res.json();
+      setTdsEmbedState(data.embeddable ? "allowed" : "blocked");
+    } catch {
+      setTdsEmbedState("error");
+    }
+  };
 
   const handleNfcWrite = async () => {
     if (!filament) return;
@@ -893,7 +927,7 @@ export default function FilamentDetail() {
       {filament.tdsUrl && (
         <div className="mb-6">
           <button
-            onClick={() => setShowTdsPreview(!showTdsPreview)}
+            onClick={handleToggleTdsPreview}
             className="inline-flex items-center gap-2 text-sm text-blue-600 hover:underline"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -910,14 +944,55 @@ export default function FilamentDetail() {
             {t("detail.tds.openNewTab")}
           </a>
           {showTdsPreview && (
-            <div className="mt-3 border border-gray-300 dark:border-gray-700 rounded overflow-hidden">
-              <iframe
-                src={filament.tdsUrl}
-                className="w-full bg-white"
-                style={{ height: "80vh" }}
-                title={t("detail.tds.title")}
-                sandbox="allow-same-origin allow-scripts"
-              />
+            <div className="mt-3">
+              {tdsEmbedState === "checking" && (
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  {t("detail.tds.checking")}
+                </p>
+              )}
+              {tdsEmbedState === "allowed" && (
+                <div className="border border-gray-300 dark:border-gray-700 rounded overflow-hidden">
+                  <iframe
+                    src={filament.tdsUrl}
+                    className="w-full bg-white"
+                    style={{ height: "80vh" }}
+                    title={t("detail.tds.title")}
+                    sandbox="allow-same-origin allow-scripts"
+                  />
+                </div>
+              )}
+              {(tdsEmbedState === "blocked" || tdsEmbedState === "error") && (
+                <div className="border border-amber-300 dark:border-amber-700/50 bg-amber-50 dark:bg-amber-900/10 rounded p-4">
+                  <div className="flex items-start gap-3">
+                    <svg className="w-5 h-5 text-amber-600 dark:text-amber-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-amber-900 dark:text-amber-100">
+                        {tdsEmbedState === "blocked"
+                          ? t("detail.tds.blockedTitle")
+                          : t("detail.tds.errorTitle")}
+                      </p>
+                      <p className="text-sm text-amber-800 dark:text-amber-200/80 mt-1">
+                        {tdsEmbedState === "blocked"
+                          ? t("detail.tds.blockedBody")
+                          : t("detail.tds.errorBody")}
+                      </p>
+                      <a
+                        href={filament.tdsUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 text-sm font-medium bg-amber-600 hover:bg-amber-700 text-white rounded"
+                      >
+                        {t("detail.tds.openExternal")}
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

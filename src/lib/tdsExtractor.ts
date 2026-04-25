@@ -7,7 +7,7 @@
  * Supported providers: Google Gemini, Anthropic Claude, OpenAI ChatGPT.
  */
 
-import { lookup } from "node:dns/promises";
+import { assertExternalUrl } from "@/lib/externalUrlGuard";
 
 export type AiProvider = "gemini" | "claude" | "openai";
 
@@ -111,88 +111,16 @@ interface TdsContent {
 }
 
 /**
- * Block-list for SSRF defence: loopback, RFC1918 private, link-local, multicast,
- * cloud metadata IPs. Returns true when an address must NOT be fetched.
- *
- * Covers IPv4 dotted quads and the most common IPv6 ranges. Relies on the OS
- * DNS resolver to expand hostnames; does not attempt to defeat DNS rebinding
- * (rechecking after fetch would help against that — see assertExternalUrl
- * caller for residual-risk note).
- */
-function isPrivateIp(ip: string): boolean {
-  if (ip.includes(".")) {
-    const parts = ip.split(".").map((n) => Number(n));
-    if (parts.length !== 4 || parts.some((n) => Number.isNaN(n) || n < 0 || n > 255)) {
-      return true; // unparseable → block conservatively
-    }
-    const [a, b] = parts;
-    if (a === 0) return true;                              // 0.0.0.0/8
-    if (a === 10) return true;                             // 10.0.0.0/8 (RFC1918)
-    if (a === 127) return true;                            // 127.0.0.0/8 (loopback)
-    if (a === 169 && b === 254) return true;               // 169.254.0.0/16 (link-local + AWS/GCP/Azure metadata)
-    if (a === 172 && b >= 16 && b <= 31) return true;      // 172.16.0.0/12 (RFC1918)
-    if (a === 192 && b === 168) return true;               // 192.168.0.0/16 (RFC1918)
-    if (a === 100 && b >= 64 && b <= 127) return true;     // 100.64.0.0/10 (CG-NAT, RFC6598)
-    if (a >= 224) return true;                             // 224.0.0.0/4 multicast + 240/4 reserved
-    return false;
-  }
-  // IPv6 — keep this conservative; literal v6 in user URLs is rare.
-  const lc = ip.toLowerCase();
-  if (lc === "::" || lc === "::1") return true;
-  if (lc.startsWith("fe80:")) return true;                 // link-local
-  if (lc.startsWith("fc") || lc.startsWith("fd")) return true; // unique-local fc00::/7
-  if (lc.startsWith("ff")) return true;                    // multicast
-  if (lc.startsWith("::ffff:")) {
-    // IPv4-mapped IPv6 — recurse on the embedded v4 form
-    return isPrivateIp(lc.slice(7));
-  }
-  return false;
-}
-
-/**
- * Pre-flight a user-supplied URL for the TDS fetcher. Throws on:
- *  - non-http(s) schemes (file:, gopher:, ftp:, …)
- *  - hostnames that resolve to loopback / private / link-local / metadata IPs
- *
- * Residual risk: this only validates the *initial* URL. The TDS fetch sets
- * `redirect: "follow"`, so a hostile public host could redirect into private
- * space. Catching that requires `redirect: "manual"` plus per-hop validation;
- * skipped here to avoid breaking legitimate shortener/CDN redirects, with the
- * understanding that the AI-key gate already restricts who can reach this code.
- */
-async function assertExternalUrl(url: string): Promise<void> {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error("Invalid TDS URL");
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    throw new Error(`Disallowed URL scheme "${parsed.protocol}" — only http(s) is supported.`);
-  }
-  if (!parsed.hostname) throw new Error("TDS URL has no hostname");
-
-  const looksLikeIp = /^(\d+\.){3}\d+$|^\[?[\da-f:]+\]?$/i.test(parsed.hostname);
-  let ips: string[];
-  if (looksLikeIp) {
-    ips = [parsed.hostname.replace(/^\[|\]$/g, "")];
-  } else {
-    const records = await lookup(parsed.hostname, { all: true }).catch(() => []);
-    if (records.length === 0) {
-      throw new Error(`TDS URL hostname does not resolve: ${parsed.hostname}`);
-    }
-    ips = records.map((r) => r.address);
-  }
-  for (const ip of ips) {
-    if (isPrivateIp(ip)) {
-      throw new Error("TDS URL resolves to a private/internal address — only public hosts are allowed.");
-    }
-  }
-}
-
-/**
  * Fetch TDS content from a URL.
  * Returns the content as either base64 PDF data or plain text.
+ *
+ * Uses the shared SSRF guard from @/lib/externalUrlGuard. Residual risk:
+ * only the *initial* URL is validated. The fetch below sets
+ * `redirect: "follow"`, so a hostile public host could redirect into
+ * private space. Catching that requires `redirect: "manual"` plus per-hop
+ * validation; skipped here to avoid breaking legitimate shortener/CDN
+ * redirects, with the understanding that the AI-key gate already
+ * restricts who can reach this code.
  */
 async function fetchTdsContent(url: string): Promise<TdsContent> {
   await assertExternalUrl(url);
