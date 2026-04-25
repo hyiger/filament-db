@@ -51,6 +51,7 @@
   "filaments.stats.byType": "By Type",
   "filaments.stats.byVendor": "By Vendor",
   "filaments.stats.colors": "Colors ({count})",
+  "filaments.bulk.selectAll": "Select all filaments",
   "filaments.bulk.selected": "{count} selected",
   "filaments.bulk.delete": "Delete {count}",
   "filaments.bulk.deleting": "Deleting...",
