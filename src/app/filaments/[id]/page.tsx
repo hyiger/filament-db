@@ -45,17 +45,30 @@ export default function FilamentDetail() {
   const params = useParams();
   const [filament, setFilament] = useState<Filament | null>(null);
   const [showAllSettings, setShowAllSettings] = useState(false);
-  const [showTdsPreview, setShowTdsPreview] = useState(false);
   /**
-   * Result of /api/embed-check for the current filament's tdsUrl.
-   *  - "idle":     not requested yet (preview hasn't been opened)
-   *  - "checking": probe in flight
-   *  - "allowed":  server says headers permit framing
-   *  - "blocked":  X-Frame-Options or CSP frame-ancestors will refuse
-   *  - "error":    network or guard failure (treat like blocked, fall back)
+   * Both `previewOpenFor` and `embedCheck` are keyed to the tdsUrl they
+   * apply to. Navigating between filaments (same route, different params)
+   * keeps the component mounted and therefore preserves state — keying on
+   * tdsUrl means the *derived* `showTdsPreview` and `tdsEmbedState` below
+   * naturally reset when the loaded filament changes, instead of leaking a
+   * previous filament's "allowed"/"blocked" verdict to the new one.
+   *
+   * Done as derived state (not useEffect) because React Compiler's lint
+   * rule discourages calling setState inside an effect on a state-dep
+   * cycle — a cascading-render anti-pattern.
    */
-  const [tdsEmbedState, setTdsEmbedState] =
-    useState<"idle" | "checking" | "allowed" | "blocked" | "error">("idle");
+  const [previewOpenFor, setPreviewOpenFor] = useState<string | null>(null);
+  const [embedCheck, setEmbedCheck] = useState<
+    | { tdsUrl: string; state: "checking" | "allowed" | "blocked" | "error" }
+    | null
+  >(null);
+
+  const showTdsPreview =
+    !!filament?.tdsUrl && previewOpenFor === filament.tdsUrl;
+  const tdsEmbedState: "idle" | "checking" | "allowed" | "blocked" | "error" =
+    filament?.tdsUrl && embedCheck?.tdsUrl === filament.tdsUrl
+      ? embedCheck.state
+      : "idle";
   /** ID of the filament whose `name` matches the current filament's
    *  `inherits` field, if any — used to render Inherits-from as a link. */
   const [inheritsTargetId, setInheritsTargetId] = useState<string | null>(null);
@@ -130,19 +143,23 @@ export default function FilamentDetail() {
   // — the manual deps would have to spell out `filament` to match the
   // compiler's inference, which leaks more than we read.
   const handleToggleTdsPreview = async () => {
-    const next = !showTdsPreview;
-    setShowTdsPreview(next);
-    if (!next) return;
     if (!filament?.tdsUrl) return;
-    if (tdsEmbedState !== "idle") return; // already checked this session
-    setTdsEmbedState("checking");
+    const tdsUrl = filament.tdsUrl;
+    if (showTdsPreview) {
+      setPreviewOpenFor(null);
+      return;
+    }
+    setPreviewOpenFor(tdsUrl);
+    // Skip if we already have a verdict for this exact tdsUrl this session.
+    if (embedCheck?.tdsUrl === tdsUrl) return;
+    setEmbedCheck({ tdsUrl, state: "checking" });
     try {
-      const res = await fetch(`/api/embed-check?url=${encodeURIComponent(filament.tdsUrl)}`);
+      const res = await fetch(`/api/embed-check?url=${encodeURIComponent(tdsUrl)}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: { embeddable: boolean } = await res.json();
-      setTdsEmbedState(data.embeddable ? "allowed" : "blocked");
+      setEmbedCheck({ tdsUrl, state: data.embeddable ? "allowed" : "blocked" });
     } catch {
-      setTdsEmbedState("error");
+      setEmbedCheck({ tdsUrl, state: "error" });
     }
   };
 
