@@ -2,6 +2,9 @@
 
 # dependencies
 /node_modules
+# Catch nested node_modules too (e.g. packages/*/node_modules) so a slip
+# of `git add -A` can't sweep half a gigabyte of deps into a commit.
+**/node_modules/
 /.pnp
 .pnp.*
 .yarn/*
