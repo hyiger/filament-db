@@ -163,7 +163,15 @@ export class SyncService extends EventEmitter {
       // Locations are referenced from filaments[].spools[].locationId — a
       // missing remap would either drop the reference or, worse, point at a
       // wrong location on the target DB (GH #116).
+      //
+      // Reconcile by name first: locations existed on both sides before sync
+      // was added (v1.11.3). On the very first sync each side has its own
+      // locally-minted syncId, so a naive push would `insertOne` a row whose
+      // name collides with the partial-unique index on Location and abort
+      // the entire sync cycle. Pairing matching-name rows and unifying their
+      // syncIds turns the duplicates into a no-op last-write-wins merge.
       this.updateStatus({ progress: "Syncing locations..." });
+      await this.reconcileLocationsByName(localDb, remoteDb);
       const locationResult = await this.syncCollection(localDb, remoteDb, "locations");
 
       // Build location syncId→ID maps for spool reference remapping
@@ -171,6 +179,19 @@ export class SyncService extends EventEmitter {
       const remoteLocations = await remoteDb.collection("locations").find({ _deletedAt: null }).toArray();
       const localLocationBySyncId = new Map(localLocations.filter(l => l.syncId).map(l => [l.syncId as string, l._id]));
       const remoteLocationBySyncId = new Map(remoteLocations.filter(l => l.syncId).map(l => [l.syncId as string, l._id]));
+
+      // Repair dangling spool.locationId references left behind by pre-#116
+      // sync cycles. Filaments synced before the locationId remap landed
+      // carry spools[].locationId values that point at the *other side's*
+      // ObjectId (which obviously doesn't exist on this side). The normal
+      // filament sync path can't fix them: those filaments often have equal
+      // updatedAt on both sides, so syncCollection's last-write-wins skip
+      // never re-runs the transform on them. Patch them in-place using the
+      // freshly-built location maps; bumps updatedAt so subsequent syncs
+      // notice the rewrite.
+      await this.repairDanglingSpoolLocations(
+        localDb, remoteDb, localLocationBySyncId, remoteLocationBySyncId,
+      );
 
       // Backfill filament syncIds before building maps (syncCollection does this too, but we need maps first)
       await this.backfillSyncIds(localDb.collection("filaments"));
@@ -356,6 +377,147 @@ export class SyncService extends EventEmitter {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { _id: _stripId, __v: _stripV, ...rest } = doc;
     return rest;
+  }
+
+  /**
+   * Pair locations by name across DBs and unify their syncIds before the
+   * collection sync runs. Without this step the very first sync after the
+   * GH #116 fix lands hits Location's partial unique-name index whenever a
+   * user has independently created the same location ("Drybox #1") on a
+   * desktop and on Docker — both rows have local-only syncIds, so the
+   * insertOne in syncCollection's "local-only" branch raises E11000 and
+   * aborts the whole cycle.
+   *
+   * Tie-break for picking the surviving syncId, in order:
+   *   1. Both already share a syncId → no-op.
+   *   2. Exactly one side has a syncId → propagate to the other.
+   *   3. Neither has a syncId → mint a fresh UUID, assign to both.
+   *   4. Both have syncIds and they differ → keep local's, overwrite remote's.
+   *      (Local wins so the owning desktop's sync history stays intact;
+   *      remote rows get re-keyed onto the local id.)
+   *
+   * Defensive in case 2/4: if the chosen syncId is already in use by a
+   * *different* doc on the target side, skip the pair and log — this
+   * indicates pre-existing corruption that needs human attention rather
+   * than another silent overwrite.
+   */
+  private async reconcileLocationsByName(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+  ): Promise<void> {
+    const localCol = localDb.collection("locations");
+    const remoteCol = remoteDb.collection("locations");
+    const localActive = await localCol.find({ _deletedAt: null }).toArray();
+    const remoteActive = await remoteCol.find({ _deletedAt: null }).toArray();
+
+    const remoteByName = new Map(remoteActive.map((d) => [d.name as string, d]));
+
+    for (const local of localActive) {
+      const remote = remoteByName.get(local.name as string);
+      if (!remote) continue;
+
+      const localSyncId = local.syncId as string | undefined;
+      const remoteSyncId = remote.syncId as string | undefined;
+
+      if (localSyncId && remoteSyncId && localSyncId === remoteSyncId) continue;
+
+      const winningSyncId = localSyncId || remoteSyncId || randomUUID();
+
+      if (localSyncId !== winningSyncId) {
+        const conflict = await localCol.findOne({ syncId: winningSyncId, _id: { $ne: local._id } });
+        if (conflict) {
+          console.warn(`reconcileLocationsByName: local syncId conflict for "${local.name}" — skipping`);
+          continue;
+        }
+        await localCol.updateOne({ _id: local._id }, { $set: { syncId: winningSyncId } });
+      }
+      if (remoteSyncId !== winningSyncId) {
+        const conflict = await remoteCol.findOne({ syncId: winningSyncId, _id: { $ne: remote._id } });
+        if (conflict) {
+          console.warn(`reconcileLocationsByName: remote syncId conflict for "${local.name}" — skipping`);
+          continue;
+        }
+        await remoteCol.updateOne({ _id: remote._id }, { $set: { syncId: winningSyncId } });
+      }
+    }
+  }
+
+  /**
+   * Walk both sides' active filaments and patch any spool whose locationId
+   * doesn't match a current location ObjectId on that side.
+   *
+   * Pre-#116 sync cycles copied filaments wholesale across DBs without
+   * remapping spools[].locationId, so a filament on Atlas can be carrying
+   * a desktop-side ObjectId (and vice versa). The normal filament sync
+   * doesn't fix these — both sides have equal updatedAt for those rows,
+   * so syncCollection's last-write-wins skip never re-runs the transform.
+   *
+   * Recovery uses the syncId maps already built from this cycle's location
+   * sync: a dangling id on one side gets looked up via the *other* side's
+   * id→syncId map, then resolved to the correct local id via this side's
+   * syncId→id map. Orphans (id not present on either side) clear to null
+   * rather than persist as a permanent dangling reference.
+   */
+  private async repairDanglingSpoolLocations(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+    localLocationBySyncId: Map<string, ObjectId>,
+    remoteLocationBySyncId: Map<string, ObjectId>,
+  ): Promise<void> {
+    const localActiveIds = new Set(Array.from(localLocationBySyncId.values()).map((id) => id.toString()));
+    const remoteActiveIds = new Set(Array.from(remoteLocationBySyncId.values()).map((id) => id.toString()));
+
+    const localIdToSyncId = new Map<string, string>();
+    for (const [syncId, id] of localLocationBySyncId) localIdToSyncId.set(id.toString(), syncId);
+    const remoteIdToSyncId = new Map<string, string>();
+    for (const [syncId, id] of remoteLocationBySyncId) remoteIdToSyncId.set(id.toString(), syncId);
+
+    await this.repairSideSpoolLocations(localDb, localActiveIds, localLocationBySyncId, remoteIdToSyncId, "local");
+    await this.repairSideSpoolLocations(remoteDb, remoteActiveIds, remoteLocationBySyncId, localIdToSyncId, "remote");
+  }
+
+  private async repairSideSpoolLocations(
+    db: ReturnType<MongoClient["db"]>,
+    sideActiveIds: Set<string>,
+    sideSyncIdToId: Map<string, ObjectId>,
+    otherSideIdToSyncId: Map<string, string>,
+    sideLabel: "local" | "remote",
+  ): Promise<void> {
+    const filaments = await db
+      .collection("filaments")
+      .find({ _deletedAt: null, "spools.locationId": { $ne: null } })
+      .toArray();
+
+    let repaired = 0;
+    for (const f of filaments) {
+      const spools: Document[] = Array.isArray(f.spools) ? f.spools : [];
+      let changed = false;
+      const newSpools = spools.map((spool) => {
+        if (!spool.locationId) return spool;
+        const idStr = spool.locationId.toString();
+        if (sideActiveIds.has(idStr)) return spool; // already valid
+
+        const syncId = otherSideIdToSyncId.get(idStr);
+        const correctId = syncId ? sideSyncIdToId.get(syncId) : null;
+        if (!correctId) {
+          changed = true;
+          return { ...spool, locationId: null };
+        }
+        if (correctId.toString() === idStr) return spool;
+        changed = true;
+        return { ...spool, locationId: correctId };
+      });
+      if (changed) {
+        await db.collection("filaments").updateOne(
+          { _id: f._id },
+          { $set: { spools: newSpools, updatedAt: new Date() } },
+        );
+        repaired++;
+      }
+    }
+    if (repaired > 0) {
+      console.log(`repairDanglingSpoolLocations: fixed ${repaired} ${sideLabel} filament(s)`);
+    }
   }
 
   /**

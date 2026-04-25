@@ -47,6 +47,19 @@ describe("SyncService — locations and spool.locationId remap", () => {
     ]);
   });
 
+  beforeAll(async () => {
+    // Reproduce Mongoose's partial-unique name index on locations so the
+    // duplicate-name reconciliation tests actually exercise the constraint
+    // SyncService is guarding against. Without this, raw insertOne calls
+    // wouldn't trip E11000 even on conflicting names.
+    for (const db of [localClient.db("filament-db"), remoteClient.db("filament-db")]) {
+      await db.collection("locations").createIndex(
+        { name: 1 },
+        { unique: true, partialFilterExpression: { _deletedAt: null } },
+      ).catch(() => {});
+    }
+  }, 120_000);
+
   afterEach(async () => {
     // Reset both databases between tests so syncId state from one test
     // doesn't bleed into the next.
@@ -192,6 +205,151 @@ describe("SyncService — locations and spool.locationId remap", () => {
     await sync.sync();
 
     const remoteFilament = await remoteDb.collection("filaments").findOne({ name: "Filament with orphan loc" });
+    expect(remoteFilament?.spools[0].locationId).toBeNull();
+  });
+
+  // Codex P1 follow-up to PR #118.
+  it("reconciles same-name locations across DBs without tripping the unique-name index", async () => {
+    const localDb = localClient.db("filament-db");
+    const remoteDb = remoteClient.db("filament-db");
+
+    // Two locally-minted "Drybox #1" rows with different syncIds, exactly the
+    // shape produced when v1.11.2 desktops independently created locations
+    // before sync was added in v1.11.3. A naive insertOne push would throw
+    // E11000 on the partial-unique name index and abort the whole sync cycle.
+    await localDb.collection("locations").insertOne({
+      _id: new ObjectId(), syncId: "local-syncid",
+      name: "Drybox #1", kind: "drybox", humidity: 20, notes: "",
+      _deletedAt: null, createdAt: new Date(), updatedAt: new Date(Date.now() - 60_000),
+    });
+    await remoteDb.collection("locations").insertOne({
+      _id: new ObjectId(), syncId: "remote-syncid",
+      name: "Drybox #1", kind: "drybox", humidity: 25, notes: "",
+      _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+    });
+
+    sync = makeSync();
+    const results = await sync.sync();
+
+    // Sync completes (didn't error) and locations collapsed to one row per side.
+    expect(results.find((r) => r.collection === "locations")).toBeDefined();
+    const localCount = await localDb.collection("locations").countDocuments({ name: "Drybox #1", _deletedAt: null });
+    const remoteCount = await remoteDb.collection("locations").countDocuments({ name: "Drybox #1", _deletedAt: null });
+    expect(localCount).toBe(1);
+    expect(remoteCount).toBe(1);
+
+    // Both sides now share the local syncId (local-wins tie-break).
+    const local = await localDb.collection("locations").findOne({ name: "Drybox #1" });
+    const remote = await remoteDb.collection("locations").findOne({ name: "Drybox #1" });
+    expect(local?.syncId).toBe("local-syncid");
+    expect(remote?.syncId).toBe("local-syncid");
+
+    // Last-write-wins picked the newer (remote) row's payload across the merge.
+    expect(local?.humidity).toBe(25);
+    expect(remote?.humidity).toBe(25);
+  });
+
+  it("reconciles same-name locations when neither side has a syncId yet", async () => {
+    const localDb = localClient.db("filament-db");
+    const remoteDb = remoteClient.db("filament-db");
+
+    // Pre-sync state: both sides have a "Top shelf" with no syncId field at all
+    // (i.e. created before sync was even thinking about locations).
+    await localDb.collection("locations").insertOne({
+      _id: new ObjectId(),
+      name: "Top shelf", kind: "shelf", humidity: null, notes: "",
+      _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+    });
+    await remoteDb.collection("locations").insertOne({
+      _id: new ObjectId(),
+      name: "Top shelf", kind: "shelf", humidity: null, notes: "",
+      _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+    });
+
+    sync = makeSync();
+    await sync.sync();
+
+    const local = await localDb.collection("locations").findOne({ name: "Top shelf" });
+    const remote = await remoteDb.collection("locations").findOne({ name: "Top shelf" });
+    expect(local?.syncId).toBeTruthy();
+    expect(remote?.syncId).toBeTruthy();
+    expect(local?.syncId).toBe(remote?.syncId); // shared minted UUID
+    // Still one row per side — no duplicate from the push.
+    expect(await localDb.collection("locations").countDocuments({ name: "Top shelf" })).toBe(1);
+    expect(await remoteDb.collection("locations").countDocuments({ name: "Top shelf" })).toBe(1);
+  });
+
+  // Codex P2 follow-up to PR #118.
+  it("repairs filaments left with stale spool.locationId by pre-#116 syncs (equal updatedAt)", async () => {
+    const localDb = localClient.db("filament-db");
+    const remoteDb = remoteClient.db("filament-db");
+
+    // Same location on both sides, sharing a syncId — i.e. already reconciled.
+    const sharedSyncId = "shared-loc";
+    const localLocId = new ObjectId();
+    const remoteLocId = new ObjectId();
+    const sameTimestamp = new Date();
+    await localDb.collection("locations").insertOne({
+      _id: localLocId, syncId: sharedSyncId,
+      name: "Drybox", kind: "drybox", humidity: null, notes: "",
+      _deletedAt: null, createdAt: sameTimestamp, updatedAt: sameTimestamp,
+    });
+    await remoteDb.collection("locations").insertOne({
+      _id: remoteLocId, syncId: sharedSyncId,
+      name: "Drybox", kind: "drybox", humidity: null, notes: "",
+      _deletedAt: null, createdAt: sameTimestamp, updatedAt: sameTimestamp,
+    });
+
+    // A filament that was synced by the *old* (pre-#116) code: identical
+    // updatedAt on both sides, both pointing the spool at the LOCAL ObjectId.
+    // The remote copy is dangling — that locationId doesn't exist on remote.
+    // The new filament-sync transform won't touch this row because the equal
+    // timestamps short-circuit syncCollection's "no action needed" path.
+    const sharedFilamentSyncId = "shared-filament";
+    await localDb.collection("filaments").insertOne({
+      _id: new ObjectId(), syncId: sharedFilamentSyncId,
+      name: "PLA Black", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: sameTimestamp, updatedAt: sameTimestamp,
+      spools: [{ _id: new ObjectId(), label: "Spool A", totalWeight: 1000, locationId: localLocId }],
+    });
+    await remoteDb.collection("filaments").insertOne({
+      _id: new ObjectId(), syncId: sharedFilamentSyncId,
+      name: "PLA Black", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: sameTimestamp, updatedAt: sameTimestamp,
+      spools: [{ _id: new ObjectId(), label: "Spool A", totalWeight: 1000, locationId: localLocId }],
+    });
+
+    sync = makeSync();
+    await sync.sync();
+
+    // Remote filament's spool should now point at the REMOTE location id,
+    // not the leftover localLocId. (Local was already correct.)
+    const remoteFilament = await remoteDb.collection("filaments").findOne({ syncId: sharedFilamentSyncId });
+    expect(remoteFilament?.spools[0].locationId.toString()).toBe(remoteLocId.toString());
+    expect(remoteFilament?.spools[0].locationId.toString()).not.toBe(localLocId.toString());
+
+    const localFilament = await localDb.collection("filaments").findOne({ syncId: sharedFilamentSyncId });
+    expect(localFilament?.spools[0].locationId.toString()).toBe(localLocId.toString());
+  });
+
+  it("clears spool.locationId to null when the dangling reference has no syncId match anywhere", async () => {
+    const localDb = localClient.db("filament-db");
+    const remoteDb = remoteClient.db("filament-db");
+
+    // No locations at all on either side — but a remote filament still
+    // carries an arbitrary locationId from some long-deleted row.
+    const orphanId = new ObjectId();
+    await remoteDb.collection("filaments").insertOne({
+      _id: new ObjectId(),
+      name: "PLA w/ orphan ref", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+      spools: [{ _id: new ObjectId(), label: "Spool", totalWeight: 1000, locationId: orphanId }],
+    });
+
+    sync = makeSync();
+    await sync.sync();
+
+    const remoteFilament = await remoteDb.collection("filaments").findOne({ name: "PLA w/ orphan ref" });
     expect(remoteFilament?.spools[0].locationId).toBeNull();
   });
 });
