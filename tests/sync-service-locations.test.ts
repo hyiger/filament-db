@@ -416,4 +416,113 @@ describe("SyncService — locations and spool.locationId remap", () => {
     expect(localF?.spools[0].locationId.toString()).toBe(localLocId.toString());
     expect(remoteF?.spools[0].locationId.toString()).toBe(remoteLocId.toString());
   });
+
+  // GH #128 — fresh hybrid install pulled all filaments but lost every
+  // parent/child link. The transform's `localFilamentBySyncId` map was
+  // built before the inserts, so on first sync every variant's parentId
+  // remap returned undefined and got nulled.
+  it("preserves parent/child links when a fresh-install pulls a parent + variant from remote", async () => {
+    const localDb = localClient.db("filament-db");
+    const remoteDb = remoteClient.db("filament-db");
+
+    // Remote has a parent and a variant referencing it. Local has nothing.
+    const parentRemoteId = new ObjectId();
+    const variantRemoteId = new ObjectId();
+    const parentSyncId = "parent-sync";
+    const variantSyncId = "variant-sync";
+
+    await remoteDb.collection("filaments").insertOne({
+      _id: parentRemoteId, syncId: parentSyncId,
+      name: "Prusament PC Blend", vendor: "Prusament", type: "PC",
+      _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+      parentId: null,
+    });
+    await remoteDb.collection("filaments").insertOne({
+      _id: variantRemoteId, syncId: variantSyncId,
+      name: "Prusament PC Blend — Galaxy Black", vendor: "Prusament", type: "PC",
+      _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+      parentId: parentRemoteId, // <- references remote's parent _id
+    });
+
+    sync = makeSync();
+    await sync.sync();
+
+    // Both filaments should now exist locally with DIFFERENT _ids than remote
+    // (insertOne mints a fresh _id per side), but the variant's parentId must
+    // still point at the local parent's _id — recovered by the post-sync
+    // repair pass.
+    const localParent = await localDb.collection("filaments").findOne({ syncId: parentSyncId });
+    const localVariant = await localDb.collection("filaments").findOne({ syncId: variantSyncId });
+
+    expect(localParent).not.toBeNull();
+    expect(localVariant).not.toBeNull();
+    expect(localParent!._id.toString()).not.toBe(parentRemoteId.toString()); // sanity: ids differ across DBs
+    expect(localVariant!.parentId).not.toBeNull();
+    expect(localVariant!.parentId.toString()).toBe(localParent!._id.toString());
+  });
+
+  it("does not overwrite a valid parentId that diverges from the remote (last-write-wins owns that)", async () => {
+    const localDb = localClient.db("filament-db");
+    const remoteDb = remoteClient.db("filament-db");
+
+    // Two parents, A and B. Local variant points at A, remote variant points at B.
+    // The repair pass should leave local alone — divergence is a real edit and
+    // belongs to syncCollection's last-write-wins comparison, not to repair.
+    const parentASyncId = "parent-a";
+    const parentBSyncId = "parent-b";
+    const variantSyncId = "v-sync";
+    const localParentAId = new ObjectId();
+    const remoteParentAId = new ObjectId();
+    const localParentBId = new ObjectId();
+    const remoteParentBId = new ObjectId();
+    const localVariantId = new ObjectId();
+    const remoteVariantId = new ObjectId();
+
+    // CRITICAL: every row uses the SAME timestamp — corresponding local and
+    // remote rows must have exactly equal updatedAt so syncCollection's
+    // last-write-wins skip fires (no merge), leaving the repair pass as the
+    // ONLY thing that could change parentId. With per-row `new Date()` calls
+    // the timestamps drift by milliseconds and Node 22 was fast enough to
+    // make remote slightly newer, which silently triggered LWW and made the
+    // assertion flap.
+    const sharedTimestamp = new Date();
+    for (const [db, parentAId, parentBId, variantId, variantParentId] of [
+      [localDb, localParentAId, localParentBId, localVariantId, localParentAId],
+      [remoteDb, remoteParentAId, remoteParentBId, remoteVariantId, remoteParentBId],
+    ] as const) {
+      await db.collection("filaments").insertOne({
+        _id: parentAId, syncId: parentASyncId,
+        name: "Parent A", vendor: "Test", type: "PLA",
+        _deletedAt: null, createdAt: sharedTimestamp, updatedAt: sharedTimestamp,
+        parentId: null,
+      });
+      await db.collection("filaments").insertOne({
+        _id: parentBId, syncId: parentBSyncId,
+        name: "Parent B", vendor: "Test", type: "PLA",
+        _deletedAt: null, createdAt: sharedTimestamp, updatedAt: sharedTimestamp,
+        parentId: null,
+      });
+      await db.collection("filaments").insertOne({
+        _id: variantId, syncId: variantSyncId,
+        name: "Variant", vendor: "Test", type: "PLA",
+        _deletedAt: null, createdAt: sharedTimestamp, updatedAt: sharedTimestamp,
+        parentId: variantParentId,
+      });
+    }
+
+    sync = makeSync();
+    await sync.sync();
+
+    // After sync, the filament-sync syncCollection or repair shouldn't have
+    // forced local's parentId to point at parentB. Whichever side's
+    // updatedAt is newer wins — the test seeds equal timestamps so neither
+    // wins; both should retain their original (valid) parentIds.
+    const localVariant = await localDb.collection("filaments").findOne({ syncId: variantSyncId });
+    const remoteVariant = await remoteDb.collection("filaments").findOne({ syncId: variantSyncId });
+    // Local variant's parentId resolves through the local map for parent A's syncId.
+    const localParentAFresh = await localDb.collection("filaments").findOne({ syncId: parentASyncId });
+    const remoteParentBFresh = await remoteDb.collection("filaments").findOne({ syncId: parentBSyncId });
+    expect(localVariant!.parentId.toString()).toBe(localParentAFresh!._id.toString());
+    expect(remoteVariant!.parentId.toString()).toBe(remoteParentBFresh!._id.toString());
+  });
 });

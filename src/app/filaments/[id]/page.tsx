@@ -639,7 +639,7 @@ export default function FilamentDetail() {
         <InfoCard label={t("detail.field.bedFirstLayer")} value={filament.temperatures.bedFirstLayer ? `${filament.temperatures.bedFirstLayer}°C` : "—"} inherited={inherited.has("temperatures.bedFirstLayer")} />
         <InfoCard label={t("detail.field.cost")} value={filament.cost != null ? `${currencySymbol}${filament.cost.toFixed(2)}/kg` : "—"} inherited={inherited.has("cost")} />
         <InfoCard label={t("detail.field.density")} value={filament.density ? `${filament.density.toFixed(2)} g/cm³` : "—"} inherited={inherited.has("density")} />
-        <InfoCard label={t("detail.field.diameter")} value={`${filament.diameter.toFixed(2)} mm`} inherited={inherited.has("diameter")} />
+        <InfoCard label={t("detail.field.diameter")} value={filament.diameter != null ? `${filament.diameter.toFixed(2)} mm` : "—"} inherited={inherited.has("diameter")} />
         <InfoCard label={t("detail.field.maxVolSpeed")} value={filament.maxVolumetricSpeed ? `${filament.maxVolumetricSpeed} mm³/s` : "—"} inherited={inherited.has("maxVolumetricSpeed")} />
       </div>
 
