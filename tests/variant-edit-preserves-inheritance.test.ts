@@ -263,6 +263,133 @@ describe("variant edit round-trip preserves inheritance", () => {
     expect(freshStandalone.diameter).toBe(1.75);
   });
 
+  it("clearing start_filament_gcode on a variant restores inheritance from the parent (GH #113)", async () => {
+    // Repro: parent has a real start G-code; variant was created (e.g. via
+    // the pre-fix clone path) with the parent's value baked into its own
+    // settings bag. The user clears the textarea and saves. Before the fix,
+    // the form's submit conditional only stripped a simple inline `M572` —
+    // an inherited multi-line gcode silently survived as an explicit override.
+    const parent = await Filament.create({
+      name: "Parent w/ start gcode",
+      vendor: "Test",
+      type: "PLA",
+      settings: {
+        start_filament_gcode: '"G92 E0\\nM104 S{first_layer_temperature}"',
+        filament_density: "1.24",
+      },
+    });
+    const variant = await Filament.create({
+      name: "Variant w/ baked-in override",
+      vendor: "Test",
+      type: "PLA",
+      color: "#ff0000",
+      parentId: parent._id,
+      settings: {
+        start_filament_gcode: '"G92 E0\\nM104 S{first_layer_temperature}"',
+      },
+    });
+
+    // The fixed form omits start_filament_gcode from the settings bag when
+    // both the textarea and the Pressure Advance field are empty.
+    const putReq = new NextRequest(`http://localhost/api/filaments/${variant._id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: variant.name,
+        vendor: variant.vendor,
+        type: variant.type,
+        color: variant.color,
+        parentId: parent._id,
+        settings: {}, // user cleared the only key the variant had
+      }),
+    });
+    const putRes = await putFilament(putReq, { params: Promise.resolve({ id: String(variant._id) }) });
+    expect(putRes.status).toBe(200);
+
+    // Variant's own settings no longer carry start_filament_gcode.
+    const fresh = await Filament.findById(variant._id).lean();
+    expect(fresh?.settings?.start_filament_gcode).toBeUndefined();
+
+    // Resolved view falls through to the parent's value.
+    const resolvedReq = new NextRequest(`http://localhost/api/filaments/${variant._id}`);
+    const resolvedRes = await getFilament(resolvedReq, { params: Promise.resolve({ id: String(variant._id) }) });
+    const resolved = await resolvedRes.json();
+    expect(resolved.settings.start_filament_gcode).toBe(
+      '"G92 E0\\nM104 S{first_layer_temperature}"'
+    );
+  });
+
+  it("a whitelist-only clone POST creates a variant that inherits everything else (GH #115)", async () => {
+    // Repro: pre-fix, the new-filament page spread the entire resolved parent
+    // doc into the form when cloning, so saving wrote every inheritable field
+    // back as an explicit override (severing the parent link). The fixed page
+    // only sends identification fields. This test pins down the API contract
+    // the page now relies on: posting a minimal body must produce a variant
+    // with null/empty inheritable fields that resolves through to the parent.
+    const parent = await Filament.create({
+      name: "Loaded Parent",
+      vendor: "Test",
+      type: "PLA",
+      color: "#000000",
+      cost: 30,
+      density: 1.24,
+      diameter: 1.75,
+      temperatures: { nozzle: 215, bed: 60 },
+      maxVolumetricSpeed: 12,
+      settings: {
+        start_filament_gcode: '"G92 E0"',
+        filament_density: "1.24",
+      },
+    });
+
+    const req = new NextRequest("http://localhost/api/filaments", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        parentId: String(parent._id),
+        name: "Loaded Parent (copy)",
+        color: "#ff0000",
+        colorName: "Red",
+        vendor: "Test",
+        type: "PLA",
+      }),
+    });
+    const res = await createFilament(req);
+    expect(res.status).toBe(201);
+    const created = await res.json();
+
+    // Variant's own row has only what the whitelist sent — everything
+    // inheritable is left null/empty.
+    const fresh = await Filament.findById(created._id).lean();
+    expect(fresh?.cost).toBeNull();
+    expect(fresh?.density).toBeNull();
+    expect(fresh?.diameter).toBeNull();
+    expect(fresh?.temperatures?.nozzle).toBeNull();
+    expect(fresh?.maxVolumetricSpeed).toBeNull();
+    expect(Object.keys(fresh?.settings ?? {})).toHaveLength(0);
+
+    // Resolved GET threads the parent's values through.
+    const resolvedReq = new NextRequest(`http://localhost/api/filaments/${created._id}`);
+    const resolvedRes = await getFilament(resolvedReq, { params: Promise.resolve({ id: String(created._id) }) });
+    const resolved = await resolvedRes.json();
+    expect(resolved.cost).toBe(30);
+    expect(resolved.density).toBe(1.24);
+    expect(resolved.diameter).toBe(1.75);
+    expect(resolved.temperatures.nozzle).toBe(215);
+    expect(resolved.maxVolumetricSpeed).toBe(12);
+    expect(resolved.settings.start_filament_gcode).toBe('"G92 E0"');
+    expect(resolved._inherited).toEqual(
+      expect.arrayContaining(["cost", "density", "diameter", "maxVolumetricSpeed", "settings"])
+    );
+
+    // And the link stays live: bumping the parent updates the resolved view.
+    await Filament.findByIdAndUpdate(parent._id, { $set: { cost: 35 } });
+    const reResolvedReq = new NextRequest(`http://localhost/api/filaments/${created._id}`);
+    const reResolvedRes = await getFilament(reResolvedReq, { params: Promise.resolve({ id: String(created._id) }) });
+    const reResolved = await reResolvedRes.json();
+    expect(reResolved.cost).toBe(35);
+  });
+
   it("PUT strips server-only response fields (_parent, _variants, _inherited) from the body", async () => {
     const { variant } = await seed();
 

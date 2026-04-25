@@ -161,7 +161,12 @@ function NewFilamentContent() {
     }
   }, [parentId]);
 
-  // Initialize from ?cloneId= query param (full clone from detail page)
+  // Initialize from ?cloneId= query param (full clone from detail page).
+  // Only copy identification fields (name, color, vendor, type) so the new
+  // variant inherits all settings (calibration, temps, gcode, …) from the
+  // parent. Spreading the whole resolved doc would persist parent values as
+  // explicit overrides on the variant and silently sever inheritance — same
+  // failure mode as GH #106 / GH #115.
   useEffect(() => {
     if (cloneId) {
       const ac = new AbortController();
@@ -169,12 +174,15 @@ function NewFilamentContent() {
         .then((r) => (r.ok ? r.json() : null))
         .then((filament) => {
           if (filament) {
-            // Strip identity fields, but inherit the source's parent (or use source as parent)
-            // so the clone is registered as a variant.
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-            const { _id, _variants, _inherited, parentId: srcParentId, createdAt, updatedAt, __v, ...rest } = filament;
-            const parentId = srcParentId || _id;
-            setInitialData({ ...rest, parentId, name: `${rest.name} (${t("new.copySuffix")})` });
+            const parentId = filament.parentId || filament._id;
+            setInitialData({
+              parentId,
+              name: `${filament.name} (${t("new.copySuffix")})`,
+              color: filament.color || "#808080",
+              colorName: filament.colorName || null,
+              vendor: filament.vendor || "",
+              type: filament.type || "PLA",
+            });
             setTitleKey("new.cloneTitle");
             setFormKey((k) => k + 1);
           }
@@ -487,13 +495,16 @@ function NewFilamentContent() {
       return;
     }
     const filament = await res.json();
-    // Strip identity fields — keep everything else as a template.
-    // Inherit the source's parent if it has one, otherwise use the source as the parent
-    // so the clone is registered as a variant.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    const { _id, _variants, _inherited, parentId: srcParentId, createdAt, updatedAt, __v, ...rest } = filament;
-    const parentId = srcParentId || _id;
-    setInitialData({ ...rest, parentId, name: `${rest.name} (${t("new.copySuffix")})` });
+    // See the cloneId useEffect above for why we whitelist instead of spread.
+    const parentId = filament.parentId || filament._id;
+    setInitialData({
+      parentId,
+      name: `${filament.name} (${t("new.copySuffix")})`,
+      color: filament.color || "#808080",
+      colorName: filament.colorName || null,
+      vendor: filament.vendor || "",
+      type: filament.type || "PLA",
+    });
     setTitleKey("new.cloneTitle");
     setFormKey((k) => k + 1);
     toast(t("new.toast.populatedFromClone"));

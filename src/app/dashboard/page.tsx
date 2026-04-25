@@ -58,9 +58,18 @@ export default function DashboardPage() {
     return () => ac.abort();
   }, []);
 
+  const backLink = (
+    <div className="mb-4">
+      <Link href="/" className="text-blue-600 hover:underline text-sm">
+        &larr; {t("dashboard.backToFilaments")}
+      </Link>
+    </div>
+  );
+
   if (error) {
     return (
       <main className="max-w-5xl mx-auto px-4 py-8">
+        {backLink}
         <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
       </main>
     );
@@ -69,6 +78,7 @@ export default function DashboardPage() {
   if (!data) {
     return (
       <main className="max-w-5xl mx-auto px-4 py-8">
+        {backLink}
         <p className="text-sm text-gray-500">{t("common.loading")}</p>
       </main>
     );
@@ -78,6 +88,7 @@ export default function DashboardPage() {
 
   return (
     <main className="max-w-5xl mx-auto px-4 py-8">
+      {backLink}
       <h1 className="text-3xl font-bold mb-6">{t("dashboard.title")}</h1>
 
       {/* Top metrics */}
