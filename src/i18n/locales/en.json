@@ -82,6 +82,7 @@
   "compare.row.printSpeed": "Print speed",
   "compare.row.onHand": "On hand",
   "dashboard.title": "Dashboard",
+  "dashboard.backToFilaments": "Back to filaments",
   "dashboard.filaments": "Filaments",
   "dashboard.spools": "Active Spools",
   "dashboard.totalWeight": "Total Remaining",

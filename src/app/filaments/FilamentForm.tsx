@@ -616,18 +616,16 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     settings.end_filament_gcode = form.endGcode ? `"${form.endGcode}"` : undefined;
     settings.filament_notes = form.notes ? `"${form.notes}"` : undefined;
 
-    // Handle start G-code: if the user edited it directly, use that; otherwise manage PA injection
+    // Handle start G-code: user-typed text wins; else inject PA-only line; else
+    // drop the override entirely so a variant inherits from its parent (GH #113).
+    // Without the trailing `else`, an inherited (or pre-existing) gcode that
+    // contained no `M572` line could never be cleared from the form.
     if (form.startGcode) {
       settings.start_filament_gcode = `"${form.startGcode}"`;
     } else if (form.pressureAdvance) {
       settings.start_filament_gcode = `"M572 S${form.pressureAdvance}"`;
-    } else if (settings.start_filament_gcode) {
-      // PA cleared — remove M572 line if it's a simple one
-      const gcode = settings.start_filament_gcode as string;
-      if (gcode.match(/M572\s+S[\d.]+/) && !gcode.includes("{if")) {
-        const cleaned = gcode.replace(/\\n?M572\s+S[\d.]+/, "").replace(/^"\\n/, '"');
-        settings.start_filament_gcode = cleaned === '""' ? undefined : cleaned;
-      }
+    } else {
+      settings.start_filament_gcode = undefined;
     }
 
     try {
