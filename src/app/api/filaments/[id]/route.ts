@@ -64,14 +64,24 @@ export async function GET(
       .sort({ name: 1 })
       .lean();
 
-    // In raw mode, attach the parent doc alongside so the edit UI can show
-    // "inherited from parent" placeholders for any field the variant left
-    // blank, without a second round-trip.
+    // In raw mode, attach the full parent doc alongside so the edit UI can
+    // show "inherited from parent" placeholders for any field the variant
+    // left blank, without a second round-trip. In non-raw mode, attach a
+    // light parent-summary (just _id + name) so the variant detail page
+    // can render a clickable "Up to <parent name>" link without a second
+    // request (GH #127).
     if (raw && parentDoc) {
       return NextResponse.json({
         ...resolved,
         _variants: variants,
         _parent: parentDoc,
+      });
+    }
+    if (parentDoc) {
+      return NextResponse.json({
+        ...resolved,
+        _variants: variants,
+        _parent: { _id: parentDoc._id, name: parentDoc.name },
       });
     }
 

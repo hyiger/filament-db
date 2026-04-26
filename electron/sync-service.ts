@@ -618,13 +618,33 @@ export class SyncService extends EventEmitter {
         currentParentIdStr != null && !validIds.has(currentParentIdStr);
       const expectedStr = expected ? expected.toString() : null;
 
+      // Match local↔remote updatedAt to ms. Equal timestamps mean the row
+      // is "in sync as far as edits go" — no user mutation has happened on
+      // this side since the last sync. A null parentId in that state is
+      // the fresh-install bug; a null parentId where local.updatedAt is
+      // *newer* (Mongoose bumps it on save) is an intentional "make this
+      // standalone" edit, and the repair must NOT undo it.
+      const sideUpdatedAt = f.updatedAt instanceof Date
+        ? f.updatedAt.getTime()
+        : (typeof f.updatedAt === "string" ? Date.parse(f.updatedAt) : NaN);
+      const otherUpdatedAt = counterpart?.updatedAt instanceof Date
+        ? counterpart.updatedAt.getTime()
+        : (typeof counterpart?.updatedAt === "string" ? Date.parse(counterpart.updatedAt) : NaN);
+      const timestampsMatch =
+        Number.isFinite(sideUpdatedAt) && Number.isFinite(otherUpdatedAt) &&
+        sideUpdatedAt === otherUpdatedAt;
+
       // Conservative: only repair the two clear-bug shapes. Don't touch
       // valid-but-different parentIds (those are legitimate user edits and
       // belong to the next last-write-wins cycle).
       const shouldFix =
-        // Fresh-install null leak: should have a parent, currently null.
-        (currentParentIdStr == null && expected != null) ||
-        // Stale id pointing at nothing on this side.
+        // Fresh-install null leak: should have a parent, currently null,
+        // AND timestamps match (so we know this side hasn't been touched
+        // since sync). A null with mismatched timestamps is an intentional
+        // detach (GH #128 follow-up).
+        (currentParentIdStr == null && expected != null && timestampsMatch) ||
+        // Stale id pointing at nothing on this side. Always broken state,
+        // repair regardless of timestamp.
         (isCurrentDangling && currentParentIdStr !== expectedStr);
 
       if (!shouldFix) continue;

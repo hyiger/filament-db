@@ -22,6 +22,9 @@ interface ElectronAPI {
     progress: string | null;
   }) => void) => () => void;
   onConnectionModeFallback: (cb: (info: { intended: string; actual: string }) => void) => () => void;
+  /** Fires after a hybrid-mode sync cycle completes (success or no-op).
+   *  Used by data-listing pages to refetch without waiting for navigation. */
+  onSyncComplete: (cb: () => void) => () => void;
 
   // NFC
   nfcGetStatus: () => Promise<{

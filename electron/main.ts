@@ -378,6 +378,10 @@ function initSyncService(localUri: string, atlasUri: string) {
 
   syncService.on("syncComplete", () => {
     console.log("Sync completed");
+    // Tell the renderer so it can refresh data that may have changed
+    // (filaments list, dashboard, etc.) — without waiting for the next
+    // user-triggered route change. GH #127.
+    mainWindow?.webContents.send("sync-complete");
   });
 
   syncService.on("syncError", (err: string) => {
