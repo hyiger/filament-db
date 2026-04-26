@@ -526,12 +526,12 @@ describe("SyncService — locations and spool.locationId remap", () => {
     expect(remoteVariant!.parentId.toString()).toBe(remoteParentBFresh!._id.toString());
   });
 
-  // Codex P2 follow-up to PR #129. The repair pass used to fire on EVERY
-  // null-parentId-with-non-null-counterpart combination, which would
-  // silently undo a legitimate "detach this variant" edit if both sides
-  // happened to share a timestamp at that moment. The fix gates the
-  // null→something branch on equal updatedAt, so user-initiated detaches
-  // (which Mongoose stamps with a fresher updatedAt) aren't reverted.
+  // Codex P2 follow-up to PR #129 / #130. The repair pass used to fire on
+  // EVERY null-parentId-with-non-null-counterpart combination, which would
+  // silently undo a legitimate "detach this variant" edit. The PR-#130 fix
+  // gated on equal updatedAt; the PR-#131 fix narrowed it further to
+  // "this row was just inserted by THIS sync's pull" — only the pull-path
+  // bug warrants override; pre-existing rows are always user territory.
   it("does not re-attach a deliberately-detached variant when local.updatedAt is newer than remote's", async () => {
     const localDb = localClient.db("filament-db");
     const remoteDb = remoteClient.db("filament-db");
@@ -586,5 +586,61 @@ describe("SyncService — locations and spool.locationId remap", () => {
     const remoteV = await remoteDb.collection("filaments").findOne({ syncId: variantSyncId });
     expect(localV?.parentId).toBeNull();
     expect(remoteV?.parentId).toBeNull();
+  });
+
+  // Same Codex P2 — but the meaner shape: local detached, remote still
+  // attached, equal updatedAt (e.g. a manual DB edit that didn't bump the
+  // timestamp, or two devices that happened to write at the same ms).
+  // The v1.12.2 timestamp guard would still re-attach this; v1.12.3's
+  // freshly-inserted-only guard preserves the local null because the
+  // local row pre-existed this sync cycle.
+  it("does not re-attach a pre-existing variant whose null parentId persists across equal-timestamp sync", async () => {
+    const localDb = localClient.db("filament-db");
+    const remoteDb = remoteClient.db("filament-db");
+
+    const parentSyncId = "p-equal";
+    const variantSyncId = "v-equal";
+    const sharedTimestamp = new Date();
+
+    // Seed the same parent + variant on both sides. Local detached the
+    // variant somehow without bumping updatedAt (the edge case Codex
+    // flagged: external script, manual mongo edit, or perfectly-
+    // simultaneous concurrent edit).
+    await localDb.collection("filaments").insertOne({
+      _id: new ObjectId(), syncId: parentSyncId,
+      name: "Parent", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: sharedTimestamp, updatedAt: sharedTimestamp,
+      parentId: null,
+    });
+    await remoteDb.collection("filaments").insertOne({
+      _id: new ObjectId(), syncId: parentSyncId,
+      name: "Parent", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: sharedTimestamp, updatedAt: sharedTimestamp,
+      parentId: null,
+    });
+
+    const remoteParentDoc = await remoteDb.collection("filaments").findOne({ syncId: parentSyncId });
+
+    await localDb.collection("filaments").insertOne({
+      _id: new ObjectId(), syncId: variantSyncId,
+      name: "Variant", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: sharedTimestamp, updatedAt: sharedTimestamp,
+      parentId: null, // detached
+    });
+    await remoteDb.collection("filaments").insertOne({
+      _id: new ObjectId(), syncId: variantSyncId,
+      name: "Variant", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: sharedTimestamp, updatedAt: sharedTimestamp,
+      parentId: remoteParentDoc!._id,
+    });
+
+    sync = makeSync();
+    await sync.sync();
+
+    // Equal updatedAt across the board → syncCollection's tie skip fires.
+    // The repair pass must respect that and leave local's null alone
+    // because local's variant row pre-existed this sync's pull.
+    const localV = await localDb.collection("filaments").findOne({ syncId: variantSyncId });
+    expect(localV?.parentId).toBeNull();
   });
 });
