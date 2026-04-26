@@ -55,6 +55,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.removeListener("connection-mode-fallback", handler);
     };
   },
+  onSyncComplete: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on("sync-complete", handler);
+    return () => {
+      ipcRenderer.removeListener("sync-complete", handler);
+    };
+  },
 
   // NFC
   nfcGetStatus: () => ipcRenderer.invoke("nfc-get-status"),

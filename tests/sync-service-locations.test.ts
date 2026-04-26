@@ -525,4 +525,66 @@ describe("SyncService — locations and spool.locationId remap", () => {
     expect(localVariant!.parentId.toString()).toBe(localParentAFresh!._id.toString());
     expect(remoteVariant!.parentId.toString()).toBe(remoteParentBFresh!._id.toString());
   });
+
+  // Codex P2 follow-up to PR #129. The repair pass used to fire on EVERY
+  // null-parentId-with-non-null-counterpart combination, which would
+  // silently undo a legitimate "detach this variant" edit if both sides
+  // happened to share a timestamp at that moment. The fix gates the
+  // null→something branch on equal updatedAt, so user-initiated detaches
+  // (which Mongoose stamps with a fresher updatedAt) aren't reverted.
+  it("does not re-attach a deliberately-detached variant when local.updatedAt is newer than remote's", async () => {
+    const localDb = localClient.db("filament-db");
+    const remoteDb = remoteClient.db("filament-db");
+
+    // Same parent on both sides, sharing a syncId.
+    const parentSyncId = "p-detach";
+    const variantSyncId = "v-detach";
+    const localParentId = new ObjectId();
+    const remoteParentId = new ObjectId();
+    const localVariantId = new ObjectId();
+    const remoteVariantId = new ObjectId();
+    const olderRemote = new Date(Date.now() - 60_000);
+    const newerLocal = new Date();
+
+    for (const [db, parentId] of [
+      [localDb, localParentId],
+      [remoteDb, remoteParentId],
+    ] as const) {
+      await db.collection("filaments").insertOne({
+        _id: parentId, syncId: parentSyncId,
+        name: "Parent", vendor: "Test", type: "PLA",
+        _deletedAt: null, createdAt: olderRemote, updatedAt: olderRemote,
+        parentId: null,
+      });
+    }
+
+    // Remote variant still attached (older snapshot).
+    await remoteDb.collection("filaments").insertOne({
+      _id: remoteVariantId, syncId: variantSyncId,
+      name: "Variant", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: olderRemote, updatedAt: olderRemote,
+      parentId: remoteParentId,
+    });
+
+    // Local variant detached (intentional user edit). Mongoose would have
+    // bumped updatedAt on save — simulate with a NEWER timestamp.
+    await localDb.collection("filaments").insertOne({
+      _id: localVariantId, syncId: variantSyncId,
+      name: "Variant", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: olderRemote, updatedAt: newerLocal,
+      parentId: null,
+    });
+
+    sync = makeSync();
+    await sync.sync();
+
+    // syncCollection's last-write-wins picks local (newer) → pushes the
+    // detach to remote. After sync both sides should have parentId=null.
+    // Crucially, the repair pass must NOT have re-attached the variant
+    // before the LWW push had a chance to propagate the user's intent.
+    const localV = await localDb.collection("filaments").findOne({ syncId: variantSyncId });
+    const remoteV = await remoteDb.collection("filaments").findOne({ syncId: variantSyncId });
+    expect(localV?.parentId).toBeNull();
+    expect(remoteV?.parentId).toBeNull();
+  });
 });

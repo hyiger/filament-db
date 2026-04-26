@@ -324,6 +324,17 @@ export default function Home() {
     fetchFilaments();
   }, [fetchFilaments]);
 
+  // Refetch when an Electron sync cycle finishes — picks up parent links
+  // and variant edits that landed from another device without waiting for
+  // the user to navigate away and back (GH #127). No-op in the web app.
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.onSyncComplete) return;
+    return api.onSyncComplete(() => {
+      fetchFilaments();
+    });
+  }, [fetchFilaments]);
+
   // Group filaments: parents with their variants, standalone filaments as-is
   // Client-side quick filter (low stock / has spools / missing calibrations).
   // Applied before grouping so a parent whose variants are filtered out is
@@ -916,6 +927,30 @@ export default function Home() {
         <p className="text-gray-500">{t("filaments.noResults")}</p>
       ) : (
         <div>
+          {/* Expand-all / collapse-all — only worth showing when there's
+            * actually a parent group to expand. (GH #127) */}
+          {(() => {
+            const parentIds = groupedFilaments
+              .filter((g): g is GroupedFilament => "parent" in g)
+              .map((g) => g.parent._id);
+            if (parentIds.length === 0) return null;
+            const allExpanded = parentIds.every((id) => expandedParents.has(id));
+            return (
+              <div className="flex justify-end mb-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpandedParents(allExpanded ? new Set() : new Set(parentIds))
+                  }
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  {allExpanded
+                    ? t("filaments.collapseAll")
+                    : t("filaments.expandAll")}
+                </button>
+              </div>
+            );
+          })()}
           <table className="w-full text-sm border-collapse min-w-[900px]">
             <thead className="sticky z-10 bg-white dark:bg-gray-950 shadow-[0_1px_0_0_rgba(209,213,219,0.5)]" style={{ top: `${stickyHeaderHeight}px` }}>
               <tr className="border-b border-gray-300">

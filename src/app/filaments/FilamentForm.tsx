@@ -731,6 +731,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent text-gray-900 dark:text-gray-100";
   const labelClass = "block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100";
 
+  // Single source of truth for the submit button label so the duplicate at
+  // the top of the form can't drift from the bottom one.
+  const submitLabel = saving
+    ? t("form.saving")
+    : initialData
+      ? t("form.updateFilament")
+      : t("form.createFilament");
+
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       {fetchErrors.length > 0 && (
@@ -738,6 +746,17 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           {t("form.fetchError", { items: fetchErrors.join(", ") })}
         </div>
       )}
+      {/* Top submit button — mirrors the bottom one so users editing a long
+       * filament don't have to scroll back down to save (GH #127). */}
+      <div className="flex justify-end">
+        <button
+          type="submit"
+          disabled={saving}
+          className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+        >
+          {submitLabel}
+        </button>
+      </div>
       {form.parentId && initialData?._parent && (
         // Variant banner — without this users edit a clone, see the parent's
         // values pre-filled (as they used to before GH #106 was fixed), and
@@ -2263,7 +2282,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         disabled={saving}
         className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
       >
-        {saving ? t("form.saving") : initialData ? t("form.updateFilament") : t("form.createFilament")}
+        {submitLabel}
       </button>
     </form>
   );

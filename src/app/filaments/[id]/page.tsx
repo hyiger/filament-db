@@ -596,12 +596,22 @@ export default function FilamentDetail() {
 
       {/* Variant parent link */}
       {isVariant && (
-        <div className="mb-4 px-3 py-2 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded text-sm">
-          {t("detail.inheritsFromParent")}
-          {inherited.size > 0 && (
-            <span className="text-gray-500 ml-1">
-              ({t("detail.inheritedFieldCount", { count: inherited.size })})
-            </span>
+        <div className="mb-4 px-3 py-2 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded text-sm flex items-center justify-between gap-3 flex-wrap">
+          <span>
+            {t("detail.inheritsFromParent")}
+            {inherited.size > 0 && (
+              <span className="text-gray-500 ml-1">
+                ({t("detail.inheritedFieldCount", { count: inherited.size })})
+              </span>
+            )}
+          </span>
+          {filament._parent && (
+            <Link
+              href={`/filaments/${filament._parent._id}`}
+              className="text-blue-700 dark:text-blue-300 hover:underline whitespace-nowrap"
+            >
+              {t("detail.upToParent", { name: filament._parent.name })}
+            </Link>
           )}
         </div>
       )}
