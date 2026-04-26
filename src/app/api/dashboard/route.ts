@@ -6,6 +6,7 @@ import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import PrintHistory from "@/models/PrintHistory";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { resolveFilament } from "@/lib/resolveFilament";
 
 /**
  * GET /api/dashboard — aggregate summary for the dashboard page.
@@ -78,8 +79,15 @@ export async function GET() {
       }
     }
 
-    // Spools due for a dry cycle — no dry cycle in the last 30 days and
-    // filament.dryingTemperature set (only materials that need drying).
+    // Spools due for a dry cycle — no dry cycle in the last 30 days and the
+    // filament needs drying. A variant with no own dryingTemperature must
+    // inherit from its parent; pre-v1.12.5 this branch only checked the
+    // variant's own field, so child filaments with inherited drying values
+    // were silently skipped (GH #133).
+    const parentMap = new Map<string, (typeof filaments)[number]>();
+    for (const f of filaments) {
+      if (!f.parentId) parentMap.set(f._id.toString(), f);
+    }
     const now = Date.now();
     const dryThresholdMs = 30 * 24 * 60 * 60 * 1000;
     const dryDue: {
@@ -90,7 +98,10 @@ export async function GET() {
       lastDried: string | null;
     }[] = [];
     for (const f of filaments) {
-      if (typeof f.dryingTemperature !== "number") continue;
+      const resolved = f.parentId
+        ? resolveFilament(f, parentMap.get(f.parentId.toString()))
+        : f;
+      if (typeof resolved.dryingTemperature !== "number") continue;
       for (const s of f.spools || []) {
         if (s.retired) continue;
         const cycles = s.dryCycles || [];
