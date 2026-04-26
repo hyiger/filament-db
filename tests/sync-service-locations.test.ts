@@ -588,6 +588,66 @@ describe("SyncService — locations and spool.locationId remap", () => {
     expect(remoteV?.parentId).toBeNull();
   });
 
+  // Codex P1 follow-up to PR #131. v1.12.3's freshly-inserted-only guard
+  // missed a real shape: pre-existing local variant pulls a NEWER copy
+  // from remote, syncCollection updates it before the parent (which only
+  // exists on remote) gets inserted, and the in-line transform's stale
+  // local target map yields parentId=null. Repair must fire because this
+  // sync cycle just rewrote the row — the null came from sync code, not
+  // user intent. v1.12.4 widens the gate to "touched this cycle" by
+  // comparing updatedAt against a pre-sync snapshot.
+  it("re-attaches a pre-existing variant whose remote update nulled parentId because the local target map missed the parent", async () => {
+    const localDb = localClient.db("filament-db");
+    const remoteDb = remoteClient.db("filament-db");
+
+    const parentSyncId = "p-late-arrival";
+    const variantSyncId = "v-late-arrival";
+
+    // Local has a STANDALONE variant pre-existing (no parent locally yet).
+    // Remote has a NEWER variant attached to a parent that local lacks.
+    // syncCollection iterates an unordered Set — variant can be processed
+    // before the parent gets inserted on local. The transform looks up
+    // the parent's syncId in the localFilamentBySyncId map (built BEFORE
+    // the inserts), gets undefined, and writes parentId=null.
+    const oldLocalTime = new Date(Date.now() - 60_000);
+    const newRemoteTime = new Date();
+
+    await localDb.collection("filaments").insertOne({
+      _id: new ObjectId(), syncId: variantSyncId,
+      name: "Variant", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: oldLocalTime, updatedAt: oldLocalTime,
+      parentId: null, // standalone locally before sync runs
+    });
+    const remoteParentId = new ObjectId();
+    await remoteDb.collection("filaments").insertOne({
+      _id: remoteParentId, syncId: parentSyncId,
+      name: "Parent", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: newRemoteTime, updatedAt: newRemoteTime,
+      parentId: null,
+    });
+    await remoteDb.collection("filaments").insertOne({
+      _id: new ObjectId(), syncId: variantSyncId,
+      name: "Variant", vendor: "Test", type: "PLA",
+      _deletedAt: null, createdAt: newRemoteTime, updatedAt: newRemoteTime,
+      parentId: remoteParentId,
+    });
+
+    sync = makeSync();
+    await sync.sync();
+
+    const localParent = await localDb.collection("filaments").findOne({ syncId: parentSyncId });
+    const localVariant = await localDb.collection("filaments").findOne({ syncId: variantSyncId });
+
+    expect(localParent).not.toBeNull();
+    expect(localVariant).not.toBeNull();
+    // Repair must restore the parent link even though local's variant
+    // pre-existed this cycle — its updatedAt changed to remote's value
+    // when syncCollection's last-write-wins push fired, so the touched-
+    // this-cycle gate identifies it as a sync-rewritten row.
+    expect(localVariant!.parentId).not.toBeNull();
+    expect(localVariant!.parentId.toString()).toBe(localParent!._id.toString());
+  });
+
   // Same Codex P2 — but the meaner shape: local detached, remote still
   // attached, equal updatedAt (e.g. a manual DB edit that didn't bump the
   // timestamp, or two devices that happened to write at the same ms).
