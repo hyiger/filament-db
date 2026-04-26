@@ -203,18 +203,28 @@ export class SyncService extends EventEmitter {
       const localFilamentBySyncId = new Map(localFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
       const remoteFilamentBySyncId = new Map(remoteFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
 
-      // Snapshot the set of pre-existing filament _ids on each side so the
-      // post-sync repair pass can tell "freshly inserted in this cycle"
-      // from "already existed". The repair pass uses this signal instead
-      // of timestamp guesses — the only safe time to overwrite a null
-      // parentId is when this row was JUST created by the pull (the bug
-      // path) and not edited by the user since (the v1.12.2 follow-up).
-      const localFilamentIdsBeforeSync = new Set(
-        localFilaments.map((f) => f._id.toString()),
-      );
-      const remoteFilamentIdsBeforeSync = new Set(
-        remoteFilaments.map((f) => f._id.toString()),
-      );
+      // Snapshot each side's pre-existing filaments as `_id → updatedAt(ms)`
+      // so the post-sync repair pass can tell whether THIS sync cycle wrote
+      // each row. Two shapes both qualify as "fair game to repair":
+      //   (a) row not in snapshot at all → freshly inserted by this pull
+      //       (the GH #128 fresh-install shape);
+      //   (b) row in snapshot but updatedAt has changed → rewritten by
+      //       this cycle's syncCollection update (the Codex P1 shape on
+      //       PR #131: pre-existing variant whose parentId got nulled
+      //       because the in-line transform's target map missed the parent
+      //       that's about to be inserted later in the same cycle).
+      // Anything else is a row this sync didn't touch — user territory,
+      // leave alone (Codex P2 on PR #130 / v1.12.1).
+      const localFilamentSnapshot = new Map<string, number | null>();
+      for (const f of localFilaments) {
+        const t = SyncService.readUpdatedAt(f);
+        localFilamentSnapshot.set(f._id.toString(), t ?? null);
+      }
+      const remoteFilamentSnapshot = new Map<string, number | null>();
+      for (const f of remoteFilaments) {
+        const t = SyncService.readUpdatedAt(f);
+        remoteFilamentSnapshot.set(f._id.toString(), t ?? null);
+      }
 
       // Sync filaments with nozzle, printer, parent, and spool-location remapping
       this.updateStatus({ progress: "Syncing filaments..." });
@@ -239,7 +249,7 @@ export class SyncService extends EventEmitter {
       // built against the post-sync state of both DBs.
       await this.repairFilamentParentIds(
         localDb, remoteDb,
-        localFilamentIdsBeforeSync, remoteFilamentIdsBeforeSync,
+        localFilamentSnapshot, remoteFilamentSnapshot,
       );
 
       const results = [nozzleResult, printerResult, locationResult, filamentResult];
@@ -576,8 +586,8 @@ export class SyncService extends EventEmitter {
   private async repairFilamentParentIds(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
-    localIdsBeforeSync: Set<string>,
-    remoteIdsBeforeSync: Set<string>,
+    localSnapshot: Map<string, number | null>,
+    remoteSnapshot: Map<string, number | null>,
   ): Promise<void> {
     const lf = await localDb.collection("filaments").find({}).toArray();
     const rf = await remoteDb.collection("filaments").find({}).toArray();
@@ -601,11 +611,11 @@ export class SyncService extends EventEmitter {
 
     await this.repairSideParentIds(
       localDb, lf, localBySyncId, remoteBySyncId, remoteIdToSyncId,
-      localIdsBeforeSync, "local",
+      localSnapshot, "local",
     );
     await this.repairSideParentIds(
       remoteDb, rf, remoteBySyncId, localBySyncId, localIdToSyncId,
-      remoteIdsBeforeSync, "remote",
+      remoteSnapshot, "remote",
     );
   }
 
@@ -615,12 +625,12 @@ export class SyncService extends EventEmitter {
     sideBySyncId: Map<string, Document>,
     otherBySyncId: Map<string, Document>,
     otherIdToSyncId: Map<string, string>,
-    /** Set of _ids that existed on this side BEFORE this sync cycle's
-     * filament step ran. Anything not in this set was just inserted by
-     * the pull and is the only safe target for a null→something repair —
-     * an existing row's null is either user intent or already-correct,
-     * and overriding it would race the user's edits (GH #127 / Codex P2). */
-    idsBeforeSync: Set<string>,
+    /** Pre-sync snapshot of this side's filaments: `_id → updatedAt(ms)`,
+     * or null when the row had no recorded updatedAt. The repair only
+     * overrides null→expected for rows this cycle actually touched
+     * (inserted, or whose updatedAt changed). Untouched rows are user
+     * territory — last-write-wins handles real edits on the next pass. */
+    snapshot: Map<string, number | null>,
     sideLabel: "local" | "remote",
   ): Promise<void> {
     const validIds = new Set(sideFilaments.map((f) => f._id.toString()));
@@ -647,17 +657,38 @@ export class SyncService extends EventEmitter {
       const isCurrentDangling =
         currentParentIdStr != null && !validIds.has(currentParentIdStr);
       const expectedStr = expected ? expected.toString() : null;
-      const wasFreshlyInserted = !idsBeforeSync.has(f._id.toString());
+
+      // Was this row inserted OR rewritten by THIS sync cycle? If yes,
+      // the parentId we see now came from the just-run transform — fair
+      // game to repair against the freshly-built syncId maps. If no,
+      // leave it alone (intentional detach, or already-correct).
+      const id = f._id.toString();
+      const snapshotUpdatedAt = snapshot.get(id);
+      let wasTouchedThisCycle: boolean;
+      if (snapshotUpdatedAt === undefined) {
+        // Not in snapshot at all → freshly inserted by this sync's pull
+        // (GH #128 fresh-install shape).
+        wasTouchedThisCycle = true;
+      } else if (snapshotUpdatedAt === null) {
+        // Pre-existing but no recorded updatedAt — can't prove it changed.
+        // Default to "untouched" so we don't override potentially-intentional state.
+        wasTouchedThisCycle = false;
+      } else {
+        // Pre-existing with a known timestamp: compare against current.
+        // syncCollection's update propagates the source updatedAt, so a
+        // sync rewrite shows up as a value change here.
+        const currentUpdatedAt = SyncService.readUpdatedAt(f);
+        wasTouchedThisCycle =
+          currentUpdatedAt !== undefined && currentUpdatedAt !== snapshotUpdatedAt;
+      }
 
       // Conservative: only repair the two clear-bug shapes.
       const shouldFix =
-        // Fresh-install null leak: row was just inserted by this sync's
-        // pull, and its parentId came back null because the target id map
-        // was empty when the transform ran. Pre-existing rows with null
-        // parentId are either intentional detaches or already-correct
-        // standalones — leave them to syncCollection's last-write-wins
-        // (Codex P2 on the v1.12.1 repair pass).
-        (currentParentIdStr == null && expected != null && wasFreshlyInserted) ||
+        // Null parentId where projection says it should be set, and this
+        // row was created or rewritten by this cycle. Covers both the
+        // fresh-install pull (#128) and the pre-existing-variant-updated
+        // -before-its-parent shape (Codex P1 on PR #131).
+        (currentParentIdStr == null && expected != null && wasTouchedThisCycle) ||
         // Stale id pointing at nothing on this side. Always broken state,
         // repair regardless of when the row was inserted.
         (isCurrentDangling && currentParentIdStr !== expectedStr);
@@ -674,6 +705,22 @@ export class SyncService extends EventEmitter {
     if (fixed > 0) {
       console.log(`repairFilamentParentIds: fixed ${fixed} ${sideLabel} filament(s)`);
     }
+  }
+
+  /** Best-effort millisecond conversion of a Mongo `updatedAt` field.
+   * Mongoose schemas in this codebase always set Dates, but raw mongo
+   * inserts can store strings — handle both, and return undefined for
+   * anything we can't read. */
+  private static readUpdatedAt(doc: Document): number | undefined {
+    const u = doc.updatedAt;
+    if (!u) return undefined;
+    if (u instanceof Date) return u.getTime();
+    if (typeof u === "string") {
+      const t = Date.parse(u);
+      return Number.isNaN(t) ? undefined : t;
+    }
+    if (typeof u === "number") return u;
+    return undefined;
   }
 
   /**
