@@ -203,6 +203,19 @@ export class SyncService extends EventEmitter {
       const localFilamentBySyncId = new Map(localFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
       const remoteFilamentBySyncId = new Map(remoteFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
 
+      // Snapshot the set of pre-existing filament _ids on each side so the
+      // post-sync repair pass can tell "freshly inserted in this cycle"
+      // from "already existed". The repair pass uses this signal instead
+      // of timestamp guesses — the only safe time to overwrite a null
+      // parentId is when this row was JUST created by the pull (the bug
+      // path) and not edited by the user since (the v1.12.2 follow-up).
+      const localFilamentIdsBeforeSync = new Set(
+        localFilaments.map((f) => f._id.toString()),
+      );
+      const remoteFilamentIdsBeforeSync = new Set(
+        remoteFilaments.map((f) => f._id.toString()),
+      );
+
       // Sync filaments with nozzle, printer, parent, and spool-location remapping
       this.updateStatus({ progress: "Syncing filaments..." });
       const filamentTransform = this.buildFilamentRefsTransform(
@@ -224,7 +237,10 @@ export class SyncService extends EventEmitter {
       // parent+variant pair pulled in the same cycle. This pass projects
       // the truth from the *other* side via syncId maps that are now
       // built against the post-sync state of both DBs.
-      await this.repairFilamentParentIds(localDb, remoteDb);
+      await this.repairFilamentParentIds(
+        localDb, remoteDb,
+        localFilamentIdsBeforeSync, remoteFilamentIdsBeforeSync,
+      );
 
       const results = [nozzleResult, printerResult, locationResult, filamentResult];
       this.updateStatus({
@@ -560,6 +576,8 @@ export class SyncService extends EventEmitter {
   private async repairFilamentParentIds(
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
+    localIdsBeforeSync: Set<string>,
+    remoteIdsBeforeSync: Set<string>,
   ): Promise<void> {
     const lf = await localDb.collection("filaments").find({}).toArray();
     const rf = await remoteDb.collection("filaments").find({}).toArray();
@@ -581,8 +599,14 @@ export class SyncService extends EventEmitter {
       }
     }
 
-    await this.repairSideParentIds(localDb, lf, localBySyncId, remoteBySyncId, remoteIdToSyncId, "local");
-    await this.repairSideParentIds(remoteDb, rf, remoteBySyncId, localBySyncId, localIdToSyncId, "remote");
+    await this.repairSideParentIds(
+      localDb, lf, localBySyncId, remoteBySyncId, remoteIdToSyncId,
+      localIdsBeforeSync, "local",
+    );
+    await this.repairSideParentIds(
+      remoteDb, rf, remoteBySyncId, localBySyncId, localIdToSyncId,
+      remoteIdsBeforeSync, "remote",
+    );
   }
 
   private async repairSideParentIds(
@@ -591,6 +615,12 @@ export class SyncService extends EventEmitter {
     sideBySyncId: Map<string, Document>,
     otherBySyncId: Map<string, Document>,
     otherIdToSyncId: Map<string, string>,
+    /** Set of _ids that existed on this side BEFORE this sync cycle's
+     * filament step ran. Anything not in this set was just inserted by
+     * the pull and is the only safe target for a null→something repair —
+     * an existing row's null is either user intent or already-correct,
+     * and overriding it would race the user's edits (GH #127 / Codex P2). */
+    idsBeforeSync: Set<string>,
     sideLabel: "local" | "remote",
   ): Promise<void> {
     const validIds = new Set(sideFilaments.map((f) => f._id.toString()));
@@ -617,34 +647,19 @@ export class SyncService extends EventEmitter {
       const isCurrentDangling =
         currentParentIdStr != null && !validIds.has(currentParentIdStr);
       const expectedStr = expected ? expected.toString() : null;
+      const wasFreshlyInserted = !idsBeforeSync.has(f._id.toString());
 
-      // Match local↔remote updatedAt to ms. Equal timestamps mean the row
-      // is "in sync as far as edits go" — no user mutation has happened on
-      // this side since the last sync. A null parentId in that state is
-      // the fresh-install bug; a null parentId where local.updatedAt is
-      // *newer* (Mongoose bumps it on save) is an intentional "make this
-      // standalone" edit, and the repair must NOT undo it.
-      const sideUpdatedAt = f.updatedAt instanceof Date
-        ? f.updatedAt.getTime()
-        : (typeof f.updatedAt === "string" ? Date.parse(f.updatedAt) : NaN);
-      const otherUpdatedAt = counterpart?.updatedAt instanceof Date
-        ? counterpart.updatedAt.getTime()
-        : (typeof counterpart?.updatedAt === "string" ? Date.parse(counterpart.updatedAt) : NaN);
-      const timestampsMatch =
-        Number.isFinite(sideUpdatedAt) && Number.isFinite(otherUpdatedAt) &&
-        sideUpdatedAt === otherUpdatedAt;
-
-      // Conservative: only repair the two clear-bug shapes. Don't touch
-      // valid-but-different parentIds (those are legitimate user edits and
-      // belong to the next last-write-wins cycle).
+      // Conservative: only repair the two clear-bug shapes.
       const shouldFix =
-        // Fresh-install null leak: should have a parent, currently null,
-        // AND timestamps match (so we know this side hasn't been touched
-        // since sync). A null with mismatched timestamps is an intentional
-        // detach (GH #128 follow-up).
-        (currentParentIdStr == null && expected != null && timestampsMatch) ||
+        // Fresh-install null leak: row was just inserted by this sync's
+        // pull, and its parentId came back null because the target id map
+        // was empty when the transform ran. Pre-existing rows with null
+        // parentId are either intentional detaches or already-correct
+        // standalones — leave them to syncCollection's last-write-wins
+        // (Codex P2 on the v1.12.1 repair pass).
+        (currentParentIdStr == null && expected != null && wasFreshlyInserted) ||
         // Stale id pointing at nothing on this side. Always broken state,
-        // repair regardless of timestamp.
+        // repair regardless of when the row was inserted.
         (isCurrentDangling && currentParentIdStr !== expectedStr);
 
       if (!shouldFix) continue;
