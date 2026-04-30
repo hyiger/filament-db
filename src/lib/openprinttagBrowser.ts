@@ -13,10 +13,12 @@
  */
 
 import { parse as parseYaml } from "yaml";
-import { execSync } from "child_process";
 import { mkdtempSync, readFileSync, rmSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import * as tar from "tar";
 import { OPT_TAG } from "@/lib/openprinttag";
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -326,13 +328,42 @@ export async function fetchOpenPrintTagDatabase(): Promise<OPTDatabase> {
   const tmpDir = mkdtempSync(join(tmpdir(), "openprinttag-"));
 
   try {
-    // Download tarball via GitHub API
+    // Download and extract the tarball via the GitHub tarball API. Earlier
+    // versions shelled out to `curl ... | tar xz`, but the production
+    // Docker image (node:22-alpine) doesn't ship curl, so users got
+    // "/bin/sh: curl: not found" the moment they tried to browse the OPT
+    // database (GH #136). Doing it in pure Node removes the dep on host
+    // tools and works the same in dev, Electron, and Docker.
     const tarballUrl =
       "https://api.github.com/repos/OpenPrintTag/openprinttag-database/tarball/main";
 
-    execSync(
-      `curl -sL -H "Accept: application/vnd.github+json" "${tarballUrl}" | tar xz -C "${tmpDir}"`,
-      { timeout: 60_000, maxBuffer: 50 * 1024 * 1024 },
+    const response = await fetch(tarballUrl, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        // GitHub returns 403 on unauthenticated requests with no UA.
+        "User-Agent": "filament-db",
+      },
+      // 60s matches the previous execSync timeout. AbortSignal.timeout
+      // produces a TypeError-shaped abort if exceeded.
+      signal: AbortSignal.timeout(60_000),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `GitHub tarball request failed: ${response.status} ${response.statusText}`,
+      );
+    }
+    if (!response.body) {
+      throw new Error("GitHub tarball response had no body");
+    }
+
+    // tar.x is a Writable transform that auto-detects gzip; pipeline()
+    // resolves once the entire tarball has been extracted to disk.
+    await pipeline(
+      // Cast: response.body is a Web ReadableStream, Readable.fromWeb wants
+      // the same shape but the type lib for streams/web is a bit loose
+      // across Node versions. Functionally identical.
+      Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
+      tar.x({ cwd: tmpDir }),
     );
 
     // The tarball extracts to a subdirectory like OpenPrintTag-openprinttag-database-<sha>/
