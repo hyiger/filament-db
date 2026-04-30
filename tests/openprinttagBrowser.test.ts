@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, createReadStream } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { tmpdir } from "os";
 import * as tar from "tar";
 
@@ -26,9 +26,13 @@ import { EnvHttpProxyAgent } from "undici";
 function buildTarball(files: Record<string, string>): string {
   const stagingDir = mkdtempSync(join(tmpdir(), "opt-tar-staging-"));
   for (const [relPath, content] of Object.entries(files)) {
-    const fullPath = join(stagingDir, relPath);
-    const dir = fullPath.substring(0, fullPath.lastIndexOf("/"));
-    mkdirSync(dir, { recursive: true });
+    // Map keys use forward slashes (tarball semantics); split on `/` so the
+    // directory math works the same on Windows where path.join would
+    // normalize to backslashes and our previous lastIndexOf("/") returned
+    // -1 → mkdirSync(""), CI failure mode (#137 follow-up).
+    const segments = relPath.split("/");
+    const fullPath = join(stagingDir, ...segments);
+    mkdirSync(dirname(fullPath), { recursive: true });
     writeFileSync(fullPath, content);
   }
   const tarballPath = join(tmpdir(), `opt-tarball-${Date.now()}-${Math.random()}.tgz`);
