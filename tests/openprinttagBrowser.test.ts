@@ -12,8 +12,10 @@ import {
   parseMaterialYaml,
   mapToFilamentPayload,
   fetchOpenPrintTagDatabase,
+  getProxyDispatcher,
   clearCache,
 } from "@/lib/openprinttagBrowser";
+import { EnvHttpProxyAgent } from "undici";
 
 /**
  * Build a gzipped tarball on disk from the given file map and return the
@@ -486,6 +488,34 @@ describe("clearCache", () => {
   });
 });
 
+describe("getProxyDispatcher", () => {
+  // Pure-function test that doesn't touch fetch — covers the env-var
+  // matrix the Codex feedback flagged. Each call passes its own env so
+  // we don't have to mutate process.env.
+
+  it("returns undefined when no proxy env vars are set", () => {
+    expect(getProxyDispatcher({})).toBeUndefined();
+  });
+
+  for (const key of [
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+  ] as const) {
+    it(`returns an EnvHttpProxyAgent when ${key} is set`, () => {
+      const dispatcher = getProxyDispatcher({ [key]: "http://proxy.example.invalid:8080" });
+      expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    });
+  }
+
+  it("treats an empty proxy string as unset", () => {
+    expect(getProxyDispatcher({ HTTPS_PROXY: "" })).toBeUndefined();
+  });
+});
+
 describe("fetchOpenPrintTagDatabase", () => {
   let tarballsToCleanup: string[] = [];
 
@@ -562,6 +592,62 @@ type: Resin
     await fetchOpenPrintTagDatabase();
 
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("attaches an EnvHttpProxyAgent dispatcher when HTTPS_PROXY is set", async () => {
+    // Regression for the Codex P2 on PR #137: bare fetch() ignores
+    // HTTP_PROXY/HTTPS_PROXY by default, so any proxy-restricted
+    // deployment that worked through the old curl pipeline would silently
+    // fail after the migration. We ship a dispatcher when those env vars
+    // are present.
+    const tarballPath = mockFetchTarball({
+      "OpenPrintTag-x/data/brands/.gitkeep": "",
+      "OpenPrintTag-x/data/materials/p.yaml":
+        "uuid: p\nslug: p\nbrand:\n  slug: x\nname: P\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+
+    process.env.HTTPS_PROXY = "http://proxy.example.invalid:8080";
+    try {
+      await fetchOpenPrintTagDatabase();
+      const initArg = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+        dispatcher?: unknown;
+      };
+      expect(initArg.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    } finally {
+      delete process.env.HTTPS_PROXY;
+    }
+  });
+
+  it("does not attach a dispatcher when no proxy env var is set", async () => {
+    const tarballPath = mockFetchTarball({
+      "OpenPrintTag-y/data/brands/.gitkeep": "",
+      "OpenPrintTag-y/data/materials/p.yaml":
+        "uuid: p\nslug: p\nbrand:\n  slug: y\nname: P\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+
+    // Make sure no proxy var leaks in from the parent shell.
+    const saved = {
+      HTTP_PROXY: process.env.HTTP_PROXY,
+      HTTPS_PROXY: process.env.HTTPS_PROXY,
+      http_proxy: process.env.http_proxy,
+      https_proxy: process.env.https_proxy,
+      ALL_PROXY: process.env.ALL_PROXY,
+      all_proxy: process.env.all_proxy,
+    };
+    for (const k of Object.keys(saved)) delete process.env[k];
+    try {
+      await fetchOpenPrintTagDatabase();
+      const initArg = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+        dispatcher?: unknown;
+      };
+      expect(initArg.dispatcher).toBeUndefined();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v !== undefined) process.env[k] = v;
+      }
+    }
   });
 
   it("propagates a 4xx/5xx response as a thrown error", async () => {
