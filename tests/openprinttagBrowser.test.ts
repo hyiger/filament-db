@@ -1,14 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mkdirSync, writeFileSync } from "fs";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync, createReadStream } from "fs";
 import { join } from "path";
-
-const { mockExecSync } = vi.hoisted(() => ({
-  mockExecSync: vi.fn(),
-}));
-vi.mock("child_process", async (importOriginal) => {
-  const orig = await importOriginal<typeof import("child_process")>();
-  return { ...orig, execSync: mockExecSync };
-});
+import { tmpdir } from "os";
+import * as tar from "tar";
 
 import {
   computeCompletenessScore,
@@ -18,8 +12,70 @@ import {
   parseMaterialYaml,
   mapToFilamentPayload,
   fetchOpenPrintTagDatabase,
+  getProxyDispatcher,
   clearCache,
 } from "@/lib/openprinttagBrowser";
+import { EnvHttpProxyAgent } from "undici";
+
+/**
+ * Build a gzipped tarball on disk from the given file map and return the
+ * file path. The map's keys are paths relative to the tar root; values are
+ * file contents. Used by the fetchOpenPrintTagDatabase tests to simulate
+ * GitHub's tarball API response without actually hitting the network.
+ */
+function buildTarball(files: Record<string, string>): string {
+  const stagingDir = mkdtempSync(join(tmpdir(), "opt-tar-staging-"));
+  for (const [relPath, content] of Object.entries(files)) {
+    const fullPath = join(stagingDir, relPath);
+    const dir = fullPath.substring(0, fullPath.lastIndexOf("/"));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(fullPath, content);
+  }
+  const tarballPath = join(tmpdir(), `opt-tarball-${Date.now()}-${Math.random()}.tgz`);
+  tar.c(
+    {
+      gzip: true,
+      file: tarballPath,
+      cwd: stagingDir,
+      sync: true,
+    },
+    ["."],
+  );
+  rmSync(stagingDir, { recursive: true, force: true });
+  return tarballPath;
+}
+
+/**
+ * Mock global fetch to stream a gzipped tarball constructed from `files`.
+ * Returns the path to the tarball so the test can clean it up.
+ */
+function mockFetchTarball(files: Record<string, string>): string {
+  const tarballPath = buildTarball(files);
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+    // Bridge the on-disk tarball to a Web ReadableStream the route handler
+    // can pipe through. Node's createReadStream gives us a Node Readable;
+    // wrap it in the minimal Response shape the production code consumes.
+    const nodeStream = createReadStream(tarballPath);
+    const webStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        nodeStream.on("data", (chunk: Buffer | string) => {
+          controller.enqueue(typeof chunk === "string" ? new TextEncoder().encode(chunk) : new Uint8Array(chunk));
+        });
+        nodeStream.on("end", () => controller.close());
+        nodeStream.on("error", (err) => controller.error(err));
+      },
+      cancel() {
+        nodeStream.destroy();
+      },
+    });
+    return new Response(webStream, {
+      status: 200,
+      statusText: "OK",
+      headers: { "content-type": "application/x-gzip" },
+    });
+  });
+  return tarballPath;
+}
 
 describe("computeCompletenessScore", () => {
   it("returns 0 for empty material", () => {
@@ -432,32 +488,57 @@ describe("clearCache", () => {
   });
 });
 
-describe("fetchOpenPrintTagDatabase", () => {
-  beforeEach(() => {
-    clearCache();
-    mockExecSync.mockReset();
+describe("getProxyDispatcher", () => {
+  // Pure-function test that doesn't touch fetch — covers the env-var
+  // matrix the Codex feedback flagged. Each call passes its own env so
+  // we don't have to mutate process.env.
+
+  it("returns undefined when no proxy env vars are set", () => {
+    expect(getProxyDispatcher({})).toBeUndefined();
   });
 
-  it("fetches and parses the database from a mock tarball", async () => {
-    mockExecSync.mockImplementation((_cmd: string) => {
-      const match = String(_cmd).match(/-C "([^"]+)"/);
-      if (!match) return Buffer.from("");
-      const tmpDir = match[1];
+  for (const key of [
+    "HTTP_PROXY",
+    "http_proxy",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+  ] as const) {
+    it(`returns an EnvHttpProxyAgent when ${key} is set`, () => {
+      const dispatcher = getProxyDispatcher({ [key]: "http://proxy.example.invalid:8080" });
+      expect(dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    });
+  }
 
-      const repoDir = join(tmpDir, "OpenPrintTag-openprinttag-database-abc123");
-      const brandsDir = join(repoDir, "data", "brands");
-      const materialsDir = join(repoDir, "data", "materials", "prusament");
+  it("treats an empty proxy string as unset", () => {
+    expect(getProxyDispatcher({ HTTPS_PROXY: "" })).toBeUndefined();
+  });
+});
 
-      mkdirSync(brandsDir, { recursive: true });
-      mkdirSync(materialsDir, { recursive: true });
+describe("fetchOpenPrintTagDatabase", () => {
+  let tarballsToCleanup: string[] = [];
 
-      writeFileSync(
-        join(brandsDir, "prusament.yaml"),
-        `slug: prusament\nname: Prusament\ncountry: CZ`
-      );
+  beforeEach(() => {
+    clearCache();
+    tarballsToCleanup = [];
+  });
 
-      writeFileSync(
-        join(materialsDir, "prusament-pla-galaxy-black.yaml"),
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const p of tarballsToCleanup) {
+      try { rmSync(p, { force: true }); } catch { /* swallow */ }
+    }
+  });
+
+  it("fetches and parses the database from a streamed tarball", async () => {
+    // GitHub's tarball API extracts to a top-level dir like
+    // OpenPrintTag-openprinttag-database-<sha>/. We mirror that here so
+    // the production code's "first entry under tmpDir" assumption holds.
+    const tarballPath = mockFetchTarball({
+      "OpenPrintTag-abc123/data/brands/prusament.yaml":
+        "slug: prusament\nname: Prusament\ncountry: CZ\n",
+      "OpenPrintTag-abc123/data/materials/prusament/prusament-pla-galaxy-black.yaml":
         `uuid: test-uuid-1234
 slug: prusament-pla-galaxy-black
 brand:
@@ -473,22 +554,19 @@ properties:
   min_print_temperature: 205
   max_print_temperature: 225
   min_bed_temperature: 40
-  max_bed_temperature: 60`
-      );
-
-      writeFileSync(
-        join(materialsDir, "some-resin.yaml"),
+  max_bed_temperature: 60
+`,
+      "OpenPrintTag-abc123/data/materials/prusament/some-resin.yaml":
         `uuid: resin-uuid
 slug: some-resin
 brand:
   slug: prusament
 name: Some Resin
 class: SLA
-type: Resin`
-      );
-
-      return Buffer.from("");
+type: Resin
+`,
     });
+    tarballsToCleanup.push(tarballPath);
 
     const db = await fetchOpenPrintTagDatabase();
 
@@ -502,30 +580,86 @@ type: Resin`
     expect(db.cachedAt).toBeTruthy();
   });
 
-  it("returns cached result on second call", async () => {
-    let callCount = 0;
-    mockExecSync.mockImplementation((_cmd: string) => {
-      callCount++;
-      const match = String(_cmd).match(/-C "([^"]+)"/);
-      if (!match) return Buffer.from("");
-      const tmpDir = match[1];
-
-      const repoDir = join(tmpDir, "OpenPrintTag-abc");
-      const materialsDir = join(repoDir, "data", "materials");
-      mkdirSync(materialsDir, { recursive: true });
-      mkdirSync(join(repoDir, "data", "brands"), { recursive: true });
-
-      writeFileSync(
-        join(materialsDir, "test.yaml"),
-        `uuid: u1\nslug: test\nbrand:\n  slug: test\nname: Test\nclass: FFF\ntype: PLA`
-      );
-
-      return Buffer.from("");
+  it("returns cached result on second call without re-fetching", async () => {
+    const tarballPath = mockFetchTarball({
+      "OpenPrintTag-abc/data/brands/.gitkeep": "",
+      "OpenPrintTag-abc/data/materials/test.yaml":
+        "uuid: u1\nslug: test\nbrand:\n  slug: test\nname: Test\nclass: FFF\ntype: PLA\n",
     });
+    tarballsToCleanup.push(tarballPath);
 
     await fetchOpenPrintTagDatabase();
     await fetchOpenPrintTagDatabase();
 
-    expect(callCount).toBe(1);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("attaches an EnvHttpProxyAgent dispatcher when HTTPS_PROXY is set", async () => {
+    // Regression for the Codex P2 on PR #137: bare fetch() ignores
+    // HTTP_PROXY/HTTPS_PROXY by default, so any proxy-restricted
+    // deployment that worked through the old curl pipeline would silently
+    // fail after the migration. We ship a dispatcher when those env vars
+    // are present.
+    const tarballPath = mockFetchTarball({
+      "OpenPrintTag-x/data/brands/.gitkeep": "",
+      "OpenPrintTag-x/data/materials/p.yaml":
+        "uuid: p\nslug: p\nbrand:\n  slug: x\nname: P\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+
+    process.env.HTTPS_PROXY = "http://proxy.example.invalid:8080";
+    try {
+      await fetchOpenPrintTagDatabase();
+      const initArg = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+        dispatcher?: unknown;
+      };
+      expect(initArg.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    } finally {
+      delete process.env.HTTPS_PROXY;
+    }
+  });
+
+  it("does not attach a dispatcher when no proxy env var is set", async () => {
+    const tarballPath = mockFetchTarball({
+      "OpenPrintTag-y/data/brands/.gitkeep": "",
+      "OpenPrintTag-y/data/materials/p.yaml":
+        "uuid: p\nslug: p\nbrand:\n  slug: y\nname: P\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+
+    // Make sure no proxy var leaks in from the parent shell.
+    const saved = {
+      HTTP_PROXY: process.env.HTTP_PROXY,
+      HTTPS_PROXY: process.env.HTTPS_PROXY,
+      http_proxy: process.env.http_proxy,
+      https_proxy: process.env.https_proxy,
+      ALL_PROXY: process.env.ALL_PROXY,
+      all_proxy: process.env.all_proxy,
+    };
+    for (const k of Object.keys(saved)) delete process.env[k];
+    try {
+      await fetchOpenPrintTagDatabase();
+      const initArg = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+        dispatcher?: unknown;
+      };
+      expect(initArg.dispatcher).toBeUndefined();
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v !== undefined) process.env[k] = v;
+      }
+    }
+  });
+
+  it("propagates a 4xx/5xx response as a thrown error", async () => {
+    // Regression: pre-fix the curl command failed silently in the docker
+    // image (curl missing), leaving the user with a generic "Failed to
+    // fetch" toast and a tar parse error in logs. With pure Node fetch we
+    // get an actual response status to surface to the user.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("not found", { status: 404, statusText: "Not Found" }),
+    );
+    await expect(fetchOpenPrintTagDatabase()).rejects.toThrow(
+      /404|Not Found|GitHub tarball/,
+    );
   });
 });
