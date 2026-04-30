@@ -139,5 +139,10 @@ jobs:
           files: |
             dist-electron/FilamentDB-*
             dist-electron/latest*.yml
+          # Don't overwrite hand-authored release notes when the per-platform
+          # build steps re-run softprops/action-gh-release. Without
+          # append_body, an empty `body` input replaces whatever notes were
+          # set via `gh release create` minutes earlier.
+          append_body: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
