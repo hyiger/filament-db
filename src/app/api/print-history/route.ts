@@ -160,6 +160,15 @@ export async function POST(request: NextRequest) {
     // Pass 2: apply mutations to in-memory docs. A single filament can be
     // referenced by multiple usage entries in one job, so we mutate the
     // shared doc instance and save each filament once at the end.
+    //
+    // Generate the PrintHistory _id up front so each spool usageHistory
+    // entry can carry a jobId pointing back at this job. The undo path
+    // (DELETE /api/print-history/{id}) uses that linkage to refund the
+    // exact entries this POST created — without it the undo previously
+    // matched by `(grams, date)` and silently removed the wrong entry
+    // when a manual usage log happened to share both.
+    const historyId = new mongoose.Types.ObjectId();
+
     const resolvedUsage: {
       filamentId: mongoose.Types.ObjectId;
       spoolId: mongoose.Types.ObjectId | null;
@@ -193,6 +202,7 @@ export async function POST(request: NextRequest) {
           // filters these out of the per-spool fallback so totals aren't
           // double-counted against the aggregated PrintHistory pass.
           source: "job",
+          jobId: historyId,
         });
         resolvedUsage.push({
           filamentId: filament._id,
@@ -227,6 +237,7 @@ export async function POST(request: NextRequest) {
           }
           const created = await PrintHistory.create(
             [{
+              _id: historyId,
               jobLabel: body.jobLabel.trim(),
               printerId,
               usage: resolvedUsage,
@@ -256,6 +267,7 @@ export async function POST(request: NextRequest) {
         await f.save();
       }
       history = await PrintHistory.create({
+        _id: historyId,
         jobLabel: body.jobLabel.trim(),
         printerId,
         usage: resolvedUsage,

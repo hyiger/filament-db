@@ -64,6 +64,11 @@ export async function POST(
       jobLabel,
       date,
       source: "manual",
+      // No PrintHistory record backs a direct spool-UI usage log — the
+      // print-history undo path keys off this being null to skip the
+      // entry. Required by the IUsageEntry interface so the field is
+      // explicit at every call site.
+      jobId: null,
     });
     await filament.save();
     return NextResponse.json(filament.toObject(), { status: 201 });

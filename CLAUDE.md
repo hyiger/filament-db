@@ -66,7 +66,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 
 ## Testing
 
-- 635+ tests across 35+ files (unit + Mongoose model + Next.js route handlers)
+- 770+ tests across 40+ files (unit + Mongoose model + Next.js route handlers). Exact counts drift on every PR — run `npm test` for the current numbers.
 - Coverage thresholds: 80% lines/statements, 90% functions, 75% branches (enforced on `src/lib/**` and `src/models/**`; `src/lib/compressImage.ts` is excluded because its main flow is DOM-only)
 - Setup file: `tests/setup.ts` (mongodb-memory-server). **Caveat**: setup wipes `mongoose.models` between tests; route-level tests that use `.populate(...)` must re-register models in `beforeEach` by calling `mongoose.model(name, schema)` directly (see `tests/locations-route.test.ts` for the pattern).
 - Tests run in CI on Node 20 and 22
