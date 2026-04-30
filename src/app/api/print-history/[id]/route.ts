@@ -35,15 +35,30 @@ export async function DELETE(
       if (typeof spool.totalWeight === "number") {
         spool.totalWeight = spool.totalWeight + u.grams;
       }
-      // Remove the matching usageHistory entry (most recent with this grams+date)
+      // Remove the matching usageHistory entry by jobId. Older entries
+      // written before the v1.12.x audit don't carry a jobId; for those
+      // we fall back to the legacy (grams, startedAt) match — but only
+      // when the entry has source "job" or "slicer", which restricts
+      // the candidate set to print-history-driven rows and avoids
+      // accidentally clobbering a manual usage log that happens to
+      // share both fields.
       spool.usageHistory = (spool.usageHistory || []).filter(
         (h, idx, arr) => {
+          // New world: jobId match is unambiguous.
+          if (h.jobId && String(h.jobId) === String(entry._id)) return false;
+
+          // Legacy fallback (entries created before jobId existed).
+          if (h.jobId) return true;
+          if (h.source !== "job" && h.source !== "slicer") return true;
           if (h.grams !== u.grams) return true;
           if (h.date.getTime() !== entry.startedAt.getTime()) return true;
-          // Remove the first match only
+          // Remove only the first matching legacy entry per usage row.
           const firstMatch = arr.findIndex(
             (x) =>
-              x.grams === u.grams && x.date.getTime() === entry.startedAt.getTime(),
+              !x.jobId &&
+              (x.source === "job" || x.source === "slicer") &&
+              x.grams === u.grams &&
+              x.date.getTime() === entry.startedAt.getTime(),
           );
           return idx !== firstMatch;
         },

@@ -24,6 +24,15 @@ export async function POST(
   if (body !== null && typeof body !== "object") {
     return errorResponse("body must be an object", 400);
   }
+  // Cap notes length so a malicious or accidental multi-MB POST can't
+  // bloat a spool subdocument. 1000 chars is generous for a freeform
+  // dry-cycle note; matches the spirit of the print-history `notes`
+  // bound (2000) without giving as much rope, since this entry sits
+  // inside an embedded subdocument array that's loaded on every spool
+  // fetch.
+  if (typeof body?.notes === "string" && body.notes.length > 1000) {
+    return errorResponse("notes must be 1000 characters or fewer", 400);
+  }
 
   const entry: Record<string, unknown> = {
     date: body?.date ? new Date(body.date) : new Date(),

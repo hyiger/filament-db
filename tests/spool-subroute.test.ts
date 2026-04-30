@@ -178,6 +178,23 @@ describe("spool sub-routes", () => {
       );
       expect(res.status).toBe(404);
     });
+
+    it("rejects notes over 1000 chars (length-bounds guard)", async () => {
+      // Without the bound a malicious or accidental multi-MB POST would
+      // bloat the spool subdocument's dryCycles array — every fetch of
+      // that spool would then drag the bloat across the wire. v1.12.x
+      // audit P1.
+      const f = await seedFilament();
+      const sid = String(f.spools[0]._id);
+      const res = await postDryCycle(
+        postReq(
+          `http://localhost/api/filaments/${f._id}/spools/${sid}/dry-cycles`,
+          { tempC: 65, notes: "a".repeat(1001) },
+        ),
+        { params: Promise.resolve({ id: String(f._id), spoolId: sid }) },
+      );
+      expect(res.status).toBe(400);
+    });
   });
 
   describe("DELETE .../spools/{spoolId}", () => {
