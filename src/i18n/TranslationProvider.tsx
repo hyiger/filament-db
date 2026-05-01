@@ -3,8 +3,8 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import type { Locale } from "./index";
 import { DEFAULT_LOCALE, LOCALES } from "./index";
-import en from "./locales/en.json";
-import de from "./locales/de.json";
+import en from "@filament-db/shared/i18n/locales/en.json";
+import de from "@filament-db/shared/i18n/locales/de.json";
 
 type TranslationDict = Record<string, string>;
 

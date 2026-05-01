@@ -19,7 +19,9 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@filament-db/shared": ["./packages/shared/src"],
+      "@filament-db/shared/*": ["./packages/shared/src/*"]
     }
   },
   "include": [
@@ -30,5 +32,5 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules", "electron", "scripts"]
+  "exclude": ["node_modules", "electron", "scripts", "packages/mobile"]
 }
