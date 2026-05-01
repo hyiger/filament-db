@@ -11,6 +11,8 @@
   "filaments.export.ini": "INI (PrusaSlicer)",
   "filaments.export.csv": "CSV",
   "filaments.export.xlsx": "Excel (XLSX)",
+  "spools.export": "Spulendaten",
+  "spools.export.csv": "CSV (eine Zeile pro Spule)",
   "filaments.table.color": "Farbe",
   "filaments.table.name": "Name",
   "filaments.table.vendor": "Hersteller",

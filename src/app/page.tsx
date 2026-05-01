@@ -830,6 +830,18 @@ export default function Home() {
                   <span className="w-2 h-2 rounded-full bg-green-500" />
                   {t("filaments.export.xlsx")}
                 </a>
+                <div className="border-t border-gray-600 my-1" />
+                <div className="px-4 py-1">
+                  <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t("spools.export")}</span>
+                </div>
+                <a
+                  href="/api/spools/export-csv"
+                  className="block px-4 py-2 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  onClick={() => setShowImportExport(false)}
+                >
+                  <span className="w-2 h-2 rounded-full bg-green-500" />
+                  {t("spools.export.csv")}
+                </a>
               </div>
             )}
           </div>
