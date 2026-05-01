@@ -45,7 +45,7 @@ export async function PUT(
     const bedType = await BedType.findOneAndUpdate(
       { _id: id, _deletedAt: null },
       body,
-      { new: true, runValidators: true }
+      { returnDocument: "after", runValidators: true }
     ).lean();
     if (!bedType) {
       return errorResponse("Not found", 404);
@@ -79,7 +79,7 @@ export async function DELETE(
     const bedType = await BedType.findOneAndUpdate(
       { _id: id, _deletedAt: null },
       { _deletedAt: new Date() },
-      { new: true }
+      { returnDocument: "after" }
     ).lean();
     if (!bedType) {
       return errorResponse("Not found", 404);

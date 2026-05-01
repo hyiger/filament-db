@@ -118,6 +118,11 @@ export interface FilamentDetail {
   settings: Record<string, string | null>;
   _inherited?: string[];
   _variants?: FilamentVariant[];
+  /** Light parent summary attached when this filament is a variant. The
+   * non-raw GET sets just `{ _id, name }` so the variant detail page can
+   * render an "Up to <parent>" link without a second request; the raw
+   * GET (used by the edit form) attaches the full parent doc instead. */
+  _parent?: { _id: string; name: string };
 }
 
 /** Lightweight filament summary (used on list/dashboard page) */

@@ -67,8 +67,23 @@ export async function POST(request: NextRequest) {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { _id: _remoteId, __v: _remoteV, createdAt: _createdAt, updatedAt: _updatedAt, _deletedAt: _remoteDeleted, ...filamentData } = remote;
 
-        // Strip parent references (they won't exist in the local DB)
-        delete filamentData.parentId;
+        // Strip every foreign-ObjectId reference — they point at documents
+        // in the *source* Atlas database and won't resolve locally. Leaving
+        // them would surface as dangling refs in calibration/nozzle UIs.
+        //
+        // Set these to explicit empty values rather than `delete`ing them so
+        // that when `Filament.updateOne(..., filamentData)` runs on an
+        // existing row, Mongoose actually *clears* the previously-stored
+        // Atlas values. Keys absent from the update doc would otherwise
+        // leave stale Atlas IDs in place on re-import/update.
+        filamentData.parentId = null;
+        filamentData.compatibleNozzles = [];
+        filamentData.calibrations = [];
+        if (Array.isArray(filamentData.spools)) {
+          for (const s of filamentData.spools) {
+            if (s && typeof s === "object") s.locationId = null;
+          }
+        }
 
         const existing = await Filament.findOne({ name: filamentData.name, _deletedAt: null });
         if (existing) {

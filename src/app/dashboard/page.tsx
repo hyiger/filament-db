@@ -58,6 +58,18 @@ export default function DashboardPage() {
     return () => ac.abort();
   }, []);
 
+  /** Spool labels imported from Prusament come through as
+   * `<instanceId> (<ISO timestamp>)`. The ISO chunk reads as raw
+   * machine output in a dashboard list — convert it to the user's
+   * locale date so the line scans as "name · 0a1b2c3d4e (Jan 5, 2025)"
+   * instead of "name · 0a1b2c3d4e (2025-01-05T08:21:40+01:00)". Other
+   * label shapes (e.g. user-typed "Drybox A") pass through unchanged. */
+  const prettifySpoolLabel = (label: string): string =>
+    label.replace(/\((\d{4}-\d{2}-\d{2}T[\d:+\-Z.]+)\)/g, (_, iso) => {
+      const d = new Date(iso);
+      return Number.isNaN(d.getTime()) ? `(${iso})` : `(${d.toLocaleDateString()})`;
+    });
+
   if (error) {
     return (
       <main className="max-w-5xl mx-auto px-4 py-8">
@@ -152,7 +164,7 @@ export default function DashboardPage() {
                 >
                   {d.filamentName}
                   {d.spoolLabel && (
-                    <span className="text-gray-500"> · {d.spoolLabel}</span>
+                    <span className="text-gray-500"> · {prettifySpoolLabel(d.spoolLabel)}</span>
                   )}
                 </Link>
                 <span className="text-gray-500 text-xs ml-2">

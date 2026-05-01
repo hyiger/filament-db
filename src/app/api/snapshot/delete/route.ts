@@ -3,18 +3,38 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
+import BedType from "@/models/BedType";
+import Location from "@/models/Location";
+import PrintHistory from "@/models/PrintHistory";
+import SharedCatalog from "@/models/SharedCatalog";
 
 /**
  * DELETE /api/snapshot/delete — Permanently delete all data from all collections.
+ *
+ * Every user-facing collection must be listed here. A missed collection means
+ * a "reset" still surfaces stale data in the dashboard / analytics and can
+ * leave published share links active after what the user asked to be a wipe.
  */
 export async function DELETE() {
   try {
     await dbConnect();
 
-    const [filaments, nozzles, printers] = await Promise.all([
+    const [
+      filaments,
+      nozzles,
+      printers,
+      bedTypes,
+      locations,
+      printHistory,
+      sharedCatalogs,
+    ] = await Promise.all([
       Filament.deleteMany({}),
       Nozzle.deleteMany({}),
       Printer.deleteMany({}),
+      BedType.deleteMany({}),
+      Location.deleteMany({}),
+      PrintHistory.deleteMany({}),
+      SharedCatalog.deleteMany({}),
     ]);
 
     return NextResponse.json({
@@ -23,6 +43,10 @@ export async function DELETE() {
         filaments: filaments.deletedCount,
         nozzles: nozzles.deletedCount,
         printers: printers.deletedCount,
+        bedTypes: bedTypes.deletedCount,
+        locations: locations.deletedCount,
+        printHistory: printHistory.deletedCount,
+        sharedCatalogs: sharedCatalogs.deletedCount,
       },
     });
   } catch (err) {

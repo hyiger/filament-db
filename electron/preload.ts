@@ -30,7 +30,7 @@ interface UpdateInstallStrings {
 contextBridge.exposeInMainWorld("electronAPI", {
   // Config
   getConfig: () => ipcRenderer.invoke("get-config"),
-  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; locale?: string }) =>
+  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string }) =>
     ipcRenderer.invoke("save-config", config),
   resetConfig: () => ipcRenderer.invoke("reset-config"),
   testConnection: (uri: string) => ipcRenderer.invoke("test-connection", uri),
@@ -53,6 +53,13 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.on("connection-mode-fallback", handler);
     return () => {
       ipcRenderer.removeListener("connection-mode-fallback", handler);
+    };
+  },
+  onSyncComplete: (callback: () => void) => {
+    const handler = () => callback();
+    ipcRenderer.on("sync-complete", handler);
+    return () => {
+      ipcRenderer.removeListener("sync-complete", handler);
     };
   },
 

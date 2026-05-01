@@ -378,6 +378,10 @@ function initSyncService(localUri: string, atlasUri: string) {
 
   syncService.on("syncComplete", () => {
     console.log("Sync completed");
+    // Tell the renderer so it can refresh data that may have changed
+    // (filaments list, dashboard, etc.) — without waiting for the next
+    // user-triggered route change. GH #127.
+    mainWindow?.webContents.send("sync-complete");
   });
 
   syncService.on("syncError", (err: string) => {
@@ -400,6 +404,7 @@ ipcMain.handle("get-config", () => {
     aiApiKey: store.get("aiApiKey") as string,
     aiProvider: store.get("aiProvider") as string,
     currency: store.get("currency") as string,
+    customCurrencies: store.get("customCurrencies") as string,
     locale: store.get("locale") as string,
   };
 });
@@ -412,6 +417,7 @@ ipcMain.handle("save-config", async (_event, config: {
   aiApiKey?: string;
   aiProvider?: string;
   currency?: string;
+  customCurrencies?: string;
   locale?: string;
 }) => {
   // Update individual fields
@@ -432,6 +438,9 @@ ipcMain.handle("save-config", async (_event, config: {
   }
   if (config.currency !== undefined) {
     store.set("currency", config.currency);
+  }
+  if (config.customCurrencies !== undefined) {
+    store.set("customCurrencies", config.customCurrencies);
   }
   if (config.locale !== undefined) {
     store.set("locale", config.locale);

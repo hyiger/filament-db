@@ -72,6 +72,13 @@ export async function POST(request: NextRequest) {
       if (parent.parentId) {
         return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
       }
+      // Variants should inherit diameter from the parent unless the client
+      // explicitly provides one. Without this, Mongoose's schema default of
+      // 1.75 materialises on the new variant and silently overrides a
+      // parent's non-1.75 diameter (e.g. 2.85mm). GH #106.
+      if (body.diameter === undefined || body.diameter === null || body.diameter === "") {
+        body.diameter = null;
+      }
     }
 
     const filament = await Filament.create(body);

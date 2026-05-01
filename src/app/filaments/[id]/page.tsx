@@ -45,7 +45,56 @@ export default function FilamentDetail() {
   const params = useParams();
   const [filament, setFilament] = useState<Filament | null>(null);
   const [showAllSettings, setShowAllSettings] = useState(false);
-  const [showTdsPreview, setShowTdsPreview] = useState(false);
+  /**
+   * Both `previewOpenFor` and `embedCheck` are keyed to the tdsUrl they
+   * apply to. Navigating between filaments (same route, different params)
+   * keeps the component mounted and therefore preserves state — keying on
+   * tdsUrl means the *derived* `showTdsPreview` and `tdsEmbedState` below
+   * naturally reset when the loaded filament changes, instead of leaking a
+   * previous filament's "allowed"/"blocked" verdict to the new one.
+   *
+   * Done as derived state (not useEffect) because React Compiler's lint
+   * rule discourages calling setState inside an effect on a state-dep
+   * cycle — a cascading-render anti-pattern.
+   */
+  const [previewOpenFor, setPreviewOpenFor] = useState<string | null>(null);
+  const [embedCheck, setEmbedCheck] = useState<
+    | { tdsUrl: string; state: "checking" | "allowed" | "blocked" | "error" }
+    | null
+  >(null);
+
+  const showTdsPreview =
+    !!filament?.tdsUrl && previewOpenFor === filament.tdsUrl;
+  const tdsEmbedState: "idle" | "checking" | "allowed" | "blocked" | "error" =
+    filament?.tdsUrl && embedCheck?.tdsUrl === filament.tdsUrl
+      ? embedCheck.state
+      : "idle";
+  /** Lookup result for the current filament's `inherits` PrusaSlicer-style
+   *  parent name. Stamped with the inheritsName the lookup was for so a
+   *  filament-prop change can't expose a stale (wrong) target id while the
+   *  next fetch is still in flight — same pattern as embedCheck above. */
+  const [inheritsLookup, setInheritsLookup] = useState<
+    { inheritsName: string; targetId: string | null } | null
+  >(null);
+  const inheritsTargetId =
+    filament?.inherits && inheritsLookup?.inheritsName === filament.inherits
+      ? inheritsLookup.targetId
+      : null;
+  /**
+   * AbortController for the in-flight embed-check fetch. Lets a new toggle
+   * (e.g. user navigates A→B and opens B's preview before A's probe has
+   * resolved) cancel the previous request and ignore its eventual reply,
+   * so a late-arriving response can't overwrite a newer in-flight or
+   * already-resolved verdict.
+   */
+  const embedCheckAbortRef = useRef<AbortController | null>(null);
+  /** Inline "+ Add Spool" form state — used for both the regular and the
+   * first-spool entry points. Was previously a one-click create with no
+   * confirmation; users would land on a blank spool with no idea what
+   * had just happened. */
+  const [addSpoolForm, setAddSpoolForm] = useState<
+    { open: boolean; label: string; totalWeight: string }
+  >({ open: false, label: "", totalWeight: "" });
   const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag } = useNfcContext();
   const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
   const nfcWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -90,6 +139,70 @@ export default function FilamentDetail() {
       .catch(() => {});
     return () => ac.abort();
   }, []);
+
+  // If this filament has an `inherits` PrusaSlicer-style parent name, look up
+  // whether any filament in the DB matches it exactly. The result is stored
+  // stamped with the inheritsName it was for, and the derived
+  // `inheritsTargetId` above only returns it when the stamp matches the
+  // *current* filament's inherits — so a same-route navigation can't render
+  // a stale link to the previous filament's parent.
+  useEffect(() => {
+    if (!filament?.inherits) return;
+    const inheritsName = filament.inherits;
+    const ac = new AbortController();
+    fetch(`/api/filaments?search=${encodeURIComponent(inheritsName)}`, { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: { _id: string; name: string }[]) => {
+        const match = rows.find((row) => row.name === inheritsName);
+        setInheritsLookup({ inheritsName, targetId: match?._id ?? null });
+      })
+      .catch(() => {});
+    return () => ac.abort();
+  }, [filament?.inherits]);
+
+  // Probe whether the TDS URL allows iframe embedding. Done in a click
+  // handler (not an effect) because the "set state to 'checking' then
+  // fetch" pattern in an effect would re-fire the effect on the very
+  // state change it just made, aborting its own request.
+  // Plain function (no useCallback) so React Compiler can memoize it
+  // — the manual deps would have to spell out `filament` to match the
+  // compiler's inference, which leaks more than we read.
+  const handleToggleTdsPreview = async () => {
+    if (!filament?.tdsUrl) return;
+    const tdsUrl = filament.tdsUrl;
+    if (showTdsPreview) {
+      setPreviewOpenFor(null);
+      return;
+    }
+    setPreviewOpenFor(tdsUrl);
+    // Skip if we already have a verdict for this exact tdsUrl this session.
+    if (embedCheck?.tdsUrl === tdsUrl) return;
+
+    // Cancel any in-flight probe so a late response from the *previous*
+    // toggle (different filament, different tdsUrl) can't overwrite this
+    // one's verdict and snap the open preview back to "idle".
+    embedCheckAbortRef.current?.abort();
+    const ac = new AbortController();
+    embedCheckAbortRef.current = ac;
+
+    setEmbedCheck({ tdsUrl, state: "checking" });
+    try {
+      const res = await fetch(`/api/embed-check?url=${encodeURIComponent(tdsUrl)}`, {
+        signal: ac.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data: { embeddable: boolean } = await res.json();
+      // Defence in depth: even if the abort raced and we read the body,
+      // skip the write if our controller is no longer the latest one.
+      if (embedCheckAbortRef.current !== ac) return;
+      setEmbedCheck({ tdsUrl, state: data.embeddable ? "allowed" : "blocked" });
+    } catch (err) {
+      // Aborted requests are intentional, not errors — just drop them.
+      if ((err as { name?: string })?.name === "AbortError") return;
+      if (embedCheckAbortRef.current !== ac) return;
+      setEmbedCheck({ tdsUrl, state: "error" });
+    }
+  };
 
   const handleNfcWrite = async () => {
     if (!filament) return;
@@ -483,12 +596,22 @@ export default function FilamentDetail() {
 
       {/* Variant parent link */}
       {isVariant && (
-        <div className="mb-4 px-3 py-2 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded text-sm">
-          {t("detail.inheritsFromParent")}
-          {inherited.size > 0 && (
-            <span className="text-gray-500 ml-1">
-              ({t("detail.inheritedFieldCount", { count: inherited.size })})
-            </span>
+        <div className="mb-4 px-3 py-2 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded text-sm flex items-center justify-between gap-3 flex-wrap">
+          <span>
+            {t("detail.inheritsFromParent")}
+            {inherited.size > 0 && (
+              <span className="text-gray-500 ml-1">
+                ({t("detail.inheritedFieldCount", { count: inherited.size })})
+              </span>
+            )}
+          </span>
+          {filament._parent && (
+            <Link
+              href={`/filaments/${filament._parent._id}`}
+              className="text-blue-700 dark:text-blue-300 hover:underline whitespace-nowrap"
+            >
+              {t("detail.upToParent", { name: filament._parent.name })}
+            </Link>
           )}
         </div>
       )}
@@ -526,7 +649,7 @@ export default function FilamentDetail() {
         <InfoCard label={t("detail.field.bedFirstLayer")} value={filament.temperatures.bedFirstLayer ? `${filament.temperatures.bedFirstLayer}°C` : "—"} inherited={inherited.has("temperatures.bedFirstLayer")} />
         <InfoCard label={t("detail.field.cost")} value={filament.cost != null ? `${currencySymbol}${filament.cost.toFixed(2)}/kg` : "—"} inherited={inherited.has("cost")} />
         <InfoCard label={t("detail.field.density")} value={filament.density ? `${filament.density.toFixed(2)} g/cm³` : "—"} inherited={inherited.has("density")} />
-        <InfoCard label={t("detail.field.diameter")} value={`${filament.diameter.toFixed(2)} mm`} inherited={inherited.has("diameter")} />
+        <InfoCard label={t("detail.field.diameter")} value={filament.diameter != null ? `${filament.diameter.toFixed(2)} mm` : "—"} inherited={inherited.has("diameter")} />
         <InfoCard label={t("detail.field.maxVolSpeed")} value={filament.maxVolumetricSpeed ? `${filament.maxVolumetricSpeed} mm³/s` : "—"} inherited={inherited.has("maxVolumetricSpeed")} />
       </div>
 
@@ -610,7 +733,7 @@ export default function FilamentDetail() {
                 <button
                   onClick={handleWeightUpdate}
                   disabled={weightSaving || !weightInput}
-                  className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                  className="px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400"
                 >
                   {weightSaving ? "..." : t("common.save")}
                 </button>
@@ -673,32 +796,114 @@ export default function FilamentDetail() {
                     nfcWriting={nfcWriting}
                   />
                 ))}
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleAddSpool()}
-                    className="flex-1 py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
-                  >
-                    + {t("detail.addSpool")}
-                  </button>
-                  <button
-                    onClick={() => setShowPrusamentImport(true)}
-                    className="py-2 px-3 border-2 border-dashed border-orange-300 dark:border-orange-700 rounded-lg text-sm text-orange-500 hover:border-orange-400 hover:text-orange-600 transition-colors"
-                    title={t("detail.spool.prusamentImportTitle")}
-                  >
-                    + {t("detail.spool.prusamentQr")}
-                  </button>
-                </div>
+                {addSpoolForm.open ? (
+                  <div className="flex flex-wrap gap-2 items-stretch p-3 border border-blue-300 dark:border-blue-700 rounded-lg bg-blue-50/30 dark:bg-blue-950/20">
+                    <input
+                      type="text"
+                      autoFocus
+                      placeholder={t("detail.spool.addLabelPlaceholder")}
+                      value={addSpoolForm.label}
+                      onChange={(e) => setAddSpoolForm((s) => ({ ...s, label: e.target.value }))}
+                      className="flex-1 min-w-[10rem] px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
+                    />
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder={t("detail.spool.addWeightPlaceholder")}
+                      value={addSpoolForm.totalWeight}
+                      onChange={(e) => setAddSpoolForm((s) => ({ ...s, totalWeight: e.target.value }))}
+                      className="w-32 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
+                    />
+                    <button
+                      onClick={async () => {
+                        const weight = addSpoolForm.totalWeight
+                          ? Number(addSpoolForm.totalWeight)
+                          : null;
+                        await handleAddSpool(addSpoolForm.label.trim(), weight);
+                        setAddSpoolForm({ open: false, label: "", totalWeight: "" });
+                      }}
+                      className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                    >
+                      {t("detail.spool.addCreate")}
+                    </button>
+                    <button
+                      onClick={() =>
+                        setAddSpoolForm({ open: false, label: "", totalWeight: "" })
+                      }
+                      className="px-4 py-1.5 border border-gray-300 dark:border-gray-700 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-800"
+                    >
+                      {t("common.cancel")}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setAddSpoolForm({ open: true, label: "", totalWeight: "" })}
+                      className="flex-1 py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                    >
+                      + {t("detail.addSpool")}
+                    </button>
+                    <button
+                      onClick={() => setShowPrusamentImport(true)}
+                      className="py-2 px-3 border-2 border-dashed border-orange-300 dark:border-orange-700 rounded-lg text-sm text-orange-500 hover:border-orange-400 hover:text-orange-600 transition-colors"
+                      title={t("detail.spool.prusamentImportTitle")}
+                    >
+                      + {t("detail.spool.prusamentQr")}
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
             {/* Add first spool button when no weight data exists yet */}
             {!hasSpools && filament.totalWeight == null && filament.spoolWeight != null && (
-              <button
-                onClick={() => handleAddSpool()}
-                className="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
-              >
-                + {t("detail.addSpool")}
-              </button>
+              addSpoolForm.open ? (
+                <div className="flex flex-wrap gap-2 items-stretch p-3 border border-blue-300 dark:border-blue-700 rounded-lg bg-blue-50/30 dark:bg-blue-950/20">
+                  <input
+                    type="text"
+                    autoFocus
+                    placeholder={t("detail.spool.addLabelPlaceholder")}
+                    value={addSpoolForm.label}
+                    onChange={(e) => setAddSpoolForm((s) => ({ ...s, label: e.target.value }))}
+                    className="flex-1 min-w-[10rem] px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder={t("detail.spool.addWeightPlaceholder")}
+                    value={addSpoolForm.totalWeight}
+                    onChange={(e) => setAddSpoolForm((s) => ({ ...s, totalWeight: e.target.value }))}
+                    className="w-32 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
+                  />
+                  <button
+                    onClick={async () => {
+                      const weight = addSpoolForm.totalWeight
+                        ? Number(addSpoolForm.totalWeight)
+                        : null;
+                      await handleAddSpool(addSpoolForm.label.trim(), weight);
+                      setAddSpoolForm({ open: false, label: "", totalWeight: "" });
+                    }}
+                    className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                  >
+                    {t("detail.spool.addCreate")}
+                  </button>
+                  <button
+                    onClick={() => setAddSpoolForm({ open: false, label: "", totalWeight: "" })}
+                    className="px-4 py-1.5 border border-gray-300 dark:border-gray-700 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    {t("common.cancel")}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setAddSpoolForm({ open: true, label: "", totalWeight: "" })}
+                  className="w-full py-2 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg text-sm text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
+                >
+                  + {t("detail.addSpool")}
+                </button>
+              )
             )}
           </div>
         );
@@ -893,7 +1098,7 @@ export default function FilamentDetail() {
       {filament.tdsUrl && (
         <div className="mb-6">
           <button
-            onClick={() => setShowTdsPreview(!showTdsPreview)}
+            onClick={handleToggleTdsPreview}
             className="inline-flex items-center gap-2 text-sm text-blue-600 hover:underline"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -910,14 +1115,55 @@ export default function FilamentDetail() {
             {t("detail.tds.openNewTab")}
           </a>
           {showTdsPreview && (
-            <div className="mt-3 border border-gray-300 dark:border-gray-700 rounded overflow-hidden">
-              <iframe
-                src={filament.tdsUrl}
-                className="w-full bg-white"
-                style={{ height: "80vh" }}
-                title={t("detail.tds.title")}
-                sandbox="allow-same-origin allow-scripts"
-              />
+            <div className="mt-3">
+              {tdsEmbedState === "checking" && (
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  {t("detail.tds.checking")}
+                </p>
+              )}
+              {tdsEmbedState === "allowed" && (
+                <div className="border border-gray-300 dark:border-gray-700 rounded overflow-hidden">
+                  <iframe
+                    src={filament.tdsUrl}
+                    className="w-full bg-white"
+                    style={{ height: "80vh" }}
+                    title={t("detail.tds.title")}
+                    sandbox="allow-same-origin allow-scripts"
+                  />
+                </div>
+              )}
+              {(tdsEmbedState === "blocked" || tdsEmbedState === "error") && (
+                <div className="border border-amber-300 dark:border-amber-700/50 bg-amber-50 dark:bg-amber-900/10 rounded p-4">
+                  <div className="flex items-start gap-3">
+                    <svg className="w-5 h-5 text-amber-600 dark:text-amber-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                    </svg>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-medium text-amber-900 dark:text-amber-100">
+                        {tdsEmbedState === "blocked"
+                          ? t("detail.tds.blockedTitle")
+                          : t("detail.tds.errorTitle")}
+                      </p>
+                      <p className="text-sm text-amber-800 dark:text-amber-200/80 mt-1">
+                        {tdsEmbedState === "blocked"
+                          ? t("detail.tds.blockedBody")
+                          : t("detail.tds.errorBody")}
+                      </p>
+                      <a
+                        href={filament.tdsUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 text-sm font-medium bg-amber-600 hover:bg-amber-700 text-white rounded"
+                      >
+                        {t("detail.tds.openExternal")}
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -925,7 +1171,17 @@ export default function FilamentDetail() {
 
       {filament.inherits && (
         <p className="text-sm text-gray-500 mb-4">
-          {t("detail.inheritsFrom")}: <span className="font-mono">{filament.inherits}</span>
+          {t("detail.inheritsFrom")}:{" "}
+          {inheritsTargetId ? (
+            <Link
+              href={`/filaments/${inheritsTargetId}`}
+              className="font-mono text-blue-600 hover:underline"
+            >
+              {filament.inherits}
+            </Link>
+          ) : (
+            <span className="font-mono">{filament.inherits}</span>
+          )}
         </p>
       )}
 
@@ -1257,6 +1513,12 @@ function SpoolCard({
               />
               <button
                 type="button"
+                // Require at least one of (temp, duration) — empty cycles
+                // are accidental clicks; the dashboard's "needs drying"
+                // list keys off the timestamp, not the metric values, so
+                // a blank cycle would still mark the spool as recently
+                // dried and silently mask a real overdue.
+                disabled={!dryTemp && !dryDuration}
                 onClick={() => {
                   onLogDryCycle({
                     tempC: dryTemp ? Number(dryTemp) : null,
@@ -1265,7 +1527,7 @@ function SpoolCard({
                   setDryTemp("");
                   setDryDuration("");
                 }}
-                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400"
               >
                 {t("detail.spool.logDry")}
               </button>
@@ -1303,6 +1565,13 @@ function SpoolCard({
               />
               <button
                 type="button"
+                // Disable until grams is a positive number. The earlier
+                // version validated inside onClick but kept the button
+                // active blue, so a user who logged 25g once could come
+                // back, see (apparently) cleared inputs, click again,
+                // and not know whether their click did nothing or
+                // re-posted the previous value.
+                disabled={!(Number(usageGrams) > 0)}
                 onClick={() => {
                   const g = Number(usageGrams);
                   if (!Number.isFinite(g) || g <= 0) return;
@@ -1310,7 +1579,7 @@ function SpoolCard({
                   setUsageGrams("");
                   setUsageLabel("");
                 }}
-                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400"
               >
                 {t("detail.spool.logUsage")}
               </button>

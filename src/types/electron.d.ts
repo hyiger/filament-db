@@ -1,7 +1,7 @@
 interface ElectronAPI {
   // Config
-  getConfig: () => Promise<{ mongodbUri: string; connectionMode: string; atlasUri: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; locale?: string }>;
-  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; locale?: string }) => Promise<{ success: boolean }>;
+  getConfig: () => Promise<{ mongodbUri: string; connectionMode: string; atlasUri: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string }>;
+  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string }) => Promise<{ success: boolean }>;
   resetConfig: () => Promise<{ success: boolean }>;
   testConnection: (uri: string) => Promise<{ success: boolean; error?: string }>;
   showMessage: (options: { type: string; title: string; message: string }) => Promise<void>;
@@ -22,6 +22,9 @@ interface ElectronAPI {
     progress: string | null;
   }) => void) => () => void;
   onConnectionModeFallback: (cb: (info: { intended: string; actual: string }) => void) => () => void;
+  /** Fires after a hybrid-mode sync cycle completes (success or no-op).
+   *  Used by data-listing pages to refetch without waiting for navigation. */
+  onSyncComplete: (cb: () => void) => () => void;
 
   // NFC
   nfcGetStatus: () => Promise<{

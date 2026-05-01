@@ -219,7 +219,13 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     colorName: initialData?.colorName || "",
     cost: initialData?.cost?.toString() || "",
     density: initialData?.density?.toString() || "",
-    diameter: initialData?.diameter?.toString() || "1.75",
+    // Variants leave diameter blank when inheriting from the parent — falling
+    // back to "1.75" here would paint a value into the input that the user
+    // never typed, and saving would persist 1.75 as an explicit override
+    // (even if the parent's diameter is e.g. 2.85). The submit-side fallback
+    // in handleSubmit keeps 1.75 as the default for standalone filaments.
+    diameter:
+      initialData?.diameter?.toString() || (initialData?.parentId ? "" : "1.75"),
     temperatures: {
       nozzle: initialData?.temperatures?.nozzle?.toString() || "",
       nozzleFirstLayer: initialData?.temperatures?.nozzleFirstLayer?.toString() || "",
@@ -610,18 +616,16 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     settings.end_filament_gcode = form.endGcode ? `"${form.endGcode}"` : undefined;
     settings.filament_notes = form.notes ? `"${form.notes}"` : undefined;
 
-    // Handle start G-code: if the user edited it directly, use that; otherwise manage PA injection
+    // Handle start G-code: user-typed text wins; else inject PA-only line; else
+    // drop the override entirely so a variant inherits from its parent (GH #113).
+    // Without the trailing `else`, an inherited (or pre-existing) gcode that
+    // contained no `M572` line could never be cleared from the form.
     if (form.startGcode) {
       settings.start_filament_gcode = `"${form.startGcode}"`;
     } else if (form.pressureAdvance) {
       settings.start_filament_gcode = `"M572 S${form.pressureAdvance}"`;
-    } else if (settings.start_filament_gcode) {
-      // PA cleared — remove M572 line if it's a simple one
-      const gcode = settings.start_filament_gcode as string;
-      if (gcode.match(/M572\s+S[\d.]+/) && !gcode.includes("{if")) {
-        const cleaned = gcode.replace(/\\n?M572\s+S[\d.]+/, "").replace(/^"\\n/, '"');
-        settings.start_filament_gcode = cleaned === '""' ? undefined : cleaned;
-      }
+    } else {
+      settings.start_filament_gcode = undefined;
     }
 
     try {
@@ -633,7 +637,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         colorName: form.colorName || null,
         cost: parseNum(form.cost),
         density: parseNum(form.density),
-        diameter: parseNum(form.diameter) ?? 1.75,
+        // Variants should inherit diameter from the parent when left blank;
+        // only apply the 1.75 fallback for standalone filaments (GH #106).
+        diameter: parseNum(form.diameter) ?? (form.parentId ? null : 1.75),
         temperatures: {
           nozzle: parseNum(form.temperatures.nozzle),
           nozzleFirstLayer: parseNum(form.temperatures.nozzleFirstLayer),
@@ -725,11 +731,43 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent text-gray-900 dark:text-gray-100";
   const labelClass = "block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100";
 
+  // Single source of truth for the submit button label so the duplicate at
+  // the top of the form can't drift from the bottom one.
+  const submitLabel = saving
+    ? t("form.saving")
+    : initialData
+      ? t("form.updateFilament")
+      : t("form.createFilament");
+
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       {fetchErrors.length > 0 && (
         <div className="px-3 py-2 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded text-sm text-yellow-700 dark:text-yellow-300">
           {t("form.fetchError", { items: fetchErrors.join(", ") })}
+        </div>
+      )}
+      {/* Top submit button — mirrors the bottom one so users editing a long
+       * filament don't have to scroll back down to save (GH #127). */}
+      <div className="flex justify-end">
+        <button
+          type="submit"
+          disabled={saving}
+          className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+        >
+          {submitLabel}
+        </button>
+      </div>
+      {form.parentId && initialData?._parent && (
+        // Variant banner — without this users edit a clone, see the parent's
+        // values pre-filled (as they used to before GH #106 was fixed), and
+        // don't realise that clicking Save copies every field onto the
+        // child. Now the edit form fetches ?raw=true and shows only the
+        // variant's own overrides; inherited fields render blank. This
+        // banner spells that out so the empty inputs don't look buggy.
+        <div className="px-3 py-2 bg-blue-50 dark:bg-blue-900/30 border border-blue-200 dark:border-blue-800 rounded text-sm text-blue-800 dark:text-blue-200">
+          {t("form.variantHint", {
+            parent: (initialData._parent as { name?: string }).name ?? "parent",
+          })}
         </div>
       )}
 
@@ -1131,7 +1169,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               onChange={(e) => setForm({ ...form, totalWeight: e.target.value })}
               placeholder={t("form.placeholder.initialWeight")}
             />
-            <p className="text-xs text-gray-400 mt-1">{t("form.initialWeightHint")}</p>
+            <p className="text-xs text-gray-400 mt-1">
+              {initialData?._id
+                ? t("form.initialWeightHintEdit")
+                : t("form.initialWeightHint")}
+            </p>
           </div>
           <div>
             <label className={labelClass}>{t("form.lowStockThreshold")}</label>
@@ -2240,7 +2282,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         disabled={saving}
         className="px-6 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
       >
-        {saving ? t("form.saving") : initialData ? t("form.updateFilament") : t("form.createFilament")}
+        {submitLabel}
       </button>
     </form>
   );

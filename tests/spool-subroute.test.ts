@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as postUsage } from "@/app/api/filaments/[id]/spools/[spoolId]/usage/route";
 import { POST as postDryCycle } from "@/app/api/filaments/[id]/spools/[spoolId]/dry-cycles/route";
+import { DELETE as deleteSpool } from "@/app/api/filaments/[id]/spools/[spoolId]/route";
 
 /**
  * Tests for the two v1.11 spool-ledger sub-endpoints:
@@ -174,6 +175,71 @@ describe("spool sub-routes", () => {
           { tempC: 50 },
         ),
         { params: Promise.resolve({ id: String(f._id), spoolId: fakeSpool }) },
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("rejects notes over 1000 chars (length-bounds guard)", async () => {
+      // Without the bound a malicious or accidental multi-MB POST would
+      // bloat the spool subdocument's dryCycles array — every fetch of
+      // that spool would then drag the bloat across the wire. v1.12.x
+      // audit P1.
+      const f = await seedFilament();
+      const sid = String(f.spools[0]._id);
+      const res = await postDryCycle(
+        postReq(
+          `http://localhost/api/filaments/${f._id}/spools/${sid}/dry-cycles`,
+          { tempC: 65, notes: "a".repeat(1001) },
+        ),
+        { params: Promise.resolve({ id: String(f._id), spoolId: sid }) },
+      );
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe("DELETE .../spools/{spoolId}", () => {
+    function delReq(url: string) {
+      return new NextRequest(url, { method: "DELETE" });
+    }
+
+    it("removes the spool and returns the updated filament", async () => {
+      const f = await seedFilament();
+      const sid = String(f.spools[0]._id);
+      const res = await deleteSpool(
+        delReq(`http://localhost/api/filaments/${f._id}/spools/${sid}`),
+        { params: Promise.resolve({ id: String(f._id), spoolId: sid }) },
+      );
+      expect(res.status).toBe(200);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(0);
+    });
+
+    it("returns 404 for a missing spoolId rather than silently succeeding", async () => {
+      // Regression: a $pull with a non-matching _id used to be a silent
+      // no-op on the filament doc — the client got a 200 and couldn't tell
+      // whether the deletion actually happened.
+      const f = await seedFilament();
+      const originalSpoolId = String(f.spools[0]._id);
+      const fakeSpool = new mongoose.Types.ObjectId().toString();
+      const res = await deleteSpool(
+        delReq(`http://localhost/api/filaments/${f._id}/spools/${fakeSpool}`),
+        { params: Promise.resolve({ id: String(f._id), spoolId: fakeSpool }) },
+      );
+      expect(res.status).toBe(404);
+
+      // Real spool must still be there.
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(1);
+      expect(String(fresh.spools[0]._id)).toBe(originalSpoolId);
+    });
+
+    it("returns 404 when the filament itself doesn't exist", async () => {
+      const fakeFilament = new mongoose.Types.ObjectId().toString();
+      const fakeSpool = new mongoose.Types.ObjectId().toString();
+      const res = await deleteSpool(
+        delReq(`http://localhost/api/filaments/${fakeFilament}/spools/${fakeSpool}`),
+        { params: Promise.resolve({ id: fakeFilament, spoolId: fakeSpool }) },
       );
       expect(res.status).toBe(404);
     });

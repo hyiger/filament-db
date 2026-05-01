@@ -43,7 +43,12 @@ interface SyncResult {
 /**
  * Bidirectional sync engine between local MongoDB and Atlas.
  * Uses last-write-wins conflict resolution based on updatedAt timestamps.
- * Nozzles are synced first so filament references can be remapped.
+ * Nozzles, printers, and locations are synced first so filaments (and their
+ * embedded spools) can have their references remapped onto the target DB's IDs.
+ *
+ * NOTE: bedtypes, printhistory, and sharedcatalogs are NOT synced yet — they
+ * were added in v1.11 alongside locations and have the same gap. They'll need
+ * the same treatment when their data starts diverging across desktops.
  */
 export class SyncService extends EventEmitter {
   private localUri: string;
@@ -154,6 +159,40 @@ export class SyncService extends EventEmitter {
       const localPrinterBySyncId = new Map(localPrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
       const remotePrinterBySyncId = new Map(remotePrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
 
+      // Sync locations before filaments so spool.locationId can be remapped.
+      // Locations are referenced from filaments[].spools[].locationId — a
+      // missing remap would either drop the reference or, worse, point at a
+      // wrong location on the target DB (GH #116).
+      //
+      // Reconcile by name first: locations existed on both sides before sync
+      // was added (v1.11.3). On the very first sync each side has its own
+      // locally-minted syncId, so a naive push would `insertOne` a row whose
+      // name collides with the partial-unique index on Location and abort
+      // the entire sync cycle. Pairing matching-name rows and unifying their
+      // syncIds turns the duplicates into a no-op last-write-wins merge.
+      this.updateStatus({ progress: "Syncing locations..." });
+      await this.reconcileLocationsByName(localDb, remoteDb);
+      const locationResult = await this.syncCollection(localDb, remoteDb, "locations");
+
+      // Build location syncId→ID maps for spool reference remapping
+      const localLocations = await localDb.collection("locations").find({ _deletedAt: null }).toArray();
+      const remoteLocations = await remoteDb.collection("locations").find({ _deletedAt: null }).toArray();
+      const localLocationBySyncId = new Map(localLocations.filter(l => l.syncId).map(l => [l.syncId as string, l._id]));
+      const remoteLocationBySyncId = new Map(remoteLocations.filter(l => l.syncId).map(l => [l.syncId as string, l._id]));
+
+      // Repair dangling spool.locationId references left behind by pre-#116
+      // sync cycles. Filaments synced before the locationId remap landed
+      // carry spools[].locationId values that point at the *other side's*
+      // ObjectId (which obviously doesn't exist on this side). The normal
+      // filament sync path can't fix them: those filaments often have equal
+      // updatedAt on both sides, so syncCollection's last-write-wins skip
+      // never re-runs the transform on them. Patch them in-place using the
+      // freshly-built location maps; bumps updatedAt so subsequent syncs
+      // notice the rewrite.
+      await this.repairDanglingSpoolLocations(
+        localDb, remoteDb, localLocationBySyncId, remoteLocationBySyncId,
+      );
+
       // Backfill filament syncIds before building maps (syncCollection does this too, but we need maps first)
       await this.backfillSyncIds(localDb.collection("filaments"));
       await this.backfillSyncIds(remoteDb.collection("filaments"));
@@ -164,19 +203,56 @@ export class SyncService extends EventEmitter {
       const localFilamentBySyncId = new Map(localFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
       const remoteFilamentBySyncId = new Map(remoteFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
 
-      // Sync filaments with nozzle, printer, and parent reference remapping
+      // Snapshot each side's pre-existing filaments as `_id → updatedAt(ms)`
+      // so the post-sync repair pass can tell whether THIS sync cycle wrote
+      // each row. Two shapes both qualify as "fair game to repair":
+      //   (a) row not in snapshot at all → freshly inserted by this pull
+      //       (the GH #128 fresh-install shape);
+      //   (b) row in snapshot but updatedAt has changed → rewritten by
+      //       this cycle's syncCollection update (the Codex P1 shape on
+      //       PR #131: pre-existing variant whose parentId got nulled
+      //       because the in-line transform's target map missed the parent
+      //       that's about to be inserted later in the same cycle).
+      // Anything else is a row this sync didn't touch — user territory,
+      // leave alone (Codex P2 on PR #130 / v1.12.1).
+      const localFilamentSnapshot = new Map<string, number | null>();
+      for (const f of localFilaments) {
+        const t = SyncService.readUpdatedAt(f);
+        localFilamentSnapshot.set(f._id.toString(), t ?? null);
+      }
+      const remoteFilamentSnapshot = new Map<string, number | null>();
+      for (const f of remoteFilaments) {
+        const t = SyncService.readUpdatedAt(f);
+        remoteFilamentSnapshot.set(f._id.toString(), t ?? null);
+      }
+
+      // Sync filaments with nozzle, printer, parent, and spool-location remapping
       this.updateStatus({ progress: "Syncing filaments..." });
       const filamentTransform = this.buildFilamentRefsTransform(
         localNozzleBySyncId, remoteNozzleBySyncId,
         localPrinterBySyncId, remotePrinterBySyncId,
         localFilamentBySyncId, remoteFilamentBySyncId,
+        localLocationBySyncId, remoteLocationBySyncId,
       );
       const filamentResult = await this.syncCollection(
         localDb, remoteDb, "filaments",
         filamentTransform,
       );
 
-      const results = [nozzleResult, printerResult, filamentResult];
+      // Repair filaments whose parentId was dropped (or stale) when the
+      // syncCollection transform ran. The transform builds its target id
+      // map BEFORE the sync inserts — so on a fresh install the local map
+      // is empty and every variant's parentId gets nulled on first pull
+      // (GH #128). Same shape can also happen for any newly-created
+      // parent+variant pair pulled in the same cycle. This pass projects
+      // the truth from the *other* side via syncId maps that are now
+      // built against the post-sync state of both DBs.
+      await this.repairFilamentParentIds(
+        localDb, remoteDb,
+        localFilamentSnapshot, remoteFilamentSnapshot,
+      );
+
+      const results = [nozzleResult, printerResult, locationResult, filamentResult];
       this.updateStatus({
         state: "idle",
         lastSyncAt: new Date().toISOString(),
@@ -340,6 +416,314 @@ export class SyncService extends EventEmitter {
   }
 
   /**
+   * Pair locations by name across DBs and unify their syncIds before the
+   * collection sync runs. Without this step the very first sync after the
+   * GH #116 fix lands hits Location's partial unique-name index whenever a
+   * user has independently created the same location ("Drybox #1") on a
+   * desktop and on Docker — both rows have local-only syncIds, so the
+   * insertOne in syncCollection's "local-only" branch raises E11000 and
+   * aborts the whole cycle.
+   *
+   * Tie-break for picking the surviving syncId, in order:
+   *   1. Both already share a syncId → no-op.
+   *   2. Exactly one side has a syncId → propagate to the other.
+   *   3. Neither has a syncId → mint a fresh UUID, assign to both.
+   *   4. Both have syncIds and they differ → keep local's, overwrite remote's.
+   *      (Local wins so the owning desktop's sync history stays intact;
+   *      remote rows get re-keyed onto the local id.)
+   *
+   * Defensive in case 2/4: if the chosen syncId is already in use by a
+   * *different* doc on the target side, skip the pair and log — this
+   * indicates pre-existing corruption that needs human attention rather
+   * than another silent overwrite.
+   */
+  private async reconcileLocationsByName(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+  ): Promise<void> {
+    const localCol = localDb.collection("locations");
+    const remoteCol = remoteDb.collection("locations");
+    const localActive = await localCol.find({ _deletedAt: null }).toArray();
+    const remoteActive = await remoteCol.find({ _deletedAt: null }).toArray();
+
+    const remoteByName = new Map(remoteActive.map((d) => [d.name as string, d]));
+
+    for (const local of localActive) {
+      const remote = remoteByName.get(local.name as string);
+      if (!remote) continue;
+
+      const localSyncId = local.syncId as string | undefined;
+      const remoteSyncId = remote.syncId as string | undefined;
+
+      if (localSyncId && remoteSyncId && localSyncId === remoteSyncId) continue;
+
+      const winningSyncId = localSyncId || remoteSyncId || randomUUID();
+
+      if (localSyncId !== winningSyncId) {
+        const conflict = await localCol.findOne({ syncId: winningSyncId, _id: { $ne: local._id } });
+        if (conflict) {
+          console.warn(`reconcileLocationsByName: local syncId conflict for "${local.name}" — skipping`);
+          continue;
+        }
+        await localCol.updateOne({ _id: local._id }, { $set: { syncId: winningSyncId } });
+      }
+      if (remoteSyncId !== winningSyncId) {
+        const conflict = await remoteCol.findOne({ syncId: winningSyncId, _id: { $ne: remote._id } });
+        if (conflict) {
+          console.warn(`reconcileLocationsByName: remote syncId conflict for "${local.name}" — skipping`);
+          continue;
+        }
+        await remoteCol.updateOne({ _id: remote._id }, { $set: { syncId: winningSyncId } });
+      }
+    }
+  }
+
+  /**
+   * Walk both sides' active filaments and patch any spool whose locationId
+   * doesn't match a current location ObjectId on that side.
+   *
+   * Pre-#116 sync cycles copied filaments wholesale across DBs without
+   * remapping spools[].locationId, so a filament on Atlas can be carrying
+   * a desktop-side ObjectId (and vice versa). The normal filament sync
+   * doesn't fix these — both sides have equal updatedAt for those rows,
+   * so syncCollection's last-write-wins skip never re-runs the transform.
+   *
+   * Recovery uses the syncId maps already built from this cycle's location
+   * sync: a dangling id on one side gets looked up via the *other* side's
+   * id→syncId map, then resolved to the correct local id via this side's
+   * syncId→id map. Orphans (id not present on either side) clear to null
+   * rather than persist as a permanent dangling reference.
+   */
+  private async repairDanglingSpoolLocations(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+    localLocationBySyncId: Map<string, ObjectId>,
+    remoteLocationBySyncId: Map<string, ObjectId>,
+  ): Promise<void> {
+    const localActiveIds = new Set(Array.from(localLocationBySyncId.values()).map((id) => id.toString()));
+    const remoteActiveIds = new Set(Array.from(remoteLocationBySyncId.values()).map((id) => id.toString()));
+
+    const localIdToSyncId = new Map<string, string>();
+    for (const [syncId, id] of localLocationBySyncId) localIdToSyncId.set(id.toString(), syncId);
+    const remoteIdToSyncId = new Map<string, string>();
+    for (const [syncId, id] of remoteLocationBySyncId) remoteIdToSyncId.set(id.toString(), syncId);
+
+    await this.repairSideSpoolLocations(localDb, localActiveIds, localLocationBySyncId, remoteIdToSyncId, "local");
+    await this.repairSideSpoolLocations(remoteDb, remoteActiveIds, remoteLocationBySyncId, localIdToSyncId, "remote");
+  }
+
+  private async repairSideSpoolLocations(
+    db: ReturnType<MongoClient["db"]>,
+    sideActiveIds: Set<string>,
+    sideSyncIdToId: Map<string, ObjectId>,
+    otherSideIdToSyncId: Map<string, string>,
+    sideLabel: "local" | "remote",
+  ): Promise<void> {
+    const filaments = await db
+      .collection("filaments")
+      .find({ _deletedAt: null, "spools.locationId": { $ne: null } })
+      .toArray();
+
+    let repaired = 0;
+    for (const f of filaments) {
+      const spools: Document[] = Array.isArray(f.spools) ? f.spools : [];
+      let changed = false;
+      const newSpools = spools.map((spool) => {
+        if (!spool.locationId) return spool;
+        const idStr = spool.locationId.toString();
+        if (sideActiveIds.has(idStr)) return spool; // already valid
+
+        const syncId = otherSideIdToSyncId.get(idStr);
+        const correctId = syncId ? sideSyncIdToId.get(syncId) : null;
+        if (!correctId) {
+          changed = true;
+          return { ...spool, locationId: null };
+        }
+        if (correctId.toString() === idStr) return spool;
+        changed = true;
+        return { ...spool, locationId: correctId };
+      });
+      if (changed) {
+        // CRITICAL: do NOT bump updatedAt. This repair runs before the
+        // filament-sync last-write-wins comparison; bumping the timestamp
+        // here would make the repaired side look "newest" purely because
+        // we touched it, and a subsequent push could overwrite genuinely
+        // newer edits on the *other* side that haven't synced yet.
+        // Preserving updatedAt lets the existing comparison resolve the
+        // sync correctly: equal timestamps → no action needed (both sides
+        // now consistent), unequal → real edit recency wins.
+        await db.collection("filaments").updateOne(
+          { _id: f._id },
+          { $set: { spools: newSpools } },
+        );
+        repaired++;
+      }
+    }
+    if (repaired > 0) {
+      console.log(`repairDanglingSpoolLocations: fixed ${repaired} ${sideLabel} filament(s)`);
+    }
+  }
+
+  /**
+   * Restore filament parentId references that the in-line transform couldn't
+   * resolve when syncCollection ran. The transform builds its target id map
+   * once at sync start — on a fresh install the local map is empty, so when
+   * a variant is pulled, the lookup `localFilamentBySyncId.get(syncId)` for
+   * its parent returns undefined and the variant gets `parentId: null` on
+   * first insert. Subsequent syncs see equal updatedAt and skip the row, so
+   * the wrong null persists forever (GH #128).
+   *
+   * This pass runs AFTER the main filament sync and uses freshly-rebuilt
+   * id maps. It projects the truth from the *other* side via the syncId
+   * map so a fresh install gets the parent links it should have. Conservative:
+   * only writes when current parentId is null-but-should-be-set, OR is set
+   * but dangling (points at a non-existent id on this side). Existing valid
+   * parentIds are left alone — last-write-wins on the next sync handles
+   * intentional user edits.
+   *
+   * Does NOT bump updatedAt — same rationale as repairDanglingSpoolLocations.
+   */
+  private async repairFilamentParentIds(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+    localSnapshot: Map<string, number | null>,
+    remoteSnapshot: Map<string, number | null>,
+  ): Promise<void> {
+    const lf = await localDb.collection("filaments").find({}).toArray();
+    const rf = await remoteDb.collection("filaments").find({}).toArray();
+
+    const localBySyncId = new Map<string, Document>();
+    const localIdToSyncId = new Map<string, string>();
+    for (const f of lf) {
+      if (f.syncId) {
+        localBySyncId.set(f.syncId as string, f);
+        localIdToSyncId.set(f._id.toString(), f.syncId as string);
+      }
+    }
+    const remoteBySyncId = new Map<string, Document>();
+    const remoteIdToSyncId = new Map<string, string>();
+    for (const f of rf) {
+      if (f.syncId) {
+        remoteBySyncId.set(f.syncId as string, f);
+        remoteIdToSyncId.set(f._id.toString(), f.syncId as string);
+      }
+    }
+
+    await this.repairSideParentIds(
+      localDb, lf, localBySyncId, remoteBySyncId, remoteIdToSyncId,
+      localSnapshot, "local",
+    );
+    await this.repairSideParentIds(
+      remoteDb, rf, remoteBySyncId, localBySyncId, localIdToSyncId,
+      remoteSnapshot, "remote",
+    );
+  }
+
+  private async repairSideParentIds(
+    db: ReturnType<MongoClient["db"]>,
+    sideFilaments: Document[],
+    sideBySyncId: Map<string, Document>,
+    otherBySyncId: Map<string, Document>,
+    otherIdToSyncId: Map<string, string>,
+    /** Pre-sync snapshot of this side's filaments: `_id → updatedAt(ms)`,
+     * or null when the row had no recorded updatedAt. The repair only
+     * overrides null→expected for rows this cycle actually touched
+     * (inserted, or whose updatedAt changed). Untouched rows are user
+     * territory — last-write-wins handles real edits on the next pass. */
+    snapshot: Map<string, number | null>,
+    sideLabel: "local" | "remote",
+  ): Promise<void> {
+    const validIds = new Set(sideFilaments.map((f) => f._id.toString()));
+    let fixed = 0;
+
+    for (const f of sideFilaments) {
+      if (!f.syncId) continue;
+
+      const currentParentIdStr: string | null = f.parentId
+        ? f.parentId.toString()
+        : null;
+
+      // What should parentId be on this side, projected from the other side?
+      const counterpart = otherBySyncId.get(f.syncId as string);
+      let expected: ObjectId | null = null;
+      if (counterpart?.parentId) {
+        const parentSyncId = otherIdToSyncId.get(counterpart.parentId.toString());
+        if (parentSyncId) {
+          const sideParent = sideBySyncId.get(parentSyncId);
+          expected = (sideParent?._id as ObjectId | undefined) ?? null;
+        }
+      }
+
+      const isCurrentDangling =
+        currentParentIdStr != null && !validIds.has(currentParentIdStr);
+      const expectedStr = expected ? expected.toString() : null;
+
+      // Was this row inserted OR rewritten by THIS sync cycle? If yes,
+      // the parentId we see now came from the just-run transform — fair
+      // game to repair against the freshly-built syncId maps. If no,
+      // leave it alone (intentional detach, or already-correct).
+      const id = f._id.toString();
+      const snapshotUpdatedAt = snapshot.get(id);
+      let wasTouchedThisCycle: boolean;
+      if (snapshotUpdatedAt === undefined) {
+        // Not in snapshot at all → freshly inserted by this sync's pull
+        // (GH #128 fresh-install shape).
+        wasTouchedThisCycle = true;
+      } else if (snapshotUpdatedAt === null) {
+        // Pre-existing but no recorded updatedAt — can't prove it changed.
+        // Default to "untouched" so we don't override potentially-intentional state.
+        wasTouchedThisCycle = false;
+      } else {
+        // Pre-existing with a known timestamp: compare against current.
+        // syncCollection's update propagates the source updatedAt, so a
+        // sync rewrite shows up as a value change here.
+        const currentUpdatedAt = SyncService.readUpdatedAt(f);
+        wasTouchedThisCycle =
+          currentUpdatedAt !== undefined && currentUpdatedAt !== snapshotUpdatedAt;
+      }
+
+      // Conservative: only repair the two clear-bug shapes.
+      const shouldFix =
+        // Null parentId where projection says it should be set, and this
+        // row was created or rewritten by this cycle. Covers both the
+        // fresh-install pull (#128) and the pre-existing-variant-updated
+        // -before-its-parent shape (Codex P1 on PR #131).
+        (currentParentIdStr == null && expected != null && wasTouchedThisCycle) ||
+        // Stale id pointing at nothing on this side. Always broken state,
+        // repair regardless of when the row was inserted.
+        (isCurrentDangling && currentParentIdStr !== expectedStr);
+
+      if (!shouldFix) continue;
+
+      await db.collection("filaments").updateOne(
+        { _id: f._id },
+        { $set: { parentId: expected } },
+      );
+      fixed++;
+    }
+
+    if (fixed > 0) {
+      console.log(`repairFilamentParentIds: fixed ${fixed} ${sideLabel} filament(s)`);
+    }
+  }
+
+  /** Best-effort millisecond conversion of a Mongo `updatedAt` field.
+   * Mongoose schemas in this codebase always set Dates, but raw mongo
+   * inserts can store strings — handle both, and return undefined for
+   * anything we can't read. */
+  private static readUpdatedAt(doc: Document): number | undefined {
+    const u = doc.updatedAt;
+    if (!u) return undefined;
+    if (u instanceof Date) return u.getTime();
+    if (typeof u === "string") {
+      const t = Date.parse(u);
+      return Number.isNaN(t) ? undefined : t;
+    }
+    if (typeof u === "number") return u;
+    return undefined;
+  }
+
+  /**
    * Remap nozzle ObjectId references in printer documents.
    * installedNozzles need to point to the correct IDs on the target side.
    * Maps use syncId as the stable key (survives renames).
@@ -382,6 +766,8 @@ export class SyncService extends EventEmitter {
     remotePrinterBySyncId: Map<string, ObjectId>,
     localFilamentBySyncId: Map<string, ObjectId>,
     remoteFilamentBySyncId: Map<string, ObjectId>,
+    localLocationBySyncId: Map<string, ObjectId>,
+    remoteLocationBySyncId: Map<string, ObjectId>,
   ): (doc: Document, direction: "toLocal" | "toRemote") => Document {
     // Build reverse maps once (source ID → syncId) for both directions
     const buildReverse = (map: Map<string, ObjectId>) => {
@@ -398,12 +784,16 @@ export class SyncService extends EventEmitter {
     const remotePrinterIdToSyncId = buildReverse(remotePrinterBySyncId);
     const localFilamentIdToSyncId = buildReverse(localFilamentBySyncId);
     const remoteFilamentIdToSyncId = buildReverse(remoteFilamentBySyncId);
+    const localLocationIdToSyncId = buildReverse(localLocationBySyncId);
+    const remoteLocationIdToSyncId = buildReverse(remoteLocationBySyncId);
 
     return (doc: Document, direction: "toLocal" | "toRemote"): Document => {
       const sourceNozzleIdToSyncId = direction === "toLocal" ? remoteNozzleIdToSyncId : localNozzleIdToSyncId;
       const targetNozzleMap = direction === "toLocal" ? localNozzleBySyncId : remoteNozzleBySyncId;
       const sourcePrinterIdToSyncId = direction === "toLocal" ? remotePrinterIdToSyncId : localPrinterIdToSyncId;
       const targetPrinterMap = direction === "toLocal" ? localPrinterBySyncId : remotePrinterBySyncId;
+      const sourceLocationIdToSyncId = direction === "toLocal" ? remoteLocationIdToSyncId : localLocationIdToSyncId;
+      const targetLocationMap = direction === "toLocal" ? localLocationBySyncId : remoteLocationBySyncId;
 
       // Remap compatibleNozzles
       if (Array.isArray(doc.compatibleNozzles)) {
@@ -446,6 +836,19 @@ export class SyncService extends EventEmitter {
         const parentSyncId = sourceFilamentIdToSyncId.get(doc.parentId.toString());
         const targetParentId = parentSyncId ? targetFilamentMap.get(parentSyncId) : null;
         doc.parentId = targetParentId || null;
+      }
+
+      // Remap spools[].locationId. Locations sync as their own collection but
+      // the ObjectIds differ across DBs, so each spool's locationId must be
+      // translated through the syncId map. Unknown locations clear to null
+      // rather than pointing at a wrong location on the target side.
+      if (Array.isArray(doc.spools)) {
+        doc.spools = doc.spools.map((spool: Document) => {
+          if (!spool.locationId) return spool;
+          const locSyncId = sourceLocationIdToSyncId.get(spool.locationId.toString());
+          const targetLocationId = locSyncId ? targetLocationMap.get(locSyncId) : null;
+          return { ...spool, locationId: targetLocationId || null };
+        });
       }
 
       return doc;

@@ -43,9 +43,11 @@ npm run dev                   # opens http://localhost:3456
 
 ---
 
-## Step 2: Understand the Connection Status Indicator
+## Step 2: Understand the App Shell
 
-After setup, a small status pill appears next to the "Filament DB" title on the home page. It shows your current connection state at a glance:
+A persistent top bar runs along every page with the app name on the left and quick links to **Filaments**, **Dashboard**, **Compare**, **Analytics**, **Share**, and **Settings**. On narrow screens (phones) the links collapse into a hamburger menu. The active page is highlighted.
+
+Beside the **Filament DB** title on the home page is a small **connection status pill** that shows your current connection state at a glance:
 
 ### Web App
 
@@ -89,7 +91,7 @@ After setup, a small status pill appears next to the "Filament DB" title on the 
 
 If you have multiple printers (e.g. a Prusa Core One and a Bambu H2D), define them now so you can store per-printer calibrations later. If you only have one printer or want to skip this, jump to Step 4.
 
-1. Go to **Settings** (gear icon in the top right of the home page), then click **Printers**.
+1. Go to **Settings** (link in the top navigation bar), then click **Printers**.
 2. Click **+ Add Printer**.
 3. Fill in:
    - **Manufacturer** -- e.g. `Prusa`
@@ -105,7 +107,7 @@ If you have multiple printers (e.g. a Prusa Core One and a Bambu H2D), define th
 
 Before adding filaments you need at least one nozzle profile so you can assign per-nozzle calibrations later.
 
-1. Go to **Settings** (gear icon in the top right of the home page), then click **Nozzles**.
+1. Go to **Settings** (link in the top navigation bar), then click **Nozzles**.
 2. Click **+ Add Nozzle**.
 3. Fill in the form:
    - **Name** -- a short label, e.g. `0.4 Brass`
@@ -144,13 +146,13 @@ Before adding filaments you need at least one nozzle profile so you can assign p
 
 ### Option B: Populate from an Existing Source
 
-On the **Add New Filament** page, the **"Populate from"** toolbar offers three shortcuts:
+On the **Add New Filament** page, the **"Populate from"** toolbar offers four buttons plus an automatic NFC path:
 
-- **NFC Tag** (desktop only) -- place a tagged spool on the reader. The form auto-populates with material, vendor, temps, density, and color from the OpenPrintTag data.
-- **Import from TDS** -- paste a Technical Data Sheet URL and the AI extracts temperatures, density, drying specs, Tg, HDT, shore hardness, and more. Requires an AI API key configured in Settings (see [Step 5b](#step-5b-import-from-a-technical-data-sheet)).
 - **Prusament QR** -- enter a spool ID or URL from a Prusament QR code to fetch full specs.
+- **Import from TDS** -- paste a Technical Data Sheet URL and the AI extracts temperatures, density, drying specs, Tg, HDT, shore hardness, and more. Requires an AI API key configured in Settings (see [Step 5b](#step-5b-import-from-a-technical-data-sheet)).
 - **Load from INI** -- upload a PrusaSlicer `.ini` config bundle. If it contains one filament profile, the form fills automatically. If multiple profiles are found, a picker dialog lets you choose which one.
-- **Clone Existing** -- search your library and select a filament. All settings are copied into the form (with the name cleared so you can enter a new one).
+- **Clone Existing** -- search your library and select a filament. Only identification fields (name with " (copy)" suffix, color, vendor, type) carry over; everything else inherits live from the parent so the new variant tracks the parent's calibrations going forward.
+- **NFC Tag** (desktop only, no button — automatic) -- with a reader connected, place a tagged spool on it. The form auto-populates with material, vendor, temps, density, and color from the OpenPrintTag data.
 
 After populating, review and adjust any fields before clicking **Create Filament**.
 
@@ -160,7 +162,7 @@ If you have a link to a manufacturer's Technical Data Sheet (PDF or web page), t
 
 **First-time setup (once):**
 
-1. Go to **Settings** (gear icon or navigate to `/settings`).
+1. Go to **Settings** (link in the top navigation bar, or navigate to `/settings`).
 2. Scroll to **AI Features**.
 3. Choose a provider: **Google Gemini** (free tier), **Anthropic Claude**, or **OpenAI ChatGPT**.
 4. Click the provider link to get an API key (Gemini is free, Claude and OpenAI are pay-per-use).
@@ -261,7 +263,7 @@ Click any filament name to open its detail page. You'll see:
 - **Header** -- color swatch, name, vendor, type, and badges for "variant" or "3 colors"
 - **Info cards** -- nozzle temp, bed temp, cost, density, diameter, max volumetric speed. Cards with a blue background and "(inherited)" label show values inherited from a parent filament.
 - **Calibrations** -- tables grouped by printer (when multiple printers have data) showing per-nozzle values for EM, Max Vol Speed, PA, Retract Length, Retract Speed, and Z Lift. If no calibrations exist, compatible nozzles are shown as simple badges.
-- **TDS preview** -- click "View Technical Data Sheet" to open an inline preview, or "Open in new tab" for full-screen.
+- **TDS preview** -- click "View Technical Data Sheet" to open an inline preview, or "Open in new tab" for full-screen. Many vendor sites (Shopify, Wix, etc.) refuse to be embedded in another page; for those URLs the preview pane shows an explanatory panel with an **Open data sheet ↗** button instead of a blank iframe.
 - **PrusaSlicer settings** -- click "Show all PrusaSlicer settings" to expand every raw key-value pair.
 
 ### Variant navigation
@@ -287,11 +289,10 @@ You can also click the **Edit** button directly from the home page table row.
 Variants share a parent's settings (temperatures, density, retraction, calibrations) and only store what's different: name, color, and cost.
 
 1. Open a filament's detail page.
-2. Click **+ Add Color** (amber button, only visible on parent filaments).
-3. The "Add Color Variant" form opens with **vendor** and **type** pre-filled from the parent.
-4. Enter the variant's **name**, pick its **color**, and optionally set a **cost**.
-5. Leave other fields blank -- they inherit from the parent automatically.
-6. Click **Create Filament**.
+2. Click **Clone** (amber button — visible only on parent filaments, not on existing variants).
+3. The form opens with the parent's **name** (suffixed with " (copy)"), **color**, **colorName**, **vendor**, and **type** pre-filled. All other fields are blank — they inherit live from the parent.
+4. Edit the **name**, pick a new **color**, and optionally adjust **colorName**.
+5. Click **Create Filament**. The new filament is registered as a variant of the parent and any future edits to the parent's calibrations / temperatures / settings will flow through automatically.
 
 To turn an existing standalone filament into a variant:
 
@@ -386,7 +387,7 @@ A small colored dot appears in the header:
 
 ### Erasing a Tag
 
-1. Go to **Settings** (gear icon in the header).
+1. Go to **Settings** (link in the top navigation bar).
 2. Scroll to the **NFC Tools** section — it shows the reader/tag status.
 3. Place a tag on the reader (status turns green).
 4. Click **Erase Tag** (red button).
@@ -450,7 +451,7 @@ If a filament has a single `totalWeight` but no spools yet, click **"Migrate to 
 
 ## Step 16: Browse the OpenPrintTag Community Database
 
-Discover filaments from 97 brands in the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) and selectively import them into your library.
+Discover filaments from 100+ brands (10,000+ FDM materials) in the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) and selectively import them into your library. The page shows live counts in its subtitle.
 
 1. From the home page, open the **Import/Export** dropdown and click **"Browse OpenPrintTag DB"**.
 2. The browser loads all FDM filaments (11,000+ materials; SLA resins are filtered out automatically).
@@ -493,10 +494,11 @@ Without the fork, sync manually:
 
 ## Step 18: Delete a Filament
 
-1. On the home page, click **Delete** next to any filament.
-2. Confirm the deletion in the popup.
+1. On the home page, tick the checkbox at the start of any filament row (or the header checkbox to select every row).
+2. A red bulk-action bar appears above the table showing the number selected.
+3. Click **Delete N** in that bar and confirm.
 
-**Note**: Parent filaments with color variants cannot be deleted. Delete the variants first.
+**Note**: Parent filaments with color variants cannot be deleted — delete the variants first. Failed deletions surface in a per-row error toast and the rest of the batch still completes.
 
 In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted filaments are soft-deleted internally (marked with a timestamp) so the deletion propagates correctly across devices.
 

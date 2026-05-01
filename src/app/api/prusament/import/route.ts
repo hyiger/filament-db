@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
           },
         },
       },
-      { new: true },
+      { returnDocument: "after" },
     ).lean();
 
     if (!filament) {
@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
         },
       },
     },
-    { new: true },
+    { returnDocument: "after" },
   ).lean();
 
   if (existingUpdated) {

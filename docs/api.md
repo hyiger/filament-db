@@ -813,8 +813,9 @@ Per-job ledger of print runs. Decrements spool weights, appends spool-level usag
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET`  | `/api/print-history` | List print jobs (desc by `startedAt`). Query: `filamentId`, `printerId`, `limit` (default 100, max 1000) |
-| `POST` | `/api/print-history` | Record a print job (see body below) |
+| `GET`    | `/api/print-history`      | List print jobs (desc by `startedAt`). Query: `filamentId`, `printerId`, `limit` (default 100, max 1000) |
+| `POST`   | `/api/print-history`      | Record a print job (see body below) |
+| `DELETE` | `/api/print-history/{id}` | Undo a print job — refund the spool weight and remove the matching `usageHistory` entries |
 
 ### POST /api/print-history
 
@@ -840,7 +841,19 @@ Validations:
 
 Every referenced filament is fetched and validated **before** any mutation. If any one is missing the whole request aborts with 404 and no spool weights are touched. The writes run inside a MongoDB transaction when the deployment supports it (Atlas always does), and fall back to sequential saves on standalone mongod.
 
+Each spool `usageHistory` entry the POST writes is stamped with `jobId` set to the new PrintHistory `_id`, so a later `DELETE` can match the exact entries to refund.
+
 Response: the created `PrintHistory` document, `201`.
+
+### DELETE /api/print-history/{id}
+
+Undo a job: for every `usage` entry on the record, find the matching spool, refund its `totalWeight` by the recorded grams, and remove the corresponding `usageHistory` entry. Then delete the `PrintHistory` document itself.
+
+Refund matching is by `usageHistory.jobId === entry._id` — unambiguous, so a manual usage log that happens to share `(grams, date)` with the job is **not** affected. Legacy entries written before `jobId` existed (pre-v1.12.7) fall back to a `(grams, date, source)` match that's still scoped to `source: "job" | "slicer"`, so manual logs survive that path too.
+
+Returns `200 { "message": "Deleted and refunded" }` on success, `404` if no PrintHistory with that id exists.
+
+Best-effort: if a referenced spool has since been deleted (or the filament soft-deleted), that entry is silently skipped — the rest of the refunds still apply and the PrintHistory document is removed.
 
 ---
 
@@ -1006,3 +1019,24 @@ Returns:
 Fetch multiple filaments for the comparison view in one round trip. `ids` is a comma-separated list (minimum 1, maximum 8). Returns filaments in the same order as the `ids` list, with `compatibleNozzles` and `calibrations.{nozzle,printer,bedType}` populated so the UI can render names directly.
 
 `400` if `ids` is missing, empty, or over 8.
+
+### GET /api/embed-check?url=…
+
+Probe whether a remote URL can be rendered inside an `<iframe>`. Used by the filament detail page to gracefully fall back to "open in new tab" when the source site sets `X-Frame-Options: DENY|SAMEORIGIN` or a restrictive `Content-Security-Policy: frame-ancestors`.
+
+The URL goes through the shared SSRF guard (loopback / RFC1918 / cloud metadata IPs blocked, http(s) only). Redirects are followed manually with the same guard re-applied on every hop, so a public host that 30x-redirects into private space is rejected. Capped at 5 redirects and an 8-second timeout.
+
+Response shape:
+```json
+{ "embeddable": true, "contentType": "text/html; charset=utf-8" }
+```
+or:
+```json
+{ "embeddable": false, "reason": "X-Frame-Options: deny", "contentType": "text/html" }
+```
+
+Network failures collapse to `{ embeddable: false, reason: <message> }` rather than a 5xx — the UI shows the same fallback either way.
+
+### GET /api/openapi
+
+Returns the OpenAPI 3.0 spec document used by the in-app Swagger UI. Version is injected dynamically from `package.json` so external consumers can verify the spec matches the running build.

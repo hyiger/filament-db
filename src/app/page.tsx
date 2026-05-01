@@ -8,7 +8,6 @@ import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SpoolCsvImportDialog from "@/components/SpoolCsvImportDialog";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 import NfcStatus from "@/components/NfcStatus";
-import AppNav from "@/components/AppNav";
 import QuickFilterChips, { type QuickFilter } from "@/components/QuickFilterChips";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
@@ -323,6 +322,17 @@ export default function Home() {
     // standard fetch-on-param-change pattern with AbortController.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchFilaments();
+  }, [fetchFilaments]);
+
+  // Refetch when an Electron sync cycle finishes — picks up parent links
+  // and variant edits that landed from another device without waiting for
+  // the user to navigate away and back (GH #127). No-op in the web app.
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.onSyncComplete) return;
+    return api.onSyncComplete(() => {
+      fetchFilaments();
+    });
   }, [fetchFilaments]);
 
   // Group filaments: parents with their variants, standalone filaments as-is
@@ -728,7 +738,7 @@ export default function Home() {
           className="hidden"
         />
       )}
-      <div ref={stickyHeaderRef} className="sticky top-0 z-20 bg-white dark:bg-gray-950 pb-3 -mt-8 pt-8 border-b border-gray-200 dark:border-gray-800 shadow-sm">
+      <div ref={stickyHeaderRef} className="sticky top-[var(--app-header-h)] z-20 bg-white dark:bg-gray-950 pb-3 -mt-8 pt-8 border-b border-gray-200 dark:border-gray-800 shadow-sm">
       <div className="flex items-start justify-between gap-4 mb-6 flex-wrap">
         <div className="min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
@@ -737,14 +747,13 @@ export default function Home() {
             <SyncStatusIndicator />
             <NfcStatus />
           </div>
-          <AppNav />
         </div>
         <div className="flex gap-2 shrink-0">
           {/* Import / Export dropdown */}
           <div className="relative" ref={importExportRef}>
             <button
               onClick={() => setShowImportExport((s) => !s)}
-              className="px-4 py-2 bg-gray-700 text-white rounded hover:bg-gray-600 text-sm flex items-center gap-1.5"
+              className="px-4 py-2 bg-gray-200 text-gray-800 hover:bg-gray-300 dark:bg-gray-700 dark:text-white dark:hover:bg-gray-600 rounded text-sm flex items-center gap-1.5"
             >
               {t("filaments.importExport")}
               <svg className={`w-3.5 h-3.5 transition-transform ${showImportExport ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -820,6 +829,18 @@ export default function Home() {
                 >
                   <span className="w-2 h-2 rounded-full bg-green-500" />
                   {t("filaments.export.xlsx")}
+                </a>
+                <div className="border-t border-gray-600 my-1" />
+                <div className="px-4 py-1">
+                  <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t("spools.export")}</span>
+                </div>
+                <a
+                  href="/api/spools/export-csv"
+                  className="block px-4 py-2 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  onClick={() => setShowImportExport(false)}
+                >
+                  <span className="w-2 h-2 rounded-full bg-green-500" />
+                  {t("spools.export.csv")}
                 </a>
               </div>
             )}
@@ -918,6 +939,30 @@ export default function Home() {
         <p className="text-gray-500">{t("filaments.noResults")}</p>
       ) : (
         <div>
+          {/* Expand-all / collapse-all — only worth showing when there's
+            * actually a parent group to expand. (GH #127) */}
+          {(() => {
+            const parentIds = groupedFilaments
+              .filter((g): g is GroupedFilament => "parent" in g)
+              .map((g) => g.parent._id);
+            if (parentIds.length === 0) return null;
+            const allExpanded = parentIds.every((id) => expandedParents.has(id));
+            return (
+              <div className="flex justify-end mb-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    setExpandedParents(allExpanded ? new Set() : new Set(parentIds))
+                  }
+                  className="text-xs text-blue-600 hover:underline"
+                >
+                  {allExpanded
+                    ? t("filaments.collapseAll")
+                    : t("filaments.expandAll")}
+                </button>
+              </div>
+            );
+          })()}
           <table className="w-full text-sm border-collapse min-w-[900px]">
             <thead className="sticky z-10 bg-white dark:bg-gray-950 shadow-[0_1px_0_0_rgba(209,213,219,0.5)]" style={{ top: `${stickyHeaderHeight}px` }}>
               <tr className="border-b border-gray-300">

@@ -136,14 +136,39 @@ export async function POST(request: NextRequest) {
     });
     const byId = new Map(filaments.map((f) => [String(f._id), f]));
     for (const u of usage) {
-      if (!byId.has(u.filamentId)) {
+      const filament = byId.get(u.filamentId);
+      if (!filament) {
         return errorResponse(`Filament not found: ${u.filamentId}`, 404);
+      }
+      // If the caller named a specific spool, confirm it exists on this
+      // filament before we mutate anything. Otherwise an invalid or stale
+      // spoolId silently falls through to "first spool" in pass 2 and
+      // debits the wrong inventory.
+      if (u.spoolId) {
+        const hasSpool = filament.spools.some(
+          (s) => String(s._id) === u.spoolId,
+        );
+        if (!hasSpool) {
+          return errorResponse(
+            `Spool not found on filament ${u.filamentId}: ${u.spoolId}`,
+            400,
+          );
+        }
       }
     }
 
     // Pass 2: apply mutations to in-memory docs. A single filament can be
     // referenced by multiple usage entries in one job, so we mutate the
     // shared doc instance and save each filament once at the end.
+    //
+    // Generate the PrintHistory _id up front so each spool usageHistory
+    // entry can carry a jobId pointing back at this job. The undo path
+    // (DELETE /api/print-history/{id}) uses that linkage to refund the
+    // exact entries this POST created — without it the undo previously
+    // matched by `(grams, date)` and silently removed the wrong entry
+    // when a manual usage log happened to share both.
+    const historyId = new mongoose.Types.ObjectId();
+
     const resolvedUsage: {
       filamentId: mongoose.Types.ObjectId;
       spoolId: mongoose.Types.ObjectId | null;
@@ -177,6 +202,7 @@ export async function POST(request: NextRequest) {
           // filters these out of the per-spool fallback so totals aren't
           // double-counted against the aggregated PrintHistory pass.
           source: "job",
+          jobId: historyId,
         });
         resolvedUsage.push({
           filamentId: filament._id,
@@ -211,6 +237,7 @@ export async function POST(request: NextRequest) {
           }
           const created = await PrintHistory.create(
             [{
+              _id: historyId,
               jobLabel: body.jobLabel.trim(),
               printerId,
               usage: resolvedUsage,
@@ -240,6 +267,7 @@ export async function POST(request: NextRequest) {
         await f.save();
       }
       history = await PrintHistory.create({
+        _id: historyId,
         jobLabel: body.jobLabel.trim(),
         printerId,
         usage: resolvedUsage,

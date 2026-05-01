@@ -1,6 +1,6 @@
 {
   "name": "filament-db",
-  "version": "1.11.0",
+  "version": "1.12.11",
   "description": "Desktop and web app for managing 3D printing filament profiles",
   "author": {
     "name": "hyiger",
@@ -38,6 +38,8 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "swagger-ui-react": "^5.32.1",
+    "tar": "^7.5.0",
+    "undici": "^6.25.0",
     "yaml": "^2.8.3"
   },
   "devDependencies": {

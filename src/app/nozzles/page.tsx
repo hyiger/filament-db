@@ -106,10 +106,6 @@ export default function NozzlesPage() {
         <div>
           <h1 className="text-3xl font-bold">{t("nozzles.title")}</h1>
           <div className="flex gap-3">
-            <Link href="/" className="text-blue-600 hover:underline text-sm">
-              &larr; {t("nozzles.backToFilaments")}
-            </Link>
-            <span className="text-gray-400 dark:text-gray-600">|</span>
             <Link href="/settings" className="text-blue-600 hover:underline text-sm">
               &larr; {t("nozzles.backToSettings")}
             </Link>
@@ -161,7 +157,7 @@ export default function NozzlesPage() {
                     type="checkbox"
                     checked={selected.size === nozzles.length && nozzles.length > 0}
                     onChange={toggleAll}
-                    aria-label={t("filaments.bulk.selectAll") || "Select all"}
+                    aria-label={t("nozzles.bulk.selectAll") || "Select all"}
                     className="accent-red-600"
                   />
                 </th>

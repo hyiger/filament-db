@@ -7,6 +7,8 @@
  * Supported providers: Google Gemini, Anthropic Claude, OpenAI ChatGPT.
  */
 
+import { assertExternalUrl } from "@/lib/externalUrlGuard";
+
 export type AiProvider = "gemini" | "claude" | "openai";
 
 export const AI_PROVIDERS: { id: AiProvider; name: string; keyUrl: string; keyPrefix: string }[] = [
@@ -38,6 +40,8 @@ export interface TdsExtractedData {
     standby?: number;
   };
   dryingTemperature?: number;
+  /** Minutes — must match the unit the Filament schema stores (480 = 8 hours).
+   * The extractor prompt explicitly asks the AI to convert hours→minutes. */
   dryingTime?: number;
   glassTempTransition?: number;
   heatDeflectionTemp?: number;
@@ -78,7 +82,7 @@ Return ONLY a JSON object with the following fields. Use null for any field not 
     "bedRangeMax": "Maximum recommended bed temperature in °C"
   },
   "dryingTemperature": "Recommended drying temperature in °C",
-  "dryingTime": "Recommended drying time in hours (convert from minutes if needed)",
+  "dryingTime": "Recommended drying time in MINUTES (e.g. 480 for 8 hours — convert any TDS-quoted hours to minutes by multiplying by 60)",
   "glassTempTransition": "Glass transition temperature (Tg) in °C",
   "heatDeflectionTemp": "Heat deflection temperature (HDT) in °C (prefer 0.45 MPa value if both are given)",
   "shoreHardnessA": "Shore A hardness (for flexible materials like TPU/TPE/PEBA)",
@@ -94,7 +98,7 @@ Important:
 - Temperature ranges like "210-230°C" should be split: nozzleRangeMin=210, nozzleRangeMax=230, nozzle=220 (midpoint)
 - For bed temperature ranges, do the same split
 - Density is typically in g/cm³ (e.g. 1.24, not 1240 kg/m³ — convert if needed)
-- Drying time should be in hours (convert minutes to hours if needed)
+- Drying time MUST be returned in minutes (multiply hours by 60 — e.g. "8 hours" → 480, "30 minutes" → 30). The downstream filament schema stores minutes.
 - Only include fields you can confidently extract from the document
 - Return ONLY valid JSON, no markdown code fences, no explanation`;
 
@@ -109,8 +113,18 @@ interface TdsContent {
 /**
  * Fetch TDS content from a URL.
  * Returns the content as either base64 PDF data or plain text.
+ *
+ * Uses the shared SSRF guard from @/lib/externalUrlGuard. Residual risk:
+ * only the *initial* URL is validated. The fetch below sets
+ * `redirect: "follow"`, so a hostile public host could redirect into
+ * private space. Catching that requires `redirect: "manual"` plus per-hop
+ * validation; skipped here to avoid breaking legitimate shortener/CDN
+ * redirects, with the understanding that the AI-key gate already
+ * restricts who can reach this code.
  */
 async function fetchTdsContent(url: string): Promise<TdsContent> {
+  await assertExternalUrl(url);
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
 

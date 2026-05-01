@@ -4,6 +4,7 @@ import Filament from "@/models/Filament";
 import Location from "@/models/Location";
 import { parseCsv } from "@/lib/parseCsv";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { unsanitizeCsvCell } from "@/lib/csvWriter";
 
 /**
  * POST /api/spools/import — bulk-create spools from CSV.
@@ -14,7 +15,11 @@ import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
  *
  * Required columns (case-sensitive):
  *   filament   — matched to Filament.name; vendor can disambiguate
- *   totalWeight — grams (number)
+ *   totalWeight — grams (number). An empty cell maps to null (the spool
+ *     schema's "weight unknown" state), so a CSV produced by
+ *     `/api/spools/export-csv` round-trips for spools created via
+ *     `POST /api/filaments/[id]/spools` (which default totalWeight to null).
+ *     Codex P2 on PR #141.
  *
  * Optional columns:
  *   vendor, label, lotNumber, purchaseDate (ISO date), openedDate,
@@ -97,8 +102,12 @@ export async function POST(request: NextRequest) {
 
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      const filamentName = (r.filament || "").trim();
-      const vendor = (r.vendor || "").trim();
+      // Strip the formula guard apostrophe (`csvCell` adds `'` in front
+      // of cells starting with =, +, -, @, tab, CR) so a row exported
+      // by `/api/spools/export-csv` round-trips cleanly. Codex P2
+      // follow-up to PR #144.
+      const filamentName = unsanitizeCsvCell((r.filament || "").trim());
+      const vendor = unsanitizeCsvCell((r.vendor || "").trim());
       const weightStr = (r.totalWeight || "").trim();
 
       if (!filamentName) {
@@ -106,10 +115,25 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      const weight = Number(weightStr);
-      if (!Number.isFinite(weight) || weight < 0) {
-        results.push({ row: i + 2, ok: false, error: "totalWeight must be a non-negative number" });
-        continue;
+      // Empty cell → preserve null. Importer used to coerce "" → 0 because
+      // Number("") === 0, which broke round-trip parity with the export
+      // (Codex P2 on PR #141: a spool created with totalWeight=null and
+      // re-imported from its own export would land as 0g). A populated cell
+      // still has to be a non-negative finite number.
+      let weight: number | null;
+      if (weightStr === "") {
+        weight = null;
+      } else {
+        const w = Number(weightStr);
+        if (!Number.isFinite(w) || w < 0) {
+          results.push({
+            row: i + 2,
+            ok: false,
+            error: "totalWeight must be a non-negative number",
+          });
+          continue;
+        }
+        weight = w;
       }
 
       // Disambiguate by vendor if provided, otherwise match by name alone.
@@ -128,7 +152,9 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      const locationId = await resolveLocationId((r.location || "").trim());
+      const locationId = await resolveLocationId(
+        unsanitizeCsvCell((r.location || "").trim()),
+      );
 
       const purchaseDate = r.purchaseDate ? new Date(r.purchaseDate) : null;
       const openedDate = r.openedDate ? new Date(r.openedDate) : null;
@@ -138,9 +164,9 @@ export async function POST(request: NextRequest) {
       // to avoid the direct `any` eslint rule while still satisfying the
       // push signature.
       filament.spools.push({
-        label: r.label || "",
+        label: unsanitizeCsvCell(r.label || ""),
         totalWeight: weight,
-        lotNumber: r.lotNumber || null,
+        lotNumber: r.lotNumber ? unsanitizeCsvCell(r.lotNumber) : null,
         purchaseDate: purchaseDate && !isNaN(+purchaseDate) ? purchaseDate : null,
         openedDate: openedDate && !isNaN(+openedDate) ? openedDate : null,
         locationId: locationId || null,

@@ -97,8 +97,21 @@ export function resolveFilament(
     }
   }
 
-  // Resolve compatibleNozzles — use variant's if defined (even empty), otherwise parent's
-  if (filament.compatibleNozzles !== undefined) {
+  // Array fields (compatibleNozzles / optTags / bedTypeTemps / calibrations /
+  // presets) inherit from the parent when the variant's array is empty.
+  //
+  // We used to treat `undefined` as "inherit" and `[]` as "explicit override
+  // to empty", but Mongoose always materialises array schema fields as `[]`
+  // at load time — `undefined` was unreachable in practice, so variants
+  // silently failed to inherit any array field. Treating empty === inherit
+  // matches what users expect (GH #106 — "clone should track parent
+  // ongoing, not snapshot once").
+  //
+  // Trade-off: there's no way to explicitly say "this variant has zero
+  // calibrations even though the parent has some". That's a rare case —
+  // when it comes up, either drop the parent link or add a sentinel
+  // override field in a future iteration.
+  if (filament.compatibleNozzles && filament.compatibleNozzles.length > 0) {
     resolved.compatibleNozzles = filament.compatibleNozzles;
   } else {
     resolved.compatibleNozzles = parent.compatibleNozzles || [];
@@ -107,8 +120,7 @@ export function resolveFilament(
     }
   }
 
-  // Resolve optTags — use variant's if defined (even empty), otherwise parent's
-  if (filament.optTags !== undefined) {
+  if (filament.optTags && filament.optTags.length > 0) {
     resolved.optTags = filament.optTags;
   } else {
     resolved.optTags = parent.optTags || [];
@@ -117,8 +129,7 @@ export function resolveFilament(
     }
   }
 
-  // Resolve bedTypeTemps — use variant's if defined (even empty), otherwise parent's
-  if (filament.bedTypeTemps !== undefined) {
+  if (filament.bedTypeTemps && filament.bedTypeTemps.length > 0) {
     resolved.bedTypeTemps = filament.bedTypeTemps;
   } else {
     resolved.bedTypeTemps = parent.bedTypeTemps || [];
@@ -127,8 +138,7 @@ export function resolveFilament(
     }
   }
 
-  // Resolve calibrations — use variant's if defined (even empty), otherwise parent's
-  if (filament.calibrations !== undefined) {
+  if (filament.calibrations && filament.calibrations.length > 0) {
     resolved.calibrations = filament.calibrations;
   } else {
     resolved.calibrations = parent.calibrations || [];
@@ -137,8 +147,7 @@ export function resolveFilament(
     }
   }
 
-  // Resolve presets — use variant's if defined (even empty), otherwise parent's
-  if (filament.presets !== undefined) {
+  if (filament.presets && filament.presets.length > 0) {
     resolved.presets = filament.presets;
   } else {
     resolved.presets = parent.presets || [];

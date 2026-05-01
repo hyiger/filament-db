@@ -55,11 +55,6 @@ export default function AnalyticsPage() {
 
   return (
     <main className="max-w-5xl mx-auto px-4 py-8">
-      <div className="mb-4">
-        <Link href="/" className="text-blue-600 hover:underline text-sm">
-          &larr; {t("analytics.backToFilaments")}
-        </Link>
-      </div>
       <div className="flex items-end justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold">{t("analytics.title")}</h1>
@@ -99,6 +94,17 @@ export default function AnalyticsPage() {
             <StatBox label={t("analytics.totalJobs")} value={String(data.totals.jobs)} />
           </div>
 
+          {/* Single page-level empty state when no usage was recorded in the
+              window. Avoids repeating the same "no data" line under every
+              section heading. */}
+          {data.usageByDay.every((d) => d.grams === 0) &&
+            data.byFilament.length === 0 &&
+            data.byVendor.length === 0 ? (
+              <div className="border border-gray-200 dark:border-gray-800 rounded p-6 text-center">
+                <p className="text-sm text-gray-500">{t("analytics.noData")}</p>
+              </div>
+            ) : (
+            <>
           {/* Usage by day */}
           <section className="mb-8">
             <h2 className="text-lg font-semibold mb-3">
@@ -216,6 +222,8 @@ export default function AnalyticsPage() {
                 ))}
               </ul>
             </section>
+          )}
+            </>
           )}
         </>
       )}

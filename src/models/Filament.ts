@@ -32,6 +32,17 @@ export interface IUsageEntry {
    *   - "nfc":    written by an NFC read.
    */
   source: "manual" | "slicer" | "job" | "nfc";
+  /**
+   * For entries created by `POST /api/print-history`, the _id of the
+   * matching PrintHistory document. The undo path (`DELETE
+   * /api/print-history/{id}`) uses this to find exactly which spool
+   * usageHistory entries to refund — without it, the previous logic
+   * matched by `(grams, date)` alone, which silently removed the wrong
+   * entry whenever a manual usage log happened to share both.
+   *
+   * Always null for `manual`/`nfc` entries (no PrintHistory record exists).
+   */
+  jobId: mongoose.Types.ObjectId | null;
 }
 
 export interface ISpool {
@@ -122,6 +133,11 @@ export interface IFilament extends Document {
    * shows a low-stock indicator on the dashboard and list. Null = disabled. */
   lowStockThreshold: number | null;
   dryingTemperature: number | null;
+  /** Drying time in MINUTES (480 = 8 hours). The form input, CSV export header,
+   * and NfcReadDialog all assume minutes; TDS extractor converts hours→minutes
+   * at the boundary. Other code paths (compare page, OpenPrintTag display)
+   * historically rendered this value with an "h" suffix — those are display
+   * bugs against this canonical unit and should be fixed if they surface. */
   dryingTime: number | null;
   transmissionDistance: number | null;
   glassTempTransition: number | null;
@@ -236,6 +252,9 @@ const FilamentSchema = new Schema<IFilament>(
               enum: ["manual", "slicer", "job", "nfc"],
               default: "manual",
             },
+            // Index so the undo path's `usageHistory.jobId === entry._id`
+            // filter doesn't full-scan every spool's array.
+            jobId: { type: Schema.Types.ObjectId, ref: "PrintHistory", default: null, index: true },
           },
         ],
       },

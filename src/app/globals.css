@@ -12,6 +12,11 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  /* Height of the persistent global AppHeader (rendered by app/layout.tsx).
+   * Pages with their own sticky toolbars reference this so they don't slide
+   * under the global header — e.g. `top-[var(--app-header-h)]`. Keep in
+   * sync with AppHeader.tsx's container class (currently `h-12` = 3rem). */
+  --app-header-h: 3rem;
 }
 
 @theme inline {

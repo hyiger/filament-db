@@ -13,11 +13,40 @@
  */
 
 import { parse as parseYaml } from "yaml";
-import { execSync } from "child_process";
 import { mkdtempSync, readFileSync, rmSync, readdirSync, statSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import * as tar from "tar";
+import { EnvHttpProxyAgent, type Dispatcher } from "undici";
 import { OPT_TAG } from "@/lib/openprinttag";
+
+/**
+ * Build an undici dispatcher that honours `HTTP_PROXY` / `HTTPS_PROXY` /
+ * `NO_PROXY` env vars when the deployment sets them.
+ *
+ * Background: the previous `curl -L` shell call automatically respected
+ * those variables, but Node's built-in fetch ignores them by default
+ * (you'd otherwise need `NODE_USE_ENV_PROXY=1` or `--use-env-proxy`).
+ * On the corporate / air-gapped Docker setups that motivated #136, that
+ * regression would silently break OpenPrintTag refresh even though the
+ * curl path used to work. Returning a dispatcher only when a proxy is
+ * actually configured keeps the no-proxy fast path identical.
+ */
+export function getProxyDispatcher(
+  env: Partial<Record<string, string | undefined>> = process.env,
+): Dispatcher | undefined {
+  const hasProxy = Boolean(
+    env.HTTP_PROXY ||
+      env.http_proxy ||
+      env.HTTPS_PROXY ||
+      env.https_proxy ||
+      env.ALL_PROXY ||
+      env.all_proxy,
+  );
+  return hasProxy ? new EnvHttpProxyAgent() : undefined;
+}
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -326,13 +355,47 @@ export async function fetchOpenPrintTagDatabase(): Promise<OPTDatabase> {
   const tmpDir = mkdtempSync(join(tmpdir(), "openprinttag-"));
 
   try {
-    // Download tarball via GitHub API
+    // Download and extract the tarball via the GitHub tarball API. Earlier
+    // versions shelled out to `curl ... | tar xz`, but the production
+    // Docker image (node:22-alpine) doesn't ship curl, so users got
+    // "/bin/sh: curl: not found" the moment they tried to browse the OPT
+    // database (GH #136). Doing it in pure Node removes the dep on host
+    // tools and works the same in dev, Electron, and Docker.
     const tarballUrl =
       "https://api.github.com/repos/OpenPrintTag/openprinttag-database/tarball/main";
 
-    execSync(
-      `curl -sL -H "Accept: application/vnd.github+json" "${tarballUrl}" | tar xz -C "${tmpDir}"`,
-      { timeout: 60_000, maxBuffer: 50 * 1024 * 1024 },
+    // Pass the proxy dispatcher when one is configured. `dispatcher` is an
+    // undici-flavoured option not present on the standard RequestInit type,
+    // hence the cast — it's a documented Node fetch extension.
+    const dispatcher = getProxyDispatcher();
+    const response = await fetch(tarballUrl, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        // GitHub returns 403 on unauthenticated requests with no UA.
+        "User-Agent": "filament-db",
+      },
+      // 60s matches the previous execSync timeout. AbortSignal.timeout
+      // produces a TypeError-shaped abort if exceeded.
+      signal: AbortSignal.timeout(60_000),
+      ...(dispatcher ? { dispatcher } : {}),
+    } as RequestInit & { dispatcher?: Dispatcher });
+    if (!response.ok) {
+      throw new Error(
+        `GitHub tarball request failed: ${response.status} ${response.statusText}`,
+      );
+    }
+    if (!response.body) {
+      throw new Error("GitHub tarball response had no body");
+    }
+
+    // tar.x is a Writable transform that auto-detects gzip; pipeline()
+    // resolves once the entire tarball has been extracted to disk.
+    await pipeline(
+      // Cast: response.body is a Web ReadableStream, Readable.fromWeb wants
+      // the same shape but the type lib for streams/web is a bit loose
+      // across Node versions. Functionally identical.
+      Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
+      tar.x({ cwd: tmpDir }),
     );
 
     // The tarball extracts to a subdirectory like OpenPrintTag-openprinttag-database-<sha>/

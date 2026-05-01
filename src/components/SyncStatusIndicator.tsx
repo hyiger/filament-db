@@ -129,8 +129,8 @@ export default function SyncStatusIndicator() {
     return (
       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs ${
         online
-          ? "bg-green-900/40 text-green-400"
-          : "bg-red-900/40 text-red-400"
+          ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-400"
+          : "bg-red-100 text-red-800 dark:bg-red-900/40 dark:text-red-400"
       }`}>
         <span className={`w-1.5 h-1.5 rounded-full ${online ? "bg-green-500" : "bg-red-500"}`} />
         {online ? t("sync.status.connected") : t("sync.status.offline")}
@@ -141,7 +141,7 @@ export default function SyncStatusIndicator() {
   // Electron: offline mode
   if (mode === "offline") {
     return (
-      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs bg-gray-700 text-gray-300">
+      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300">
         <span className="w-1.5 h-1.5 rounded-full bg-gray-500" />
         {t("sync.status.local")}
       </span>
@@ -155,8 +155,8 @@ export default function SyncStatusIndicator() {
     return (
       <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs ${
         connected
-          ? "bg-green-900/40 text-green-400"
-          : "bg-amber-900/40 text-amber-400"
+          ? "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-400"
+          : "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-400"
       }`}>
         <span className={`w-1.5 h-1.5 rounded-full ${connected ? "bg-green-500" : "bg-amber-500"}`} />
         {connected ? t("sync.status.connected") : t("sync.status.noConnection")}
@@ -170,41 +170,41 @@ export default function SyncStatusIndicator() {
   const pill = (() => {
     if (!online || isFallback) {
       return {
-        bg: "bg-amber-900/40",
+        bg: "bg-amber-100 dark:bg-amber-900/40",
         dot: "bg-amber-500",
-        text: "text-amber-400",
+        text: "text-amber-800 dark:text-amber-400",
         label: isFallback ? t("sync.status.offlineLocalData") : t("sync.status.offline"),
       };
     }
     switch (status.state) {
       case "syncing":
         return {
-          bg: "bg-blue-900/40",
+          bg: "bg-blue-100 dark:bg-blue-900/40",
           dot: "bg-blue-400 animate-pulse",
-          text: "text-blue-300",
+          text: "text-blue-800 dark:text-blue-300",
           label: status.progress || t("sync.status.syncing"),
         };
       case "error":
         return {
-          bg: "bg-red-900/40",
+          bg: "bg-red-100 dark:bg-red-900/40",
           dot: "bg-red-500",
-          text: "text-red-300",
+          text: "text-red-800 dark:text-red-300",
           label: t("sync.status.syncError"),
         };
       case "idle":
         return {
-          bg: "bg-green-900/40",
+          bg: "bg-green-100 dark:bg-green-900/40",
           dot: "bg-green-500",
-          text: "text-green-400",
+          text: "text-green-800 dark:text-green-400",
           label: status.lastSyncAt
             ? t("sync.status.synced", { time: formatRelativeTime(status.lastSyncAt, t) })
             : t("sync.status.connected"),
         };
       default:
         return {
-          bg: "bg-gray-700",
+          bg: "bg-gray-200 dark:bg-gray-700",
           dot: "bg-gray-500",
-          text: "text-gray-300",
+          text: "text-gray-700 dark:text-gray-300",
           label: t("sync.status.hybrid"),
         };
     }

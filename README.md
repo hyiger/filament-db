@@ -1,6 +1,6 @@
 # Filament DB
 
-A desktop and web application for managing 3D printing filament profiles. Import filament configurations from PrusaSlicer, store them in MongoDB or MongoDB Atlas, and manage them through a clean interface. Available as an installable desktop app for macOS, Windows, and Linux, or run as a local web app. The desktop app supports offline mode with an embedded local database, hybrid mode with automatic cloud sync, or direct Atlas cloud mode. The API is unauthenticated and intended for single-user localhost use; do not expose to untrusted networks without adding an auth layer.
+A desktop and web application for managing 3D printing filament profiles. Import filament configurations from PrusaSlicer, store them in MongoDB or MongoDB Atlas, and manage them through a clean interface. The desktop app reads and writes [OpenPrintTag](https://openprinttag.io/) NFC tags (NFC-V / ISO 15693) and reads Bambu Lab MIFARE Classic spool tags via an ACR1552U reader, so you can scan a spool to autofill a profile or write your own per-spool tags. Available as an installable desktop app for macOS, Windows, and Linux, or run as a local web app. The desktop app supports offline mode with an embedded local database, hybrid mode with automatic cloud sync, or direct Atlas cloud mode. The API is unauthenticated and intended for single-user localhost use; do not expose to untrusted networks without adding an auth layer.
 
 ![Filament DB](docs/images/filament-db-screenshot.png)
 
@@ -149,7 +149,7 @@ filament-db/
 │   ├── i18n/                   # Locale files + TranslationProvider (en, de)
 │   ├── lib/                    # DB connection, INI parser, CSV parser, image compression, OpenPrintTag encoder/decoder, TDS extractor, PrusaSlicer bundle, spool validator
 │   └── models/                 # Mongoose schemas (Filament, Nozzle, Printer, BedType, Location, PrintHistory, SharedCatalog)
-├── tests/                      # Vitest unit + route tests (635 tests across 35 files)
+├── tests/                      # Vitest unit + route + Mongoose model + electron sync tests
 ├── .github/workflows/
 │   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
 │   ├── release.yml          # CD: build desktop installers on version tags (4 platforms)
