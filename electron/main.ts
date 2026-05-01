@@ -404,6 +404,7 @@ ipcMain.handle("get-config", () => {
     aiApiKey: store.get("aiApiKey") as string,
     aiProvider: store.get("aiProvider") as string,
     currency: store.get("currency") as string,
+    customCurrencies: store.get("customCurrencies") as string,
     locale: store.get("locale") as string,
   };
 });
@@ -416,6 +417,7 @@ ipcMain.handle("save-config", async (_event, config: {
   aiApiKey?: string;
   aiProvider?: string;
   currency?: string;
+  customCurrencies?: string;
   locale?: string;
 }) => {
   // Update individual fields
@@ -436,6 +438,9 @@ ipcMain.handle("save-config", async (_event, config: {
   }
   if (config.currency !== undefined) {
     store.set("currency", config.currency);
+  }
+  if (config.customCurrencies !== undefined) {
+    store.set("customCurrencies", config.customCurrencies);
   }
   if (config.locale !== undefined) {
     store.set("locale", config.locale);
