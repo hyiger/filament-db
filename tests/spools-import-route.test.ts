@@ -164,4 +164,33 @@ describe("/api/spools/import", () => {
     const body = await res.json();
     expect(body.imported).toBe(1);
   });
+
+  // Codex P2 on PR #141 — round-trip parity with `/api/spools/export-csv`,
+  // which emits an empty `totalWeight` cell for spools that genuinely have
+  // no recorded weight (e.g. spools created via POST /api/filaments/[id]/spools
+  // which defaults to null). Pre-fix the importer coerced "" → 0 because
+  // Number("") === 0, silently overwriting null with a meaningless zero.
+  it("preserves a null totalWeight when the cell is empty (round-trip parity with the exporter)", async () => {
+    const f = await Filament.create({ name: "Round-Trip", vendor: "Test", type: "PLA" });
+    const csv = "filament,totalWeight\nRound-Trip,\n";
+    const res = await importSpools(csvRequest(csv));
+    const body = await res.json();
+    expect(body.imported).toBe(1);
+    expect(body.failed).toBe(0);
+
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBeNull();
+  });
+
+  it("still rejects non-numeric or negative totalWeight cells (only blank maps to null)", async () => {
+    await Filament.create({ name: "Strict", vendor: "Test", type: "PLA" });
+    const csv = "filament,totalWeight\nStrict,abc\nStrict,-5\n";
+    const res = await importSpools(csvRequest(csv));
+    const body = await res.json();
+    expect(body.imported).toBe(0);
+    expect(body.failed).toBe(2);
+    expect(body.results[0].error).toMatch(/non-negative/);
+    expect(body.results[1].error).toMatch(/non-negative/);
+  });
 });
