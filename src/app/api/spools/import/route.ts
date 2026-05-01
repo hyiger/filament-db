@@ -4,6 +4,7 @@ import Filament from "@/models/Filament";
 import Location from "@/models/Location";
 import { parseCsv } from "@/lib/parseCsv";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { unsanitizeCsvCell } from "@/lib/csvWriter";
 
 /**
  * POST /api/spools/import — bulk-create spools from CSV.
@@ -101,8 +102,12 @@ export async function POST(request: NextRequest) {
 
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
-      const filamentName = (r.filament || "").trim();
-      const vendor = (r.vendor || "").trim();
+      // Strip the formula guard apostrophe (`csvCell` adds `'` in front
+      // of cells starting with =, +, -, @, tab, CR) so a row exported
+      // by `/api/spools/export-csv` round-trips cleanly. Codex P2
+      // follow-up to PR #144.
+      const filamentName = unsanitizeCsvCell((r.filament || "").trim());
+      const vendor = unsanitizeCsvCell((r.vendor || "").trim());
       const weightStr = (r.totalWeight || "").trim();
 
       if (!filamentName) {
@@ -147,7 +152,9 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      const locationId = await resolveLocationId((r.location || "").trim());
+      const locationId = await resolveLocationId(
+        unsanitizeCsvCell((r.location || "").trim()),
+      );
 
       const purchaseDate = r.purchaseDate ? new Date(r.purchaseDate) : null;
       const openedDate = r.openedDate ? new Date(r.openedDate) : null;
@@ -157,9 +164,9 @@ export async function POST(request: NextRequest) {
       // to avoid the direct `any` eslint rule while still satisfying the
       // push signature.
       filament.spools.push({
-        label: r.label || "",
+        label: unsanitizeCsvCell(r.label || ""),
         totalWeight: weight,
-        lotNumber: r.lotNumber || null,
+        lotNumber: r.lotNumber ? unsanitizeCsvCell(r.lotNumber) : null,
         purchaseDate: purchaseDate && !isNaN(+purchaseDate) ? purchaseDate : null,
         openedDate: openedDate && !isNaN(+openedDate) ? openedDate : null,
         locationId: locationId || null,

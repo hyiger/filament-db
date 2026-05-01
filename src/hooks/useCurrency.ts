@@ -117,16 +117,38 @@ export function useCurrency() {
       .getConfig()
       .then((cfg) => {
         const c = cfg as Record<string, unknown>;
-        const customJson = typeof c.customCurrencies === "string" ? c.customCurrencies : "";
-        const parsed = parseCustomCurrencies(customJson, BUILTIN_CODES);
-        if (parsed.length > 0) setCustomCurrenciesState(parsed);
+
+        // Resolve the authoritative custom list for this hydration:
+        //   - Electron-store has the key (typeof === "string"): apply it
+        //     verbatim, INCLUDING the empty array. Otherwise a desktop
+        //     user who cleared their list could see localStorage-cached
+        //     entries resurrect on next launch (Codex P2 follow-up to
+        //     PR #142).
+        //   - Key absent (undefined): leave the localStorage-initialised
+        //     state alone — first run on desktop after web use survives.
+        let resolvedList: CustomCurrency[] | null = null;
+        if (typeof c.customCurrencies === "string") {
+          resolvedList = parseCustomCurrencies(c.customCurrencies, BUILTIN_CODES);
+          setCustomCurrenciesState(resolvedList);
+        }
 
         const saved = typeof c.currency === "string" ? c.currency : "";
-        if (saved && isKnownCode(saved, parsed)) {
-          setCurrencyState(saved);
+        if (saved) {
+          // Validate against the just-resolved list so an electron-side
+          // entry that still exists in `c.customCurrencies` is accepted
+          // even on the first render after mount. Falling back to the
+          // closure's `customCurrencies` is correct only when electron
+          // didn't override (resolvedList === null).
+          const validateAgainst = resolvedList ?? customCurrencies;
+          if (isKnownCode(saved, validateAgainst)) {
+            setCurrencyState(saved);
+          }
         }
       })
       .catch(() => {});
+    // Mount-only hydration; we deliberately do not re-run when the
+    // localStorage-initialised customCurrencies value churns.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const persistCurrency = useCallback((code: string) => {
@@ -179,9 +201,18 @@ export function useCurrency() {
       const next = addCC(customCurrencies, entry);
       setCustomCurrenciesState(next);
       persistCustom(next);
+      // Auto-select the just-added code. Doing it here closes the
+      // closure-stale-state hole: a separate setCurrency() call from the
+      // caller would validate against the pre-add `customCurrencies`
+      // captured in setCurrency's useCallback memo, and reject the new
+      // code (Codex P2 follow-up to PR #142). Since the ergonomic flow
+      // is "user adds a currency to use", autoselect is also the right
+      // default behaviour.
+      setCurrencyState(entry.code);
+      persistCurrency(entry.code);
       return null;
     },
-    [customCurrencies, persistCustom],
+    [customCurrencies, persistCurrency, persistCustom],
   );
 
   const removeCustom = useCallback(

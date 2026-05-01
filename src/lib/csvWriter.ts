@@ -64,3 +64,30 @@ export function isFormulaCandidate(value: unknown): boolean {
     FORMULA_TRIGGERS.includes(value[0])
   );
 }
+
+/**
+ * Inverse of `csvCell`'s formula guard: strip a leading `'` if it's
+ * sitting in front of a formula-trigger character. This is what the CSV
+ * importers run user-supplied string fields through so a value exported
+ * with the guard (`'=foo`) round-trips back to its original form (`=foo`).
+ *
+ * The strip is conservative — it only fires on the exact `'` + trigger
+ * pattern that `csvCell` produces. A value that genuinely starts with `'`
+ * followed by a non-trigger character (e.g. `'70s blue`) is left alone.
+ *
+ * Codex P2 follow-up to PR #144: without this, exporting then re-
+ * importing a row whose filament name / vendor / location starts with
+ * a trigger char would either fail to match an existing filament (the
+ * import is exact-string-match on `filament`) or persist the apostrophe
+ * verbatim into the document.
+ */
+export function unsanitizeCsvCell(value: string): string {
+  if (
+    value.length >= 2 &&
+    value[0] === "'" &&
+    FORMULA_TRIGGERS.includes(value[1])
+  ) {
+    return value.slice(1);
+  }
+  return value;
+}

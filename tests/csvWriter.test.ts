@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { csvCell, isFormulaCandidate } from "@/lib/csvWriter";
+import { csvCell, isFormulaCandidate, unsanitizeCsvCell } from "@/lib/csvWriter";
 
 /**
  * Codex P2 on PR #141 — without sanitisation, an attacker who controls
@@ -67,6 +67,50 @@ describe("csvCell — formula injection neutralisation", () => {
 
   it("does NOT prefix the empty string", () => {
     expect(csvCell("")).toBe("");
+  });
+});
+
+describe("unsanitizeCsvCell — inverse of csvCell's formula guard", () => {
+  it("strips the leading apostrophe when followed by a formula trigger", () => {
+    expect(unsanitizeCsvCell("'=foo")).toBe("=foo");
+    expect(unsanitizeCsvCell("'+evil()")).toBe("+evil()");
+    expect(unsanitizeCsvCell("'-1+2")).toBe("-1+2");
+    expect(unsanitizeCsvCell("'@SUM(A1)")).toBe("@SUM(A1)");
+    expect(unsanitizeCsvCell("'\tinject")).toBe("\tinject");
+    expect(unsanitizeCsvCell("'\rinject")).toBe("\rinject");
+  });
+
+  it("leaves apostrophe-prefixed strings alone when the next char is benign", () => {
+    expect(unsanitizeCsvCell("'70s blue")).toBe("'70s blue");
+    expect(unsanitizeCsvCell("'apostrophe")).toBe("'apostrophe");
+    expect(unsanitizeCsvCell("'a")).toBe("'a");
+  });
+
+  it("leaves non-apostrophe-prefixed values alone", () => {
+    expect(unsanitizeCsvCell("Generic PLA")).toBe("Generic PLA");
+    expect(unsanitizeCsvCell("=foo")).toBe("=foo"); // no leading apostrophe → no change
+    expect(unsanitizeCsvCell("")).toBe("");
+  });
+
+  it("round-trips with csvCell for formula-leading values", () => {
+    const original = "=cmd|'/C calc'!A0";
+    // csvCell wraps in quotes because of the comma; unsanitize handles
+    // the un-wrapped value the parser would hand back.
+    const exported = csvCell(original);
+    // Strip the RFC4180 quote wrap that csvCell applied because of the
+    // embedded comma: the parseCsv layer would have already done that
+    // before handing the cell to unsanitizeCsvCell.
+    const unwrapped = exported.startsWith('"') && exported.endsWith('"')
+      ? exported.slice(1, -1).replace(/""/g, '"')
+      : exported;
+    expect(unsanitizeCsvCell(unwrapped)).toBe(original);
+  });
+
+  it("round-trips with csvCell for plain formula triggers (no embedded commas)", () => {
+    expect(unsanitizeCsvCell(csvCell("=A1+B1"))).toBe("=A1+B1");
+    expect(unsanitizeCsvCell(csvCell("+1"))).toBe("+1");
+    expect(unsanitizeCsvCell(csvCell("-1"))).toBe("-1");
+    expect(unsanitizeCsvCell(csvCell("@SUM"))).toBe("@SUM");
   });
 });
 

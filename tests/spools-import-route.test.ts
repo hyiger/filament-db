@@ -193,4 +193,66 @@ describe("/api/spools/import", () => {
     expect(body.results[0].error).toMatch(/non-negative/);
     expect(body.results[1].error).toMatch(/non-negative/);
   });
+
+  // Codex P2 follow-up to PR #144 — `csvCell` prefixes formula-leading
+  // STRING cells with a `'` so spreadsheets read them as text. The
+  // importer must strip that guard so a row exported with a name like
+  // `=Eval` round-trips back to the original filament without keeping
+  // the apostrophe in the matched/persisted text.
+  it("strips the formula-guard apostrophe so an exported '=Name' row matches its filament on re-import", async () => {
+    const f = await Filament.create({
+      name: "=Generic", // legit-but-formula-shaped filament name
+      vendor: "Test",
+      type: "PLA",
+    });
+    // Simulate a row produced by /api/spools/export-csv: the exporter
+    // wrote `'=Generic` (apostrophe prefix). The importer must match
+    // back to the original filament.
+    const csv = "filament,totalWeight\n'=Generic,950\n";
+    const res = await importSpools(csvRequest(csv));
+    const body = await res.json();
+    expect(body.imported).toBe(1);
+    expect(body.failed).toBe(0);
+
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(950);
+  });
+
+  it("strips the formula-guard apostrophe from label / lotNumber / location when present", async () => {
+    const f = await Filament.create({ name: "Strip", vendor: "Test", type: "PLA" });
+    // Label, lotNumber, and location all start with `=` originally.
+    // After export they'd be `'=label` / `'=LOT-1` / `'=Drybox` and
+    // re-import must restore the original strings — otherwise the
+    // matched location name would be `'=Drybox` (a different row from
+    // the original) and analytics on label / lot would diverge.
+    const csv =
+      "filament,totalWeight,label,lotNumber,location\n" +
+      `Strip,500,'=Lab Use,'=LOT-1,'=Drybox\n`;
+    const res = await importSpools(csvRequest(csv));
+    const body = await res.json();
+    expect(body.imported).toBe(1);
+
+    const fresh = await Filament.findById(f._id);
+    const spool = fresh.spools[0];
+    expect(spool.label).toBe("=Lab Use");
+    expect(spool.lotNumber).toBe("=LOT-1");
+    // resolveLocationId used the unsanitized name; the row should now
+    // reference a location with that exact name, not "'=Drybox".
+    const Location = (await import("@/models/Location")).default;
+    const loc = await Location.findOne({ name: "=Drybox" });
+    expect(loc).not.toBeNull();
+    expect(spool.locationId.toString()).toBe(loc!._id.toString());
+  });
+
+  it("leaves apostrophe-prefixed values alone when the next char isn't a formula trigger ('70s blue)", async () => {
+    await Filament.create({ name: "'70s Style", vendor: "Test", type: "PLA" });
+    const csv = "filament,totalWeight\n'70s Style,800\n";
+    const res = await importSpools(csvRequest(csv));
+    const body = await res.json();
+    // Should match — the leading `'` followed by `7` is not a guard
+    // pattern, so unsanitize leaves it intact and the filament lookup
+    // finds the seeded row.
+    expect(body.imported).toBe(1);
+  });
 });

@@ -70,9 +70,11 @@ export default function SettingsPage() {
       setNewCurrError(err);
       return;
     }
-    // Success: reset form, hide, select the just-added code
+    // `addCustom` auto-selects the new currency on success — calling
+    // `setCurrency` here additionally would race React's state batching
+    // and reject the new code on the first click (Codex P2 follow-up
+    // to PR #142). Just reset the form.
     setNewCurrError(null);
-    setCurrency(newCurrCode.trim().toUpperCase());
     setNewCurrCode("");
     setNewCurrSymbol("");
     setNewCurrName("");
