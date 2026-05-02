@@ -98,6 +98,54 @@ describe("GET /api/filaments — projection to FilamentSummary", () => {
     expect(entry.spools[1].label).toBe("Backup");
   });
 
+  it("hasCalibrations reflects effective state — a variant with no own calibrations inherits from parent", async () => {
+    // Codex round-3 P2: variants with empty calibrations[] inherit from
+    // their parent (see resolveFilament). The list projection used to
+    // compute hasCalibrations from only the variant's own array, so
+    // every inheriting variant was falsely flagged as missing calibration.
+    const Filament = (await import("@/models/Filament")).default;
+    const parent = await Filament.create({
+      name: "Inheritance Parent",
+      vendor: "Test",
+      type: "PLA",
+      calibrations: [
+        { nozzle: new mongoose.Types.ObjectId(), extrusionMultiplier: 0.95 },
+      ],
+    });
+    await Filament.create({
+      name: "Inheriting Variant",
+      vendor: "Test",
+      type: "PLA",
+      parentId: parent._id,
+      // empty calibrations — inherits from parent
+    });
+    await Filament.create({
+      name: "Override Variant",
+      vendor: "Test",
+      type: "PLA",
+      parentId: parent._id,
+      calibrations: [
+        { nozzle: new mongoose.Types.ObjectId(), extrusionMultiplier: 1.0 },
+      ],
+    });
+    await Filament.create({
+      name: "Standalone Bare",
+      vendor: "Test",
+      type: "PLA",
+    });
+
+    const res = await listFilaments(
+      new NextRequest("http://localhost/api/filaments"),
+    );
+    const body = await res.json();
+
+    const find = (name: string) => body.find((f: { name: string }) => f.name === name);
+    expect(find("Inheritance Parent").hasCalibrations).toBe(true);
+    expect(find("Inheriting Variant").hasCalibrations).toBe(true); // <-- the bug fix
+    expect(find("Override Variant").hasCalibrations).toBe(true);
+    expect(find("Standalone Bare").hasCalibrations).toBe(false);
+  });
+
   it("computes hasCalibrations true/false per row", async () => {
     await seed();
     const res = await listFilaments(

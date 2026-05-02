@@ -39,6 +39,21 @@ export async function GET(request: NextRequest) {
     const filaments = await Filament.aggregate([
       { $match: filter },
       { $sort: { name: 1 } },
+      // Look up parent's calibrations so hasCalibrations reflects the
+      // *effective* state rather than the variant's own array. Variants
+      // with empty calibrations inherit from their parent (see
+      // resolveFilament in src/lib/resolveFilament.ts), so projecting
+      // only the variant's own array would falsely flag inheriting
+      // variants under the noCalibration filter.
+      {
+        $lookup: {
+          from: "filaments",
+          localField: "parentId",
+          foreignField: "_id",
+          as: "_parent",
+          pipeline: [{ $project: { calibrations: 1 } }],
+        },
+      },
       {
         $project: {
           name: 1,
@@ -56,7 +71,22 @@ export async function GET(request: NextRequest) {
           "temperatures.nozzle": 1,
           "temperatures.bed": 1,
           hasCalibrations: {
-            $gt: [{ $size: { $ifNull: ["$calibrations", []] } }, 0],
+            $or: [
+              { $gt: [{ $size: { $ifNull: ["$calibrations", []] } }, 0] },
+              {
+                $gt: [
+                  {
+                    $size: {
+                      $ifNull: [
+                        { $arrayElemAt: ["$_parent.calibrations", 0] },
+                        [],
+                      ],
+                    },
+                  },
+                  0,
+                ],
+              },
+            ],
           },
           spools: {
             $map: {
