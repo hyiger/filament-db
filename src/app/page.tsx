@@ -12,59 +12,9 @@ import QuickFilterChips, { type QuickFilter } from "@/components/QuickFilterChip
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
+import { getRemainingGrams, getRemainingPct, getSpoolCount } from "@/lib/inventoryStats";
 
 type Filament = FilamentSummary;
-
-function getRemainingPct(f: Filament): number | null {
-  // Multi-spool: aggregate across all spools
-  if (f.spools?.length > 0 && f.spoolWeight != null && f.netFilamentWeight != null && f.netFilamentWeight > 0) {
-    let totalRemaining = 0;
-    let validCount = 0;
-    for (const spool of f.spools) {
-      if (spool.totalWeight != null) {
-        totalRemaining += Math.max(0, spool.totalWeight - f.spoolWeight);
-        validCount++;
-      }
-    }
-    if (validCount === 0) return null;
-    const totalNet = f.netFilamentWeight * validCount;
-    return Math.min(100, Math.max(0, Math.round((totalRemaining / totalNet) * 100)));
-  }
-  // Legacy single-spool
-  if (f.totalWeight == null || f.spoolWeight == null || f.netFilamentWeight == null || f.netFilamentWeight <= 0) return null;
-  return Math.min(100, Math.max(0, Math.round(((f.totalWeight - f.spoolWeight) / f.netFilamentWeight) * 100)));
-}
-
-function getSpoolCount(f: Filament): number {
-  if (f.spools?.length > 0) return f.spools.length;
-  return f.totalWeight != null ? 1 : 0;
-}
-
-/**
- * Grams of filament remaining across all *non-retired* spools. Null if the
- * filament isn't weight-tracked (no spool weight or no netFilamentWeight).
- * Used for the low-stock chip + badge.
- */
-function getRemainingGrams(f: Filament): number | null {
-  if (
-    !f.spools ||
-    f.spools.length === 0 ||
-    f.spoolWeight == null ||
-    f.netFilamentWeight == null
-  ) {
-    return null;
-  }
-  let grams = 0;
-  let any = false;
-  for (const s of f.spools) {
-    if (s.retired) continue;
-    if (s.totalWeight != null) {
-      grams += Math.max(0, s.totalWeight - f.spoolWeight);
-      any = true;
-    }
-  }
-  return any ? grams : null;
-}
 
 function isLowStock(f: Filament): boolean {
   const threshold = f.lowStockThreshold;
