@@ -19,7 +19,11 @@ export async function DELETE(
   try {
     await dbConnect();
     const { id } = await params;
-    const entry = await PrintHistory.findById(id);
+    // Filter on _deletedAt: null so a retry / double-click / client-retry
+    // after a timeout doesn't re-run the refund loop on an already
+    // tombstoned entry. Without this, each repeat call would refund the
+    // spool weight again and inflate inventory totals.
+    const entry = await PrintHistory.findOne({ _id: id, _deletedAt: null });
     if (!entry) {
       return errorResponse("Not found", 404);
     }
@@ -66,7 +70,15 @@ export async function DELETE(
       await filament.save();
     }
 
-    await PrintHistory.deleteOne({ _id: id });
+    // Soft-delete by setting _deletedAt. Hard `deleteOne` would let a peer
+    // sync resurrect the row from the other DB on the next cycle —
+    // syncCollection treats "missing on one side" as pull/push, not delete,
+    // and only propagates deletes via the _deletedAt tombstone. Same model
+    // the rest of the synced collections already use.
+    await PrintHistory.updateOne(
+      { _id: id },
+      { $set: { _deletedAt: new Date() } },
+    );
     return NextResponse.json({ message: "Deleted and refunded" });
   } catch (err) {
     return errorResponse("Failed to delete print history", 500, getErrorMessage(err));

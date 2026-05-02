@@ -415,6 +415,61 @@ describe("print-history DELETE (undo)", () => {
     const res = await deletePrintHistory(delReq(fakeId), { params: Promise.resolve({ id: fakeId }) });
     expect(res.status).toBe(404);
   });
+
+  it("is idempotent — a repeat DELETE on a tombstoned entry returns 404 and doesn't double-refund", async () => {
+    // Codex round-2 P1: switching to soft-delete left the door open for
+    // a retry / double-click / client retry after timeout to re-run the
+    // refund loop. Each repeat would add u.grams back to the spool,
+    // inflating inventory. The handler now filters findOne on
+    // _deletedAt: null so the second call short-circuits to 404.
+    const f = await Filament.create({
+      name: "Idempotent",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ label: "", totalWeight: 1000 }],
+    });
+    const job = await postJob(f, "double-click", 100);
+
+    const first = await deletePrintHistory(delReq(job._id), { params: Promise.resolve({ id: job._id }) });
+    expect(first.status).toBe(200);
+    const afterFirst = await Filament.findById(f._id);
+    expect(afterFirst.spools[0].totalWeight).toBe(1000); // refunded once
+
+    const second = await deletePrintHistory(delReq(job._id), { params: Promise.resolve({ id: job._id }) });
+    expect(second.status).toBe(404);
+    const afterSecond = await Filament.findById(f._id);
+    // Critical: weight unchanged after the second call. Without the
+    // _deletedAt filter this would be 1100 (refund applied twice).
+    expect(afterSecond.spools[0].totalWeight).toBe(1000);
+  });
+
+  it("soft-deletes the PrintHistory row (sets _deletedAt) so peer sync can propagate", async () => {
+    // Hard delete would let syncCollection resurrect the row from the
+    // other DB on the next cycle (it treats missing rows as
+    // pull-or-push, only respecting deletes via the _deletedAt
+    // tombstone). Refund still happens; only the row stays.
+    const f = await Filament.create({
+      name: "Soft Delete Check",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ label: "", totalWeight: 1000 }],
+    });
+    const job = await postJob(f, "soft", 100);
+
+    const delRes = await deletePrintHistory(delReq(job._id), { params: Promise.resolve({ id: job._id }) });
+    expect(delRes.status).toBe(200);
+
+    const tombstone = await PrintHistory.findById(job._id);
+    expect(tombstone).not.toBeNull();
+    expect(tombstone._deletedAt).toBeInstanceOf(Date);
+    // Refund still happened
+    const refunded = await Filament.findById(f._id);
+    expect(refunded.spools[0].totalWeight).toBe(1000);
+  });
 });
 
 describe("analytics GET — double-counting regression", () => {

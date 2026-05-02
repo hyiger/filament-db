@@ -72,12 +72,15 @@ interface SyncResult {
 /**
  * Bidirectional sync engine between local MongoDB and Atlas.
  * Uses last-write-wins conflict resolution based on updatedAt timestamps.
- * Nozzles, printers, and locations are synced first so filaments (and their
- * embedded spools) can have their references remapped onto the target DB's IDs.
+ * Nozzles, printers, locations, and bedtypes are synced first so filaments
+ * (and their embedded spools) can have their references remapped onto the
+ * target DB's IDs. Printhistories and sharedcatalogs sync after filaments.
  *
- * NOTE: bedtypes, printhistory, and sharedcatalogs are NOT synced yet — they
- * were added in v1.11 alongside locations and have the same gap. They'll need
- * the same treatment when their data starts diverging across desktops.
+ * Known limitation: spool subdocuments inside Filament don't have stable
+ * cross-side identifiers. Anything that references a spool by id —
+ * printer.amsSlots[].spoolId, printhistory.usage[].spoolId — clears that
+ * id during cross-side remap. Per-filament gram totals still reconcile;
+ * per-spool attribution is dropped pending a spool-syncId migration.
  */
 export class SyncService extends EventEmitter {
   private localUri: string;
@@ -222,6 +225,21 @@ export class SyncService extends EventEmitter {
         localDb, remoteDb, localLocationBySyncId, remoteLocationBySyncId,
       );
 
+      // Sync bedtypes before filaments so calibrations[].bedType can be
+      // remapped. Same partial-unique-name index trap as locations — bed
+      // types existed before sync was added in this collection set, and
+      // duplicate names on first sync would E11000 the cycle. Reconcile
+      // by name first to unify the syncIds.
+      this.updateStatus({ progress: "Syncing bed types..." });
+      await this.reconcileBedTypesByName(localDb, remoteDb);
+      const bedTypeResult = await this.syncCollection(localDb, remoteDb, "bedtypes");
+
+      // Build bedType syncId→ID maps for filament calibration remap
+      const localBedTypes = await localDb.collection("bedtypes").find({ _deletedAt: null }).toArray();
+      const remoteBedTypes = await remoteDb.collection("bedtypes").find({ _deletedAt: null }).toArray();
+      const localBedTypeBySyncId = new Map(localBedTypes.filter(b => b.syncId).map(b => [b.syncId as string, b._id]));
+      const remoteBedTypeBySyncId = new Map(remoteBedTypes.filter(b => b.syncId).map(b => [b.syncId as string, b._id]));
+
       // Backfill filament syncIds before building maps (syncCollection does this too, but we need maps first)
       await this.backfillSyncIds(localDb.collection("filaments"));
       await this.backfillSyncIds(remoteDb.collection("filaments"));
@@ -255,13 +273,15 @@ export class SyncService extends EventEmitter {
         remoteFilamentSnapshot.set(f._id.toString(), t ?? null);
       }
 
-      // Sync filaments with nozzle, printer, parent, and spool-location remapping
+      // Sync filaments with nozzle, printer, parent, spool-location, and
+      // bedType remapping
       this.updateStatus({ progress: "Syncing filaments..." });
       const filamentTransform = this.buildFilamentRefsTransform(
         localNozzleBySyncId, remoteNozzleBySyncId,
         localPrinterBySyncId, remotePrinterBySyncId,
         localFilamentBySyncId, remoteFilamentBySyncId,
         localLocationBySyncId, remoteLocationBySyncId,
+        localBedTypeBySyncId, remoteBedTypeBySyncId,
       );
       const filamentResult = await this.syncCollection(
         localDb, remoteDb, "filaments",
@@ -281,7 +301,54 @@ export class SyncService extends EventEmitter {
         localFilamentSnapshot, remoteFilamentSnapshot,
       );
 
-      const results = [nozzleResult, printerResult, locationResult, filamentResult];
+      // Rebuild filament syncId maps now that filament sync has settled —
+      // both the printer amsSlots repair below and the print-history
+      // transform need ids that exist on both sides post-sync.
+      const lFilPost = await localDb.collection("filaments").find({}).toArray();
+      const rFilPost = await remoteDb.collection("filaments").find({}).toArray();
+      const localFilPostBySyncId = new Map(lFilPost.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
+      const remoteFilPostBySyncId = new Map(rFilPost.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
+
+      // Repair printer amsSlots[].filamentId refs. Printers sync runs
+      // BEFORE filaments to break the calibrations[].printer ↔
+      // amsSlots[].filamentId cycle, but that means the printer transform
+      // can't remap amsSlots into filament ids that don't yet exist on
+      // the target side. Patch them in-place now via the post-sync
+      // filament syncId maps. amsSlots[].spoolId can't be remapped at
+      // all without spool syncIds (a separate schema migration); it gets
+      // cleared if the parent filamentId reference itself can't be
+      // resolved, otherwise left alone.
+      await this.repairPrinterAmsSlots(
+        localDb, remoteDb,
+        localFilPostBySyncId, remoteFilPostBySyncId,
+      );
+
+      // Sync print history. Top-level job ledger that references
+      // printerId + usage[].filamentId. usage[].spoolId can't be remapped
+      // (no spool syncIds) and is cleared on insert — the job total still
+      // reconciles via filamentId + grams; the per-spool attribution is
+      // dropped pending the spool-syncId migration.
+      this.updateStatus({ progress: "Syncing print history..." });
+      const printHistoryTransform = this.buildPrintHistoryTransform(
+        localPrinterBySyncId, remotePrinterBySyncId,
+        localFilPostBySyncId, remoteFilPostBySyncId,
+      );
+      const printHistoryResult = await this.syncCollection(
+        localDb, remoteDb, "printhistories", printHistoryTransform,
+      );
+
+      // Sync shared catalogs. Payload is denormalised at publish time so
+      // there are no outbound refs to remap — straight syncId-keyed
+      // last-write-wins between the two sides.
+      this.updateStatus({ progress: "Syncing shared catalogs..." });
+      const sharedCatalogResult = await this.syncCollection(
+        localDb, remoteDb, "sharedcatalogs",
+      );
+
+      const results = [
+        nozzleResult, printerResult, locationResult, bedTypeResult,
+        filamentResult, printHistoryResult, sharedCatalogResult,
+      ];
       this.updateStatus({
         state: "idle",
         lastSyncAt: new Date().toISOString(),
@@ -469,8 +536,35 @@ export class SyncService extends EventEmitter {
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
   ): Promise<void> {
-    const localCol = localDb.collection("locations");
-    const remoteCol = remoteDb.collection("locations");
+    await this.reconcileByName(localDb, remoteDb, "locations");
+  }
+
+  /**
+   * Same name-collision resolver used for locations, applied to bedtypes.
+   * BedType has a partial-unique index on `name` (non-deleted only), so two
+   * desktops that independently created "Textured PEI" before bedtype sync
+   * existed would E11000 on the very first sync push.
+   */
+  private async reconcileBedTypesByName(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+  ): Promise<void> {
+    await this.reconcileByName(localDb, remoteDb, "bedtypes");
+  }
+
+  /**
+   * Generic name-keyed syncId reconciliation. Used for any collection
+   * with a partial-unique-name index where the same logical row may have
+   * been created independently on both sides before sync was added —
+   * locations (v1.11.3) and bedtypes (this PR).
+   */
+  private async reconcileByName(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+    collectionName: string,
+  ): Promise<void> {
+    const localCol = localDb.collection(collectionName);
+    const remoteCol = remoteDb.collection(collectionName);
     const localActive = await localCol.find({ _deletedAt: null }).toArray();
     const remoteActive = await remoteCol.find({ _deletedAt: null }).toArray();
 
@@ -490,7 +584,7 @@ export class SyncService extends EventEmitter {
       if (localSyncId !== winningSyncId) {
         const conflict = await localCol.findOne({ syncId: winningSyncId, _id: { $ne: local._id } });
         if (conflict) {
-          console.warn(`reconcileLocationsByName: local syncId conflict for "${local.name}" — skipping`);
+          console.warn(`reconcileByName(${collectionName}): local syncId conflict for "${local.name}" — skipping`);
           continue;
         }
         await localCol.updateOne({ _id: local._id }, { $set: { syncId: winningSyncId } });
@@ -498,7 +592,7 @@ export class SyncService extends EventEmitter {
       if (remoteSyncId !== winningSyncId) {
         const conflict = await remoteCol.findOne({ syncId: winningSyncId, _id: { $ne: remote._id } });
         if (conflict) {
-          console.warn(`reconcileLocationsByName: remote syncId conflict for "${local.name}" — skipping`);
+          console.warn(`reconcileByName(${collectionName}): remote syncId conflict for "${local.name}" — skipping`);
           continue;
         }
         await remoteCol.updateOne({ _id: remote._id }, { $set: { syncId: winningSyncId } });
@@ -796,6 +890,8 @@ export class SyncService extends EventEmitter {
     remoteFilamentBySyncId: Map<string, ObjectId>,
     localLocationBySyncId: Map<string, ObjectId>,
     remoteLocationBySyncId: Map<string, ObjectId>,
+    localBedTypeBySyncId: Map<string, ObjectId>,
+    remoteBedTypeBySyncId: Map<string, ObjectId>,
   ): (doc: Document, direction: "toLocal" | "toRemote") => Document {
     // Build reverse maps once (source ID → syncId) for both directions
     const buildReverse = (map: Map<string, ObjectId>) => {
@@ -814,6 +910,8 @@ export class SyncService extends EventEmitter {
     const remoteFilamentIdToSyncId = buildReverse(remoteFilamentBySyncId);
     const localLocationIdToSyncId = buildReverse(localLocationBySyncId);
     const remoteLocationIdToSyncId = buildReverse(remoteLocationBySyncId);
+    const localBedTypeIdToSyncId = buildReverse(localBedTypeBySyncId);
+    const remoteBedTypeIdToSyncId = buildReverse(remoteBedTypeBySyncId);
 
     return (doc: Document, direction: "toLocal" | "toRemote"): Document => {
       const sourceNozzleIdToSyncId = direction === "toLocal" ? remoteNozzleIdToSyncId : localNozzleIdToSyncId;
@@ -822,6 +920,8 @@ export class SyncService extends EventEmitter {
       const targetPrinterMap = direction === "toLocal" ? localPrinterBySyncId : remotePrinterBySyncId;
       const sourceLocationIdToSyncId = direction === "toLocal" ? remoteLocationIdToSyncId : localLocationIdToSyncId;
       const targetLocationMap = direction === "toLocal" ? localLocationBySyncId : remoteLocationBySyncId;
+      const sourceBedTypeIdToSyncId = direction === "toLocal" ? remoteBedTypeIdToSyncId : localBedTypeIdToSyncId;
+      const targetBedTypeMap = direction === "toLocal" ? localBedTypeBySyncId : remoteBedTypeBySyncId;
 
       // Remap compatibleNozzles
       if (Array.isArray(doc.compatibleNozzles)) {
@@ -833,7 +933,8 @@ export class SyncService extends EventEmitter {
           .filter(Boolean);
       }
 
-      // Remap calibrations.nozzle and calibrations.printer
+      // Remap calibrations.nozzle, calibrations.printer, and
+      // calibrations.bedType
       if (Array.isArray(doc.calibrations)) {
         doc.calibrations = doc.calibrations
           .map((cal: Document) => {
@@ -849,6 +950,15 @@ export class SyncService extends EventEmitter {
               const printerSyncId = sourcePrinterIdToSyncId.get(cal.printer.toString());
               const targetPrinterId = printerSyncId ? targetPrinterMap.get(printerSyncId) : null;
               remapped.printer = targetPrinterId || null;
+            }
+
+            // Remap bedType reference if present. An unknown bedType on the
+            // target side clears to null rather than persisting a wrong-side
+            // ObjectId — same model as printer/location.
+            if (cal.bedType) {
+              const bedTypeSyncId = sourceBedTypeIdToSyncId.get(cal.bedType.toString());
+              const targetBedTypeId = bedTypeSyncId ? targetBedTypeMap.get(bedTypeSyncId) : null;
+              remapped.bedType = targetBedTypeId || null;
             }
 
             return remapped;
@@ -881,6 +991,155 @@ export class SyncService extends EventEmitter {
 
       return doc;
     };
+  }
+
+  /**
+   * Build a transform for printhistories. Remaps printerId and
+   * usage[].filamentId via syncId. usage[].spoolId is cleared on
+   * insert/update because spool subdocuments don't have stable
+   * cross-side identifiers (no spool syncIds yet — separate schema
+   * migration). The job's per-filament gram totals are still correct
+   * after the remap, but per-spool attribution is lost.
+   */
+  private buildPrintHistoryTransform(
+    localPrinterBySyncId: Map<string, ObjectId>,
+    remotePrinterBySyncId: Map<string, ObjectId>,
+    localFilamentBySyncId: Map<string, ObjectId>,
+    remoteFilamentBySyncId: Map<string, ObjectId>,
+  ): (doc: Document, direction: "toLocal" | "toRemote") => Document {
+    const buildReverse = (map: Map<string, ObjectId>) => {
+      const reverse = new Map<string, string>();
+      for (const [syncId, id] of map) reverse.set(id.toString(), syncId);
+      return reverse;
+    };
+
+    const localPrinterIdToSyncId = buildReverse(localPrinterBySyncId);
+    const remotePrinterIdToSyncId = buildReverse(remotePrinterBySyncId);
+    const localFilamentIdToSyncId = buildReverse(localFilamentBySyncId);
+    const remoteFilamentIdToSyncId = buildReverse(remoteFilamentBySyncId);
+
+    return (doc: Document, direction: "toLocal" | "toRemote"): Document => {
+      const sourcePrinterIdToSyncId = direction === "toLocal" ? remotePrinterIdToSyncId : localPrinterIdToSyncId;
+      const targetPrinterMap = direction === "toLocal" ? localPrinterBySyncId : remotePrinterBySyncId;
+      const sourceFilamentIdToSyncId = direction === "toLocal" ? remoteFilamentIdToSyncId : localFilamentIdToSyncId;
+      const targetFilamentMap = direction === "toLocal" ? localFilamentBySyncId : remoteFilamentBySyncId;
+
+      if (doc.printerId) {
+        const printerSyncId = sourcePrinterIdToSyncId.get(doc.printerId.toString());
+        doc.printerId = (printerSyncId ? targetPrinterMap.get(printerSyncId) : null) || null;
+      }
+
+      if (Array.isArray(doc.usage)) {
+        doc.usage = doc.usage
+          .map((entry: Document) => {
+            if (!entry.filamentId) return null; // schema requires filamentId
+            const filSyncId = sourceFilamentIdToSyncId.get(entry.filamentId.toString());
+            const targetFilId = filSyncId ? targetFilamentMap.get(filSyncId) : null;
+            if (!targetFilId) return null; // drop usage entry with unresolvable filament
+            return {
+              ...entry,
+              filamentId: targetFilId,
+              // Clear spoolId — no stable cross-side spool ids; per-spool
+              // attribution is dropped pending the spool-syncId migration.
+              spoolId: null,
+            };
+          })
+          .filter(Boolean);
+      }
+
+      return doc;
+    };
+  }
+
+  /**
+   * After the filament sync settles, walk both sides' printers and patch
+   * each amsSlots[].filamentId so it points at a filament that actually
+   * exists on this side. The forward path is necessary because printer
+   * sync runs BEFORE filament sync (to break the calibrations.printer ↔
+   * amsSlots.filamentId cycle): on push, the remote target may not yet
+   * have the filament id we're handing it; on pull, our local map didn't
+   * have the new filament when the printer transform ran.
+   *
+   * Resolution model:
+   *   - filamentId points at a current valid filament on this side → leave.
+   *   - filamentId is null → leave (intentional empty slot).
+   *   - filamentId is set but dangles → look up by other-side syncId and
+   *     swap in the correct local id; if the syncId can't be projected
+   *     (filament absent on other side too), clear to null. spoolId
+   *     follows the same fate as its parent filamentId — cleared if the
+   *     filamentId is repaired or cleared, since per-spool attribution
+   *     can't survive a filamentId rewrite without spool syncIds.
+   *
+   * Does NOT bump updatedAt — same rationale as the other repair passes.
+   */
+  private async repairPrinterAmsSlots(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+    localFilamentBySyncId: Map<string, ObjectId>,
+    remoteFilamentBySyncId: Map<string, ObjectId>,
+  ): Promise<void> {
+    const localFilIds = new Set(Array.from(localFilamentBySyncId.values()).map((id) => id.toString()));
+    const remoteFilIds = new Set(Array.from(remoteFilamentBySyncId.values()).map((id) => id.toString()));
+
+    const localFilIdToSyncId = new Map<string, string>();
+    for (const [syncId, id] of localFilamentBySyncId) localFilIdToSyncId.set(id.toString(), syncId);
+    const remoteFilIdToSyncId = new Map<string, string>();
+    for (const [syncId, id] of remoteFilamentBySyncId) remoteFilIdToSyncId.set(id.toString(), syncId);
+
+    await this.repairSidePrinterAmsSlots(localDb, localFilIds, localFilamentBySyncId, remoteFilIdToSyncId, "local");
+    await this.repairSidePrinterAmsSlots(remoteDb, remoteFilIds, remoteFilamentBySyncId, localFilIdToSyncId, "remote");
+  }
+
+  private async repairSidePrinterAmsSlots(
+    db: ReturnType<MongoClient["db"]>,
+    sideValidFilIds: Set<string>,
+    sideFilSyncIdToId: Map<string, ObjectId>,
+    otherSideFilIdToSyncId: Map<string, string>,
+    sideLabel: "local" | "remote",
+  ): Promise<void> {
+    // Use $elemMatch — the naive "amsSlots.filamentId": { $ne: null } would
+    // exclude any printer that has *any* slot with filamentId === null, even
+    // if a sibling slot is set (Mongo's array-positional matching makes
+    // negated equality match on whole-array, not per-element).
+    const printers = await db
+      .collection("printers")
+      .find({
+        _deletedAt: null,
+        amsSlots: { $elemMatch: { filamentId: { $ne: null } } },
+      })
+      .toArray();
+
+    let repaired = 0;
+    for (const p of printers) {
+      const slots: Document[] = Array.isArray(p.amsSlots) ? p.amsSlots : [];
+      let changed = false;
+      const newSlots = slots.map((slot) => {
+        if (!slot.filamentId) return slot;
+        const idStr = slot.filamentId.toString();
+        if (sideValidFilIds.has(idStr)) return slot; // already valid
+
+        const syncId = otherSideFilIdToSyncId.get(idStr);
+        const correctId = syncId ? sideFilSyncIdToId.get(syncId) : null;
+        if (!correctId) {
+          changed = true;
+          return { ...slot, filamentId: null, spoolId: null };
+        }
+        if (correctId.toString() === idStr) return slot;
+        changed = true;
+        // Filament repaired but spool can't be reliably mapped — clear it.
+        return { ...slot, filamentId: correctId, spoolId: null };
+      });
+      if (changed) {
+        await db.collection("printers").updateOne(
+          { _id: p._id },
+          { $set: { amsSlots: newSlots } },
+        );
+        repaired++;
+      }
+    }
+    if (repaired > 0) {
+      console.log(`repairPrinterAmsSlots: fixed ${repaired} ${sideLabel} printer(s)`);
+    }
   }
 
   destroy() {

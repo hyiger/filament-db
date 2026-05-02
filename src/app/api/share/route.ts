@@ -13,7 +13,7 @@ import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 export async function GET() {
   try {
     await dbConnect();
-    const catalogs = await SharedCatalog.find({})
+    const catalogs = await SharedCatalog.find({ _deletedAt: null })
       .select("slug title description expiresAt viewCount createdAt updatedAt")
       .sort({ createdAt: -1 })
       .lean();

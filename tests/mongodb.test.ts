@@ -42,6 +42,8 @@ describe("dbConnect", () => {
     (global as Record<string, unknown>).mongoose = {
       conn: null,
       promise: connectPromise,
+      uri: process.env.MONGODB_URI,
+      migrations: { instanceIds: false, sharedCatalogIndexes: false },
     };
 
     const result = await dbConnect();
@@ -71,7 +73,7 @@ describe("dbConnect", () => {
 
     // Reset cache to force migration to run again
     const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
-    cached.migrated = false;
+    cached.migrations = { instanceIds: false, sharedCatalogIndexes: false };
     cached.conn = null;
     cached.promise = null;
 
@@ -103,26 +105,61 @@ describe("dbConnect", () => {
     expect(result).toBeDefined();
   });
 
-  it("runs migration on first connect", async () => {
-    // Reset cache to force fresh connection
+  it("marks each migration complete on first successful connect", async () => {
     (global as Record<string, unknown>).mongoose = undefined;
 
     const result = await dbConnect();
     expect(result).toBeDefined();
-    // Migration should have run (cached.migrated = true)
-    const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
-    expect(cached.migrated).toBe(true);
+    const cached = (global as Record<string, unknown>).mongoose as {
+      migrations: { instanceIds: boolean; sharedCatalogIndexes: boolean };
+    };
+    expect(cached.migrations.instanceIds).toBe(true);
+    expect(cached.migrations.sharedCatalogIndexes).toBe(true);
   });
 
-  it("skips migration on subsequent connects", async () => {
+  it("skips migrations on subsequent connects once they've succeeded", async () => {
     (global as Record<string, unknown>).mongoose = undefined;
     await dbConnect();
 
-    // Second call should skip migration
-    const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
-    expect(cached.migrated).toBe(true);
+    const cached = (global as Record<string, unknown>).mongoose as {
+      migrations: { instanceIds: boolean; sharedCatalogIndexes: boolean };
+    };
+    expect(cached.migrations.instanceIds).toBe(true);
+    expect(cached.migrations.sharedCatalogIndexes).toBe(true);
 
     const result = await dbConnect();
     expect(result).toBeDefined();
+  });
+
+  it("retries a failed migration on the next connect (doesn't poison the cache)", async () => {
+    // Codex round-4 P2: a transient failure on backfillInstanceIds or
+    // syncIndexes used to set the single `migrated` flag and skip both
+    // migrations forever after. With per-migration flags, only the
+    // succeeded migration sticks; a failed one retries on the next call.
+    (global as Record<string, unknown>).mongoose = undefined;
+
+    // Force the SharedCatalog migration to throw on its first attempt.
+    const sharedCatalogMod = await import("@/models/SharedCatalog");
+    const SharedCatalog = sharedCatalogMod.default;
+    const syncIndexesSpy = vi
+      .spyOn(SharedCatalog, "syncIndexes")
+      .mockRejectedValueOnce(new Error("transient failure"));
+
+    try {
+      await dbConnect();
+      const cached = (global as Record<string, unknown>).mongoose as {
+        migrations: { instanceIds: boolean; sharedCatalogIndexes: boolean };
+      };
+      // The instanceIds backfill succeeded; the sharedCatalog migration didn't.
+      expect(cached.migrations.instanceIds).toBe(true);
+      expect(cached.migrations.sharedCatalogIndexes).toBe(false);
+
+      // Next call should retry the failed one — and now succeed.
+      await dbConnect();
+      expect(syncIndexesSpy).toHaveBeenCalledTimes(2);
+      expect(cached.migrations.sharedCatalogIndexes).toBe(true);
+    } finally {
+      syncIndexesSpy.mockRestore();
+    }
   });
 });

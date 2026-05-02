@@ -21,8 +21,10 @@ export async function GET(
     // save) races under concurrent viewers: each reader sees the same count
     // and increments it by one, so simultaneous hits silently drop updates.
     // findOneAndUpdate with $inc is one round-trip and collision-safe.
+    // Filter on _deletedAt: null so an unpublished (soft-deleted) slug
+    // returns 404 rather than 200.
     const catalog = await SharedCatalog.findOneAndUpdate(
-      { slug },
+      { slug, _deletedAt: null },
       { $inc: { viewCount: 1 } },
       { returnDocument: "after" },
     );
@@ -60,8 +62,16 @@ export async function DELETE(
   try {
     await dbConnect();
     const { slug } = await params;
-    const res = await SharedCatalog.deleteOne({ slug });
-    if (res.deletedCount === 0) {
+    // Soft-delete instead of hard `deleteOne` so the unpublish actually
+    // sticks across peers. syncCollection treats a missing row as
+    // "pull/push back" rather than "propagate the delete" — without a
+    // _deletedAt tombstone the next sync from the other peer would
+    // resurrect the catalog and re-expose the link the user took down.
+    const res = await SharedCatalog.updateOne(
+      { slug, _deletedAt: null },
+      { $set: { _deletedAt: new Date() } },
+    );
+    if (res.matchedCount === 0) {
       return errorResponse("Shared catalog not found", 404);
     }
     return NextResponse.json({ message: "Unpublished" });
