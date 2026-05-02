@@ -25,7 +25,88 @@ export async function GET(request: NextRequest) {
     if (vendor) filter.vendor = vendor;
     if (search) filter.name = { $regex: escapeRegex(search), $options: "i" };
 
-    const filaments = await Filament.find(filter).sort({ name: 1 }).lean();
+    // Project to FilamentSummary shape: drop heavy spool subfields
+    // (photoDataUrl, usageHistory, dryCycles), keep only the temperatures
+    // the list renders, and surface `hasCalibrations` so the noCalibration
+    // quick filter has a signal it can act on without fetching every doc.
+    // The full document is still available via /api/filaments/{id}.
+    //
+    // tdsUrl is included on top of FilamentSummary because FilamentForm
+    // (src/app/filaments/FilamentForm.tsx) calls this endpoint with
+    // ?vendor=... to derive vendor-keyed TDS suggestions and reads
+    // f.tdsUrl off each result. Dropping the field silently empties the
+    // suggestion list on create/edit.
+    const filaments = await Filament.aggregate([
+      { $match: filter },
+      { $sort: { name: 1 } },
+      // Look up parent's calibrations so hasCalibrations reflects the
+      // *effective* state rather than the variant's own array. Variants
+      // with empty calibrations inherit from their parent (see
+      // resolveFilament in src/lib/resolveFilament.ts), so projecting
+      // only the variant's own array would falsely flag inheriting
+      // variants under the noCalibration filter.
+      {
+        $lookup: {
+          from: "filaments",
+          localField: "parentId",
+          foreignField: "_id",
+          as: "_parent",
+          pipeline: [{ $project: { calibrations: 1 } }],
+        },
+      },
+      {
+        $project: {
+          name: 1,
+          vendor: 1,
+          type: 1,
+          color: 1,
+          cost: 1,
+          density: 1,
+          parentId: 1,
+          spoolWeight: 1,
+          netFilamentWeight: 1,
+          totalWeight: 1,
+          lowStockThreshold: 1,
+          tdsUrl: 1,
+          "temperatures.nozzle": 1,
+          "temperatures.bed": 1,
+          hasCalibrations: {
+            $or: [
+              { $gt: [{ $size: { $ifNull: ["$calibrations", []] } }, 0] },
+              {
+                $gt: [
+                  {
+                    $size: {
+                      $ifNull: [
+                        { $arrayElemAt: ["$_parent.calibrations", 0] },
+                        [],
+                      ],
+                    },
+                  },
+                  0,
+                ],
+              },
+            ],
+          },
+          spools: {
+            $map: {
+              input: { $ifNull: ["$spools", []] },
+              as: "s",
+              in: {
+                _id: "$$s._id",
+                // PrinterForm's AMS slot picker renders each option as
+                // `s.label || s._id.slice(-4)`, so dropping label degrades
+                // every choice to a 4-char id and breaks multi-spool
+                // identification.
+                label: "$$s.label",
+                totalWeight: "$$s.totalWeight",
+                retired: "$$s.retired",
+              },
+            },
+          },
+        },
+      },
+    ]);
     return NextResponse.json(filaments);
   } catch (err) {
     return errorResponse("Failed to fetch filaments", 500, getErrorMessage(err));

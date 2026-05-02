@@ -152,4 +152,9 @@ export interface FilamentSummary {
     nozzle: number | null;
     bed: number | null;
   };
+  /** True when the filament has at least one nozzle calibration. Used by
+   * the noCalibration quick filter on the list page; computed in the
+   * aggregation projection so the full calibrations array doesn't need
+   * to ship with every list row. */
+  hasCalibrations?: boolean;
 }

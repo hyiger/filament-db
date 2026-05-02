@@ -299,6 +299,7 @@ export default function Home() {
     for (const f of filaments) {
       if (isLowStock(f)) counts.lowStock++;
       if ((f.spools?.length ?? 0) > 0) counts.hasSpools++;
+      if (!f.hasCalibrations) counts.noCalibration++;
     }
     return counts;
   }, [filaments]);
@@ -308,8 +309,7 @@ export default function Home() {
     return filaments.filter((f) => {
       if (quickFilter === "lowStock") return isLowStock(f);
       if (quickFilter === "hasSpools") return (f.spools?.length ?? 0) > 0;
-      // noCalibration can't be determined from FilamentSummary alone —
-      // keeping the chip for future use (detail API would be needed).
+      if (quickFilter === "noCalibration") return !f.hasCalibrations;
       return true;
     });
   }, [filaments, quickFilter]);
