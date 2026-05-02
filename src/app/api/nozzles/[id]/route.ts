@@ -3,7 +3,7 @@ import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
 import Filament from "@/models/Filament";
 import Printer from "@/models/Printer";
-import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 export async function GET(
   _request: NextRequest,
@@ -91,7 +91,7 @@ export async function PUT(
 
     return NextResponse.json(nozzle);
   } catch (err) {
-    return errorResponse("Failed to update nozzle", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to update nozzle");
   }
 }
 
@@ -140,6 +140,6 @@ export async function DELETE(
     }
     return NextResponse.json({ message: "Deleted" });
   } catch (err) {
-    return errorResponse("Failed to delete nozzle", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to delete nozzle");
   }
 }

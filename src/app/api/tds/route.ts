@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractFromTds, extractFromTdsContent, validateApiKey, type AiProvider } from "@/lib/tdsExtractor";
-import { errorResponse, getErrorMessage, MAX_UPLOAD_SIZE } from "@/lib/apiErrorHandler";
+import { errorResponse, getErrorMessage, isClientInputErrorMessage, MAX_UPLOAD_SIZE } from "@/lib/apiErrorHandler";
 
 /**
  * In-memory API key/provider store for web mode.
@@ -123,7 +123,8 @@ export async function POST(request: NextRequest) {
       const result = await extractFromTdsContent(buffer, mimeType, apiKey, provider);
 
       if (!result.success) {
-        return errorResponse(result.error || "Extraction failed", 502);
+        const msg = result.error || "Extraction failed";
+        return errorResponse(msg, isClientInputErrorMessage(msg) ? 400 : 502);
       }
 
       return NextResponse.json(result);
@@ -156,7 +157,8 @@ export async function POST(request: NextRequest) {
     const result = await extractFromTds(url, apiKey, provider);
 
     if (!result.success) {
-      return errorResponse(result.error || "Extraction failed", 502);
+      const msg = result.error || "Extraction failed";
+      return errorResponse(msg, isClientInputErrorMessage(msg) ? 400 : 502);
     }
 
     return NextResponse.json(result);

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import BedType from "@/models/BedType";
-import { getErrorMessage, errorResponse, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 
 export async function GET(request: NextRequest) {
   try {
@@ -43,6 +43,6 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const dupResponse = handleDuplicateKeyError(err, "bed type");
     if (dupResponse) return dupResponse;
-    return errorResponse("Failed to create bed type", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to create bed type");
   }
 }

@@ -5,7 +5,7 @@ import Nozzle from "@/models/Nozzle";
 import "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
-import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 /**
  * GET /api/filaments/{id}
@@ -151,7 +151,7 @@ export async function PUT(
     }
     return NextResponse.json(filament);
   } catch (err) {
-    return errorResponse("Failed to update filament", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to update filament");
   }
 }
 
@@ -326,7 +326,7 @@ export async function POST(
       filamentId: filament._id,
     });
   } catch (err) {
-    return errorResponse("Failed to sync filament", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to sync filament");
   }
 }
 
@@ -356,6 +356,6 @@ export async function DELETE(
     }
     return NextResponse.json({ message: "Deleted" });
   } catch (err) {
-    return errorResponse("Failed to delete filament", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to delete filament");
   }
 }

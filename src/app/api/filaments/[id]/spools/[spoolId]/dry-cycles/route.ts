@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
-import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 /**
  * POST /api/filaments/{id}/spools/{spoolId}/dry-cycles — log a dry cycle.
@@ -58,6 +58,6 @@ export async function POST(
     }
     return NextResponse.json(filament, { status: 201 });
   } catch (err) {
-    return errorResponse("Failed to log dry cycle", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to log dry cycle");
   }
 }

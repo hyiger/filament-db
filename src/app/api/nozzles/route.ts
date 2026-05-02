@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
-import { getErrorMessage, errorResponse, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 
 export async function GET(request: NextRequest) {
   try {
@@ -87,6 +87,6 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const dupResponse = handleDuplicateKeyError(err, "nozzle");
     if (dupResponse) return dupResponse;
-    return errorResponse("Failed to create nozzle", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to create nozzle");
   }
 }

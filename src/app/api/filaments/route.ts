@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
-import { getErrorMessage, errorResponse, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -167,6 +167,6 @@ export async function POST(request: NextRequest) {
   } catch (err: unknown) {
     const dupResponse = handleDuplicateKeyError(err, "filament");
     if (dupResponse) return dupResponse;
-    return errorResponse("Failed to create filament", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to create filament");
   }
 }
