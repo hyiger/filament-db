@@ -855,6 +855,42 @@ describe("Filament Model — v1.11 spool fields", () => {
     ).rejects.toThrow();
   });
 
+  it("accepts http(s) tdsUrl values and rejects non-http schemes", async () => {
+    const ok = await Filament.create({
+      name: "TDS HTTPS",
+      vendor: "Test",
+      type: "PLA",
+      tdsUrl: "https://example.com/tds.pdf",
+    });
+    expect(ok.tdsUrl).toBe("https://example.com/tds.pdf");
+
+    // null and empty string are still allowed (field is optional)
+    const empty = await Filament.create({
+      name: "TDS Empty",
+      vendor: "Test",
+      type: "PLA",
+      tdsUrl: "",
+    });
+    expect(empty.tdsUrl).toBe("");
+
+    for (const bad of [
+      "javascript:alert(1)",
+      "file:///etc/passwd",
+      "data:text/html,<script>",
+      "ftp://example.com",
+      "not a url",
+    ]) {
+      await expect(
+        Filament.create({
+          name: `Bad TDS ${bad}`,
+          vendor: "Test",
+          type: "PLA",
+          tdsUrl: bad,
+        }),
+      ).rejects.toThrow(/tdsUrl/);
+    }
+  });
+
   it("stores lowStockThreshold and rejects negatives", async () => {
     const filament = await Filament.create({
       name: "Low Stock",

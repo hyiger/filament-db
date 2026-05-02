@@ -276,7 +276,22 @@ const FilamentSchema = new Schema<IFilament>(
     maxPrintSpeed: { type: Number, default: null },
     spoolType: { type: String, default: null },
     optTags: { type: [Number], default: [] },
-    tdsUrl: { type: String, default: null },
+    tdsUrl: {
+      type: String,
+      default: null,
+      validate: {
+        validator: (v: string | null) => {
+          if (v == null || v === "") return true;
+          try {
+            const proto = new URL(v).protocol;
+            return proto === "http:" || proto === "https:";
+          } catch {
+            return false;
+          }
+        },
+        message: "tdsUrl must be a valid http(s) URL",
+      },
+    },
     inherits: { type: String, default: null },
     parentId: { type: Schema.Types.ObjectId, ref: "Filament", default: null, index: true },
     settings: { type: Schema.Types.Mixed, default: {} },
