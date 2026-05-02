@@ -19,7 +19,11 @@ export async function DELETE(
   try {
     await dbConnect();
     const { id } = await params;
-    const entry = await PrintHistory.findById(id);
+    // Filter on _deletedAt: null so a retry / double-click / client-retry
+    // after a timeout doesn't re-run the refund loop on an already
+    // tombstoned entry. Without this, each repeat call would refund the
+    // spool weight again and inflate inventory totals.
+    const entry = await PrintHistory.findOne({ _id: id, _deletedAt: null });
     if (!entry) {
       return errorResponse("Not found", 404);
     }

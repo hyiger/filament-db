@@ -416,6 +416,35 @@ describe("print-history DELETE (undo)", () => {
     expect(res.status).toBe(404);
   });
 
+  it("is idempotent — a repeat DELETE on a tombstoned entry returns 404 and doesn't double-refund", async () => {
+    // Codex round-2 P1: switching to soft-delete left the door open for
+    // a retry / double-click / client retry after timeout to re-run the
+    // refund loop. Each repeat would add u.grams back to the spool,
+    // inflating inventory. The handler now filters findOne on
+    // _deletedAt: null so the second call short-circuits to 404.
+    const f = await Filament.create({
+      name: "Idempotent",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ label: "", totalWeight: 1000 }],
+    });
+    const job = await postJob(f, "double-click", 100);
+
+    const first = await deletePrintHistory(delReq(job._id), { params: Promise.resolve({ id: job._id }) });
+    expect(first.status).toBe(200);
+    const afterFirst = await Filament.findById(f._id);
+    expect(afterFirst.spools[0].totalWeight).toBe(1000); // refunded once
+
+    const second = await deletePrintHistory(delReq(job._id), { params: Promise.resolve({ id: job._id }) });
+    expect(second.status).toBe(404);
+    const afterSecond = await Filament.findById(f._id);
+    // Critical: weight unchanged after the second call. Without the
+    // _deletedAt filter this would be 1100 (refund applied twice).
+    expect(afterSecond.spools[0].totalWeight).toBe(1000);
+  });
+
   it("soft-deletes the PrintHistory row (sets _deletedAt) so peer sync can propagate", async () => {
     // Hard delete would let syncCollection resurrect the row from the
     // other DB on the next cycle (it treats missing rows as
