@@ -98,6 +98,33 @@ describe("GET /api/filaments — projection to FilamentSummary", () => {
     expect(cal).not.toHaveProperty("calibrations");
   });
 
+  it("includes tdsUrl in the projection so FilamentForm vendor suggestions still work", async () => {
+    // FilamentForm calls /api/filaments?vendor=... and reads tdsUrl off
+    // each row to populate vendor-keyed TDS suggestions. Codex flagged
+    // that dropping the field silently empties the suggestion list.
+    const Filament = (await import("@/models/Filament")).default;
+    await Filament.create({
+      name: "Has TDS",
+      vendor: "Test",
+      type: "PLA",
+      tdsUrl: "https://example.com/tds.pdf",
+    });
+    await Filament.create({
+      name: "No TDS",
+      vendor: "Test",
+      type: "PLA",
+    });
+
+    const res = await listFilaments(
+      new NextRequest("http://localhost/api/filaments?vendor=Test"),
+    );
+    const body = await res.json();
+    const withTds = body.find((f: { name: string }) => f.name === "Has TDS");
+    const withoutTds = body.find((f: { name: string }) => f.name === "No TDS");
+    expect(withTds.tdsUrl).toBe("https://example.com/tds.pdf");
+    expect(withoutTds.tdsUrl).toBeNull();
+  });
+
   it("preserves type/vendor filters across the projection", async () => {
     await seed();
     const res = await listFilaments(

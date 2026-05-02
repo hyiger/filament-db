@@ -30,6 +30,12 @@ export async function GET(request: NextRequest) {
     // the list renders, and surface `hasCalibrations` so the noCalibration
     // quick filter has a signal it can act on without fetching every doc.
     // The full document is still available via /api/filaments/{id}.
+    //
+    // tdsUrl is included on top of FilamentSummary because FilamentForm
+    // (src/app/filaments/FilamentForm.tsx) calls this endpoint with
+    // ?vendor=... to derive vendor-keyed TDS suggestions and reads
+    // f.tdsUrl off each result. Dropping the field silently empties the
+    // suggestion list on create/edit.
     const filaments = await Filament.aggregate([
       { $match: filter },
       { $sort: { name: 1 } },
@@ -46,6 +52,7 @@ export async function GET(request: NextRequest) {
           netFilamentWeight: 1,
           totalWeight: 1,
           lowStockThreshold: 1,
+          tdsUrl: 1,
           "temperatures.nozzle": 1,
           "temperatures.bed": 1,
           hasCalibrations: {
