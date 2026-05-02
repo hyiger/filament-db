@@ -165,7 +165,9 @@ export async function POST(request: NextRequest) {
       const purchaseDate = r.purchaseDate ? new Date(r.purchaseDate) : null;
       const openedDate = r.openedDate ? new Date(r.openedDate) : null;
 
-      const spoolFields = {
+      // Build the field set for a NEW spool — defaults fill in for any
+      // optional column the user didn't include.
+      const newSpoolFields = {
         label: unsanitizeCsvCell(r.label || ""),
         totalWeight: weight,
         lotNumber: r.lotNumber ? unsanitizeCsvCell(r.lotNumber) : null,
@@ -179,6 +181,13 @@ export async function POST(request: NextRequest) {
       // update the existing entry instead of appending a duplicate.
       // Without this, exporting and re-importing the same CSV silently
       // doubles the library's spool count (GH #159).
+      //
+      // For the UPDATE path, only assign the columns that were actually
+      // present in the CSV header — missing columns must leave existing
+      // metadata untouched. Otherwise a partial-column re-import (e.g.
+      // `filament,totalWeight,spoolId` to bulk-update weights) would
+      // silently null label / lotNumber / dates / location on every
+      // matched spool. Codex P1 on PR #172.
       const incomingSpoolId = (r.spoolId || "").trim();
       let action: "created" | "updated" = "created";
       if (incomingSpoolId) {
@@ -187,7 +196,19 @@ export async function POST(request: NextRequest) {
         // fields, the same workaround the push path below uses.
         const existing = (filament.spools as unknown as { id(id: string): Record<string, unknown> | null }).id(incomingSpoolId);
         if (existing) {
-          Object.assign(existing, spoolFields);
+          // totalWeight is required so it always counts as "present" — its
+          // empty-cell-means-null semantics are still honoured by `weight`.
+          const partialUpdate: Record<string, unknown> = { totalWeight: weight };
+          if ("label" in r) partialUpdate.label = unsanitizeCsvCell(r.label || "");
+          if ("lotNumber" in r) partialUpdate.lotNumber = r.lotNumber ? unsanitizeCsvCell(r.lotNumber) : null;
+          if ("purchaseDate" in r) {
+            partialUpdate.purchaseDate = purchaseDate && !isNaN(+purchaseDate) ? purchaseDate : null;
+          }
+          if ("openedDate" in r) {
+            partialUpdate.openedDate = openedDate && !isNaN(+openedDate) ? openedDate : null;
+          }
+          if ("location" in r) partialUpdate.locationId = locationId || null;
+          Object.assign(existing, partialUpdate);
           action = "updated";
         }
       }
@@ -196,7 +217,7 @@ export async function POST(request: NextRequest) {
         // the outer Filament schema is re-inferred — cast to unknown first
         // to avoid the direct `any` eslint rule while still satisfying the
         // push signature.
-        filament.spools.push(spoolFields as unknown as Parameters<typeof filament.spools.push>[0]);
+        filament.spools.push(newSpoolFields as unknown as Parameters<typeof filament.spools.push>[0]);
       }
       await filament.save();
       results.push({ row: i + 2, ok: true, action, filament: filament.name });

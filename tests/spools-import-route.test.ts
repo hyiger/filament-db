@@ -335,6 +335,68 @@ describe("/api/spools/import", () => {
       expect(fresh.spools[1].totalWeight).toBe(1000);
     });
 
+    it("partial-column update preserves existing metadata (Codex P1 PR #172)", async () => {
+      // Seed a spool with full metadata. A re-import that only includes
+      // filament/totalWeight/spoolId (e.g. bulk weight tweak) must NOT
+      // null out label/lotNumber/dates/location on the matched spool.
+      const f = await Filament.create({
+        name: "PETG Yellow",
+        vendor: "Test",
+        type: "PETG",
+        spools: [
+          {
+            label: "Yellow shelf #2",
+            totalWeight: 950,
+            lotNumber: "LOT-007",
+            purchaseDate: new Date("2025-01-15"),
+            openedDate: new Date("2025-02-01"),
+          },
+        ],
+      });
+      const spoolId = String(f.spools[0]._id);
+
+      const csv =
+        "filament,totalWeight,spoolId\n" +
+        `PETG Yellow,825,${spoolId}\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(1);
+      expect(body.updated).toBe(1);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(1);
+      const updated = fresh.spools[0];
+      expect(updated.totalWeight).toBe(825);                // updated
+      expect(updated.label).toBe("Yellow shelf #2");        // preserved
+      expect(updated.lotNumber).toBe("LOT-007");            // preserved
+      expect(updated.purchaseDate?.toISOString().slice(0, 10)).toBe("2025-01-15"); // preserved
+      expect(updated.openedDate?.toISOString().slice(0, 10)).toBe("2025-02-01");   // preserved
+    });
+
+    it("explicit empty cell on update path clears the field (round-trip with full export)", async () => {
+      // Distinguishing "column absent" from "column present + empty" is
+      // the round-trip contract: an exported CSV that includes label as
+      // an empty cell means the spool genuinely has no label, and the
+      // re-import should respect that.
+      const f = await Filament.create({
+        name: "TPU Pink",
+        vendor: "Test",
+        type: "TPU",
+        spools: [{ label: "Old label", totalWeight: 800 }],
+      });
+      const spoolId = String(f.spools[0]._id);
+
+      const csv =
+        "filament,totalWeight,label,spoolId\n" +
+        `TPU Pink,800,,${spoolId}\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.updated).toBe(1);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools[0].label).toBe(""); // explicitly cleared
+    });
+
     it("mixed CSV with one update and one create reports both counts correctly", async () => {
       const f = await Filament.create({
         name: "ASA Grey",
