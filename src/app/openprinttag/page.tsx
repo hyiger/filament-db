@@ -2,9 +2,21 @@
 
 import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
+import { List, type RowComponentProps } from "react-window";
 import { useToast } from "@/components/Toast";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { safeHttpUrl } from "@/lib/safeRenderUrl";
+
+// Row layout constants — the virtualized List needs known heights so it
+// can compute the absolute scroll position of every row without mounting
+// it. ~52px matches the rendered row height (one line of text + 8px y
+// padding × 2). Expanded rows include MaterialDetail which is a 3-column
+// property grid; 360px covers it on the typical layout, with overflow
+// allowed to scroll inside the row if a material has unusually many
+// fields. Pre-virtualization the page mounted ~11.7k rows / 200k DOM
+// nodes; this drops it to whatever fits in the viewport (GH #163).
+const ROW_HEIGHT_PX = 52;
+const EXPANDED_ROW_HEIGHT_PX = 412;
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -248,6 +260,106 @@ function MaterialDetail({ m }: { m: OPTMaterial }) {
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ── Virtualized row ────────────────────────────────────────────────────
+
+interface MaterialRowProps {
+  materials: OPTMaterial[];
+  selectedSlugs: Set<string>;
+  expandedSlug: string | null;
+  toggleSelect: (slug: string) => void;
+  setExpanded: (slug: string | null) => void;
+}
+
+/**
+ * One row in the virtualized list. react-window mounts a window of these
+ * (typically ~30–60 rows for a viewport-sized list with overscan) instead
+ * of all 11.7k materials. The `style` prop carries absolute positioning
+ * computed from the row index — must be applied to the outermost element.
+ */
+function MaterialRow({
+  index,
+  style,
+  materials,
+  selectedSlugs,
+  expandedSlug,
+  toggleSelect,
+  setExpanded,
+}: RowComponentProps<MaterialRowProps>) {
+  const m = materials[index];
+  if (!m) return null;
+  const isStub = m.completenessTier === "stub";
+  const isExpanded = expandedSlug === m.slug;
+
+  return (
+    <div style={style} className="border-b border-gray-100 dark:border-gray-800">
+      <div
+        className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors ${
+          selectedSlugs.has(m.slug) ? "bg-blue-50 dark:bg-blue-900/20" : ""
+        } ${isStub ? "opacity-50" : ""} ${isExpanded ? "bg-gray-50 dark:bg-gray-800/30" : ""}`}
+        style={{ height: ROW_HEIGHT_PX }}
+      >
+        {/* Checkbox — stops propagation so it doesn't toggle expand */}
+        <input
+          type="checkbox"
+          checked={selectedSlugs.has(m.slug)}
+          onChange={() => toggleSelect(m.slug)}
+          onClick={(e) => e.stopPropagation()}
+          className="rounded border-gray-300 dark:border-gray-600 flex-shrink-0"
+        />
+        <div
+          className="flex items-center gap-3 flex-1 min-w-0"
+          onClick={() => setExpanded(isExpanded ? null : m.slug)}
+        >
+          <ColorSwatch color={m.color} />
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={`font-medium text-sm truncate ${isStub ? "text-gray-500 dark:text-gray-400" : ""}`}>
+                {m.name}
+              </span>
+              <TypeBadge type={m.type} />
+            </div>
+            <div className="flex items-center gap-3 mt-0.5">
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                {m.brandName}
+              </span>
+              {m.nozzleTempMin != null && m.nozzleTempMax != null && (
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  {m.nozzleTempMin}–{m.nozzleTempMax}°C
+                </span>
+              )}
+              {m.density != null && (
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  {m.density} g/cm³
+                </span>
+              )}
+              {m.transmissionDistance != null && (
+                <span className="text-xs text-gray-400 dark:text-gray-500">
+                  TD {m.transmissionDistance}
+                </span>
+              )}
+            </div>
+          </div>
+          <CompletenessBar score={m.completenessScore} tier={m.completenessTier} />
+          <svg
+            className={`w-4 h-4 text-gray-400 dark:text-gray-500 flex-shrink-0 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+          </svg>
+        </div>
+      </div>
+      {isExpanded && (
+        <div style={{ height: EXPANDED_ROW_HEIGHT_PX - ROW_HEIGHT_PX, overflow: "auto" }}>
+          <MaterialDetail m={m} />
+        </div>
+      )}
     </div>
   );
 }
@@ -663,84 +775,41 @@ export default function OpenPrintTagBrowser() {
             )}
           </div>
 
-          {/* Material list */}
-          <div className="divide-y divide-gray-100 dark:divide-gray-800">
-            {filteredMaterials.length === 0 ? (
-              <div className="px-4 py-12 text-center text-gray-500 dark:text-gray-400">
-                {t("openprinttag.noResults")}
-              </div>
-            ) : (
-              filteredMaterials.map((m) => {
-                const isStub = m.completenessTier === "stub";
-                const isExpanded = expanded === m.slug;
-                return (
-                  <div key={m.slug}>
-                    <div
-                      className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors ${
-                        selected.has(m.slug) ? "bg-blue-50 dark:bg-blue-900/20" : ""
-                      } ${isStub ? "opacity-50" : ""} ${isExpanded ? "bg-gray-50 dark:bg-gray-800/30" : ""}`}
-                    >
-                      {/* Checkbox — stops propagation so it doesn't toggle expand */}
-                      <input
-                        type="checkbox"
-                        checked={selected.has(m.slug)}
-                        onChange={() => toggleSelect(m.slug)}
-                        onClick={(e) => e.stopPropagation()}
-                        className="rounded border-gray-300 dark:border-gray-600 flex-shrink-0"
-                      />
-                      {/* Clickable area — toggles expand */}
-                      <div
-                        className="flex items-center gap-3 flex-1 min-w-0"
-                        onClick={() => setExpanded(isExpanded ? null : m.slug)}
-                      >
-                        <ColorSwatch color={m.color} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className={`font-medium text-sm truncate ${isStub ? "text-gray-500 dark:text-gray-400" : ""}`}>
-                              {m.name}
-                            </span>
-                            <TypeBadge type={m.type} />
-                          </div>
-                          <div className="flex items-center gap-3 mt-0.5">
-                            <span className="text-xs text-gray-500 dark:text-gray-400">
-                              {m.brandName}
-                            </span>
-                            {m.nozzleTempMin != null && m.nozzleTempMax != null && (
-                              <span className="text-xs text-gray-400 dark:text-gray-500">
-                                {m.nozzleTempMin}–{m.nozzleTempMax}°C
-                              </span>
-                            )}
-                            {m.density != null && (
-                              <span className="text-xs text-gray-400 dark:text-gray-500">
-                                {m.density} g/cm³
-                              </span>
-                            )}
-                            {m.transmissionDistance != null && (
-                              <span className="text-xs text-gray-400 dark:text-gray-500">
-                                TD {m.transmissionDistance}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <CompletenessBar score={m.completenessScore} tier={m.completenessTier} />
-                        {/* Expand chevron */}
-                        <svg
-                          className={`w-4 h-4 text-gray-400 dark:text-gray-500 flex-shrink-0 transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
-                        </svg>
-                      </div>
-                    </div>
-                    {isExpanded && <MaterialDetail m={m} />}
-                  </div>
-                );
-              })
-            )}
-          </div>
+          {/* Material list — virtualized via react-window so only the rows
+              in the viewport (+ small overscan) are mounted. The List
+              fills the remaining viewport height; total scrollable height
+              comes from rowHeight × rowCount, so the scroll position
+              stays meaningful even with 11.7k entries. (GH #163) */}
+          {filteredMaterials.length === 0 ? (
+            <div className="px-4 py-12 text-center text-gray-500 dark:text-gray-400">
+              {t("openprinttag.noResults")}
+            </div>
+          ) : (
+            <div className="h-[calc(100vh-var(--app-header-h)-64px-41px)]">
+              <List
+                rowComponent={MaterialRow}
+                rowCount={filteredMaterials.length}
+                // Returning a different height for the expanded row makes
+                // react-window remeasure on every change to rowProps —
+                // including the expandedSlug change below — so the layout
+                // updates without us calling an imperative API.
+                rowHeight={(index, props) =>
+                  props.materials[index]?.slug === props.expandedSlug
+                    ? EXPANDED_ROW_HEIGHT_PX
+                    : ROW_HEIGHT_PX
+                }
+                rowProps={{
+                  materials: filteredMaterials,
+                  selectedSlugs: selected,
+                  expandedSlug: expanded,
+                  toggleSelect,
+                  setExpanded,
+                }}
+                overscanCount={5}
+                style={{ height: "100%" }}
+              />
+            </div>
+          )}
         </main>
       </div>
     </div>
