@@ -356,8 +356,11 @@ describe("/api/spools/import", () => {
 
       const fresh = await Filament.findById(f._id);
       expect(fresh.spools).toHaveLength(2);
-      const byId = new Map(fresh.spools.map((s: { _id: { toString(): string }; totalWeight: number; label: string }) => [String(s._id), s]));
-      expect(byId.get(existingId)?.totalWeight).toBe(800);
+      const updatedSpool = fresh.spools.find(
+        (s: { _id: { toString(): string }; totalWeight: number }) =>
+          String(s._id) === existingId,
+      );
+      expect(updatedSpool?.totalWeight).toBe(800);
     });
   });
 });
