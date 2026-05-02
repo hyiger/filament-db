@@ -25,7 +25,46 @@ export async function GET(request: NextRequest) {
     if (vendor) filter.vendor = vendor;
     if (search) filter.name = { $regex: escapeRegex(search), $options: "i" };
 
-    const filaments = await Filament.find(filter).sort({ name: 1 }).lean();
+    // Project to FilamentSummary shape: drop heavy spool subfields
+    // (photoDataUrl, usageHistory, dryCycles), keep only the temperatures
+    // the list renders, and surface `hasCalibrations` so the noCalibration
+    // quick filter has a signal it can act on without fetching every doc.
+    // The full document is still available via /api/filaments/{id}.
+    const filaments = await Filament.aggregate([
+      { $match: filter },
+      { $sort: { name: 1 } },
+      {
+        $project: {
+          name: 1,
+          vendor: 1,
+          type: 1,
+          color: 1,
+          cost: 1,
+          density: 1,
+          parentId: 1,
+          spoolWeight: 1,
+          netFilamentWeight: 1,
+          totalWeight: 1,
+          lowStockThreshold: 1,
+          "temperatures.nozzle": 1,
+          "temperatures.bed": 1,
+          hasCalibrations: {
+            $gt: [{ $size: { $ifNull: ["$calibrations", []] } }, 0],
+          },
+          spools: {
+            $map: {
+              input: { $ifNull: ["$spools", []] },
+              as: "s",
+              in: {
+                _id: "$$s._id",
+                totalWeight: "$$s.totalWeight",
+                retired: "$$s.retired",
+              },
+            },
+          },
+        },
+      },
+    ]);
     return NextResponse.json(filaments);
   } catch (err) {
     return errorResponse("Failed to fetch filaments", 500, getErrorMessage(err));
