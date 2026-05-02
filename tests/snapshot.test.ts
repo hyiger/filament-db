@@ -113,6 +113,92 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(bedTypes).toHaveLength(0);
   });
 
+  /**
+   * GH #158 regression guard.
+   *
+   * Pre-fix the snapshot payload deliberately excluded SharedCatalog —
+   * but /api/snapshot/delete (the danger-zone wipe) DID clear it. So a
+   * snapshot → delete-all → restore round-trip silently dropped every
+   * published share link. The fix makes the snapshot symmetric with
+   * the delete: SharedCatalog is now part of the export and restore.
+   */
+  it("snapshot/restore round-trip preserves SharedCatalog (GH #158)", async () => {
+    // Re-register SharedCatalog model after the per-test wipe.
+    delete mongoose.models.SharedCatalog;
+    const SharedCatalog = (await import("@/models/SharedCatalog")).default;
+
+    // Seed a published catalog
+    const seed = await SharedCatalog.create({
+      slug: "test-share-abc123",
+      title: "Shareable PLA",
+      description: "A test share",
+      payload: { version: 1, createdAt: new Date().toISOString(), filaments: [{ name: "X" }], nozzles: [], printers: [], bedTypes: [] },
+      viewCount: 7,
+    });
+
+    // Export
+    const exportRes = await GET();
+    const snapshot = JSON.parse(await exportRes.text());
+    expect(snapshot.version).toBeGreaterThanOrEqual(4);
+    expect(Array.isArray(snapshot.collections.sharedCatalogs)).toBe(true);
+    expect(snapshot.collections.sharedCatalogs).toHaveLength(1);
+    expect(snapshot.collections.sharedCatalogs[0].slug).toBe("test-share-abc123");
+    expect(snapshot.collections.sharedCatalogs[0].viewCount).toBe(7);
+
+    // Wipe and restore
+    await SharedCatalog.deleteMany({});
+    expect(await SharedCatalog.countDocuments({})).toBe(0);
+
+    const req = new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+    const res = await POST(req);
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.restored.sharedCatalogs).toBe(1);
+
+    const restored = await SharedCatalog.findOne({ slug: "test-share-abc123" }).lean();
+    expect(restored).not.toBeNull();
+    if (!restored) throw new Error("unreachable — guarded by expect above");
+    expect(restored.title).toBe("Shareable PLA");
+    expect(restored.viewCount).toBe(7);
+    expect(String(restored._id)).toBe(String(seed._id));
+  });
+
+  it("POST restore of a snapshot without sharedCatalogs (v3 shape) leaves the collection empty (no crash)", async () => {
+    delete mongoose.models.SharedCatalog;
+    const SharedCatalog = (await import("@/models/SharedCatalog")).default;
+    await SharedCatalog.create({
+      slug: "pre-restore-share",
+      title: "Pre-restore",
+      description: "",
+      payload: { version: 1, createdAt: new Date().toISOString(), filaments: [], nozzles: [], printers: [], bedTypes: [] },
+    });
+
+    // v3 shape — no sharedCatalogs key
+    const snapshot = {
+      version: 3,
+      createdAt: new Date().toISOString(),
+      collections: { filaments: [], nozzles: [], printers: [], bedTypes: [], locations: [], printHistory: [] },
+    };
+
+    const req = new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+    const res = await POST(req);
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    // No sharedCatalogs in the snapshot → collection wiped (because POST
+    // always wipes everything before restoring), and the count comes back
+    // 0 — not undefined.
+    expect(body.restored.sharedCatalogs).toBe(0);
+    expect(await SharedCatalog.countDocuments({})).toBe(0);
+  });
+
   it("POST restore preserves calibration.bedType references through ObjectId rehydration", async () => {
     // End-to-end: export a filament whose calibration references a BedType,
     // restore the snapshot, and verify the reference still resolves.
