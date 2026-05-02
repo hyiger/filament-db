@@ -255,4 +255,109 @@ describe("/api/spools/import", () => {
     // finds the seeded row.
     expect(body.imported).toBe(1);
   });
+
+  describe("GH #159: round-trip dedup via spoolId", () => {
+    it("re-importing an exported CSV updates existing spools instead of duplicating", async () => {
+      // Seed a filament with a single spool so we can capture the spoolId
+      // the exporter would emit and feed it back through the importer.
+      const f = await Filament.create({
+        name: "PLA Black",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ label: "Original", totalWeight: 1000 }],
+      });
+      const seededSpoolId = String(f.spools[0]._id);
+
+      // Re-import the exact row the exporter would produce, including the
+      // spoolId column. Pre-fix this would push a NEW spool (doubling
+      // the count). Post-fix it should update the existing one.
+      const csv =
+        "filament,totalWeight,label,spoolId\n" +
+        `PLA Black,950,Original,${seededSpoolId}\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(1);
+      expect(body.created).toBe(0);
+      expect(body.updated).toBe(1);
+      expect(body.results[0].action).toBe("updated");
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(1); // NOT 2
+      expect(String(fresh.spools[0]._id)).toBe(seededSpoolId);
+      expect(fresh.spools[0].totalWeight).toBe(950); // updated value persisted
+    });
+
+    it("a row whose spoolId doesn't match falls through to create (so foreign exports still work)", async () => {
+      const f = await Filament.create({
+        name: "PETG Blue",
+        vendor: "Test",
+        type: "PETG",
+      });
+
+      // spoolId from a different DB / filament — exporter from another
+      // instance would carry an _id this DB has never seen. The current
+      // filament has no spools, so .id() returns null and the row creates.
+      const foreignSpoolId = new mongoose.Types.ObjectId().toString();
+      const csv =
+        "filament,totalWeight,spoolId\n" +
+        `PETG Blue,850,${foreignSpoolId}\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(1);
+      expect(body.created).toBe(1);
+      expect(body.updated).toBe(0);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(1);
+      expect(fresh.spools[0].totalWeight).toBe(850);
+    });
+
+    it("a row with no spoolId column behaves exactly like the legacy create path", async () => {
+      const f = await Filament.create({
+        name: "TPU Red",
+        vendor: "Test",
+        type: "TPU",
+        spools: [{ label: "Existing", totalWeight: 500 }],
+      });
+
+      const csv =
+        "filament,totalWeight,label\n" +
+        `TPU Red,1000,Newly added\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(1);
+      expect(body.created).toBe(1);
+      expect(body.updated).toBe(0);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(2); // existing + newly created
+      expect(fresh.spools[1].label).toBe("Newly added");
+      expect(fresh.spools[1].totalWeight).toBe(1000);
+    });
+
+    it("mixed CSV with one update and one create reports both counts correctly", async () => {
+      const f = await Filament.create({
+        name: "ASA Grey",
+        vendor: "Test",
+        type: "ASA",
+        spools: [{ label: "First", totalWeight: 1000 }],
+      });
+      const existingId = String(f.spools[0]._id);
+
+      const csv =
+        "filament,totalWeight,label,spoolId\n" +
+        `ASA Grey,800,First,${existingId}\n` +     // updates existing
+        `ASA Grey,1000,Second,\n`;                   // creates new
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(2);
+      expect(body.created).toBe(1);
+      expect(body.updated).toBe(1);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(2);
+      const byId = new Map(fresh.spools.map((s: { _id: { toString(): string }; totalWeight: number; label: string }) => [String(s._id), s]));
+      expect(byId.get(existingId)?.totalWeight).toBe(800);
+    });
+  });
 });
