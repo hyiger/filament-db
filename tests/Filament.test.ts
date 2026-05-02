@@ -855,6 +855,78 @@ describe("Filament Model — v1.11 spool fields", () => {
     ).rejects.toThrow();
   });
 
+  it("accepts http(s) tdsUrl values and rejects non-http schemes", async () => {
+    const ok = await Filament.create({
+      name: "TDS HTTPS",
+      vendor: "Test",
+      type: "PLA",
+      tdsUrl: "https://example.com/tds.pdf",
+    });
+    expect(ok.tdsUrl).toBe("https://example.com/tds.pdf");
+
+    // null and empty string are still allowed (field is optional)
+    const empty = await Filament.create({
+      name: "TDS Empty",
+      vendor: "Test",
+      type: "PLA",
+      tdsUrl: "",
+    });
+    expect(empty.tdsUrl).toBe("");
+
+    for (const bad of [
+      "javascript:alert(1)",
+      "file:///etc/passwd",
+      "data:text/html,<script>",
+      "ftp://example.com",
+      "not a url",
+    ]) {
+      await expect(
+        Filament.create({
+          name: `Bad TDS ${bad}`,
+          vendor: "Test",
+          type: "PLA",
+          tdsUrl: bad,
+        }),
+      ).rejects.toThrow(/tdsUrl/);
+    }
+  });
+
+  it("rejects disallowed tdsUrl schemes on update queries (not just create)", async () => {
+    // Mongoose skips schema validators on bare updateOne / findOneAndUpdate
+    // unless `runValidators: true` is passed. The CSV import path in
+    // src/lib/importFilaments.ts doesn't pass it, so we wired pre-update
+    // hooks instead — verify they fire across the three Mongoose update
+    // entry points and that the original value isn't overwritten on reject.
+    const f = await Filament.create({
+      name: "TDS Update Test",
+      vendor: "Test",
+      type: "PLA",
+      tdsUrl: "https://example.com/ok",
+    });
+
+    await expect(
+      Filament.updateOne({ _id: f._id }, { $set: { tdsUrl: "javascript:alert(1)" } }),
+    ).rejects.toThrow(/tdsUrl/);
+
+    await expect(
+      Filament.findOneAndUpdate({ _id: f._id }, { $set: { tdsUrl: "file:///etc/passwd" } }),
+    ).rejects.toThrow(/tdsUrl/);
+
+    await expect(
+      Filament.updateMany({}, { $set: { tdsUrl: "ftp://example.com" } }),
+    ).rejects.toThrow(/tdsUrl/);
+
+    // Original value untouched after the rejected updates
+    const reread = await Filament.findById(f._id).lean();
+    expect(reread!.tdsUrl).toBe("https://example.com/ok");
+
+    // http(s) updates still pass through; empty/null are allowed clears
+    await Filament.updateOne({ _id: f._id }, { $set: { tdsUrl: "https://other.example.com/new" } });
+    expect((await Filament.findById(f._id).lean())!.tdsUrl).toBe("https://other.example.com/new");
+    await Filament.updateOne({ _id: f._id }, { $set: { tdsUrl: "" } });
+    await Filament.updateOne({ _id: f._id }, { $set: { tdsUrl: null } });
+  });
+
   it("stores lowStockThreshold and rejects negatives", async () => {
     const filament = await Filament.create({
       name: "Low Stock",

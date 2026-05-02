@@ -6,6 +6,7 @@ import Link from "next/link";
 import NfcStatus from "@/components/NfcStatus";
 import { useNfcContext } from "@/components/NfcProvider";
 import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
+import { safeHttpUrl } from "@/lib/safeRenderUrl";
 import { useToast } from "@/components/Toast";
 import { useCurrency } from "@/hooks/useCurrency";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
@@ -1106,14 +1107,16 @@ export default function FilamentDetail() {
             </svg>
             {showTdsPreview ? t("detail.tds.hide") : t("detail.tds.view")}
           </button>
-          <a
-            href={filament.tdsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-3 text-xs text-gray-500 hover:underline"
-          >
-            {t("detail.tds.openNewTab")}
-          </a>
+          {safeHttpUrl(filament.tdsUrl) && (
+            <a
+              href={safeHttpUrl(filament.tdsUrl)!}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="ml-3 text-xs text-gray-500 hover:underline"
+            >
+              {t("detail.tds.openNewTab")}
+            </a>
+          )}
           {showTdsPreview && (
             <div className="mt-3">
               {tdsEmbedState === "checking" && (
@@ -1121,10 +1124,10 @@ export default function FilamentDetail() {
                   {t("detail.tds.checking")}
                 </p>
               )}
-              {tdsEmbedState === "allowed" && (
+              {tdsEmbedState === "allowed" && safeHttpUrl(filament.tdsUrl) && (
                 <div className="border border-gray-300 dark:border-gray-700 rounded overflow-hidden">
                   <iframe
-                    src={filament.tdsUrl}
+                    src={safeHttpUrl(filament.tdsUrl)!}
                     className="w-full bg-white"
                     style={{ height: "80vh" }}
                     title={t("detail.tds.title")}
@@ -1149,17 +1152,19 @@ export default function FilamentDetail() {
                           ? t("detail.tds.blockedBody")
                           : t("detail.tds.errorBody")}
                       </p>
-                      <a
-                        href={filament.tdsUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 text-sm font-medium bg-amber-600 hover:bg-amber-700 text-white rounded"
-                      >
-                        {t("detail.tds.openExternal")}
-                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                        </svg>
-                      </a>
+                      {safeHttpUrl(filament.tdsUrl) && (
+                        <a
+                          href={safeHttpUrl(filament.tdsUrl)!}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 text-sm font-medium bg-amber-600 hover:bg-amber-700 text-white rounded"
+                        >
+                          {t("detail.tds.openExternal")}
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                          </svg>
+                        </a>
+                      )}
                     </div>
                   </div>
                 </div>

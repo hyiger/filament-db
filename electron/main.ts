@@ -79,7 +79,20 @@ function createWindow(urlPath = "/") {
     }
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    // Only forward http(s) targets to the OS shell. Anything else
+    // (file:, javascript:, data:, custom protocol handlers) could be
+    // used by injected/imported content to launch local apps or
+    // exfiltrate data via a registered handler.
+    try {
+      const proto = new URL(url).protocol;
+      if (proto === "http:" || proto === "https:") {
+        shell.openExternal(url);
+      } else {
+        console.warn(`Refused to open external URL with disallowed scheme: ${proto}`);
+      }
+    } catch {
+      console.warn(`Refused to open malformed external URL: ${url}`);
+    }
     return { action: "deny" };
   });
 

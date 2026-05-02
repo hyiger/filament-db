@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { safeHttpUrl } from "@/lib/safeRenderUrl";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -221,11 +222,11 @@ function MaterialDetail({ m }: { m: OPTMaterial }) {
           <DetailField label={t("openprinttag.detail.photo")} value={m.photoUrl ? t("openprinttag.detail.yes") : null} />
           <DetailField label={t("openprinttag.detail.productUrl")} value={m.productUrl ? t("openprinttag.detail.yes") : null} />
 
-          {(m.productUrl || m.photoUrl) && (
+          {(safeHttpUrl(m.productUrl) || safeHttpUrl(m.photoUrl)) && (
             <div className="mt-2 flex flex-col gap-1">
-              {m.productUrl && (
+              {safeHttpUrl(m.productUrl) && (
                 <a
-                  href={m.productUrl}
+                  href={safeHttpUrl(m.productUrl)!}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-xs text-blue-600 dark:text-blue-400 hover:underline truncate"
@@ -233,9 +234,9 @@ function MaterialDetail({ m }: { m: OPTMaterial }) {
                   {t("openprinttag.detail.productPageLink")}
                 </a>
               )}
-              {m.photoUrl && (
+              {safeHttpUrl(m.photoUrl) && (
                 <a
-                  href={m.photoUrl}
+                  href={safeHttpUrl(m.photoUrl)!}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-xs text-blue-600 dark:text-blue-400 hover:underline truncate"
