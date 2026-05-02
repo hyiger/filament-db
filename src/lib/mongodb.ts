@@ -54,7 +54,7 @@ export default async function dbConnect() {
 
   cached.conn = await cached.promise;
 
-  // One-time migration: backfill instanceId for existing filaments
+  // One-time migrations on first connect after process start.
   if (!cached.migrated) {
     try {
       const { backfillInstanceIds } = await import("@/models/Filament");
@@ -62,10 +62,29 @@ export default async function dbConnect() {
       if (count > 0) {
         console.log(`[migration] Backfilled instanceId for ${count} filament(s)`);
       }
-      cached.migrated = true;
     } catch (err) {
       console.error("[migration] Failed to backfill instanceIds:", err);
     }
+
+    // SharedCatalog's slug index changed from a plain unique index to
+    // a partial-unique-on-_deletedAt-null index when soft-delete landed.
+    // MongoDB won't mutate existing index options in-place, so on
+    // existing installs the old `slug_1` index keeps enforcing global
+    // uniqueness (including over tombstoned rows). syncIndexes() drops
+    // indexes that don't match the current schema and recreates them
+    // with the new options — idempotent on fresh databases (the indexes
+    // already match), corrective on upgraded ones.
+    try {
+      const SharedCatalog = (await import("@/models/SharedCatalog")).default;
+      const dropped = await SharedCatalog.syncIndexes();
+      if (dropped.length > 0) {
+        console.log(`[migration] Rebuilt SharedCatalog indexes (dropped: ${dropped.join(", ")})`);
+      }
+    } catch (err) {
+      console.error("[migration] Failed to sync SharedCatalog indexes:", err);
+    }
+
+    cached.migrated = true;
   }
 
   return cached.conn;
