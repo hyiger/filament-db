@@ -119,3 +119,73 @@ describe("/api/dashboard — dry-cycle inheritance", () => {
     expect(ids).not.toContain(String(variant._id));
   });
 });
+
+/**
+ * GH #166 regression guard.
+ *
+ * The "ACTIVE SPOOLS" tile renders `data.counts.spools` against a label
+ * that says "Active". If `counts.spools` doesn't match the dashboard's
+ * own definition of "active" (i.e. excludes retired), the tile lies the
+ * moment any spool is retired. The fix returns both the active count
+ * and a separate `totalSpools` so the API surface is unambiguous and a
+ * future tile / tooltip can render the breakdown.
+ */
+describe("/api/dashboard — counts.spools is active-only (excludes retired)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    const filamentMod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) {
+      mongoose.model("Filament", filamentMod.default.schema);
+    }
+    Filament = mongoose.models.Filament;
+  });
+
+  it("excludes retired spools from counts.spools and surfaces them in counts.retiredSpools", async () => {
+    await Filament.create({
+      name: "PLA Active",
+      vendor: "Test",
+      type: "PLA",
+      spools: [
+        { label: "A1", totalWeight: 1000 },
+        { label: "A2", totalWeight: 1000 },
+      ],
+    });
+    await Filament.create({
+      name: "PLA Mixed",
+      vendor: "Test",
+      type: "PLA",
+      spools: [
+        { label: "B1", totalWeight: 1000 },
+        { label: "B2-retired", totalWeight: 50, retired: true },
+      ],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+
+    expect(body.counts.spools).toBe(3);          // A1, A2, B1
+    expect(body.counts.retiredSpools).toBe(1);   // B2-retired
+    expect(body.counts.totalSpools).toBe(4);     // breakdown for tooltips / future tiles
+  });
+
+  it("counts.spools is 0 when every spool is retired", async () => {
+    await Filament.create({
+      name: "All Retired PLA",
+      vendor: "Test",
+      type: "PLA",
+      spools: [
+        { label: "old1", totalWeight: 0, retired: true },
+        { label: "old2", totalWeight: 0, retired: true },
+      ],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+
+    expect(body.counts.spools).toBe(0);
+    expect(body.counts.retiredSpools).toBe(2);
+    expect(body.counts.totalSpools).toBe(2);
+  });
+});

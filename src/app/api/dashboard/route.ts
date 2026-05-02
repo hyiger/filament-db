@@ -127,6 +127,11 @@ export async function GET() {
         bedTypes: bedTypeCount,
         spools: spoolCount,
         retiredSpools,
+        // Active + retired. The "Active Spools" tile renders `spools`; the
+        // "(N retired)" hint renders when `retiredSpools > 0`. Surfacing
+        // the total here means a future tooltip / breakdown can show it
+        // without re-deriving the sum on the client (GH #166).
+        totalSpools: spoolCount + retiredSpools,
       },
       totalGrams,
       lowStock,
