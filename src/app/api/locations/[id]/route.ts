@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Location from "@/models/Location";
 import Filament from "@/models/Filament";
-import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 export async function GET(
   _request: NextRequest,
@@ -52,7 +52,7 @@ export async function PUT(
     }
     return NextResponse.json(location);
   } catch (err) {
-    return errorResponse("Failed to update location", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to update location");
   }
 }
 

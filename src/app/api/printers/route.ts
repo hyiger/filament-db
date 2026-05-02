@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Printer from "@/models/Printer";
 import Nozzle from "@/models/Nozzle";
-import { getErrorMessage, errorResponse, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 
 export async function GET(request: NextRequest) {
   try {
@@ -68,6 +68,6 @@ export async function POST(request: NextRequest) {
   } catch (err: unknown) {
     const dupResponse = handleDuplicateKeyError(err, "printer");
     if (dupResponse) return dupResponse;
-    return errorResponse("Failed to create printer", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to create printer");
   }
 }

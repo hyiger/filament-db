@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Location from "@/models/Location";
 import Filament from "@/models/Filament";
-import { getErrorMessage, errorResponse, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 
 export async function GET(request: NextRequest) {
   try {
@@ -76,6 +76,6 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     const dupResponse = handleDuplicateKeyError(err, "location");
     if (dupResponse) return dupResponse;
-    return errorResponse("Failed to create location", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to create location");
   }
 }

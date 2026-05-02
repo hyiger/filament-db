@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import PrintHistory from "@/models/PrintHistory";
-import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 /**
  * GET /api/print-history — list print history entries.
@@ -279,6 +279,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(history, { status: 201 });
   } catch (err) {
-    return errorResponse("Failed to record print history", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to record print history");
   }
 }

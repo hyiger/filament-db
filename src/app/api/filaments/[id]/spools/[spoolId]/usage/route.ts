@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
-import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 /**
  * POST /api/filaments/{id}/spools/{spoolId}/usage — manually log grams used.
@@ -73,6 +73,6 @@ export async function POST(
     await filament.save();
     return NextResponse.json(filament.toObject(), { status: 201 });
   } catch (err) {
-    return errorResponse("Failed to log usage", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to log usage");
   }
 }
