@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import SyncStatusIndicator from "@/components/SyncStatusIndicator";
+import NfcStatus from "@/components/NfcStatus";
 
 const LINKS: { href: string; labelKey: string; exact?: boolean }[] = [
   { href: "/", labelKey: "common.filaments", exact: true },
@@ -49,23 +51,38 @@ export default function AppHeader() {
       <div className="max-w-7xl mx-auto px-4 h-12 flex items-center justify-between gap-3">
         <Link
           href="/"
-          className="font-semibold text-base sm:text-lg whitespace-nowrap text-gray-900 dark:text-gray-100 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
+          className="flex items-baseline gap-2 whitespace-nowrap text-gray-900 dark:text-gray-100 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
         >
-          {t("filaments.title")}
+          <span className="font-semibold text-base sm:text-lg">{t("filaments.title")}</span>
+          {/* Version pill — moved out of /filaments header (GH #156) so the
+              user can see the running version on every page. APP_VERSION is
+              injected by next.config at build time from package.json. */}
+          <span className="hidden sm:inline text-[10px] font-mono text-gray-400 dark:text-gray-500">
+            v{process.env.APP_VERSION}
+          </span>
         </Link>
-        {/* Desktop nav — hidden on mobile */}
-        <nav className="hidden md:flex items-center gap-1" aria-label="Primary">
-          {LINKS.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              aria-current={isActive(link) ? "page" : undefined}
-              className={`${baseClass} ${isActive(link) ? activeClass : inactiveClass}`}
-            >
-              {t(link.labelKey)}
-            </Link>
-          ))}
-        </nav>
+        {/* Right cluster: status pills + primary nav. Status pills (Sync,
+            NFC) used to live on the /filaments page header only; moving them
+            here makes them visible on every page (GH #156). Both render to
+            null when not in Electron / not relevant. */}
+        <div className="hidden md:flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <SyncStatusIndicator />
+            <NfcStatus />
+          </div>
+          <nav className="flex items-center gap-1" aria-label="Primary">
+            {LINKS.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                aria-current={isActive(link) ? "page" : undefined}
+                className={`${baseClass} ${isActive(link) ? activeClass : inactiveClass}`}
+              >
+                {t(link.labelKey)}
+              </Link>
+            ))}
+          </nav>
+        </div>
         {/* Mobile hamburger — hidden on ≥md */}
         <button
           type="button"
