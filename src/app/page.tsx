@@ -6,8 +6,6 @@ import { useToast } from "@/components/Toast";
 import ImportAtlasDialog from "@/components/ImportAtlasDialog";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SpoolCsvImportDialog from "@/components/SpoolCsvImportDialog";
-import SyncStatusIndicator from "@/components/SyncStatusIndicator";
-import NfcStatus from "@/components/NfcStatus";
 import QuickFilterChips, { type QuickFilter } from "@/components/QuickFilterChips";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
@@ -666,9 +664,6 @@ export default function Home() {
         <div className="min-w-0">
           <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-3xl font-bold whitespace-nowrap">{t("filaments.title")}</h1>
-            <span className="text-sm text-gray-500 font-mono self-end mb-0.5">v{process.env.APP_VERSION}</span>
-            <SyncStatusIndicator />
-            <NfcStatus />
           </div>
         </div>
         <div className="flex gap-2 shrink-0">
