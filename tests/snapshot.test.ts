@@ -160,7 +160,8 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(body.restored.sharedCatalogs).toBe(1);
 
     const restored = await SharedCatalog.findOne({ slug: "test-share-abc123" }).lean();
-    expect(restored).toBeTruthy();
+    expect(restored).not.toBeNull();
+    if (!restored) throw new Error("unreachable — guarded by expect above");
     expect(restored.title).toBe("Shareable PLA");
     expect(restored.viewCount).toBe(7);
     expect(String(restored._id)).toBe(String(seed._id));
