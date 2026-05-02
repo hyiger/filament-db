@@ -515,9 +515,22 @@ ipcMain.handle("save-config", async (_event, config: {
     }
 
     // Reload the window on a connection change so the renderer picks up
-    // the new sync state. Stay on Settings so the user can keep tuning.
+    // the new sync state. Destination depends on where the save came from:
+    //   - first-run /setup completes → go home (the existing setup flow
+    //     contract — src/app/setup/page.tsx awaits saveConfig and expects
+    //     the main process to redirect; Codex review on PR #178)
+    //   - any other page (Settings) → stay on /settings so the user can
+    //     keep tuning without being bounced (GH #177)
     if (mainWindow) {
-      mainWindow.loadURL(getAppURL("/settings"));
+      const currentPath = (() => {
+        try {
+          return new URL(mainWindow.webContents.getURL()).pathname;
+        } catch {
+          return "/";
+        }
+      })();
+      const isSetupCompletion = currentPath === "/setup";
+      mainWindow.loadURL(getAppURL(isSetupCompletion ? "/" : "/settings"));
     }
   }
 
