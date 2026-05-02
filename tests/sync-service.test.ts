@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { getDbNameFromUri } from "../electron/sync-service";
+import { getDbNameFromUri, wrapSyncErrorMessage } from "../electron/sync-service";
 
 describe("getDbNameFromUri", () => {
   it("extracts db name from a basic mongodb URI with explicit path", () => {
@@ -50,5 +50,51 @@ describe("getDbNameFromUri", () => {
     expect(getDbNameFromUri("mongodb://localhost/my-db_v2.prod")).toBe(
       "my-db_v2.prod"
     );
+  });
+});
+
+describe("wrapSyncErrorMessage", () => {
+  it("wraps the Atlas read-only driver message into an actionable hint", () => {
+    const err = new Error(
+      "user is not allowed to do action [update] on [filament-db.filaments]"
+    );
+    const wrapped = wrapSyncErrorMessage(err, "filament-db");
+
+    expect(wrapped).toContain("filament-db");
+    expect(wrapped).toContain("readWrite");
+    expect(wrapped).toContain("Settings → Connection");
+    expect(wrapped).not.toContain("user is not allowed to do action");
+  });
+
+  it("wraps errors carrying MongoDB code 13 (Unauthorized) even without the matching message", () => {
+    // Real MongoServerError shape: a plain Error decorated with a numeric code
+    const err = Object.assign(new Error("Unauthorized"), { code: 13 });
+    const wrapped = wrapSyncErrorMessage(err, "prod-db");
+
+    expect(wrapped).toContain("prod-db");
+    expect(wrapped).toContain("readWrite");
+  });
+
+  it("redacts mongodb URIs in non-auth error messages", () => {
+    const err = new Error(
+      "connection failed to mongodb+srv://user:secret@cluster.mongodb.net/db"
+    );
+    const wrapped = wrapSyncErrorMessage(err, "filament-db");
+
+    expect(wrapped).not.toContain("secret");
+    expect(wrapped).not.toContain("user:");
+    expect(wrapped).toContain("mongodb://***");
+  });
+
+  it("falls back to a generic message for non-Error throws", () => {
+    expect(wrapSyncErrorMessage("oops", "filament-db")).toBe("Sync failed");
+    expect(wrapSyncErrorMessage(undefined, "filament-db")).toBe("Sync failed");
+  });
+
+  it("does not match the auth regex on incidental text", () => {
+    const err = new Error("network reset while updating filament cache");
+    const wrapped = wrapSyncErrorMessage(err, "filament-db");
+    // No rewrite — message passes through (with URI redaction, n/a here)
+    expect(wrapped).toBe("network reset while updating filament cache");
   });
 });
