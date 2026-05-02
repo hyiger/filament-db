@@ -6,6 +6,23 @@ function generateInstanceId(): string {
   return crypto.randomBytes(5).toString("hex");
 }
 
+/** Reject anything but http(s). Empty/null are allowed (field is optional).
+ * Used both as the schema validator (catches save/create) and via the
+ * pre('updateOne'|'findOneAndUpdate'|'updateMany') hooks below — Mongoose
+ * skips schema validators on bare update queries unless the caller passes
+ * `runValidators: true`, and the CSV/atlas-import paths don't, so the hook
+ * is what actually keeps a `javascript:`/`file:` URL out of storage on the
+ * import-update branch. */
+function isValidTdsUrl(v: string | null | undefined): boolean {
+  if (v == null || v === "") return true;
+  try {
+    const proto = new URL(v).protocol;
+    return proto === "http:" || proto === "https:";
+  } catch {
+    return false;
+  }
+}
+
 export interface IDryCycle {
   _id?: mongoose.Types.ObjectId;
   date: Date;
@@ -280,15 +297,7 @@ const FilamentSchema = new Schema<IFilament>(
       type: String,
       default: null,
       validate: {
-        validator: (v: string | null) => {
-          if (v == null || v === "") return true;
-          try {
-            const proto = new URL(v).protocol;
-            return proto === "http:" || proto === "https:";
-          } catch {
-            return false;
-          }
-        },
+        validator: isValidTdsUrl,
         message: "tdsUrl must be a valid http(s) URL",
       },
     },
@@ -315,6 +324,28 @@ FilamentSchema.pre("save", function () {
     this.instanceId = generateInstanceId();
   }
 });
+
+// Validate tdsUrl on every update path. Mongoose runs schema validators
+// only on save() / create() by default; bare updateOne / findOneAndUpdate
+// (used by the CSV import path in src/lib/importFilaments.ts) skip them
+// unless the caller passes `runValidators: true`. Hook them all here so
+// an imported javascript:/file: URL can't bypass the scheme guard.
+function validateTdsUrlInUpdate(this: mongoose.Query<unknown, unknown>) {
+  const update = this.getUpdate() as Record<string, unknown> | null;
+  if (!update) return;
+  const $set = (update.$set ?? {}) as Record<string, unknown>;
+  // tdsUrl can appear as either a top-level key (replacement-style update)
+  // or under $set (the form import / CSV import / atlas import paths use)
+  for (const candidate of [update.tdsUrl, $set.tdsUrl]) {
+    if (candidate === undefined) continue;
+    if (!isValidTdsUrl(candidate as string | null)) {
+      throw new Error("tdsUrl must be a valid http(s) URL");
+    }
+  }
+}
+FilamentSchema.pre("updateOne", validateTdsUrlInUpdate);
+FilamentSchema.pre("updateMany", validateTdsUrlInUpdate);
+FilamentSchema.pre("findOneAndUpdate", validateTdsUrlInUpdate);
 
 const Filament: Model<IFilament> =
   mongoose.models.Filament || mongoose.model<IFilament>("Filament", FilamentSchema);
