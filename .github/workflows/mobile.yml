@@ -33,9 +33,39 @@ permissions:
   contents: write
 
 jobs:
+  typecheck:
+    name: Mobile typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Mobile imports from @filament-db/shared, which is a workspace
+      # link (file:../shared). Install root first so the link resolves.
+      - name: Install PC/SC development headers
+        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
+
+      - name: Install root + shared dependencies
+        run: npm ci
+
+      - name: Install mobile dependencies
+        working-directory: packages/mobile
+        run: npm install
+
+      - name: Typecheck mobile
+        working-directory: packages/mobile
+        run: npm run typecheck
+
   build:
     name: Build ${{ matrix.platform }}
     runs-on: ubuntu-latest
+    needs: typecheck
     strategy:
       fail-fast: false
       matrix:
@@ -78,7 +108,10 @@ jobs:
             echo "profile=preview" >> "$GITHUB_OUTPUT"
           fi
 
-      # Android: wait for build, download APK, and upload to GitHub release
+      # Android: wait for build, fail the job on EAS error so a broken
+      # build doesn't pass CI. Result JSON is captured for the artifact
+      # step; if the build itself fails we exit early before attempting
+      # the artifact step.
       - name: Build Android (${{ steps.profile.outputs.profile }})
         if: matrix.platform == 'android'
         working-directory: packages/mobile
@@ -88,7 +121,7 @@ jobs:
             --profile ${{ steps.profile.outputs.profile }} \
             --non-interactive \
             --wait \
-            --json > /tmp/eas-build-result.json 2>/dev/null || true
+            --json > /tmp/eas-build-result.json
           cat /tmp/eas-build-result.json
 
       - name: Download Android APK
@@ -114,7 +147,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # iOS: submit to EAS (no artifact download — distributed via TestFlight)
+      # iOS: wait for the build so EAS-side failures (signing, archive,
+      # provisioning) surface as CI failures rather than silent successes.
+      # Distributed via TestFlight; no artifact download here.
       - name: Build iOS (${{ steps.profile.outputs.profile }})
         if: matrix.platform == 'ios'
         working-directory: packages/mobile
@@ -123,7 +158,7 @@ jobs:
             --platform ios \
             --profile ${{ steps.profile.outputs.profile }} \
             --non-interactive \
-            --no-wait
+            --wait
 
       - name: Summary
         run: |

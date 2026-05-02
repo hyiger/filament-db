@@ -45,7 +45,7 @@ class MobileNfcService {
     try {
       // Request NFC-V technology
       if (Platform.OS === "ios") {
-        await NfcManager.requestTechnology(NfcTech.Iso15693ICode);
+        await NfcManager.requestTechnology(NfcTech.Iso15693IOS);
       } else {
         await NfcManager.requestTechnology(NfcTech.NfcV);
       }
@@ -81,7 +81,7 @@ class MobileNfcService {
 
       // Request NFC-V technology
       if (Platform.OS === "ios") {
-        await NfcManager.requestTechnology(NfcTech.Iso15693ICode);
+        await NfcManager.requestTechnology(NfcTech.Iso15693IOS);
       } else {
         await NfcManager.requestTechnology(NfcTech.NfcV);
       }
@@ -122,7 +122,7 @@ class MobileNfcService {
   ): Promise<void> {
     try {
       if (Platform.OS === "ios") {
-        await NfcManager.requestTechnology(NfcTech.Iso15693ICode);
+        await NfcManager.requestTechnology(NfcTech.Iso15693IOS);
       } else {
         await NfcManager.requestTechnology(NfcTech.NfcV);
       }
@@ -155,7 +155,7 @@ class MobileNfcService {
   async formatTag(onProgress?: (percent: number) => void): Promise<void> {
     try {
       if (Platform.OS === "ios") {
-        await NfcManager.requestTechnology(NfcTech.Iso15693ICode);
+        await NfcManager.requestTechnology(NfcTech.Iso15693IOS);
       } else {
         await NfcManager.requestTechnology(NfcTech.NfcV);
       }

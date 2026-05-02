@@ -15,6 +15,6 @@
     "./logic": "./src/logic/index.ts",
     "./logic/*": "./src/logic/*.ts",
     "./i18n": "./src/i18n/index.ts",
-    "./i18n/locales/*": "./src/i18n/locales/*.json"
+    "./i18n/locales/*.json": "./src/i18n/locales/*.json"
   }
 }

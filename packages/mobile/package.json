@@ -10,7 +10,8 @@
     "android": "expo run:android",
     "build:dev": "eas build --profile development",
     "build:preview": "eas build --profile preview",
-    "build:prod": "eas build --profile production"
+    "build:prod": "eas build --profile production",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@filament-db/shared": "file:../shared",
