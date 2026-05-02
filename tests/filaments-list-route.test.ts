@@ -73,6 +73,31 @@ describe("GET /api/filaments — projection to FilamentSummary", () => {
     expect(photoEntry.spools[0]).toHaveProperty("_id");
   });
 
+  it("includes spools[].label so PrinterForm's AMS slot picker doesn't degrade to short IDs", async () => {
+    // PrinterForm renders each spool choice as `s.label || s._id.slice(-4)`,
+    // so the projection must keep label even though the list page itself
+    // doesn't render it.
+    const Filament = (await import("@/models/Filament")).default;
+    await Filament.create({
+      name: "Labeled Spools",
+      vendor: "Test",
+      type: "PLA",
+      spools: [
+        { label: "AMS slot 1", totalWeight: 800 },
+        { label: "Backup", totalWeight: 1000 },
+      ],
+    });
+
+    const res = await listFilaments(
+      new NextRequest("http://localhost/api/filaments"),
+    );
+    const body = await res.json();
+    const entry = body.find((f: { name: string }) => f.name === "Labeled Spools");
+    expect(entry.spools).toHaveLength(2);
+    expect(entry.spools[0].label).toBe("AMS slot 1");
+    expect(entry.spools[1].label).toBe("Backup");
+  });
+
   it("computes hasCalibrations true/false per row", async () => {
     await seed();
     const res = await listFilaments(

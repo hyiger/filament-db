@@ -64,6 +64,11 @@ export async function GET(request: NextRequest) {
               as: "s",
               in: {
                 _id: "$$s._id",
+                // PrinterForm's AMS slot picker renders each option as
+                // `s.label || s._id.slice(-4)`, so dropping label degrades
+                // every choice to a 4-char id and breaks multi-spool
+                // identification.
+                label: "$$s.label",
                 totalWeight: "$$s.totalWeight",
                 retired: "$$s.retired",
               },
