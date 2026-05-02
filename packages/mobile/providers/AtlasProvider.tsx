@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from "react";
 import * as SecureStore from "expo-secure-store";
 import { atlasService } from "../services/atlas";
 
@@ -34,6 +34,14 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
   const [isConnected, setIsConnected] = useState(false);
   const [isRestoring, setIsRestoring] = useState(true);
 
+  // Cancellation token for the on-mount restore. If the user reaches the
+  // connect screen and submits new credentials (or signs out) before our
+  // SecureStore-read + atlasService.connect chain settles, we must NOT
+  // flip the provider back to the stale stored values — that race would
+  // sign them back into the old account. setConfig/clearConfig invalidate
+  // the in-flight restore by flipping this flag.
+  const restoreInvalidated = useRef(false);
+
   // On mount, pull credentials out of SecureStore and reconnect to Atlas.
   // Without this the user has to re-enter their App ID + API key on every
   // cold launch — the connect screen wrote them to SecureStore but nothing
@@ -47,11 +55,16 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
           SecureStore.getItemAsync(STORAGE_KEY_APP_ID),
           SecureStore.getItemAsync(STORAGE_KEY_API_KEY),
         ]);
-        if (cancelled) return;
+        if (cancelled || restoreInvalidated.current) return;
         if (appId && apiKey) {
           try {
             await atlasService.connect(appId, apiKey);
-            if (cancelled) return;
+            // Re-check both flags AFTER the await — a slow auto-reconnect
+            // could resolve while the user is on the connect screen
+            // submitting fresh credentials. Without this guard the stale
+            // restored creds would race in and overwrite the newer
+            // manual connection's state.
+            if (cancelled || restoreInvalidated.current) return;
             setConfigState({ appId, apiKey });
             setIsConnected(true);
           } catch (err) {
@@ -66,6 +79,11 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setConfig = useCallback(async (c: AtlasConfig) => {
+    // Any in-flight restore is now stale — the user has explicitly
+    // chosen these credentials. Set the flag BEFORE the awaits so a
+    // restore that resolves between here and the state writes still
+    // sees the invalidation.
+    restoreInvalidated.current = true;
     await SecureStore.setItemAsync(STORAGE_KEY_APP_ID, c.appId);
     await SecureStore.setItemAsync(STORAGE_KEY_API_KEY, c.apiKey);
     setConfigState(c);
@@ -73,6 +91,7 @@ export function AtlasProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const clearConfig = useCallback(async () => {
+    restoreInvalidated.current = true;
     await SecureStore.deleteItemAsync(STORAGE_KEY_APP_ID);
     await SecureStore.deleteItemAsync(STORAGE_KEY_API_KEY);
     atlasService.disconnect();
