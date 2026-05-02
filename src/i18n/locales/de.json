@@ -94,6 +94,7 @@
   "dashboard.backToFilaments": "Zurück zu Filamenten",
   "dashboard.filaments": "Filamente",
   "dashboard.spools": "Aktive Spulen",
+  "dashboard.spools.retiredHint": "+{count} ausgemustert",
   "dashboard.totalWeight": "Gesamt verbleibend",
   "dashboard.printers": "Drucker",
   "dashboard.nozzles": "Düsen",

@@ -94,6 +94,7 @@
   "dashboard.backToFilaments": "Back to filaments",
   "dashboard.filaments": "Filaments",
   "dashboard.spools": "Active Spools",
+  "dashboard.spools.retiredHint": "+{count} retired",
   "dashboard.totalWeight": "Total Remaining",
   "dashboard.printers": "Printers",
   "dashboard.nozzles": "Nozzles",

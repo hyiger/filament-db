@@ -13,6 +13,7 @@ interface DashboardData {
     bedTypes: number;
     spools: number;
     retiredSpools: number;
+    totalSpools: number;
   };
   totalGrams: number;
   lowStock: {
@@ -95,7 +96,15 @@ export default function DashboardPage() {
       {/* Top metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mb-8">
         <Metric label={t("dashboard.filaments")} value={data.counts.filaments} href="/" />
-        <Metric label={t("dashboard.spools")} value={data.counts.spools} />
+        <Metric
+          label={t("dashboard.spools")}
+          value={data.counts.spools}
+          hint={
+            data.counts.retiredSpools > 0
+              ? t("dashboard.spools.retiredHint", { count: data.counts.retiredSpools })
+              : undefined
+          }
+        />
         <Metric label={t("dashboard.totalWeight")} value={`${kg} kg`} />
         <Metric label={t("dashboard.printers")} value={data.counts.printers} href="/printers" />
         <Metric label={t("dashboard.nozzles")} value={data.counts.nozzles} href="/nozzles" />
@@ -213,10 +222,12 @@ function Metric({
   label,
   value,
   href,
+  hint,
 }: {
   label: string;
   value: number | string;
   href?: string;
+  hint?: string;
 }) {
   const content = (
     <div className="border border-gray-200 dark:border-gray-700 rounded px-3 py-2 bg-white dark:bg-gray-900 hover:border-gray-300 dark:hover:border-gray-600 transition-colors h-full">
@@ -224,6 +235,9 @@ function Metric({
       <div className="text-xl font-semibold text-gray-900 dark:text-gray-100 mt-0.5">
         {value}
       </div>
+      {hint ? (
+        <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">{hint}</div>
+      ) : null}
     </div>
   );
   return href ? <Link href={href}>{content}</Link> : content;
