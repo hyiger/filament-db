@@ -662,8 +662,25 @@ export default function Home() {
       <div ref={stickyHeaderRef} className="sticky top-[var(--app-header-h)] z-20 bg-white dark:bg-gray-950 pb-3 -mt-8 pt-8 border-b border-gray-200 dark:border-gray-800 shadow-sm">
       {/* Page heading was removed (#176) — the brand "Filament DB" + version
           pill in AppHeader (and the active "Filaments" nav link) already
-          identify the page. Keeping a duplicate H1 was visually noisy. */}
-      <div className="flex items-start justify-end gap-4 mb-6 flex-wrap">
+          identify the page. The stats-toggle on the left and the action
+          buttons on the right share one row so there's no wasted vertical
+          space above the metadata line. */}
+      <div className="flex items-center justify-between gap-4 mb-3 flex-wrap">
+        {filaments.length > 0 ? (
+          <button
+            onClick={() => setShowStats((s) => !s)}
+            className="text-sm text-gray-500 hover:text-gray-300 flex items-center gap-1"
+          >
+            <span>{showStats ? "▾" : "▸"}</span>
+            <span>{t("filaments.stats.total", { count: filaments.length })}</span>
+            <span className="text-gray-600">·</span>
+            <span>{t("filaments.stats.typeCount", { count: types.length })}</span>
+            <span className="text-gray-600">·</span>
+            <span>{t("filaments.stats.vendorCount", { count: vendors.length })}</span>
+          </button>
+        ) : (
+          <span />
+        )}
         <div className="flex gap-2 shrink-0">
           {/* Import / Export dropdown */}
           <div className="relative" ref={importExportRef}>
@@ -770,21 +787,11 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Statistics summary */}
-      {filaments.length > 0 && (
+      {/* Statistics expansion — toggle moved into the action-buttons row
+          above (#176 follow-up); this just renders the expanded grid. */}
+      {filaments.length > 0 && showStats && (
         <div className="mb-4">
-          <button
-            onClick={() => setShowStats((s) => !s)}
-            className="text-sm text-gray-500 hover:text-gray-300 flex items-center gap-1 mb-2"
-          >
-            <span>{showStats ? "▾" : "▸"}</span>
-            <span>{t("filaments.stats.total", { count: filaments.length })}</span>
-            <span className="text-gray-600">·</span>
-            <span>{t("filaments.stats.typeCount", { count: types.length })}</span>
-            <span className="text-gray-600">·</span>
-            <span>{t("filaments.stats.vendorCount", { count: vendors.length })}</span>
-          </button>
-          {showStats && <FilamentStats filaments={filaments} />}
+          <FilamentStats filaments={filaments} />
         </div>
       )}
 
