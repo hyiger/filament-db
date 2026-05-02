@@ -30,6 +30,14 @@ interface UpdateInfo {
 
 let mainWindow: BrowserWindow | null = null;
 let currentState: UpdateInfo = { state: "idle" };
+/** Tracks whether initAutoUpdater has done its one-time setup (IPC handlers,
+ * autoUpdater listeners, periodic-check timers) for this process. The
+ * function is called from `createWindow()` in electron/main.ts, which on
+ * macOS runs every time the user clicks the dock icon after closing the
+ * window. Without this guard the second call hits
+ * `Error: Attempted to register a second handler for 'update-get-status'`
+ * and crashes the app on reopen (GH #154). */
+let initialized = false;
 
 function emit(update: Partial<UpdateInfo>) {
   currentState = { ...currentState, ...update };
@@ -37,7 +45,19 @@ function emit(update: Partial<UpdateInfo>) {
 }
 
 export function initAutoUpdater(win: BrowserWindow) {
+  // Always refresh the window reference — the previous window may have
+  // been closed and the renderer for the new window needs to receive
+  // future status events.
   mainWindow = win;
+
+  if (initialized) {
+    // Re-emit the current state into the new window so the renderer's
+    // initial getSyncStatus() / status listener attaches to a fresh value
+    // instead of waiting for the next tick.
+    emit({});
+    return;
+  }
+  initialized = true;
 
   // IPC surface is registered unconditionally so the dev-mode renderer can
   // still call update-get-status (and friends) without crashing with
