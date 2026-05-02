@@ -7,7 +7,7 @@ import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 import { unsanitizeCsvCell } from "@/lib/csvWriter";
 
 /**
- * POST /api/spools/import — bulk-create spools from CSV.
+ * POST /api/spools/import — bulk-create OR upsert spools from CSV.
  *
  * Accepts either:
  *   - Content-Type: text/csv with the CSV as the raw request body
@@ -23,11 +23,16 @@ import { unsanitizeCsvCell } from "@/lib/csvWriter";
  *
  * Optional columns:
  *   vendor, label, lotNumber, purchaseDate (ISO date), openedDate,
- *   location (name — will create the Location if it doesn't exist)
+ *   location (name — will create the Location if it doesn't exist),
+ *   spoolId — when present and the matching filament already has a spool
+ *     with that subdoc _id, the existing spool's mutable fields are
+ *     updated instead of appending a new one. This makes the export →
+ *     re-import round-trip idempotent (GH #159 — pre-fix re-importing
+ *     an export silently doubled inventory).
  *
- * Returns a per-row result so the client can show granular success/failure.
- * Does not transactionally roll back on partial failure — this is a user
- * bulk-paste, not a critical path.
+ * Returns a per-row result tagged `created | updated` so the client can
+ * show granular success/failure. Does not transactionally roll back on
+ * partial failure — this is a user bulk-paste, not a critical path.
  */
 export async function POST(request: NextRequest) {
   let csvText: string;
@@ -96,6 +101,7 @@ export async function POST(request: NextRequest) {
     const results: Array<{
       row: number;
       ok: boolean;
+      action?: "created" | "updated";
       error?: string;
       filament?: string;
     }> = [];
@@ -159,25 +165,73 @@ export async function POST(request: NextRequest) {
       const purchaseDate = r.purchaseDate ? new Date(r.purchaseDate) : null;
       const openedDate = r.openedDate ? new Date(r.openedDate) : null;
 
-      // Mongoose's subdocument type doesn't include our added fields until
-      // the outer Filament schema is re-inferred — cast to unknown first
-      // to avoid the direct `any` eslint rule while still satisfying the
-      // push signature.
-      filament.spools.push({
+      // Build the field set for a NEW spool — defaults fill in for any
+      // optional column the user didn't include.
+      const newSpoolFields = {
         label: unsanitizeCsvCell(r.label || ""),
         totalWeight: weight,
         lotNumber: r.lotNumber ? unsanitizeCsvCell(r.lotNumber) : null,
         purchaseDate: purchaseDate && !isNaN(+purchaseDate) ? purchaseDate : null,
         openedDate: openedDate && !isNaN(+openedDate) ? openedDate : null,
         locationId: locationId || null,
-      } as unknown as Parameters<typeof filament.spools.push>[0]);
+      };
+
+      // Round-trip dedup: when the CSV row carries a `spoolId` and the
+      // matching filament already has a spool with that subdoc _id,
+      // update the existing entry instead of appending a duplicate.
+      // Without this, exporting and re-importing the same CSV silently
+      // doubles the library's spool count (GH #159).
+      //
+      // For the UPDATE path, only assign the columns that were actually
+      // present in the CSV header — missing columns must leave existing
+      // metadata untouched. Otherwise a partial-column re-import (e.g.
+      // `filament,totalWeight,spoolId` to bulk-update weights) would
+      // silently null label / lotNumber / dates / location on every
+      // matched spool. Codex P1 on PR #172.
+      const incomingSpoolId = (r.spoolId || "").trim();
+      let action: "created" | "updated" = "created";
+      if (incomingSpoolId) {
+        // .id() returns the matching subdoc or null. Cast through unknown
+        // because the inferred subdoc type doesn't expose our extended
+        // fields, the same workaround the push path below uses.
+        const existing = (filament.spools as unknown as { id(id: string): Record<string, unknown> | null }).id(incomingSpoolId);
+        if (existing) {
+          // totalWeight is required so it always counts as "present" — its
+          // empty-cell-means-null semantics are still honoured by `weight`.
+          const partialUpdate: Record<string, unknown> = { totalWeight: weight };
+          if ("label" in r) partialUpdate.label = unsanitizeCsvCell(r.label || "");
+          if ("lotNumber" in r) partialUpdate.lotNumber = r.lotNumber ? unsanitizeCsvCell(r.lotNumber) : null;
+          if ("purchaseDate" in r) {
+            partialUpdate.purchaseDate = purchaseDate && !isNaN(+purchaseDate) ? purchaseDate : null;
+          }
+          if ("openedDate" in r) {
+            partialUpdate.openedDate = openedDate && !isNaN(+openedDate) ? openedDate : null;
+          }
+          if ("location" in r) partialUpdate.locationId = locationId || null;
+          Object.assign(existing, partialUpdate);
+          action = "updated";
+        }
+      }
+      if (action === "created") {
+        // Mongoose's subdocument type doesn't include our added fields until
+        // the outer Filament schema is re-inferred — cast to unknown first
+        // to avoid the direct `any` eslint rule while still satisfying the
+        // push signature.
+        filament.spools.push(newSpoolFields as unknown as Parameters<typeof filament.spools.push>[0]);
+      }
       await filament.save();
-      results.push({ row: i + 2, ok: true, filament: filament.name });
+      results.push({ row: i + 2, ok: true, action, filament: filament.name });
     }
 
     const ok = results.filter((r) => r.ok).length;
+    const created = results.filter((r) => r.ok && r.action === "created").length;
+    const updated = results.filter((r) => r.ok && r.action === "updated").length;
     const failed = results.length - ok;
-    return NextResponse.json({ imported: ok, failed, results });
+    // `imported` is preserved for backwards compatibility with any client
+    // that already reads it; `created`/`updated` are the new breakdown so
+    // a re-import can be reported as "updated 6" rather than misleadingly
+    // "imported 6" (which would imply doubling).
+    return NextResponse.json({ imported: ok, created, updated, failed, results });
   } catch (err) {
     return errorResponse("Failed to import spools", 500, getErrorMessage(err));
   }

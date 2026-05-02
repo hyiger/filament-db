@@ -255,4 +255,174 @@ describe("/api/spools/import", () => {
     // finds the seeded row.
     expect(body.imported).toBe(1);
   });
+
+  describe("GH #159: round-trip dedup via spoolId", () => {
+    it("re-importing an exported CSV updates existing spools instead of duplicating", async () => {
+      // Seed a filament with a single spool so we can capture the spoolId
+      // the exporter would emit and feed it back through the importer.
+      const f = await Filament.create({
+        name: "PLA Black",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ label: "Original", totalWeight: 1000 }],
+      });
+      const seededSpoolId = String(f.spools[0]._id);
+
+      // Re-import the exact row the exporter would produce, including the
+      // spoolId column. Pre-fix this would push a NEW spool (doubling
+      // the count). Post-fix it should update the existing one.
+      const csv =
+        "filament,totalWeight,label,spoolId\n" +
+        `PLA Black,950,Original,${seededSpoolId}\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(1);
+      expect(body.created).toBe(0);
+      expect(body.updated).toBe(1);
+      expect(body.results[0].action).toBe("updated");
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(1); // NOT 2
+      expect(String(fresh.spools[0]._id)).toBe(seededSpoolId);
+      expect(fresh.spools[0].totalWeight).toBe(950); // updated value persisted
+    });
+
+    it("a row whose spoolId doesn't match falls through to create (so foreign exports still work)", async () => {
+      const f = await Filament.create({
+        name: "PETG Blue",
+        vendor: "Test",
+        type: "PETG",
+      });
+
+      // spoolId from a different DB / filament — exporter from another
+      // instance would carry an _id this DB has never seen. The current
+      // filament has no spools, so .id() returns null and the row creates.
+      const foreignSpoolId = new mongoose.Types.ObjectId().toString();
+      const csv =
+        "filament,totalWeight,spoolId\n" +
+        `PETG Blue,850,${foreignSpoolId}\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(1);
+      expect(body.created).toBe(1);
+      expect(body.updated).toBe(0);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(1);
+      expect(fresh.spools[0].totalWeight).toBe(850);
+    });
+
+    it("a row with no spoolId column behaves exactly like the legacy create path", async () => {
+      const f = await Filament.create({
+        name: "TPU Red",
+        vendor: "Test",
+        type: "TPU",
+        spools: [{ label: "Existing", totalWeight: 500 }],
+      });
+
+      const csv =
+        "filament,totalWeight,label\n" +
+        `TPU Red,1000,Newly added\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(1);
+      expect(body.created).toBe(1);
+      expect(body.updated).toBe(0);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(2); // existing + newly created
+      expect(fresh.spools[1].label).toBe("Newly added");
+      expect(fresh.spools[1].totalWeight).toBe(1000);
+    });
+
+    it("partial-column update preserves existing metadata (Codex P1 PR #172)", async () => {
+      // Seed a spool with full metadata. A re-import that only includes
+      // filament/totalWeight/spoolId (e.g. bulk weight tweak) must NOT
+      // null out label/lotNumber/dates/location on the matched spool.
+      const f = await Filament.create({
+        name: "PETG Yellow",
+        vendor: "Test",
+        type: "PETG",
+        spools: [
+          {
+            label: "Yellow shelf #2",
+            totalWeight: 950,
+            lotNumber: "LOT-007",
+            purchaseDate: new Date("2025-01-15"),
+            openedDate: new Date("2025-02-01"),
+          },
+        ],
+      });
+      const spoolId = String(f.spools[0]._id);
+
+      const csv =
+        "filament,totalWeight,spoolId\n" +
+        `PETG Yellow,825,${spoolId}\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(1);
+      expect(body.updated).toBe(1);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(1);
+      const updated = fresh.spools[0];
+      expect(updated.totalWeight).toBe(825);                // updated
+      expect(updated.label).toBe("Yellow shelf #2");        // preserved
+      expect(updated.lotNumber).toBe("LOT-007");            // preserved
+      expect(updated.purchaseDate?.toISOString().slice(0, 10)).toBe("2025-01-15"); // preserved
+      expect(updated.openedDate?.toISOString().slice(0, 10)).toBe("2025-02-01");   // preserved
+    });
+
+    it("explicit empty cell on update path clears the field (round-trip with full export)", async () => {
+      // Distinguishing "column absent" from "column present + empty" is
+      // the round-trip contract: an exported CSV that includes label as
+      // an empty cell means the spool genuinely has no label, and the
+      // re-import should respect that.
+      const f = await Filament.create({
+        name: "TPU Pink",
+        vendor: "Test",
+        type: "TPU",
+        spools: [{ label: "Old label", totalWeight: 800 }],
+      });
+      const spoolId = String(f.spools[0]._id);
+
+      const csv =
+        "filament,totalWeight,label,spoolId\n" +
+        `TPU Pink,800,,${spoolId}\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.updated).toBe(1);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools[0].label).toBe(""); // explicitly cleared
+    });
+
+    it("mixed CSV with one update and one create reports both counts correctly", async () => {
+      const f = await Filament.create({
+        name: "ASA Grey",
+        vendor: "Test",
+        type: "ASA",
+        spools: [{ label: "First", totalWeight: 1000 }],
+      });
+      const existingId = String(f.spools[0]._id);
+
+      const csv =
+        "filament,totalWeight,label,spoolId\n" +
+        `ASA Grey,800,First,${existingId}\n` +     // updates existing
+        `ASA Grey,1000,Second,\n`;                   // creates new
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(2);
+      expect(body.created).toBe(1);
+      expect(body.updated).toBe(1);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(2);
+      const updatedSpool = fresh.spools.find(
+        (s: { _id: { toString(): string }; totalWeight: number }) =>
+          String(s._id) === existingId,
+      );
+      expect(updatedSpool?.totalWeight).toBe(800);
+    });
+  });
 });
