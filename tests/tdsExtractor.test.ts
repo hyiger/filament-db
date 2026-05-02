@@ -69,6 +69,141 @@ describe("tdsExtractor", () => {
     });
   });
 
+  // Per-hop SSRF revalidation: a public host that 30x-redirects to a private
+  // IP must NOT pivot us into private space. Same pattern as embed-check.
+  describe("redirect handling (manual, per-hop revalidation)", () => {
+    it("rejects a public URL that 302-redirects to a private IP", async () => {
+      const fetchMock = vi.fn().mockImplementationOnce(() =>
+        Promise.resolve({
+          status: 302,
+          headers: new Headers({ location: "http://10.0.0.5/secret" }),
+          body: { cancel: () => Promise.resolve() },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://attacker.example.com/start", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/private|internal/i);
+      // Critical: the second fetch (to the private IP) must NOT have happened.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a redirect to the AWS/GCP/Azure metadata IP", async () => {
+      const fetchMock = vi.fn().mockImplementationOnce(() =>
+        Promise.resolve({
+          status: 302,
+          headers: new Headers({ location: "http://169.254.169.254/latest/meta-data/" }),
+          body: { cancel: () => Promise.resolve() },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/innocuous", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/private|internal/i);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects a redirect to a non-http(s) scheme (e.g. file://)", async () => {
+      const fetchMock = vi.fn().mockImplementationOnce(() =>
+        Promise.resolve({
+          status: 302,
+          headers: new Headers({ location: "file:///etc/passwd" }),
+          body: { cancel: () => Promise.resolve() },
+        }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/innocuous", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/scheme/i);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("follows a public→public redirect chain to the final response", async () => {
+      const geminiResponse = {
+        candidates: [{ content: { parts: [{ text: '{"name": "Chained PLA", "type": "PLA"}' }] } }],
+      };
+      // 302 → 301 → 200 (HTML) → Gemini
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 302,
+          headers: new Headers({ location: "https://b.example.com/redirected" }),
+          body: { cancel: () => Promise.resolve() },
+        })
+        .mockResolvedValueOnce({
+          status: 301,
+          headers: new Headers({ location: "https://c.example.com/final" }),
+          body: { cancel: () => Promise.resolve() },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+          text: () => Promise.resolve("<html><body>chained PLA</body></html>"),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve(geminiResponse),
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://a.example.com/start", "fake-key");
+      expect(result.success).toBe(true);
+      expect(result.data?.name).toBe("Chained PLA");
+      // 3 redirect/fetch hops + 1 Gemini call
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+
+    it("resolves a relative Location header against the previous URL", async () => {
+      const geminiResponse = {
+        candidates: [{ content: { parts: [{ text: '{"name": "Rel", "type": "PLA"}' }] } }],
+      };
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          status: 302,
+          headers: new Headers({ location: "/elsewhere" }),
+          body: { cancel: () => Promise.resolve() },
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+          text: () => Promise.resolve("<html>x</html>"),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve(geminiResponse),
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      await extractFromTds("https://example.com/path/start", "fake-key");
+      const secondCallUrl = fetchMock.mock.calls[1][0];
+      expect(secondCallUrl).toBe("https://example.com/elsewhere");
+    });
+
+    it("aborts after MAX_REDIRECTS (5) hops", async () => {
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        const next = url.replace(/\/(\d+)$/, (_, n) => `/${Number(n) + 1}`);
+        return Promise.resolve({
+          status: 302,
+          headers: new Headers({ location: next }),
+          body: { cancel: () => Promise.resolve() },
+        });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/0", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/too many redirects/i);
+      // 6 calls = initial + MAX_REDIRECTS (5) follow attempts before bailing.
+      expect(fetchMock).toHaveBeenCalledTimes(6);
+    });
+  });
+
   describe("extractFromTds", () => {
     it("returns error when URL fetch fails", async () => {
       vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Network error")));
