@@ -13,6 +13,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
 import { getRemainingGrams, getRemainingPct, getSpoolCount } from "@/lib/inventoryStats";
+import { compareFilaments, nextSortState, type SortKey, type SortDir } from "@/lib/sortFilamentList";
 
 type Filament = FilamentSummary;
 
@@ -21,28 +22,6 @@ function isLowStock(f: Filament): boolean {
   if (!threshold || threshold <= 0) return false;
   const remaining = getRemainingGrams(f);
   return remaining !== null && remaining < threshold;
-}
-
-type SortKey = "name" | "vendor" | "type" | "nozzle" | "bed" | "cost" | "remaining";
-type SortDir = "asc" | "desc";
-
-function getSortValue(f: Filament, key: SortKey): string | number {
-  switch (key) {
-    case "name":
-      return f.name.toLowerCase();
-    case "vendor":
-      return f.vendor.toLowerCase();
-    case "type":
-      return f.type.toLowerCase();
-    case "nozzle":
-      return f.temperatures.nozzle ?? -1;
-    case "bed":
-      return f.temperatures.bed ?? -1;
-    case "cost":
-      return f.cost ?? -1;
-    case "remaining":
-      return getRemainingPct(f) ?? -1;
-  }
 }
 
 function SortIcon({ column, sortKey, sortDir }: { column: SortKey; sortKey: SortKey; sortDir: SortDir }) {
@@ -363,14 +342,11 @@ export default function Home() {
       ...standalone.map((f) => f),
     ];
 
+    const cmp = compareFilaments(sortKey, sortDir);
     all.sort((a, b) => {
       const fa = "parent" in a ? a.parent : a;
       const fb = "parent" in b ? b.parent : b;
-      const aVal = getSortValue(fa, sortKey);
-      const bVal = getSortValue(fb, sortKey);
-      if (aVal < bVal) return sortDir === "asc" ? -1 : 1;
-      if (aVal > bVal) return sortDir === "asc" ? 1 : -1;
-      return 0;
+      return cmp(fa, fb);
     });
 
     return all;
@@ -386,12 +362,9 @@ export default function Home() {
   };
 
   const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir(sortDir === "asc" ? "desc" : "asc");
-    } else {
-      setSortKey(key);
-      setSortDir("asc");
-    }
+    const next = nextSortState({ sortKey, sortDir }, key);
+    setSortKey(next.sortKey);
+    setSortDir(next.sortDir);
   };
 
   const allFilamentIds = useMemo(() => filaments.map((f) => f._id), [filaments]);
