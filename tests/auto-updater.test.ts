@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // level — they don't load in a Node test env. Vitest hoists vi.mock so
 // these run before the auto-updater import below.
 const handleSpy = vi.fn();
-const sendSpy = vi.fn();
 const onSpy = vi.fn();
 
 vi.mock("electron", () => ({
@@ -39,10 +38,16 @@ vi.mock("electron-updater", () => ({
 }));
 
 interface FakeWindow {
-  webContents: { send: typeof sendSpy };
+  webContents: { send: ReturnType<typeof vi.fn> };
 }
+/**
+ * Each fake window gets its OWN send spy. Sharing one would let a
+ * regression that still emits to the previous window slip through —
+ * `win2.webContents.send` and `win1.webContents.send` would be the
+ * same mock and any call would satisfy either assertion.
+ */
 function makeWin(): FakeWindow {
-  return { webContents: { send: sendSpy } };
+  return { webContents: { send: vi.fn() } };
 }
 
 describe("initAutoUpdater — idempotency", () => {
@@ -55,7 +60,6 @@ describe("initAutoUpdater — idempotency", () => {
     // initialized=true bleeds into the next test.
     vi.resetModules();
     handleSpy.mockClear();
-    sendSpy.mockClear();
     onSpy.mockClear();
     initAutoUpdater = (await import("../electron/auto-updater")).initAutoUpdater;
   });
@@ -87,19 +91,29 @@ describe("initAutoUpdater — idempotency", () => {
     expect(handleSpy).toHaveBeenCalledTimes(5);
   });
 
-  it("refreshes the window reference on subsequent calls so future emits target the new window", () => {
+  it("redirects future emits to the new window and stops emitting to the old one", () => {
     const win1 = makeWin();
     const win2 = makeWin();
 
     initAutoUpdater(win1);
+    // The first init emits initial idle state into win1.
+    const win1CallsAfterFirstInit = win1.webContents.send.mock.calls.length;
+    expect(win1CallsAfterFirstInit).toBeGreaterThan(0);
+
     initAutoUpdater(win2);
 
-    // The re-init path should immediately re-emit the current state into
-    // the new window so the renderer sees a value without waiting for the
-    // next status change.
+    // Re-init should immediately re-emit the current state into the NEW
+    // window so the renderer sees a value without waiting for the next
+    // status change.
     expect(win2.webContents.send).toHaveBeenCalledWith(
       "update-status",
       expect.objectContaining({ state: "idle" }),
     );
+
+    // And — the actual GH #154 regression guard — the old window must
+    // not receive any new emits after re-init. Two distinct send spies
+    // are required to verify this; with the previous shared-spy setup a
+    // regression that still targeted win1 would have been invisible.
+    expect(win1.webContents.send.mock.calls.length).toBe(win1CallsAfterFirstInit);
   });
 });
