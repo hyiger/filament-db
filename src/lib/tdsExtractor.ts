@@ -110,33 +110,67 @@ interface TdsContent {
   mimeType?: string;
 }
 
+/** Cap redirect chains. Real-world TDS hosts rarely chain more than 2-3.
+ * Matches the embed-check route limit so the two SSRF-guarded fetchers
+ * behave consistently. */
+const MAX_REDIRECTS = 5;
+
 /**
  * Fetch TDS content from a URL.
  * Returns the content as either base64 PDF data or plain text.
  *
- * Uses the shared SSRF guard from @/lib/externalUrlGuard. Residual risk:
- * only the *initial* URL is validated. The fetch below sets
- * `redirect: "follow"`, so a hostile public host could redirect into
- * private space. Catching that requires `redirect: "manual"` plus per-hop
- * validation; skipped here to avoid breaking legitimate shortener/CDN
- * redirects, with the understanding that the AI-key gate already
- * restricts who can reach this code.
+ * SSRF: every redirect hop re-runs assertExternalUrl, so a public host
+ * can't bounce us into RFC1918/loopback/metadata space via a 3xx. Same
+ * pattern as src/app/api/embed-check/route.ts. The previous
+ * `redirect: "follow"` left the gap that an attacker who could plant a
+ * hostile TDS URL plus the AI-key gate could pivot to private infra.
  */
 async function fetchTdsContent(url: string): Promise<TdsContent> {
-  await assertExternalUrl(url);
-
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
 
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; FilamentDB/1.0)",
-        Accept: "text/html,application/xhtml+xml,application/pdf,*/*",
-      },
-      redirect: "follow",
-    });
+    let currentUrl = url;
+    let res: Response | null = null;
+    for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+      // Re-validate every hop so a hostile public host can't bounce us into
+      // private space via 30x. assertExternalUrl throws on disallowed
+      // schemes / loopback / RFC1918 / metadata IPs.
+      await assertExternalUrl(currentUrl);
+
+      const hopRes = await fetch(currentUrl, {
+        signal: controller.signal,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; FilamentDB/1.0)",
+          Accept: "text/html,application/xhtml+xml,application/pdf,*/*",
+        },
+        redirect: "manual",
+      });
+
+      // Treat 3xx (except 304) as a redirect we follow ourselves so the
+      // next hop is re-validated.
+      const isRedirect = hopRes.status >= 300 && hopRes.status < 400 && hopRes.status !== 304;
+      if (!isRedirect) {
+        res = hopRes;
+        break;
+      }
+      const loc = hopRes.headers.get("location");
+      hopRes.body?.cancel().catch(() => {});
+      if (!loc) {
+        throw new Error(`Failed to fetch TDS: HTTP ${hopRes.status} with no Location header`);
+      }
+      if (hop === MAX_REDIRECTS) {
+        throw new Error(`Failed to fetch TDS: too many redirects (>${MAX_REDIRECTS})`);
+      }
+      // Resolve relative redirects against the URL we just fetched.
+      currentUrl = new URL(loc, currentUrl).toString();
+    }
+
+    if (!res) {
+      // Defensive: shouldn't happen because the loop either breaks on a
+      // non-redirect or throws on too-many-redirects.
+      throw new Error("Failed to fetch TDS: no final response");
+    }
 
     if (!res.ok) {
       throw new Error(`Failed to fetch TDS: HTTP ${res.status} ${res.statusText}`);
