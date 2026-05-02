@@ -36,13 +36,34 @@ const PORT = parseInt(process.env.PORT || "3456", 10);
 
 // ── Single-instance lock ──
 // Prevent multiple app windows / duplicate servers on the same port.
+//
+// On Windows in particular, an upgrade can leave a previous-version
+// process running in the background — the new install then fails to get
+// the lock and used to silently `app.quit()` with no window and no
+// notification, exactly matching the GH #176 report. Surface the cause
+// before quitting so the user knows why nothing appeared.
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
+  // showErrorBox is synchronous and works before app.whenReady, unlike
+  // the regular dialog.show APIs. Keep the message short — the user
+  // hasn't even seen a window yet.
+  dialog.showErrorBox(
+    "Filament DB is already running",
+    "Another instance is already running. Look for it in your taskbar / system tray, " +
+      "or end the existing process via Task Manager (Windows) / Activity Monitor (macOS) " +
+      "and try again.",
+  );
   app.quit();
 } else {
 
 app.on("second-instance", () => {
   if (mainWindow) {
+    // The first instance might be hidden (some upgrade paths leave the
+    // window state stuck off-screen); calling .show() before .focus()
+    // resurfaces it whether it was minimized, hidden, or just behind
+    // another window — covers the GH #176 case where the app process
+    // exists but no window is visible.
+    if (!mainWindow.isVisible()) mainWindow.show();
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
   }
@@ -466,25 +487,51 @@ ipcMain.handle("save-config", async (_event, config: {
     store.set("atlasUri", config.mongodbUri);
   }
 
-  // Resolve the actual URI based on mode
-  const uri = await resolveMongoUri();
-  if (uri) {
-    process.env.MONGODB_URI = uri;
-  }
+  // Only the connection-affecting fields require a server restart and a
+  // navigation reload. Saving cosmetic prefs like currency / locale / AI
+  // keys / customCurrencies used to bounce the user back to /, which made
+  // Settings feel unstable and interrupted multi-step configuration (GH
+  // #177). Detect whether the connection actually changed before doing
+  // any of the heavy lifting.
+  const connectionChanged =
+    config.connectionMode !== undefined ||
+    config.atlasUri !== undefined ||
+    config.mongodbUri !== undefined;
 
-  if (!isDev) {
-    // Restart the production server with the new URI
-    stopServer();
-    try {
-      await startProductionServer(uri || undefined);
-    } catch (err) {
-      console.error("Failed to start server after config save:", err);
+  if (connectionChanged) {
+    const uri = await resolveMongoUri();
+    if (uri) {
+      process.env.MONGODB_URI = uri;
     }
-  }
 
-  // Redirect main window to home
-  if (mainWindow) {
-    mainWindow.loadURL(getAppURL("/"));
+    if (!isDev) {
+      // Restart the production server with the new URI
+      stopServer();
+      try {
+        await startProductionServer(uri || undefined);
+      } catch (err) {
+        console.error("Failed to start server after config save:", err);
+      }
+    }
+
+    // Reload the window on a connection change so the renderer picks up
+    // the new sync state. Destination depends on where the save came from:
+    //   - first-run /setup completes → go home (the existing setup flow
+    //     contract — src/app/setup/page.tsx awaits saveConfig and expects
+    //     the main process to redirect; Codex review on PR #178)
+    //   - any other page (Settings) → stay on /settings so the user can
+    //     keep tuning without being bounced (GH #177)
+    if (mainWindow) {
+      const currentPath = (() => {
+        try {
+          return new URL(mainWindow.webContents.getURL()).pathname;
+        } catch {
+          return "/";
+        }
+      })();
+      const isSetupCompletion = currentPath === "/setup";
+      mainWindow.loadURL(getAppURL(isSetupCompletion ? "/" : "/settings"));
+    }
   }
 
   return { success: true };
