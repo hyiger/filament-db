@@ -32,7 +32,7 @@ Click any filament name in the table to see its full details:
    - **Import from TDS** to extract properties from a Technical Data Sheet URL using AI (requires API key — see [AI Settings](#ai-settings))
    - **Prusament QR** to fetch specs from a Prusament spool QR code
    - **Load from INI** to pick a profile from a PrusaSlicer config bundle
-   - **Clone Existing** to copy all settings from another filament in your library
+   - **Clone Existing** to copy identity fields from another filament and inherit its settings as a variant
 3. Fill in the required fields (name, vendor, type)
 4. Optionally set temperatures, cost, density, color, fan settings, retraction, shrinkage, pressure advance, and other properties
 5. Select compatible nozzles and enter per-nozzle calibration overrides
@@ -55,7 +55,7 @@ Click **"Delete"** next to any filament in the list. You will be prompted to con
 
 You can import filaments from another Filament DB instance hosted on MongoDB Atlas:
 
-1. Click **"Import from Atlas"** on the home page
+1. Open the **Import/Export** dropdown on the home page and click **"Import from Atlas"**
 2. Enter the MongoDB Atlas connection string (e.g., `mongodb+srv://user:pass@cluster.mongodb.net/`)
 3. Click **"Connect"** — the app will retrieve all filaments from the remote database
 4. Select which filaments to import (all are selected by default). Use **"Select All"** / **"Deselect All"** to toggle
@@ -316,7 +316,7 @@ The check requires that the filament has a **spool weight** (empty spool) set an
 
 Prusament filament spools have a QR code linking to a detail page with full specifications.
 
-1. Click **"Prusament QR"** on the home page, or **"+ Prusament QR"** on a filament's spool tracker
+1. Open the **Import/Export** dropdown on the home page and click **"Prusament QR"**, or click **"+ Prusament QR"** on a filament's spool tracker
 2. Enter the spool ID (e.g., `c6974284da`) or paste the full URL
 3. Review the extracted data (material, color, temperatures, weights, pricing, diameter tolerances)
 4. Choose **"New filament"** to create a fully-populated entry, or **"Add spool to existing"** to add the spool to a matching filament
@@ -330,13 +330,13 @@ This also works from a filament's detail page to add another spool of the same m
 
 ### Exporting
 
-Click **"Export CSV"** or **"Export XLSX"** on the home page to download all filaments in the chosen format. The export includes name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying temperature/time, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, and spool type.
+Open the **Import/Export** dropdown on the home page and click **"Export CSV"** or **"Export XLSX"** to download all filaments in the chosen format. The export includes name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying temperature/time, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, and spool type.
 
 XLSX exports include styled headers, color-coded cells, auto-filter, and a frozen header row.
 
 ### Importing
 
-Click **"Import CSV"** or **"Import XLSX"** on the home page to upload a file (max 10 MB). The file must have a header row with at minimum `Name`, `Vendor`, and `Type` columns. Additional columns are mapped by header name (case-insensitive), including glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, nozzle temp ranges, standby temp, color name, and spool type. Only fields present in the file are updated — existing data for unmapped columns is preserved. Rows missing required fields are reported with row numbers and reasons.
+Open the **Import/Export** dropdown on the home page and click **"Import CSV"** or **"Import XLSX"** to upload a file (max 10 MB). The file must have a header row with at minimum `Name`, `Vendor`, and `Type` columns. Additional columns are mapped by header name (case-insensitive), including glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, nozzle temp ranges, standby temp, color name, and spool type. Only fields present in the file are updated — existing data for unmapped columns is preserved. Rows missing required fields are reported with row numbers and reasons.
 
 ---
 
@@ -344,7 +344,7 @@ Click **"Import CSV"** or **"Import XLSX"** on the home page to upload a file (m
 
 ### Exporting a Snapshot
 
-Go to **Settings** and click **"Backup"** in the Database Snapshots section to download a JSON snapshot of the entire database. The snapshot includes all filaments, nozzles, and printers (including soft-deleted documents) with all references and timestamps preserved.
+Go to **Settings** and click **"Backup"** in the Database Snapshots section to download a JSON snapshot of core app data. The snapshot includes filaments, nozzles, printers, bed types, locations, and print history (including soft-deleted documents) with references and timestamps preserved. Shared catalog records are not included in snapshot export/restore.
 
 ### Restoring a Snapshot
 
@@ -415,15 +415,15 @@ PrusaSlicer Filament Edition can check after slicing whether the selected spool 
 
 Even without the fork, you can manually sync:
 
-- **Export**: Click **"Export INI"** on the home page to download all filaments as a PrusaSlicer-compatible config bundle
+- **Export**: Open the **Import/Export** dropdown on the home page and click **"Export INI"** to download all filaments as a PrusaSlicer-compatible config bundle
 - **Import**: In PrusaSlicer, go to **File > Import > Import Config Bundle** to load the exported file
-- **Re-import**: Click **"Import INI"** to import a PrusaSlicer config bundle back into Filament DB
+- **Re-import**: Open the **Import/Export** dropdown and click **"Import INI"** to import a PrusaSlicer config bundle back into Filament DB
 
 ---
 
 ## API Documentation
 
-Go to **Settings** and click **"API Documentation"** to open the interactive Swagger UI at `/api-docs`. This provides a browsable, testable interface for all REST API endpoints with full request/response schemas. The underlying OpenAPI 3.0 spec is available at `/api/openapi` (dynamically versioned from `package.json`).
+Go to **Settings** and click **"API Documentation"** to open the interactive Swagger UI at `/api-docs`. This provides a browsable, testable interface for the documented OpenAPI surface, while [the API reference](api.md) includes additional prose for newer routes and behavior details. The underlying OpenAPI 3.0 spec is available at `/api/openapi` (dynamically versioned from `package.json`).
 
 ---
 

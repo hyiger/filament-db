@@ -14,7 +14,7 @@
 ## Option 1: Web / Desktop UI (recommended)
 
 1. Open Filament DB (desktop app or web at `http://localhost:3456`)
-2. Click **"Import INI"** in the top right of the home page
+2. Open the **Import/Export** dropdown on the home page and click **"Import INI"**
 3. Select your PrusaSlicer config bundle `.ini` file
 4. Filaments are parsed and upserted into the database
 
@@ -102,7 +102,7 @@ Alternatively, set an environment variable: `GEMINI_API_KEY`, `ANTHROPIC_API_KEY
 Prusament filament spools have a QR code that links to a detail page with specifications (material, color, temperatures, weight, manufacturing date, diameter tolerances, pricing).
 
 1. Scan the QR code on the spool or find the spool ID printed on the label
-2. Click **"Prusament QR"** on the home page (or **"+ Prusament QR"** on a filament's spool tracker)
+2. Open the **Import/Export** dropdown on the home page and click **"Prusament QR"** (or click **"+ Prusament QR"** on a filament's spool tracker)
 3. Enter the spool ID (e.g., `c6974284da`) or paste the full URL
 4. Review the extracted data and choose:
    - **New filament** -- creates a fully-populated filament entry
@@ -115,7 +115,7 @@ This also works from a filament's detail page to add another spool of the same m
 
 ## CSV / XLSX Import
 
-1. Click **"Import CSV"** or **"Import XLSX"** on the home page
+1. Open the **Import/Export** dropdown on the home page and click **"Import CSV"** or **"Import XLSX"**
 2. Select a file with a header row containing at minimum `Name`, `Vendor`, and `Type` columns (max 10 MB)
 3. Additional supported columns: `Color`, `Color Name`, `Diameter`, `Cost`, `Density`, `Nozzle Temp`, `Bed Temp`, `Nozzle First Layer`, `Bed First Layer`, `Max Volumetric Speed`, `Spool Weight`, `Net Filament Weight`, `TDS URL`, `Instance ID`, `Drying Temp`, `Drying Time`, `Transmission Distance` (HueForge TD), `Glass Transition` / `Tg`, `Heat Deflection` / `HDT`, `Shore A`, `Shore D`, `Min Print Speed`, `Max Print Speed`, `Nozzle Range Min`, `Nozzle Range Max`, `Standby Temp`, `Spool Type`
 4. Column names are matched case-insensitively with common aliases (e.g. "HueForge TD" maps to Transmission Distance, "Tg" maps to Glass Transition)
@@ -126,24 +126,24 @@ This also works from a filament's detail page to add another spool of the same m
 
 ## Snapshot Restore
 
-You can restore a previously exported snapshot to import an entire database (filaments, nozzles, and printers):
+You can restore a previously exported snapshot to import core app data: filaments, nozzles, printers, bed types, locations, and print history. Shared catalog records are not included in snapshot export/restore.
 
 1. Go to **Settings** and click **"Restore"** in the Database Snapshots section
 2. Select a snapshot JSON file (exported via **"Backup"**)
-3. All current data is replaced with the snapshot contents
+3. All current snapshot-scoped data is replaced with the snapshot contents
 4. The restore uses best-effort rollback — if any error occurs, the handler attempts to re-insert the previous data
 
 ---
 
 ## CSV / XLSX Export
 
-Click **"Export CSV"** or **"Export XLSX"** to download all filaments. Exports include name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying settings, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, and spool type.
+Open the **Import/Export** dropdown on the home page and click **"Export CSV"** or **"Export XLSX"** to download all filaments. Exports include name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying settings, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, and spool type.
 
 ---
 
 ## OpenPrintTag Community Database Import
 
-Browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) (11,000+ materials from 97 brands) and selectively import filaments into your library.
+Browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) (11,000+ materials from 100+ brands) and selectively import filaments into your library.
 
 1. From the home page, open the **Import/Export** dropdown and click **"Browse OpenPrintTag DB"**
 2. The browser loads all FDM filaments from the OpenPrintTag database (SLA resins are filtered out)
@@ -180,6 +180,6 @@ PrusaSlicer Filament Edition fetches base presets from `GET /api/filaments/prusa
 
 ## Exporting to PrusaSlicer INI
 
-Click **"Export INI"** in the top right to download all filaments as a PrusaSlicer-compatible INI file. This file contains all stored settings for each filament and can be imported back into PrusaSlicer via **File > Import > Import Config Bundle...**
+Open the **Import/Export** dropdown on the home page and click **"Export INI"** to download all filaments as a PrusaSlicer-compatible INI file. This file contains all stored settings for each filament and can be imported back into PrusaSlicer via **File > Import > Import Config Bundle...**
 
 Each filament produces one `[filament:Name]` section. Calibration overrides are not included — they are applied dynamically via the calibration API.

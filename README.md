@@ -45,7 +45,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Import from Atlas** -- connect to a remote MongoDB Atlas database and selectively import filaments
 - **TDS extraction** -- paste a TDS URL to auto-populate the filament form via AI (Gemini, Claude, or ChatGPT)
 - **OpenPrintTag binary** -- download `.bin` files with drying temps, transmission distance (HueForge TD), and instance ID
-- **Snapshot backup/restore** -- export and import the entire database as JSON with best-effort rollback on failure
+- **Snapshot backup/restore** -- export and import core app data (filaments, nozzles, printers, bed types, locations, and print history) as JSON with best-effort rollback on failure
 
 ### Desktop App
 - **Multi-language support** -- English and German, with easy addition of new languages
@@ -59,7 +59,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 ### Developer
 - **REST API** -- full CRUD endpoints for filaments, nozzles, printers, and bed types
 - **PrusaSlicer API** -- `GET /api/filaments/prusaslicer` exports filaments as a PrusaSlicer-compatible INI config bundle (one section per filament); calibration overrides are applied dynamically via `GET /api/filaments/{id}/calibration`; `POST` imports bundles back
-- **API documentation** -- interactive Swagger UI at `/api-docs` with OpenAPI 3.0 spec
+- **API documentation** -- API reference plus interactive Swagger UI at `/api-docs` with an OpenAPI 3.0 spec for the documented REST surface
 
 ## Tech Stack
 
@@ -107,7 +107,7 @@ See the [Setup Guide](docs/setup.md) for detailed instructions.
 | [Importing & Exporting](docs/importing.md) | PrusaSlicer config export, web UI import, CLI seed script, INI export |
 | [Usage Guide](docs/usage.md) | Browsing, filtering, sorting, editing filaments, nozzle management, calibrations, TDS links |
 | [NFC Tags](docs/nfc.md) | Reading/writing OpenPrintTag and reading Bambu Lab NFC spool tags with the ACR1552U reader |
-| [API Reference](docs/api.md) | REST API endpoints for filaments, nozzles, and printers (also available as [interactive Swagger UI](/api-docs)) |
+| [API Reference](docs/api.md) | REST API endpoints for Filament DB, plus the documented OpenAPI surface used by the [interactive Swagger UI](/api-docs) |
 | [Testing](docs/testing.md) | Running tests, coverage thresholds, CI/CD with GitHub Actions |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and solutions |
 

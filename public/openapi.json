@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "Filament DB API",
-    "description": "REST API for managing 3D printing filament profiles, nozzles, and printers. Supports filament inheritance (parent/variant), per-printer per-nozzle calibrations, INI profile export/import, and OpenPrintTag NFC binary generation.",
-    "version": "1.9.2",
+    "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports.",
+    "version": "1.13.0",
     "license": {
       "name": "MIT"
     }
@@ -19,9 +19,17 @@
     { "name": "Spools", "description": "Per-filament spool tracking" },
     { "name": "Nozzles", "description": "Manage nozzle definitions" },
     { "name": "Printers", "description": "Manage printer profiles" },
+    { "name": "Bed Types", "description": "Manage build plate / bed surface definitions" },
+    { "name": "Locations", "description": "Manage spool storage locations" },
+    { "name": "Dashboard", "description": "Dashboard summary data" },
+    { "name": "Analytics", "description": "Usage analytics and rollups" },
     { "name": "Prusament", "description": "Prusament spool scraping and import" },
     { "name": "PrusaSlicer", "description": "PrusaSlicer config bundle export and import" },
     { "name": "OpenPrintTag", "description": "OpenPrintTag community database browser and import" },
+    { "name": "OrcaSlicer", "description": "OrcaSlicer profile export and sync" },
+    { "name": "Print History", "description": "Record and undo print jobs" },
+    { "name": "Sharing", "description": "Publish and retrieve shared filament catalogs" },
+    { "name": "Utilities", "description": "Auxiliary API helpers" },
     { "name": "TDS", "description": "Technical Data Sheet AI extraction" },
     { "name": "Snapshot", "description": "Database backup and restore" },
     { "name": "Setup", "description": "Database connectivity" }
@@ -1366,11 +1374,454 @@
         }
       }
     },
+    "/api/analytics": {
+      "get": {
+        "tags": ["Analytics"],
+        "summary": "Get usage analytics",
+        "description": "Aggregates print history and direct manual spool usage for a time window.",
+        "parameters": [
+          { "name": "days", "in": "query", "schema": { "type": "integer", "minimum": 7, "maximum": 365, "default": 30 }, "description": "Number of days to include" }
+        ],
+        "responses": {
+          "200": { "description": "Usage analytics", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "500": { "description": "Failed to build analytics", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/dashboard": {
+      "get": {
+        "tags": ["Dashboard"],
+        "summary": "Get dashboard summary",
+        "description": "Returns counts, inventory totals, low-stock rows, dry-cycle reminders, and recent print history for the dashboard.",
+        "responses": {
+          "200": { "description": "Dashboard summary", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "500": { "description": "Failed to build dashboard", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/embed-check": {
+      "get": {
+        "tags": ["Utilities"],
+        "summary": "Check whether a URL can be embedded",
+        "description": "Fetches headers for a public http(s) URL using SSRF-safe redirect handling and reports whether the URL is likely embeddable in an iframe.",
+        "parameters": [
+          { "name": "url", "in": "query", "required": true, "schema": { "type": "string", "format": "uri" }, "description": "Public http(s) URL to probe" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Embed check result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "embeddable": { "type": "boolean" },
+                    "reason": { "type": "string" },
+                    "contentType": { "type": "string", "nullable": true }
+                  },
+                  "required": ["embeddable"]
+                }
+              }
+            }
+          },
+          "400": { "description": "Missing URL", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/bed-types": {
+      "get": {
+        "tags": ["Bed Types"],
+        "summary": "List bed types",
+        "parameters": [
+          { "name": "material", "in": "query", "schema": { "type": "string" }, "description": "Filter by bed material" }
+        ],
+        "responses": {
+          "200": { "description": "Array of bed types", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }
+        }
+      },
+      "post": {
+        "tags": ["Bed Types"],
+        "summary": "Create bed type",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": {
+          "201": { "description": "Created bed type", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Invalid JSON or duplicate bed type", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/bed-types/{id}": {
+      "parameters": [
+        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "MongoDB ObjectId of the bed type" }
+      ],
+      "get": {
+        "tags": ["Bed Types"],
+        "summary": "Get bed type",
+        "responses": {
+          "200": { "description": "Bed type", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "404": { "description": "Bed type not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      },
+      "put": {
+        "tags": ["Bed Types"],
+        "summary": "Update bed type",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": {
+          "200": { "description": "Updated bed type", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "404": { "description": "Bed type not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["Bed Types"],
+        "summary": "Soft-delete bed type",
+        "description": "Soft-deletes a bed type unless it is referenced by any filament calibration.",
+        "responses": {
+          "200": { "description": "Deleted", "content": { "application/json": { "schema": { "type": "object", "properties": { "message": { "type": "string" } } } } } },
+          "400": { "description": "Bed type is still referenced", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Bed type not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/locations": {
+      "get": {
+        "tags": ["Locations"],
+        "summary": "List locations",
+        "parameters": [
+          { "name": "kind", "in": "query", "schema": { "type": "string" }, "description": "Filter by location kind" },
+          { "name": "stats", "in": "query", "schema": { "type": "boolean" }, "description": "When true, include spool counts and grams per location" }
+        ],
+        "responses": {
+          "200": { "description": "Array of locations", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }
+        }
+      },
+      "post": {
+        "tags": ["Locations"],
+        "summary": "Create location",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": {
+          "201": { "description": "Created location", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Invalid JSON or duplicate location", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/locations/{id}": {
+      "parameters": [
+        { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "MongoDB ObjectId of the location" }
+      ],
+      "get": {
+        "tags": ["Locations"],
+        "summary": "Get location",
+        "responses": {
+          "200": { "description": "Location", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "404": { "description": "Location not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      },
+      "put": {
+        "tags": ["Locations"],
+        "summary": "Update location",
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": {
+          "200": { "description": "Updated location", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "404": { "description": "Location not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["Locations"],
+        "summary": "Soft-delete location",
+        "description": "Soft-deletes a location unless it is referenced by any spool.",
+        "responses": {
+          "200": { "description": "Deleted", "content": { "application/json": { "schema": { "type": "object", "properties": { "message": { "type": "string" } } } } } },
+          "400": { "description": "Location is still referenced", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Location not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/filaments/compare": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "Compare filaments",
+        "description": "Fetches up to 8 filaments, preserving the order of the comma-separated ids query.",
+        "parameters": [
+          { "name": "ids", "in": "query", "required": true, "schema": { "type": "string" }, "description": "Comma-separated filament IDs" }
+        ],
+        "responses": {
+          "200": { "description": "Ordered filament list", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/Filament" } } } } },
+          "400": { "description": "Missing or invalid ids", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/filaments/orcaslicer": {
+      "get": {
+        "tags": ["OrcaSlicer"],
+        "summary": "Export OrcaSlicer profiles",
+        "description": "Exports resolved filament profiles as OrcaSlicer-compatible JSON.",
+        "parameters": [
+          { "name": "type", "in": "query", "schema": { "type": "string" }, "description": "Filter by filament type" },
+          { "name": "vendor", "in": "query", "schema": { "type": "string" }, "description": "Filter by vendor name" },
+          { "name": "ids", "in": "query", "schema": { "type": "string" }, "description": "Comma-separated filament IDs" }
+        ],
+        "responses": {
+          "200": { "description": "OrcaSlicer profile array", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }
+        }
+      }
+    },
+    "/api/filaments/{id}/orcaslicer": {
+      "post": {
+        "tags": ["OrcaSlicer"],
+        "summary": "Sync OrcaSlicer profile changes",
+        "description": "Maps known OrcaSlicer fields back to structured filament fields and stores unknown keys in the settings bag.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Filament name or MongoDB ObjectId" }
+        ],
+        "requestBody": { "required": true, "content": { "application/json": { "schema": { "type": "object" } } } },
+        "responses": {
+          "200": { "description": "Sync result", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Invalid JSON", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Filament not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/filaments/{id}/spools/{spoolId}/usage": {
+      "post": {
+        "tags": ["Spools"],
+        "summary": "Log manual spool usage",
+        "description": "Decrements the target spool total weight and appends a manual usage history entry.",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" },
+          { "name": "spoolId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Spool ObjectId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["grams"],
+                "properties": {
+                  "grams": { "type": "number", "exclusiveMinimum": 0 },
+                  "jobLabel": { "type": "string", "maxLength": 200 },
+                  "date": { "type": "string", "format": "date-time" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Updated filament", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Filament" } } } },
+          "400": { "description": "Invalid usage body", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Filament or spool not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/filaments/{id}/spools/{spoolId}/dry-cycles": {
+      "post": {
+        "tags": ["Spools"],
+        "summary": "Log spool dry cycle",
+        "description": "Appends a drying-cycle entry to a spool.",
+        "parameters": [
+          { "$ref": "#/components/parameters/FilamentId" },
+          { "name": "spoolId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Spool ObjectId" }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "date": { "type": "string", "format": "date-time" },
+                  "tempC": { "type": "number", "nullable": true },
+                  "durationMin": { "type": "number", "nullable": true },
+                  "notes": { "type": "string", "maxLength": 1000 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Updated filament", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Filament" } } } },
+          "400": { "description": "Invalid dry-cycle body", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Filament or spool not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/print-history": {
+      "get": {
+        "tags": ["Print History"],
+        "summary": "List print history",
+        "parameters": [
+          { "name": "filamentId", "in": "query", "schema": { "type": "string" }, "description": "Filter to jobs using a filament" },
+          { "name": "printerId", "in": "query", "schema": { "type": "string" }, "description": "Filter to a printer" },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 100 }, "description": "Maximum rows to return" }
+        ],
+        "responses": {
+          "200": { "description": "Print history entries", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }
+        }
+      },
+      "post": {
+        "tags": ["Print History"],
+        "summary": "Record print job",
+        "description": "Creates a PrintHistory row, debits referenced spools, and stamps usageHistory entries with the job id for safe undo.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["jobLabel", "usage"],
+                "properties": {
+                  "jobLabel": { "type": "string", "maxLength": 200 },
+                  "printerId": { "type": "string", "nullable": true },
+                  "startedAt": { "type": "string", "format": "date-time" },
+                  "source": { "type": "string", "enum": ["manual", "prusaslicer", "orcaslicer", "bambu", "other"] },
+                  "notes": { "type": "string", "maxLength": 2000 },
+                  "usage": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": {
+                      "type": "object",
+                      "required": ["filamentId", "grams"],
+                      "properties": {
+                        "filamentId": { "type": "string" },
+                        "spoolId": { "type": "string" },
+                        "grams": { "type": "number", "minimum": 0 }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Created print history entry", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Invalid print history body", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Referenced filament not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/print-history/{id}": {
+      "delete": {
+        "tags": ["Print History"],
+        "summary": "Undo print job",
+        "description": "Refunds matching spool usage and soft-deletes the PrintHistory row so sync propagates the delete tombstone.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "PrintHistory ObjectId" }
+        ],
+        "responses": {
+          "200": { "description": "Deleted and refunded", "content": { "application/json": { "schema": { "type": "object", "properties": { "message": { "type": "string" } } } } } },
+          "404": { "description": "Print history not found or already deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/share": {
+      "get": {
+        "tags": ["Sharing"],
+        "summary": "List shared catalogs",
+        "responses": {
+          "200": { "description": "Published catalogs", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }
+        }
+      },
+      "post": {
+        "tags": ["Sharing"],
+        "summary": "Publish shared catalog",
+        "description": "Publishes a static denormalized catalog payload for selected filaments and referenced nozzles/printers/bed types.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["title", "filamentIds"],
+                "properties": {
+                  "title": { "type": "string", "maxLength": 200 },
+                  "description": { "type": "string", "maxLength": 5000 },
+                  "filamentIds": { "type": "array", "minItems": 1, "maxItems": 500, "items": { "type": "string" } },
+                  "expiresAt": { "type": "string", "format": "date-time", "nullable": true }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": { "description": "Shared catalog published", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Invalid share body", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "No matching filaments found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/share/{slug}": {
+      "parameters": [
+        { "name": "slug", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Shared catalog slug" }
+      ],
+      "get": {
+        "tags": ["Sharing"],
+        "summary": "Fetch shared catalog",
+        "description": "Returns the denormalized payload for a public shared catalog and increments its view count.",
+        "responses": {
+          "200": { "description": "Shared catalog", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "404": { "description": "Shared catalog not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "410": { "description": "Shared catalog expired", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      },
+      "delete": {
+        "tags": ["Sharing"],
+        "summary": "Unpublish shared catalog",
+        "description": "Soft-deletes the shared catalog so peer sync propagates the unpublish tombstone.",
+        "responses": {
+          "200": { "description": "Unpublished", "content": { "application/json": { "schema": { "type": "object", "properties": { "message": { "type": "string" } } } } } },
+          "404": { "description": "Shared catalog not found", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/spools/export-csv": {
+      "get": {
+        "tags": ["Spools"],
+        "summary": "Export spools as CSV",
+        "description": "Exports one row per spool with round-trippable columns for filament, vendor, label, total weight, lot number, dates, and location.",
+        "responses": {
+          "200": { "description": "Spool CSV", "content": { "text/csv": { "schema": { "type": "string" } } } }
+        }
+      }
+    },
+    "/api/spools/import": {
+      "post": {
+        "tags": ["Spools"],
+        "summary": "Import spools from CSV",
+        "description": "Bulk-creates spools from CSV. Required columns are filament and totalWeight; vendor can disambiguate, and location names are created when missing.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "text/csv": { "schema": { "type": "string" } },
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["csv"],
+                "properties": { "csv": { "type": "string" } }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Per-row import result", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Invalid or empty CSV", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/openapi": {
+      "get": {
+        "tags": ["Utilities"],
+        "summary": "Get OpenAPI document",
+        "description": "Returns the OpenAPI 3.0 document, with version injected from package.json at runtime.",
+        "responses": {
+          "200": { "description": "OpenAPI document", "content": { "application/json": { "schema": { "type": "object" } } } }
+        }
+      }
+    },
     "/api/snapshot": {
       "get": {
         "tags": ["Snapshot"],
         "summary": "Export database snapshot",
-        "description": "Downloads a JSON snapshot of the entire database including all filaments, nozzles, and printers.",
+        "description": "Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, and print history. Shared catalog records are not included in snapshot export/restore.",
         "responses": {
           "200": {
             "description": "JSON snapshot file",
@@ -1381,7 +1832,7 @@
       "post": {
         "tags": ["Snapshot"],
         "summary": "Restore database snapshot",
-        "description": "Restores the database from a snapshot using best-effort rollback. If any part of the restore fails, the handler attempts to re-insert previous data from an in-memory backup. Concurrent restores are rejected with 409. Note: the restore is not truly atomic — concurrent readers may observe partial state during the delete/insert window, and rollback itself may fail.",
+        "description": "Restores snapshot-scoped data from a snapshot using best-effort rollback. If any part of the restore fails, the handler attempts to re-insert previous data from an in-memory backup. Concurrent restores are rejected with 409. Note: the restore is not truly atomic — concurrent readers may observe partial state during the delete/insert window, and rollback itself may fail.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1404,7 +1855,10 @@
                       "properties": {
                         "filaments": { "type": "integer" },
                         "nozzles": { "type": "integer" },
-                        "printers": { "type": "integer" }
+                        "printers": { "type": "integer" },
+                        "bedTypes": { "type": "integer" },
+                        "locations": { "type": "integer" },
+                        "printHistory": { "type": "integer" }
                       }
                     }
                   }
@@ -1422,7 +1876,7 @@
       "delete": {
         "tags": ["Snapshot"],
         "summary": "Clear database",
-        "description": "Permanently deletes all data from all collections.",
+        "description": "Permanently deletes filaments, nozzles, printers, bed types, locations, print history, and shared catalogs.",
         "responses": {
           "200": {
             "description": "Database cleared",
@@ -1437,7 +1891,11 @@
                       "properties": {
                         "filaments": { "type": "integer" },
                         "nozzles": { "type": "integer" },
-                        "printers": { "type": "integer" }
+                        "printers": { "type": "integer" },
+                        "bedTypes": { "type": "integer" },
+                        "locations": { "type": "integer" },
+                        "printHistory": { "type": "integer" },
+                        "sharedCatalogs": { "type": "integer" }
                       }
                     }
                   }

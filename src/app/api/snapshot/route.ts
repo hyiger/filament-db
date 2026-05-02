@@ -72,11 +72,13 @@ function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
- * GET /api/snapshot — Export the entire database as a JSON snapshot.
+ * GET /api/snapshot — Export snapshot-scoped app data as JSON.
  *
- * The snapshot includes all documents (including soft-deleted) from all
- * three collections. Timestamps, _ids, and references are preserved so
- * the snapshot can be restored as-is.
+ * The snapshot includes all documents (including soft-deleted) from
+ * filaments, nozzles, printers, bed types, locations, and print history.
+ * Timestamps, _ids, and references are preserved so the snapshot can be
+ * restored as-is. Shared catalogs are deliberately excluded from backup /
+ * restore; the danger-zone delete endpoint clears them separately.
  */
 export async function GET() {
   await dbConnect();
@@ -122,8 +124,9 @@ export async function GET() {
 /**
  * POST /api/snapshot — Restore the database from a JSON snapshot.
  *
- * This is a destructive operation: all existing documents in the three
- * collections are deleted and replaced with the snapshot contents.
+ * This is a destructive operation: all existing documents in the
+ * snapshot-scoped collections are deleted and replaced with the snapshot
+ * contents.
  *
  * Expects multipart/form-data with a single "file" field containing
  * the snapshot JSON.

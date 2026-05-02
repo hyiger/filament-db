@@ -2,7 +2,7 @@
 
 [< Back to README](../README.md)
 
-> **Interactive docs**: Browse and test all endpoints in the [Swagger UI](/api-docs) — an interactive OpenAPI 3.0 explorer built into the app.
+> **Interactive docs**: Browse and test the documented OpenAPI surface in the [Swagger UI](/api-docs) — an interactive OpenAPI 3.0 explorer built into the app. This Markdown reference also documents newer routes that may have more detailed prose than the generated Swagger view.
 
 ## Filaments
 
@@ -713,19 +713,19 @@ Extracted fields include: name, vendor, type, density, diameter, temperatures (n
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/snapshot` | Export the entire database as a JSON snapshot |
+| `GET` | `/api/snapshot` | Export core app data as a JSON snapshot |
 | `POST` | `/api/snapshot` | Restore the database from a JSON snapshot |
-| `DELETE` | `/api/snapshot/delete` | Permanently delete all data from all collections |
+| `DELETE` | `/api/snapshot/delete` | Permanently delete all local app data |
 
 ### GET /api/snapshot
 
-Downloads a JSON snapshot of the entire database, including all filaments, nozzles, printers, and bed types (including soft-deleted documents). The snapshot preserves `_id` values, timestamps, and references so it can be restored exactly.
+Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, and print history (including soft-deleted documents). The snapshot preserves `_id` values, timestamps, and references so it can be restored exactly. Shared catalog records are not included in snapshot export/restore.
 
 Returns a JSON file with `Content-Disposition: attachment` header.
 
 ### POST /api/snapshot
 
-Restore the database from a previously exported snapshot. This is a destructive operation: all existing data is replaced with the snapshot contents.
+Restore the database from a previously exported snapshot. This is a destructive operation: all existing snapshot-scoped data is replaced with the snapshot contents.
 
 Upload via `multipart/form-data` with a `file` field containing the snapshot JSON, or send the JSON directly as the request body.
 
@@ -735,13 +735,20 @@ Returns:
 ```json
 {
   "message": "Snapshot restored successfully",
-  "restored": { "filaments": 42, "nozzles": 5, "printers": 2 }
+  "restored": {
+    "filaments": 42,
+    "nozzles": 5,
+    "printers": 2,
+    "bedTypes": 3,
+    "locations": 4,
+    "printHistory": 12
+  }
 }
 ```
 
 ### DELETE /api/snapshot/delete
 
-Permanently deletes all documents from all three collections (filaments, nozzles, printers). Returns the count of deleted documents per collection.
+Permanently deletes all documents from filaments, nozzles, printers, bed types, locations, print history, and shared catalogs. Returns the count of deleted documents per collection.
 
 ---
 
@@ -880,7 +887,7 @@ Response: the created `PrintHistory` document, `201`.
 
 ### DELETE /api/print-history/{id}
 
-Undo a job: for every `usage` entry on the record, find the matching spool, refund its `totalWeight` by the recorded grams, and remove the corresponding `usageHistory` entry. Then **soft-delete** the `PrintHistory` document by setting `_deletedAt` (instead of a hard `deleteOne`) so peer sync can propagate the unpublish via the tombstone — a hard delete would let the other peer push the row back on the next sync cycle.
+Undo a job: for every `usage` entry on the record, find the matching spool, refund its `totalWeight` by the recorded grams, and remove the corresponding `usageHistory` entry. Then **soft-delete** the `PrintHistory` document by setting `_deletedAt` (instead of a hard `deleteOne`) so peer sync can propagate the delete via the tombstone — a hard delete would let the other peer push the row back on the next sync cycle.
 
 Refund matching is by `usageHistory.jobId === entry._id` — unambiguous, so a manual usage log that happens to share `(grams, date)` with the job is **not** affected. Legacy entries written before `jobId` existed (pre-v1.12.7) fall back to a `(grams, date, source)` match that's still scoped to `source: "job" | "slicer"`, so manual logs survive that path too.
 

@@ -39,7 +39,7 @@ npm run dev                   # opens http://localhost:3456
 
 > **Note:** The web app always requires a `MONGODB_URI` in `.env.local`. Offline and hybrid modes are desktop-app-only features.
 >
-> **Port:** Filament DB always runs on port **3456** in all modes.
+> **Port:** Source/dev and the desktop app use port **3456**. Docker exposes container port **3000** and is normally mapped to host port **3456** with `-p 3456:3000`.
 
 ---
 
@@ -186,7 +186,7 @@ If you have a link to a manufacturer's Technical Data Sheet (PDF or web page), t
 If you already have profiles in PrusaSlicer, bulk-import them instead of entering each one by hand.
 
 1. In PrusaSlicer, go to **File > Export > Export Config Bundle** and save the `.ini` file.
-2. On the Filament DB home page, click **Import INI**.
+2. On the Filament DB home page, open the **Import/Export** dropdown and click **Import INI**.
 3. Select the `.ini` file.
 4. A toast confirms how many filaments were imported: `Imported 42 filaments (38 new, 4 updated)`.
 
@@ -194,7 +194,7 @@ If you already have profiles in PrusaSlicer, bulk-import them instead of enterin
 
 You can import filaments from another Filament DB instance hosted on MongoDB Atlas:
 
-1. On the home page, click **Import from Atlas**.
+1. On the home page, open the **Import/Export** dropdown and click **Import from Atlas**.
 2. Enter the MongoDB Atlas connection string for the remote database.
 3. Click **Connect** -- the app retrieves all filaments from the remote database.
 4. A list appears with checkboxes for each filament. Parent/variant hierarchy is indicated with indentation and arrow markers. Use **Select All** / **Deselect All** to toggle.
@@ -205,7 +205,7 @@ You can import filaments from another Filament DB instance hosted on MongoDB Atl
 
 Prusament spools have a QR code linking to a detail page with full specifications (material, color, temperatures, weight, diameter tolerances, pricing).
 
-1. On the home page, click **Prusament QR**.
+1. On the home page, open the **Import/Export** dropdown and click **Prusament QR**.
 2. Enter the spool ID (e.g., `c6974284da`) or paste the full URL from the QR code.
 3. The app fetches and displays the spool data -- material, color swatch, temperatures, weights, pricing.
 4. Choose **"New filament"** to create a fully-populated filament entry, or **"Add spool to existing"** to add the spool to a matching filament in your library.
@@ -215,7 +215,7 @@ You can also click **"+ Prusament QR"** on a filament's detail page (in the Spoo
 
 ### From CSV or XLSX
 
-1. On the home page, click **Import CSV** or **Import XLSX**.
+1. On the home page, open the **Import/Export** dropdown and click **Import CSV** or **Import XLSX**.
 2. Select a file with a header row containing at minimum `Name`, `Vendor`, and `Type` columns.
 3. A toast confirms how many filaments were imported. Only fields present in the file are updated — existing data for unmapped columns is preserved.
 
@@ -223,7 +223,7 @@ You can also click **"+ Prusament QR"** on a filament's detail page (in the Spoo
 
 1. Go to **Settings** and click **"Restore"** in the Database Snapshots section.
 2. Select a previously exported snapshot JSON file.
-3. All current data is replaced with the snapshot contents (best-effort rollback on failure).
+3. All current snapshot-scoped data is replaced with the snapshot contents (best-effort rollback on failure).
 
 ### Via CLI (alternative)
 
@@ -304,7 +304,7 @@ To turn an existing standalone filament into a variant:
 
 ## Step 11: Export to PrusaSlicer
 
-1. On the home page, click **Export INI**.
+1. On the home page, open the **Import/Export** dropdown and click **Export INI**.
 2. A `.ini` file downloads containing all your filaments as `[filament:Name]` sections — one section per filament.
 3. In PrusaSlicer, go to **File > Import > Import Config Bundle** and select the file.
 
@@ -481,15 +481,15 @@ If you use [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer)
 3. Your filaments appear in the filament dropdown; calibration values (EM, max volumetric speed, PA, retraction) are applied dynamically when you switch printer/nozzle
 4. Edit filaments in Filament DB, restart PrusaSlicer, and the updated values appear automatically
 
-> **Port:** Filament DB runs on port **3456** in all modes. PrusaSlicer defaults to `http://localhost:3456`.
+> **Port:** Filament DB dev/desktop runs on port **3456**. Docker uses container port **3000** and is normally mapped to host port **3456**. PrusaSlicer defaults to `http://localhost:3456`.
 
 ### Manual Export/Import
 
 Without the fork, sync manually:
 
-1. Click **"Export INI"** on the home page to download a PrusaSlicer-compatible config bundle
+1. Open the **Import/Export** dropdown on the home page and click **"Export INI"** to download a PrusaSlicer-compatible config bundle
 2. In PrusaSlicer, go to **File > Import > Import Config Bundle** to load it
-3. To re-import from PrusaSlicer, export a config bundle and use **"Import INI"** in Filament DB
+3. To re-import from PrusaSlicer, export a config bundle and use **Import/Export > "Import INI"** in Filament DB
 
 ---
 
@@ -580,14 +580,14 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 | Populate from NFC / TDS / INI / Clone | Add Filament > Populate from toolbar |
 | Import from TDS | Add Filament > Import from TDS |
 | Configure AI provider | Settings > AI Features |
-| Import from PrusaSlicer | Home > Import INI |
-| Import from CSV/XLSX | Home > Import CSV / Import XLSX |
-| Import Prusament spool | Home > Prusament QR |
-| Import from Atlas | Home > Import from Atlas |
+| Import from PrusaSlicer | Home > Import/Export > Import INI |
+| Import from CSV/XLSX | Home > Import/Export > Import CSV / Import XLSX |
+| Import Prusament spool | Home > Import/Export > Prusament QR |
+| Import from Atlas | Home > Import/Export > Import from Atlas |
 | Browse OpenPrintTag DB | Home > Import/Export > Browse OpenPrintTag DB |
 | Restore from snapshot | Settings > Database Snapshots > Restore |
-| Export to PrusaSlicer | Home > Export INI |
-| Export to CSV/XLSX | Home > Export CSV / Export XLSX |
+| Export to PrusaSlicer | Home > Import/Export > Export INI |
+| Export to CSV/XLSX | Home > Import/Export > Export CSV / Export XLSX |
 | Backup database | Settings > Database Snapshots > Backup |
 | View filament details | Home > click filament name |
 | Edit filament | Detail page > Edit |
