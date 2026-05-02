@@ -66,7 +66,15 @@ export async function DELETE(
       await filament.save();
     }
 
-    await PrintHistory.deleteOne({ _id: id });
+    // Soft-delete by setting _deletedAt. Hard `deleteOne` would let a peer
+    // sync resurrect the row from the other DB on the next cycle —
+    // syncCollection treats "missing on one side" as pull/push, not delete,
+    // and only propagates deletes via the _deletedAt tombstone. Same model
+    // the rest of the synced collections already use.
+    await PrintHistory.updateOne(
+      { _id: id },
+      { $set: { _deletedAt: new Date() } },
+    );
     return NextResponse.json({ message: "Deleted and refunded" });
   } catch (err) {
     return errorResponse("Failed to delete print history", 500, getErrorMessage(err));

@@ -13,6 +13,7 @@ import mongoose, { Schema, Document, Model } from "mongoose";
 export interface ISharedCatalog extends Document {
   /** Short URL-safe identifier used in the share link. */
   slug: string;
+  syncId: string | null;
   /** Human-readable title shown on the share page. */
   title: string;
   /** Optional description shown on the share page. */
@@ -30,6 +31,9 @@ export interface ISharedCatalog extends Document {
   };
   expiresAt: Date | null;
   viewCount: number;
+  /** Soft-delete tombstone so a hard-delete on one peer doesn't get
+   * resurrected by the next sync cycle from the other peer. */
+  _deletedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -42,14 +46,27 @@ function generateSlug(): string {
 
 const SharedCatalogSchema = new Schema<ISharedCatalog>(
   {
-    slug: { type: String, required: true, unique: true, index: true, default: generateSlug },
+    // Slug is unique only among non-deleted rows so a soft-deleted slug
+    // can be reused if the random-base64url generator ever collides on
+    // a republish. Same partial-unique pattern Location and BedType use.
+    // Field-level `index: true` is intentionally omitted — the
+    // schema.index() call below owns the index and adding another would
+    // create a duplicate-name collision.
+    slug: { type: String, required: true, default: generateSlug },
+    syncId: { type: String, unique: true, sparse: true, index: true },
     title: { type: String, required: true },
     description: { type: String, default: "" },
     payload: { type: Schema.Types.Mixed, required: true },
     expiresAt: { type: Date, default: null, index: true },
     viewCount: { type: Number, default: 0, min: 0 },
+    _deletedAt: { type: Date, default: null },
   },
   { timestamps: true }
+);
+
+SharedCatalogSchema.index(
+  { slug: 1 },
+  { unique: true, partialFilterExpression: { _deletedAt: null } }
 );
 
 const SharedCatalog: Model<ISharedCatalog> =

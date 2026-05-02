@@ -284,7 +284,7 @@ describe("/api/share", () => {
   });
 
   describe("DELETE /api/share/[slug]", () => {
-    it("unpublishes a catalog", async () => {
+    it("unpublishes a catalog (soft-delete sets _deletedAt)", async () => {
       const catalog = await SharedCatalog.create({
         title: "Doomed",
         payload: {
@@ -301,8 +301,41 @@ describe("/api/share", () => {
         { params: Promise.resolve({ slug: catalog.slug }) },
       );
       expect(res.status).toBe(200);
-      const check = await SharedCatalog.findOne({ slug: catalog.slug });
-      expect(check).toBeNull();
+      // Soft-delete: row stays in collection so peer sync can propagate
+      // the unpublish via _deletedAt rather than resurrecting on the
+      // next pull. The slug-active query (used by the public GET) must
+      // miss it so the link returns 404.
+      const active = await SharedCatalog.findOne({ slug: catalog.slug, _deletedAt: null });
+      expect(active).toBeNull();
+      const tombstone = await SharedCatalog.findOne({ slug: catalog.slug });
+      expect(tombstone).not.toBeNull();
+      expect(tombstone?._deletedAt).toBeInstanceOf(Date);
+    });
+
+    it("returns 404 when deleting an already-soft-deleted catalog", async () => {
+      const catalog = await SharedCatalog.create({
+        title: "Already gone",
+        payload: { version: 1, createdAt: new Date().toISOString(), filaments: [], nozzles: [], printers: [], bedTypes: [] },
+        _deletedAt: new Date(),
+      });
+      const res = await deleteShare(
+        new NextRequest(`http://localhost/api/share/${catalog.slug}`),
+        { params: Promise.resolve({ slug: catalog.slug }) },
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("public GET hides a soft-deleted catalog", async () => {
+      const catalog = await SharedCatalog.create({
+        title: "Hidden",
+        payload: { version: 1, createdAt: new Date().toISOString(), filaments: [], nozzles: [], printers: [], bedTypes: [] },
+        _deletedAt: new Date(),
+      });
+      const res = await getShare(
+        new NextRequest(`http://localhost/api/share/${catalog.slug}`),
+        { params: Promise.resolve({ slug: catalog.slug }) },
+      );
+      expect(res.status).toBe(404);
     });
   });
 });

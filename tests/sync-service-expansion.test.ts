@@ -355,6 +355,54 @@ describe("SyncService — v1.12 sync expansion", () => {
       // the job ran.
       expect(remoteHistory?.usage).toHaveLength(0);
     });
+
+    it("propagates a soft-deleted print history (tombstone) to the other side", async () => {
+      // Hard-delete on one peer would let the other peer push the row
+      // back on the next sync. The DELETE route now soft-deletes via
+      // _deletedAt so syncCollection's tombstone path can carry the
+      // deletion across.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+
+      const sharedSyncId = "ph-shared-syncid";
+      const startedAt = new Date("2026-04-30T12:00:00Z");
+      // Both sides have the row (state after a prior sync). The user
+      // then unpublishes on local — soft-delete sets _deletedAt to a
+      // value newer than the remote's updatedAt.
+      await localDb.collection("printhistories").insertOne({
+        jobLabel: "to-be-deleted",
+        printerId: null,
+        usage: [],
+        startedAt,
+        source: "manual",
+        notes: "",
+        syncId: sharedSyncId,
+        _deletedAt: new Date(Date.now() + 1000), // newer than remote's updatedAt
+        createdAt: startedAt,
+        updatedAt: startedAt,
+      });
+      await remoteDb.collection("printhistories").insertOne({
+        jobLabel: "to-be-deleted",
+        printerId: null,
+        usage: [],
+        startedAt,
+        source: "manual",
+        notes: "",
+        syncId: sharedSyncId,
+        _deletedAt: null,
+        createdAt: startedAt,
+        updatedAt: startedAt,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      const remoteRow = await remoteDb.collection("printhistories").findOne({ syncId: sharedSyncId });
+      expect(remoteRow).not.toBeNull();
+      // The tombstone propagated to the remote side instead of remote
+      // pushing its still-active copy back over local.
+      expect(remoteRow?._deletedAt).not.toBeNull();
+    });
   });
 
   // ── sharedcatalogs ────────────────────────────────────────────────────
@@ -368,6 +416,7 @@ describe("SyncService — v1.12 sync expansion", () => {
         payload: { version: 1, createdAt: new Date().toISOString(), filaments: [], nozzles: [], printers: [], bedTypes: [] },
         expiresAt: null,
         viewCount: 0,
+        _deletedAt: null,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
@@ -380,6 +429,48 @@ describe("SyncService — v1.12 sync expansion", () => {
       const remote = await remoteClient.db("filament-db").collection("sharedcatalogs").findOne({ slug: "abcdefghijkl" });
       expect(remote?.title).toBe("My picks");
       expect(remote?.syncId).toBeTruthy();
+    });
+
+    it("propagates a soft-deleted (unpublished) shared catalog tombstone", async () => {
+      // Same model as print-history above: the share unpublish route
+      // now soft-deletes so peer sync stops resurrecting unpublished
+      // links. Without _deletedAt, syncCollection would push the
+      // still-active remote row back over local's tombstone-attempt.
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+
+      const sharedSyncId = "sc-shared-syncid";
+      const t0 = new Date("2026-04-30T12:00:00Z");
+      await localDb.collection("sharedcatalogs").insertOne({
+        slug: "shared-link",
+        title: "Hidden",
+        description: "",
+        payload: { version: 1, createdAt: t0.toISOString(), filaments: [], nozzles: [], printers: [], bedTypes: [] },
+        expiresAt: null,
+        viewCount: 0,
+        syncId: sharedSyncId,
+        _deletedAt: new Date(Date.now() + 1000),
+        createdAt: t0,
+        updatedAt: t0,
+      });
+      await remoteDb.collection("sharedcatalogs").insertOne({
+        slug: "shared-link",
+        title: "Hidden",
+        description: "",
+        payload: { version: 1, createdAt: t0.toISOString(), filaments: [], nozzles: [], printers: [], bedTypes: [] },
+        expiresAt: null,
+        viewCount: 0,
+        syncId: sharedSyncId,
+        _deletedAt: null,
+        createdAt: t0,
+        updatedAt: t0,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      const remoteRow = await remoteDb.collection("sharedcatalogs").findOne({ syncId: sharedSyncId });
+      expect(remoteRow?._deletedAt).not.toBeNull();
     });
   });
 });

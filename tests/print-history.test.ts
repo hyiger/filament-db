@@ -415,6 +415,32 @@ describe("print-history DELETE (undo)", () => {
     const res = await deletePrintHistory(delReq(fakeId), { params: Promise.resolve({ id: fakeId }) });
     expect(res.status).toBe(404);
   });
+
+  it("soft-deletes the PrintHistory row (sets _deletedAt) so peer sync can propagate", async () => {
+    // Hard delete would let syncCollection resurrect the row from the
+    // other DB on the next cycle (it treats missing rows as
+    // pull-or-push, only respecting deletes via the _deletedAt
+    // tombstone). Refund still happens; only the row stays.
+    const f = await Filament.create({
+      name: "Soft Delete Check",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ label: "", totalWeight: 1000 }],
+    });
+    const job = await postJob(f, "soft", 100);
+
+    const delRes = await deletePrintHistory(delReq(job._id), { params: Promise.resolve({ id: job._id }) });
+    expect(delRes.status).toBe(200);
+
+    const tombstone = await PrintHistory.findById(job._id);
+    expect(tombstone).not.toBeNull();
+    expect(tombstone._deletedAt).toBeInstanceOf(Date);
+    // Refund still happened
+    const refunded = await Filament.findById(f._id);
+    expect(refunded.spools[0].totalWeight).toBe(1000);
+  });
 });
 
 describe("analytics GET — double-counting regression", () => {
