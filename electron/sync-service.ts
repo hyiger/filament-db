@@ -25,6 +25,35 @@ export function getDbNameFromUri(uri: string): string {
   }
 }
 
+/**
+ * Wrap a sync error into a user-facing message, redacting connection
+ * strings. When the error is the MongoDB driver's "Unauthorized" shape
+ * (raised when the Atlas user lacks `readWrite`), swap the raw driver
+ * text for an actionable hint that points the user at the fix —
+ * regenerating the connection string from a writable Atlas user.
+ *
+ * Detects the auth shape two ways: by message regex (matches the driver's
+ * `user is not allowed to do action [update] on [db.coll]`) and by code 13
+ * (the more reliable signal, but not always populated on every wrapped
+ * error path). Either is sufficient. See GH #143.
+ */
+export function wrapSyncErrorMessage(err: unknown, dbName: string): string {
+  const message = err instanceof Error ? err.message : "Sync failed";
+  const code =
+    err && typeof err === "object" && "code" in err
+      ? (err as { code: unknown }).code
+      : undefined;
+
+  const isAuthError =
+    /user is not allowed to do action/i.test(message) || code === 13;
+
+  if (isAuthError) {
+    return `The Atlas user in your connection string only has read permission for "${dbName}". Update the user's role to one that includes readWrite (or change the connection string to one that does), then try again. You can re-enter the connection string in Settings → Connection.`;
+  }
+
+  return message.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
+}
+
 export interface SyncStatus {
   state: "idle" | "syncing" | "error" | "offline";
   lastSyncAt: string | null;
@@ -262,8 +291,7 @@ export class SyncService extends EventEmitter {
       this.emit("syncComplete", results);
       return results;
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Sync failed";
-      const safe = message.replace(/mongodb(\+srv)?:\/\/[^\s]+/g, "mongodb://***");
+      const safe = wrapSyncErrorMessage(err, getDbNameFromUri(this.atlasUri));
       this.updateStatus({ state: "error", error: safe, progress: null });
       this.emit("syncError", safe);
       return [];
