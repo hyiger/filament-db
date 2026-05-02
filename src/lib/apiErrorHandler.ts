@@ -52,9 +52,17 @@ export function handleDuplicateKeyError(
  * (`assertExternalUrl` rejections from src/lib/externalUrlGuard.ts). Used both
  * for thrown Errors (see `isClientInputError`) and for failure objects whose
  * error is returned as a string (e.g. tdsExtractor result.error).
+ *
+ * `Invalid URL:` is colon-anchored on purpose. `assertExternalUrl` re-throws
+ * its constructor failure as `Invalid URL: <input>` so it matches here, while
+ * the bare `new URL(...)` constructor (used by the TDS redirect resolver in
+ * src/lib/tdsExtractor.ts when the upstream Location header is malformed)
+ * throws just `Invalid URL`. The bare form is an upstream/bad-gateway
+ * failure, not user input, and must NOT be mapped to 400 (Codex P2 on PR
+ * #167).
  */
 export function isClientInputErrorMessage(message: string): boolean {
-  return /must be a valid|Disallowed URL scheme|private\/internal address|URL hostname does not resolve|URL has no hostname|^Invalid URL$/i.test(message);
+  return /must be a valid|Disallowed URL scheme|private\/internal address|URL hostname does not resolve|URL has no hostname|Invalid URL:/i.test(message);
 }
 
 /**

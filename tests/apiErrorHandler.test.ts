@@ -74,11 +74,19 @@ describe("isClientInputErrorMessage", () => {
   });
 
   it("matches every assertExternalUrl rejection message", () => {
-    expect(isClientInputErrorMessage("Invalid URL")).toBe(true);
+    expect(isClientInputErrorMessage("Invalid URL: not a url")).toBe(true);
     expect(isClientInputErrorMessage('Disallowed URL scheme "javascript:" — only http(s) is supported.')).toBe(true);
     expect(isClientInputErrorMessage("URL has no hostname")).toBe(true);
     expect(isClientInputErrorMessage("URL hostname does not resolve: not-a-real-host.test")).toBe(true);
     expect(isClientInputErrorMessage("URL resolves to a private/internal address — only public hosts are allowed.")).toBe(true);
+  });
+
+  it("does NOT match the bare 'Invalid URL' (Codex P2 PR #167)", () => {
+    // The bare `new URL(...)` constructor throws this when an upstream
+    // server's redirect Location header is malformed — that's a 502 case,
+    // not a 400. Only the colon-prefixed `assertExternalUrl` variant
+    // counts as client input.
+    expect(isClientInputErrorMessage("Invalid URL")).toBe(false);
   });
 
   it("does not match unrelated server-fault messages", () => {

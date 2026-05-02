@@ -65,7 +65,13 @@ export async function assertExternalUrl(url: string): Promise<URL> {
   try {
     parsed = new URL(url);
   } catch {
-    throw new Error("Invalid URL");
+    // Tag the message so the apiErrorHandler 400-classifier matches THIS
+    // path specifically. The bare `new URL(...)` constructor (used by the
+    // TDS redirect-resolver in src/lib/tdsExtractor.ts) also throws
+    // "Invalid URL" when an upstream Location header is malformed; that
+    // case is an upstream/bad-gateway condition, not user input, so it
+    // must NOT be mapped to 400 (Codex review on PR #167).
+    throw new Error(`Invalid URL: ${url}`);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error(`Disallowed URL scheme "${parsed.protocol}" — only http(s) is supported.`);
