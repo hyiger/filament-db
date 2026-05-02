@@ -138,6 +138,57 @@ describe("variant edit round-trip preserves inheritance", () => {
     expect(resolved._inherited).toContain("temperatures.nozzle");
   });
 
+  it("GH #162: ?raw=true returns a slim _parent (no settings, no populated nozzles, no sync metadata)", async () => {
+    const parent = await Filament.create({
+      name: "Parent with internals",
+      vendor: "Vendor",
+      type: "PLA",
+      cost: 35,
+      density: 1.24,
+      diameter: 1.75,
+      color: "#222222",
+      // Stuff the parent with the kinds of fields the audit complained about
+      // leaking through the raw _parent payload.
+      settings: {
+        filament_notes: "private vendor data",
+        chamber_temperature: "55",
+        cooling_overrides: "complex",
+      },
+    });
+    const variant = await Filament.create({
+      name: "Variant",
+      vendor: "Vendor",
+      type: "PLA",
+      parentId: parent._id,
+    });
+
+    const req = new NextRequest(`http://localhost/api/filaments/${variant._id}?raw=true`);
+    const res = await getFilament(req, { params: Promise.resolve({ id: String(variant._id) }) });
+    const body = await res.json();
+
+    expect(body._parent).toBeDefined();
+    // Inheritable display values that FilamentForm would render as hint text.
+    expect(body._parent.name).toBe("Parent with internals");
+    expect(body._parent.color).toBe("#222222");
+    expect(body._parent.cost).toBe(35);
+    expect(body._parent.density).toBe(1.24);
+    // Mongoose / sync internals must NOT be on the wire.
+    expect(body._parent.__v).toBeUndefined();
+    expect(body._parent.syncId).toBeUndefined();
+    expect(body._parent.instanceId).toBeUndefined();
+    // PrusaSlicer settings bag must NOT be on the wire (~2KB of irrelevant
+    // keys per request).
+    expect(body._parent.settings).toBeUndefined();
+    // Populated nozzle/calibration arrays must NOT be on the wire.
+    expect(body._parent.compatibleNozzles).toBeUndefined();
+    expect(body._parent.calibrations).toBeUndefined();
+    // Spool subdocs would be even bigger — must NOT be on the wire.
+    expect(body._parent.spools).toBeUndefined();
+    // createdAt/updatedAt are noise on a derived link target.
+    expect(body._parent.createdAt).toBeUndefined();
+    expect(body._parent.updatedAt).toBeUndefined();
+  });
+
   it("explicit overrides on the variant are preserved across the round-trip", async () => {
     const { parent, variant } = await seed();
 

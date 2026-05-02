@@ -42,19 +42,37 @@ export async function GET(
       return errorResponse("Not found", 404);
     }
 
-    // Resolve inheritance when displaying; skip when editing so the form
-    // only sees the variant's own overrides.
+    // Two parent-fetch shapes:
+    //
+    //   raw=true  → variant edit form. Skip resolveFilament (the form must
+    //               see only the variant's own overrides — GH #106) and
+    //               attach a slim parent-summary projected to the inheritable
+    //               display values FilamentForm consumes for hint placeholders.
+    //               Dropping settings/presets/populated nozzles/sync metadata
+    //               (__v, syncId, instanceId) cuts ~2KB/request and stops
+    //               leaking sync internals to the renderer (GH #162).
+    //
+    //   raw=false → variant detail page. Run resolveFilament on the populated
+    //               parent so inherited fields render correctly, then attach
+    //               only `{ _id, name }` for the "Up to <parent>" link.
     let resolved: IFilament | ReturnType<typeof resolveFilament> = filament;
-    let parentDoc: IFilament | null = null;
+    let parentSummary: { _id: unknown; name?: string; vendor?: string; type?: string; color?: string; cost?: number | null; density?: number | null; diameter?: number | null } | null = null;
     if (filament.parentId) {
-      parentDoc = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
-        .populate("compatibleNozzles")
-        .populate("calibrations.nozzle")
-        .populate("calibrations.printer")
-        .populate("calibrations.bedType")
-        .lean()) as IFilament | null;
-      if (!raw && parentDoc) {
-        resolved = resolveFilament(filament, parentDoc);
+      if (raw) {
+        parentSummary = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
+          .select("_id name vendor type color cost density diameter")
+          .lean()) as typeof parentSummary;
+      } else {
+        const parentDoc = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
+          .populate("compatibleNozzles")
+          .populate("calibrations.nozzle")
+          .populate("calibrations.printer")
+          .populate("calibrations.bedType")
+          .lean()) as IFilament | null;
+        if (parentDoc) {
+          resolved = resolveFilament(filament, parentDoc);
+          parentSummary = { _id: parentDoc._id, name: parentDoc.name };
+        }
       }
     }
 
@@ -64,24 +82,11 @@ export async function GET(
       .sort({ name: 1 })
       .lean();
 
-    // In raw mode, attach the full parent doc alongside so the edit UI can
-    // show "inherited from parent" placeholders for any field the variant
-    // left blank, without a second round-trip. In non-raw mode, attach a
-    // light parent-summary (just _id + name) so the variant detail page
-    // can render a clickable "Up to <parent name>" link without a second
-    // request (GH #127).
-    if (raw && parentDoc) {
+    if (parentSummary) {
       return NextResponse.json({
         ...resolved,
         _variants: variants,
-        _parent: parentDoc,
-      });
-    }
-    if (parentDoc) {
-      return NextResponse.json({
-        ...resolved,
-        _variants: variants,
-        _parent: { _id: parentDoc._id, name: parentDoc.name },
+        _parent: parentSummary,
       });
     }
 
