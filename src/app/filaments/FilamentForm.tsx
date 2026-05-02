@@ -733,9 +733,18 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
 
   // Single source of truth for the submit button label so the duplicate at
   // the top of the form can't drift from the bottom one.
+  //
+  // Edit mode is identified by the presence of `_id` on initialData — only
+  // /filaments/{id}/edit fetches a real doc with that field; the populate-from
+  // flows on /filaments/new (clone, NFC, Prusament, INI, TDS, parent) all
+  // synthesise an initialData object without an _id. Branching on the bare
+  // truthiness of initialData (the prior behaviour) made every populate-from
+  // flow show "Update Filament" on what is in fact a create — confusing on a
+  // destructive-feeling action like Clone (GH #164).
+  const isEdit = Boolean(initialData?._id);
   const submitLabel = saving
     ? t("form.saving")
-    : initialData
+    : isEdit
       ? t("form.updateFilament")
       : t("form.createFilament");
 
