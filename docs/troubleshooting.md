@@ -114,3 +114,22 @@ Atlas was unreachable when the app started, so it automatically fell back to an 
 ## Desktop app: how to switch connection modes
 
 Run `window.electronAPI.resetConfig()` in the developer console (View > Toggle Developer Tools). This returns you to the setup wizard where you can choose a different mode.
+
+## Sync error: "user is not allowed to do action [update]" / "lacks readWrite on …"
+
+The Atlas user in your connection string only has read permission for the target database, so the sync push is rejected. Fix in the Atlas dashboard:
+
+1. **Security > Database Access**
+2. Edit the user used by the connection string
+3. Change the built-in role to `Read and write to any database` (or scope with `readWrite@<dbname>` for the target DB)
+4. Click **Update User**, then click **Sync Now** in the desktop app's status pill
+
+Alternatively, generate a fresh connection string from a user that already has `readWrite` and re-paste it via the desktop app's **Settings → Connection** panel.
+
+## TDS extraction fails with "URL resolves to a private/internal address" or "too many redirects"
+
+The TDS extractor runs an SSRF guard on every redirect hop, so a TDS URL that 30x-redirects into a private IP range (RFC1918, loopback, link-local, cloud metadata IPs) or chains more than 5 redirects is rejected by design — not all link shorteners or vendor CDNs work. Workarounds:
+
+- Use the direct PDF URL the vendor publishes, not a tracker / shortener wrapper.
+- If the original URL serves the file directly without redirects, this guard never triggers.
+- For local testing, save the PDF and use the **file upload** mode of `POST /api/tds` instead of the URL mode (the URL guard does not apply to uploaded files).

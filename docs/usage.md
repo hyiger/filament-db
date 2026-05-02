@@ -95,7 +95,7 @@ A status pill appears next to the "Filament DB" title on the home page, showing 
 
 Click the pill to open a tooltip with mode, network status, last sync timestamp, error details, and a **"Sync Now"** button for manual sync. Automatic sync runs every 5 minutes when Atlas is reachable.
 
-Sync uses **last-write-wins** conflict resolution: if the same filament was edited on both sides, the most recently updated version wins (per-document, based on `updatedAt` timestamp).
+Synced collections: filaments (with embedded spools), nozzles, printers, locations, bedtypes, printhistories, sharedcatalogs. Sync uses **last-write-wins** conflict resolution: if the same filament was edited on both sides, the most recently updated version wins (per-document, based on `updatedAt` timestamp). Soft-deletes propagate via `_deletedAt`.
 
 ### Desktop App — Offline Mode
 
@@ -497,6 +497,8 @@ The **Share** page at `/share` lets you publish a static snapshot of selected fi
 3. Click **Publish** — the server collects every nozzle / printer / bed-type referenced by those filaments and denormalises everything into the payload, so the recipient gets a complete, consistent set
 
 **Public view** (`/share/{slug}`) — anyone with the link can browse the catalog, selectively import filaments into their own instance, and see a view counter that increments atomically. Published catalogs are static: later edits to the source filaments do not change what subsequent viewers download.
+
+**Unpublishing** is a soft-delete: the slug returns 404 to the public immediately, but the row stays in the collection so peer sync can carry the unpublish across as a tombstone (without it, the other peer would push the still-active copy back on the next sync cycle). Slugs from unpublished catalogs can be reused by future republishes.
 
 **Importing** on the destination side rehydrates referenced entities first (nozzles, printers, bed-types), then creates the filaments with the correct local IDs. Same-named records on the destination are reused rather than duplicated; calibrations pointing at unresolvable references are dropped rather than saved dangling.
 

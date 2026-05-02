@@ -414,6 +414,7 @@ If you chose **Hybrid** mode during setup, your data lives locally and syncs to 
 
 - The app syncs with Atlas every **5 minutes** when connected.
 - Changes made locally are pushed to Atlas; changes made remotely (e.g., from the web app or another device) are pulled down.
+- **Synced collections**: filaments (with embedded spools), nozzles, printers, locations, bedtypes, printhistories, sharedcatalogs.
 - The sync status pill next to "Filament DB" shows the current state — see [Step 2](#step-2-understand-the-connection-status-indicator).
 
 ### Working Offline
@@ -553,6 +554,8 @@ Want to send a friend your exact PLA + PETG setup?
 4. Click **Publish** — you get back a short URL
 
 Recipients who open the URL see a read-only list. They can multi-select and click **Import selected** to pull the filaments (plus referenced nozzles/printers/bed-types) into their own instance. Same-named records on the destination are reused, so nothing gets duplicated.
+
+**Unpublish** is a soft-delete: the slug returns 404 to anyone holding the link immediately, but the row stays in the collection so peer sync carries the unpublish across (without it, the other peer would push the still-active copy back). Slugs can be reused by future republishes.
 
 ## Step 24: Compare Filaments *(v1.11)*
 

@@ -137,6 +137,8 @@ The desktop app wraps the Next.js application in Electron:
 │  │   via @pokusew/pcsclite               │  │
 │  │ - Embedded local MongoDB (mongod)     │  │
 │  │ - Bidirectional Atlas sync service    │  │
+│  │ - External link guard: only http(s)   │  │
+│  │   URLs reach shell.openExternal       │  │
 │  │ - Server crash auto-recovery         │  │
 │  │ - IPC timeout protection (15s)       │  │
 │  └───────────────────────────────────────┘  │

@@ -40,11 +40,42 @@
 
 ### GET /api/filaments
 
-Returns an array of filament documents. Supports optional query parameters:
+Returns an array of projected filament summaries (not the full documents — heavy spool subfields like `photoDataUrl`, `usageHistory`, and `dryCycles` are stripped to keep the list payload small). Supports optional query parameters:
 
 - `search` -- filter by name (case-insensitive regex)
 - `type` -- exact match on filament type (e.g., `PLA`, `PETG`)
 - `vendor` -- exact match on vendor name
+
+**Response shape per row** (matches `FilamentSummary` in `src/types/filament.ts` plus a few extras the list / form / picker need):
+
+```json
+{
+  "_id": "…",
+  "name": "Prusament PLA Galaxy Black",
+  "vendor": "Prusament",
+  "type": "PLA",
+  "color": "#1a1a2e",
+  "cost": 35,
+  "density": 1.24,
+  "parentId": null,
+  "spoolWeight": 200,
+  "netFilamentWeight": 1000,
+  "totalWeight": null,
+  "lowStockThreshold": 250,
+  "tdsUrl": "https://example.com/tds.pdf",
+  "temperatures": { "nozzle": 215, "bed": 60 },
+  "hasCalibrations": true,
+  "spools": [
+    { "_id": "…", "label": "AMS slot 1", "totalWeight": 800, "retired": false }
+  ]
+}
+```
+
+- `hasCalibrations` is `true` when the filament has at least one calibration, **or** when it's a variant whose parent has at least one (via aggregation `$lookup`). The "Missing calibration" quick filter on the list page reads this — variants that inherit from a parent are correctly counted as calibrated.
+- `tdsUrl` is included so `FilamentForm`'s vendor-keyed TDS suggestions still work.
+- `spools[].label` is included so `PrinterForm`'s AMS slot picker can render `s.label || s._id.slice(-4)`.
+
+For the full document (calibrations array, presets, settings, full spool subdocs), call `GET /api/filaments/:id`.
 
 ### POST /api/filaments
 
@@ -666,6 +697,8 @@ Returns:
 
 Extracted fields include: name, vendor, type, density, diameter, temperatures (nozzle, bed, ranges), drying temperature/time, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), volumetric speed, print speed ranges, and weights. Fields not found in the TDS are omitted from the response.
 
+**SSRF / redirect handling**: the URL fetcher uses the shared `assertExternalUrl` guard (no `file:` / `gopher:` schemes; rejects loopback / RFC1918 / link-local / cloud-metadata IPs). Redirects are followed manually with the same guard re-applied on every hop, capped at 5 redirects — so a public host cannot 30x-redirect into private space (matches the `embed-check` route's pattern). The `tdsUrl` field on `Filament` is also schema-validated to http(s) on both create and every update path.
+
 ---
 
 ## Setup
@@ -815,7 +848,7 @@ Per-job ledger of print runs. Decrements spool weights, appends spool-level usag
 |--------|----------|-------------|
 | `GET`    | `/api/print-history`      | List print jobs (desc by `startedAt`). Query: `filamentId`, `printerId`, `limit` (default 100, max 1000) |
 | `POST`   | `/api/print-history`      | Record a print job (see body below) |
-| `DELETE` | `/api/print-history/{id}` | Undo a print job — refund the spool weight and remove the matching `usageHistory` entries |
+| `DELETE` | `/api/print-history/{id}` | Undo a print job — refund the spool weight, remove the matching `usageHistory` entries, soft-delete the row |
 
 ### POST /api/print-history
 
@@ -847,13 +880,15 @@ Response: the created `PrintHistory` document, `201`.
 
 ### DELETE /api/print-history/{id}
 
-Undo a job: for every `usage` entry on the record, find the matching spool, refund its `totalWeight` by the recorded grams, and remove the corresponding `usageHistory` entry. Then delete the `PrintHistory` document itself.
+Undo a job: for every `usage` entry on the record, find the matching spool, refund its `totalWeight` by the recorded grams, and remove the corresponding `usageHistory` entry. Then **soft-delete** the `PrintHistory` document by setting `_deletedAt` (instead of a hard `deleteOne`) so peer sync can propagate the unpublish via the tombstone — a hard delete would let the other peer push the row back on the next sync cycle.
 
 Refund matching is by `usageHistory.jobId === entry._id` — unambiguous, so a manual usage log that happens to share `(grams, date)` with the job is **not** affected. Legacy entries written before `jobId` existed (pre-v1.12.7) fall back to a `(grams, date, source)` match that's still scoped to `source: "job" | "slicer"`, so manual logs survive that path too.
 
-Returns `200 { "message": "Deleted and refunded" }` on success, `404` if no PrintHistory with that id exists.
+**Idempotent**: a retry / double-click / client retry after timeout returns `404` instead of refunding spool weight again. The lookup filters on `_deletedAt: null`, so once the row is tombstoned the second call short-circuits before touching anything.
 
-Best-effort: if a referenced spool has since been deleted (or the filament soft-deleted), that entry is silently skipped — the rest of the refunds still apply and the PrintHistory document is removed.
+Returns `200 { "message": "Deleted and refunded" }` on first success, `404` on any subsequent call (or if no PrintHistory with that id ever existed).
+
+Best-effort: if a referenced spool has since been deleted (or the filament soft-deleted), that entry is silently skipped — the rest of the refunds still apply and the PrintHistory document is still tombstoned.
 
 ---
 
@@ -889,10 +924,10 @@ Publishes a static snapshot of selected filaments with their referenced nozzles/
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET`    | `/api/share`            | List catalogs you've published (newest first) |
+| `GET`    | `/api/share`            | List catalogs you've published (newest first; soft-deleted catalogs are hidden) |
 | `POST`   | `/api/share`            | Publish a new catalog |
-| `GET`    | `/api/share/:slug`      | Public fetch. Atomically increments `viewCount`. Returns 410 when expired. |
-| `DELETE` | `/api/share/:slug`      | Unpublish |
+| `GET`    | `/api/share/:slug`      | Public fetch. Atomically increments `viewCount`. Returns 404 when soft-deleted, 410 when expired. |
+| `DELETE` | `/api/share/:slug`      | Unpublish (soft-delete) |
 
 ### POST /api/share
 
@@ -913,7 +948,22 @@ The server collects every nozzle / printer / bedType referenced by the selected 
 
 ### GET /api/share/:slug
 
-Response includes `viewCount` (incremented atomically via `$inc`) and the full denormalised payload. Use this as the source of truth for importing on the destination side.
+Response includes `viewCount` (incremented atomically via `$inc`) and the full denormalised payload. Use this as the source of truth for importing on the destination side. The query filters on `_deletedAt: null`, so unpublished slugs return 404.
+
+### DELETE /api/share/:slug
+
+Soft-deletes the catalog by setting `_deletedAt` (instead of `deleteOne`). The slug returns 404 from the public GET immediately. The row remains in the collection so peer sync can carry the unpublish across as a tombstone — a hard delete would let the other peer push the still-active copy back on the next cycle.
+
+The slug index is **partial-unique on `_deletedAt: null`** (auto-migrated from the legacy plain-unique index by `SharedCatalog.syncIndexes()` in the dbConnect migration block), so a slug used by a tombstoned row can be reused by a future republish without tripping E11000.
+
+Returns `200 { "message": "Unpublished" }` on first success, `404` on any subsequent call.
+
+#### SharedCatalog schema additions (v1.13)
+
+The model gained two fields to support sync-safe deletion:
+
+- `_deletedAt: Date | null` — soft-delete tombstone, default `null`. Filtered out by GET endpoints.
+- `syncId: string | null` — unique-sparse stable cross-DB identifier, auto-assigned by the sync engine.
 
 ---
 

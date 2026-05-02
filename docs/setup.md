@@ -349,6 +349,8 @@ The desktop app supports three connection modes:
 - Sync uses last-write-wins conflict resolution based on timestamps
 - Manual "Sync Now" button available in the status indicator
 - Sync runs every 5 minutes when Atlas is reachable
+- **What gets synced**: nozzles, printers, locations, bedtypes, filaments (with embedded spools), printhistories, sharedcatalogs — all with cross-DB ref remap so calibrations, AMS slots, and spool/filament references stay consistent on both sides. Soft-deletes (`_deletedAt`) propagate so an undo on one peer doesn't get resurrected by the other.
+- **Spool subdocument limitation**: spool ids inside Filament don't have stable cross-side identifiers, so `printer.amsSlots[].spoolId` and `printhistory.usage[].spoolId` are cleared on cross-side remap. Per-filament gram totals still reconcile correctly; per-spool attribution of which spool was loaded / consumed is dropped.
 
 ### Local Only (Offline)
 
@@ -371,6 +373,7 @@ The desktop app supports three connection modes:
 
 3. **Create a database user:**
    - In the setup wizard, enter a username and password
+   - **Built-in role**: pick `Read and write to any database` (or scope to your specific database). The app needs `readWrite` on the target DB — if the user is read-only, the desktop will show a clear sync error pointing you back to Settings → Connection (instead of leaking the raw `user is not allowed to do action [update]` driver text).
    - Click **"Create Database User"**
    - Save these credentials -- you will need them for the connection string
 

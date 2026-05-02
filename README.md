@@ -52,7 +52,8 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **System theme** -- light/dark/system toggle with no-flash init script; respects OS `prefers-color-scheme` in system mode
 - **Cross-platform** -- installable on macOS (.dmg), Windows (.exe), and Linux (.AppImage, .deb) including arm64 for Raspberry Pi
 - **Offline mode** -- embedded local MongoDB; choose cloud-only, hybrid, or fully offline
-- **Atlas sync** -- automatic bidirectional sync with MongoDB Atlas using last-write-wins conflict resolution
+- **Atlas sync** -- automatic bidirectional sync with MongoDB Atlas using last-write-wins conflict resolution; covers filaments (with embedded spools), nozzles, printers, locations, bedtypes, printhistories, and sharedcatalogs with cross-DB ref remap (calibrations, AMS slots) and soft-delete tombstone propagation
+- **Hardened external URL handling** -- Electron `setWindowOpenHandler` only forwards `http(s)` to the OS shell (not `file:` / `javascript:` / custom protocols); render-time guards on TDS / photo / product links; `tdsUrl` schema-validated to http(s) on every write path; TDS extractor follows redirects manually with per-hop SSRF re-checks (5-redirect cap)
 - **Auto-update** -- in-app banner announces new versions, downloads in the background, and prompts to restart-and-install (localized); falls back to the GitHub release page on macOS since Gatekeeper blocks unsigned auto-install
 
 ### Developer
@@ -147,7 +148,7 @@ filament-db/
 │   ├── components/             # React components (NFC, dialogs, providers, update banner, theme)
 │   ├── hooks/                  # Custom hooks (useNfc, useCurrency)
 │   ├── i18n/                   # Locale files + TranslationProvider (en, de)
-│   ├── lib/                    # DB connection, INI parser, CSV parser, image compression, OpenPrintTag encoder/decoder, TDS extractor, PrusaSlicer bundle, spool validator
+│   ├── lib/                    # DB connection, INI parser, CSV parser, image compression, OpenPrintTag encoder/decoder, TDS extractor (with manual SSRF redirect guard), PrusaSlicer bundle, spool validator, safeRenderUrl (http(s)-only render guard), inventoryStats (retired-spool-aware totals), externalUrlGuard (SSRF block-list)
 │   └── models/                 # Mongoose schemas (Filament, Nozzle, Printer, BedType, Location, PrintHistory, SharedCatalog)
 ├── tests/                      # Vitest unit + route + Mongoose model + electron sync tests
 ├── .github/workflows/
