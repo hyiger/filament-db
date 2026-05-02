@@ -7,6 +7,7 @@ import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import Location from "@/models/Location";
 import PrintHistory from "@/models/PrintHistory";
+import SharedCatalog from "@/models/SharedCatalog";
 
 // Simple in-memory mutex to prevent concurrent restore operations.
 // Limitation: this only guards within a single Node.js process. In a
@@ -75,29 +76,50 @@ function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
  * GET /api/snapshot — Export snapshot-scoped app data as JSON.
  *
  * The snapshot includes all documents (including soft-deleted) from
- * filaments, nozzles, printers, bed types, locations, and print history.
- * Timestamps, _ids, and references are preserved so the snapshot can be
- * restored as-is. Shared catalogs are deliberately excluded from backup /
- * restore; the danger-zone delete endpoint clears them separately.
+ * filaments, nozzles, printers, bed types, locations, print history,
+ * and shared catalogs. Timestamps, _ids, and references are preserved
+ * so the snapshot can be restored as-is.
+ *
+ * Note on JSON keys: `bedTypes`, `printHistory`, and `sharedCatalogs`
+ * are camelCase keys in the JSON shape, but the restore writes go
+ * through the corresponding Mongoose models (BedType, PrintHistory,
+ * SharedCatalog) — the keys never reach Mongo, so there's no
+ * collection-name mismatch. The keys are kept stable so older
+ * snapshots round-trip on the same shape.
  */
 export async function GET() {
   await dbConnect();
 
-  const [filaments, nozzles, printers, bedTypes, locations, printHistory] =
-    await Promise.all([
-      Filament.find({}).lean(),
-      Nozzle.find({}).lean(),
-      Printer.find({}).lean(),
-      BedType.find({}).lean(),
-      Location.find({}).lean(),
-      PrintHistory.find({}).lean(),
-    ]);
+  const [
+    filaments,
+    nozzles,
+    printers,
+    bedTypes,
+    locations,
+    printHistory,
+    sharedCatalogs,
+  ] = await Promise.all([
+    Filament.find({}).lean(),
+    Nozzle.find({}).lean(),
+    Printer.find({}).lean(),
+    BedType.find({}).lean(),
+    Location.find({}).lean(),
+    PrintHistory.find({}).lean(),
+    SharedCatalog.find({}).lean(),
+  ]);
 
-  // Snapshot version 3 adds locations + printHistory. v2 snapshots (with
-  // bedTypes but no locations/printHistory) still restore cleanly. v1
-  // snapshots (without bedTypes either) also still restore.
+  // Snapshot version history:
+  //   v1 — filaments, nozzles, printers
+  //   v2 — adds bedTypes
+  //   v3 — adds locations + printHistory
+  //   v4 — adds sharedCatalogs (GH #158: previously dropped on every
+  //        snapshot/restore round-trip, silently losing every published
+  //        share link; now symmetric with /api/snapshot/delete which
+  //        always cleared SharedCatalog)
+  // Older snapshots still restore cleanly because POST destructures
+  // missing collections to `[]`.
   const snapshot = {
-    version: 3,
+    version: 4,
     createdAt: new Date().toISOString(),
     collections: {
       filaments,
@@ -106,6 +128,7 @@ export async function GET() {
       bedTypes,
       locations,
       printHistory,
+      sharedCatalogs,
     },
   };
 
@@ -159,6 +182,7 @@ async function restoreSnapshot(request: NextRequest) {
       bedTypes?: unknown[];
       locations?: unknown[];
       printHistory?: unknown[];
+      sharedCatalogs?: unknown[];
     };
   };
 
@@ -211,6 +235,7 @@ async function restoreSnapshot(request: NextRequest) {
     bedTypes = [],
     locations = [],
     printHistory = [],
+    sharedCatalogs = [],
   } = snapshot.collections;
 
   // --- Safety: snapshot the current DB so we can roll back on failure ---
@@ -221,6 +246,7 @@ async function restoreSnapshot(request: NextRequest) {
     backupBedTypes,
     backupLocations,
     backupPrintHistory,
+    backupSharedCatalogs,
   ] = await Promise.all([
     Filament.find({}).lean(),
     Nozzle.find({}).lean(),
@@ -228,6 +254,7 @@ async function restoreSnapshot(request: NextRequest) {
     BedType.find({}).lean(),
     Location.find({}).lean(),
     PrintHistory.find({}).lean(),
+    SharedCatalog.find({}).lean(),
   ]);
 
   try {
@@ -239,6 +266,7 @@ async function restoreSnapshot(request: NextRequest) {
       BedType.deleteMany({}),
       Location.deleteMany({}),
       PrintHistory.deleteMany({}),
+      SharedCatalog.deleteMany({}),
     ]);
 
     // Insert snapshot data (order matters: reference targets before referrers
@@ -251,6 +279,7 @@ async function restoreSnapshot(request: NextRequest) {
       bedTypes: 0,
       locations: 0,
       printHistory: 0,
+      sharedCatalogs: 0,
     };
 
     if (nozzles.length > 0) {
@@ -289,6 +318,12 @@ async function restoreSnapshot(request: NextRequest) {
       results.printHistory = printHistory.length;
     }
 
+    if (sharedCatalogs.length > 0) {
+      const docs = (sharedCatalogs as Record<string, unknown>[]).map(restoreTypes);
+      await SharedCatalog.insertMany(docs, { lean: true, ordered: false });
+      results.sharedCatalogs = sharedCatalogs.length;
+    }
+
     return NextResponse.json({
       message: "Snapshot restored successfully",
       restored: results,
@@ -303,6 +338,7 @@ async function restoreSnapshot(request: NextRequest) {
         BedType.deleteMany({}),
         Location.deleteMany({}),
         PrintHistory.deleteMany({}),
+        SharedCatalog.deleteMany({}),
       ]);
       if (backupNozzles.length > 0) await Nozzle.insertMany(backupNozzles, { ordered: false });
       if (backupPrinters.length > 0) await Printer.insertMany(backupPrinters, { ordered: false });
@@ -310,6 +346,7 @@ async function restoreSnapshot(request: NextRequest) {
       if (backupLocations.length > 0) await Location.insertMany(backupLocations, { ordered: false });
       if (backupFilaments.length > 0) await Filament.insertMany(backupFilaments, { ordered: false });
       if (backupPrintHistory.length > 0) await PrintHistory.insertMany(backupPrintHistory, { ordered: false });
+      if (backupSharedCatalogs.length > 0) await SharedCatalog.insertMany(backupSharedCatalogs, { ordered: false });
     } catch (rollbackErr) {
       // Rollback itself failed — report it so the user knows data may be lost
       const detail = err instanceof Error ? err.message : String(err);
