@@ -1,11 +1,53 @@
 import { app, BrowserWindow, Menu, ipcMain, dialog, utilityProcess, UtilityProcess, shell, session } from "electron";
 import path from "path";
+import fs from "fs";
 import Store from "electron-store";
 import http from "http";
 import { NfcService } from "./nfc-service";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
 import { initAutoUpdater } from "./auto-updater";
+
+// ── Diagnostic log ──
+// Writes lifecycle and crash events to a file in userData so users on
+// machines where the window never appears (GH #176) can attach a log
+// instead of guessing at console output they can't see. Best-effort only —
+// never throws, never blocks startup. Entries are also mirrored to
+// console.log for the dev workflow.
+const LOG_PATH = path.join(app.getPath("userData"), "logs", "main.log");
+let logStream: fs.WriteStream | null = null;
+let loggerDisabled = false;
+function disableLogger() {
+  loggerDisabled = true;
+  if (logStream) {
+    logStream.removeAllListeners("error");
+    logStream.end();
+    logStream = null;
+  }
+}
+function diag(message: string) {
+  console.log(`[diag] ${message}`);
+  if (loggerDisabled) return;
+  try {
+    if (!logStream) {
+      fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
+      const stream = fs.createWriteStream(LOG_PATH, { flags: "a" });
+      // WriteStream errors (perm-denied on roaming profile, AV file lock,
+      // disk-full mid-write) emit asynchronously on the stream; without a
+      // listener Node treats them as uncaught and would kill the main
+      // process — exactly the failure mode the logger is supposed to
+      // help debug, not cause. Absorb and disable further writes.
+      stream.on("error", disableLogger);
+      logStream = stream;
+    }
+    logStream.write(`[${new Date().toISOString()}] ${message}\n`);
+  } catch {
+    // Sync errors (mkdirSync, createWriteStream throwing on bad path,
+    // write() back-pressure rejection) — same policy: stop trying.
+    disableLogger();
+  }
+}
+diag(`startup: pid=${process.pid} platform=${process.platform} version=${app.getVersion()} packaged=${app.isPackaged}`);
 
 export type ConnectionMode = "atlas" | "offline" | "hybrid";
 
@@ -44,6 +86,7 @@ const PORT = parseInt(process.env.PORT || "3456", 10);
 // before quitting so the user knows why nothing appeared.
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
+  diag("single-instance lock denied — another instance owns it; quitting");
   // showErrorBox is synchronous and works before app.whenReady, unlike
   // the regular dialog.show APIs. Keep the message short — the user
   // hasn't even seen a window yet.
@@ -55,6 +98,7 @@ if (!gotTheLock) {
   );
   app.quit();
 } else {
+  diag("single-instance lock acquired");
 
 app.on("second-instance", () => {
   if (mainWindow) {
@@ -73,7 +117,18 @@ function getAppURL(urlPath = "/") {
   return `http://localhost:${PORT}${urlPath}`;
 }
 
+/** Hard cap on how long we'll wait for `ready-to-show` before forcing the
+ * window visible. The point of the safety net is GH #176: users on Windows
+ * with KB5083631 / strict Defender / SAC report the process running with
+ * no visible window. If the renderer hangs (load blocked, GPU process
+ * crashed mid-paint, server slow to respond), we'd rather show a blank
+ * window the user can interact with than leave a phantom background
+ * process. Must be longer than the realistic startup time on a cold
+ * Windows install with Defender scanning every file. */
+const WINDOW_SHOW_TIMEOUT_MS = 20_000;
+
 function createWindow(urlPath = "/") {
+  diag(`createWindow: urlPath=${urlPath}`);
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
@@ -81,11 +136,45 @@ function createWindow(urlPath = "/") {
     minHeight: 600,
     title: "Filament DB",
     icon: path.join(__dirname, "..", "assets", "icon.png"),
+    // Defer paint until the renderer reports ready-to-show (or the
+    // safety-net timeout fires). Without this, a window flash of unstyled
+    // content can occur on slow first loads, AND — more importantly for
+    // GH #176 — there's no path to recover if the renderer never reaches
+    // a visible state on its own.
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  mainWindow.once("ready-to-show", () => {
+    diag("ready-to-show — showing window");
+    mainWindow?.show();
+  });
+
+  // Safety-net: if ready-to-show never fires (renderer hung, did-fail-load,
+  // GPU crash mid-paint), force the window visible so the user can at
+  // least see and report the failure instead of seeing nothing. GH #176.
+  setTimeout(() => {
+    if (mainWindow && !mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+      diag(`window-show timeout (${WINDOW_SHOW_TIMEOUT_MS}ms) — forcing show`);
+      mainWindow.show();
+    }
+  }, WINDOW_SHOW_TIMEOUT_MS);
+
+  // Surface renderer / load failures into the diagnostic log. Without
+  // these, a renderer that crashes during navigation leaves a process in
+  // Task Manager with no UI and no console anyone can read.
+  mainWindow.webContents.on("did-fail-load", (_evt, errorCode, errorDescription, validatedURL) => {
+    diag(`did-fail-load url=${validatedURL} code=${errorCode} desc=${errorDescription}`);
+  });
+  mainWindow.webContents.on("render-process-gone", (_evt, details) => {
+    diag(`render-process-gone reason=${details.reason} exitCode=${details.exitCode}`);
+  });
+  mainWindow.webContents.on("unresponsive", () => {
+    diag("renderer unresponsive");
   });
 
   mainWindow.loadURL(getAppURL(urlPath));
@@ -659,7 +748,16 @@ ipcMain.handle("nfc-format-tag", async () => {
 
 // ── App lifecycle ──
 
+// `child-process-gone` covers GPU, utility, and any other Chromium child
+// processes — useful when the new Windows graphics stack (KB5083631 era)
+// kills the GPU process and the renderer is left half-painted. Logging
+// it gives users on GH #176 something concrete to attach.
+app.on("child-process-gone", (_evt, details) => {
+  diag(`child-process-gone type=${details.type} reason=${details.reason} exitCode=${details.exitCode}`);
+});
+
 app.whenReady().then(async () => {
+  diag("app ready");
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
