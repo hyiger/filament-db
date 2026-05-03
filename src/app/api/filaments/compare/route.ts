@@ -1,25 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
-import Filament from "@/models/Filament";
+import Filament, { IFilament } from "@/models/Filament";
 import "@/models/Nozzle";
 import "@/models/Printer";
 import "@/models/BedType";
+import { resolveFilament } from "@/lib/resolveFilament";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 
 /**
  * GET /api/filaments/compare?ids=a,b,c — fetch multiple filaments for the
  * comparison view in one round trip.
  *
+ * Variants are resolved against their parent so columns like cost, density,
+ * temperatures, drying-time, and spoolWeight (the on-hand math reads it)
+ * render the inherited values when the variant left those fields blank —
+ * matching the detail page, list, and exports. Pre-fix Compare returned
+ * the raw documents and showed `—` for any inheritable field the variant
+ * didn't override (GH #184) and miscalculated the "On hand" row for
+ * inherited spoolWeight (Codex P2 on PR #190). The single resolveFilament
+ * pass handles both.
+ *
  * Returns populated calibration refs so the UI can render printer/nozzle/
  * bedType names directly.
- *
- * GH #182 / Codex P2 on PR #190: variants commonly store
- * `spoolWeight: null` and inherit from their parent. Resolve the inherited
- * value here so the compare page's "On hand" math (which subtracts
- * spoolWeight from each spool's totalWeight) doesn't fall through to 0
- * for inherited cases. A future broader-resolution change (#184) will
- * resolve every inheritable field; this PR scopes the fix to the field
- * the on-hand math needs.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -46,30 +48,31 @@ export async function GET(request: NextRequest) {
       .populate("calibrations.bedType")
       .lean();
 
-    // Resolve inherited spoolWeight for any variant whose own field is null.
-    // One batched fetch covers every parent in the result set.
+    // Fetch parents for any variant in the result so resolveFilament can
+    // merge inherited fields (cost, density, temperatures, drying info,
+    // spoolWeight, etc.). One batched query for all parent ids; the
+    // common case (no variants) hits zero extra queries.
     const parentIds = Array.from(
       new Set(
         filaments
-          .filter((f) => f.parentId && (f.spoolWeight === null || f.spoolWeight === undefined))
-          .map((f) => String(f.parentId)),
+          .map((f) => f.parentId && String(f.parentId))
+          .filter((id): id is string => !!id),
       ),
     );
-    const parentSpoolWeights = parentIds.length
-      ? new Map(
-          (
-            await Filament.find({ _id: { $in: parentIds } })
-              .select("spoolWeight")
-              .lean()
-          ).map((p) => [String(p._id), p.spoolWeight ?? null]),
-        )
-      : new Map<string, number | null>();
+    const parents = parentIds.length
+      ? ((await Filament.find({ _id: { $in: parentIds }, _deletedAt: null })
+          .populate("compatibleNozzles")
+          .populate("calibrations.nozzle")
+          .populate("calibrations.printer")
+          .populate("calibrations.bedType")
+          .lean()) as IFilament[])
+      : [];
+    const parentById = new Map(parents.map((p) => [String(p._id), p]));
 
     const resolved = filaments.map((f) => {
-      if (f.spoolWeight !== null && f.spoolWeight !== undefined) return f;
       if (!f.parentId) return f;
-      const inherited = parentSpoolWeights.get(String(f.parentId));
-      return inherited != null ? { ...f, spoolWeight: inherited } : f;
+      const parent = parentById.get(String(f.parentId));
+      return parent ? resolveFilament(f, parent) : f;
     });
 
     // Return in the same order the caller requested so the UI's columns
