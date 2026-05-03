@@ -144,6 +144,64 @@ describe("upsertImportRows", () => {
     expect(updated!.cost).toBe(29.99);
   });
 
+  it("does NOT reset color/diameter on existing filaments when those columns are absent (GH #183)", async () => {
+    // Seed a filament with explicit non-default color + diameter.
+    const seeded = await Filament.create({
+      name: "Existing PETG",
+      vendor: "Vendor",
+      type: "PETG",
+      color: "#123ABC",
+      diameter: 2.85,
+    });
+
+    // Re-import with only the required columns — same name/vendor/type
+    // but neither color nor diameter present in the row. Pre-fix the
+    // importer would silently overwrite color → "#808080" and diameter
+    // → 1.75 because they were always included with defaults.
+    const result = await upsertImportRows([
+      { name: "Existing PETG", vendor: "Vendor", type: "PETG" },
+    ]);
+
+    expect(result.updated).toBe(1);
+    expect(result.created).toBe(0);
+
+    const fresh = await Filament.findById(seeded._id);
+    expect(fresh!.color).toBe("#123ABC");   // preserved
+    expect(fresh!.diameter).toBe(2.85);     // preserved
+  });
+
+  it("still applies provided color/diameter on update (GH #183)", async () => {
+    const seeded = await Filament.create({
+      name: "Updatable PLA",
+      vendor: "Vendor",
+      type: "PLA",
+      color: "#000000",
+      diameter: 1.75,
+    });
+
+    const result = await upsertImportRows([
+      { name: "Updatable PLA", vendor: "Vendor", type: "PLA", color: "#FF00FF", diameter: 2.85 },
+    ]);
+
+    expect(result.updated).toBe(1);
+    const fresh = await Filament.findById(seeded._id);
+    expect(fresh!.color).toBe("#FF00FF");
+    expect(fresh!.diameter).toBe(2.85);
+  });
+
+  it("falls back to schema defaults for color/diameter when creating a new filament without them (GH #183)", async () => {
+    // Create-path defaults still apply via the Mongoose schema even after
+    // the fix removed the explicit defaults from the importer's `doc`.
+    const result = await upsertImportRows([
+      { name: "Defaults New PLA", vendor: "Vendor", type: "PLA" },
+    ]);
+
+    expect(result.created).toBe(1);
+    const created = await Filament.findOne({ name: "Defaults New PLA" });
+    expect(created!.color).toBe("#808080");  // schema default
+    expect(created!.diameter).toBe(1.75);    // schema default
+  });
+
   it("resurrects soft-deleted filaments", async () => {
     await Filament.create({
       name: "Deleted PLA",
