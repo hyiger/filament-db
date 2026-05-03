@@ -16,16 +16,35 @@ import { initAutoUpdater } from "./auto-updater";
 // console.log for the dev workflow.
 const LOG_PATH = path.join(app.getPath("userData"), "logs", "main.log");
 let logStream: fs.WriteStream | null = null;
+let loggerDisabled = false;
+function disableLogger() {
+  loggerDisabled = true;
+  if (logStream) {
+    logStream.removeAllListeners("error");
+    logStream.end();
+    logStream = null;
+  }
+}
 function diag(message: string) {
   console.log(`[diag] ${message}`);
+  if (loggerDisabled) return;
   try {
     if (!logStream) {
       fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
-      logStream = fs.createWriteStream(LOG_PATH, { flags: "a" });
+      const stream = fs.createWriteStream(LOG_PATH, { flags: "a" });
+      // WriteStream errors (perm-denied on roaming profile, AV file lock,
+      // disk-full mid-write) emit asynchronously on the stream; without a
+      // listener Node treats them as uncaught and would kill the main
+      // process — exactly the failure mode the logger is supposed to
+      // help debug, not cause. Absorb and disable further writes.
+      stream.on("error", disableLogger);
+      logStream = stream;
     }
     logStream.write(`[${new Date().toISOString()}] ${message}\n`);
   } catch {
-    // best-effort; the logger must never become a startup blocker
+    // Sync errors (mkdirSync, createWriteStream throwing on bad path,
+    // write() back-pressure rejection) — same policy: stop trying.
+    disableLogger();
   }
 }
 diag(`startup: pid=${process.pid} platform=${process.platform} version=${app.getVersion()} packaged=${app.isPackaged}`);
