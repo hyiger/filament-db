@@ -80,7 +80,10 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
         <div className="space-y-1.5">
           {byType.map(([type, count]) => (
             <div key={type} className="flex items-center gap-2 text-sm">
-              <span className="w-16 truncate text-gray-600 dark:text-gray-300 font-medium">{type}</span>
+              {/* w-24 matches the vendor row below (was w-16, which clipped
+                  "PLA Tough" to "PLA TO…" — GH #89). title= is the
+                  fallback for any type name that still exceeds 96px. */}
+              <span title={type} className="w-24 truncate text-gray-600 dark:text-gray-300 font-medium">{type}</span>
               <div className="flex-1 bg-gray-200 dark:bg-gray-800 rounded-full h-3">
                 <div
                   className="h-3 rounded-full bg-blue-500"
@@ -99,7 +102,7 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
         <div className="space-y-1.5">
           {byVendor.map(([vendor, count]) => (
             <div key={vendor} className="flex items-center gap-2 text-sm">
-              <span className="w-24 truncate text-gray-600 dark:text-gray-300 font-medium">{vendor}</span>
+              <span title={vendor} className="w-24 truncate text-gray-600 dark:text-gray-300 font-medium">{vendor}</span>
               <div className="flex-1 bg-gray-200 dark:bg-gray-800 rounded-full h-3">
                 <div
                   className="h-3 rounded-full bg-amber-500"
