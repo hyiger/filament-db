@@ -9,20 +9,17 @@ directories:
 
 icon: assets/icon.png
 
-# Bundle the standalone Next.js server + node_modules into an ASAR archive.
-# The standalone bundle is thousands of small JS files; without ASAR the
-# NSIS installer extracts each one individually and Windows Defender real-
-# time-scans every file, producing the multi-minute install stall users
-# reported in GH #176. ASAR collapses them into one opaque archive that
-# copies in a single I/O burst and is opaque to per-file AV scanning.
-#
-# .node native binaries cannot be loaded from inside an ASAR archive — they
-# must live on disk so dlopen()/LoadLibrary() can mmap them. Unpack them
-# explicitly so Electron's asar shim transparently rewrites paths to the
-# unpacked copy at runtime.
-asar: true
-asarUnpack:
-  - "**/*.node"
+# asar disabled — v1.14.2 attempted asar:true to fix the slow Windows
+# install (GH #176 install stall) but the embedded server's utility
+# process exited with code 1 during module load. Likely cause: sharp's
+# bundled .node binary, built for Node's ABI by `npm install`, fails to
+# load in Electron's Node runtime when paired with `npmRebuild: false`,
+# OR a path-resolution lookup escapes the asar shim. Either way, asar
+# needs more investigation before we attempt it again — the server
+# stdio capture added in electron/main.ts will log the actual exception
+# next time. Slow install returns until we have a working asar config;
+# that's preferable to an app that doesn't start.
+asar: false
 npmRebuild: false
 
 files:
