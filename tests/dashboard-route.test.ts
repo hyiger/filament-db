@@ -189,3 +189,98 @@ describe("/api/dashboard — counts.spools is active-only (excludes retired)", (
     expect(body.counts.totalSpools).toBe(2);
   });
 });
+
+/**
+ * GH #182 regression guard.
+ *
+ * `spool.totalWeight` is the live scale reading (filament + empty spool),
+ * not remaining filament. Pre-fix the dashboard's `totalGrams` and
+ * low-stock check summed the raw scale value, which inflated inventory
+ * by one empty-spool mass per tracked spool and let low-stock alerts
+ * hide while the gross weight still cleared the threshold.
+ */
+describe("/api/dashboard — totalGrams + low-stock subtract empty-spool mass (GH #182)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    const filamentMod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) {
+      mongoose.model("Filament", filamentMod.default.schema);
+    }
+    Filament = mongoose.models.Filament;
+  });
+
+  it("totalGrams sums (totalWeight − spoolWeight) per spool, clamped at 0", async () => {
+    // Two spools at 1000g scale, 250g empty-spool mass → 750g remaining each
+    // ⇒ totalGrams should be 1500, NOT the raw 2000.
+    await Filament.create({
+      name: "PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 250,
+      netFilamentWeight: 1000,
+      spools: [
+        { label: "A", totalWeight: 1000 },
+        { label: "B", totalWeight: 1000 },
+      ],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    expect(body.totalGrams).toBe(1500);
+  });
+
+  it("a spool whose scale reading is below the empty-spool weight clamps to 0 (no negative)", async () => {
+    // totalWeight=200 with spoolWeight=250 means the scale is below the
+    // empty mass — should contribute 0 (not -50) to totalGrams.
+    await Filament.create({
+      name: "Empty PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 250,
+      netFilamentWeight: 1000,
+      spools: [{ label: "almost-empty", totalWeight: 200 }],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    expect(body.totalGrams).toBe(0);
+  });
+
+  it("low-stock check uses remaining filament, so a high-gross / low-net spool surfaces", async () => {
+    // 600g gross with 500g empty-spool mass = 100g remaining. Threshold
+    // 200 → should be flagged as low stock. Pre-fix the check compared
+    // 600 < 200 (false) and the warning was hidden.
+    const f = await Filament.create({
+      name: "Almost Empty PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 500,
+      netFilamentWeight: 1000,
+      lowStockThreshold: 200,
+      spools: [{ label: "low", totalWeight: 600 }],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const ids = (body.lowStock as { _id: string }[]).map((x) => x._id);
+    expect(ids).toContain(String(f._id));
+    const entry = (body.lowStock as { _id: string; remainingGrams: number }[]).find((x) => x._id === String(f._id));
+    expect(entry?.remainingGrams).toBe(100);
+  });
+
+  it("a filament with no spoolWeight defaults to subtracting 0 (back-compat for legacy docs)", async () => {
+    await Filament.create({
+      name: "Legacy",
+      vendor: "Test",
+      type: "PLA",
+      // spoolWeight intentionally omitted (undefined / null)
+      spools: [{ label: "X", totalWeight: 1000 }],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    expect(body.totalGrams).toBe(1000);
+  });
+});

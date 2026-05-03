@@ -52,6 +52,13 @@ export async function GET() {
 
     for (const f of filaments) {
       let remaining = 0;
+      // Subtracting the empty-spool weight is the bit GH #182 was about:
+      // `spool.totalWeight` is the live scale reading (filament + empty
+      // spool), not remaining filament. Pre-fix the dashboard summed the
+      // raw scale value, which inflated `totalGrams` by one empty-spool
+      // mass per tracked spool and let low-stock alerts hide while the
+      // gross weight still cleared the threshold.
+      const spoolMass = typeof f.spoolWeight === "number" ? f.spoolWeight : 0;
       for (const s of f.spools || []) {
         if (s.retired) {
           retiredSpools++;
@@ -59,7 +66,7 @@ export async function GET() {
         }
         spoolCount++;
         if (typeof s.totalWeight === "number") {
-          remaining += s.totalWeight;
+          remaining += Math.max(0, s.totalWeight - spoolMass);
         }
       }
       totalGrams += remaining;

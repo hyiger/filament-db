@@ -129,6 +129,53 @@ describe("/api/locations", () => {
       expect(stats.spoolCount).toBe(2);
       expect(stats.totalGrams).toBe(800);
     });
+
+    it("totalGrams subtracts the parent filament's spoolWeight per spool (GH #182)", async () => {
+      // Same gross weights as the test above but with spoolWeight=250 set on
+      // the filament. Expected remaining = (500-250) + (300-250) = 300.
+      // Pre-fix the aggregation summed the raw scale value (800), which
+      // over-reported by N × empty-spool mass per location.
+      const loc = await Location.create({ name: "Drybox A", kind: "drybox" });
+      await Filament.create({
+        name: "Per-spool-mass Test",
+        vendor: "Test",
+        type: "PLA",
+        spoolWeight: 250,
+        netFilamentWeight: 1000,
+        spools: [
+          { label: "", totalWeight: 500, locationId: loc._id, retired: false },
+          { label: "", totalWeight: 300, locationId: loc._id, retired: false },
+        ],
+      });
+
+      const res = await listLocations(jsonReq("http://localhost/api/locations?stats=true"));
+      const body = await res.json();
+      const stats = body.find((l: { name: string }) => l.name === "Drybox A");
+      expect(stats.spoolCount).toBe(2);
+      expect(stats.totalGrams).toBe(300);
+    });
+
+    it("spool below empty-spool weight clamps at 0 — no negative grams (GH #182)", async () => {
+      const loc = await Location.create({ name: "Drybox B", kind: "drybox" });
+      await Filament.create({
+        name: "Underweight Test",
+        vendor: "Test",
+        type: "PLA",
+        spoolWeight: 250,
+        netFilamentWeight: 1000,
+        spools: [
+          // 200 < 250 ⇒ contributes 0, not -50
+          { label: "", totalWeight: 200, locationId: loc._id, retired: false },
+          // 1000 - 250 = 750
+          { label: "", totalWeight: 1000, locationId: loc._id, retired: false },
+        ],
+      });
+
+      const res = await listLocations(jsonReq("http://localhost/api/locations?stats=true"));
+      const body = await res.json();
+      const stats = body.find((l: { name: string }) => l.name === "Drybox B");
+      expect(stats.totalGrams).toBe(750);
+    });
   });
 
   describe("GET /api/locations/[id]", () => {

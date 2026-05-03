@@ -24,6 +24,12 @@ export async function GET(request: NextRequest) {
     // Attach spool counts per location so the list page can show "N spools"
     // without the client having to re-query filaments. Uses a single
     // aggregation over Filament.spools since spools are embedded.
+    //
+    // GH #182: subtract the parent filament's `spoolWeight` from each
+    // spool's `totalWeight` (clamped at 0) so the per-location grams
+    // figure reports remaining filament, not the gross scale reading.
+    // Without it, a location with N spools would over-report inventory
+    // by N × empty-spool-mass.
     const counts = await Filament.aggregate([
       { $match: { _deletedAt: null } },
       { $unwind: "$spools" },
@@ -32,7 +38,19 @@ export async function GET(request: NextRequest) {
         $group: {
           _id: "$spools.locationId",
           spoolCount: { $sum: 1 },
-          totalGrams: { $sum: { $ifNull: ["$spools.totalWeight", 0] } },
+          totalGrams: {
+            $sum: {
+              $max: [
+                0,
+                {
+                  $subtract: [
+                    { $ifNull: ["$spools.totalWeight", 0] },
+                    { $ifNull: ["$spoolWeight", 0] },
+                  ],
+                },
+              ],
+            },
+          },
         },
       },
     ]);
