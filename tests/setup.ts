@@ -29,6 +29,16 @@ afterEach(async () => {
   }
 });
 
+// Bump the hook timeout — vitest's default of 10s isn't enough for the
+// disconnect + mongod stop pipeline on slow / first-run machines.
+// mongodb-memory-server's stop() sends SIGINT to mongod, waits 10s, then
+// falls back to SIGKILL (the warning is hardcoded inside
+// node_modules/mongodb-memory-server-core/.../utils.js). Worst case the
+// teardown takes ~20s (10s SIGINT wait + the kill+exit roundtrip), so
+// 30s gives the test suite enough headroom to exit cleanly even when
+// mongod refuses the soft signal (GH #186).
+const TEARDOWN_TIMEOUT_MS = 30_000;
+
 afterAll(async () => {
   // Guard each step — if beforeAll failed, mongoServer may be null and
   // mongoose may not be connected. A throwing teardown would mask the real
@@ -43,4 +53,4 @@ afterAll(async () => {
   if (mongoServer) {
     await mongoServer.stop().catch(() => {});
   }
-});
+}, TEARDOWN_TIMEOUT_MS);
