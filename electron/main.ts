@@ -373,20 +373,34 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
       serviceName: "next-server",
     });
 
+    // Mirror server output into the diag log too — when the utility
+    // process dies during module load (as it did under v1.14.2's asar
+    // packaging), the stack trace lands on stderr and we want it
+    // captured alongside the lifecycle events for support reports.
     serverProcess.stdout?.on("data", (data: Buffer) => {
-      console.log("Server:", data.toString().trim());
+      const text = data.toString().trim();
+      if (text) {
+        console.log("Server:", text);
+        diag(`server.stdout: ${text}`);
+      }
     });
 
     serverProcess.stderr?.on("data", (data: Buffer) => {
-      console.error("Server error:", data.toString().trim());
+      const text = data.toString().trim();
+      if (text) {
+        console.error("Server error:", text);
+        diag(`server.stderr: ${text}`);
+      }
     });
 
     serverProcess.on("spawn", () => {
+      diag("server spawned");
       // Wait for the server to respond to HTTP requests
       waitForServer(PORT).then(resolve).catch(reject);
     });
 
     serverProcess.on("exit", (code) => {
+      diag(`server exit code=${code}`);
       if (code !== 0) {
         reject(new Error(`Server exited with code ${code}`));
       }
