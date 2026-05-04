@@ -40,6 +40,7 @@ interface CompareFilament {
   minPrintSpeed: number | null;
   maxPrintSpeed: number | null;
   spools: { totalWeight: number | null; retired?: boolean }[];
+  spoolWeight: number | null;
 }
 
 export default function ComparePage() {
@@ -108,10 +109,17 @@ function ComparePageInner() {
 
   const totalGrams = useMemo(() => {
     return comparison.map((f) => {
+      // GH #182: subtract the empty-spool weight so the "On hand" row
+      // reports remaining filament, not the gross scale reading. The
+      // pre-fix sum was inflated by one empty-spool mass per tracked
+      // spool — same root cause as the dashboard / locations totals.
+      const spoolMass = typeof f.spoolWeight === "number" ? f.spoolWeight : 0;
       let grams = 0;
       for (const s of f.spools || []) {
         if (s.retired) continue;
-        if (typeof s.totalWeight === "number") grams += s.totalWeight;
+        if (typeof s.totalWeight === "number") {
+          grams += Math.max(0, s.totalWeight - spoolMass);
+        }
       }
       return grams;
     });
