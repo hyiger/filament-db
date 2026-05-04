@@ -215,7 +215,7 @@ You can also click **"+ Prusament QR"** on a filament's detail page (in the Spoo
 
 ### From CSV or XLSX
 
-1. On the home page, open the **Import/Export** dropdown and click **Import CSV** or **Import XLSX**.
+1. On the home page, open the **Import/Export** dropdown and click **Import File (INI / CSV / XLSX)**. The app routes by extension (`.csv` → CSV importer, `.xlsx` → XLSX importer, `.ini` → PrusaSlicer bundle).
 2. Select a file with a header row containing at minimum `Name`, `Vendor`, and `Type` columns.
 3. A toast confirms how many filaments were imported. Only fields present in the file are updated — existing data for unmapped columns is preserved.
 
@@ -452,10 +452,10 @@ If a filament has a single `totalWeight` but no spools yet, click **"Migrate to 
 
 ## Step 16: Browse the OpenPrintTag Community Database
 
-Discover filaments from 100+ brands (10,000+ FDM materials) in the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) and selectively import them into your library. The page shows live counts in its subtitle.
+Discover thousands of FDM filaments from many brands in the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) and selectively import them into your library. The page shows live counts in its subtitle (the database grows as the community contributes more entries).
 
 1. From the home page, open the **Import/Export** dropdown and click **"Browse OpenPrintTag DB"**.
-2. The browser loads all FDM filaments (11,000+ materials; SLA resins are filtered out automatically).
+2. The browser loads all FDM filaments (SLA resins are filtered out automatically).
 3. Materials are color-coded by data completeness:
    - 🟢 **Rich** (7-10 fields) -- green progress bar, fully opaque
    - 🟡 **Partial** (4-6 fields) -- yellow progress bar, fully opaque
@@ -581,7 +581,7 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 | Import from TDS | Add Filament > Import from TDS |
 | Configure AI provider | Settings > AI Features |
 | Import from PrusaSlicer | Home > Import/Export > Import INI |
-| Import from CSV/XLSX | Home > Import/Export > Import CSV / Import XLSX |
+| Import from CSV/XLSX | Home > Import/Export > Import File (INI / CSV / XLSX) — routed by extension |
 | Import Prusament spool | Home > Import/Export > Prusament QR |
 | Import from Atlas | Home > Import/Export > Import from Atlas |
 | Browse OpenPrintTag DB | Home > Import/Export > Browse OpenPrintTag DB |

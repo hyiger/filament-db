@@ -719,7 +719,7 @@ Extracted fields include: name, vendor, type, density, diameter, temperatures (n
 
 ### GET /api/snapshot
 
-Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, and print history (including soft-deleted documents). The snapshot preserves `_id` values, timestamps, and references so it can be restored exactly. Shared catalog records are not included in snapshot export/restore.
+Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones). The snapshot preserves `_id` values, timestamps, and references so it can be restored exactly. Snapshot schema version is `4` as of v1.14.0; older v1/v2/v3 snapshots still restore (missing collections come back as empty).
 
 Returns a JSON file with `Content-Disposition: attachment` header.
 
@@ -741,7 +741,8 @@ Returns:
     "printers": 2,
     "bedTypes": 3,
     "locations": 4,
-    "printHistory": 12
+    "printHistory": 12,
+    "sharedCatalogs": 1
   }
 }
 ```
