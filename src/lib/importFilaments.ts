@@ -222,13 +222,24 @@ export async function upsertImportRows(
     // Build the update doc using only fields that were actually present in the
     // import row. This prevents overwriting existing data (e.g. temperatures,
     // calibrations) with nulls when the CSV simply doesn't have those columns.
+    //
+    // GH #183: pre-fix `color` and `diameter` were unconditionally set with
+    // defaults (`#808080` / `1.75`), so importing a row that only carried
+    // name/vendor/type would silently reset an existing filament's color
+    // and diameter. Only attach them to `doc` when the row supplied them;
+    // for the create path the Mongoose schema-level defaults still kick in
+    // for missing fields.
     const doc: Record<string, unknown> = {
       name: row.name,
       vendor: row.vendor,
       type: row.type,
-      color: row.color || "#808080",
-      diameter: row.diameter ?? 1.75,
     };
+    if (row.color !== undefined && row.color !== "" && row.color !== null) {
+      doc.color = row.color;
+    }
+    if (row.diameter !== undefined && row.diameter !== null) {
+      doc.diameter = row.diameter;
+    }
 
     // Only set optional scalar fields if they were explicitly provided
     if (row.cost !== undefined) doc.cost = row.cost ?? null;
