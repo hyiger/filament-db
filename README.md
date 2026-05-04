@@ -39,7 +39,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **PrusaSlicer** -- import and export INI config bundles via browser upload or CLI
 - **Bulk spool import** -- paste or upload a CSV of spool rows (filament, weight, vendor, lot, dates, location); auto-creates missing locations and reports per-row errors
 - **PrusaSlicer Filament Edition** -- live bidirectional sync of filament presets with [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer) via REST API; presets appear in the filament dropdown on startup, changes sync back with per-nozzle calibration context, and calibration overrides are applied dynamically when switching printers/nozzles
-- **OpenPrintTag database** -- browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) (11,000+ materials from 97 brands), filter by type/brand/data quality, and selectively import filaments with completeness scoring
+- **OpenPrintTag database** -- browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) (thousands of FDM materials from many brands; live counts shown in the UI), filter by type/brand/data quality, and selectively import filaments with completeness scoring
 - **CSV / XLSX** -- import and export spreadsheets with column mapping
 - **Prusament QR** -- scan a spool QR code or enter spool ID to auto-import specs, temps, weights, and pricing
 - **Import from Atlas** -- connect to a remote MongoDB Atlas database and selectively import filaments

@@ -1821,7 +1821,7 @@
       "get": {
         "tags": ["Snapshot"],
         "summary": "Export database snapshot",
-        "description": "Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, and print history. Shared catalog records are not included in snapshot export/restore.",
+        "description": "Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones). Snapshot schema version is 4 as of v1.14.0; older v1/v2/v3 snapshots still restore (missing collections come back as empty).",
         "responses": {
           "200": {
             "description": "JSON snapshot file",
@@ -1858,7 +1858,8 @@
                         "printers": { "type": "integer" },
                         "bedTypes": { "type": "integer" },
                         "locations": { "type": "integer" },
-                        "printHistory": { "type": "integer" }
+                        "printHistory": { "type": "integer" },
+                        "sharedCatalogs": { "type": "integer" }
                       }
                     }
                   }

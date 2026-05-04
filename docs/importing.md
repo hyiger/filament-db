@@ -115,7 +115,7 @@ This also works from a filament's detail page to add another spool of the same m
 
 ## CSV / XLSX Import
 
-1. Open the **Import/Export** dropdown on the home page and click **"Import CSV"** or **"Import XLSX"**
+1. Open the **Import/Export** dropdown on the home page and click **"Import File (INI / CSV / XLSX)"** — the app routes by extension (`.csv` → CSV importer, `.xlsx` → XLSX importer, `.ini` → PrusaSlicer bundle)
 2. Select a file with a header row containing at minimum `Name`, `Vendor`, and `Type` columns (max 10 MB)
 3. Additional supported columns: `Color`, `Color Name`, `Diameter`, `Cost`, `Density`, `Nozzle Temp`, `Bed Temp`, `Nozzle First Layer`, `Bed First Layer`, `Max Volumetric Speed`, `Spool Weight`, `Net Filament Weight`, `TDS URL`, `Instance ID`, `Drying Temp`, `Drying Time`, `Transmission Distance` (HueForge TD), `Glass Transition` / `Tg`, `Heat Deflection` / `HDT`, `Shore A`, `Shore D`, `Min Print Speed`, `Max Print Speed`, `Nozzle Range Min`, `Nozzle Range Max`, `Standby Temp`, `Spool Type`
 4. Column names are matched case-insensitively with common aliases (e.g. "HueForge TD" maps to Transmission Distance, "Tg" maps to Glass Transition)
@@ -126,7 +126,7 @@ This also works from a filament's detail page to add another spool of the same m
 
 ## Snapshot Restore
 
-You can restore a previously exported snapshot to import core app data: filaments, nozzles, printers, bed types, locations, and print history. Shared catalog records are not included in snapshot export/restore.
+You can restore a previously exported snapshot to import core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones).
 
 1. Go to **Settings** and click **"Restore"** in the Database Snapshots section
 2. Select a snapshot JSON file (exported via **"Backup"**)
@@ -143,7 +143,7 @@ Open the **Import/Export** dropdown on the home page and click **"Export CSV"** 
 
 ## OpenPrintTag Community Database Import
 
-Browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) (11,000+ materials from 100+ brands) and selectively import filaments into your library.
+Browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) (thousands of FDM materials from many brands; the browser subtitle shows the live count from the upstream database) and selectively import filaments into your library.
 
 1. From the home page, open the **Import/Export** dropdown and click **"Browse OpenPrintTag DB"**
 2. The browser loads all FDM filaments from the OpenPrintTag database (SLA resins are filtered out)

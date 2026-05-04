@@ -47,7 +47,13 @@ Click any filament name in the table to see its full details:
 
 ## Deleting a Filament
 
-Click **"Delete"** next to any filament in the list. You will be prompted to confirm before deletion.
+Deletion goes through the bulk-actions selection bar:
+
+1. Tick the checkbox(es) next to one or more rows in the filament list.
+2. A red selection bar appears above the table with **"Delete {count}"**.
+3. Click it and confirm.
+
+Parent filaments that still have color variants are blocked from deletion — remove or reparent the variants first.
 
 ---
 
@@ -336,7 +342,7 @@ XLSX exports include styled headers, color-coded cells, auto-filter, and a froze
 
 ### Importing
 
-Open the **Import/Export** dropdown on the home page and click **"Import CSV"** or **"Import XLSX"** to upload a file (max 10 MB). The file must have a header row with at minimum `Name`, `Vendor`, and `Type` columns. Additional columns are mapped by header name (case-insensitive), including glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, nozzle temp ranges, standby temp, color name, and spool type. Only fields present in the file are updated — existing data for unmapped columns is preserved. Rows missing required fields are reported with row numbers and reasons.
+Open the **Import/Export** dropdown on the home page and click **"Import File (INI / CSV / XLSX)"** to upload a file (max 10 MB). The app routes by extension: `.ini` → PrusaSlicer bundle import, `.csv` → CSV importer, `.xlsx` → XLSX importer. The file must have a header row with at minimum `Name`, `Vendor`, and `Type` columns. Additional columns are mapped by header name (case-insensitive), including glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, nozzle temp ranges, standby temp, color name, and spool type. Only fields present in the file are updated — existing data for unmapped columns is preserved. Rows missing required fields are reported with row numbers and reasons.
 
 ---
 
@@ -344,7 +350,7 @@ Open the **Import/Export** dropdown on the home page and click **"Import CSV"** 
 
 ### Exporting a Snapshot
 
-Go to **Settings** and click **"Backup"** in the Database Snapshots section to download a JSON snapshot of core app data. The snapshot includes filaments, nozzles, printers, bed types, locations, and print history (including soft-deleted documents) with references and timestamps preserved. Shared catalog records are not included in snapshot export/restore.
+Go to **Settings** and click **"Backup"** in the Database Snapshots section to download a JSON snapshot of core app data. The snapshot includes filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones) with references and timestamps preserved.
 
 ### Restoring a Snapshot
 
@@ -360,7 +366,7 @@ Each filament has a unique instance identifier (5-byte hex string, e.g. `2acc210
 
 ## OpenPrintTag Community Database Browser
 
-Browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) directly from Filament DB to discover and import filaments from 97 brands.
+Browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) directly from Filament DB to discover and import thousands of FDM filaments from many brands. The browser subtitle shows the live count fetched from the upstream database (it grows as the community contributes more entries).
 
 ### Accessing the Browser
 
