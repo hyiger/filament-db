@@ -176,6 +176,38 @@ describe("/api/locations", () => {
       const stats = body.find((l: { name: string }) => l.name === "Drybox B");
       expect(stats.totalGrams).toBe(750);
     });
+
+    it("variant inherits spoolWeight from parent in the location aggregation (Codex P2 PR #190)", async () => {
+      // Parent spoolWeight=250; variant inherits. Spool on the variant
+      // assigned to a location. Pre-Codex-fix the $lookup was missing
+      // and the variant's null spoolWeight fell through to 0, leaving
+      // the over-reporting bug intact for variant spools.
+      const loc = await Location.create({ name: "Drybox C", kind: "drybox" });
+      const parent = await Filament.create({
+        name: "Inherit Parent",
+        vendor: "Test",
+        type: "PLA",
+        spoolWeight: 250,
+      });
+      await Filament.create({
+        name: "Inherit Variant",
+        vendor: "Test",
+        type: "PLA",
+        color: "#abc",
+        parentId: parent._id,
+        // spoolWeight intentionally omitted — inherit.
+        spools: [
+          // 1000 - 250 = 750 expected (NOT 1000).
+          { label: "", totalWeight: 1000, locationId: loc._id, retired: false },
+        ],
+      });
+
+      const res = await listLocations(jsonReq("http://localhost/api/locations?stats=true"));
+      const body = await res.json();
+      const stats = body.find((l: { name: string }) => l.name === "Drybox C");
+      expect(stats.spoolCount).toBe(1);
+      expect(stats.totalGrams).toBe(750);
+    });
   });
 
   describe("GET /api/locations/[id]", () => {

@@ -50,6 +50,16 @@ export async function GET() {
       threshold: number;
     }[] = [];
 
+    // Build a parentMap up front — variants intentionally inherit
+    // `spoolWeight` from their parent (see src/lib/resolveFilament.ts),
+    // so subtracting only the variant's own field treats the inherited
+    // case as 0 and re-introduces the GH #182 over-reporting for every
+    // variant. Codex P1 on PR #190.
+    const parentMap = new Map<string, (typeof filaments)[number]>();
+    for (const f of filaments) {
+      if (!f.parentId) parentMap.set(f._id.toString(), f);
+    }
+
     for (const f of filaments) {
       let remaining = 0;
       // Subtracting the empty-spool weight is the bit GH #182 was about:
@@ -58,7 +68,13 @@ export async function GET() {
       // raw scale value, which inflated `totalGrams` by one empty-spool
       // mass per tracked spool and let low-stock alerts hide while the
       // gross weight still cleared the threshold.
-      const spoolMass = typeof f.spoolWeight === "number" ? f.spoolWeight : 0;
+      //
+      // Resolve the parent's spoolWeight when the variant's is null so
+      // inherited values are honoured.
+      const ownMass = typeof f.spoolWeight === "number" ? f.spoolWeight : null;
+      const parent = f.parentId ? parentMap.get(f.parentId.toString()) : undefined;
+      const inheritedMass = parent && typeof parent.spoolWeight === "number" ? parent.spoolWeight : 0;
+      const spoolMass = ownMass ?? inheritedMass;
       for (const s of f.spools || []) {
         if (s.retired) {
           retiredSpools++;
@@ -90,11 +106,7 @@ export async function GET() {
     // filament needs drying. A variant with no own dryingTemperature must
     // inherit from its parent; pre-v1.12.5 this branch only checked the
     // variant's own field, so child filaments with inherited drying values
-    // were silently skipped (GH #133).
-    const parentMap = new Map<string, (typeof filaments)[number]>();
-    for (const f of filaments) {
-      if (!f.parentId) parentMap.set(f._id.toString(), f);
-    }
+    // were silently skipped (GH #133). Reuses the parentMap built above.
     const now = Date.now();
     const dryThresholdMs = 30 * 24 * 60 * 60 * 1000;
     const dryDue: {

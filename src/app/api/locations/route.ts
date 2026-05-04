@@ -25,13 +25,30 @@ export async function GET(request: NextRequest) {
     // without the client having to re-query filaments. Uses a single
     // aggregation over Filament.spools since spools are embedded.
     //
-    // GH #182: subtract the parent filament's `spoolWeight` from each
+    // GH #182: subtract the filament's effective `spoolWeight` from each
     // spool's `totalWeight` (clamped at 0) so the per-location grams
     // figure reports remaining filament, not the gross scale reading.
-    // Without it, a location with N spools would over-report inventory
-    // by N × empty-spool-mass.
+    // Without it, a location with N spools over-reports inventory by
+    // N × empty-spool-mass.
+    //
+    // Codex P2 on PR #190: `spoolWeight` is inheritable — variants commonly
+    // store null and inherit from their parent. Use $lookup to resolve the
+    // parent's value when the variant's is null, then $ifNull-chain
+    // (variant own → parent → 0) inside the subtract.
     const counts = await Filament.aggregate([
       { $match: { _deletedAt: null } },
+      // Pull the parent doc (if any) so we can resolve inherited spoolWeight.
+      // Variants without a parentId get an empty array; the $arrayElemAt
+      // below safely returns null for the inherited fallback.
+      {
+        $lookup: {
+          from: "filaments",
+          localField: "parentId",
+          foreignField: "_id",
+          as: "_parent",
+          pipeline: [{ $project: { spoolWeight: 1 } }],
+        },
+      },
       { $unwind: "$spools" },
       { $match: { "spools.retired": { $ne: true }, "spools.locationId": { $ne: null } } },
       {
@@ -45,7 +62,12 @@ export async function GET(request: NextRequest) {
                 {
                   $subtract: [
                     { $ifNull: ["$spools.totalWeight", 0] },
-                    { $ifNull: ["$spoolWeight", 0] },
+                    {
+                      $ifNull: [
+                        "$spoolWeight",
+                        { $ifNull: [{ $arrayElemAt: ["$_parent.spoolWeight", 0] }, 0] },
+                      ],
+                    },
                   ],
                 },
               ],

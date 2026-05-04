@@ -283,4 +283,56 @@ describe("/api/dashboard — totalGrams + low-stock subtract empty-spool mass (G
     const body = await res.json();
     expect(body.totalGrams).toBe(1000);
   });
+
+  it("a variant inherits spoolWeight from its parent (Codex P1 PR #190)", async () => {
+    // Parent has spoolWeight=250; variant leaves it null. Pre-Codex-fix the
+    // dashboard treated the variant's null as 0 and contributed the full
+    // gross weight (1000) to totalGrams, re-introducing the original bug.
+    const parent = await Filament.create({
+      name: "Parent PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 250,
+      netFilamentWeight: 1000,
+    });
+    await Filament.create({
+      name: "Variant Galaxy Black",
+      vendor: "Test",
+      type: "PLA",
+      color: "#1a1a2e",
+      parentId: parent._id,
+      // spoolWeight + netFilamentWeight intentionally omitted — inherit.
+      spools: [{ label: "v1", totalWeight: 1000 }],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    // Variant should contribute (1000 - 250) = 750, NOT 1000.
+    expect(body.totalGrams).toBe(750);
+  });
+
+  it("low-stock alert fires for a variant whose remaining (after inherited spoolWeight) is below threshold", async () => {
+    const parent = await Filament.create({
+      name: "LS Parent",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 500,
+      netFilamentWeight: 1000,
+    });
+    const variant = await Filament.create({
+      name: "LS Variant",
+      vendor: "Test",
+      type: "PLA",
+      color: "#fff",
+      parentId: parent._id,
+      lowStockThreshold: 200,
+      // 600 - inherited 500 = 100 remaining → below threshold 200.
+      spools: [{ label: "low", totalWeight: 600 }],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const ids = (body.lowStock as { _id: string }[]).map((x) => x._id);
+    expect(ids).toContain(String(variant._id));
+  });
 });
