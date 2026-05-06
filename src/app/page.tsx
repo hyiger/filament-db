@@ -451,7 +451,7 @@ export default function Home() {
   const renderRow = (f: Filament, isVariant = false) => (
     <tr
       key={f._id}
-      className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${isVariant ? "bg-gray-50/50 dark:bg-gray-950/50" : ""} ${selected.has(f._id) ? "bg-red-950/20" : ""}`}
+      className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${isVariant ? "bg-gray-50/50 dark:bg-gray-950/50" : ""} ${selected.has(f._id) ? "bg-red-900/25" : ""}`}
     >
       <td className="py-2 px-2">
         <input
@@ -547,7 +547,7 @@ export default function Home() {
       <>
         <tr
           key={f._id}
-          className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(f._id) ? "bg-red-950/20" : ""}`}
+          className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(f._id) ? "bg-red-900/25" : ""}`}
         >
           <td className="py-2 px-2">
             <input
@@ -840,18 +840,25 @@ export default function Home() {
       </div>
 
       {selected.size > 0 && (
-        <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-950/30 border border-red-800 rounded-lg">
-          <span className="text-sm text-red-300">{t("filaments.bulk.selected", { count: selected.size })}</span>
+        // GH #196: previously the bar used `bg-red-950/30` + `text-red-300`
+        // + small text-sm — pink-on-dark-red is a low-contrast pairing on
+        // a near-black page and the small thin font compounded the problem.
+        // Bumped the bg to red-900/50 (deeper, less transparent), the count
+        // text to red-100 with font-medium, and the Clear button to
+        // gray-200 hover-white so all three elements meet WCAG-AA contrast
+        // on dark mode.
+        <div className="mb-4 flex items-center gap-3 px-3 py-2.5 bg-red-900/50 border border-red-700 rounded-lg">
+          <span className="text-sm font-medium text-red-100">{t("filaments.bulk.selected", { count: selected.size })}</span>
           <button
             onClick={handleBulkDelete}
             disabled={bulkDeleting}
-            className="px-3 py-1 bg-red-700 text-white rounded text-sm hover:bg-red-600 disabled:opacity-50"
+            className="px-3 py-1.5 bg-red-700 text-white rounded text-sm font-medium hover:bg-red-600 disabled:opacity-50"
           >
             {bulkDeleting ? t("filaments.bulk.deleting") : t("filaments.bulk.delete", { count: selected.size })}
           </button>
           <button
             onClick={() => setSelected(new Set())}
-            className="text-sm text-gray-400 hover:text-gray-200"
+            className="text-sm text-gray-200 hover:text-white"
           >
             {t("common.clear")}
           </button>
