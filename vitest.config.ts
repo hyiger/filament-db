@@ -24,6 +24,16 @@ export default defineConfig({
       },
     },
     testTimeout: 15000,
+    // Bumped from the 10s default. Several route-level test files use a
+    // beforeEach that dynamically imports Mongoose models and re-registers
+    // them on the connection (setup.ts wipes mongoose.models between
+    // tests). On Windows the cold-import + ESM-resolution path can blow
+    // past 10s on the first iteration of a file, which used to fail the
+    // Windows release build (e.g. tests/locations-route.test.ts beforeEach
+    // timed out in CI but passed locally on macOS / Linux). 30s gives
+    // enough headroom for the slowest Windows runner without masking real
+    // hangs — the testTimeout above still catches stuck tests at 15s.
+    hookTimeout: 30000,
     setupFiles: ["./tests/setup.ts"],
   },
   resolve: {
