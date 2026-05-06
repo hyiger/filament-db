@@ -54,7 +54,7 @@ export default function AnalyticsPage() {
   }, [data]);
 
   return (
-    <main className="max-w-5xl mx-auto px-4 py-8">
+    <main className="w-full px-4 py-8">
       <div className="flex items-end justify-between mb-6 flex-wrap gap-3">
         <div>
           <h1 className="text-3xl font-bold">{t("analytics.title")}</h1>

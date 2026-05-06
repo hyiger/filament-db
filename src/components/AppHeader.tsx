@@ -48,7 +48,7 @@ export default function AppHeader() {
 
   return (
     <header className="sticky top-0 z-40 bg-white/95 dark:bg-gray-950/95 backdrop-blur border-b border-gray-200 dark:border-gray-800">
-      <div className="max-w-7xl mx-auto px-4 h-12 flex items-center justify-between gap-3">
+      <div className="w-full px-4 h-12 flex items-center justify-between gap-3">
         <Link
           href="/"
           className="flex items-baseline gap-2 whitespace-nowrap text-gray-900 dark:text-gray-100 hover:text-blue-700 dark:hover:text-blue-300 transition-colors"
@@ -115,7 +115,7 @@ export default function AppHeader() {
           className="md:hidden border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950"
           aria-label="Primary mobile"
         >
-          <div className="max-w-7xl mx-auto px-4 py-2 flex flex-col gap-1">
+          <div className="w-full px-4 py-2 flex flex-col gap-1">
             {LINKS.map((link) => (
               <Link
                 key={link.href}

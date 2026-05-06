@@ -73,7 +73,7 @@ export default function DashboardPage() {
 
   if (error) {
     return (
-      <main className="max-w-5xl mx-auto px-4 py-8">
+      <main className="w-full px-4 py-8">
         <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
       </main>
     );
@@ -81,7 +81,7 @@ export default function DashboardPage() {
 
   if (!data) {
     return (
-      <main className="max-w-5xl mx-auto px-4 py-8">
+      <main className="w-full px-4 py-8">
         <p className="text-sm text-gray-500">{t("common.loading")}</p>
       </main>
     );
@@ -90,7 +90,7 @@ export default function DashboardPage() {
   const kg = (data.totalGrams / 1000).toFixed(2);
 
   return (
-    <main className="max-w-5xl mx-auto px-4 py-8">
+    <main className="w-full px-4 py-8">
       <h1 className="text-3xl font-bold mb-6">{t("dashboard.title")}</h1>
 
       {/* Top metrics */}

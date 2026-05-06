@@ -106,7 +106,7 @@ export default function PrintersPage() {
   };
 
   return (
-    <main className="max-w-5xl mx-auto px-4 py-8">
+    <main className="w-full px-4 py-8">
       <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">{t("printers.title")}</h1>
