@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Location from "@/models/Location";
 import Filament from "@/models/Filament";
-import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 export async function GET(
   _request: NextRequest,
@@ -17,7 +17,7 @@ export async function GET(
     }
     return NextResponse.json(location);
   } catch (err) {
-    return errorResponse("Failed to fetch location", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to fetch location");
   }
 }
 
@@ -87,6 +87,6 @@ export async function DELETE(
     }
     return NextResponse.json({ message: "Deleted" });
   } catch (err) {
-    return errorResponse("Failed to delete location", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to delete location");
   }
 }

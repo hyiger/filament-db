@@ -67,9 +67,11 @@ export function isClientInputErrorMessage(message: string): boolean {
 
 /**
  * True when an error is a client-input rejection rather than a server fault —
- * Mongoose schema validators (`ValidationError`), our pre-update hooks
- * (`tdsUrl must be a valid http(s) URL`), and the shared SSRF guard
- * (`assertExternalUrl` rejections from src/lib/externalUrlGuard.ts).
+ * Mongoose schema validators (`ValidationError`), Mongoose ObjectId-cast
+ * rejections (`CastError` — fired when a route's path param like `{id}` is
+ * not a parseable ObjectId — GH #202), our pre-update hooks (`tdsUrl must
+ * be a valid http(s) URL`), and the shared SSRF guard (`assertExternalUrl`
+ * rejections from src/lib/externalUrlGuard.ts).
  *
  * Used by route handlers to distinguish 4xx-worthy "your input was bad"
  * from 5xx "the server crashed". Without this, validators throw a generic
@@ -79,7 +81,8 @@ export function isClientInputErrorMessage(message: string): boolean {
  */
 export function isClientInputError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
-  if (err.name === "ValidationError") return true; // Mongoose
+  if (err.name === "ValidationError") return true; // Mongoose validators
+  if (err.name === "CastError") return true; // Mongoose ObjectId/cast rejections (GH #202)
   return isClientInputErrorMessage(err.message);
 }
 

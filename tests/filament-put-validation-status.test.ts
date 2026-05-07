@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
-import { PUT as putFilament } from "@/app/api/filaments/[id]/route";
+import { GET as getFilament, PUT as putFilament } from "@/app/api/filaments/[id]/route";
 
 /**
  * GH #160 regression guard.
@@ -84,5 +84,28 @@ describe("PUT /api/filaments/[id] — client-input rejections return 400", () =>
     const res = await putFilament(req, { params: Promise.resolve({ id: String(filament._id) }) });
 
     expect(res.status).toBe(200);
+  });
+
+  it("GET with an invalid ObjectId path param returns 400, not 500 (GH #202)", async () => {
+    // Pre-fix the route used `errorResponse(..., 500, getErrorMessage)` and
+    // Mongoose's CastError leaked through as a 500 server-fault status —
+    // bad UX (renderers couldn't tell input from server failure) and bad
+    // for monitoring (alerts on copy-paste typos).
+    const req = new NextRequest("http://localhost/api/filaments/notavalidobjectid");
+    const res = await getFilament(req, { params: Promise.resolve({ id: "notavalidobjectid" }) });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    // Mongoose's CastError message includes "Cast to ObjectId failed"
+    expect(body.error).toMatch(/Cast to ObjectId failed/i);
+  });
+
+  it("PUT with an invalid ObjectId path param returns 400, not 500 (GH #202)", async () => {
+    const req = new NextRequest("http://localhost/api/filaments/notavalidobjectid", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "anything" }),
+    });
+    const res = await putFilament(req, { params: Promise.resolve({ id: "notavalidobjectid" }) });
+    expect(res.status).toBe(400);
   });
 });

@@ -3,7 +3,7 @@ import dbConnect from "@/lib/mongodb";
 import Printer from "@/models/Printer";
 import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
-import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 export async function GET(
   _request: NextRequest,
@@ -20,7 +20,7 @@ export async function GET(
     }
     return NextResponse.json(printer);
   } catch (err) {
-    return errorResponse("Failed to fetch printer", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to fetch printer");
   }
 }
 
@@ -102,6 +102,6 @@ export async function DELETE(
     }
     return NextResponse.json({ message: "Deleted" });
   } catch (err) {
-    return errorResponse("Failed to delete printer", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to delete printer");
   }
 }

@@ -103,6 +103,15 @@ describe("isClientInputError", () => {
     expect(isClientInputError(err)).toBe(true);
   });
 
+  it("returns true for Mongoose CastError (GH #202 — invalid ObjectId on path param)", () => {
+    // CastError fires when a route's {id} path param isn't a parseable
+    // ObjectId, e.g. GET /api/filaments/notavalidobjectid. Bad client
+    // input — the route should return 400, not 500.
+    const err = new Error('Cast to ObjectId failed for value "notavalidobjectid" (type string) at path "_id" for model "Filament"');
+    err.name = "CastError";
+    expect(isClientInputError(err)).toBe(true);
+  });
+
   it("returns true when the message matches a known client-input pattern", () => {
     expect(isClientInputError(new Error("tdsUrl must be a valid http(s) URL"))).toBe(true);
     expect(isClientInputError(new Error('Disallowed URL scheme "file:"'))).toBe(true);

@@ -3,7 +3,7 @@ import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
 import Filament from "@/models/Filament";
 import Printer from "@/models/Printer";
-import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 export async function GET(
   _request: NextRequest,
@@ -27,7 +27,7 @@ export async function GET(
       .lean();
     return NextResponse.json({ ...nozzle, printers });
   } catch (err) {
-    return errorResponse("Failed to fetch nozzle", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to fetch nozzle");
   }
 }
 

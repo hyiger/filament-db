@@ -5,7 +5,7 @@ import Nozzle from "@/models/Nozzle";
 import "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
-import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 /**
  * GET /api/filaments/{id}
@@ -92,7 +92,7 @@ export async function GET(
 
     return NextResponse.json({ ...resolved, _variants: variants });
   } catch (err) {
-    return errorResponse("Failed to fetch filament", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to fetch filament");
   }
 }
 

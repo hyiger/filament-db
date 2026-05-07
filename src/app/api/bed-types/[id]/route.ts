@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import BedType from "@/models/BedType";
 import Filament from "@/models/Filament";
-import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 export async function GET(
   _request: NextRequest,
@@ -17,7 +17,7 @@ export async function GET(
     }
     return NextResponse.json(bedType);
   } catch (err) {
-    return errorResponse("Failed to fetch bed type", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to fetch bed type");
   }
 }
 
@@ -86,6 +86,6 @@ export async function DELETE(
     }
     return NextResponse.json({ message: "Deleted" });
   } catch (err) {
-    return errorResponse("Failed to delete bed type", 500, getErrorMessage(err));
+    return errorResponseFromCaught(err, "Failed to delete bed type");
   }
 }
