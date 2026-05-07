@@ -488,7 +488,7 @@ These writes run inside a MongoDB transaction when the deployment supports it (A
 The **Analytics** page at `/analytics` draws from PrintHistory records plus any manual per-spool usage entries (the ones you logged directly on the spool UI without going through the print-history endpoint).
 
 - **Window**: 7, 30, 90, or 365 days
-- **Totals**: grams, estimated cost, jobs
+- **Totals**: grams, estimated cost, jobs (`+N manual` is shown under the jobs counter when at least one manual per-spool entry contributed to the totals — distinguishes inventory drained via PrintHistory jobs from inventory drained via direct spool-UI logs)
 - **Usage by day**: bar chart
 - **Breakdown**: by filament, by vendor, by printer
 

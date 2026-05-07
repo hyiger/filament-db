@@ -914,7 +914,7 @@ Aggregates PrintHistory rows plus any manual per-spool usageHistory entries (the
 {
   "since": "2026-03-23T00:00:00Z",
   "days": 30,
-  "totals": { "grams": 3240, "cost": 82.50, "jobs": 17 },
+  "totals": { "grams": 3240, "cost": 82.50, "jobs": 17, "manualEntries": 2 },
   "usageByDay": [{ "date": "2026-03-23", "grams": 0 }, …],
   "byFilament":  [{ "_id": "…", "name": "PLA Black", "vendor": "Vendor A", "cost": 25, "grams": 1200 }, …],
   "byVendor":    [{ "vendor": "Vendor A", "grams": 2100 }, …],
@@ -923,6 +923,8 @@ Aggregates PrintHistory rows plus any manual per-spool usageHistory entries (the
 ```
 
 `usageHistory` entries are only pulled in when `source === "manual"`. Entries with `source: "job"` or `"slicer"` are owned by a PrintHistory row and already counted in the primary aggregation — including them here would double-count the same grams.
+
+`totals.manualEntries` (added GH #204) counts the manual `usageHistory` rows that contributed to the window — distinguishes inventory drained via PrintHistory jobs from inventory drained via direct spool-UI logs. The renderer surfaces this as a `+N manual` hint under the **Print jobs** stat box when > 0, so a fresh DB with only manual logs no longer shows `0 g · $0 · 0 jobs` despite having recorded usage.
 
 ---
 
