@@ -1152,6 +1152,7 @@
       "post": {
         "tags": ["Spools"],
         "summary": "Add spool to filament",
+        "description": "Adds a new spool subdoc to the filament. At least one of label, totalWeight, lotNumber, purchaseDate, openedDate, locationId, photoDataUrl, or retired must be supplied — an empty body returns 400 (GH #203).",
         "parameters": [
           { "$ref": "#/components/parameters/FilamentId" }
         ],
@@ -1161,9 +1162,16 @@
             "application/json": {
               "schema": {
                 "type": "object",
+                "minProperties": 1,
                 "properties": {
                   "label": { "type": "string", "description": "Spool label (e.g. spool ID or date)" },
-                  "totalWeight": { "type": "number", "nullable": true, "description": "Total weight in grams (spool + filament)" }
+                  "totalWeight": { "type": "number", "nullable": true, "description": "Total weight in grams (spool + filament). Null = weight unknown." },
+                  "lotNumber": { "type": "string", "nullable": true, "description": "Manufacturer lot / batch number" },
+                  "purchaseDate": { "type": "string", "nullable": true, "description": "ISO date string (YYYY-MM-DD)" },
+                  "openedDate": { "type": "string", "nullable": true, "description": "ISO date string (YYYY-MM-DD) — when the spool was first opened" },
+                  "locationId": { "type": "string", "nullable": true, "description": "Reference to a Location document (drybox/shelf/cabinet/etc)" },
+                  "photoDataUrl": { "type": "string", "nullable": true, "description": "Inline base64 image (JPEG/PNG/GIF/WebP/AVIF/HEIC; SVG rejected)" },
+                  "retired": { "type": "boolean", "description": "True if the spool is empty / no longer in use; excluded from inventory totals" }
                 }
               }
             }
@@ -1177,6 +1185,10 @@
                 "schema": { "$ref": "#/components/schemas/Filament" }
               }
             }
+          },
+          "400": {
+            "description": "Empty body, invalid field type, or no recognised fields supplied",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
           },
           "404": {
             "description": "Filament not found",
