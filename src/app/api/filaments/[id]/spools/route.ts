@@ -7,7 +7,7 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  let body;
+  let body: unknown;
   try {
     body = await request.json();
   } catch {
@@ -21,20 +21,55 @@ export async function POST(
     return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
+  // GH #203: validateSpoolBody (POST mode) defaults missing fields to
+  // empty string / null, so an empty `{}` request previously created a
+  // phantom spool with no label, no weight, no metadata. Require the
+  // caller to explicitly supply something — totalWeight or any of the
+  // other meaningful fields. The CSV importer enforces the same
+  // contract via its required-column check on `totalWeight`.
+  const rawBody = body as Record<string, unknown>;
+  const meaningfulKeys = [
+    "label",
+    "totalWeight",
+    "lotNumber",
+    "purchaseDate",
+    "openedDate",
+    "locationId",
+    "photoDataUrl",
+    "retired",
+  ];
+  const supplied = meaningfulKeys.some((k) => rawBody[k] !== undefined);
+  if (!supplied) {
+    return NextResponse.json(
+      {
+        error:
+          "At least one of label, totalWeight, lotNumber, purchaseDate, openedDate, locationId, photoDataUrl, or retired is required",
+      },
+      { status: 400 },
+    );
+  }
+
   try {
     await dbConnect();
     const { id } = await params;
 
+    // Only push fields the validator captured. Previously the $push
+    // dropped lotNumber / purchaseDate / openedDate / locationId /
+    // photoDataUrl / retired even when the client supplied them — a
+    // separate latent bug paired with the empty-body phantom (GH #203).
+    const newSpool: Record<string, unknown> = {};
+    if (validation.label !== undefined) newSpool.label = validation.label;
+    if (validation.totalWeight !== undefined) newSpool.totalWeight = validation.totalWeight;
+    if (validation.lotNumber !== undefined) newSpool.lotNumber = validation.lotNumber;
+    if (validation.purchaseDate !== undefined) newSpool.purchaseDate = validation.purchaseDate;
+    if (validation.openedDate !== undefined) newSpool.openedDate = validation.openedDate;
+    if (validation.locationId !== undefined) newSpool.locationId = validation.locationId;
+    if (validation.photoDataUrl !== undefined) newSpool.photoDataUrl = validation.photoDataUrl;
+    if (validation.retired !== undefined) newSpool.retired = validation.retired;
+
     const filament = await Filament.findOneAndUpdate(
       { _id: id, _deletedAt: null },
-      {
-        $push: {
-          spools: {
-            label: validation.label,
-            totalWeight: validation.totalWeight,
-          },
-        },
-      },
+      { $push: { spools: newSpool } },
       { returnDocument: "after" }
     ).lean();
 
