@@ -183,6 +183,7 @@
   "analytics.totalGrams": "Gramm verbraucht",
   "analytics.totalCost": "Geschätzte Kosten",
   "analytics.totalJobs": "Druckaufträge",
+  "analytics.manualEntriesHint": "+{count} manuell",
   "analytics.usageByDay": "Verbrauch pro Tag",
   "analytics.topFilaments": "Top-Filamente",
   "analytics.byVendor": "Nach Hersteller",

@@ -8,7 +8,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 interface AnalyticsData {
   since: string;
   days: number;
-  totals: { grams: number; cost: number; jobs: number };
+  totals: { grams: number; cost: number; jobs: number; manualEntries: number };
   usageByDay: { date: string; grams: number }[];
   byFilament: { _id: string; name: string; vendor: string; cost: number | null; grams: number }[];
   byVendor: { vendor: string; grams: number }[];
@@ -91,7 +91,20 @@ export default function AnalyticsPage() {
                 data.totals.cost > 0 ? `${currencySymbol}${data.totals.cost.toFixed(2)}` : "—"
               }
             />
-            <StatBox label={t("analytics.totalJobs")} value={String(data.totals.jobs)} />
+            {/* GH #204: when there are no PrintHistory rows but the
+                grams + cost totals are non-zero, the value came from
+                manual per-spool usage entries. Show the "+N manual"
+                hint underneath the Print jobs counter so the user can
+                attribute the totals. */}
+            <StatBox
+              label={t("analytics.totalJobs")}
+              value={String(data.totals.jobs)}
+              hint={
+                data.totals.manualEntries > 0
+                  ? t("analytics.manualEntriesHint", { count: data.totals.manualEntries })
+                  : undefined
+              }
+            />
           </div>
 
           {/* Single page-level empty state when no usage was recorded in the
@@ -231,11 +244,14 @@ export default function AnalyticsPage() {
   );
 }
 
-function StatBox({ label, value }: { label: string; value: string }) {
+function StatBox({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="border border-gray-200 dark:border-gray-700 rounded px-3 py-2 bg-white dark:bg-gray-900">
       <div className="text-xs text-gray-500 uppercase tracking-wide">{label}</div>
       <div className="text-xl font-semibold mt-0.5">{value}</div>
+      {hint ? (
+        <div className="text-[10px] text-gray-500 dark:text-gray-400 mt-0.5">{hint}</div>
+      ) : null}
     </div>
   );
 }

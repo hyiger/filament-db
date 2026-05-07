@@ -183,6 +183,7 @@
   "analytics.totalGrams": "Grams used",
   "analytics.totalCost": "Estimated cost",
   "analytics.totalJobs": "Print jobs",
+  "analytics.manualEntriesHint": "+{count} manual",
   "analytics.usageByDay": "Usage by day",
   "analytics.topFilaments": "Top filaments",
   "analytics.byVendor": "By vendor",

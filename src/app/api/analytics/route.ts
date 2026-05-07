@@ -46,6 +46,13 @@ export async function GET(request: NextRequest) {
     const byPrinter = new Map<string, { name: string; grams: number }>();
     let totalGrams = 0;
     let totalCost = 0;
+    // GH #204: per-spool `usageHistory` entries logged directly on the
+    // spool UI (source: "manual") count toward grams + cost but are not
+    // PrintHistory documents, so the existing `jobs` counter doesn't
+    // include them. Surface a separate count so the user can attribute
+    // the "Grams used" total — pre-fix the page showed `50 g · $1.10 ·
+    // 0 jobs` with no hint that the 50 g came from a manual entry.
+    let manualEntries = 0;
 
     // Seed all days in the window with 0 so the chart has no gaps.
     for (let i = 0; i <= days; i++) {
@@ -121,6 +128,7 @@ export async function GET(request: NextRequest) {
           byVendor.set(f.vendor, (byVendor.get(f.vendor) ?? 0) + u.grams);
           totalGrams += u.grams;
           if (f.cost != null) totalCost += (u.grams / 1000) * f.cost;
+          manualEntries++;
         }
       }
     }
@@ -148,6 +156,7 @@ export async function GET(request: NextRequest) {
         grams: Math.round(totalGrams),
         cost: Math.round(totalCost * 100) / 100,
         jobs: history.length,
+        manualEntries,
       },
       usageByDay,
       byFilament: byFilamentArr,
