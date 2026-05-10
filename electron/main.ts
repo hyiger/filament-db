@@ -786,9 +786,15 @@ app.on("child-process-gone", (_evt, details) => {
  */
 function isSmartCardServiceRunning(timeoutMs = 5000): Promise<boolean> {
   if (process.platform !== "win32") return Promise.resolve(true);
+  // Resolve sc.exe via SystemRoot rather than the bare command name. Windows'
+  // default executable search order checks the app / current-working
+  // directory before System32, so a `sc.exe` planted next to a portable run
+  // would be picked up first and turn this probe into an arbitrary-code-
+  // execution sink. Anchor to an absolute path to close that.
+  const scPath = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "sc.exe");
   return new Promise((resolve) => {
     execFile(
-      "sc.exe",
+      scPath,
       ["query", "SCardSvr"],
       { timeout: timeoutMs, windowsHide: true },
       (err, stdout) => {
