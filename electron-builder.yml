@@ -64,13 +64,19 @@ mac:
     - dmg
 
 win:
+  # Arch list is enumerated here but the release workflow scopes each CI job
+  # to a single arch via --x64 / --arm64 — that way cross-compiled native
+  # modules (pcsclite for arm64, rebuilt via electron-rebuild --arch=arm64)
+  # can't accidentally bleed into the wrong installer.
   target:
     - target: nsis
       arch:
         - x64
+        - arm64
     - target: zip
       arch:
         - x64
+        - arm64
 
 nsis:
   oneClick: false

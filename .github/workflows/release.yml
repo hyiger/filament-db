@@ -27,7 +27,10 @@ jobs:
             arch: x64
           - os: windows-latest
             platform: win
-            arch: ""
+            arch: x64
+          - os: windows-latest
+            platform: win-arm64-cross
+            arch: arm64
           - os: ubuntu-latest
             platform: linux
             arch: x64
@@ -90,10 +93,31 @@ jobs:
           npm run electron:compile
 
       - name: Rebuild native modules and package (default — host arch matches target)
-        if: matrix.platform != 'linux-arm64' && matrix.platform != 'mac-x64-cross'
+        if: matrix.platform != 'linux-arm64' && matrix.platform != 'mac-x64-cross' && matrix.platform != 'win-arm64-cross'
         run: |
           npm run electron:rebuild
           npx electron-builder --config electron-builder.yml ${{ matrix.arch != '' && format('--{0}', matrix.arch) || '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rebuild native modules and package (Windows arm64 cross-compile on x64)
+        if: matrix.platform == 'win-arm64-cross'
+        shell: pwsh
+        run: |
+          # MSVC on windows-latest already ships an x64→arm64 cross toolchain
+          # (Microsoft.VisualStudio.Component.VC.Tools.ARM64), so this just
+          # works once --arch is set. Sanity-check the produced .node by
+          # parsing its PE header so a silent fallback to host arch fails
+          # fast instead of shipping an x64 binary inside an arm64 installer.
+          npx electron-rebuild -f -o "@pokusew/pcsclite" --arch=arm64
+          $node = "node_modules/@pokusew/pcsclite/build/Release/pcsclite.node"
+          $bytes = [System.IO.File]::ReadAllBytes($node)
+          $peOffset = [BitConverter]::ToUInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          $archName = switch ($machine) { 0x8664 {"x64"} 0xAA64 {"arm64"} default {"unknown:0x{0:X4}" -f $_} }
+          Write-Host "pcsclite.node arch: $archName (machine=0x$('{0:X4}' -f $machine))"
+          if ($archName -ne "arm64") { throw "pcsclite.node was rebuilt as $archName, expected arm64" }
+          npx electron-builder --config electron-builder.yml --arm64
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
