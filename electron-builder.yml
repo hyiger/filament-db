@@ -64,19 +64,19 @@ mac:
     - dmg
 
 win:
-  # Arch list is enumerated here but the release workflow scopes each CI job
-  # to a single arch via --x64 / --arm64 — that way cross-compiled native
-  # modules (pcsclite for arm64, rebuilt via electron-rebuild --arch=arm64)
-  # can't accidentally bleed into the wrong installer.
+  # Do NOT hardcode arch here (mirrors the mac config above). Each CI matrix
+  # job rebuilds pcsclite for exactly one arch and then invokes electron-
+  # builder with the matching --x64 or --arm64 flag. Listing both arches
+  # under `target.arch[]` would make electron-builder build BOTH per-arch
+  # installers PLUS a universal combined one in every Windows CI job —
+  # which (a) ships ~398 MB of duplicated content as the no-arch
+  # `windows-setup.exe` and (b) silently smuggles the wrong pcsclite.node
+  # into the off-arch installer (the arm64 CI job has only the arm64
+  # native module, so its windows-x64-setup.exe is broken — and vice
+  # versa). Leaving arch unset means the CLI flag alone scopes the build.
   target:
     - target: nsis
-      arch:
-        - x64
-        - arm64
     - target: zip
-      arch:
-        - x64
-        - arm64
 
 nsis:
   oneClick: false
