@@ -48,6 +48,13 @@ interface NfcContextValue {
    * and replace it to trigger a fresh read.
    */
   notifyTagWritten: (filament: FilamentMatch) => void;
+  /**
+   * Call this after a successful Erase Tag. The tag is now blank, so the
+   * status pill's "Loaded: <name>" label and the lingering read result
+   * must clear immediately rather than waiting for the user to lift the
+   * (now-erased) tag off the reader.
+   */
+  notifyTagErased: () => void;
 }
 
 const NfcContext = createContext<NfcContextValue | null>(null);
@@ -99,6 +106,7 @@ export function useNfcContext(): NfcContextValue {
       dialogOpen: false,
       dismissTagRead: () => {},
       notifyTagWritten: () => {},
+      notifyTagErased: () => {},
     };
   }
   return ctx;
@@ -170,6 +178,15 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
     // of that workflow would be jarring. The pill update is enough.
   }, []);
 
+  // Called by Settings → Erase Tag after a successful erase. The tag is
+  // now blank, so clear the pill label and the stale read result rather
+  // than reporting the just-erased filament until the user lifts the tag.
+  const notifyTagErased = useCallback(() => {
+    setLoadedTagName(null);
+    setTagReadResult(null);
+    setDialogOpen(false);
+  }, []);
+
   return (
     <NfcContext.Provider
       value={{
@@ -183,6 +200,7 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
         dialogOpen,
         dismissTagRead,
         notifyTagWritten,
+        notifyTagErased,
       }}
     >
       {children}

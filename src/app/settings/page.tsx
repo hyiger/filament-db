@@ -8,9 +8,11 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import { LOCALES } from "@/i18n";
 import { useTheme, type ThemePreference } from "@/components/ThemeProvider";
 import { useIsElectron } from "@/hooks/useIsElectron";
+import { useNfcContext } from "@/components/NfcProvider";
 
 export default function SettingsPage() {
   const { t, locale, setLocale } = useTranslation();
+  const { notifyTagErased } = useNfcContext();
   const [restoring, setRestoring] = useState(false);
   const [restoreResult, setRestoreResult] = useState<{ ok: boolean; message: string } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -164,6 +166,10 @@ export default function SettingsPage() {
         throw new Error("NFC format not available — restart the app to load updated NFC support");
       }
       await window.electronAPI.nfcFormatTag();
+      // The tag is now blank — clear the status pill's "Loaded: <name>"
+      // label immediately instead of leaving it stale until the user
+      // lifts the erased tag off the reader.
+      notifyTagErased();
       setFormatResult({ ok: true, message: t("settings.nfcEraseSuccess") });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
