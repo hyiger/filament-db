@@ -31,9 +31,11 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
   const [importProgress, setImportProgress] = useState("");
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  // Focus trap
+  // Focus trap: capture previous focus, trap tab, restore on cleanup
   useEffect(() => {
     if (!dialogRef.current) return;
+    
+    const previouslyFocused = document.activeElement as HTMLElement | null;
     dialogRef.current.focus();
 
     const dialog = dialogRef.current;
@@ -59,8 +61,21 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
       }
     };
     document.addEventListener("keydown", handleTab);
-    return () => document.removeEventListener("keydown", handleTab);
+    return () => {
+      document.removeEventListener("keydown", handleTab);
+      previouslyFocused?.focus?.();
+    };
   }, [onClose]);
+
+  // Move focus to first interactive element when step changes
+  useEffect(() => {
+    if (!dialogRef.current) return;
+    const dialog = dialogRef.current;
+    const firstFocusable = dialog.querySelector<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    );
+    firstFocusable?.focus();
+  }, [step]);
 
   const handleConnect = async () => {
     if (!uri.trim()) return;

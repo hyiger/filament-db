@@ -25,9 +25,12 @@ export default function NfcReadDialog() {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [visible, dismissTagRead]);
 
-  // Focus trap: focus the dialog when it appears and trap tab within it
+  // Focus trap: capture previous focus, focus the dialog when it appears,
+  // trap tab within it, and restore focus on cleanup
   useEffect(() => {
     if (!visible || !dialogRef.current) return;
+    
+    const previouslyFocused = document.activeElement as HTMLElement | null;
     dialogRef.current.focus();
 
     const dialog = dialogRef.current;
@@ -52,7 +55,10 @@ export default function NfcReadDialog() {
       }
     };
     document.addEventListener("keydown", handleTab);
-    return () => document.removeEventListener("keydown", handleTab);
+    return () => {
+      document.removeEventListener("keydown", handleTab);
+      previouslyFocused?.focus?.();
+    };
   }, [visible]);
 
   if (!visible || !tagReadResult) return null;

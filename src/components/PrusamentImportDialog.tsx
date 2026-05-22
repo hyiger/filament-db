@@ -67,10 +67,13 @@ export default function PrusamentImportDialog({
   );
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  // Focus trap & escape
+  // Focus trap & escape: capture previous focus, trap tab, restore on cleanup
   useEffect(() => {
     if (!dialogRef.current) return;
+    
+    const previouslyFocused = document.activeElement as HTMLElement | null;
     dialogRef.current.focus();
+    
     const dialog = dialogRef.current;
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -95,8 +98,21 @@ export default function PrusamentImportDialog({
       }
     };
     document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      previouslyFocused?.focus?.();
+    };
   }, [onClose]);
+
+  // Move focus to first interactive element when step changes
+  useEffect(() => {
+    if (!dialogRef.current) return;
+    const dialog = dialogRef.current;
+    const firstFocusable = dialog.querySelector<HTMLElement>(
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+    );
+    firstFocusable?.focus();
+  }, [step]);
 
   const handleLookup = async () => {
     const input = spoolInput.trim();
