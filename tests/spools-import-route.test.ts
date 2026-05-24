@@ -517,5 +517,29 @@ describe("/api/spools/import", () => {
       const fresh = await Filament.findOne({ name: "ABS Black" });
       expect(fresh.spools).toHaveLength(0);
     });
+
+    // Codex P2 on PR #375: a row failing date validation must not leave
+    // behind an auto-created Location. resolveLocationId upserts by name,
+    // so if validation ran AFTER the upsert an invalid CSV row would
+    // dirty the catalog with a phantom location even though no spool
+    // ever materialised.
+    it("does not auto-create a Location when the row fails date validation", async () => {
+      await Filament.create({ name: "Orphan Test", vendor: "V", type: "PLA" });
+      const phantomLocationName = "Phantom Cabinet From Bad Row";
+
+      const csv =
+        "filament,totalWeight,purchaseDate,location\n" +
+        `Orphan Test,1000,2025-02-29,${phantomLocationName}\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.failed).toBe(1);
+      expect(body.results[0].error).toMatch(/purchaseDate/);
+
+      const phantom = await Location.findOne({ name: phantomLocationName });
+      expect(phantom).toBeNull();
+
+      const fresh = await Filament.findOne({ name: "Orphan Test" });
+      expect(fresh.spools).toHaveLength(0);
+    });
   });
 });

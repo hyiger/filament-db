@@ -176,14 +176,16 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      const locationId = await resolveLocationId(
-        unsanitizeCsvCell((r.location || "").trim()),
-      );
-
       // GH #372 (Codex follow-up): treat ISO-shaped-but-impossible dates
       // (Feb 29 outside a leap year, etc.) as bad input rather than
       // silently normalising them to a different day. `new Date(s)` alone
       // would shift "2025-02-29" to March 1st without warning.
+      //
+      // Validate BEFORE `resolveLocationId` — that call auto-creates a
+      // Location row whose name matches the cell, and any row that fails
+      // a later check would otherwise leave behind an orphan location
+      // (Codex P2 on PR #375). Per-row failures must remain side-effect
+      // free so an invalid CSV doesn't dirty the catalog.
       const rawPurchase = (r.purchaseDate || "").trim();
       if (rawPurchase && !isValidIsoDateString(rawPurchase)) {
         results.push({
@@ -204,6 +206,10 @@ export async function POST(request: NextRequest) {
       }
       const purchaseDate = rawPurchase ? new Date(rawPurchase) : null;
       const openedDate = rawOpened ? new Date(rawOpened) : null;
+
+      const locationId = await resolveLocationId(
+        unsanitizeCsvCell((r.location || "").trim()),
+      );
 
       // Build the field set for a NEW spool — defaults fill in for any
       // optional column the user didn't include.
