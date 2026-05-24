@@ -239,9 +239,21 @@ function NewFilamentContent() {
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  // Handle NFC tag read while on this page
+  // Handle NFC tag read while on this page.
+  //
+  // NfcProvider intentionally keeps `tagReadResult` alive after the tag
+  // is lifted off the reader — the scan-match dialog's action buttons
+  // (View Filament / Create New / candidates) need to remain usable
+  // after the user dismisses the modal. That design is fine for the
+  // dialog; it's wrong for this page, which has no concept of "stale
+  // result vs. fresh scan." Without the `tagPresent` gate, clicking
+  // "+ Add Filament" any time after a scan-and-lift sequence would
+  // pre-fill the form with whatever was last scanned — even when the
+  // user has clearly moved on. Match the user's mental model: if the
+  // tag isn't on the reader RIGHT NOW, do nothing.
   useEffect(() => {
     if (!tagReadResult?.data) return;
+    if (!nfcStatus.tagPresent) return;
     const data = tagReadResult.data;
     // Syncing NFC tag payload into form initial data — same pattern as above.
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -268,7 +280,7 @@ function NewFilamentContent() {
     setFormKey((k) => k + 1);
     dismissTagRead();
     toast(t("new.toast.populatedFromNfc"));
-  }, [tagReadResult, dismissTagRead, toast, t]);
+  }, [tagReadResult, nfcStatus.tagPresent, dismissTagRead, toast, t]);
 
   // Handle INI file selection
   const handleIniFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
