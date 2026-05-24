@@ -4,7 +4,8 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface SyncStatus {
-  state: "idle" | "syncing" | "error" | "offline";
+  // GH #369: "partial" = at least one collection synced, at least one failed.
+  state: "idle" | "syncing" | "error" | "offline" | "partial";
   lastSyncAt: string | null;
   error: string | null;
   progress: string | null;
@@ -207,6 +208,16 @@ export default function SyncStatusIndicator() {
           dot: "bg-red-500",
           text: "text-red-800 dark:text-red-300",
           label: t("sync.status.syncError"),
+        };
+      case "partial":
+        // GH #369: amber, distinct from red — partial convergence is
+        // recoverable. The tooltip surfaces status.error which names the
+        // failed collection(s) so the user knows what to re-run.
+        return {
+          bg: "bg-amber-100 dark:bg-amber-900/40",
+          dot: "bg-amber-500",
+          text: "text-amber-800 dark:text-amber-300",
+          label: t("sync.status.partial"),
         };
       case "idle":
         return {

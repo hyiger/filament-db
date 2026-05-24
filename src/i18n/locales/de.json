@@ -566,6 +566,7 @@
   "sync.status.offlineLocalData": "Offline — lokale Daten werden verwendet",
   "sync.status.syncing": "Synchronisiere…",
   "sync.status.syncError": "Synchronisierungsfehler",
+  "sync.status.partial": "Teilsynchronisation",
   "sync.status.synced": "Synchronisiert {time}",
   "sync.status.hybrid": "Hybrid",
   "sync.tooltip.mode": "Modus",

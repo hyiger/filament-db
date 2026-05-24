@@ -8,7 +8,7 @@ interface ElectronAPI {
 
   // Sync
   getSyncStatus: () => Promise<{
-    state: "idle" | "syncing" | "error" | "offline";
+    state: "idle" | "syncing" | "error" | "offline" | "partial";
     lastSyncAt: string | null;
     error: string | null;
     progress: string | null;

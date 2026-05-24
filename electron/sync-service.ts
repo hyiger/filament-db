@@ -55,7 +55,15 @@ export function wrapSyncErrorMessage(err: unknown, dbName: string): string {
 }
 
 export interface SyncStatus {
-  state: "idle" | "syncing" | "error" | "offline";
+  /**
+   * "partial" (GH #369) means some collections succeeded and at least one
+   * failed in the same cycle. Distinct from "error" — which is reserved
+   * for cycle-level failures (connect timeout, post-sync repair throw,
+   * every collection failed) — so the renderer can surface partial
+   * convergence as recoverable rather than the all-or-nothing red pill
+   * the pre-fix code showed.
+   */
+  state: "idle" | "syncing" | "error" | "offline" | "partial";
   lastSyncAt: string | null;
   error: string | null;
   progress: string | null;
@@ -67,6 +75,12 @@ interface SyncResult {
   pulled: number;
   updated: number;
   deleted: number;
+  /**
+   * GH #369: per-collection error. When set, this collection's sync
+   * threw and the count fields are zero. Other collections in the same
+   * cycle may have succeeded.
+   */
+  error?: string | null;
 }
 
 /**
@@ -164,6 +178,34 @@ export class SyncService extends EventEmitter {
       connectTimeoutMS: 10000,
     });
 
+    // GH #369: per-collection error isolation. Wraps a syncCollection call
+    // so a single collection failure (transient network blip, schema
+    // validation rejection, partial-unique-index collision) reports an
+    // errored SyncResult instead of throwing all the way out and discarding
+    // the partial-success state from earlier collections. Downstream
+    // collections still run — they may also fail or do imperfect remapping
+    // (the maps built between syncCollection calls would reflect stale
+    // state for the failed collection), and the renderer surfaces the
+    // per-collection breakdown so the user knows what to re-run.
+    const atlasName = getDbNameFromUri(this.atlasUri);
+    const trySync = async (
+      name: string,
+      run: () => Promise<SyncResult>,
+    ): Promise<SyncResult> => {
+      try {
+        return await run();
+      } catch (err) {
+        return {
+          collection: name,
+          pushed: 0,
+          pulled: 0,
+          updated: 0,
+          deleted: 0,
+          error: wrapSyncErrorMessage(err, atlasName),
+        };
+      }
+    };
+
     try {
       await local.connect();
       await remote.connect();
@@ -173,7 +215,9 @@ export class SyncService extends EventEmitter {
 
       // Sync nozzles first (filaments and printers reference them)
       this.updateStatus({ progress: "Syncing nozzles..." });
-      const nozzleResult = await this.syncCollection(localDb, remoteDb, "nozzles");
+      const nozzleResult = await trySync("nozzles", () =>
+        this.syncCollection(localDb, remoteDb, "nozzles"),
+      );
 
       // Build nozzle syncId→ID maps for reference remapping
       const localNozzles = await localDb.collection("nozzles").find({ _deletedAt: null }).toArray();
@@ -192,7 +236,9 @@ export class SyncService extends EventEmitter {
       // by name first to unify the syncIds.
       this.updateStatus({ progress: "Syncing bed types..." });
       await this.reconcileBedTypesByName(localDb, remoteDb);
-      const bedTypeResult = await this.syncCollection(localDb, remoteDb, "bedtypes");
+      const bedTypeResult = await trySync("bedtypes", () =>
+        this.syncCollection(localDb, remoteDb, "bedtypes"),
+      );
 
       // Build bedType syncId→ID maps for printer + filament remap
       const localBedTypes = await localDb.collection("bedtypes").find({ _deletedAt: null }).toArray();
@@ -203,13 +249,15 @@ export class SyncService extends EventEmitter {
       // Sync printers (filament calibrations reference them; printers
       // themselves reference nozzles + bedtypes, both synced above).
       this.updateStatus({ progress: "Syncing printers..." });
-      const printerResult = await this.syncCollection(
-        localDb, remoteDb, "printers",
-        (doc, direction) => this.remapPrinterRefs(
-          doc, direction,
-          localNozzleBySyncId, remoteNozzleBySyncId,
-          localBedTypeBySyncId, remoteBedTypeBySyncId,
-        )
+      const printerResult = await trySync("printers", () =>
+        this.syncCollection(
+          localDb, remoteDb, "printers",
+          (doc, direction) => this.remapPrinterRefs(
+            doc, direction,
+            localNozzleBySyncId, remoteNozzleBySyncId,
+            localBedTypeBySyncId, remoteBedTypeBySyncId,
+          ),
+        ),
       );
 
       // Build printer syncId→ID maps for filament calibration reference remapping
@@ -231,7 +279,9 @@ export class SyncService extends EventEmitter {
       // syncIds turns the duplicates into a no-op last-write-wins merge.
       this.updateStatus({ progress: "Syncing locations..." });
       await this.reconcileLocationsByName(localDb, remoteDb);
-      const locationResult = await this.syncCollection(localDb, remoteDb, "locations");
+      const locationResult = await trySync("locations", () =>
+        this.syncCollection(localDb, remoteDb, "locations"),
+      );
 
       // Build location syncId→ID maps for spool reference remapping
       const localLocations = await localDb.collection("locations").find({ _deletedAt: null }).toArray();
@@ -295,9 +345,8 @@ export class SyncService extends EventEmitter {
         localLocationBySyncId, remoteLocationBySyncId,
         localBedTypeBySyncId, remoteBedTypeBySyncId,
       );
-      const filamentResult = await this.syncCollection(
-        localDb, remoteDb, "filaments",
-        filamentTransform,
+      const filamentResult = await trySync("filaments", () =>
+        this.syncCollection(localDb, remoteDb, "filaments", filamentTransform),
       );
 
       // Repair filaments whose parentId was dropped (or stale) when the
@@ -345,28 +394,47 @@ export class SyncService extends EventEmitter {
         localPrinterBySyncId, remotePrinterBySyncId,
         localFilPostBySyncId, remoteFilPostBySyncId,
       );
-      const printHistoryResult = await this.syncCollection(
-        localDb, remoteDb, "printhistories", printHistoryTransform,
+      const printHistoryResult = await trySync("printhistories", () =>
+        this.syncCollection(localDb, remoteDb, "printhistories", printHistoryTransform),
       );
 
       // Sync shared catalogs. Payload is denormalised at publish time so
       // there are no outbound refs to remap — straight syncId-keyed
       // last-write-wins between the two sides.
       this.updateStatus({ progress: "Syncing shared catalogs..." });
-      const sharedCatalogResult = await this.syncCollection(
-        localDb, remoteDb, "sharedcatalogs",
+      const sharedCatalogResult = await trySync("sharedcatalogs", () =>
+        this.syncCollection(localDb, remoteDb, "sharedcatalogs"),
       );
 
       const results = [
         nozzleResult, printerResult, locationResult, bedTypeResult,
         filamentResult, printHistoryResult, sharedCatalogResult,
       ];
+
+      // GH #369: decide the cycle-level state from the per-collection
+      // breakdown. All-clean → idle; some-but-not-all errored → partial
+      // (recoverable, renderer shows amber); every collection errored →
+      // error (likely cycle-level, e.g. auth failure that fired on every
+      // collection identically). The `error` field summarises which
+      // collections failed so the user knows what to re-run without
+      // expanding the tooltip.
+      const erroredResults = results.filter(r => r.error);
+      const erroredAll = erroredResults.length === results.length;
+      const erroredSome = erroredResults.length > 0;
+      const summary = erroredSome
+        ? erroredResults.length === 1
+          ? `${erroredResults[0].collection}: ${erroredResults[0].error}`
+          : `${erroredResults.length} collections failed: ${erroredResults.map(r => r.collection).join(", ")}`
+        : null;
+
       this.updateStatus({
-        state: "idle",
+        state: erroredAll ? "error" : erroredSome ? "partial" : "idle",
         lastSyncAt: new Date().toISOString(),
+        error: summary,
         progress: null,
       });
 
+      if (erroredAll) this.emit("syncError", summary ?? "Sync failed");
       this.emit("syncComplete", results);
       return results;
     } catch (err) {

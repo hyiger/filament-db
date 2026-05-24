@@ -1,7 +1,9 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
 interface SyncStatus {
-  state: "idle" | "syncing" | "error" | "offline";
+  // GH #369: "partial" means at least one collection failed while at
+  // least one succeeded in the same cycle. Distinct from "error".
+  state: "idle" | "syncing" | "error" | "offline" | "partial";
   lastSyncAt: string | null;
   error: string | null;
   progress: string | null;
