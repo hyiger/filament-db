@@ -182,16 +182,47 @@ export class SyncService extends EventEmitter {
     // so a single collection failure (transient network blip, schema
     // validation rejection, partial-unique-index collision) reports an
     // errored SyncResult instead of throwing all the way out and discarding
-    // the partial-success state from earlier collections. Downstream
-    // collections still run — they may also fail or do imperfect remapping
-    // (the maps built between syncCollection calls would reflect stale
-    // state for the failed collection), and the renderer surfaces the
-    // per-collection breakdown so the user knows what to re-run.
+    // the partial-success state from earlier collections.
+    //
+    // GH #369 (Codex follow-up): dependent collections are SKIPPED rather
+    // than run with stale syncId maps. Without this guard a transient
+    // nozzle/bedtype failure would let `printers`/`filaments` run anyway —
+    // remapPrinterRefs and buildFilamentRefsTransform drop unresolved
+    // references to null, so a transient upstream failure became permanent
+    // reference loss in downstream documents (Feb 29 of sync bugs). The
+    // dependency graph mirrors the explicit "syncs before X" ordering
+    // comments throughout this method:
+    //   nozzles      → no deps
+    //   bedtypes     → no deps
+    //   printers     → nozzles, bedtypes  (remapPrinterRefs uses both maps)
+    //   locations    → no deps
+    //   filaments    → nozzles, printers, bedtypes, locations, filaments-self
+    //                  (buildFilamentRefsTransform consumes all four maps)
+    //   printhistories → printers, filaments (transitively → all of filaments' deps)
+    //   sharedcatalogs → no deps (payload denormalised at publish time)
+    //
+    // A "skipped" SyncResult names the failing prerequisite so the user
+    // knows exactly which collection to re-run.
     const atlasName = getDbNameFromUri(this.atlasUri);
+    const results: SyncResult[] = [];
     const trySync = async (
       name: string,
+      deps: string[],
       run: () => Promise<SyncResult>,
     ): Promise<SyncResult> => {
+      for (const dep of deps) {
+        const depResult = results.find(r => r.collection === dep);
+        if (depResult?.error) {
+          return {
+            collection: name,
+            pushed: 0,
+            pulled: 0,
+            updated: 0,
+            deleted: 0,
+            error: `skipped — prerequisite "${dep}" failed (${depResult.error})`,
+          };
+        }
+      }
       try {
         return await run();
       } catch (err) {
@@ -215,9 +246,9 @@ export class SyncService extends EventEmitter {
 
       // Sync nozzles first (filaments and printers reference them)
       this.updateStatus({ progress: "Syncing nozzles..." });
-      const nozzleResult = await trySync("nozzles", () =>
+      results.push(await trySync("nozzles", [], () =>
         this.syncCollection(localDb, remoteDb, "nozzles"),
-      );
+      ));
 
       // Build nozzle syncId→ID maps for reference remapping
       const localNozzles = await localDb.collection("nozzles").find({ _deletedAt: null }).toArray();
@@ -236,9 +267,9 @@ export class SyncService extends EventEmitter {
       // by name first to unify the syncIds.
       this.updateStatus({ progress: "Syncing bed types..." });
       await this.reconcileBedTypesByName(localDb, remoteDb);
-      const bedTypeResult = await trySync("bedtypes", () =>
+      results.push(await trySync("bedtypes", [], () =>
         this.syncCollection(localDb, remoteDb, "bedtypes"),
-      );
+      ));
 
       // Build bedType syncId→ID maps for printer + filament remap
       const localBedTypes = await localDb.collection("bedtypes").find({ _deletedAt: null }).toArray();
@@ -249,7 +280,7 @@ export class SyncService extends EventEmitter {
       // Sync printers (filament calibrations reference them; printers
       // themselves reference nozzles + bedtypes, both synced above).
       this.updateStatus({ progress: "Syncing printers..." });
-      const printerResult = await trySync("printers", () =>
+      results.push(await trySync("printers", ["nozzles", "bedtypes"], () =>
         this.syncCollection(
           localDb, remoteDb, "printers",
           (doc, direction) => this.remapPrinterRefs(
@@ -258,7 +289,7 @@ export class SyncService extends EventEmitter {
             localBedTypeBySyncId, remoteBedTypeBySyncId,
           ),
         ),
-      );
+      ));
 
       // Build printer syncId→ID maps for filament calibration reference remapping
       const localPrinters = await localDb.collection("printers").find({ _deletedAt: null }).toArray();
@@ -279,9 +310,9 @@ export class SyncService extends EventEmitter {
       // syncIds turns the duplicates into a no-op last-write-wins merge.
       this.updateStatus({ progress: "Syncing locations..." });
       await this.reconcileLocationsByName(localDb, remoteDb);
-      const locationResult = await trySync("locations", () =>
+      results.push(await trySync("locations", [], () =>
         this.syncCollection(localDb, remoteDb, "locations"),
-      );
+      ));
 
       // Build location syncId→ID maps for spool reference remapping
       const localLocations = await localDb.collection("locations").find({ _deletedAt: null }).toArray();
@@ -345,9 +376,11 @@ export class SyncService extends EventEmitter {
         localLocationBySyncId, remoteLocationBySyncId,
         localBedTypeBySyncId, remoteBedTypeBySyncId,
       );
-      const filamentResult = await trySync("filaments", () =>
-        this.syncCollection(localDb, remoteDb, "filaments", filamentTransform),
-      );
+      results.push(await trySync(
+        "filaments",
+        ["nozzles", "bedtypes", "printers", "locations"],
+        () => this.syncCollection(localDb, remoteDb, "filaments", filamentTransform),
+      ));
 
       // Repair filaments whose parentId was dropped (or stale) when the
       // syncCollection transform ran. The transform builds its target id
@@ -394,22 +427,19 @@ export class SyncService extends EventEmitter {
         localPrinterBySyncId, remotePrinterBySyncId,
         localFilPostBySyncId, remoteFilPostBySyncId,
       );
-      const printHistoryResult = await trySync("printhistories", () =>
-        this.syncCollection(localDb, remoteDb, "printhistories", printHistoryTransform),
-      );
+      results.push(await trySync(
+        "printhistories",
+        ["printers", "filaments"],
+        () => this.syncCollection(localDb, remoteDb, "printhistories", printHistoryTransform),
+      ));
 
       // Sync shared catalogs. Payload is denormalised at publish time so
       // there are no outbound refs to remap — straight syncId-keyed
       // last-write-wins between the two sides.
       this.updateStatus({ progress: "Syncing shared catalogs..." });
-      const sharedCatalogResult = await trySync("sharedcatalogs", () =>
+      results.push(await trySync("sharedcatalogs", [], () =>
         this.syncCollection(localDb, remoteDb, "sharedcatalogs"),
-      );
-
-      const results = [
-        nozzleResult, printerResult, locationResult, bedTypeResult,
-        filamentResult, printHistoryResult, sharedCatalogResult,
-      ];
+      ));
 
       // GH #369: decide the cycle-level state from the per-collection
       // breakdown. All-clean → idle; some-but-not-all errored → partial
