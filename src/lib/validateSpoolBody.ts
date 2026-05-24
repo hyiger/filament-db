@@ -32,6 +32,48 @@ export interface ValidateOpts {
   partial?: boolean;
 }
 
+/**
+ * Verify a string names a real ISO 8601 calendar date.
+ *
+ * GH #372 (Codex follow-up): the original implementation used only
+ * `isNaN(new Date(s).getTime())`, which silently *normalises* out-of-range
+ * inputs — `new Date("2025-02-29")` becomes March 1st rather than failing,
+ * so a user typo on a non-leap-year date persisted as a shifted day. Match
+ * the YYYY-MM-DD prefix against `Date.UTC`-reconstructed components so any
+ * normalisation surfaces as a rejected input. Accepts the two shapes the
+ * API actually receives in practice:
+ *
+ *   - `YYYY-MM-DD`                                  (date-only)
+ *   - `YYYY-MM-DDThh:mm[:ss[.SSS]][Z|±hh:mm]`       (full ISO 8601)
+ *
+ * Anything else (free-form "yesterday", localised "1/15/2025", Unix epoch
+ * numbers as strings) is rejected — Mongoose would have coerced these in
+ * unpredictable ways downstream.
+ */
+export function isValidIsoDateString(s: string): boolean {
+  const m = /^(\d{4})-(\d{2})-(\d{2})(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})?)?$/.exec(s);
+  if (!m) return false;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  // Round-trip the date components through Date.UTC. If the input named a
+  // day that doesn't exist (Feb 29 outside a leap year, Nov 31, month 13,
+  // day 0, etc.), the UTC normalisation shifts at least one component and
+  // the round-trip won't match.
+  const reconstructed = new Date(Date.UTC(year, month - 1, day));
+  if (
+    reconstructed.getUTCFullYear() !== year ||
+    reconstructed.getUTCMonth() !== month - 1 ||
+    reconstructed.getUTCDate() !== day
+  ) {
+    return false;
+  }
+  // If a time portion is present, also confirm the whole string parses
+  // (catches bad hours/minutes/offsets like "T25:00Z").
+  if (s.length > 10 && isNaN(new Date(s).getTime())) return false;
+  return true;
+}
+
 export function validateSpoolBody(
   body: unknown,
   opts: ValidateOpts = {},
@@ -80,17 +122,20 @@ export function validateSpoolBody(
   }
 
   // Date fields — string-typed at the API surface (Mongoose casts on save)
-  // but the string has to parse to a real date. GH #372: pre-fix accepted
-  // any string at all, so a bad client could persist "Invalid Date" which
-  // then broke every downstream consumer (analytics, dashboards, CSV
-  // export, sync). The CSV importer already guards this — match it here.
+  // but the string has to name a real ISO 8601 calendar date. GH #372:
+  // pre-fix accepted any string at all, so a bad client could persist
+  // "Invalid Date" which then broke downstream consumers (analytics,
+  // dashboards, CSV export, sync). Codex follow-up: `new Date(s)` alone
+  // also accepts impossible days by silently normalising (Feb 29 in a
+  // non-leap year → March 1), so use `isValidIsoDateString` which round-
+  // trips the components through Date.UTC.
   for (const field of ["purchaseDate", "openedDate"] as const) {
     if (b[field] !== undefined) {
       if (b[field] === null) {
         result[field] = null;
       } else if (typeof b[field] === "string") {
-        if (isNaN(new Date(b[field] as string).getTime())) {
-          return { ok: false, error: `${field} must be a valid ISO date string or null` };
+        if (!isValidIsoDateString(b[field] as string)) {
+          return { ok: false, error: `${field} must be a valid ISO date string (YYYY-MM-DD or full ISO 8601) or null` };
         }
         result[field] = b[field] as string;
       } else {

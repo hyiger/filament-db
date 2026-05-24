@@ -6,6 +6,7 @@ import { parseCsv } from "@/lib/parseCsv";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { unsanitizeCsvCell } from "@/lib/csvWriter";
+import { isValidIsoDateString } from "@/lib/validateSpoolBody";
 
 /**
  * POST /api/spools/import — bulk-create OR upsert spools from CSV.
@@ -179,8 +180,30 @@ export async function POST(request: NextRequest) {
         unsanitizeCsvCell((r.location || "").trim()),
       );
 
-      const purchaseDate = r.purchaseDate ? new Date(r.purchaseDate) : null;
-      const openedDate = r.openedDate ? new Date(r.openedDate) : null;
+      // GH #372 (Codex follow-up): treat ISO-shaped-but-impossible dates
+      // (Feb 29 outside a leap year, etc.) as bad input rather than
+      // silently normalising them to a different day. `new Date(s)` alone
+      // would shift "2025-02-29" to March 1st without warning.
+      const rawPurchase = (r.purchaseDate || "").trim();
+      if (rawPurchase && !isValidIsoDateString(rawPurchase)) {
+        results.push({
+          row: i + 2,
+          ok: false,
+          error: "purchaseDate must be a valid ISO date (YYYY-MM-DD or full ISO 8601)",
+        });
+        continue;
+      }
+      const rawOpened = (r.openedDate || "").trim();
+      if (rawOpened && !isValidIsoDateString(rawOpened)) {
+        results.push({
+          row: i + 2,
+          ok: false,
+          error: "openedDate must be a valid ISO date (YYYY-MM-DD or full ISO 8601)",
+        });
+        continue;
+      }
+      const purchaseDate = rawPurchase ? new Date(rawPurchase) : null;
+      const openedDate = rawOpened ? new Date(rawOpened) : null;
 
       // Build the field set for a NEW spool — defaults fill in for any
       // optional column the user didn't include.

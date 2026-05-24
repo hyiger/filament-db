@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { validateSpoolBody } from "@/lib/validateSpoolBody";
+import { validateSpoolBody, isValidIsoDateString } from "@/lib/validateSpoolBody";
 
 describe("validateSpoolBody (POST semantics)", () => {
   it("accepts an empty body and defaults label/totalWeight", () => {
@@ -99,10 +99,37 @@ describe("validateSpoolBody (POST semantics)", () => {
     }
   });
 
+  // GH #372 (Codex follow-up): the original check used `new Date(s)` only,
+  // which silently NORMALISES out-of-range calendar dates ("2025-02-29"
+  // becomes March 1 in a non-leap year). A typoed date used to pass and
+  // persist as a different day — exactly the silent corruption the
+  // validator was supposed to prevent.
+  it("rejects ISO-shaped but impossible calendar dates", () => {
+    for (const bad of [
+      "2025-02-29",  // Feb 29 in non-leap year → silently became Mar 1
+      "2023-02-30",  // Feb 30 doesn't exist
+      "2025-04-31",  // Apr has 30 days
+      "2025-13-01",  // month 13
+      "2025-00-15",  // month 0
+      "2025-01-00",  // day 0
+      "2025-01-32",  // day 32
+    ]) {
+      const r = validateSpoolBody({ purchaseDate: bad });
+      expect(r.ok, `expected ${bad} to be rejected`).toBe(false);
+    }
+  });
+
   it("accepts ISO-shaped date strings", () => {
-    for (const good of ["2025-01-01", "2025-01-01T12:34:56Z", "2025-12-31T23:59:59.000Z"]) {
+    for (const good of [
+      "2025-01-01",
+      "2025-01-01T12:34:56Z",
+      "2025-12-31T23:59:59.000Z",
+      "2024-02-29",       // leap year — Feb 29 is real
+      "2000-02-29",       // century leap year
+      "2025-03-15T08:00:00+05:30",  // ISO with positive offset
+    ]) {
       const r = validateSpoolBody({ purchaseDate: good, openedDate: good });
-      expect(r.ok, `date=${good}`).toBe(true);
+      expect(r.ok, `expected ${good} to be accepted`).toBe(true);
     }
   });
 
@@ -112,6 +139,47 @@ describe("validateSpoolBody (POST semantics)", () => {
     if (!r.ok) return;
     expect(r.purchaseDate).toBeNull();
     expect(r.openedDate).toBeNull();
+  });
+});
+
+// Direct unit coverage for the helper. The validateSpoolBody tests above
+// already exercise the end-to-end path; these target the helper itself
+// because the import route also calls it directly.
+describe("isValidIsoDateString", () => {
+  it("accepts well-formed YYYY-MM-DD", () => {
+    expect(isValidIsoDateString("2025-01-01")).toBe(true);
+    expect(isValidIsoDateString("2024-02-29")).toBe(true);
+    expect(isValidIsoDateString("1999-12-31")).toBe(true);
+  });
+
+  it("accepts full ISO 8601 timestamps", () => {
+    expect(isValidIsoDateString("2025-01-01T00:00:00Z")).toBe(true);
+    expect(isValidIsoDateString("2025-01-01T12:34:56.789Z")).toBe(true);
+    expect(isValidIsoDateString("2025-01-01T12:34:56-05:00")).toBe(true);
+    expect(isValidIsoDateString("2025-01-01T12:34:56+0530")).toBe(true);
+  });
+
+  it("rejects calendar-impossible dates that JS Date silently normalises", () => {
+    expect(isValidIsoDateString("2025-02-29")).toBe(false);  // not leap
+    expect(isValidIsoDateString("2023-02-30")).toBe(false);
+    expect(isValidIsoDateString("2025-04-31")).toBe(false);
+    expect(isValidIsoDateString("2025-13-01")).toBe(false);
+    expect(isValidIsoDateString("2025-00-15")).toBe(false);
+    expect(isValidIsoDateString("2025-01-32")).toBe(false);
+    expect(isValidIsoDateString("2025-01-00")).toBe(false);
+  });
+
+  it("rejects free-form and non-ISO inputs", () => {
+    expect(isValidIsoDateString("yesterday")).toBe(false);
+    expect(isValidIsoDateString("01/15/2025")).toBe(false);
+    expect(isValidIsoDateString("15-01-2025")).toBe(false);
+    expect(isValidIsoDateString("")).toBe(false);
+    expect(isValidIsoDateString("1737936000")).toBe(false);  // unix epoch as string
+  });
+
+  it("rejects malformed time portions", () => {
+    expect(isValidIsoDateString("2025-01-01T25:00:00Z")).toBe(false);  // bad hour
+    expect(isValidIsoDateString("2025-01-01T12:61:00Z")).toBe(false);  // bad minute
   });
 });
 

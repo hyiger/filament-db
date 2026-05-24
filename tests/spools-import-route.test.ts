@@ -475,4 +475,47 @@ describe("/api/spools/import", () => {
       }
     });
   });
+
+  // GH #372 (Codex follow-up): a CSV row carrying an ISO-shaped but
+  // impossible calendar date (e.g. "2025-02-29") must NOT silently shift
+  // the spool to a different day via JS Date normalisation.
+  describe("date validity in CSV rows", () => {
+    it("rejects rows with an impossible purchaseDate without persisting the spool", async () => {
+      await Filament.create({ name: "PETG White", vendor: "V", type: "PETG" });
+
+      const csv =
+        "filament,totalWeight,purchaseDate\n" +
+        // Feb 29 in a non-leap year — pre-fix would have stored as March 1.
+        `PETG White,1000,2025-02-29\n` +
+        // A real leap-year Feb 29 — should be accepted.
+        `PETG White,1000,2024-02-29\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.failed).toBe(1);
+      expect(body.imported).toBe(1);
+      expect(body.results[0]).toMatchObject({ ok: false });
+      expect(body.results[0].error).toMatch(/purchaseDate/);
+      expect(body.results[1]).toMatchObject({ ok: true });
+
+      // Only the leap-year row materialised as a spool.
+      const fresh = await Filament.findOne({ name: "PETG White" });
+      expect(fresh.spools).toHaveLength(1);
+      expect(fresh.spools[0].purchaseDate?.toISOString().slice(0, 10)).toBe("2024-02-29");
+    });
+
+    it("rejects rows with an impossible openedDate", async () => {
+      await Filament.create({ name: "ABS Black", vendor: "V", type: "ABS" });
+
+      const csv =
+        "filament,totalWeight,openedDate\n" +
+        `ABS Black,1000,2025-04-31\n`;  // April only has 30 days
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.failed).toBe(1);
+      expect(body.results[0].error).toMatch(/openedDate/);
+
+      const fresh = await Filament.findOne({ name: "ABS Black" });
+      expect(fresh.spools).toHaveLength(0);
+    });
+  });
 });
