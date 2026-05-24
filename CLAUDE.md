@@ -30,14 +30,14 @@ npm run electron:build   # Full Electron build pipeline
 
 ```
 src/app/            App Router pages + API routes (incl. v1.11: dashboard, locations, analytics, share, compare)
-src/app/api/        REST API (incl. v1.11: /locations, /print-history, /analytics, /share, /spools/import; v1.21: /spools/[spoolId]/assignment)
-src/components/     React components (NfcProvider, Toast, dialogs, ThemeProvider, UpdateBanner, AppNav)
+src/app/api/        REST API (incl. v1.11: /locations, /print-history, /analytics, /share, /spools/import; v1.21: /spools/[spoolId]/assignment; v1.22: /filaments/{id}/{prusaslicer,orcaslicer,bambustudio} single-filament slicer exports)
+src/components/     React components (NfcProvider, Toast, dialogs incl. ConfirmDialog/UnsavedChangesDialog/ImportAtlasDialog/PrusamentImportDialog/SpoolCsvImportDialog/NfcReadDialog, ThemeProvider, UpdateBanner, AppNav, AppHeader, SyncStatusIndicator, FilamentSwatch, FinishChip, CollapsibleSection, FormToc, QuickFilterChips, CopyButton, ClientProviders)
 src/hooks/          Custom hooks (useNfc, useCurrency)
 src/i18n/           Translations + provider (en, de)
-src/lib/            Core logic (openprinttag CBOR + decode, NDEF, TDS extraction, INI parser, CSV parser, image compression, theme init script, spool validator, PrusaSlicer + OrcaSlicer bundles, OpenPrintTag DB browser, safeRenderUrl, inventoryStats, externalUrlGuard, apiErrorHandler, customCurrency, exportFilaments, exportSpools, importFilaments, resolveFilament, sortFilamentList, prusament, spoolSlots)
+src/lib/            Core logic (openprinttag CBOR + decode + DB browser, NDEF, TDS extraction, INI parser, CSV parser + writer, image compression, theme init script, spool validator, PrusaSlicer + OrcaSlicer + single-filament slicer bundles, safeRenderUrl, inventoryStats, externalUrlGuard, mongoUriGuard, apiErrorHandler, customCurrency, cssNamedColors, filamentFinish, exportFilaments, exportSpools, importFilaments, resolveFilament, sortFilamentList, prusament, spoolSlots, nozzleConflicts, scanBus, scanMatchHandler, slicerSettings, requestGuard, tdsExtractor)
 src/models/         Mongoose schemas (Filament, Nozzle, Printer, BedType, Location, PrintHistory, SharedCatalog)
 src/types/          TypeScript type defs (electron.d.ts, filament.ts)
-electron/           Electron main process (main.ts, preload.ts, ndef.ts, bambu-tag.ts, auto-updater.ts)
+electron/           Electron main process (main.ts, preload.ts, ndef.ts, bambu-tag.ts, auto-updater.ts, nfc-service.ts, sync-service.ts, local-mongo.ts, ipc-security.ts)
 tests/              Vitest tests — unit + Mongoose model + Next.js route (mirrors src structure)
 scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 ```
@@ -57,7 +57,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 
 - **Framework**: Custom React Context-based i18n (no external library), following the useCurrency pattern
 - **Provider**: `src/i18n/TranslationProvider.tsx` — provides `t(key, params?)`, `locale`, `setLocale`
-- **Locales**: `src/i18n/locales/en.json` (English), `src/i18n/locales/de.json` (German) — ~1100 flat key-value pairs (count drifts on every PR — `jq 'keys|length' src/i18n/locales/en.json` for current)
+- **Locales**: `src/i18n/locales/en.json` (English), `src/i18n/locales/de.json` (German) — ~1200 flat key-value pairs (count drifts on every PR — `jq 'keys|length' src/i18n/locales/en.json` for current)
 - **Interpolation**: `{paramName}` tokens in translation strings, e.g. `t("sync.time.minutesAgo", { count: 5 })`
 - **Fallback chain**: current locale → English → raw key
 - **Persistence**: electron-store (desktop) or localStorage (web), key `filamentdb-locale`
@@ -66,7 +66,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 
 ## Testing
 
-- ~1100 tests across ~60 files (unit + Mongoose model + Next.js route handlers). Exact counts drift on every PR — run `npm test` for the current numbers.
+- ~1400 tests across ~90 files (unit + Mongoose model + Next.js route handlers). Exact counts drift on every PR — run `npm test` for the current numbers.
 - Coverage thresholds: 80% lines/statements, 90% functions, 75% branches (enforced on `src/lib/**` and `src/models/**`; `src/lib/compressImage.ts` is excluded because its main flow is DOM-only)
 - Setup file: `tests/setup.ts` (mongodb-memory-server). **Caveat**: setup wipes `mongoose.models` between tests; route-level tests that use `.populate(...)` must re-register models in `beforeEach` by calling `mongoose.model(name, schema)` directly (see `tests/locations-route.test.ts` for the pattern).
 - Tests run in CI on Node 20 and 22
@@ -90,7 +90,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 5. Apply release notes with `gh release edit v<version> --notes-file …`. CI doesn't overwrite the body when it publishes, so a single edit (any time after the draft is created) suffices
 
 ### Release-process gotchas
-- **CSP fixes affect TWO files.** The web CSP lives in `next.config.ts`; the Electron renderer applies its OWN CSP from `electron/main.ts:~1050` and the renderer doesn't merge them — the value set in Electron's `onHeadersReceived` REPLACES whatever Next sent. Any `script-src` / `frame-src` / new-directive change has to land in both. (v1.25.0 shipped with the web CSP gated for dev `'unsafe-eval'` but the Electron CSP unchanged; required a v1.25.1 patch.)
+- **CSP fixes affect TWO files.** The web CSP lives in `next.config.ts`; the Electron renderer applies its OWN CSP from `electron/main.ts:~1080` and the renderer doesn't merge them — the value set in Electron's `onHeadersReceived` REPLACES whatever Next sent. Any `script-src` / `frame-src` / new-directive change has to land in both. (v1.25.0 shipped with the web CSP gated for dev `'unsafe-eval'` but the Electron CSP unchanged; required a v1.25.1 patch. v1.30.3 fixed an `img-src 'https:'` asymmetry from #371.) The one intentional asymmetry is `connect-src`: Electron adds `ws://localhost:* http://localhost:*` for the embedded Next server; everything else must stay in lockstep.
 - **Dev vs packaged in Electron is `app.isPackaged`, not `NODE_ENV`.** `NODE_ENV` isn't reliably set when Electron launches the main process; gate Electron-specific dev-only behaviour on `app.isPackaged ? prod : dev`.
 - **The Windows ARM64 release job runs the full Vitest suite under x64 emulation, which makes `mongodb-memory-server`'s 10s startup timeout flaky** (`tests/compressImage.test.ts` was a victim on v1.25.0). When the job fails on that timeout specifically, a re-run usually passes; if it becomes a pattern, bump the `mongodb-memory-server` start timeout in `tests/setup.ts` or skip the affected test on the cross runner.
 - **macOS installs from an older app cache the bundle ID, not the binary.** A `.dmg` in Downloads doesn't replace `/Applications/Filament DB.app` until you drag it over. Verify with `defaults read /Applications/Filament\ DB.app/Contents/Info.plist CFBundleShortVersionString`.
@@ -167,6 +167,62 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 ## v1.21 Features
 
 - **Spool printer-slot assignment (#242)**: a spool can be assigned to a printer AMS/MMU slot directly from the spool card, distinct from its Location — Location is the spool's semi-permanent "home", the slot is its transient position while loaded in a printer. `src/lib/spoolSlots.ts` is the enforcement point: `findSpoolSlot` (reverse lookup over `Printer.amsSlots[].spoolId`), `assignSpoolToSlot` (clears the spool from every slot, then sets the target — a spool occupies at most one slot, and bad data with a spool in two slots self-heals), `clearSpoolsFromOtherPrinters` (post-save reconciliation wired into the printer PUT/POST so the one-slot invariant holds no matter which form wrote it). New endpoint `GET/PUT/DELETE /api/spools/[spoolId]/assignment` writes only `Printer.amsSlots[].spoolId`, never the spool's `locationId`; PUT rejects retired spools (out of inventory, not loadable). The spool DELETE handler also clears the slot so a deleted spool can't linger. Legacy printer documents predating the `amsSlots` field come back from lean queries without it — all iteration sites guard the missing array. **Hybrid-sync limitation**: `amsSlots[].spoolId` is wiped on cross-side sync remap (spool subdocuments have no stable cross-side id), so slot assignments are reliable only in single-database deployments — the spool card surfaces this caveat.
+
+## v1.22 Features
+
+- **Single-filament slicer export (PR #247)**: per-filament export endpoints `GET /api/filaments/{id}/{prusaslicer,orcaslicer,bambustudio}` emit one preset rather than a full bundle. Surface in the detail page's "Export for slicer" disclosure as three menu items (PrusaSlicer .ini / OrcaSlicer .json / Bambu Studio .json). Field mapping lives in `src/lib/singleFilamentExport.ts`; mirrors the bulk-export shape per slicer so the slicer-side import path is identical.
+
+## v1.23 Features
+
+- **Bed types on printers (PR #248)**: printers gained an `installedBedTypes: BedType[]` array — shared-catalog model so the same printer can carry multiple bed surfaces (Textured PEI + Smooth PEI etc.). Bed-type DELETE refuses while any printer references it (mirrors the location-delete guard). The calibration form's bed-type picker now filters to bed types installed on the selected printer.
+
+## v1.24 Features
+
+- **Security hardening sweep (#252-#261, P0 audit cycle)**: trusted-origin guard `assertSameOriginRequest` for destructive admin routes (snapshot export·restore·wipe, Atlas import, MongoDB connection-test); SSRF caps + DNS-resolved IP allowlist on every outbound fetch (`src/lib/externalUrlGuard.ts`) with the dispatcher's DNS cache bounded; mass-assignment protections on PUT handlers; snapshot restore validation rejects bad rows; response-size caps on external fetches (embed-check / TDS / prusament / OpenPrintTag tarball). SRV target validation for `mongodb+srv://` URIs (`src/lib/mongoUriGuard.ts`).
+- **AMS slot cleanup on filament delete (#333)**: clear AMS slots BEFORE the delete write so cleanup stays retryable; previously a partial-delete left dangling `amsSlots[].spoolId` refs.
+- **SpoolCard label revert (#263)**: sibling-spool updates no longer trample an in-progress label edit on the active card.
+
+## v1.25 Features
+
+- **API validation + semantics + dev CSP sweep (#337-#344)**: numeric field validators on Filament/Nozzle (negative cost/density/diameter rejected with 400 instead of corrupting downstream math); import endpoints return 400 not 500 for bad bodies (#338); PUT/GET on `/api/print-history/[id]` (#340); multipart/form-data branch in `/api/spools/import` (#339); `unsafe-eval` gated to packaged builds via `app.isPackaged` (#344) — dev builds keep it because Next.js Turbopack relies on it.
+- **Frontend a11y + UX polish (#342-#349, #351)**: focus traps, dialog accessible names, confirm-modal keyboard support, empty states, URL filter sharing, Add Spool affordance on filaments with no spool metadata.
+- **Print-history field caps (#350)**: notes / jobLabel length capped on PUT so a misbehaving client can't push unbounded strings.
+
+## v1.26 Features
+
+- **Parent/variant visual model (#101)**: parents-of-variants render with a hatched cross-hatched swatch via `<FilamentSwatch isParent>`. New "+ Create variant" CTA on the filament detail page (gated on `!isVariant` — no variants-of-variants by design). Parent values surface as placeholders on the new-variant form so the user can see what they'll inherit (display-only — submit handler reads from `form.*` only so blank inputs stay blank on the variant doc and continue tracking the parent dynamically via `resolveFilament()`). **A filament is only a parent if it has variants** — no explicit flag, derived from variant count. See "Multi-color parent indicator + Create-variant flow" section.
+
+## v1.27 Features
+
+- **Finish indicator on swatch + name chip**: `<FilamentSwatch>` gains a `finish?` prop driving CSS overlays (matte / silk / sparkle / glow / translucent / transparent). `<FinishChip>` mirrors the finish as a small chip beside the name. Source of truth: `src/lib/filamentFinish.ts`'s `deriveFinish(optTags)` — priority order `transparent > translucent > sparkle > silk > glow > matte`. Parents are finish-agnostic. `optTags` rides the list aggregation + per-parent variant projection. See "Finish indicator on the swatch + name chip" section.
+- **Smart Filament Workflow guide**: end-user-facing Markdown + PDF guide explaining the NFC scan → preset select → calibration loop. Lives in `docs/`.
+- **optTags inheritance fixes**: list + variants-subquery projections now inherit `optTags` from parent so a variant without explicit tags renders the same finish as its parent.
+
+## v1.28 Features
+
+- **Color name → hex typeahead**: `FilamentForm`'s "Color Name" input is a combobox with two suggestion sources — previously-used color names from the DB (`GET /api/filaments/colors` runs `$group` over non-deleted filaments) and the 148 CSS Color Module Level 4 named colors plus synonyms. Picking a suggestion sets both `colorName` and `color` hex. Helpers in `src/lib/cssNamedColors.ts`: `lookupCssNamedColor(name)`, `filterColorSuggestions(...)`. See "Color-name typeahead → hex" section.
+- **NFC prefill fixes**: tag-present state routed through a ref in the NFC prefill effect (was triggering stale closures); prefill on `/filaments/new` clears when no tag is on the reader.
+- **Test infra**: bumped `mongodb-memory-server` `launchTimeout` to 60s for the Windows-ARM64 x64-emulation CI runner that was flaky at 10s.
+
+## v1.29 Features
+
+- **Delete filament button on detail page**: top-of-detail-page Delete button that uses the soft-delete trash workflow (#213) — sends DELETE to `/api/filaments/{id}` which sets `_deletedAt`. Mirrors the trash-then-restore-or-purge flow.
+- **Parents excluded from inventory aggregates**: list-level "remaining grams / spool count" totals skip parents since their spools (if any) are tracked separately on their variants. Quick-filter visible-row counts now align with chip counts.
+- **Calibration prune + filter fixes**: stale printer-specific calibrations pruned on save (PR #358 P2); calibration printer tabs filtered to printers that own a compatible nozzle; fail-open behavior when the nozzle catalog is temporarily unavailable so legitimate edits aren't blocked by transient DB issues.
+- **Parent-fallback enrichment in filtered views**: variants in filtered list views keep their parent-resolved values (was silently null-ing inherited fields under some filter combos).
+- **NFC phantom-tag recovery**: `clearPhantomPresence` no longer blanket-clears `readerPresent`; auto-read connect failure now clears the phantom `tagPresent` flag (continuation of GH #230).
+- **Duplicate-key error surface**: PUT handlers on entity routes (Nozzle, Printer, BedType, Location) now surface duplicate-key errors as 409 with the conflicting field named, instead of 500 with raw mongo text.
+
+## v1.30 Features
+
+- **Trusted-origin (CSRF) guard sweep (#360/#368)**: extended `assertSameOriginRequest` from the destructive admin routes covered by #252 to **every** mutating route — POST/PUT/DELETE/PATCH on filaments, nozzles, printers, locations, bed-types, print-history, spools, share, scan/publish, prusament/import, openprinttag/import, tds, and the import-* endpoints. See "Trusted-origin (CSRF) guard sweep" section.
+- **Hybrid sync per-collection error isolation (#369)**: each `syncCollection` runs through a `trySync(name, deps, fn)` wrapper in `electron/sync-service.ts`. A single collection failure no longer aborts the whole cycle; dependent collections cascade-skip with prerequisite-named errors (e.g. nozzle failure → printers/filaments/printhistories skipped with "skipped — prerequisite 'nozzles' failed"). New `SyncStatus.state: "partial"` (renderer shows amber pill) for partial-success cycles. `status.error` groups errors by message so the auth-error case shows the wrapped readWrite hint once with all affected collections rather than collapsing to a name list. Post-sync repair passes (`repairFilamentParentIds`, `repairPrinterAmsSlots`, `repairDanglingSpoolLocations`) are gated on their prerequisites and wrapped in best-effort try/catch.
+- **Spool ingestion hardening (#370, #372, #373)**: `POST /api/spools/import` wraps each row's `save()` in its own try/catch so a `VersionError` from a concurrent writer reports per-row instead of 500-ing the batch. `purchaseDate` / `openedDate` strings on both JSON-body API and CSV importer now go through `isValidIsoDateString` in `src/lib/validateSpoolBody.ts` — rejects ISO-shaped-but-impossible dates (Feb 29 in non-leap years, Feb 30, Apr 31, month 0/13, day 0/32). Date validation runs BEFORE `resolveLocationId` so a failed-date row doesn't leave an orphan auto-created Location. `isValidIsoDateString` uses `setUTCFullYear` not `Date.UTC` so years 0000-0099 round-trip correctly (no 2-digit-year remap to 1900s). `photoDataUrl` allow-list error message + this doc now mention HEIF consistently (was always in the regex, missing from copy).
+- **CSP img-src alignment (#371)**: Electron renderer CSP now mirrors web CSP's `img-src 'self' data: blob: https:` — `https:` was missing on the Electron side, leaving external HTTPS image references silently broken only in the desktop build. The `connect-src` localhost addition remains the one intentional asymmetry.
+- **Clone button on variants (#377)**: v0.3.0 leftover gate removed. The new-page clone handler at `src/app/filaments/new/page.tsx:~190` already supported variants (`filament.parentId || filament._id` — cloning a variant produces a sibling under the same parent; cloning a root produces a variant of it). Only the UI gate on the detail page was hiding the Clone button on variant pages. The "Create variant" CTA next to Clone keeps its `!isVariant` gate (variants-of-variants stay banned).
+- **Parent/variant relationship in exports (#378)**: filament CSV/XLSX exports (`EXPORT_COLUMNS` in `src/lib/exportFilaments.ts`) and spool CSV export (`SPOOL_EXPORT_COLUMNS` in `src/lib/exportSpools.ts`) now include `Parent` (parent filament's name when this row is a variant) and `Variant Count` (>0 only for parents) columns. Slicer-bound exports (PrusaSlicer/OrcaSlicer/Bambu Studio) intentionally stay flat — slicers have no concept of variants. Re-import side tracked separately (#379).
+- **Spool Tracker empty state (#380)**: filament detail page always renders the Spool Tracker section. Pre-fix, a freshly-created filament with no spools AND no weight metadata hid the entire section including the Add Spool button — a regression of #346 which covered "no spools but has weights". New `detail.spool.emptyHint` i18n key surfaces a short "No spools yet — add one to start tracking..." message above the CTA when there's nothing to track yet.
+- **Retire prompt on zero weight (#381)**: when the user sets a spool's remaining weight to 0 on the detail page and the spool isn't already retired, prompt to also mark it retired in the same write. Retiring preserves history (purchase/opened dates, dry cycles, usage log, location, photo) but excludes from inventory totals via `inventoryStats.ts`. Prompt is skipped when the caller explicitly passed `retired` (the SpoolCard's own retire toggle path), when prior weight was already 0 (no real transition), or when the spool was already retired.
 
 ## Color-name typeahead → hex
 
