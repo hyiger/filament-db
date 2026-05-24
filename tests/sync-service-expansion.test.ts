@@ -59,6 +59,10 @@ describe("SyncService — v1.12 sync expansion", () => {
         { slug: 1 },
         { unique: true },
       ).catch(() => {});
+      await db.collection("filaments").createIndex(
+        { name: 1 },
+        { unique: true, partialFilterExpression: { _deletedAt: null } },
+      ).catch(() => {});
     }
   }, 120_000);
 
@@ -127,6 +131,50 @@ describe("SyncService — v1.12 sync expansion", () => {
       const remoteRow = await remoteClient.db("filament-db").collection("bedtypes").findOne({ name: "Cool Plate" });
       expect(localRow?.syncId).toBe("local-uuid");
       expect(remoteRow?.syncId).toBe("local-uuid");
+    });
+  });
+
+  // ── filaments name-collision reconciliation ───────────────────────────
+
+  describe("filaments name reconciliation", () => {
+    it("reconciles same-name filaments across DBs without tripping the partial-unique-name index", async () => {
+      // Reproduces the v1.30.x E11000 cycle abort: both sides independently
+      // created "PC Blend" with their own syncIds; without reconcileByName
+      // for filaments, syncCollection's update path walks the new name into
+      // the partial-unique-on-non-deleted `name` index and aborts the cycle.
+      await localClient.db("filament-db").collection("filaments").insertOne({
+        name: "PC Blend", manufacturer: "Local Co", type: "PC",
+        syncId: "local-uuid",
+        _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+      });
+      await remoteClient.db("filament-db").collection("filaments").insertOne({
+        name: "PC Blend", manufacturer: "Remote Co", type: "PC",
+        syncId: "remote-uuid",
+        _deletedAt: null, createdAt: new Date(), updatedAt: new Date(),
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+      const filamentResult = results.find((r) => r.collection === "filaments");
+      expect(filamentResult).toBeDefined();
+      expect(filamentResult?.error).toBeUndefined();
+
+      // Each side still has exactly one active row for the name (no E11000).
+      const localCount = await localClient.db("filament-db").collection("filaments").countDocuments({ name: "PC Blend", _deletedAt: null });
+      const remoteCount = await remoteClient.db("filament-db").collection("filaments").countDocuments({ name: "PC Blend", _deletedAt: null });
+      expect(localCount).toBe(1);
+      expect(remoteCount).toBe(1);
+
+      // syncIds unified — local wins per the tie-break rule in reconcileByName.
+      const localRow = await localClient.db("filament-db").collection("filaments").findOne({ name: "PC Blend" });
+      const remoteRow = await remoteClient.db("filament-db").collection("filaments").findOne({ name: "PC Blend" });
+      expect(localRow?.syncId).toBe("local-uuid");
+      expect(remoteRow?.syncId).toBe("local-uuid");
+
+      // And printhistories (which prerequisite-depend on filaments via trySync)
+      // should not be skip-cascaded with a prerequisite-failed error.
+      const phResult = results.find((r) => r.collection === "printhistories");
+      expect(phResult?.error).toBeUndefined();
     });
   });
 

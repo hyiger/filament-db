@@ -353,6 +353,19 @@ export class SyncService extends EventEmitter {
       await this.backfillSyncIds(localDb.collection("filaments"));
       await this.backfillSyncIds(remoteDb.collection("filaments"));
 
+      // Reconcile same-name filaments across DBs before building the
+      // syncId maps. Same first-sync trap as locations + bedtypes — two
+      // sides that independently created "PC Blend" carry distinct
+      // syncIds, so syncCollection's last-write-wins path tries to
+      // updateOne the name into the partial-unique-on-non-deleted
+      // `name` index and E11000s the whole cycle (cascading to
+      // printhistories via the trySync prerequisite chain). Must run
+      // AFTER backfill (reconcileByName trusts existing syncIds when
+      // present and only mints when both sides are missing one) and
+      // BEFORE the maps below so parentId remapping sees the unified
+      // syncId on both sides.
+      await this.reconcileFilamentsByName(localDb, remoteDb);
+
       // Build filament syncId→ID maps for parentId remapping
       const localFilaments = await localDb.collection("filaments").find({}).toArray();
       const remoteFilaments = await remoteDb.collection("filaments").find({}).toArray();
@@ -754,6 +767,24 @@ export class SyncService extends EventEmitter {
     remoteDb: ReturnType<MongoClient["db"]>,
   ): Promise<void> {
     await this.reconcileByName(localDb, remoteDb, "bedtypes");
+  }
+
+  /**
+   * Same name-collision resolver, applied to filaments. Filament has the
+   * partial-unique-on-non-deleted `name` index too, and the same
+   * independent-creation shape ("PC Blend" minted on both desktop and
+   * Atlas before they ever talked) lands as different local syncIds —
+   * syncCollection then treats them as two rows and either insertOne or
+   * updateOne walks into the index and E11000s, aborting the cycle (and
+   * cascading-skipping printhistories via the `trySync` prerequisite
+   * chain added in #369). Unifying the syncIds here turns the pair into
+   * a normal last-write-wins merge.
+   */
+  private async reconcileFilamentsByName(
+    localDb: ReturnType<MongoClient["db"]>,
+    remoteDb: ReturnType<MongoClient["db"]>,
+  ): Promise<void> {
+    await this.reconcileByName(localDb, remoteDb, "filaments");
   }
 
   /**
