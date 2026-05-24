@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
  * POST /api/filaments/{id}/restore — un-soft-delete a filament.
@@ -15,9 +16,12 @@ import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
  * a Mongo duplicate-key error.
  */
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   try {
     await dbConnect();
     const { id } = await params;

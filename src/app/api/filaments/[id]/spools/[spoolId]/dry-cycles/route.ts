@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /** GH #304: hard cap on a spool's embedded dryCycles array — same
  * unbounded-growth concern as usageHistory. The `$slice: -N` modifier
@@ -19,6 +20,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; spoolId: string }> }
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: any;
   try {

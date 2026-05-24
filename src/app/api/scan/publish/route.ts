@@ -6,6 +6,7 @@ import {
   type ScanEventFilament,
 } from "@/lib/scanBus";
 import { errorResponse, getErrorMessage } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
  * Accept a decoded-and-matched NFC scan from the renderer and fan it out to
@@ -77,6 +78,9 @@ function pickDecoded(value: unknown): ScanEventDecoded {
 }
 
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   let body: unknown;
   try {
     body = await request.json();

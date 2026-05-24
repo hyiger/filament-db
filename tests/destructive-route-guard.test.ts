@@ -3,6 +3,13 @@ import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { DELETE as snapshotDelete } from "@/app/api/snapshot/delete/route";
+import { POST as filamentsPost } from "@/app/api/filaments/route";
+import { POST as nozzlesPost } from "@/app/api/nozzles/route";
+import { POST as locationsPost } from "@/app/api/locations/route";
+import { POST as sharePost } from "@/app/api/share/route";
+import { POST as scanPublishPost } from "@/app/api/scan/publish/route";
+import { POST as spoolsImportPost } from "@/app/api/spools/import/route";
+import { POST as printHistoryPost } from "@/app/api/print-history/route";
 
 /**
  * GH #252 — trusted-origin guard for destructive admin routes.
@@ -103,5 +110,83 @@ describe("destructive route — snapshot/delete CSRF guard", () => {
     );
     expect(res.status).toBe(200);
     expect(await Filament.countDocuments({})).toBe(0);
+  });
+});
+
+/**
+ * GH #360 — the trusted-origin guard is now mandatory on every
+ * mutating API route, not just the destructive admin handlers covered
+ * above. These cases pin a representative sample (CRUD/import/share/
+ * scan/print-history) so a future contributor can't quietly drop the
+ * guard from a new route.
+ */
+describe("mutating routes — cross-origin CSRF rejection", () => {
+  function csrfReq(url: string, init?: RequestInit) {
+    return new NextRequest(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "sec-fetch-site": "cross-site",
+      },
+      body: JSON.stringify({ ignored: true }),
+      ...init,
+    });
+  }
+
+  function mismatchedOriginReq(url: string) {
+    return new NextRequest(url, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://evil.example",
+        host: "localhost:3456",
+      },
+      body: JSON.stringify({ ignored: true }),
+    });
+  }
+
+  it("filaments POST rejects cross-site", async () => {
+    const res = await filamentsPost(csrfReq("http://localhost:3456/api/filaments"));
+    expect(res.status).toBe(403);
+  });
+
+  it("nozzles POST rejects cross-site", async () => {
+    const res = await nozzlesPost(csrfReq("http://localhost:3456/api/nozzles"));
+    expect(res.status).toBe(403);
+  });
+
+  it("locations POST rejects cross-site", async () => {
+    const res = await locationsPost(csrfReq("http://localhost:3456/api/locations"));
+    expect(res.status).toBe(403);
+  });
+
+  it("share POST rejects cross-site", async () => {
+    const res = await sharePost(csrfReq("http://localhost:3456/api/share"));
+    expect(res.status).toBe(403);
+  });
+
+  it("scan/publish POST rejects cross-site", async () => {
+    const res = await scanPublishPost(csrfReq("http://localhost:3456/api/scan/publish"));
+    expect(res.status).toBe(403);
+  });
+
+  it("spools/import POST rejects cross-site", async () => {
+    const res = await spoolsImportPost(csrfReq("http://localhost:3456/api/spools/import"));
+    expect(res.status).toBe(403);
+  });
+
+  it("print-history POST rejects cross-site", async () => {
+    const res = await printHistoryPost(csrfReq("http://localhost:3456/api/print-history"));
+    expect(res.status).toBe(403);
+  });
+
+  it("filaments POST rejects mismatched Origin header", async () => {
+    const res = await filamentsPost(mismatchedOriginReq("http://localhost:3456/api/filaments"));
+    expect(res.status).toBe(403);
+  });
+
+  it("share POST rejects mismatched Origin header", async () => {
+    const res = await sharePost(mismatchedOriginReq("http://localhost:3456/api/share"));
+    expect(res.status).toBe(403);
   });
 });

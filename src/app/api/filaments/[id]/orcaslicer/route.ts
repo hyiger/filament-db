@@ -7,6 +7,7 @@ import {
   exportFilenameStem,
 } from "@/lib/singleFilamentExport";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
 
 /**
@@ -80,6 +81,9 @@ export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   // Guard JSON parsing — malformed bodies should return 400, not 500
   let body: Record<string, unknown>;
   try {

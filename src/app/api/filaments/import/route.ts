@@ -3,8 +3,12 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { parseIniFilaments } from "@/lib/parseIni";
 import { assertMultipartFormData, checkFileSize, isDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   // GH #338: bad content-type is client input, not a server fault — 400 + clear message.
   const ctError = assertMultipartFormData(request);
   if (ctError) return ctError;

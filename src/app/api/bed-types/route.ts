@@ -3,6 +3,7 @@ import dbConnect from "@/lib/mongodb";
 import BedType from "@/models/BedType";
 import Printer from "@/models/Printer";
 import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 export async function GET(request: NextRequest) {
   try {
@@ -44,6 +45,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: any;
   try {

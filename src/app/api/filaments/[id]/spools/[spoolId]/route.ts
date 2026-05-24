@@ -4,11 +4,15 @@ import Filament from "@/models/Filament";
 import Printer from "@/models/Printer";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; spoolId: string }> }
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   let body;
   try {
     body = await request.json();
@@ -71,9 +75,12 @@ export async function PUT(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string; spoolId: string }> }
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   try {
     await dbConnect();
     const { id, spoolId } = await params;

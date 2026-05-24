@@ -4,6 +4,7 @@ import Nozzle from "@/models/Nozzle";
 import Filament from "@/models/Filament";
 import Printer from "@/models/Printer";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 export async function GET(
   _request: NextRequest,
@@ -35,6 +36,9 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: any;
   try {
@@ -98,9 +102,12 @@ export async function PUT(
 }
 
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   try {
     await dbConnect();
     const { id } = await params;

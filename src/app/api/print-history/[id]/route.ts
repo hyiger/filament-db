@@ -5,6 +5,7 @@ import PrintHistory from "@/models/PrintHistory";
 import Filament from "@/models/Filament";
 import Printer from "@/models/Printer";
 import { errorResponseFromCaught, getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
  * GH #340: GET /api/print-history/{id} — fetch a single job by id,
@@ -62,6 +63,9 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;
@@ -157,9 +161,12 @@ export async function PUT(
  * loss but still remove the history entry.
  */
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   try {
     await dbConnect();
     const { id } = await params;

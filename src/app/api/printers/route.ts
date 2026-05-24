@@ -6,6 +6,7 @@ import { clearSpoolsFromOtherPrinters } from "@/lib/spoolSlots";
 import Nozzle from "@/models/Nozzle";
 import BedType from "@/models/BedType";
 import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 export async function GET(request: NextRequest) {
   try {
@@ -33,6 +34,9 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   try {
     await dbConnect();
   } catch (err) {

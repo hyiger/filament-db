@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { mapHeaders, rowToImport, upsertImportRows } from "@/lib/importFilaments";
 import { assertMultipartFormData, getErrorMessage, errorResponse, checkFileSize } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   // GH #338: bad content-type is client input, not a server fault — 400 + clear message.
   const ctError = assertMultipartFormData(request);
   if (ctError) return ctError;

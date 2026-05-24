@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { mapHeaders, rowToImport, upsertImportRows } from "@/lib/importFilaments";
 import { assertMultipartFormData, getErrorMessage, errorResponse, checkFileSize } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 function parseCsvLine(line: string): string[] {
   const fields: string[] = [];
@@ -36,6 +37,9 @@ function parseCsvLine(line: string): string[] {
 }
 
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   // GH #338: bad content-type is client input, not a server fault — 400 + clear message.
   const ctError = assertMultipartFormData(request);
   if (ctError) return ctError;

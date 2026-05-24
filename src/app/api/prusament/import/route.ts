@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import type { PrusamentScrapeResult } from "../route";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
  * GH #307: validate a renderer-supplied Prusament spool payload before
@@ -56,6 +57,9 @@ function validatePrusamentSpool(spool: unknown): string | null {
  *   action      – "create" | "add-spool"
  */
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   try {
     await dbConnect();
   } catch (err) {

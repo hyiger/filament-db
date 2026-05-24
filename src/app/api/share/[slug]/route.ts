@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import SharedCatalog from "@/models/SharedCatalog";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
  * GET /api/share/{slug} — fetch a public shared catalog by its slug.
@@ -73,9 +74,12 @@ export async function GET(
  * DELETE /api/share/{slug} — unpublish a shared catalog.
  */
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   try {
     await dbConnect();
     const { slug } = await params;

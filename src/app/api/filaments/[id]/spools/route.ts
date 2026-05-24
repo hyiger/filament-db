@@ -2,11 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   let body: unknown;
   try {
     body = await request.json();

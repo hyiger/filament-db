@@ -8,6 +8,7 @@ import { resolveFilament } from "@/lib/resolveFilament";
 import { generatePrusaSlicerBundle } from "@/lib/prusaSlicerBundle";
 import { parseIniFilaments } from "@/lib/parseIni";
 import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
  * GET /api/filaments/prusaslicer
@@ -112,6 +113,9 @@ export async function GET(request: NextRequest) {
  * Returns: { created: number, updated: number, filaments: string[] }
  */
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   try {
     await dbConnect();
 

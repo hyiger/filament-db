@@ -4,6 +4,7 @@ import dbConnect from "@/lib/mongodb";
 import Printer from "@/models/Printer";
 import Filament from "@/models/Filament";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { findSpoolSlot, assignSpoolToSlot } from "@/lib/spoolSlots";
 
 /**
@@ -37,6 +38,9 @@ export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ spoolId: string }> },
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   let body: unknown;
   try {
     body = await request.json();
@@ -109,9 +113,12 @@ export async function PUT(
 
 /** DELETE — clear the spool from whatever slot it is in. Idempotent. */
 export async function DELETE(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ spoolId: string }> },
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   try {
     await dbConnect();
     const { spoolId } = await params;

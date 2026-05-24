@@ -4,6 +4,7 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import PrintHistory from "@/models/PrintHistory";
 import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
  * GET /api/print-history — list print history entries.
@@ -66,6 +67,9 @@ export async function GET(request: NextRequest) {
  * record gets created (e.g. because a later usage entry 404s).
  */
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: any;
   try {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractFromTds, extractFromTdsContent, validateApiKey, type AiProvider } from "@/lib/tdsExtractor";
 import { errorResponse, getErrorMessage, isClientInputErrorMessage, MAX_UPLOAD_SIZE } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
  * In-memory API key/provider store for web mode.
@@ -64,6 +65,9 @@ export async function GET() {
 
 /** PUT /api/tds — save AI API key (web mode) */
 export async function PUT(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   let body;
   try {
     body = await request.json();
@@ -94,7 +98,10 @@ export async function PUT(request: NextRequest) {
 }
 
 /** DELETE /api/tds — remove AI API key */
-export async function DELETE() {
+export async function DELETE(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   storedApiKey = null;
   storedProvider = "gemini";
   return NextResponse.json({ success: true });
@@ -121,6 +128,9 @@ function resolveApiKey(bodyKey: string | undefined, provider: AiProvider): strin
 
 /** POST /api/tds — extract filament data from a TDS URL or uploaded file */
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   try {
     const contentType = request.headers.get("content-type") || "";
 

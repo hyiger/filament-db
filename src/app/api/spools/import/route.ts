@@ -4,6 +4,7 @@ import Filament from "@/models/Filament";
 import Location from "@/models/Location";
 import { parseCsv } from "@/lib/parseCsv";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { unsanitizeCsvCell } from "@/lib/csvWriter";
 
 /**
@@ -35,6 +36,9 @@ import { unsanitizeCsvCell } from "@/lib/csvWriter";
  * partial failure — this is a user bulk-paste, not a critical path.
  */
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   let csvText: string;
 
   const contentType = (request.headers.get("content-type") || "").toLowerCase();

@@ -6,6 +6,7 @@ import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import SharedCatalog from "@/models/SharedCatalog";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
  * GET /api/share — list all shared catalogs the user has published.
@@ -34,6 +35,9 @@ export async function GET() {
  * do not change what someone else downloaded.
  */
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: any;
   try {

@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseIniFilaments } from "@/lib/parseIni";
 import { assertMultipartFormData, checkFileSize } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 export async function POST(request: NextRequest) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   // GH #338: bad content-type is client input, not a server fault — 400 + clear message.
   const ctError = assertMultipartFormData(request);
   if (ctError) return ctError;

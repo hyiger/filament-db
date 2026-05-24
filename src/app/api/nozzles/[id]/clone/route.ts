@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { nextCloneName, clonePeerNamePattern } from "@/lib/nozzleConflicts";
 
 /**
@@ -23,9 +24,12 @@ import { nextCloneName, clonePeerNamePattern } from "@/lib/nozzleConflicts";
  * which printer triggered the clone.
  */
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
+  const guard = assertSameOriginRequest(request);
+  if (guard) return guard;
+
   try {
     await dbConnect();
     const { id } = await params;
