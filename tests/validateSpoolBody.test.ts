@@ -83,6 +83,36 @@ describe("validateSpoolBody (POST semantics)", () => {
     expect(validateSpoolBody({ lotNumber: 12345 }).ok).toBe(false);
     expect(validateSpoolBody({ purchaseDate: { invalid: true } }).ok).toBe(false);
   });
+
+  // GH #372: date strings must parse to a real date, not just be string-shaped.
+  // Pre-fix, "not a date" / "2024-13-99" rode through to Mongoose and either
+  // saved as "Invalid Date" or broke downstream consumers.
+  it("rejects un-parseable date strings", () => {
+    for (const bad of ["not a date", "2024-13-99", "yesterday", "abc123"]) {
+      const r1 = validateSpoolBody({ purchaseDate: bad });
+      expect(r1.ok, `purchaseDate=${bad}`).toBe(false);
+      if (r1.ok) continue;
+      expect(r1.error).toMatch(/purchaseDate/);
+
+      const r2 = validateSpoolBody({ openedDate: bad });
+      expect(r2.ok, `openedDate=${bad}`).toBe(false);
+    }
+  });
+
+  it("accepts ISO-shaped date strings", () => {
+    for (const good of ["2025-01-01", "2025-01-01T12:34:56Z", "2025-12-31T23:59:59.000Z"]) {
+      const r = validateSpoolBody({ purchaseDate: good, openedDate: good });
+      expect(r.ok, `date=${good}`).toBe(true);
+    }
+  });
+
+  it("still accepts null for date fields", () => {
+    const r = validateSpoolBody({ purchaseDate: null, openedDate: null });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.purchaseDate).toBeNull();
+    expect(r.openedDate).toBeNull();
+  });
 });
 
 describe("validateSpoolBody (PUT semantics with partial: true)", () => {

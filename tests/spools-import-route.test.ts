@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as importSpools } from "@/app/api/spools/import/route";
@@ -423,6 +423,56 @@ describe("/api/spools/import", () => {
           String(s._id) === existingId,
       );
       expect(updatedSpool?.totalWeight).toBe(800);
+    });
+  });
+
+  // GH #370: a per-row save() failure (e.g. mongoose VersionError under
+  // concurrent writers) must not abort the whole batch. Pre-fix the throw
+  // escaped the row loop into the outer 500 catch and the user lost the
+  // already-processed rows' results entirely.
+  describe("per-row save failure isolation", () => {
+    it("continues processing remaining rows when one save() throws", async () => {
+      await Filament.create({ name: "PLA Red", vendor: "V", type: "PLA" });
+      await Filament.create({ name: "PLA Blue", vendor: "V", type: "PLA" });
+      await Filament.create({ name: "PLA Green", vendor: "V", type: "PLA" });
+
+      // Throw on the second save() call only — simulates a transient
+      // VersionError from a concurrent writer on row 2.
+      let callCount = 0;
+      const realSave = mongoose.Model.prototype.save;
+      const spy = vi
+        .spyOn(mongoose.Model.prototype, "save")
+        .mockImplementation(async function (this: mongoose.Document, ...args: unknown[]) {
+          callCount += 1;
+          if (callCount === 2) {
+            const err = new mongoose.Error.VersionError(this, 0, ["spools"]);
+            throw err;
+          }
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          return realSave.apply(this, args as any);
+        });
+
+      try {
+        const csv =
+          "filament,totalWeight\n" +
+          `PLA Red,800\n` +
+          `PLA Blue,900\n` +
+          `PLA Green,1000\n`;
+        const res = await importSpools(csvRequest(csv));
+        expect(res.status).toBe(200);
+        const body = await res.json();
+
+        // Two saves succeeded (rows 1 and 3); one failed (row 2).
+        expect(body.imported).toBe(2);
+        expect(body.failed).toBe(1);
+        expect(body.results).toHaveLength(3);
+        expect(body.results[0]).toMatchObject({ ok: true, filament: "PLA Red" });
+        expect(body.results[1]).toMatchObject({ ok: false });
+        expect(body.results[1].error).toMatch(/save failed/i);
+        expect(body.results[2]).toMatchObject({ ok: true, filament: "PLA Green" });
+      } finally {
+        spy.mockRestore();
+      }
     });
   });
 });

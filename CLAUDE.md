@@ -131,7 +131,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill)
 - **System theme**: `src/components/ThemeProvider.tsx` + `src/lib/themeInitScript.ts`. The init script runs inline before React mounts to avoid light-flash on dark-mode cold loads.
 - **Auto-update**: `electron/auto-updater.ts`. IPC handlers registered unconditionally so the renderer can always call `update-get-status`; mutating actions short-circuit to `{ ok: false, error: "dev-mode" }` when `!app.isPackaged`. The install dialog accepts an optional `strings` IPC argument so the OS-native dialog honours the user's current locale (renderer owns the i18n catalog).
 - **Spool bulk CSV import**: `src/app/api/spools/import`. Row limit 10,000 (enforced inside `parseCsv`, throws `CsvRowLimitExceededError`). Auto-creates locations by name.
-- **Spool validation**: `src/lib/validateSpoolBody.ts`. `photoDataUrl` MIME allow-list is narrow (JPEG/PNG/GIF/WebP/AVIF/HEIC) — SVG is explicitly rejected because `<script>` inside SVG can execute in some rendering contexts.
+- **Spool validation**: `src/lib/validateSpoolBody.ts`. `photoDataUrl` MIME allow-list is narrow (JPEG/PNG/GIF/WebP/AVIF/HEIC/HEIF) — SVG is explicitly rejected because `<script>` inside SVG can execute in some rendering contexts. `purchaseDate` / `openedDate` strings are parsed to verify they form a real date (GH #372 — pre-fix accepted any string).
 
 ## v1.13 Features
 

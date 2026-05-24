@@ -236,8 +236,22 @@ export async function POST(request: NextRequest) {
         // push signature.
         filament.spools.push(newSpoolFields as unknown as Parameters<typeof filament.spools.push>[0]);
       }
-      await filament.save();
-      results.push({ row: i + 2, ok: true, action, filament: filament.name });
+      // GH #370: per-row try/catch. Filament has `optimisticConcurrency:
+      // true`, so a concurrent writer (UI edit, NFC scan, parallel import)
+      // can make `save()` throw VersionError. Without this guard the throw
+      // escaped the row loop, falling into the outer 500 catch — every
+      // already-processed row's outcome was discarded and the user got no
+      // partial-results payload from a documented best-effort importer.
+      try {
+        await filament.save();
+        results.push({ row: i + 2, ok: true, action, filament: filament.name });
+      } catch (saveErr) {
+        results.push({
+          row: i + 2,
+          ok: false,
+          error: `save failed: ${getErrorMessage(saveErr)}`,
+        });
+      }
     }
 
     const ok = results.filter((r) => r.ok).length;

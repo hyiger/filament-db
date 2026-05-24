@@ -68,12 +68,30 @@ export function validateSpoolBody(
     result.totalWeight = null;
   }
 
-  // Optional string fields — only validated if present.
-  for (const field of ["lotNumber", "purchaseDate", "openedDate"] as const) {
+  // lotNumber: free-form string or null.
+  if (b.lotNumber !== undefined) {
+    if (b.lotNumber === null) {
+      result.lotNumber = null;
+    } else if (typeof b.lotNumber === "string") {
+      result.lotNumber = b.lotNumber;
+    } else {
+      return { ok: false, error: "lotNumber must be a string or null" };
+    }
+  }
+
+  // Date fields — string-typed at the API surface (Mongoose casts on save)
+  // but the string has to parse to a real date. GH #372: pre-fix accepted
+  // any string at all, so a bad client could persist "Invalid Date" which
+  // then broke every downstream consumer (analytics, dashboards, CSV
+  // export, sync). The CSV importer already guards this — match it here.
+  for (const field of ["purchaseDate", "openedDate"] as const) {
     if (b[field] !== undefined) {
       if (b[field] === null) {
         result[field] = null;
       } else if (typeof b[field] === "string") {
+        if (isNaN(new Date(b[field] as string).getTime())) {
+          return { ok: false, error: `${field} must be a valid ISO date string or null` };
+        }
         result[field] = b[field] as string;
       } else {
         return { ok: false, error: `${field} must be a string or null` };
@@ -109,7 +127,7 @@ export function validateSpoolBody(
           !/^data:image\/(jpeg|jpg|png|gif|webp|avif|heic|heif);base64,/i.test(b.photoDataUrl)) {
         return {
           ok: false,
-          error: "photoDataUrl must be a JPEG/PNG/GIF/WebP/AVIF/HEIC image data URL",
+          error: "photoDataUrl must be a JPEG/PNG/GIF/WebP/AVIF/HEIC/HEIF image data URL",
         };
       }
       result.photoDataUrl = b.photoDataUrl === "" ? null : b.photoDataUrl;
