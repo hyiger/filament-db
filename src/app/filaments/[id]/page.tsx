@@ -737,18 +737,25 @@ export default function FilamentDetail() {
               ))}
             </div>
           </details>
-          {!isVariant && (
-            <Link
-              href={`/filaments/new?cloneId=${filament._id}`}
-              className="px-4 py-2 bg-amber-600 text-white rounded hover:bg-amber-700 text-sm inline-flex items-center gap-1.5"
-              title={t("detail.clone.title")}
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-              {t("detail.clone")}
-            </Link>
-          )}
+          {/* Clone is available on every filament — root or variant. The new-
+              page clone path at src/app/filaments/new/page.tsx:192 does
+              `filament.parentId || filament._id`, so cloning a variant
+              produces a sibling variant of the same parent, and cloning a
+              root produces a variant of that root. The "Create variant" CTA
+              below is gated on `!isVariant` because variants-of-variants
+              isn't a thing in this design (a parent must be a top-level
+              filament). The old gate here was a v0.3.0 leftover from before
+              the parent/variant system landed in its current form. */}
+          <Link
+            href={`/filaments/new?cloneId=${filament._id}`}
+            className="px-4 py-2 bg-amber-600 text-white rounded hover:bg-amber-700 text-sm inline-flex items-center gap-1.5"
+            title={t("detail.clone.title")}
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+            </svg>
+            {t("detail.clone")}
+          </Link>
           {!isVariant && (
             <Link
               href={`/filaments/new?parentId=${filament._id}`}
