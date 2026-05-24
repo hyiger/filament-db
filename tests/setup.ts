@@ -8,10 +8,26 @@ import { beforeAll, afterAll, afterEach } from "vitest";
 // whole suite collapsing on a cold cache.
 const MONGO_START_TIMEOUT_MS = 120_000;
 
+// Per-instance launch timeout for `MongoMemoryServer.create()` — the
+// mongodb-memory-server-core internal default is 10 seconds and that's
+// not enough on the Windows-arm64 release runner, which executes the
+// suite under x64 emulation. v1.27.0 shipped without Windows-arm64
+// assets because both the initial build and the re-run hit
+// `GenericMMSError: Instance failed to start within 10000ms` on the
+// first `MongoMemoryServer.create()`. Two consecutive failures is the
+// "becoming a pattern" trigger CLAUDE.md's release-process gotcha
+// section already calls out — bumping the start timeout is the
+// recommended durable fix. 60s gives the emulated runner ~6× the
+// headroom of the default; faster runners (mac/linux native) only
+// spend their typical ~1–2s and remain unaffected.
+const MONGO_INSTANCE_LAUNCH_TIMEOUT_MS = 60_000;
+
 let mongoServer: MongoMemoryServer | null = null;
 
 beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create();
+  mongoServer = await MongoMemoryServer.create({
+    instance: { launchTimeout: MONGO_INSTANCE_LAUNCH_TIMEOUT_MS },
+  });
   const uri = mongoServer.getUri();
   process.env.MONGODB_URI = uri;
   await mongoose.connect(uri);
