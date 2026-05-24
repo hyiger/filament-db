@@ -289,11 +289,20 @@ You can also click the **Edit** button directly from the home page table row.
 
 Variants share a parent's settings (temperatures, density, retraction, calibrations) and only store what's different: name, color, and cost.
 
+There are two affordances on the detail page that lead to the same result:
+
+- **"+ Create variant"** (fuchsia button) — only shown on **root** filaments (i.e. not already a variant). Quickest path when you're on the intended parent and just want to add a color under it.
+- **Clone** (amber button) — shown on **every** filament, root or variant. When you Clone a root, the new filament becomes a variant of that root. When you Clone a variant, the new filament becomes a sibling variant under the same parent.
+
+Steps with either button:
+
 1. Open a filament's detail page.
-2. Click **Clone** (amber button — visible only on parent filaments, not on existing variants).
-3. The form opens with the parent's **name** (suffixed with " (copy)"), **color**, **colorName**, **vendor**, and **type** pre-filled. All other fields are blank — they inherit live from the parent.
+2. Click **Clone** or **"+ Create variant"**.
+3. The form opens with the parent's **name** (suffixed with " (copy)"), **color**, **colorName**, **vendor**, and **type** pre-filled. All other fields are blank — they inherit live from the parent. Inherited values appear as placeholder text in each input so you can see what you'll get without typing.
 4. Edit the **name**, pick a new **color**, and optionally adjust **colorName**.
 5. Click **Create Filament**. The new filament is registered as a variant of the parent and any future edits to the parent's calibrations / temperatures / settings will flow through automatically.
+
+> **Design rule**: variants-of-variants are not supported. A parent must be a top-level filament. This is why the "+ Create variant" button is hidden on variant pages.
 
 To turn an existing standalone filament into a variant:
 
@@ -442,13 +451,15 @@ Even in pure **Atlas mode**, if Atlas is unreachable when the app starts, it aut
 
 Each filament can track multiple physical spools with individual weights.
 
-1. On a filament's detail page, scroll to the **Spool Tracker** section.
+1. On a filament's detail page, find the **Spool Tracker** section. As of v1.30.3 it always renders — on a brand-new filament with no weight metadata it shows a short "No spools yet" hint above the **"+ Add Spool"** button.
 2. Click **"+ Add Spool"** to add a new spool with an optional label and weight.
 3. Each spool shows its label, total weight, and a delete button.
 4. The tracker aggregates stats across all spools (total weight, computed length from density and diameter).
 5. Each spool can also be assigned a **Location** (its storage home) and a **Printer slot** (the AMS/MMU position it is currently loaded in — a spool occupies one slot at a time).
 
 If a filament has a single `totalWeight` but no spools yet, click **"Migrate to spool tracking"** to convert it.
+
+When you finish a spool and set its remaining weight to **0**, the app prompts to also mark it **retired** in the same write — that's the canonical "I finished this spool" workflow. Retiring preserves the spool's full history (dates, dry cycles, usage log) but excludes it from inventory totals, so your remaining-weight numbers stay clean without losing provenance.
 
 ---
 
@@ -497,13 +508,14 @@ Without the fork, sync manually:
 
 ## Step 18: Delete a Filament
 
-1. On the home page, tick the checkbox at the start of any filament row (or the header checkbox to select every row).
-2. A red bulk-action bar appears above the table showing the number selected.
-3. Click **Delete N** in that bar and confirm.
+Two paths, same result:
+
+- **Bulk** — on the home page, tick the checkbox at the start of any filament row (or the header checkbox to select every row). A red bulk-action bar appears above the table showing the number selected. Click **Delete N** in that bar and confirm.
+- **Single (v1.29)** — on the filament detail page, click the red **Delete** button in the top-right action row. Faster when you've already opened the filament.
 
 **Note**: Parent filaments with color variants cannot be deleted — delete the variants first. Failed deletions surface in a per-row error toast and the rest of the batch still completes.
 
-In hybrid mode, deletions are synced to Atlas on the next sync cycle. Deleted filaments are soft-deleted internally (marked with a timestamp) so the deletion propagates correctly across devices.
+Both paths soft-delete: the filament is marked with a `_deletedAt` timestamp and moves to the trash. The deletion propagates correctly across devices in hybrid mode on the next sync cycle. From the trash you can either restore or permanently delete it; permanent deletes also propagate via a `_purged` tombstone so they don't get resurrected by a peer's sync.
 
 ---
 

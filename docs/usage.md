@@ -32,7 +32,7 @@ Click any filament name in the table to see its full details:
    - **Import from TDS** to extract properties from a Technical Data Sheet URL using AI (requires API key — see [AI Settings](#ai-settings))
    - **Prusament QR** to fetch specs from a Prusament spool QR code
    - **Load from INI** to pick a profile from a PrusaSlicer config bundle
-   - **Clone Existing** to copy identity fields from another filament and inherit its settings as a variant
+   - **Clone Existing** to copy identity fields from another filament and inherit its settings as a variant. (On a filament's detail page, a dedicated **"+ Create variant"** button is also available on root filaments — quicker path when you already know which filament should be the parent.)
 3. Fill in the required fields (name, vendor, type)
 4. Optionally set temperatures, cost, density, color, fan settings, retraction, shrinkage, pressure advance, and other properties
 5. Select compatible nozzles and enter per-nozzle calibration overrides
@@ -326,7 +326,7 @@ Each filament can track multiple physical spools with individual weights.
 
 ### Adding Spools
 
-On a filament's detail page, the **Spool Tracker** section appears when weight data exists. Click **"+ Add Spool"** to add a new spool entry with an optional label and weight.
+On a filament's detail page, the **Spool Tracker** section always renders (as of v1.30.3 / #380). When there are no spools and no weight metadata configured yet, the section shows a short "No spools yet" hint above the **"+ Add Spool"** button — click it to add a new spool entry with an optional label and weight.
 
 ### Managing Spools
 
@@ -502,7 +502,7 @@ Separate from its **Location** (its storage "home"), a spool can be assigned to 
 Each spool now has three additional ledgers accessible from its detail panel:
 
 - **Photo** — upload a JPEG/PNG (SVG is rejected for security). The file is downsampled to 1200px and compressed client-side to ~200KB before being stored inline on the spool subdocument, so there's no file-upload endpoint.
-- **Retired** — toggle to remove a spool from inventory totals, the PrusaSlicer spool-check endpoint, and the main spool list. History is preserved.
+- **Retired** — toggle to remove a spool from inventory totals, the PrusaSlicer spool-check endpoint, and the main spool list. History is preserved. As of v1.30.3 (#381), setting a spool's remaining weight to **0** triggers a prompt offering to also mark it retired in the same write — the canonical "I finished this spool" moment, one click instead of two.
 - **Dry cycles** — log each drying session with optional temperature (°C), duration (minutes), and notes. The dashboard's "needs drying" warning reads from this log.
 - **Usage history** — each manual weight decrement (or slicer-driven print job) appends an entry tagged with its source (`manual`, `slicer`, `job`, `nfc`).
 

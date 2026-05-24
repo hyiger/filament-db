@@ -137,7 +137,16 @@ You can restore a previously exported snapshot to import core app data: filament
 
 ## CSV / XLSX Export
 
-Open the **Import/Export** dropdown on the home page and click **"Export CSV"** or **"Export XLSX"** to download all filaments. Exports include name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying settings, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, and spool type.
+Open the **Import/Export** dropdown on the home page and click **"Export CSV"** or **"Export XLSX"** to download all filaments. Exports include name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying settings, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, spool type, and (as of v1.30.3) two columns surfacing the parent/variant relationship:
+
+- **Parent** — name of the parent filament when this row is a variant; empty for roots and standalones.
+- **Variant Count** — number of variants this filament has (>0 only for parents with variants).
+
+Variants still inherit their parent's print values (those are flattened into each variant's row), so the new columns are the *only* way to reconstruct the parent/variant tree from an export.
+
+The spool CSV export (`/api/spools/export-csv`) mirrors these two columns at the spool level.
+
+> Slicer-bound exports (PrusaSlicer .ini / OrcaSlicer .json / Bambu Studio .json) intentionally stay flat — slicers have no concept of variants and need every preset to stand alone.
 
 ---
 
