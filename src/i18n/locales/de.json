@@ -787,6 +787,7 @@
   "detail.spool.added": "Spule hinzugefügt",
   "detail.spool.addFailed": "Spule konnte nicht hinzugefügt werden",
   "detail.spool.emptyHint": "Noch keine Spulen — füge eine hinzu, um Restgewicht, Trockenzyklen und Verbrauch zu verfolgen.",
+  "detail.spool.confirmRetireOnZero": "Restgewicht ist jetzt 0. Diese Spule auch als ausgemustert markieren? Beim Ausmustern bleibt die Historie (Daten, Trockenzyklen, Verbrauch) erhalten, sie wird aber aus den Inventarsummen ausgeschlossen.",
   "detail.spool.updated": "Spule aktualisiert",
   "detail.spool.updateFailed": "Spule konnte nicht aktualisiert werden",
   "detail.spool.confirmRemove": "Diese Spule entfernen?",

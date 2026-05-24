@@ -410,6 +410,32 @@ export default function FilamentDetail() {
     },
   ) => {
     if (!filament) return;
+
+    // When the user zeroes the remaining weight on a non-retired spool,
+    // offer to retire it in the same write — that's the canonical "I
+    // finished this spool" moment, and retiring preserves the spool's
+    // history (purchase / opened dates, dry cycles, usage log) while
+    // excluding it from inventory totals (see inventoryStats.ts gates on
+    // `retired`). Skipped when:
+    //   - the caller already passed `retired` (don't clobber an explicit
+    //     choice from the SpoolCard's own retire toggle);
+    //   - the spool was already retired (the prompt would be a no-op);
+    //   - the prior weight was already 0 (no real transition to mark).
+    if (data.totalWeight === 0 && data.retired === undefined) {
+      const current = filament.spools?.find(
+        (s: { _id: { toString(): string } }) => s._id.toString() === spoolId,
+      ) as { retired?: boolean; totalWeight?: number | null } | undefined;
+      if (current && !current.retired && current.totalWeight !== 0) {
+        const retire = await confirm({
+          message: t("detail.spool.confirmRetireOnZero"),
+          confirmLabel: t("detail.spool.retire"),
+        });
+        if (retire) {
+          data = { ...data, retired: true };
+        }
+      }
+    }
+
     try {
       const res = await fetch(`/api/filaments/${filament._id}/spools/${spoolId}`, {
         method: "PUT",

@@ -787,6 +787,7 @@
   "detail.spool.added": "Spool added",
   "detail.spool.addFailed": "Failed to add spool",
   "detail.spool.emptyHint": "No spools yet — add one to start tracking remaining weight, dry cycles, and usage.",
+  "detail.spool.confirmRetireOnZero": "Remaining weight is now 0. Also mark this spool as retired? Retiring keeps its history (dates, dry cycles, usage) but excludes it from inventory totals.",
   "detail.spool.updated": "Spool updated",
   "detail.spool.updateFailed": "Failed to update spool",
   "detail.spool.confirmRemove": "Remove this spool?",
