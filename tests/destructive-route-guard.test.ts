@@ -121,7 +121,7 @@ describe("destructive route — snapshot/delete CSRF guard", () => {
  * guard from a new route.
  */
 describe("mutating routes — cross-origin CSRF rejection", () => {
-  function csrfReq(url: string, init?: RequestInit) {
+  function csrfReq(url: string) {
     return new NextRequest(url, {
       method: "POST",
       headers: {
@@ -129,7 +129,6 @@ describe("mutating routes — cross-origin CSRF rejection", () => {
         "sec-fetch-site": "cross-site",
       },
       body: JSON.stringify({ ignored: true }),
-      ...init,
     });
   }
 
