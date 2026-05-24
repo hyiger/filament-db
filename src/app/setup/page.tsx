@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useIsElectron } from "@/hooks/useIsElectron";
 
@@ -15,27 +15,8 @@ export default function SetupPage() {
   const [success, setSuccess] = useState("");
   const isElectron = useIsElectron();
   const [showUri, setShowUri] = useState(false);
-  // GH #287 (Codex review): the post-success "/" redirect is deferred
-  // 800ms so the success banner paints. Track the timer so it can be
-  // cancelled — otherwise navigating away within that window lets the
-  // stale timer hijack the user to "/" from wherever they ended up.
-  const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const clearRedirectTimer = () => {
-    if (redirectTimerRef.current) {
-      clearTimeout(redirectTimerRef.current);
-      redirectTimerRef.current = null;
-    }
-  };
-  useEffect(() => {
-    return () => clearRedirectTimer();
-  }, []);
 
-  // Switch the wizard step. A mode change does NOT unmount the page
-  // component, so the unmount cleanup above wouldn't catch a pending
-  // redirect — clear it on every mode switch (e.g. the in-page Back
-  // buttons) so a stale redirect can't fire while still on /setup.
   const changeMode = (next: ConnectionMode) => {
-    clearRedirectTimer();
     setMode(next);
   };
 
@@ -83,17 +64,16 @@ export default function SetupPage() {
           return;
         }
 
-        setSuccess(t("setup.webConnectionSuccess"));
-        // GH #287: the web/Docker path used to stop here, stranding the
-        // user on /setup with no way forward but hand-editing the URL.
-        // Redirect home with a hard reload so the server process picks
-        // up the freshly-saved connection; the brief delay lets the
-        // success message paint first. The timer is cleared on unmount
-        // and on any mode switch so it can't fire from a stale context.
-        clearRedirectTimer();
-        redirectTimerRef.current = setTimeout(() => {
-          window.location.href = "/";
-        }, 800);
+        // Issue #362: the web/Docker setup flow only TESTS the URI; it
+        // does not persist it. `dbConnect()` reads `process.env.MONGODB_URI`
+        // at boot, which can only be set via `.env.local` (local dev) or
+        // `-e MONGODB_URI=...` (Docker). Previously this branch showed
+        // "Connected!" and redirected to `/`, which then immediately
+        // hit the same missing-connection failure (GH #287's fix had
+        // a real side-effect bug). Now the success message tells the
+        // user that this was just a connection test and explains how
+        // to actually configure the app.
+        setSuccess(t("setup.webConnectionTestSuccess"));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("setup.connectionFailed"));
@@ -266,6 +246,16 @@ export default function SetupPage() {
           </div>
         )}
 
+        {!isElectron && (
+          // Issue #362: the web build can't persist the URI from this
+          // form (dbConnect reads from process.env at boot). Set the
+          // user's expectation up front: this is a connection-test
+          // form, not a save-and-configure form.
+          <div className="p-3 bg-amber-900/20 border border-amber-800 rounded-lg mb-4 text-xs text-amber-200">
+            <strong>{t("setup.webTestOnlyLabel")}</strong> {t("setup.webTestOnlyExplanation")}
+          </div>
+        )}
+
         <form onSubmit={handleAtlasConnect} className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1">
@@ -331,7 +321,11 @@ export default function SetupPage() {
               disabled={testing || !mongoUri}
               className="flex-1 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 text-sm"
             >
-              {testing ? t("setup.testingConnection") : t("setup.connect")}
+              {testing
+                ? t("setup.testingConnection")
+                : isElectron
+                  ? t("setup.connect")
+                  : t("setup.testConnection")}
             </button>
           </div>
         </form>

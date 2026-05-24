@@ -12,6 +12,17 @@ import mongoose, { Schema, Document, Model } from "mongoose";
  * handler.
  */
 export interface IPrintHistory extends Document {
+  /**
+   * Stable cross-DB identifier used by the hybrid-sync engine to pair
+   * print-history rows between local + Atlas. Mirrors the same field
+   * on every other synced collection (filaments, nozzles, printers,
+   * locations, bedtypes, sharedcatalogs). Issue #361: the snapshot
+   * restore handler now inserts through Mongoose schemas in strict
+   * mode, which silently strips unknown keys — without declaring
+   * `syncId` here, a restored row loses the value and the next sync
+   * treats it as new/unpaired. Sparse-unique index matches siblings.
+   */
+  syncId: string | null;
   /** Human-friendly job label — typically the .3mf/.gcode filename. */
   jobLabel: string;
   /** Which printer this ran on, if known. */
@@ -35,6 +46,7 @@ export interface IPrintHistory extends Document {
 
 const PrintHistorySchema = new Schema<IPrintHistory>(
   {
+    syncId: { type: String, unique: true, sparse: true, index: true },
     jobLabel: { type: String, required: true },
     printerId: { type: Schema.Types.ObjectId, ref: "Printer", default: null, index: true },
     usage: [

@@ -403,6 +403,49 @@ describe("snapshot route — Location + PrintHistory round-trip", () => {
     expect(phs[0].printerId.toString()).toBe(printer._id.toString());
   });
 
+  it("POST restore preserves PrintHistory syncId values (issue #361)", async () => {
+    // PrintHistory participates in hybrid sync via `syncId` (mirroring
+    // every other synced collection). The snapshot restore now inserts
+    // through Mongoose schemas in strict mode, which silently strips
+    // unknown keys. Without `syncId` declared on PrintHistorySchema,
+    // a restored row would lose its sync identity and the next sync
+    // cycle would treat it as a new/unpaired record. Lock down that
+    // the field round-trips through export → wipe → restore.
+    const filament = await Filament.create({
+      name: "Sync PLA",
+      vendor: "T",
+      type: "PLA",
+    });
+    const SYNC_ID = "ph-sync-id-from-atlas-7a8b9c";
+    await PrintHistory.create({
+      jobLabel: "sync-test-job",
+      printerId: null,
+      usage: [{ filamentId: filament._id, grams: 5.5 }],
+      startedAt: new Date(),
+      source: "manual",
+      syncId: SYNC_ID,
+    });
+
+    const exportRes = await GET(new NextRequest("http://localhost/api/snapshot"));
+    const snapshotPayload = JSON.parse(await exportRes.text());
+
+    await PrintHistory.deleteMany({});
+    await Filament.deleteMany({});
+
+    const restoreRes = await POST(
+      new NextRequest("http://localhost/api/snapshot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(snapshotPayload),
+      }),
+    );
+    expect(restoreRes.status).toBe(200);
+
+    const ph = await PrintHistory.findOne({ jobLabel: "sync-test-job" }).lean();
+    expect(ph).not.toBeNull();
+    expect(ph?.syncId).toBe(SYNC_ID);
+  });
+
   it("POST restore round-trips spool.locationId references through Location ObjectId rehydration", async () => {
     // The harder case: a spool subdocument holds a locationId pointing at
     // a real Location. After export → wipe → restore, the restored
