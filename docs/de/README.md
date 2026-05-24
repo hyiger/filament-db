@@ -20,7 +20,7 @@ Deutsche Übersetzung der Dokumente in [`docs/`](..). Bei Diskrepanzen zwischen 
 - **Screenshots in den Bildern** (`docs/images/`) zeigen die englische Benutzeroberfläche. Wenn du die App auf Deutsch nutzt (Einstellungen → Sprache: Deutsch), entsprechen die Beschriftungen den deutschen i18n-Strings unter [`src/i18n/locales/de.json`](../../src/i18n/locales/de.json).
 - **Code-Blöcke, API-Pfade, Dateinamen, GitHub-Verweise und Versionsnummern** bleiben in der Übersetzung unverändert (sind Teil des öffentlichen API-Vertrags bzw. unveränderlicher Bezeichner).
 - **CSV-Spaltennamen** (z. B. `Parent`, `Variant Count`, `filament`, `totalWeight`) bleiben ebenfalls unverändert — sie sind literale Header-Werte, die der Import-Endpunkt erwartet.
-- **PDF-Version** des Smart Filament Workflow Guide: Die deutsche `.md`-Datei ist die einzige übersetzte Variante. Die `.pdf` in [`docs/smart-filament-workflow-guide.pdf`](../smart-filament-workflow-guide.pdf) wird in diesem Übersetzungsdurchgang nicht neu generiert.
+- **PDF-Version** des Smart Filament Workflow Guide: Die deutsche [`smart-filament-workflow-guide.pdf`](smart-filament-workflow-guide.pdf) wurde aus der deutschen `.md` generiert und enthält die englischen UI-Screenshots aus [`docs/images/`](../images). Die englische Originalfassung liegt parallel unter [`docs/smart-filament-workflow-guide.pdf`](../smart-filament-workflow-guide.pdf). Die beiden PDFs sind unabhängig — eine spätere Neugenerierung muss für beide erfolgen.
 
 ## Beitragen
 
