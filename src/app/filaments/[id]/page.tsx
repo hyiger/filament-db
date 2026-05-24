@@ -852,8 +852,16 @@ export default function FilamentDetail() {
         <InfoCard label={t("detail.field.maxVolSpeed")} value={filament.maxVolumetricSpeed ? `${filament.maxVolumetricSpeed} mm³/s` : "—"} inherited={inherited.has("maxVolumetricSpeed")} />
       </div>
 
-      {/* Spool Tracker */}
-      {(filament.spools?.length > 0 || filament.spoolWeight != null || filament.totalWeight != null || filament.netFilamentWeight != null) && (() => {
+      {/* Spool Tracker — always rendered. Pre-fix the outer gate hid the
+          entire section (header + Add Spool button) when the filament had
+          neither spools nor any spool-weight metadata, leaving users with
+          no in-app affordance to add their first spool (e.g. a freshly-
+          imported Siraya Tech PPS-CF row with the OpenPrintTag defaults).
+          Empty state now surfaces an Add Spool CTA via the fallback at
+          the bottom of this block, gated on hasSpools + totalWeight only.
+          (Regression of #346 — that fix covered "no spools but weights
+          set"; the "no spools AND no weights" case still fell through.) */}
+      {(() => {
         const hasSpools = filament.spools?.length > 0;
         const legacyRemaining = !hasSpools ? computeRemaining(filament) : null;
 
@@ -942,10 +950,8 @@ export default function FilamentDetail() {
                       const val = parseFloat(weightInput);
                       // handleNfcWeightUpdate reads a timeout ref internally, but
                       // this arrow is an onClick handler so the ref is accessed
-                      // post-render. The rule can't infer that through a named
-                      // helper, so silence here.
+                      // post-render — outside the render path the rule checks.
                       if (!isNaN(val) && val > 0) {
-                        // eslint-disable-next-line react-hooks/refs
                         handleNfcWeightUpdate(val);
                       } else if (filament.totalWeight != null) {
                         handleNfcWeightUpdate(filament.totalWeight);
@@ -1057,9 +1063,26 @@ export default function FilamentDetail() {
               </div>
             )}
 
-            {/* Add first spool button when no weight data exists yet */}
-            {!hasSpools && filament.totalWeight == null && filament.spoolWeight != null && (
-              addSpoolForm.open ? (
+            {/* Add-first-spool fallback. Pre-fix this was gated on
+                `filament.spoolWeight != null` so the button only appeared
+                after the user had configured an empty-spool weight on the
+                filament. For freshly-created filaments with no weight
+                metadata, the section above this block also rendered
+                nothing — leaving the user with no in-app way to add their
+                first spool. Drop the spoolWeight gate so the CTA appears
+                whenever there are no spools and no legacy
+                totalWeight-based tracking in progress.
+                When NO weights are configured at all, also surface a
+                short hint above the button — otherwise the empty section
+                looks broken rather than awaiting input. */}
+            {!hasSpools && filament.totalWeight == null && (
+              <>
+                {filament.spoolWeight == null && filament.netFilamentWeight == null && !addSpoolForm.open && (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                    {t("detail.spool.emptyHint")}
+                  </p>
+                )}
+                {addSpoolForm.open ? (
                 <div className="flex flex-wrap gap-2 items-stretch p-3 border border-blue-300 dark:border-blue-700 rounded-lg bg-blue-50/30 dark:bg-blue-950/20">
                   <input
                     type="text"
@@ -1104,7 +1127,8 @@ export default function FilamentDetail() {
                 >
                   + {t("detail.addSpool")}
                 </button>
-              )
+              )}
+              </>
             )}
           </div>
         );
