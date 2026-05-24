@@ -15,8 +15,11 @@ interface ElectronAPI {
   }>;
   triggerSync: () => Promise<{ results?: unknown[]; error?: string }>;
   checkAtlasConnectivity: () => Promise<{ connected: boolean }>;
+  // GH #369: "partial" added — at least one collection synced, at least
+  // one failed. Must stay in lockstep with the getSyncStatus return type
+  // above; runtime emits this state, so the callback must accept it.
   onSyncStatusChange: (cb: (status: {
-    state: "idle" | "syncing" | "error" | "offline";
+    state: "idle" | "syncing" | "error" | "offline" | "partial";
     lastSyncAt: string | null;
     error: string | null;
     progress: string | null;

@@ -181,4 +181,60 @@ describe("SyncService — per-collection error isolation (GH #369)", () => {
     expect(sync.getStatus().state).toBe("idle");
     expect(sync.getStatus().error).toBeNull();
   });
+
+  // GH #369 (Codex follow-up): the status.error summary must carry the
+  // ACTUAL failure message, not just the collection-name list. The
+  // canonical case: Atlas auth error — every collection fails with the
+  // same wrapped, actionable text ("Update the user's role to one that
+  // includes readWrite ..."). Pre-fix, that text was reduced to
+  // "7 collections failed: nozzles, bedtypes, ..." which stranded the
+  // user without a fix-it hint.
+  it("includes the underlying failure message (not just collection names) in status.error", async () => {
+    sync = makeSync();
+    // Throw a MongoServerError-shape with code 13 — wrapSyncErrorMessage
+    // detects this and substitutes the actionable Atlas-readWrite hint.
+    vi.spyOn(
+      sync as unknown as { syncCollection: (...args: unknown[]) => Promise<unknown> },
+      "syncCollection",
+    ).mockImplementation(async () => {
+      throw Object.assign(new Error("user is not allowed to do action [update] on [db.coll]"), { code: 13 });
+    });
+
+    await sync.sync();
+    const err = sync.getStatus().error ?? "";
+    // The actionable hint reaches the user.
+    expect(err).toMatch(/readWrite/);
+    expect(err).toMatch(/Settings → Connection/);
+    // And the affected collections are still named (so the user knows
+    // it's a full-cycle problem, not a one-off).
+    expect(err).toMatch(/nozzles/);
+    expect(err).toMatch(/sharedcatalogs/);
+  });
+
+  // Heterogeneous failure: one collection throws, others cascade-skip
+  // with prerequisite-named messages. The summary should list each
+  // distinct message with its affected collections grouped together
+  // rather than collapsing everything to a name list.
+  it("groups errors by message in the summary so distinct failures stay readable", async () => {
+    sync = makeSync();
+    const realSync = (sync as unknown as {
+      syncCollection: (...args: unknown[]) => Promise<unknown>;
+    }).syncCollection.bind(sync);
+    vi.spyOn(
+      sync as unknown as { syncCollection: typeof realSync },
+      "syncCollection",
+    ).mockImplementation(async (...args: unknown[]) => {
+      if (args[2] === "nozzles") throw new Error("nozzle sync exploded");
+      return realSync(...args);
+    });
+
+    await sync.sync();
+    const err = sync.getStatus().error ?? "";
+    // Direct error appears with its collection.
+    expect(err).toMatch(/nozzles: nozzle sync exploded/);
+    // Cascade-skip group appears separately (printers/filaments/printhistories
+    // all share the same "skipped — prerequisite nozzles failed" message and
+    // should collapse into one entry).
+    expect(err).toMatch(/skipped.*prerequisite.*nozzles/);
+  });
 });

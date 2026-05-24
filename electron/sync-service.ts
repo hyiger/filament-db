@@ -448,14 +448,36 @@ export class SyncService extends EventEmitter {
       // collection identically). The `error` field summarises which
       // collections failed so the user knows what to re-run without
       // expanding the tooltip.
+      // GH #369 (Codex follow-up): the summary must carry the underlying
+      // failure message, not just the collection-name list. The auth-error
+      // case (Atlas user missing readWrite) hits every collection with the
+      // *same* wrapped, actionable message — dropping it to a count would
+      // strand the user with "7 collections failed: ..." and no hint to
+      // re-enter the connection string in Settings → Connection.
+      //
+      // Group errors by message so a homogeneous failure (every collection
+      // returning the same wrapped text — auth, network drop, etc.) shows
+      // the actionable text ONCE prefixed by all affected collections;
+      // heterogeneous failures (one collection broke + others cascade-
+      // skipped with prerequisite-named messages) list each group on its
+      // own. " | " is the separator because the renderer renders status
+      // .error with `break-words` and a single character keeps copy/paste
+      // clean for bug reports.
       const erroredResults = results.filter(r => r.error);
       const erroredAll = erroredResults.length === results.length;
       const erroredSome = erroredResults.length > 0;
-      const summary = erroredSome
-        ? erroredResults.length === 1
-          ? `${erroredResults[0].collection}: ${erroredResults[0].error}`
-          : `${erroredResults.length} collections failed: ${erroredResults.map(r => r.collection).join(", ")}`
-        : null;
+      let summary: string | null = null;
+      if (erroredSome) {
+        const byMessage = new Map<string, string[]>();
+        for (const r of erroredResults) {
+          const list = byMessage.get(r.error!) ?? [];
+          list.push(r.collection);
+          byMessage.set(r.error!, list);
+        }
+        summary = Array.from(byMessage.entries())
+          .map(([msg, colls]) => `${colls.join(", ")}: ${msg}`)
+          .join(" | ");
+      }
 
       this.updateStatus({
         state: erroredAll ? "error" : erroredSome ? "partial" : "idle",
