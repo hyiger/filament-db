@@ -1071,7 +1071,15 @@ app.whenReady().then(async () => {
         // an embeddable vendor TDS document in an <iframe>; without it the
         // load falls back to default-src 'self' and is blocked even after
         // /api/embed-check confirms the vendor allows framing.
-        "Content-Security-Policy": [`default-src 'self'; ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws://localhost:* http://localhost:*; font-src 'self' data:; frame-src https:;`],
+        // GH #371: `img-src 'self' data: blob: https:` matches the web CSP
+        // in `next.config.ts`. Spool photos are `data:` and previews are
+        // `blob:`, but any external HTTPS image (vendor thumbnails, TDS-
+        // derived images, OpenPrintTag remote previews) needs `https:` here
+        // too — Electron's `onHeadersReceived` REPLACES the Next-sent CSP,
+        // so anything missing on this side is silently dropped in desktop.
+        // `connect-src` intentionally diverges: Electron adds localhost
+        // ws/http for the embedded Next server; everything else mirrors web.
+        "Content-Security-Policy": [`default-src 'self'; ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' ws://localhost:* http://localhost:*; font-src 'self' data:; frame-src https:;`],
       },
     });
   });
