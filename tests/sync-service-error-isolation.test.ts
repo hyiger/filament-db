@@ -237,4 +237,81 @@ describe("SyncService — per-collection error isolation (GH #369)", () => {
     // should collapse into one entry).
     expect(err).toMatch(/skipped.*prerequisite.*nozzles/);
   });
+
+  // GH #369 (Codex P1 follow-up): the post-sync repair passes
+  // (repairDanglingSpoolLocations, repairFilamentParentIds,
+  // repairPrinterAmsSlots) ran unconditionally and outside any
+  // try/catch. If their prerequisite sync failed, they'd touch stale
+  // syncId maps; if they themselves threw, the cycle's partial-success
+  // results were discarded by the outer catch. Both shapes must be
+  // contained.
+  describe("post-sync repair passes are gated on prerequisites", () => {
+    it("skips repairFilamentParentIds + repairPrinterAmsSlots when filament sync failed", async () => {
+      sync = makeSync();
+      const realSync = (sync as unknown as {
+        syncCollection: (...args: unknown[]) => Promise<unknown>;
+      }).syncCollection.bind(sync);
+
+      // Make the filament sync fail directly (printers + bedtypes + nozzles
+      // + locations succeed, so the failure is filaments-specific rather
+      // than a cascade-skip — that's the case where the repair gates
+      // matter most).
+      vi.spyOn(
+        sync as unknown as { syncCollection: typeof realSync },
+        "syncCollection",
+      ).mockImplementation(async (...args: unknown[]) => {
+        if (args[2] === "filaments") throw new Error("filament sync exploded");
+        return realSync(...args);
+      });
+
+      // Spy on the repair methods to confirm they're skipped, not just
+      // that the cycle doesn't crash.
+      const parentIdSpy = vi.spyOn(
+        sync as unknown as { repairFilamentParentIds: (...args: unknown[]) => Promise<void> },
+        "repairFilamentParentIds",
+      );
+      const amsSlotsSpy = vi.spyOn(
+        sync as unknown as { repairPrinterAmsSlots: (...args: unknown[]) => Promise<void> },
+        "repairPrinterAmsSlots",
+      );
+
+      const results = await sync.sync();
+      const byName = new Map(results.map(r => [r.collection, r]));
+
+      // Filaments failed directly; printhistories cascade-skipped.
+      expect(byName.get("filaments")!.error).toMatch(/filament sync exploded/);
+      expect(byName.get("printhistories")!.error).toMatch(/skipped/);
+
+      // The two repair passes gated on filaments did NOT run.
+      expect(parentIdSpy).not.toHaveBeenCalled();
+      expect(amsSlotsSpy).not.toHaveBeenCalled();
+
+      // Cycle still produced 7 results (pre-fix would have been []).
+      expect(results).toHaveLength(7);
+      expect(sync.getStatus().state).toBe("partial");
+    });
+
+    it("swallows a repair-pass throw rather than collapsing the cycle to []", async () => {
+      sync = makeSync();
+      // Make the repair throw. Filament sync itself succeeds (no
+      // documents to sync, so it's a no-op success).
+      vi.spyOn(
+        sync as unknown as { repairFilamentParentIds: (...args: unknown[]) => Promise<void> },
+        "repairFilamentParentIds",
+      ).mockImplementation(async () => {
+        throw new Error("repair pass exploded mid-cycle");
+      });
+      // Silence the expected error log from the swallow path.
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      const results = await sync.sync();
+      errSpy.mockRestore();
+
+      // Cycle still returns 7 results — the repair throw did NOT escape
+      // to the outer catch (which would have returned []).
+      expect(results).toHaveLength(7);
+      expect(results.every(r => !r.error)).toBe(true);
+      expect(sync.getStatus().state).toBe("idle");
+    });
+  });
 });

@@ -329,9 +329,25 @@ export class SyncService extends EventEmitter {
       // never re-runs the transform on them. Patch them in-place using the
       // freshly-built location maps; bumps updatedAt so subsequent syncs
       // notice the rewrite.
-      await this.repairDanglingSpoolLocations(
-        localDb, remoteDb, localLocationBySyncId, remoteLocationBySyncId,
-      );
+      //
+      // GH #369 (Codex P1 follow-up): gate on locations succeeding AND
+      // wrap in try/catch. Pre-fix the repair ran unconditionally with
+      // potentially-stale location maps and on failure threw all the way
+      // to the outer catch — collapsing the cycle's partial-success
+      // results to [] and the state to "error". Now: skip if upstream
+      // failed; swallow + log if the repair itself misbehaves
+      // (documented as best-effort).
+      const collectionErrored = (name: string): boolean =>
+        results.find(r => r.collection === name)?.error != null;
+      if (!collectionErrored("locations")) {
+        try {
+          await this.repairDanglingSpoolLocations(
+            localDb, remoteDb, localLocationBySyncId, remoteLocationBySyncId,
+          );
+        } catch (err) {
+          console.error("[sync] repairDanglingSpoolLocations failed (best-effort):", err);
+        }
+      }
 
       // Backfill filament syncIds before building maps (syncCollection does this too, but we need maps first)
       await this.backfillSyncIds(localDb.collection("filaments"));
@@ -390,10 +406,21 @@ export class SyncService extends EventEmitter {
       // parent+variant pair pulled in the same cycle. This pass projects
       // the truth from the *other* side via syncId maps that are now
       // built against the post-sync state of both DBs.
-      await this.repairFilamentParentIds(
-        localDb, remoteDb,
-        localFilamentSnapshot, remoteFilamentSnapshot,
-      );
+      //
+      // GH #369 (Codex P1 follow-up): gate on filaments succeeding AND
+      // wrap in try/catch — the repair does updateOne writes and a
+      // permissions/transient failure would have escaped to the outer
+      // catch, discarding the cycle's partial-success results.
+      if (!collectionErrored("filaments")) {
+        try {
+          await this.repairFilamentParentIds(
+            localDb, remoteDb,
+            localFilamentSnapshot, remoteFilamentSnapshot,
+          );
+        } catch (err) {
+          console.error("[sync] repairFilamentParentIds failed (best-effort):", err);
+        }
+      }
 
       // Rebuild filament syncId maps now that filament sync has settled —
       // both the printer amsSlots repair below and the print-history
@@ -412,10 +439,22 @@ export class SyncService extends EventEmitter {
       // all without spool syncIds (a separate schema migration); it gets
       // cleared if the parent filamentId reference itself can't be
       // resolved, otherwise left alone.
-      await this.repairPrinterAmsSlots(
-        localDb, remoteDb,
-        localFilPostBySyncId, remoteFilPostBySyncId,
-      );
+      //
+      // GH #369 (Codex P1 follow-up): needs BOTH printers and filaments
+      // to have synced — the amsSlots[].filamentId remap reads from the
+      // freshly-rebuilt filament map (so filaments must be current) and
+      // writes to printer documents (so a broken-printer-sync state
+      // shouldn't be further mutated).
+      if (!collectionErrored("printers") && !collectionErrored("filaments")) {
+        try {
+          await this.repairPrinterAmsSlots(
+            localDb, remoteDb,
+            localFilPostBySyncId, remoteFilPostBySyncId,
+          );
+        } catch (err) {
+          console.error("[sync] repairPrinterAmsSlots failed (best-effort):", err);
+        }
+      }
 
       // Sync print history. Top-level job ledger that references
       // printerId + usage[].filamentId. usage[].spoolId can't be remapped
