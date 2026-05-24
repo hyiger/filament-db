@@ -56,11 +56,19 @@ export function isValidIsoDateString(s: string): boolean {
   const year = Number(m[1]);
   const month = Number(m[2]);
   const day = Number(m[3]);
-  // Round-trip the date components through Date.UTC. If the input named a
+  // Round-trip the date components through a UTC Date. If the input named a
   // day that doesn't exist (Feb 29 outside a leap year, Nov 31, month 13,
-  // day 0, etc.), the UTC normalisation shifts at least one component and
-  // the round-trip won't match.
-  const reconstructed = new Date(Date.UTC(year, month - 1, day));
+  // day 0, etc.), the normalisation shifts at least one component and the
+  // round-trip won't match.
+  //
+  // `setUTCFullYear` is used instead of `Date.UTC(year, ...)` because
+  // Date.UTC has a legacy 2-digit-year remap: years 0-99 are silently
+  // shifted to 1900-1999, so `Date.UTC(99, 11, 31)` returns 1999-12-31
+  // and the regex-matched input `"0099-12-31"` would be wrongly rejected
+  // (Codex P3 on PR #375). `setUTCFullYear(year, month, day)` takes the
+  // year verbatim regardless of magnitude.
+  const reconstructed = new Date(0);
+  reconstructed.setUTCFullYear(year, month - 1, day);
   if (
     reconstructed.getUTCFullYear() !== year ||
     reconstructed.getUTCMonth() !== month - 1 ||

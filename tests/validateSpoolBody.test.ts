@@ -181,6 +181,19 @@ describe("isValidIsoDateString", () => {
     expect(isValidIsoDateString("2025-01-01T25:00:00Z")).toBe(false);  // bad hour
     expect(isValidIsoDateString("2025-01-01T12:61:00Z")).toBe(false);  // bad minute
   });
+
+  // Codex P3 on PR #375: Date.UTC has a legacy 2-digit-year remap that
+  // would silently shift years 0-99 into 1900-1999, falsely rejecting
+  // valid 4-digit ISO inputs like "0099-12-31". The helper now uses
+  // setUTCFullYear which takes the year verbatim.
+  it("accepts years 0000-0099 (no Date.UTC 2-digit remap)", () => {
+    expect(isValidIsoDateString("0099-12-31")).toBe(true);
+    expect(isValidIsoDateString("0050-06-15")).toBe(true);
+    expect(isValidIsoDateString("0001-01-01")).toBe(true);
+    expect(isValidIsoDateString("0000-01-01")).toBe(true);
+    // Impossible-day rules still apply in the low-year range.
+    expect(isValidIsoDateString("0050-02-30")).toBe(false);
+  });
 });
 
 describe("validateSpoolBody (PUT semantics with partial: true)", () => {
