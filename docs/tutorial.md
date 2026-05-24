@@ -222,7 +222,7 @@ You can also click **"+ Prusament QR"** on a filament's detail page (in the Spoo
 
 ### From a Snapshot Backup
 
-1. Go to **Settings** and click **"Restore"** in the Database Snapshots section.
+1. Go to **Settings → Backup & Restore** and click **"Restore from Snapshot"**.
 2. Select a previously exported snapshot JSON file.
 3. All current snapshot-scoped data is replaced with the snapshot contents (best-effort rollback on failure).
 
@@ -587,10 +587,10 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 | Import Prusament spool | Home > Import/Export > Prusament QR |
 | Import from Atlas | Home > Import/Export > Import from Atlas |
 | Browse OpenPrintTag DB | Home > Import/Export > Browse OpenPrintTag DB |
-| Restore from snapshot | Settings > Database Snapshots > Restore |
+| Restore from snapshot | Settings > Backup & Restore > Restore from Snapshot |
 | Export to PrusaSlicer | Home > Import/Export > Export INI |
 | Export to CSV/XLSX | Home > Import/Export > Export CSV / Export XLSX |
-| Backup database | Settings > Database Snapshots > Backup |
+| Backup database | Settings > Backup & Restore > Download Snapshot |
 | View filament details | Home > click filament name |
 | Edit filament | Detail page > Edit |
 | Add color variant | Detail page > + Add Color |

@@ -46,7 +46,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Import from Atlas** -- connect to a remote MongoDB Atlas database and selectively import filaments
 - **TDS extraction** -- paste a TDS URL to auto-populate the filament form via AI (Gemini, Claude, or ChatGPT)
 - **OpenPrintTag binary** -- download `.bin` files with drying temps, transmission distance (HueForge TD), and instance ID
-- **Snapshot backup/restore** -- export and import core app data (filaments, nozzles, printers, bed types, locations, and print history) as JSON with best-effort rollback on failure
+- **Snapshot backup/restore** -- export and import core app data (filaments, nozzles, printers, bed types, locations, print history, and shared catalogs) as JSON with best-effort rollback on failure
 
 ### Desktop App
 - **Multi-language support** -- English and German, with easy addition of new languages

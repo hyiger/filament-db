@@ -128,8 +128,8 @@ This also works from a filament's detail page to add another spool of the same m
 
 You can restore a previously exported snapshot to import core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones).
 
-1. Go to **Settings** and click **"Restore"** in the Database Snapshots section
-2. Select a snapshot JSON file (exported via **"Backup"**)
+1. Go to **Settings → Backup & Restore** and click **"Restore from Snapshot"**
+2. Select a snapshot JSON file (exported via **"Download Snapshot"**)
 3. All current snapshot-scoped data is replaced with the snapshot contents
 4. The restore uses best-effort rollback — if any error occurs, the handler attempts to re-insert the previous data
 

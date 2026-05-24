@@ -95,7 +95,13 @@ export default function ImportExportPage() {
         <input
           ref={fileInputRef}
           type="file"
-          accept=".json,.csv,.xlsx,.ini"
+          // `.json` was here but the filament import handler routes
+          // anything that isn't `.csv` or `.xlsx` to `/api/filaments/import`,
+          // which parses INI bundles only — JSON snapshots come back
+          // with a confusing "No filament profiles found in the INI
+          // file" error. Snapshot restore is a separate flow under
+          // Settings → Backup & Restore. Issue #363.
+          accept=".csv,.xlsx,.ini"
           className="hidden"
           onChange={handleFileImport}
         />

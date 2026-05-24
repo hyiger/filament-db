@@ -175,7 +175,8 @@ from Step 5 (with the real password filled in). The three modes are Atlas (Cloud
 > forum post) to explore a populated library before adding your own.
 
 > **Note — Docker alternative:** You can run Filament DB as a container instead:
-> `docker run -p 3000:3000 -e MONGODB_URI="mongodb+srv://..." ghcr.io/hyiger/filament-db`.
+> `docker run -p 3456:3000 -e MONGODB_URI="mongodb+srv://..." ghcr.io/hyiger/filament-db`.
+> Maps host port `3456` (matching the desktop app) to container port `3000`, so PrusaSlicer's `http://localhost:3456` works for both.
 > The Docker/web version cannot use the USB NFC reader — tag reading and writing needs the
 > **desktop** app.
 
@@ -319,8 +320,8 @@ off every physical spool.
 | Symptom | Fix |
 |---------|-----|
 | PrusaSlicer "won't accept" the Filament DB address | The URL must go in the field named exactly **Filament DB URL** under Preferences → Other. If that field isn't present, update the fork. |
-| PrusaSlicer connects to nothing / no presets sync | Filament DB must be running when PrusaSlicer starts. Open the desktop app (or start the container) first. Confirm it is reachable by opening its address (`http://localhost:3456` for the desktop app, `:3000` for Docker) in a browser. |
-| Docker container runs but PrusaSlicer can't reach it | The container must publish the port: include `-p 3000:3000` in the `docker run` command. |
+| PrusaSlicer connects to nothing / no presets sync | Filament DB must be running when PrusaSlicer starts. Open the desktop app (or start the container) first. Confirm it is reachable at `http://localhost:3456` in a browser (same URL for desktop and the recommended Docker port mapping below). |
+| Docker container runs but PrusaSlicer can't reach it | The container must publish the port: include `-p 3456:3000` in the `docker run` command so the host's port 3456 (the desktop default that PrusaSlicer expects) maps to the container's port 3000. |
 | Filament DB can't connect to MongoDB Atlas | Check that Network Access allows your IP (or `0.0.0.0/0`), that the password has no unescaped `@ : / ?` characters, and that `<db_password>` was actually replaced with the real password. |
 | The ACR1552U reader is not detected | Install the ACS PC/SC driver and reconnect the reader. NFC works only in the **desktop** app, not the web/Docker version. |
 | A tag won't write | Use NFC-V / ISO 15693 tags (NXP ICODE SLIX2, 320 bytes) or a genuine blank OpenPrintTag. Centre the tag on the reader and keep it still. |
@@ -347,8 +348,8 @@ off every physical spool.
 |---------|-------|
 | Atlas cluster tier | Free (512 MB, shared) |
 | Atlas network access | `0.0.0.0/0` (allow anywhere) or your IP |
-| PrusaSlicer → Preferences → Other | Filament DB URL = `http://localhost:3456` (desktop app) / `:3000` (Docker) |
-| Docker port mapping | `-p 3000:3000` |
+| PrusaSlicer → Preferences → Other | Filament DB URL = `http://localhost:3456` (both desktop and Docker with the recommended port mapping) |
+| Docker port mapping | `-p 3456:3000` |
 | NFC tag type | NFC-V / ISO 15693 — NXP ICODE SLIX2 (320 bytes) |
 | NFC reader | ACS ACR1552U (desktop app only) |
 

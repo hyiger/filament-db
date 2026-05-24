@@ -77,7 +77,7 @@ Two ways to reach the bulk-data actions:
 
 Both surfaces cover:
 
-- **Import filaments** — Prusament QR scan, Atlas import, OpenPrintTag browse, file upload (JSON / CSV / XLSX from another Filament DB instance)
+- **Import filaments** — Prusament QR scan, Atlas import, OpenPrintTag browse, file upload (CSV / XLSX / PrusaSlicer INI). Full database snapshots restore from Settings → Backup & Restore.
 - **Import spools** — bulk CSV with one row per spool
 - **Export filaments** — PrusaSlicer INI bundle, CSV, or XLSX
 - **Export spools** — CSV inventory with location and lot number
@@ -381,11 +381,11 @@ Open the **Import/Export** dropdown on the home page and click **"Import File (I
 
 ### Exporting a Snapshot
 
-Go to **Settings** and click **"Backup"** in the Database Snapshots section to download a JSON snapshot of core app data. The snapshot includes filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones) with references and timestamps preserved.
+Go to **Settings → Backup & Restore** and click **"Download Snapshot"** to download a JSON snapshot of core app data. The snapshot includes filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones) with references and timestamps preserved.
 
 ### Restoring a Snapshot
 
-Go to **Settings** and click **"Restore"** in the Database Snapshots section. Select a previously exported snapshot file. This replaces all current data with the snapshot contents. The restore uses best-effort rollback — if any part fails, the handler attempts to re-insert the previous data from an in-memory backup.
+Go to **Settings → Backup & Restore** and click **"Restore from Snapshot"**. Select a previously exported snapshot file. This replaces all current data with the snapshot contents. The restore uses best-effort rollback — if any part fails, the handler attempts to re-insert the previous data from an in-memory backup.
 
 ---
 
