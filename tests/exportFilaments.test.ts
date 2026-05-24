@@ -215,4 +215,67 @@ describe("getExportRows", () => {
     expect(legacy!.spoolCount).toBe(1);
     expect(none!.spoolCount).toBe(0);
   });
+
+  // User feedback on v1.30.x: the CSV/XLSX exports flattened variant
+  // values via resolveFilament but dropped the relationship itself —
+  // a "Overture PETG Red" row showed inherited print temps but no hint
+  // that it was a variant of "Overture PETG". Surface parent name +
+  // variant count so the export round-trips relationship info too.
+  describe("parent/variant columns", () => {
+    it("declares the new columns in EXPORT_COLUMNS", () => {
+      const keys = EXPORT_COLUMNS.map((c) => c.key);
+      expect(keys).toContain("parentName");
+      expect(keys).toContain("variantCount");
+    });
+
+    it("emits parent name on variants, variant count on parents, both empty on standalones", async () => {
+      const parent = await Filament.create({
+        name: "Overture PETG",
+        vendor: "Overture",
+        type: "PETG",
+        temperatures: { nozzle: 240, bed: 80 },
+        density: 1.27,
+      });
+      await Filament.create({
+        name: "Overture PETG Red",
+        vendor: "Overture",
+        type: "PETG",
+        color: "#ff0000",
+        parentId: parent._id,
+      });
+      await Filament.create({
+        name: "Overture PETG Black",
+        vendor: "Overture",
+        type: "PETG",
+        color: "#000000",
+        parentId: parent._id,
+      });
+      await Filament.create({
+        name: "Standalone TPU",
+        vendor: "X",
+        type: "TPU",
+      });
+
+      const rows = await getExportRows();
+      const byName = new Map(rows.map((r) => [r.name, r]));
+
+      // Parent: empty parentName, variant count = 2.
+      expect(byName.get("Overture PETG")!.parentName).toBeNull();
+      expect(byName.get("Overture PETG")!.variantCount).toBe(2);
+
+      // Variant: parentName is the parent's name; variant count = 0 (a
+      // variant is never a parent — variants-of-variants aren't supported).
+      expect(byName.get("Overture PETG Red")!.parentName).toBe("Overture PETG");
+      expect(byName.get("Overture PETG Red")!.variantCount).toBe(0);
+      expect(byName.get("Overture PETG Black")!.parentName).toBe("Overture PETG");
+
+      // Variants still inherit print values (sanity check this didn't regress).
+      expect(byName.get("Overture PETG Red")!.nozzleTemp).toBe(240);
+      expect(byName.get("Overture PETG Red")!.density).toBe(1.27);
+
+      // Standalone: both empty / zero.
+      expect(byName.get("Standalone TPU")!.parentName).toBeNull();
+      expect(byName.get("Standalone TPU")!.variantCount).toBe(0);
+    });
+  });
 });

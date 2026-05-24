@@ -45,6 +45,16 @@ export interface SpoolExportRow {
   instanceId: string;
   filamentId: string;
   spoolId: string;
+  /**
+   * Parent/variant relationship surfaced for export clarity — matches the
+   * filament-level export columns (see exportFilaments.ts). `parentName`
+   * is the parent filament's name when the spool belongs to a variant
+   * (empty for roots/standalones); `variantCount` is how many variants
+   * the spool's filament has (>0 only when the spool belongs to a parent
+   * with variants).
+   */
+  parentName: string | null;
+  variantCount: number;
 }
 
 export const SPOOL_EXPORT_COLUMNS: { key: keyof SpoolExportRow; header: string }[] = [
@@ -70,6 +80,9 @@ export const SPOOL_EXPORT_COLUMNS: { key: keyof SpoolExportRow; header: string }
   { key: "instanceId", header: "instanceId" },
   { key: "filamentId", header: "filamentId" },
   { key: "spoolId", header: "spoolId" },
+  // Parent/variant context — matches the filament-level export columns.
+  { key: "parentName", header: "parentName" },
+  { key: "variantCount", header: "variantCount" },
 ];
 
 function isoDateOnly(d: Date | string | null | undefined): string | null {
@@ -104,6 +117,17 @@ export async function getSpoolExportRows(): Promise<SpoolExportRow[]> {
     }
   }
 
+  // Count variants per parent for the variantCount column. A spool belonging
+  // to a parent that has variants gets the count; variants and standalones
+  // get 0. Built once and looked up by filament id below.
+  const variantCountByParent = new Map<string, number>();
+  for (const f of filaments) {
+    if (f.parentId) {
+      const key = f.parentId.toString();
+      variantCountByParent.set(key, (variantCountByParent.get(key) ?? 0) + 1);
+    }
+  }
+
   const locationNameById = new Map<string, string>();
   for (const l of locations) {
     locationNameById.set(l._id.toString(), l.name as string);
@@ -111,8 +135,11 @@ export async function getSpoolExportRows(): Promise<SpoolExportRow[]> {
 
   const rows: SpoolExportRow[] = [];
   for (const filament of filaments) {
+    const parentDoc = filament.parentId
+      ? parentMap.get(filament.parentId.toString())
+      : undefined;
     const resolved = filament.parentId
-      ? resolveFilament(filament, parentMap.get(filament.parentId.toString()))
+      ? resolveFilament(filament, parentDoc)
       : filament;
 
     for (const spool of filament.spools || []) {
@@ -160,6 +187,9 @@ export async function getSpoolExportRows(): Promise<SpoolExportRow[]> {
         instanceId: filament.instanceId ?? "",
         filamentId: filament._id.toString(),
         spoolId: spool._id ? spool._id.toString() : "",
+        parentName: parentDoc?.name ?? null,
+        variantCount:
+          variantCountByParent.get(filament._id.toString()) ?? 0,
       });
     }
   }

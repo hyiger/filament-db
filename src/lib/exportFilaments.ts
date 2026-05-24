@@ -34,6 +34,21 @@ export interface ExportRow {
   standbyTemp: number | null;
   tdsUrl: string | null;
   instanceId: string;
+  /**
+   * Parent/variant relationship surfaced for round-trip clarity (Codex /
+   * user feedback on the v1.30 export): `parentName` is the name of the
+   * parent filament when this row is a variant (empty for roots/parents),
+   * and `variantCount` is how many variants this row has (>0 only for
+   * parents). The export already inherits-flattens variant values via
+   * resolveFilament, so without these two columns the relationship is
+   * invisible in CSV/XLSX even though the app uses it heavily.
+   *
+   * Slicer-bound exports (PrusaSlicer / OrcaSlicer / Bambu) intentionally
+   * don't include these — slicers have no concept of variants and need
+   * every row to stand alone.
+   */
+  parentName: string | null;
+  variantCount: number;
 }
 
 export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
@@ -68,6 +83,11 @@ export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
   { key: "standbyTemp", header: "Standby Temp (°C)" },
   { key: "tdsUrl", header: "TDS URL" },
   { key: "instanceId", header: "Instance ID" },
+  // Parent/variant relationship — empty for roots, populated for variants
+  // (Parent) and parents (Variant Count). Placed at the end so existing
+  // consumers that read columns by header index keep working.
+  { key: "parentName", header: "Parent" },
+  { key: "variantCount", header: "Variant Count" },
 ];
 
 export async function getExportRows(): Promise<ExportRow[]> {
@@ -85,9 +105,23 @@ export async function getExportRows(): Promise<ExportRow[]> {
     }
   }
 
+  // Count variants per parent for the Variant Count column. A separate map
+  // because parentMap above only indexes roots/parents; we need to count
+  // how many filaments reference each id as their parentId.
+  const variantCountByParent = new Map<string, number>();
+  for (const f of filaments) {
+    if (f.parentId) {
+      const key = f.parentId.toString();
+      variantCountByParent.set(key, (variantCountByParent.get(key) ?? 0) + 1);
+    }
+  }
+
   return filaments.map((filament) => {
+    const parentDoc = filament.parentId
+      ? parentMap.get(filament.parentId.toString())
+      : undefined;
     const resolved = filament.parentId
-      ? resolveFilament(filament, parentMap.get(filament.parentId.toString()))
+      ? resolveFilament(filament, parentDoc)
       : filament;
 
     return {
@@ -122,6 +156,12 @@ export async function getExportRows(): Promise<ExportRow[]> {
       standbyTemp: resolved.temperatures?.standby ?? null,
       tdsUrl: resolved.tdsUrl ?? null,
       instanceId: filament.instanceId ?? "",
+      // Read parentName from the source `filament` (not `resolved`) because
+      // resolveFilament doesn't mutate name fields. The variant count
+      // applies to whatever this row's _id is — variants always 0, roots
+      // are 0 unless they have variants pointing at them.
+      parentName: parentDoc?.name ?? null,
+      variantCount: variantCountByParent.get(filament._id.toString()) ?? 0,
     };
   });
 }

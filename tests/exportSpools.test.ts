@@ -209,4 +209,55 @@ describe("getSpoolExportRows", () => {
     expect(row.instanceId).toBe(filament.instanceId);
     expect(row.instanceId.length).toBeGreaterThan(0);
   });
+
+  // Matches the parent/variant exposure added to exportFilaments — the spool
+  // export now also surfaces the relationship so a spool's row tells you
+  // whether its filament is a variant (and of what).
+  describe("parent/variant columns", () => {
+    it("declares the new columns in SPOOL_EXPORT_COLUMNS", () => {
+      const keys = SPOOL_EXPORT_COLUMNS.map((c) => c.key);
+      expect(keys).toContain("parentName");
+      expect(keys).toContain("variantCount");
+    });
+
+    it("populates parentName for spools on variants and variantCount for spools on parents", async () => {
+      const parent = await Filament.create({
+        name: "Overture PETG",
+        vendor: "Overture",
+        type: "PETG",
+        spoolWeight: 230,
+        netFilamentWeight: 1000,
+        spools: [{ label: "Parent's own spool", totalWeight: 980 }],
+      });
+      await Filament.create({
+        name: "Overture PETG Red",
+        vendor: "Overture",
+        type: "PETG",
+        color: "#ff0000",
+        parentId: parent._id,
+        spools: [{ label: "Variant spool", totalWeight: 850 }],
+      });
+      await Filament.create({
+        name: "Standalone TPU",
+        vendor: "X",
+        type: "TPU",
+        spools: [{ label: "Standalone spool", totalWeight: 500 }],
+      });
+
+      const rows = await getSpoolExportRows();
+      const byLabel = new Map(rows.map((r) => [r.label, r]));
+
+      // Parent's own spool: variant count 1 (has the variant below), no parent.
+      expect(byLabel.get("Parent's own spool")!.parentName).toBeNull();
+      expect(byLabel.get("Parent's own spool")!.variantCount).toBe(1);
+
+      // Variant spool: parentName = the parent, variant count 0.
+      expect(byLabel.get("Variant spool")!.parentName).toBe("Overture PETG");
+      expect(byLabel.get("Variant spool")!.variantCount).toBe(0);
+
+      // Standalone: both empty / zero.
+      expect(byLabel.get("Standalone spool")!.parentName).toBeNull();
+      expect(byLabel.get("Standalone spool")!.variantCount).toBe(0);
+    });
+  });
 });
