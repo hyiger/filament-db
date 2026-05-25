@@ -46,6 +46,13 @@ describe("mapHeaders", () => {
     expect(result).toEqual(["name", null, "vendor"]);
   });
 
+  it("maps the Parent column for round-trip variant import (GH #379)", () => {
+    const headers = ["Name", "Vendor", "Type", "Parent", "Variant Count"];
+    const result = mapHeaders(headers);
+    // Parent → parentName, "Variant Count" is derived/read-only and skipped.
+    expect(result).toEqual(["name", "vendor", "type", "parentName", null]);
+  });
+
   it("handles headers with extra whitespace", () => {
     const headers = ["  Name  ", " Vendor ", "  Type  "];
     const result = mapHeaders(headers);
@@ -339,5 +346,211 @@ describe("upsertImportRows", () => {
     expect(doc!.temperatures.standby).toBe(140);
     expect(doc!.temperatures.nozzle).toBe(200);
     expect(doc!.temperatures.bed).toBe(55);
+  });
+});
+
+/**
+ * GH #379: Parent-column round-trip on the filament importer.
+ *
+ * The filament CSV/XLSX export added a `Parent` column in #378 so the
+ * variant relationship is visible. The re-import side now reads it so the
+ * round-trip preserves the cluster (parent + its variants), instead of
+ * flattening every row to a standalone filament.
+ *
+ * Rules under test:
+ *   - CREATE path: parentName resolves against existing + in-batch active
+ *     filaments. Missing / variant / self-referential Parent → skip with
+ *     named reason.
+ *   - UPDATE path: parentName is silently ignored (re-parenting via
+ *     re-import is too lossy a UX).
+ */
+describe("upsertImportRows — Parent column (GH #379)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+  });
+
+  it("creates a variant with the correct parentId when Parent references an existing active filament", async () => {
+    const parent = await Filament.create({
+      name: "Universal PLA",
+      vendor: "Generic",
+      type: "PLA",
+    });
+
+    const result = await upsertImportRows([
+      {
+        name: "Galaxy Black PLA",
+        vendor: "Sunlu",
+        type: "PLA",
+        color: "#000000",
+        parentName: "Universal PLA",
+      },
+    ]);
+
+    expect(result.created).toBe(1);
+    expect(result.skipped).toBe(0);
+    const variant = await Filament.findOne({ name: "Galaxy Black PLA" });
+    expect(variant.parentId?.toString()).toBe(parent._id.toString());
+  });
+
+  it("creates a parent + variant in the same batch when the variant row comes BEFORE the parent row", async () => {
+    // Real exports sort by name, so "Galaxy Black PLA" lands before
+    // "Universal PLA" alphabetically — the two-pass driver must still
+    // resolve the in-batch parent.
+    const result = await upsertImportRows([
+      {
+        name: "Galaxy Black PLA",
+        vendor: "Sunlu",
+        type: "PLA",
+        parentName: "Universal PLA",
+      },
+      {
+        name: "Universal PLA",
+        vendor: "Generic",
+        type: "PLA",
+      },
+    ]);
+
+    expect(result.created).toBe(2);
+    expect(result.skipped).toBe(0);
+    const parent = await Filament.findOne({ name: "Universal PLA" });
+    const variant = await Filament.findOne({ name: "Galaxy Black PLA" });
+    expect(parent.parentId).toBeFalsy();
+    expect(variant.parentId.toString()).toBe(parent._id.toString());
+  });
+
+  it("skips a row whose Parent does not exist among active filaments", async () => {
+    const result = await upsertImportRows([
+      {
+        name: "Orphan Variant",
+        vendor: "V",
+        type: "PLA",
+        parentName: "Does Not Exist",
+      },
+    ]);
+
+    expect(result.created).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.skippedRows[0].name).toBe("Orphan Variant");
+    expect(result.skippedRows[0].reason).toContain("Does Not Exist");
+    expect(result.skippedRows[0].reason).toContain("not found");
+  });
+
+  it("skips a row whose Parent is itself a variant (variants-of-variants forbidden)", async () => {
+    const grandparent = await Filament.create({
+      name: "Top PLA",
+      vendor: "V",
+      type: "PLA",
+    });
+    await Filament.create({
+      name: "Middle PLA",
+      vendor: "V",
+      type: "PLA",
+      parentId: grandparent._id,
+    });
+
+    const result = await upsertImportRows([
+      {
+        name: "Leaf PLA",
+        vendor: "V",
+        type: "PLA",
+        parentName: "Middle PLA",
+      },
+    ]);
+
+    expect(result.skipped).toBe(1);
+    expect(result.skippedRows[0].reason).toContain("Middle PLA");
+    expect(result.skippedRows[0].reason).toContain("itself a variant");
+
+    const leaf = await Filament.findOne({ name: "Leaf PLA" });
+    expect(leaf).toBeNull();
+  });
+
+  it("skips a row that references its own name as Parent", async () => {
+    const result = await upsertImportRows([
+      {
+        name: "Self-Parent",
+        vendor: "V",
+        type: "PLA",
+        parentName: "Self-Parent",
+      },
+    ]);
+
+    expect(result.skipped).toBe(1);
+    expect(result.skippedRows[0].reason).toContain("self");
+  });
+
+  it("ignores the Parent column when updating an existing active filament", async () => {
+    // Active sibling that could appear to be the Parent — but updates
+    // never re-parent, per the issue's design.
+    const sibling = await Filament.create({
+      name: "Existing Parent",
+      vendor: "V",
+      type: "PLA",
+    });
+    const target = await Filament.create({
+      name: "Already Active",
+      vendor: "V",
+      type: "PLA",
+    });
+    expect(target.parentId).toBeFalsy();
+
+    const result = await upsertImportRows([
+      {
+        name: "Already Active",
+        vendor: "V",
+        type: "PLA",
+        cost: 19.99,
+        parentName: "Existing Parent",
+      },
+    ]);
+
+    expect(result.updated).toBe(1);
+    expect(result.skipped).toBe(0);
+    const fresh = await Filament.findById(target._id);
+    expect(fresh.cost).toBe(19.99);
+    expect(fresh.parentId).toBeFalsy();
+    // The sibling stays a top-level filament too.
+    const stillSibling = await Filament.findById(sibling._id);
+    expect(stillSibling.parentId).toBeFalsy();
+  });
+
+  it("round-trips a parent + its variants through a single import batch", async () => {
+    // Simulates an export of (parent + 2 variants) being re-imported into
+    // an empty DB. After the import, the cluster shape is preserved:
+    // one root with two children.
+    const result = await upsertImportRows([
+      { name: "Galaxy Black PLA", vendor: "Sunlu", type: "PLA", parentName: "Universal PLA" },
+      { name: "Universal PLA", vendor: "Generic", type: "PLA" },
+      { name: "Galaxy Gold PLA", vendor: "Sunlu", type: "PLA", parentName: "Universal PLA" },
+    ]);
+
+    expect(result.created).toBe(3);
+    expect(result.skipped).toBe(0);
+
+    const parent = await Filament.findOne({ name: "Universal PLA" });
+    expect(parent.parentId).toBeFalsy();
+    const children = await Filament.find({ parentId: parent._id });
+    expect(children).toHaveLength(2);
+    const names = children.map((c: { name: string }) => c.name).sort();
+    expect(names).toEqual(["Galaxy Black PLA", "Galaxy Gold PLA"]);
+  });
+
+  it("treats a Variant Count cell as read-only — does not blow up or persist anything", async () => {
+    // `rowToImport` would already filter the column out via mapHeaders, so
+    // an ImportRow built normally never carries `variantCount`. This test
+    // just guards the surface — a stray field on a hand-built row is
+    // ignored, not crashing.
+    const result = await upsertImportRows([
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { name: "Plain Row", vendor: "V", type: "PLA", variantCount: 5 } as any,
+    ]);
+
+    expect(result.created).toBe(1);
+    const doc = await Filament.findOne({ name: "Plain Row" });
+    // No spurious `variantCount` field landed on the model.
+    expect("variantCount" in (doc.toObject?.() ?? {})).toBe(false);
   });
 });

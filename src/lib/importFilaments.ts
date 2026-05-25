@@ -33,6 +33,15 @@ export interface ImportRow {
   standbyTemp?: number | null;
   tdsUrl?: string | null;
   instanceId?: string | null;
+  /**
+   * GH #379: optional parent-filament name surfaced as the `Parent` column
+   * in the filament CSV/XLSX export (see EXPORT_COLUMNS in
+   * `src/lib/exportFilaments.ts`). Only honoured on CREATE/RESURRECT — for
+   * an existing active filament we ignore it, because silently re-parenting
+   * a row from a re-imported edit is a surprising user experience and the
+   * "Create variant" / Clone-from-parent UI already covers the manual case.
+   */
+  parentName?: string | null;
 }
 
 /** Map header text (case-insensitive) to ImportRow keys */
@@ -106,6 +115,15 @@ const HEADER_MAP: Record<string, keyof ImportRow | undefined> = {
   "nozzle range max (°c)": "nozzleRangeMax",
   "standby temp": "standbyTemp",
   "standby temp (°c)": "standbyTemp",
+  // GH #379: round-trip the filament-level export's parent/variant columns.
+  // "Parent" carries the parent filament's name (string); "Variant Count"
+  // is derived/read-only and explicitly skipped so a re-import doesn't try
+  // to set it as a field.
+  parent: "parentName",
+  "parent name": "parentName",
+  parentname: "parentName",
+  "variant count": undefined,
+  variantcount: undefined,
 };
 
 const NUM_FIELDS = new Set<keyof ImportRow>([
@@ -188,25 +206,48 @@ export async function upsertImportRows(
   let skipped = 0;
   const skippedRows: SkippedRow[] = [];
 
-  // Batch-load all existing filaments by name to avoid N+1 queries
-  const validNames = rows
-    .filter((r) => r.name && r.vendor && r.type)
-    .map((r) => r.name!);
-
-  const allExisting = await Filament.find({ name: { $in: validNames } }).lean();
-
-  // Build lookup maps: name → active doc, name → soft-deleted doc
-  const activeByName = new Map<string, { _id: mongoose.Types.ObjectId }>();
-  const deletedByName = new Map<string, { _id: mongoose.Types.ObjectId }>();
-  for (const doc of allExisting) {
-    if (doc._deletedAt == null) {
-      activeByName.set(doc.name, doc);
-    } else if (!deletedByName.has(doc.name)) {
-      deletedByName.set(doc.name, doc);
+  // Batch-load all existing filaments by name to avoid N+1 queries.
+  // GH #379: also include every Parent value, because a variant row's
+  // parent may not itself appear as an import row (i.e. only the variant
+  // is being imported, against an already-active parent in the DB). Also
+  // project `parentId` so the parent-validity check below can reject a
+  // parentName pointing at a row that's itself a variant.
+  const namesToLoad = new Set<string>();
+  for (const r of rows) {
+    if (r.name && r.vendor && r.type) namesToLoad.add(r.name);
+    if (r.parentName) {
+      const trimmed = r.parentName.trim();
+      if (trimmed) namesToLoad.add(trimmed);
     }
   }
 
-  for (let rowIdx = 0; rowIdx < rows.length; rowIdx++) {
+  const allExisting = await Filament.find({ name: { $in: [...namesToLoad] } })
+    .select("_id name parentId _deletedAt")
+    .lean();
+
+  // The same map carries existing rows AND filaments created earlier in
+  // this same import batch — pass-2 (variant rows) resolves the `Parent`
+  // column against it, so an export → reimport works even when the parent
+  // row only exists because pass 1 just created it.
+  type IndexEntry = {
+    _id: mongoose.Types.ObjectId;
+    parentId: mongoose.Types.ObjectId | null;
+  };
+  const activeByName = new Map<string, IndexEntry>();
+  const deletedByName = new Map<string, IndexEntry>();
+  for (const doc of allExisting) {
+    const entry: IndexEntry = {
+      _id: doc._id,
+      parentId: doc.parentId ?? null,
+    };
+    if (doc._deletedAt == null) {
+      activeByName.set(doc.name, entry);
+    } else if (!deletedByName.has(doc.name)) {
+      deletedByName.set(doc.name, entry);
+    }
+  }
+
+  async function processRow(rowIdx: number): Promise<void> {
     const row = rows[rowIdx];
     if (!row.name || !row.vendor || !row.type) {
       const missing = [
@@ -216,7 +257,50 @@ export async function upsertImportRows(
       ].filter(Boolean).join(", ");
       skippedRows.push({ row: rowIdx + 2, name: row.name, reason: `Missing required field(s): ${missing}` });
       skipped++;
-      continue;
+      return;
+    }
+
+    const existing = activeByName.get(row.name);
+    const softDeleted = !existing ? deletedByName.get(row.name) : undefined;
+
+    // GH #379: resolve the optional Parent column. Honoured ONLY when this
+    // row will produce a new active filament (create or resurrect); for an
+    // already-active row we silently ignore it, because re-parenting an
+    // existing filament via a re-imported CSV is a surprising UX and the
+    // app already exposes the relationship explicitly via "Create variant"
+    // and Clone-from-parent. Self-references are blocked outright.
+    let resolvedParentId: mongoose.Types.ObjectId | null = null;
+    const parentName = row.parentName ? row.parentName.trim() : "";
+    if (parentName && !existing) {
+      if (parentName === row.name) {
+        skippedRows.push({
+          row: rowIdx + 2,
+          name: row.name,
+          reason: `Parent cannot reference self`,
+        });
+        skipped++;
+        return;
+      }
+      const parentEntry = activeByName.get(parentName);
+      if (!parentEntry) {
+        skippedRows.push({
+          row: rowIdx + 2,
+          name: row.name,
+          reason: `Parent "${parentName}" not found among active filaments`,
+        });
+        skipped++;
+        return;
+      }
+      if (parentEntry.parentId) {
+        skippedRows.push({
+          row: rowIdx + 2,
+          name: row.name,
+          reason: `Parent "${parentName}" is itself a variant — variants-of-variants are not allowed`,
+        });
+        skipped++;
+        return;
+      }
+      resolvedParentId = parentEntry._id;
     }
 
     // Build the update doc using only fields that were actually present in the
@@ -274,7 +358,6 @@ export async function upsertImportRows(
     if (row.nozzleRangeMax !== undefined) temps.nozzleRangeMax = row.nozzleRangeMax ?? null;
     if (row.standbyTemp !== undefined) temps.standby = row.standbyTemp ?? null;
 
-    const existing = activeByName.get(row.name);
     if (existing) {
       // For updates, use dot-notation for temperatures to avoid overwriting
       // sub-fields that weren't in the import
@@ -294,7 +377,6 @@ export async function upsertImportRows(
       );
       updated++;
     } else {
-      const softDeleted = deletedByName.get(row.name);
       // For creates/resurrections, include temperatures as a nested object
       if (Object.keys(temps).length > 0) {
         doc.temperatures = {
@@ -307,6 +389,7 @@ export async function upsertImportRows(
           standby: temps.standby ?? null,
         };
       }
+      if (resolvedParentId) doc.parentId = resolvedParentId;
       if (softDeleted) {
         // GH #228: the resurrect path was the only Filament write in the
         // codebase running `updateOne` without `runValidators`. The pre-
@@ -321,13 +404,41 @@ export async function upsertImportRows(
           { ...doc, _deletedAt: null },
           { runValidators: true, context: "query" },
         );
+        // GH #379: re-promote into activeByName so a later pass-2 row
+        // referencing this name as Parent resolves correctly. The
+        // effective parentId after resurrect is `resolvedParentId ??
+        // softDeleted.parentId` because we only include `parentId` in
+        // `doc` when a Parent column was provided — without it the
+        // soft-deleted row's prior parentId survives unchanged, and a
+        // pass-2 row that tried to point its Parent at this resurrected
+        // row would otherwise wrongly skip the variant-of-variant guard.
+        const effectiveParentId = resolvedParentId ?? softDeleted.parentId;
+        activeByName.set(row.name, { _id: softDeleted._id, parentId: effectiveParentId });
+        deletedByName.delete(row.name);
         updated++;
       } else {
-        await Filament.create(doc);
+        const newDoc = await Filament.create(doc);
+        // GH #379: seed activeByName with the freshly-created row so a
+        // later pass-2 row referencing it as Parent can resolve in-batch
+        // (the round-trip case: parent and variant rows in the same CSV).
+        activeByName.set(row.name, { _id: newDoc._id, parentId: resolvedParentId });
         created++;
       }
     }
   }
+
+  // GH #379: two-pass driver. Rows without a Parent column run first so
+  // any new top-level filaments are present in `activeByName` by the time
+  // pass-2 (variant rows) tries to resolve them. The skipped report is
+  // sorted at the end to preserve original-row order even though we
+  // visited rows out of order.
+  for (let i = 0; i < rows.length; i++) {
+    if (!rows[i].parentName) await processRow(i);
+  }
+  for (let i = 0; i < rows.length; i++) {
+    if (rows[i].parentName) await processRow(i);
+  }
+  skippedRows.sort((a, b) => a.row - b.row);
 
   return { total: rows.length, created, updated, skipped, skippedRows };
 }

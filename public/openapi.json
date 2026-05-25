@@ -1397,7 +1397,7 @@
       "post": {
         "tags": ["Filaments"],
         "summary": "Import filaments from CSV",
-        "description": "Upload a CSV file with header row. Requires Name, Vendor, Type columns. Only fields present are updated.",
+        "description": "Upload a CSV file with header row. Requires Name, Vendor, Type columns. Only fields present are updated. The optional `Parent` column (matching the filament CSV export) attaches a newly-created filament as a variant of the named parent — honoured on create/resurrect only; ignored on update. The parent must exist among active filaments and must not itself be a variant. `Variant Count` is read-only and ignored on import.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1426,7 +1426,7 @@
       "post": {
         "tags": ["Filaments"],
         "summary": "Import filaments from XLSX",
-        "description": "Upload an XLSX file with header row. Same column mapping as CSV import.",
+        "description": "Upload an XLSX file with header row. Same column mapping as CSV import, including the optional `Parent` column for round-tripping variant relationships.",
         "requestBody": {
           "required": true,
           "content": {
