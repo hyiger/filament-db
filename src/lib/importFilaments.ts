@@ -247,6 +247,16 @@ export async function upsertImportRows(
     }
   }
 
+  // GH #379 (Codex P2 follow-up): share one trim between the two-pass
+  // router and processRow. If routing used raw `row.parentName` while
+  // processRow trimmed before checking, a whitespace-only Parent cell
+  // would be routed to pass 2 (delaying processing of a row that's
+  // really a standalone), and any variant referencing that row's name
+  // would skip with a misleading "Parent not found".
+  function trimmedParentName(row: ImportRow): string {
+    return row.parentName ? row.parentName.trim() : "";
+  }
+
   async function processRow(rowIdx: number): Promise<void> {
     const row = rows[rowIdx];
     if (!row.name || !row.vendor || !row.type) {
@@ -270,7 +280,7 @@ export async function upsertImportRows(
     // app already exposes the relationship explicitly via "Create variant"
     // and Clone-from-parent. Self-references are blocked outright.
     let resolvedParentId: mongoose.Types.ObjectId | null = null;
-    const parentName = row.parentName ? row.parentName.trim() : "";
+    const parentName = trimmedParentName(row);
     if (parentName && !existing) {
       if (parentName === row.name) {
         skippedRows.push({
@@ -429,14 +439,16 @@ export async function upsertImportRows(
 
   // GH #379: two-pass driver. Rows without a Parent column run first so
   // any new top-level filaments are present in `activeByName` by the time
-  // pass-2 (variant rows) tries to resolve them. The skipped report is
+  // pass-2 (variant rows) tries to resolve them. Use the same trimmed
+  // view of the cell that processRow does so a whitespace-only Parent
+  // resolves to pass 1 (treated as a standalone). The skipped report is
   // sorted at the end to preserve original-row order even though we
   // visited rows out of order.
   for (let i = 0; i < rows.length; i++) {
-    if (!rows[i].parentName) await processRow(i);
+    if (!trimmedParentName(rows[i])) await processRow(i);
   }
   for (let i = 0; i < rows.length; i++) {
-    if (rows[i].parentName) await processRow(i);
+    if (trimmedParentName(rows[i])) await processRow(i);
   }
   skippedRows.sort((a, b) => a.row - b.row);
 

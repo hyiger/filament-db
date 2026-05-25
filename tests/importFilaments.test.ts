@@ -538,6 +538,31 @@ describe("upsertImportRows — Parent column (GH #379)", () => {
     expect(names).toEqual(["Galaxy Black PLA", "Galaxy Gold PLA"]);
   });
 
+  it("routes a whitespace-only Parent cell to pass 1 so it can serve as an in-batch parent (Codex P2)", async () => {
+    // Whitespace-only `Parent` is semantically empty (processRow trims
+    // before resolving). Pre-fix the router compared raw `row.parentName`,
+    // so a row with parentName="   " landed in pass 2 even though it had
+    // no parent — and any earlier variant referencing it as Parent then
+    // skipped with a misleading "not found" because pass 2's order of
+    // operations meant the parent row wasn't processed yet.
+    //
+    // Ordering this test like the original failure: variant first, then
+    // the whitespace-parent row. Both should now end up in their
+    // semantically-correct passes (variant in pass 2, parent in pass 1).
+    const result = await upsertImportRows([
+      { name: "Variant", vendor: "V", type: "PLA", parentName: "Real Parent" },
+      // Whitespace-only Parent column — semantically a standalone.
+      { name: "Real Parent", vendor: "V", type: "PLA", parentName: "   " },
+    ]);
+
+    expect(result.created).toBe(2);
+    expect(result.skipped).toBe(0);
+    const realParent = await Filament.findOne({ name: "Real Parent" });
+    const variant = await Filament.findOne({ name: "Variant" });
+    expect(realParent.parentId).toBeFalsy();
+    expect(variant.parentId.toString()).toBe(realParent._id.toString());
+  });
+
   it("treats a Variant Count cell as read-only — does not blow up or persist anything", async () => {
     // `rowToImport` would already filter the column out via mapHeaders, so
     // an ImportRow built normally never carries `variantCount`. This test
