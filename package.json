@@ -44,7 +44,8 @@
     "postcss": "^8.5.10",
     "exceljs": {
       "uuid": "^11.1.1"
-    }
+    },
+    "tmp": "^0.2.6"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.3",
