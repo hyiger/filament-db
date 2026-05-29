@@ -2175,7 +2175,8 @@
                           "totalGrams": { "type": "number" }
                         }
                       }
-                    }
+                    },
+                    "totalSpools": { "type": "integer", "description": "Sum of each group's count — surfaced on the page header without re-summing client-side." }
                   }
                 }
               }

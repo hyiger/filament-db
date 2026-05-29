@@ -1393,9 +1393,12 @@ Response shape:
       "count": 1,
       "totalGrams": 850
     }
-  ]
+  ],
+  "totalSpools": 1
 }
 ```
+
+`totalSpools` is the sum of each group's `count` so the page header can show one number without re-summing on the client.
 
 Soft-deleted filaments and their spools are excluded from the aggregation regardless of `includeRetired`.
 
