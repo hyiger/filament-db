@@ -23,16 +23,27 @@ export default defineConfig({
         statements: 80,
       },
     },
-    testTimeout: 15000,
-    // Bumped from the 10s default. Several route-level test files use a
-    // beforeEach that dynamically imports Mongoose models and re-registers
-    // them on the connection (setup.ts wipes mongoose.models between
-    // tests). On Windows the cold-import + ESM-resolution path can blow
-    // past 10s on the first iteration of a file, which used to fail the
-    // Windows release build (e.g. tests/locations-route.test.ts beforeEach
-    // timed out in CI but passed locally on macOS / Linux). 30s gives
-    // enough headroom for the slowest Windows runner without masking real
-    // hangs — the testTimeout above still catches stuck tests at 15s.
+    // Bumped from the 15s prior cap. The v1.32.0 release build (run
+    // 26624712937) hit three consecutive Windows x64 failures with
+    // different tests timing out at 15s each time; every failure was a
+    // route-level test running queries against mongodb-memory-server.
+    // Same root cause as `hookTimeout` below (cold-import + ESM-resolve
+    // is slow on Windows runners) — the slowness manifests inside the
+    // test body too, not just the hook, because the first
+    // `Filament.find()` after a model is freshly re-registered triggers
+    // the slow path. 30s matches hookTimeout and still catches genuine
+    // hangs; healthy tests run in <1s so the new ceiling is ~30× their
+    // typical budget. Tests on mac/linux are unaffected — they finish
+    // well under either cap.
+    testTimeout: 30000,
+    // Same root cause as the `testTimeout` above: route-level test files
+    // use a beforeEach that dynamically imports Mongoose models and
+    // re-registers them on the connection (setup.ts wipes
+    // mongoose.models between tests). On Windows the cold-import +
+    // ESM-resolution path can blow past 10s on the first iteration of a
+    // file, which used to fail the Windows release build (e.g.
+    // tests/locations-route.test.ts beforeEach timed out in CI but
+    // passed locally on macOS / Linux).
     hookTimeout: 30000,
     setupFiles: ["./tests/setup.ts"],
   },
