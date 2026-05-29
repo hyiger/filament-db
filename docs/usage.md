@@ -553,6 +553,19 @@ The **Share** page at `/share` lets you publish a static snapshot of selected fi
 
 The **Compare** page at `/compare` takes up to N filaments (pass via query string, or add from the filament list) and renders a side-by-side table of temperatures, cost, density, diameter, calibrations, and current remaining weight. Useful when deciding which of several similar filaments to use for a job.
 
+## Spool Inventory *(v1.32)*
+
+The **Inventory** page at `/inventory` is the same data as the filament list, viewed through the opposite lens — instead of "every filament, with its spools listed under it", you see "every location, with the filaments stored there listed under it". Use it when you want to audit a shelf or drybox at a glance, or when you need to update common per-spool details (label, remaining grams, move-to, retire) on several spools at once without bouncing through each filament's detail page.
+
+What you see:
+
+- **Header stats** — total spool count, location count, active grams on hand
+- **Filter row** — search by filament name / label / lot number (client-side), filter by location kind (shelf, drybox, printer, …), filter by filament type or vendor, "include retired" toggle (off by default — retired spools are out of inventory)
+- **Collapsible group per location** — each group's summary chip shows spool count and total grams. A synthetic **"No location"** group catches any spool whose `locationId` is null and is intentionally sorted to the END of the list so you spot stragglers as "needs attention" rather than mistaking them for primary inventory.
+- **Per-spool row** — color swatch, filament name, type, vendor, label, **inline weight editor** (click the gram value to edit, Enter to save, Esc to cancel), remaining-percent bar, last dry date, **move-to** dropdown for the spool's location, **retire/unretire** toggle (retire shows a confirm to make the inventory-removal explicit).
+
+All edits go through the same `PUT /api/filaments/{id}/spools/{spoolId}` endpoint the filament detail page uses, so semantics — retire-on-zero prompts, weight validation, sync behaviour — are identical to the SpoolCard.
+
 ## System Theme *(v1.11)*
 
 Settings → **Theme**: choose **Light**, **Dark**, or **System**. System mode follows the OS `prefers-color-scheme` media query. An inline init script runs before React mounts so the first paint is already the correct theme — no dark-mode flicker on cold load.

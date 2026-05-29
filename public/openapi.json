@@ -2144,6 +2144,46 @@
         }
       }
     },
+    "/api/spools/by-location": {
+      "get": {
+        "tags": ["Spools"],
+        "summary": "Group spools by storage location (v1.32)",
+        "description": "Backs the /inventory page. Returns every spool grouped by Location, with parent variant-inheritance hints surfaced so the client can compute remaining-percent without a second fetch. Retired spools are excluded by default; pass includeRetired=1 to include them. Spools whose locationId is null land in a synthetic 'no location' group sorted to the end of the response.",
+        "parameters": [
+          { "name": "kind", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Filter to a single location kind (shelf, drybox, printer, ...)" },
+          { "name": "type", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Filter to a single filament type" },
+          { "name": "vendor", "in": "query", "required": false, "schema": { "type": "string" }, "description": "Filter to a single vendor" },
+          { "name": "includeRetired", "in": "query", "required": false, "schema": { "type": "string", "enum": ["1"] }, "description": "Set to 1 to include retired spools (default: excluded)" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Spool groups",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "groups": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "locationId": { "type": "string", "nullable": true },
+                          "location": { "type": "object", "nullable": true },
+                          "spools": { "type": "array", "items": { "type": "object" } },
+                          "count": { "type": "integer" },
+                          "totalGrams": { "type": "number" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/spools/{spoolId}/assignment": {
       "get": {
         "tags": ["Spools"],

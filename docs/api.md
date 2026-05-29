@@ -1344,6 +1344,61 @@ Fetch multiple filaments for the comparison view in one round trip. `ids` is a c
 
 `400` if `ids` is missing, empty, or over 8.
 
+### GET /api/spools/by-location (v1.32)
+
+Backs the **Inventory** page (`/inventory`). Single-shot aggregation over the filament collection's `spools[]` subdocuments, grouped by `spools[].locationId`. A self-`$lookup` on `parentId` surfaces the parent's `spoolWeight` / `netFilamentWeight` so the client can compute remaining-percent on a variant row without a second fetch.
+
+Query parameters:
+
+| Param | Description |
+|-------|-------------|
+| `kind` | Filter to a single location kind (`shelf`, `drybox`, `printer`, …). |
+| `type` | Filter to a single filament type (`PLA`, `PETG`, …). |
+| `vendor` | Filter to a single vendor (exact match). |
+| `includeRetired` | `1` to include retired spools (default: excluded — they're out of inventory). |
+
+A synthetic group with `locationId: null` carries any spool whose `locationId` is unset. The aggregation sorts it to the END of the response so the page surfaces it as a "needs attention" trailer rather than as the first bucket.
+
+Response shape:
+
+```json
+{
+  "groups": [
+    {
+      "locationId": "…",
+      "location": { "_id": "…", "name": "Drybox A", "kind": "drybox", "humidity": 20, "notes": "" },
+      "spools": [
+        {
+          "_id": "…",
+          "label": "",
+          "totalWeight": 850,
+          "lotNumber": null,
+          "purchaseDate": "2026-03-12T00:00:00.000Z",
+          "openedDate": null,
+          "retired": false,
+          "photoDataUrl": null,
+          "dryCycleCount": 2,
+          "lastDryAt": "2026-05-10T14:22:00.000Z",
+          "filamentId": "…",
+          "filamentName": "Galaxy Black PLA",
+          "filamentVendor": "Sunlu",
+          "filamentType": "PLA",
+          "filamentColor": "#000000",
+          "spoolWeight": null,
+          "netFilamentWeight": null,
+          "parentSpoolWeight": 250,
+          "parentNetFilamentWeight": 1000
+        }
+      ],
+      "count": 1,
+      "totalGrams": 850
+    }
+  ]
+}
+```
+
+Soft-deleted filaments and their spools are excluded from the aggregation regardless of `includeRetired`.
+
 ### GET /api/embed-check?url=…
 
 Probe whether a remote URL can be rendered inside an `<iframe>`. Used by the filament detail page to gracefully fall back to "open in new tab" when the source site sets `X-Frame-Options: DENY|SAMEORIGIN` or a restrictive `Content-Security-Policy: frame-ancestors`.
