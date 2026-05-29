@@ -10,6 +10,7 @@ import NfcStatus from "@/components/NfcStatus";
 const LINKS: { href: string; labelKey: string; exact?: boolean }[] = [
   { href: "/", labelKey: "common.filaments", exact: true },
   { href: "/dashboard", labelKey: "common.dashboard" },
+  { href: "/inventory", labelKey: "common.inventory" },
   { href: "/compare", labelKey: "common.compare" },
   { href: "/analytics", labelKey: "common.analytics" },
   { href: "/share", labelKey: "common.share" },
