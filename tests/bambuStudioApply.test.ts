@@ -365,5 +365,36 @@ describe("buildStructuredUpdate", () => {
       );
       expect(unset).toEqual([]);
     });
+
+    it("does NOT emit $unset for REQUIRED schema fields (type, vendor) even with a stale variant override (Codex P2 PR #473 r3)", () => {
+      // The Filament schema declares `vendor` and `type` as required.
+      // The Bambu routes apply `$unset` with `runValidators: true`, so
+      // routing required fields into the unset list would fail schema
+      // validation. The variant's override is left in place — it's
+      // still a non-null value, just one that happens to equal the
+      // parent's, so no inheritance-resume benefit is lost (the
+      // variant doc already resolves to the same value).
+      const parent = { type: "PLA", vendor: "Polymaker", density: 1.24 };
+      const existing = {
+        parentId: "parent-id",
+        parent,
+        // Stale local values that diverge from parent for both required
+        // and optional fields.
+        type: "PLA+",
+        vendor: "OldVendor",
+        density: 1.30,
+      };
+      const { set: update, unset } = buildStructuredUpdate(
+        makeParsed({ type: "PLA", vendor: "Polymaker", density: 1.24 }),
+        existing,
+      );
+      // None of the three get $set (parent already carries them)…
+      expect("type" in update).toBe(false);
+      expect("vendor" in update).toBe(false);
+      expect("density" in update).toBe(false);
+      // …but only `density` (optional) gets $unset. `type` and `vendor`
+      // stay pinned because $unset would trip the required validator.
+      expect(unset).toEqual(["density"]);
+    });
   });
 });

@@ -184,6 +184,19 @@ export function buildStructuredUpdate(
     const v = existingRow[key];
     return v != null && v !== "";
   };
+
+  // Codex P2 on PR #473 round 3: the Filament schema declares `vendor`
+  // and `type` as required. Routing them into `$unset` with
+  // `runValidators: true` (which both Bambu routes pass) would fail
+  // schema validation. For required fields, leave the variant override
+  // in place — it's still serving its purpose (it's not null), even if
+  // it now happens to equal the parent's value. Optional fields
+  // (density, cost, diameter, etc.) are safe to unset because the
+  // schema accepts missing/null and `resolveFilament` falls back to
+  // the parent. This matches the rule the form-side honours too:
+  // required fields never get cleared, only re-pointed.
+  const REQUIRED_FIELDS = new Set<string>(["type", "vendor"]);
+
   const setIfNotInherited = (
     key: string,
     parsedVal: unknown,
@@ -191,9 +204,14 @@ export function buildStructuredUpdate(
     if (parsedVal == null) return;
     if (isVariantWithParent && parent && parent[key] === parsedVal) {
       // Parent already carries this exact value. If the variant doc
-      // currently has a stale local value for this field, unset it so
+      // currently has a stale local value for this field AND the field
+      // is safe to unset (not required by the schema), emit $unset so
       // inheritance resumes; otherwise leave the variant alone.
-      if (variantHasLocalValue(key) && existingRow?.[key] !== parsedVal) {
+      if (
+        !REQUIRED_FIELDS.has(key) &&
+        variantHasLocalValue(key) &&
+        existingRow?.[key] !== parsedVal
+      ) {
         unset.push(key);
       }
       return;

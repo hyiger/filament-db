@@ -622,5 +622,51 @@ describe("Bambu Studio importer routes", () => {
       const afterDensity = (after as { density?: number | null }).density;
       expect(afterDensity == null).toBe(true);
     });
+
+    it("succeeds (does NOT $unset required fields) when stale type/vendor match parent (Codex P2 PR #473 r3)", async () => {
+      // Required schema fields can't be $unset under `runValidators:
+      // true` — the write would fail with a validation error. Pin the
+      // route behaviour: a sync that matches the parent's `type` AND
+      // `vendor` (both required) should succeed without trying to
+      // unset them. An optional field like density alongside still
+      // gets unset.
+      const parent = await Filament.create({
+        name: "QA Parent Required",
+        vendor: "Polymaker",
+        type: "PLA",
+        diameter: 1.75,
+        density: 1.24,
+      });
+      const variant = await Filament.create({
+        name: "QA Variant Required",
+        vendor: "OldVendor", // stale; differs from parent
+        type: "PLA+", // stale; differs from parent
+        diameter: 1.75,
+        density: 1.30, // stale; differs from parent
+        parentId: parent._id,
+      });
+
+      const { POST } = await import("@/app/api/filaments/[id]/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          `http://localhost/api/filaments/${variant._id}/bambustudio`,
+          minimalProfile({
+            filament_type: ["PLA"], // matches parent
+            filament_vendor: ["Polymaker"], // matches parent
+            filament_density: ["1.24"], // matches parent
+          }),
+        ),
+        { params: Promise.resolve({ id: String(variant._id) }) },
+      );
+      expect(res.status).toBe(200); // would be 500 if required-field $unset slipped through
+
+      const after = await Filament.findById(variant._id).lean();
+      // Required fields stay pinned (would fail validation if cleared).
+      expect((after as { type: string }).type).toBe("PLA+");
+      expect((after as { vendor: string }).vendor).toBe("OldVendor");
+      // Optional `density` got cleared so it now inherits from parent.
+      const afterDensity = (after as { density?: number | null }).density;
+      expect(afterDensity == null).toBe(true);
+    });
   });
 });
