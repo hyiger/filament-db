@@ -1,0 +1,153 @@
+name: Release Bump
+
+# Manual-dispatch workflow that bumps the version in package.json,
+# package-lock.json, and public/openapi.json, opens a PR, and enables
+# auto-merge. After the PR merges, you pull main, tag, and push the tag
+# locally — that triggers the existing release.yml build matrix.
+#
+# Designed so a solo developer can cut a release without bypassing the
+# `main` branch protection rule. The only path that previously needed
+# a direct push (the version bump commit) now goes through the same
+# PR + CI gate as everything else.
+#
+# Usage:
+#   gh workflow run release-bump.yml -f version=1.32.5
+# Or via the Actions tab → Release Bump → Run workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "New version (semver, no leading v). Example: 1.32.5"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version format
+        run: |
+          if ! [[ "${{ github.event.inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Version '${{ github.event.inputs.version }}' is not semver (X.Y.Z or X.Y.Z-prerelease). Aborting."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          # Need full history so the auto-generated PR can be rebased
+          # cleanly against main.
+          fetch-depth: 0
+          # The default GITHUB_TOKEN can push branches but its commits
+          # don't trigger downstream workflows (security feature). That's
+          # fine here because the release CI fires on tag push, which
+          # the user does locally — not on the bump PR's merge.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check version isn't already used
+        run: |
+          if git rev-parse "v${{ github.event.inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Tag v${{ github.event.inputs.version }} already exists. Pick a higher version."
+            exit 1
+          fi
+          CURRENT=$(node -p "require('./package.json').version")
+          if [ "$CURRENT" = "${{ github.event.inputs.version }}" ]; then
+            echo "::error::package.json is already at ${{ github.event.inputs.version }}. Pick a higher version."
+            exit 1
+          fi
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Create bump branch
+        id: branch
+        run: |
+          BRANCH="bump/v${{ github.event.inputs.version }}"
+          git checkout -b "$BRANCH"
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Update package.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${{ github.event.inputs.version }}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Update package-lock.json
+        run: |
+          # The lockfile has two version strings: top-level and
+          # packages[""].version. `npm install --package-lock-only` writes
+          # both consistently from package.json without touching any
+          # other dependency entries.
+          npm install --package-lock-only --ignore-scripts
+
+      - name: Update public/openapi.json
+        run: |
+          node -e "
+            const fs = require('fs');
+            const api = JSON.parse(fs.readFileSync('public/openapi.json', 'utf8'));
+            api.info.version = '${{ github.event.inputs.version }}';
+            fs.writeFileSync('public/openapi.json', JSON.stringify(api, null, 2) + '\n');
+          "
+
+      - name: Commit
+        run: |
+          git add package.json package-lock.json public/openapi.json
+          git commit -m "Bump version to ${{ github.event.inputs.version }}"
+
+      - name: Push branch
+        run: git push -u origin "${{ steps.branch.outputs.name }}"
+
+      - name: Open PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_URL=$(gh pr create \
+            --title "Bump version to ${{ github.event.inputs.version }}" \
+            --body "Automated version bump produced by the Release Bump workflow.
+
+          Updates package.json, package-lock.json, and public/openapi.json to **${{ github.event.inputs.version }}**.
+
+          Auto-merge is enabled — this will land as soon as CI passes.
+
+          ## After merge
+          \`\`\`bash
+          git checkout main
+          git pull
+          git tag v${{ github.event.inputs.version }}
+          git push origin v${{ github.event.inputs.version }}
+          \`\`\`
+          The tag push triggers the existing \`release.yml\` build matrix.")
+          echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "PR opened: $PR_URL"
+
+      - name: Enable auto-merge (squash)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr merge --squash --auto "${{ steps.pr.outputs.url }}"
+
+      - name: Job summary
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Bump PR opened
+          - **Version**: \`${{ github.event.inputs.version }}\`
+          - **Branch**: \`${{ steps.branch.outputs.name }}\`
+          - **PR**: ${{ steps.pr.outputs.url }}
+          - **Auto-merge**: enabled (squash)
+
+          ## After the PR merges
+          \`\`\`bash
+          git checkout main && git pull
+          git tag v${{ github.event.inputs.version }}
+          git push origin v${{ github.event.inputs.version }}
+          \`\`\`
+          EOF
