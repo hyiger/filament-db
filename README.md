@@ -17,6 +17,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Locations** -- dedicated collection for dryboxes / shelves / cabinets / AMS slots with optional humidity readings; every spool can be assigned to one
 - **Low-stock thresholds** -- per-filament grams threshold surfaces inventory warnings on the dashboard and filament list chips
 - **Dashboard** -- at-a-glance counts, low-stock warnings, "needs drying" reminders, and shortcut links to every section
+- **Spool Inventory** -- companion lens to the filament list (`/inventory`): same data, opposite grouping. Where the filament list groups spools under their filament, this page groups filaments under their LOCATION (shelf / drybox / cabinet) so you can audit a physical location at a glance — inline weight editing, move-to dropdown, and retire toggle on each row without bouncing to per-filament pages
 - **Usage analytics** -- 7–365 day rolling window of grams consumed, cost, and jobs, broken down by day / filament / vendor / printer; draws from PrintHistory records plus manual per-spool entries
 - **Technical Data Sheets** -- link vendor TDS documents with inline preview pane and auto-suggestions from same-vendor filaments
 - **AI-powered TDS import** -- extract filament properties (temperatures, density, drying specs, Tg, HDT, shore hardness, speeds) from PDF or web TDS using Google Gemini, Anthropic Claude, or OpenAI ChatGPT
@@ -38,6 +39,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 ### Import / Export
 - **PrusaSlicer** -- import and export INI config bundles via browser upload or CLI
+- **Bambu Studio / OrcaSlicer** -- import a Bambu Studio or OrcaSlicer `.json` filament preset directly (single-filament sync button on the filament detail page, or bulk import via the `/import-export` tile). Preserves variant inheritance + auto-detects calibration context from the preset's `printer_settings_id`. Round-trip safe: export → re-import is lossless even for slicer keys the app doesn't model
 - **Bulk spool import** -- paste or upload a CSV of spool rows (filament, weight, vendor, lot, dates, location); auto-creates missing locations and reports per-row errors
 - **PrusaSlicer Filament Edition** -- live bidirectional sync of filament presets with [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer) via REST API; presets appear in the filament dropdown on startup, changes sync back with per-nozzle calibration context, and calibration overrides are applied dynamically when switching printers/nozzles
 - **OpenPrintTag database** -- browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) (thousands of FDM materials from many brands; live counts shown in the UI), filter by type/brand/data quality, and selectively import filaments with completeness scoring
@@ -138,6 +140,7 @@ filament-db/
 │   │   ├── api-docs/           # Interactive Swagger UI (OpenAPI 3.0)
 │   │   ├── setup/              # First-launch setup wizard
 │   │   ├── dashboard/          # Inventory / low-stock dashboard (v1.11)
+│   │   ├── inventory/          # Spool inventory page grouped by location (v1.32)
 │   │   ├── locations/          # Location management pages (v1.11)
 │   │   ├── analytics/          # Usage analytics charts (v1.11)
 │   │   ├── share/              # Published catalogs list + public view (v1.11)
@@ -150,7 +153,7 @@ filament-db/
 │   │   ├── bed-types/          # Bed Type pages (list, edit, new)
 │   │   └── printers/           # Printer pages (list, edit, new)
 │   ├── components/             # React components (NFC, dialogs, providers, update banner, theme)
-│   ├── hooks/                  # Custom hooks (useNfc, useCurrency)
+│   ├── hooks/                  # Custom hooks (useNfc, useCurrency, useIsElectron, useUnsavedChanges)
 │   ├── i18n/                   # Locale files + TranslationProvider (en, de)
 │   ├── lib/                    # DB connection, INI parser, CSV parser, image compression, OpenPrintTag encoder/decoder, TDS extractor (with manual SSRF redirect guard), PrusaSlicer bundle, spool validator, safeRenderUrl (http(s)-only render guard), inventoryStats (retired-spool-aware totals), externalUrlGuard (SSRF block-list), spoolSlots (spool ↔ printer-slot assignment)
 │   └── models/                 # Mongoose schemas (Filament, Nozzle, Printer, BedType, Location, PrintHistory, SharedCatalog)
