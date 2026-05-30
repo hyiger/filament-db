@@ -19,7 +19,7 @@ const DAY_OPTIONS = [7, 30, 90, 365];
 
 export default function AnalyticsPage() {
   const { t } = useTranslation();
-  const { symbol: currencySymbol } = useCurrency();
+  const { format: formatCurrency } = useCurrency();
   const [days, setDays] = useState<number>(30);
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -122,7 +122,7 @@ export default function AnalyticsPage() {
             <StatBox
               label={t("analytics.totalCost")}
               value={
-                data.totals.cost > 0 ? `${currencySymbol}${data.totals.cost.toFixed(2)}` : "—"
+                data.totals.cost > 0 ? formatCurrency(data.totals.cost) : "—"
               }
             />
             {/* GH #204: when there are no PrintHistory rows but the

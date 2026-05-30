@@ -53,7 +53,7 @@ export default function ComparePage() {
 
 function ComparePageInner() {
   const { t } = useTranslation();
-  const { symbol: currencySymbol } = useCurrency();
+  const { format: formatCurrency } = useCurrency();
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialIds = (searchParams.get("ids") || "")
@@ -134,7 +134,7 @@ function ComparePageInner() {
     },
     {
       label: t("compare.row.cost"),
-      get: (f) => (f.cost != null ? `${currencySymbol}${f.cost.toFixed(2)}` : "—"),
+      get: (f) => (f.cost != null ? formatCurrency(f.cost) : "—"),
     },
     { label: t("compare.row.diameter"), get: (f) => `${f.diameter} mm` },
     {
@@ -146,7 +146,7 @@ function ComparePageInner() {
       get: (f) => {
         if (f.cost == null || f.density == null) return "—";
         // rough cost/kg assuming 1kg spool
-        return `${currencySymbol}${f.cost.toFixed(2)}/kg`;
+        return `${formatCurrency(f.cost)}/kg`;
       },
     },
     {

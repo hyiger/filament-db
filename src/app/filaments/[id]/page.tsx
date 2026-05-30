@@ -61,7 +61,7 @@ export default function FilamentDetailPage() {
 
 function FilamentDetail() {
   const { t } = useTranslation();
-  const { symbol: currencySymbol } = useCurrency();
+  const { format: formatCurrency } = useCurrency();
   const params = useParams();
   const router = useRouter();
   const [filament, setFilament] = useState<Filament | null>(null);
@@ -973,7 +973,7 @@ function FilamentDetail() {
                   <span className="text-sm">{v.name}</span>
                   {vFinish && <FinishChip finish={vFinish} />}
                   {v.cost != null && (
-                    <span className="text-xs text-gray-500">{currencySymbol}{v.cost.toFixed(2)}</span>
+                    <span className="text-xs text-gray-500">{formatCurrency(v.cost)}</span>
                   )}
                 </Link>
               );
@@ -987,7 +987,7 @@ function FilamentDetail() {
         <InfoCard label={t("detail.field.nozzleFirstLayer")} value={filament.temperatures.nozzleFirstLayer ? `${filament.temperatures.nozzleFirstLayer}°C` : "—"} inherited={inherited.has("temperatures.nozzleFirstLayer")} />
         <InfoCard label={t("detail.field.bedTemp")} value={filament.temperatures.bed ? `${filament.temperatures.bed}°C` : "—"} inherited={inherited.has("temperatures.bed")} />
         <InfoCard label={t("detail.field.bedFirstLayer")} value={filament.temperatures.bedFirstLayer ? `${filament.temperatures.bedFirstLayer}°C` : "—"} inherited={inherited.has("temperatures.bedFirstLayer")} />
-        <InfoCard label={t("detail.field.cost")} value={filament.cost != null ? `${currencySymbol}${filament.cost.toFixed(2)}/kg` : "—"} inherited={inherited.has("cost")} />
+        <InfoCard label={t("detail.field.cost")} value={filament.cost != null ? `${formatCurrency(filament.cost)}/kg` : "—"} inherited={inherited.has("cost")} />
         <InfoCard label={t("detail.field.density")} value={filament.density ? `${filament.density.toFixed(2)} g/cm³` : "—"} inherited={inherited.has("density")} />
         <InfoCard label={t("detail.field.diameter")} value={filament.diameter != null ? `${filament.diameter.toFixed(2)} mm` : "—"} inherited={inherited.has("diameter")} />
         <InfoCard label={t("detail.field.maxVolSpeed")} value={filament.maxVolumetricSpeed ? `${filament.maxVolumetricSpeed} mm³/s` : "—"} inherited={inherited.has("maxVolumetricSpeed")} />

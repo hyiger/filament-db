@@ -151,7 +151,7 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
 
 export default function Home() {
   const { t } = useTranslation();
-  const { symbol: currencySymbol } = useCurrency();
+  const { format: formatCurrency } = useCurrency();
   const [filaments, setFilaments] = useState<Filament[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -598,7 +598,7 @@ export default function Home() {
         {f.temperatures.bed ? `${f.temperatures.bed}°C` : "—"}
       </td>
       <td className="py-2 px-2 text-right">
-        {f.cost != null ? `${currencySymbol}${f.cost.toFixed(2)}` : "—"}
+        {f.cost != null ? formatCurrency(f.cost) : "—"}
       </td>
       <td className="py-2 px-2 text-right">
         {(() => {
@@ -687,7 +687,7 @@ export default function Home() {
             {f.temperatures.bed ? `${f.temperatures.bed}°C` : "—"}
           </td>
           <td className="py-2 px-2 text-right">
-            {f.cost != null ? `${currencySymbol}${f.cost.toFixed(2)}` : "—"}
+            {f.cost != null ? formatCurrency(f.cost) : "—"}
           </td>
           <td className="py-2 px-2 text-right">
             {(() => {
