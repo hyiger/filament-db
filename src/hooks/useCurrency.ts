@@ -258,7 +258,14 @@ export function useCurrency() {
           // fall through
         }
       }
-      return `${symbol}${value}`;
+      // Custom-currency fallback: match the legacy `${symbol}${toFixed(2)}`
+      // shape so a user who selected a custom code doesn't suddenly see
+      // raw decimals (e.g. `¤12.5` for 12.5 or `¤1.234567` for an
+      // analytics total). Codex flagged this on PR #470 — the round-1
+      // migration of cost render sites would have left custom-currency
+      // users with unformatted amounts. Locale-aware Intl is reserved
+      // for the built-in ISO 4217 codes above.
+      return `${symbol}${value.toFixed(2)}`;
     },
     [currency, symbol],
   );
