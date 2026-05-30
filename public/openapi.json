@@ -1705,21 +1705,21 @@
     "/api/filaments/colors": {
       "get": {
         "tags": ["Filaments"],
-        "summary": "List distinct color-name → hex pairs",
-        "description": "Returns the deduplicated set of `(colorName, color)` pairs in use across non-deleted filaments. Powers the color-name typeahead on the filament form so users can autocomplete previously-used color names and reuse the matching hex. Each (name, hex) pair appears at most once; different hexes under the same name are returned as separate entries (e.g. three brands of \"Galaxy Black\" with slightly different shades stay distinct).",
+        "summary": "List distinct color name + hex pairs",
+        "description": "Returns the deduplicated set of color-name + hex pairs in use across non-deleted filaments. Powers the color-name typeahead on the filament form so users can autocomplete previously-used color names and reuse the matching hex. Each pair appears at most once; different hexes under the same name are returned as separate entries (e.g. three brands of \"Galaxy Black\" with slightly different shades stay distinct).",
         "responses": {
           "200": {
-            "description": "Distinct (colorName, color) pairs sorted by colorName",
+            "description": "Distinct color name + hex pairs sorted by name",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
                   "items": {
                     "type": "object",
-                    "required": ["colorName", "color"],
+                    "required": ["name", "hex"],
                     "properties": {
-                      "colorName": { "type": "string" },
-                      "color": { "type": "string", "description": "Uppercase hex string like #FF0000" }
+                      "name": { "type": "string", "description": "The user-entered colorName saved on filaments using this hex" },
+                      "hex": { "type": "string", "description": "Uppercase hex string like #FF0000" }
                     }
                   }
                 }
@@ -2088,7 +2088,7 @@
       "put": {
         "tags": ["Print History"],
         "summary": "Update print job metadata",
-        "description": "Metadata-only PUT. Updates user-editable fields (jobLabel, notes, source, printer reference, startedAt, durationSeconds). Usage rows + per-spool gram totals are NOT mutable here — refund + re-record via DELETE + POST if you need to change a usage. Length caps apply to jobLabel and notes (#350).",
+        "description": "Metadata-only PUT. Accepts ONLY the five user-editable metadata fields below — usage rows + per-spool gram totals are NOT mutable here (refund + re-record via DELETE + POST to change a usage). `jobLabel` is trimmed and capped at 200 chars; `notes` is truncated to 2000 chars; `source` must be one of `manual | prusaslicer | orcaslicer | bambu | other`; `printerId` accepts `null` to clear. Unknown body keys are silently ignored — only the documented fields take effect.",
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "PrintHistory ObjectId" }
         ],
@@ -2099,12 +2099,11 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "jobLabel": { "type": "string", "maxLength": 200 },
-                  "notes": { "type": "string", "maxLength": 5000 },
-                  "source": { "type": "string" },
-                  "printerId": { "type": "string", "nullable": true },
-                  "startedAt": { "type": "string", "format": "date-time" },
-                  "durationSeconds": { "type": "integer", "minimum": 0 }
+                  "jobLabel": { "type": "string", "maxLength": 200, "description": "Trimmed; empty after trim is rejected with 400. Hard-capped at 200 chars (#350)." },
+                  "notes": { "type": "string", "maxLength": 2000, "description": "Truncated to 2000 chars silently (#350)." },
+                  "source": { "type": "string", "enum": ["manual", "prusaslicer", "orcaslicer", "bambu", "other"] },
+                  "printerId": { "type": "string", "nullable": true, "description": "Pass `null` to clear; pass a Printer ObjectId to set." },
+                  "startedAt": { "type": "string", "format": "date-time" }
                 }
               }
             }
