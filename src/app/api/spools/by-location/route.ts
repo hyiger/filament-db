@@ -243,38 +243,43 @@ export async function GET(request: NextRequest) {
           // inventoryStats path explicitly subtracts the tare for the
           // same reason. The variant's own `spoolWeight` wins; otherwise
           // fall back to the parent's via the self-`$lookup` above.
-          // When neither tare nor totalWeight is known, the row
-          // contributes 0 — matching `getRemainingGrams`, which returns
-          // null in that case.
+          //
+          // Codex P2 round 4 on PR #400: when NEITHER tare value is set
+          // (legacy data shape — rolls tracked before `spoolWeight` was
+          // a field), fall through to a 0g tare so the gross weight
+          // still shows up in the inventory total. That matches the
+          // posture of `/api/dashboard` and `/api/locations`, both of
+          // which use a 0 fallback for the missing tare. Without this,
+          // legacy rolls would silently report 0g of inventory on the
+          // `/inventory` page while still contributing to dashboard
+          // totals — a confusing inconsistency.
           totalGrams: {
             $sum: {
-              $let: {
-                vars: {
-                  tare: {
-                    $ifNull: [
-                      "$spoolWeight",
-                      { $arrayElemAt: ["$_parent.spoolWeight", 0] },
-                    ],
-                  },
-                },
-                in: {
-                  $cond: [
-                    {
-                      $and: [
-                        { $ne: ["$spools.totalWeight", null] },
-                        { $ne: ["$$tare", null] },
-                      ],
-                    },
-                    {
-                      $max: [
-                        0,
-                        { $subtract: ["$spools.totalWeight", "$$tare"] },
-                      ],
-                    },
+              $cond: [
+                { $ne: ["$spools.totalWeight", null] },
+                {
+                  $max: [
                     0,
+                    {
+                      $subtract: [
+                        "$spools.totalWeight",
+                        {
+                          $ifNull: [
+                            "$spoolWeight",
+                            {
+                              $ifNull: [
+                                { $arrayElemAt: ["$_parent.spoolWeight", 0] },
+                                0,
+                              ],
+                            },
+                          ],
+                        },
+                      ],
+                    },
                   ],
                 },
-              },
+                0,
+              ],
             },
           },
         },

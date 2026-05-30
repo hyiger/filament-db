@@ -62,8 +62,10 @@ describe("GET /api/spools/by-location", () => {
       vendor: "QA",
       type: "PETG",
       diameter: 1.75,
-      // No `spoolWeight` → tare unknown → this spool contributes 0 to
-      // `totalGrams` (matches `getRemainingGrams`'s null posture).
+      // No `spoolWeight` → tare unknown → falls back to a 0g tare so
+      // gross weight survives. Matches the posture of `/api/dashboard`
+      // and `/api/locations` for legacy rolls tracked before
+      // `spoolWeight` existed (Codex P2 round 4 on PR #400).
       spools: [{ label: "S3", totalWeight: 1000, locationId: dry._id }],
     });
 
@@ -79,8 +81,9 @@ describe("GET /api/spools/by-location", () => {
     expect(drybox.location.name).toBe("Drybox 1");
     expect(drybox.location.kind).toBe("drybox");
     expect(drybox.count).toBe(2);
-    // S2 contributes 900 − 200 = 700; S3 has no tare so contributes 0.
-    expect(drybox.totalGrams).toBe(700);
+    // S2 contributes 900 − 200 = 700; S3 has no tare so falls back
+    // to a 0g tare and contributes its gross 1000.
+    expect(drybox.totalGrams).toBe(1700);
 
     const shelfGroup = body.groups[1];
     expect(shelfGroup.location.name).toBe("Shelf A");
