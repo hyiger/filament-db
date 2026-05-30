@@ -95,7 +95,11 @@ export async function GET() {
           _id: String(f._id),
           name: f.name,
           vendor: f.vendor,
-          color: f.color,
+          // GH #477: primary `color` is now nullable per OpenPrintTag
+          // spec. Dashboard's low-stock row swatch only renders a
+          // single color, so fall back to the gray sentinel (matches
+          // every pre-#477 row's behavior).
+          color: f.color ?? "#808080",
           remainingGrams: remaining,
           threshold: f.lowStockThreshold,
         });

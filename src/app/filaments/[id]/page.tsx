@@ -345,7 +345,9 @@ function FilamentDetail() {
         materialName: filament.name,
         brandName: filament.vendor,
         materialType: filament.type,
-        color: filament.color,
+        // GH #477: nullable color → omit key 19 from CBOR. Phase 3
+        // will surface secondaryColors on the tag too.
+        color: filament.color ?? undefined,
         density: filament.density,
         diameter: filament.diameter,
         nozzleTemp: filament.temperatures?.nozzle,
@@ -398,7 +400,9 @@ function FilamentDetail() {
         materialName: filament.name,
         brandName: filament.vendor,
         materialType: filament.type,
-        color: filament.color,
+        // GH #477: nullable color → omit key 19 from CBOR. Phase 3
+        // will surface secondaryColors on the tag too.
+        color: filament.color ?? undefined,
         density: filament.density,
         diameter: filament.diameter,
         nozzleTemp: filament.temperatures?.nozzle,

@@ -96,7 +96,19 @@ export interface IFilament extends Document {
   instanceId: string;
   vendor: string;
   type: string;
-  color: string;
+  /** Primary color hex (#RRGGBB). GH #477: per OpenPrintTag spec key 19
+   *  this MAY be null for filaments without a single primary color
+   *  (coextruded, rainbow). Existing rows keep their "#808080" default —
+   *  null is only ever written when the user explicitly toggles the
+   *  multi-color "Coextruded" arrangement in the form. Most UI surfaces
+   *  use `displayColor()` from src/lib/filamentColors.ts to fall back
+   *  to secondaryColors[0] when this is null. */
+  color: string | null;
+  /** GH #477: additional color slots for multi-color filaments, mirroring
+   *  OpenPrintTag spec keys 20–24 (`secondary_color_0..4`). Max 5 entries,
+   *  each `#RRGGBB`. Empty array on every single-color filament (default).
+   *  Treated as an array-fallback inheritable field by `resolveFilament`. */
+  secondaryColors: string[];
   colorName: string | null;
   cost: number | null;
   density: number | null;
@@ -201,7 +213,33 @@ const FilamentSchema = new Schema<IFilament>(
     instanceId: { type: String, default: generateInstanceId },
     vendor: { type: String, required: true, index: true },
     type: { type: String, required: true, index: true },
+    // GH #477: `color` is the OpenPrintTag spec's `primary_color` (key 19),
+    // which the spec explicitly allows to be null for coextruded / rainbow
+    // filaments where there's no single primary. Default stays "#808080"
+    // so existing rows + every single-color filament keep current behavior;
+    // null is only written when the user opts into the multi-color
+    // "Coextruded" arrangement. Hex shape is validated on writes via the
+    // route handlers (matches the existing posture for free-form strings).
     color: { type: String, default: "#808080" },
+    // GH #477: spec keys 20–24 (`secondary_color_0..4`). Hex validation
+    // applied per-entry; max-5 cap matches the spec exactly. Defaulting
+    // to an empty array (vs undefined) so the read path never needs a
+    // null guard.
+    secondaryColors: {
+      type: [String],
+      default: () => [],
+      validate: [
+        {
+          validator: (arr: string[]) => Array.isArray(arr) && arr.length <= 5,
+          message: "secondaryColors may not exceed 5 entries (OpenPrintTag spec limit)",
+        },
+        {
+          validator: (arr: string[]) =>
+            arr.every((c) => typeof c === "string" && /^#[0-9A-Fa-f]{6}$/.test(c)),
+          message: "Each secondaryColors entry must be a #RRGGBB hex string",
+        },
+      ],
+    },
     colorName: { type: String, default: null },
     // GH #337: physically nonsensical values (negative diameter / density /
     // cost, out-of-range temperatures) used to be silently accepted and

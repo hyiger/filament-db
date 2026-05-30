@@ -883,4 +883,93 @@ describe("Filament Model — v1.11 spool fields", () => {
       }),
     ).rejects.toThrow();
   });
+
+  // GH #477: multi-color filament schema. Mirrors OpenPrintTag spec
+  // (primary key 19 may be null; up to 5 secondary slots in keys 20–24).
+  describe("multi-color support (#477)", () => {
+    it("defaults secondaryColors to an empty array", async () => {
+      const f = await Filament.create({
+        name: "Default Secondary Colors",
+        vendor: "Test",
+        type: "PLA",
+      });
+      expect(Array.isArray(f.secondaryColors)).toBe(true);
+      expect(f.secondaryColors).toHaveLength(0);
+    });
+
+    it("accepts null color (OpenPrintTag spec — coextruded filament)", async () => {
+      // Spec key 19: "If a material doesn't have a single primary
+      // color (for example rainbow or coextruded filaments), this
+      // field can be null."
+      const f = await Filament.create({
+        name: "Coextruded Tri",
+        vendor: "Test",
+        type: "PLA",
+        color: null,
+        secondaryColors: ["#FF0000", "#00FF00", "#0000FF"],
+      });
+      expect(f.color).toBeNull();
+      expect(f.secondaryColors).toEqual(["#FF0000", "#00FF00", "#0000FF"]);
+    });
+
+    it("stores up to 5 secondaryColors", async () => {
+      const f = await Filament.create({
+        name: "Max Secondary",
+        vendor: "Test",
+        type: "PLA",
+        color: "#FF0000",
+        secondaryColors: ["#FF8800", "#FFFF00", "#00FF00", "#0000FF", "#8800FF"],
+      });
+      expect(f.secondaryColors).toHaveLength(5);
+    });
+
+    it("rejects more than 5 secondaryColors (OpenPrintTag spec ceiling)", async () => {
+      await expect(
+        Filament.create({
+          name: "Too Many Secondary",
+          vendor: "Test",
+          type: "PLA",
+          secondaryColors: [
+            "#FF0000", "#FF8800", "#FFFF00", "#00FF00", "#0000FF", "#8800FF",
+          ],
+        }),
+      ).rejects.toThrow(/may not exceed 5/);
+    });
+
+    it("rejects invalid hex strings in secondaryColors", async () => {
+      await expect(
+        Filament.create({
+          name: "Bad Hex",
+          vendor: "Test",
+          type: "PLA",
+          secondaryColors: ["red", "#GGG"],
+        }),
+      ).rejects.toThrow(/#RRGGBB hex string/);
+    });
+
+    it("rejects 8-char hex (alpha channel) in secondaryColors — not yet supported", async () => {
+      // OpenPrintTag spec's color_rgba can be 3 or 4 bytes. We don't
+      // carry alpha (translucency is handled by finish tags); reject
+      // alpha hex strings explicitly rather than silently dropping
+      // the alpha byte. Documented gap in CLAUDE.md.
+      await expect(
+        Filament.create({
+          name: "Alpha Hex",
+          vendor: "Test",
+          type: "PLA",
+          secondaryColors: ["#FF000080"],
+        }),
+      ).rejects.toThrow(/#RRGGBB hex string/);
+    });
+
+    it("preserves existing single-color behavior — color default is gray, secondaryColors is empty", async () => {
+      const f = await Filament.create({
+        name: "Plain Single Color",
+        vendor: "Test",
+        type: "PLA",
+      });
+      expect(f.color).toBe("#808080");
+      expect(f.secondaryColors).toEqual([]);
+    });
+  });
 });

@@ -129,6 +129,21 @@ export function resolveFilament(
     }
   }
 
+  // GH #477: secondaryColors inherits as a whole array (same pattern as
+  // optTags above). Per-slot inheritance would let a variant override slot
+  // 2 only and create a Frankenfilament whose effective colors come from
+  // two different filaments — that ambiguity isn't worth the flexibility.
+  // Variant declares its own non-empty array to override; otherwise it
+  // inherits the parent's full array.
+  if (filament.secondaryColors && filament.secondaryColors.length > 0) {
+    resolved.secondaryColors = filament.secondaryColors;
+  } else {
+    resolved.secondaryColors = parent.secondaryColors || [];
+    if (parent.secondaryColors?.length > 0) {
+      inherited.push("secondaryColors");
+    }
+  }
+
   if (filament.bedTypeTemps && filament.bedTypeTemps.length > 0) {
     resolved.bedTypeTemps = filament.bedTypeTemps;
   } else {

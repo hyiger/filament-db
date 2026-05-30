@@ -1,0 +1,160 @@
+/**
+ * GH #477 — Phase 1 unit tests for the multi-color helpers in
+ * src/lib/filamentColors.ts. Pure functions, no DB / DOM env required.
+ */
+import { describe, it, expect } from "vitest";
+import {
+  deriveArrangement,
+  displayColor,
+  allColors,
+  isMultiColor,
+  type ColorArrangement,
+} from "@/lib/filamentColors";
+
+describe("deriveArrangement", () => {
+  it("returns 'solid' for null/undefined/empty optTags", () => {
+    expect(deriveArrangement(null)).toBe("solid");
+    expect(deriveArrangement(undefined)).toBe("solid");
+    expect(deriveArrangement([])).toBe("solid");
+  });
+
+  it("returns 'coextruded' when tag 29 is present", () => {
+    expect(deriveArrangement([29])).toBe("coextruded");
+    expect(deriveArrangement([5, 29])).toBe("coextruded"); // tag 5 = matte
+  });
+
+  it("returns 'gradient' when tag 28 is present", () => {
+    expect(deriveArrangement([28])).toBe("gradient");
+    expect(deriveArrangement([3, 28])).toBe("gradient");
+  });
+
+  it("returns 'coextruded' when BOTH tags are present (coextruded wins)", () => {
+    // A "coextruded gradient" is theoretically possible per OpenPrintTag
+    // spec; the rendering UI can only pick one mode, so the more
+    // structural property (cross-section) wins over change-over-time.
+    expect(deriveArrangement([28, 29])).toBe("coextruded");
+    expect(deriveArrangement([29, 28])).toBe("coextruded");
+  });
+
+  it("returns 'solid' when only non-arrangement tags are present", () => {
+    // Tags 1–5, etc., are finishes (matte/silk/sparkle/glow/transparent).
+    expect(deriveArrangement([1, 2, 3, 4, 5])).toBe("solid");
+  });
+
+  it("type-checks to ColorArrangement", () => {
+    const result: ColorArrangement = deriveArrangement([29]);
+    expect(["solid", "coextruded", "gradient"]).toContain(result);
+  });
+});
+
+describe("displayColor", () => {
+  it("returns gray sentinel for null/undefined input", () => {
+    expect(displayColor(null)).toBe("#808080");
+    expect(displayColor(undefined)).toBe("#808080");
+  });
+
+  it("returns the primary color when it's set", () => {
+    expect(displayColor({ color: "#FF0000" })).toBe("#FF0000");
+    expect(
+      displayColor({ color: "#FF0000", secondaryColors: ["#00FF00"] }),
+    ).toBe("#FF0000");
+  });
+
+  it("falls back to secondaryColors[0] when primary is null (coextruded case)", () => {
+    expect(
+      displayColor({ color: null, secondaryColors: ["#00FF00", "#0000FF"] }),
+    ).toBe("#00FF00");
+  });
+
+  it("falls back to secondaryColors[0] when primary is empty string", () => {
+    expect(
+      displayColor({ color: "", secondaryColors: ["#00FF00"] }),
+    ).toBe("#00FF00");
+  });
+
+  it("returns gray sentinel when both primary and secondaryColors are absent", () => {
+    expect(displayColor({})).toBe("#808080");
+    expect(displayColor({ color: null })).toBe("#808080");
+    expect(displayColor({ color: null, secondaryColors: [] })).toBe("#808080");
+  });
+});
+
+describe("allColors", () => {
+  it("returns empty array for null/undefined input", () => {
+    expect(allColors(null)).toEqual([]);
+    expect(allColors(undefined)).toEqual([]);
+  });
+
+  it("returns primary first, then each secondary in order", () => {
+    expect(
+      allColors({
+        color: "#FF0000",
+        secondaryColors: ["#00FF00", "#0000FF"],
+      }),
+    ).toEqual(["#FF0000", "#00FF00", "#0000FF"]);
+  });
+
+  it("skips null/empty primary so the array starts with secondaryColors[0]", () => {
+    expect(
+      allColors({
+        color: null,
+        secondaryColors: ["#00FF00", "#0000FF"],
+      }),
+    ).toEqual(["#00FF00", "#0000FF"]);
+    expect(
+      allColors({ color: "", secondaryColors: ["#00FF00"] }),
+    ).toEqual(["#00FF00"]);
+  });
+
+  it("skips null/empty secondary entries (defensive — schema validates but lean reads might surface them)", () => {
+    expect(
+      allColors({
+        color: "#FF0000",
+        secondaryColors: ["#00FF00", null as unknown as string, "#0000FF", ""],
+      }),
+    ).toEqual(["#FF0000", "#00FF00", "#0000FF"]);
+  });
+
+  it("returns empty when no usable colors at all", () => {
+    expect(allColors({})).toEqual([]);
+    expect(allColors({ color: null, secondaryColors: [] })).toEqual([]);
+    expect(allColors({ color: "", secondaryColors: ["", null as unknown as string] })).toEqual([]);
+  });
+});
+
+describe("isMultiColor", () => {
+  it("returns false for null/undefined input", () => {
+    expect(isMultiColor(null)).toBe(false);
+    expect(isMultiColor(undefined)).toBe(false);
+  });
+
+  it("returns false for plain single-color filament", () => {
+    expect(isMultiColor({ color: "#FF0000" })).toBe(false);
+    expect(isMultiColor({ color: "#FF0000", secondaryColors: [] })).toBe(false);
+    expect(isMultiColor({ color: "#FF0000", optTags: [5] })).toBe(false); // matte, not arrangement
+  });
+
+  it("returns true when secondaryColors has at least one entry", () => {
+    expect(
+      isMultiColor({ color: "#FF0000", secondaryColors: ["#00FF00"] }),
+    ).toBe(true);
+  });
+
+  it("returns true when an arrangement tag is set (even with no secondary colors)", () => {
+    // Edge case: a misconfigured filament with the coextruded tag but no
+    // secondary colors yet. Still "multi-color" in intent — the form
+    // should show the arrangement radio so the user can add slots.
+    expect(isMultiColor({ color: "#FF0000", optTags: [29] })).toBe(true);
+    expect(isMultiColor({ color: "#FF0000", optTags: [28] })).toBe(true);
+  });
+
+  it("returns true when both arrangement tag AND secondaryColors are set", () => {
+    expect(
+      isMultiColor({
+        color: "#FF0000",
+        secondaryColors: ["#00FF00"],
+        optTags: [29],
+      }),
+    ).toBe(true);
+  });
+});

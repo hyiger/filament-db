@@ -89,6 +89,10 @@ export async function GET(request: NextRequest) {
           vendor: 1,
           type: 1,
           color: 1,
+          // GH #477: secondaryColors rides the list so a multi-color
+          // filament renders its full swatch in the list view without a
+          // follow-up fetch. Cheap (≤5 short hex strings per row).
+          secondaryColors: 1,
           cost: 1,
           density: 1,
           parentId: 1,

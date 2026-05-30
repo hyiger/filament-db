@@ -6,7 +6,17 @@
 export interface FilamentVariant {
   _id: string;
   name: string;
-  color: string;
+  /** GH #477: primary color hex. May be `null` per OpenPrintTag spec key
+   *  19 — coextruded / rainbow filaments don't have a single primary,
+   *  and the form's "Coextruded" arrangement toggle writes `null` here.
+   *  UI sites that need a single representative color should call
+   *  `displayColor()` from `src/lib/filamentColors.ts` to fall back to
+   *  `secondaryColors[0]`. */
+  color: string | null;
+  /** GH #477: up to 5 additional color hexes, mirroring OpenPrintTag
+   *  spec keys 20–24. Inherits as a whole array from parent when this
+   *  variant's array is empty. */
+  secondaryColors?: string[];
   cost: number | null;
   /** Tag IDs that drive the finish-derived swatch texture + chip when
    * this variant is rendered under its parent on the detail page. The
@@ -92,7 +102,10 @@ export interface FilamentDetail {
   instanceId?: string;
   vendor: string;
   type: string;
-  color: string;
+  /** GH #477: nullable per OpenPrintTag spec. See FilamentVariant.color. */
+  color: string | null;
+  /** GH #477: spec keys 20–24, up to 5 secondary color hexes. */
+  secondaryColors?: string[];
   cost: number | null;
   density: number | null;
   diameter: number;
@@ -136,7 +149,10 @@ export interface FilamentSummary {
   name: string;
   vendor: string;
   type: string;
-  color: string;
+  /** GH #477: nullable per OpenPrintTag spec. See FilamentVariant.color. */
+  color: string | null;
+  /** GH #477: spec keys 20–24, up to 5 secondary color hexes. */
+  secondaryColors?: string[];
   cost: number | null;
   density: number | null;
   parentId: string | null;

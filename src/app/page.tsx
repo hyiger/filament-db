@@ -553,7 +553,7 @@ export default function Home() {
             isParent={!isVariant && f.hasVariants === true}
             finish={deriveFinish(f.optTags)}
             size={isVariant ? 20 : 24}
-            title={f.color}
+            title={f.color ?? undefined}
           />
         </div>
       </td>
@@ -669,7 +669,7 @@ export default function Home() {
                 color={f.color}
                 isParent
                 size={24}
-                title={f.color}
+                title={f.color ?? undefined}
               />
             </div>
           </td>

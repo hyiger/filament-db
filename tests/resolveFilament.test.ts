@@ -408,6 +408,51 @@ describe("resolveFilament", () => {
     expect(result.compatibleNozzles).toEqual(["nozzle-3"]);
     expect(result._inherited).not.toContain("compatibleNozzles");
   });
+
+  // GH #477: secondaryColors uses the same array-fallback inheritance
+  // pattern as optTags / compatibleNozzles. Tested separately because
+  // it's the first nullable-primary-aware field — null variant color
+  // must NOT trigger inheritance (color is VARIANT_ONLY_FIELDS), while
+  // empty secondaryColors DOES trigger inheritance.
+  describe("secondaryColors inheritance (#477)", () => {
+    it("inherits parent's secondaryColors when variant's is empty", () => {
+      const parent = makeParent({ secondaryColors: ["#FF0000", "#00FF00"] });
+      const variant = makeVariant({ secondaryColors: [] });
+      const result = resolveFilament(variant, parent);
+      expect(result.secondaryColors).toEqual(["#FF0000", "#00FF00"]);
+      expect(result._inherited).toContain("secondaryColors");
+    });
+
+    it("uses variant's secondaryColors when non-empty (overrides parent)", () => {
+      const parent = makeParent({ secondaryColors: ["#FF0000", "#00FF00"] });
+      const variant = makeVariant({ secondaryColors: ["#0000FF"] });
+      const result = resolveFilament(variant, parent);
+      expect(result.secondaryColors).toEqual(["#0000FF"]);
+      expect(result._inherited).not.toContain("secondaryColors");
+    });
+
+    it("returns empty array (not undefined) when neither variant nor parent has any", () => {
+      const parent = makeParent({});
+      const variant = makeVariant({});
+      const result = resolveFilament(variant, parent);
+      expect(result.secondaryColors).toEqual([]);
+      expect(result._inherited).not.toContain("secondaryColors");
+    });
+
+    it("preserves variant's null color even when parent has a color (no inheritance)", () => {
+      // Coextruded variants opt into null primary; that null must NOT
+      // be replaced by the parent's color. `color` is in
+      // VARIANT_ONLY_FIELDS so this is structural, not coincidental.
+      const parent = makeParent({ color: "#FF0000" });
+      const variant = makeVariant({
+        color: null,
+        secondaryColors: ["#00FF00", "#0000FF"],
+      });
+      const result = resolveFilament(variant, parent);
+      expect(result.color).toBeNull();
+      expect(result.secondaryColors).toEqual(["#00FF00", "#0000FF"]);
+    });
+  });
 });
 
 describe("hasVariants", () => {
