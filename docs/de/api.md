@@ -1060,7 +1060,7 @@ Per-Job-Ledger der Druckläufe. Reduziert Spulengewichte, hängt Spulen-Level-`u
 | `GET`    | `/api/print-history`      | Listet Druckaufträge auf (absteigend nach `startedAt`). Query: `filamentId`, `printerId`, `limit` (Standard 100, Max 1000) |
 | `POST`   | `/api/print-history`      | Zeichnet einen Druckauftrag auf (siehe Body unten) |
 | `GET`    | `/api/print-history/{id}` | Lädt einen einzelnen Druckauftrag mit denselben populierten Feldern wie die Liste (Druckername + Filament-Name/Vendor/Typ/Farbe je Verbrauchszeile). Tombstoned-Zeilen liefern 404 |
-| `PUT`    | `/api/print-history/{id}` | Aktualisiert nur Job-Metadaten (jobLabel, notes, source, printer, startedAt, durationSeconds). Verbrauchszeilen + Spulen-Grammwerte sind hier NICHT änderbar — bei Änderungen mit DELETE + POST neu anlegen |
+| `PUT`    | `/api/print-history/{id}` | Aktualisiert nur Job-Metadaten. Akzeptiert fünf Felder: `jobLabel` (getrimmt, max. 200), `notes` (auf 2000 gekürzt), `source` (Enum), `printerId` (oder `null`), `startedAt`. Unbekannte Felder werden ignoriert. Verbrauchszeilen + Spulen-Grammwerte sind hier NICHT änderbar — bei Änderungen mit DELETE + POST neu anlegen |
 | `DELETE` | `/api/print-history/{id}` | Macht einen Druckauftrag rückgängig — erstattet das Spulengewicht, entfernt die passenden `usageHistory`-Einträge, soft-löscht die Zeile |
 
 ### POST /api/print-history
