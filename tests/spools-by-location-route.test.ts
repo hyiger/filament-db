@@ -51,7 +51,7 @@ describe("GET /api/spools/by-location", () => {
       type: "PLA",
       diameter: 1.75,
       netFilamentWeight: 1000,
-      spoolWeight: 200,
+      spoolWeight: 200, // tare → subtracted from totalGrams
       spools: [
         { label: "S1", totalWeight: 1100, locationId: shelf._id },
         { label: "S2", totalWeight: 900, locationId: dry._id },
@@ -62,6 +62,8 @@ describe("GET /api/spools/by-location", () => {
       vendor: "QA",
       type: "PETG",
       diameter: 1.75,
+      // No `spoolWeight` → tare unknown → this spool contributes 0 to
+      // `totalGrams` (matches `getRemainingGrams`'s null posture).
       spools: [{ label: "S3", totalWeight: 1000, locationId: dry._id }],
     });
 
@@ -77,11 +79,49 @@ describe("GET /api/spools/by-location", () => {
     expect(drybox.location.name).toBe("Drybox 1");
     expect(drybox.location.kind).toBe("drybox");
     expect(drybox.count).toBe(2);
-    expect(drybox.totalGrams).toBe(900 + 1000);
+    // S2 contributes 900 − 200 = 700; S3 has no tare so contributes 0.
+    expect(drybox.totalGrams).toBe(700);
 
     const shelfGroup = body.groups[1];
     expect(shelfGroup.location.name).toBe("Shelf A");
     expect(shelfGroup.count).toBe(1);
+    // S1: 1100 − 200 tare = 900g of filament.
+    expect(shelfGroup.totalGrams).toBe(900);
+  });
+
+  it("totalGrams subtracts INHERITED parent tare for variant spools (Codex P2 #391)", async () => {
+    // Regression test for the over-report: when a variant has no
+    // spoolWeight of its own but its parent does, the aggregation
+    // must reach through the self-`$lookup` and still subtract the
+    // tare. The previous version summed the gross on-scale weight
+    // and inflated the total by `N × empty-spool-mass`.
+    const shelf = await Location.create({ name: "Shelf X", kind: "shelf" });
+    const parent = await Filament.create({
+      name: "Parent PLA",
+      vendor: "QA",
+      type: "PLA",
+      diameter: 1.75,
+      spoolWeight: 250, // parent has tare
+      netFilamentWeight: 1000,
+    });
+    await Filament.create({
+      name: "Variant PLA",
+      vendor: "QA",
+      type: "PLA",
+      diameter: 1.75,
+      parentId: parent._id,
+      // variant has neither spoolWeight nor netFilamentWeight
+      spools: [
+        { label: "V1", totalWeight: 1100, locationId: shelf._id },
+        { label: "V2", totalWeight: 700, locationId: shelf._id },
+      ],
+    });
+
+    const { GET } = await import("@/app/api/spools/by-location/route");
+    const body = await (await GET(req())).json();
+    // V1: 1100 − 250 = 850; V2: 700 − 250 = 450. Total = 1300, NOT
+    // 1800 (which was the pre-fix gross sum).
+    expect(body.groups[0].totalGrams).toBe(1300);
   });
 
   it("puts the synthetic 'no location' group at the END (not BSON-null first)", async () => {

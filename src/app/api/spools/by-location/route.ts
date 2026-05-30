@@ -159,10 +159,47 @@ export async function GET(request: NextRequest) {
             },
           },
           count: { $sum: 1 },
-          // Sum totalWeight; missing values contribute 0. `$ifNull` so
-          // null doesn't poison the $sum result (Mongo treats null as 0
-          // inside $sum but the explicit ifNull documents intent).
-          totalGrams: { $sum: { $ifNull: ["$spools.totalWeight", 0] } },
+          // Codex P2 on PR #391: sum REMAINING filament grams, not gross
+          // on-scale weight. `spools.totalWeight` is the gross reading
+          // (filament + empty-spool tare), so summing it directly
+          // over-reports by `N × empty-spool-mass` — the existing
+          // inventoryStats path explicitly subtracts the tare for the
+          // same reason. The variant's own `spoolWeight` wins; otherwise
+          // fall back to the parent's via the self-`$lookup` above.
+          // When neither tare nor totalWeight is known, the row
+          // contributes 0 — matching `getRemainingGrams`, which returns
+          // null in that case.
+          totalGrams: {
+            $sum: {
+              $let: {
+                vars: {
+                  tare: {
+                    $ifNull: [
+                      "$spoolWeight",
+                      { $arrayElemAt: ["$_parent.spoolWeight", 0] },
+                    ],
+                  },
+                },
+                in: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$spools.totalWeight", null] },
+                        { $ne: ["$$tare", null] },
+                      ],
+                    },
+                    {
+                      $max: [
+                        0,
+                        { $subtract: ["$spools.totalWeight", "$$tare"] },
+                      ],
+                    },
+                    0,
+                  ],
+                },
+              },
+            },
+          },
         },
       },
       {
