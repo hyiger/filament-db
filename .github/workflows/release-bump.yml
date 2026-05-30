@@ -14,24 +14,24 @@ name: Release Bump
 #   gh workflow run release-bump.yml -f version=1.32.5
 # Or via the Actions tab → Release Bump → Run workflow.
 #
-# ── PAT REQUIREMENT ──────────────────────────────────────────────────
-# Codex P2 on PR #478: PRs created or updated by the default
-# GITHUB_TOKEN start their `pull_request` workflow runs in an
-# approval-required state. That means each bump PR would sit waiting
-# for a maintainer to click "Approve and run workflows" before CI can
-# fire, breaking the auto-merge promise.
+# ── PAT REQUIREMENT (mandatory) ──────────────────────────────────────
+# Codex P1 on PR #478 round 2: events triggered by GITHUB_TOKEN do NOT
+# create new workflow runs (except for workflow_dispatch /
+# repository_dispatch). That means if this workflow opened the bump PR
+# with GITHUB_TOKEN, the `pull_request` runs in `.github/workflows/
+# test.yml` would never be queued — not even in an
+# approval-required state. The PR could never satisfy required CI and
+# auto-merge would never complete.
 #
-# To make auto-merge land unattended, set a repository secret named
-# RELEASE_BUMP_TOKEN to a fine-grained PAT (or classic PAT) with the
-# following permissions on this repo:
+# This workflow therefore requires a repository secret named
+# RELEASE_BUMP_TOKEN containing a fine-grained PAT (or classic PAT)
+# with these scopes on this repo:
 #   - Contents: Read and write   (push the bump branch)
 #   - Pull requests: Read and write (open + auto-merge the PR)
-# Then re-run this workflow.
 #
-# If RELEASE_BUMP_TOKEN is missing, the workflow falls back to
-# GITHUB_TOKEN and prints a notice. The PR will still be created, but
-# you'll have to click "Approve and run workflows" once in the Actions
-# tab before CI runs and auto-merge can complete.
+# The workflow fails fast at the first step if the secret is missing.
+# Set it once at Settings → Secrets and variables → Actions → New
+# repository secret, then re-run.
 
 on:
   workflow_dispatch:
@@ -56,26 +56,42 @@ jobs:
             exit 1
           fi
 
-      - name: Resolve auth token
-        id: token
+      - name: Require RELEASE_BUMP_TOKEN
         env:
           PAT: ${{ secrets.RELEASE_BUMP_TOKEN }}
         run: |
-          if [ -n "$PAT" ]; then
-            echo "::notice::Using RELEASE_BUMP_TOKEN — bump PR will trigger CI and auto-merge unattended."
-            echo "has_pat=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::RELEASE_BUMP_TOKEN secret is not set — falling back to GITHUB_TOKEN. The bump PR will be created but its pull_request workflow runs will require manual approval (Actions tab → Approve and run workflows) before CI can fire and auto-merge can land. See workflow file header for setup."
-            echo "has_pat=false" >> "$GITHUB_OUTPUT"
+          if [ -z "$PAT" ]; then
+            cat <<'MSG' >&2
+          ::error::RELEASE_BUMP_TOKEN secret is required.
+
+          GitHub does NOT queue pull_request workflow runs for PRs
+          created with GITHUB_TOKEN (per the docs at
+          https://docs.github.com/actions/security-for-github-actions/security-guides/automatic-token-authentication
+          ). Without a PAT the bump PR would be created but its CI
+          would never fire, so required checks would never go green
+          and auto-merge would never land.
+
+          Fix (one-time setup):
+            1. Create a fine-grained PAT scoped to THIS repo with
+               permissions: Contents (read & write) and Pull requests
+               (read & write).
+            2. Add it as a repository secret named RELEASE_BUMP_TOKEN
+               at Settings → Secrets and variables → Actions.
+            3. Re-run this workflow.
+
+          See .github/workflows/release-bump.yml header for details.
+          MSG
+            exit 1
           fi
 
       - uses: actions/checkout@v4
         with:
           # Need full history so the bump branch can be pushed cleanly.
           fetch-depth: 0
-          # PAT preferred — without it, GITHUB_TOKEN-authored PRs land
-          # in approval-required limbo (see header comment).
-          token: ${{ secrets.RELEASE_BUMP_TOKEN || secrets.GITHUB_TOKEN }}
+          # MUST be the PAT (not GITHUB_TOKEN) so the resulting PR's
+          # pull_request workflow runs are actually queued — see header
+          # comment and the "Require RELEASE_BUMP_TOKEN" step above.
+          token: ${{ secrets.RELEASE_BUMP_TOKEN }}
 
       - name: Check version isn't already used
         run: |
@@ -138,24 +154,17 @@ jobs:
       - name: Open PR
         id: pr
         env:
-          # PAT preferred so the resulting PR's CI runs without manual
-          # approval (see header comment). Falls back to GITHUB_TOKEN.
-          GH_TOKEN: ${{ secrets.RELEASE_BUMP_TOKEN || secrets.GITHUB_TOKEN }}
+          # MUST be the PAT — see header comment. GITHUB_TOKEN-created
+          # PRs don't get pull_request CI runs queued at all.
+          GH_TOKEN: ${{ secrets.RELEASE_BUMP_TOKEN }}
         run: |
-          if [ "${{ steps.token.outputs.has_pat }}" = "true" ]; then
-            APPROVAL_NOTE=""
-          else
-            APPROVAL_NOTE="
-
-          > ⚠️ This PR was opened by \`GITHUB_TOKEN\` because \`RELEASE_BUMP_TOKEN\` is not configured. Its CI is **waiting for manual approval** — go to the [Actions tab](../../actions) and click **Approve and run workflows** on the queued test runs, then auto-merge will fire when CI passes. See \`.github/workflows/release-bump.yml\` header for one-time PAT setup."
-          fi
           PR_URL=$(gh pr create \
             --title "Bump version to ${{ github.event.inputs.version }}" \
             --body "Automated version bump produced by the Release Bump workflow.
 
           Updates package.json, package-lock.json, and public/openapi.json to **${{ github.event.inputs.version }}**.
 
-          Auto-merge is enabled — this will land as soon as CI passes.${APPROVAL_NOTE}
+          Auto-merge is enabled — this will land as soon as CI passes.
 
           ## After merge
           \`\`\`bash
@@ -170,23 +179,17 @@ jobs:
 
       - name: Enable auto-merge (squash)
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_BUMP_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.RELEASE_BUMP_TOKEN }}
         run: gh pr merge --squash --auto "${{ steps.pr.outputs.url }}"
 
       - name: Job summary
         run: |
-          if [ "${{ steps.token.outputs.has_pat }}" = "true" ]; then
-            APPROVAL_LINE="- **CI**: will run automatically (RELEASE_BUMP_TOKEN configured)"
-          else
-            APPROVAL_LINE="- **CI**: ⚠️ requires manual approval — Actions tab → Approve and run workflows"
-          fi
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## Bump PR opened
           - **Version**: \`${{ github.event.inputs.version }}\`
           - **Branch**: \`${{ steps.branch.outputs.name }}\`
           - **PR**: ${{ steps.pr.outputs.url }}
-          - **Auto-merge**: enabled (squash)
-          $APPROVAL_LINE
+          - **Auto-merge**: enabled (squash) — will land when CI passes
 
           ## After the PR merges
           \`\`\`bash
