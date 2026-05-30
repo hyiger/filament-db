@@ -77,7 +77,14 @@ export function initAutoUpdater(win: BrowserWindow) {
   // electron-updater refuses to run when app.isPackaged is false.
   ipcMain.handle("update-get-status", () => currentState);
 
-  ipcMain.handle("update-check", async () => {
+  // GH #434: update-check and update-download were gated only on
+  // `app.isPackaged`. In a release build a sub-frame could drive
+  // both unconditionally — checking is free but `update-download`
+  // pulls the full installer payload, which is bandwidth abuse
+  // against the user. Defence-in-depth: trust only the top-level
+  // app frame, same as the install handler.
+  ipcMain.handle("update-check", async (event) => {
+    assertTrustedSender(event, "update-check");
     if (!app.isPackaged) return { ok: false, error: "dev-mode" };
     try {
       await autoUpdater.checkForUpdates();
@@ -89,7 +96,8 @@ export function initAutoUpdater(win: BrowserWindow) {
     }
   });
 
-  ipcMain.handle("update-download", async () => {
+  ipcMain.handle("update-download", async (event) => {
+    assertTrustedSender(event, "update-download");
     if (!app.isPackaged) return { ok: false, error: "dev-mode" };
     if (currentState.state !== "available") return { ok: false, error: "No update available" };
     try {
@@ -154,7 +162,12 @@ export function initAutoUpdater(win: BrowserWindow) {
 
   // Opens the GitHub release page — useful for macOS where unsigned auto-
   // install is blocked by Gatekeeper and the user has to download manually.
-  ipcMain.handle("update-open-release-page", async () => {
+  // GH #434: shell.openExternal opens the user's default browser. The URL
+  // is built from a server-supplied version string (`currentState.version`)
+  // so injection risk is low, but a sub-frame triggering arbitrary tab
+  // opens is still a phishing surface — gate on the top-level frame.
+  ipcMain.handle("update-open-release-page", async (event) => {
+    assertTrustedSender(event, "update-open-release-page");
     const version = currentState.version;
     const url = version
       ? `https://github.com/hyiger/filament-db/releases/tag/v${version}`

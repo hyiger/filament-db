@@ -124,6 +124,43 @@ app.on("second-instance", () => {
   }
 });
 
+// GH #410: per-window guards on `mainWindow.webContents` (will-navigate,
+// setWindowOpenHandler) protect only the top-level frame. A new
+// BrowserWindow, an embedded <iframe> whose target becomes a separate
+// WebContents, or a stray <webview> tag would inherit nothing. The
+// global `web-contents-created` listener applies the same http(s)-only
+// filter to EVERY WebContents the app ever creates — defence in depth
+// against future code paths that spin up additional browser surfaces.
+app.on("web-contents-created", (_event, contents) => {
+  contents.setWindowOpenHandler(({ url }) => {
+    try {
+      const proto = new URL(url).protocol;
+      if (proto === "http:" || proto === "https:") {
+        shell.openExternal(url);
+      } else {
+        console.warn(
+          `[web-contents-created] Refused external URL scheme: ${proto}`,
+        );
+      }
+    } catch {
+      console.warn(
+        `[web-contents-created] Refused malformed external URL: ${url}`,
+      );
+    }
+    return { action: "deny" };
+  });
+
+  contents.on("will-navigate", (event, url) => {
+    const appUrl = getAppURL();
+    if (!url.startsWith(appUrl)) event.preventDefault();
+  });
+
+  // `<webview>` is denied at the BrowserWindow level via
+  // `webPreferences.webviewTag: false`, but a child WebContents
+  // could still try to attach one. Deny at the contents level too.
+  contents.on("will-attach-webview", (event) => event.preventDefault());
+});
+
 function getAppURL(urlPath = "/") {
   return `http://localhost:${PORT}${urlPath}`;
 }
@@ -164,6 +201,12 @@ function createWindow(urlPath = "/") {
       // DB content / TDS-extracted HTML so it can't reach beyond the
       // renderer process.
       sandbox: true,
+      // GH #410: explicit defence-in-depth. `<webview>` tags load a
+      // distinct WebContents that doesn't inherit the renderer's
+      // sandbox settings. The app doesn't use them anywhere; deny
+      // them so a future stray <webview> can't be a privileged
+      // escape hatch.
+      webviewTag: false,
     },
   });
 
@@ -635,7 +678,16 @@ function initSyncService(localUri: string, atlasUri: string) {
 // ── IPC handlers ──
 
 // Config
-ipcMain.handle("get-config", () => {
+//
+// GH #409: returns the Atlas URI + AI API keys + Mongo URI. Without a
+// sender guard, a sub-frame (embedded TDS, an XSS payload in a
+// user-supplied filament field) could read the full credential blob
+// and exfiltrate it through `img-src https:`-permitted beaconing.
+// The siblings (`save-config`, `test-connection`, `reset-config`) all
+// gate on `assertTrustedSender` already — this read path was the
+// asymmetric hole.
+ipcMain.handle("get-config", (event) => {
+  assertTrustedSender(event, "get-config");
   return {
     mongodbUri: store.get("mongodbUri") as string,
     connectionMode: store.get("connectionMode") as string,
@@ -817,7 +869,13 @@ ipcMain.handle("get-sync-status", () => {
   };
 });
 
-ipcMain.handle("trigger-sync", async () => {
+// GH #432: trigger-sync was reachable from any sub-frame. The
+// `this.syncing` guard in SyncService makes the SECOND call cheap
+// but the FIRST opens a real MongoClient connection to Atlas, which
+// a compromised sub-frame could weaponise for timing attacks or
+// bandwidth abuse against the user's Atlas tier.
+ipcMain.handle("trigger-sync", async (event) => {
+  assertTrustedSender(event, "trigger-sync");
   if (!syncService) {
     return { error: "Sync not available in current mode" };
   }
@@ -858,7 +916,12 @@ ipcMain.handle("nfc-get-status", () => {
   };
 });
 
-ipcMain.handle("nfc-read-tag", async () => {
+// GH #432 follow-up: nfc-read-tag can move tag state (reads consume
+// a slot in the reader's pipeline) and a sub-frame racing the
+// legitimate auto-read could mask a real scan. Gate on the same
+// trusted-sender check the write/format handlers already use.
+ipcMain.handle("nfc-read-tag", async (event) => {
+  assertTrustedSender(event, "nfc-read-tag");
   if (!nfcService) throw new Error("NFC not initialized");
   return withIpcTimeout(() => nfcService!.readTag(), "nfc-read-tag");
 });
@@ -1079,7 +1142,17 @@ app.whenReady().then(async () => {
         // so anything missing on this side is silently dropped in desktop.
         // `connect-src` intentionally diverges: Electron adds localhost
         // ws/http for the embedded Next server; everything else mirrors web.
-        "Content-Security-Policy": [`default-src 'self'; ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' ws://localhost:* http://localhost:*; font-src 'self' data:; frame-src https:;`],
+        //
+        // GH #408: four hardening directives the web CSP has been carrying
+        // were silently absent on desktop — `frame-ancestors 'none'`
+        // (prevents clickjacking by blocking framing of the renderer),
+        // `base-uri 'self'` (prevents <base href> injection redirecting all
+        // relative URLs), `form-action 'self'` (blocks credential-stealing
+        // form exfil), `object-src 'none'` (blocks plugin-based code
+        // execution). Drop-in addition since the Electron CSP REPLACES the
+        // Next-sent header, every directive on the web side has to be
+        // mirrored explicitly here.
+        "Content-Security-Policy": [`default-src 'self'; ${scriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' ws://localhost:* http://localhost:*; font-src 'self' data:; frame-src https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none';`],
       },
     });
   });
