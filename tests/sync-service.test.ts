@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { getDbNameFromUri, wrapSyncErrorMessage } from "../electron/sync-service";
+import {
+  getDbNameFromUri,
+  isDuplicateKeyError,
+  wrapSyncErrorMessage,
+} from "../electron/sync-service";
 
 describe("getDbNameFromUri", () => {
   it("extracts db name from a basic mongodb URI with explicit path", () => {
@@ -96,5 +100,37 @@ describe("wrapSyncErrorMessage", () => {
     const wrapped = wrapSyncErrorMessage(err, "filament-db");
     // No rewrite — message passes through (with URI redaction, n/a here)
     expect(wrapped).toBe("network reset while updating filament cache");
+  });
+});
+
+describe("isDuplicateKeyError (GH #439)", () => {
+  // The local-only push / pull paths in `syncCollection` need to treat a
+  // concurrent peer winning the `syncId`-unique race as a no-op rather
+  // than a sync failure. The recogniser keys on `err.code === 11000`
+  // which is the MongoDB driver's universal shape for "unique index
+  // violation" across MongoServerError + write-result subdocs.
+
+  it("returns true for an Error with code 11000", () => {
+    const err = Object.assign(new Error("E11000 duplicate key"), { code: 11000 });
+    expect(isDuplicateKeyError(err)).toBe(true);
+  });
+
+  it("returns true for a plain object with code 11000", () => {
+    expect(isDuplicateKeyError({ code: 11000, message: "dup" })).toBe(true);
+  });
+
+  it("returns false for a different error code (e.g. 121 = document failed validation)", () => {
+    expect(isDuplicateKeyError({ code: 121 })).toBe(false);
+  });
+
+  it("returns false for a bare Error with no code", () => {
+    expect(isDuplicateKeyError(new Error("generic failure"))).toBe(false);
+  });
+
+  it("returns false for non-error inputs", () => {
+    expect(isDuplicateKeyError(null)).toBe(false);
+    expect(isDuplicateKeyError(undefined)).toBe(false);
+    expect(isDuplicateKeyError("E11000 string")).toBe(false);
+    expect(isDuplicateKeyError(11000)).toBe(false);
   });
 });
