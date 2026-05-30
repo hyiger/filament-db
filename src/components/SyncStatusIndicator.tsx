@@ -252,9 +252,13 @@ export default function SyncStatusIndicator() {
       {showTooltip && (
         <div
           ref={tooltipRef}
-          className="absolute top-full right-0 mt-1.5 w-72 bg-gray-800 border border-gray-700 rounded-lg shadow-xl p-3 z-50 text-xs"
+          // GH #407: paired light + dark variants. Pre-fix the tooltip
+          // was dark-mode-only (`bg-gray-800 border-gray-700`) and
+          // rendered as a dark island on the light-mode UI. Every
+          // other popover in the codebase pairs `bg-white dark:bg-…`.
+          className="absolute top-full right-0 mt-1.5 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl p-3 z-50 text-xs text-gray-700 dark:text-gray-200"
         >
-          <div className="text-gray-300 mb-2">
+          <div className="text-gray-700 dark:text-gray-300 mb-2">
             <strong>{t("sync.tooltip.mode")}:</strong>{" "}
             {mode === "hybrid"
               ? t("sync.tooltip.modeHybrid")
@@ -262,19 +266,19 @@ export default function SyncStatusIndicator() {
                 ? t("sync.tooltip.modeAtlasFallback")
                 : t("sync.tooltip.modeAtlas")}
           </div>
-          <div className="text-gray-300 mb-2">
+          <div className="text-gray-700 dark:text-gray-300 mb-2">
             <strong>{t("sync.tooltip.network")}:</strong>{" "}
-            <span className={online ? "text-green-400" : "text-amber-400"}>
+            <span className={online ? "text-green-600 dark:text-green-400" : "text-amber-600 dark:text-amber-400"}>
               {online ? t("sync.tooltip.online") : t("sync.tooltip.offline")}
             </span>
           </div>
           {status.lastSyncAt && (
-            <div className="text-gray-400 mb-2">
+            <div className="text-gray-500 dark:text-gray-400 mb-2">
               <strong>{t("sync.tooltip.lastSync")}:</strong> {new Date(status.lastSyncAt).toLocaleString()}
             </div>
           )}
           {status.error && (
-            <div className="text-red-400 mb-2 break-words">
+            <div className="text-red-600 dark:text-red-400 mb-2 break-words">
               <strong>{t("sync.tooltip.error")}:</strong> {status.error}
             </div>
           )}

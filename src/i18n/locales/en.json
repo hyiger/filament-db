@@ -121,6 +121,7 @@
   "inventory.retiredBadge": "Retired",
   "inventory.neverDried": "never",
   "inventory.dryCycleCount": "{count} dry cycle(s) logged",
+  "inventory.dryCycleBadge": "{count}×",
   "inventory.updateWeight": "Update weight on scale",
   "inventory.moveTo": "Move to…",
   "inventory.retire": "Retire",

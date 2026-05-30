@@ -121,6 +121,7 @@
   "inventory.retiredBadge": "Ausgemustert",
   "inventory.neverDried": "nie",
   "inventory.dryCycleCount": "{count} Trockenzyklus/zyklen protokolliert",
+  "inventory.dryCycleBadge": "{count}×",
   "inventory.updateWeight": "Gewicht von der Waage übernehmen",
   "inventory.moveTo": "Verschieben nach…",
   "inventory.retire": "Ausmustern",

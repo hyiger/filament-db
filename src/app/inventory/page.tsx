@@ -107,6 +107,19 @@ export default function InventoryPage() {
   const [search, setSearch] = useState("");
   const [includeRetired, setIncludeRetired] = useState(false);
 
+  // GH #444: debounce the search input. The filtered-groups memo
+  // walks every group + every spool on each keystroke; on a slow
+  // host with 1000+ spools that's a noticeable per-keystroke pause.
+  // 200ms feels responsive (well below conscious-lag threshold) and
+  // collapses bursts of typing into one recompute. The main filaments
+  // list uses 300ms for the same reason; this is on the snappier
+  // side because the search runs purely client-side here.
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  useEffect(() => {
+    const id = setTimeout(() => setDebouncedSearch(search), 200);
+    return () => clearTimeout(id);
+  }, [search]);
+
   // Per-group expand/collapse state. Default: every group expanded.
   // The set holds COLLAPSED group keys (locationId or "_none") so a
   // brand-new group from a refresh defaults to expanded without us
@@ -183,7 +196,7 @@ export default function InventoryPage() {
   // (matching all rows) agree.
   const filteredGroups = useMemo(() => {
     if (!data) return [];
-    const q = search.trim().toLowerCase();
+    const q = debouncedSearch.trim().toLowerCase();
     if (!q) return data.groups;
     return data.groups
       .map((g) => {
@@ -206,7 +219,7 @@ export default function InventoryPage() {
         };
       })
       .filter((g) => g.spools.length > 0);
-  }, [data, search]);
+  }, [data, debouncedSearch]);
 
   // Stats for the header — derived from the SERVER groups so they
   // reflect the active server filters, not the client-side text search
@@ -577,13 +590,22 @@ function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }:
             </button>
           </span>
         ) : (
+          // GH #445: visible affordance for the inline weight editor.
+          // Pre-fix the trigger rendered in default text color with
+          // no underline, no icon, no hover ring — keyboard users
+          // tabbed past it without realising it was editable. Adding
+          // a pencil indicator + a dotted underline matches the
+          // visual idiom for "click to edit" used elsewhere in the
+          // app (SpoolCard label edit).
           <button
             type="button"
             onClick={() => setEditingWeight(true)}
-            className="hover:text-blue-600 transition-colors"
+            className="inline-flex items-center gap-1 border-b border-dashed border-gray-400 dark:border-gray-600 hover:text-blue-600 hover:border-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 transition-colors"
+            aria-label={t("inventory.updateWeight")}
             title={t("inventory.updateWeight")}
           >
             {row.totalWeight != null ? `${row.totalWeight}g` : <span className="text-gray-400">—</span>}
+            <span aria-hidden="true" className="text-xs opacity-50">✎</span>
           </button>
         )}
       </td>
@@ -610,9 +632,20 @@ function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }:
       </td>
       <td className="py-2 px-3 text-xs text-gray-500">
         {row.lastDryAt ? (
-          <span title={t("inventory.dryCycleCount", { count: row.dryCycleCount })}>
-            {new Date(row.lastDryAt).toLocaleDateString()}
-          </span>
+          <div className="inline-flex items-center gap-1.5">
+            <span>{new Date(row.lastDryAt).toLocaleDateString()}</span>
+            {/* GH #443: dry-cycle count was buried inside a title=
+                tooltip — touch-only iPad / tablet users never see it.
+                Surface as a visible chip next to the date. */}
+            {row.dryCycleCount > 0 && (
+              <span
+                className="inline-block px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-[10px] leading-none"
+                aria-label={t("inventory.dryCycleCount", { count: row.dryCycleCount })}
+              >
+                {t("inventory.dryCycleBadge", { count: row.dryCycleCount })}
+              </span>
+            )}
+          </div>
         ) : (
           <span className="text-gray-400">{t("inventory.neverDried")}</span>
         )}
