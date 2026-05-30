@@ -16,13 +16,33 @@ import pcsclite from "@pokusew/pcsclite";
 import { wrapNdefForTag, parseNdefFromTag } from "./ndef";
 import { decodeOpenPrintTagBinary, type DecodedOpenPrintTag } from "../src/lib/openprinttag-decode";
 import { deriveBambuKeys, parseBambuBlocks, bambuToDecodedTag } from "./bambu-tag";
+import {
+  classifyNfcError as classifyNfcErrorImpl,
+  type NfcErrorCode,
+} from "../src/lib/nfcErrorClassify";
+
+export type { NfcErrorCode };
+/** Re-export the classifier so the existing call-sites in this file
+ *  keep their local-looking import while the impl + unit tests live
+ *  under `src/lib/`. */
+export const classifyNfcError = classifyNfcErrorImpl;
 
 export interface NfcStatus {
   readerConnected: boolean;
   readerName: string | null;
   tagPresent: boolean;
   tagUid: string | null;
+  /** Last error surfaced by the pcsc/reader layer, classified for the UI.
+   *  Cleared as soon as a reader successfully reports a status update so
+   *  a transient failure doesn't linger on the pill forever. */
+  lastError: {
+    code: NfcErrorCode;
+    /** Raw upstream message — surfaced in the tooltip as a fallback when
+     *  the code is "generic" or the user wants the exact wording. */
+    message: string;
+  } | null;
 }
+
 
 type PCSCLite = ReturnType<typeof pcsclite>;
 
@@ -75,6 +95,7 @@ export class NfcService extends EventEmitter {
     readerName: null,
     tagPresent: false,
     tagUid: null,
+    lastError: null,
   };
 
   constructor() {
@@ -131,6 +152,12 @@ export class NfcService extends EventEmitter {
         // Track each reader's presence independently
         this.readerPresent.set(reader.name, isPresent && !isEmpty);
 
+        // GH #450: a successful status event proves the reader is
+        // talking again; clear any lingering error so the pill drops
+        // back to its normal state instead of stuck on a transient
+        // sharing-violation from a previous tick.
+        this.clearLastError();
+
         if (isPresent && !this.status.tagPresent) {
           this.updateStatus({ tagPresent: true, tagUid: null });
         } else if (isEmpty) {
@@ -151,12 +178,36 @@ export class NfcService extends EventEmitter {
         }
       });
 
-      reader.on("error", (err: Error) => this.emit("error", err));
+      reader.on("error", (err: Error) => {
+        this.recordError(err);
+        this.emit("error", err);
+      });
     });
 
     this.pcsc.on("error", (err: Error) => {
-      if (!err.message?.includes("SCardListReaders")) this.emit("error", err);
+      if (!err.message?.includes("SCardListReaders")) {
+        this.recordError(err);
+        this.emit("error", err);
+      }
     });
+  }
+
+  /** GH #450: store the most recent reader/pcsc error on the status so
+   *  the renderer can surface a translated hint on the NFC pill. We do
+   *  NOT clear `readerConnected` here — the reader event might still be
+   *  alive and the error transient. The status pill renders both. */
+  private recordError(err: unknown): void {
+    const message =
+      err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+    this.updateStatus({ lastError: { code: classifyNfcError(err), message } });
+  }
+
+  /** Clear any lingering error once a reader successfully reports a
+   *  status update or a tag round-trip completes. Called from the
+   *  reader.on("status") success path so a one-shot daemon hiccup
+   *  doesn't keep the pill stuck on a stale error message. */
+  public clearLastError(): void {
+    if (this.status.lastError) this.updateStatus({ lastError: null });
   }
 
   private updateStatus(partial: Partial<NfcStatus>): void {

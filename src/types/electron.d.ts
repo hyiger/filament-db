@@ -35,6 +35,13 @@ interface ElectronAPI {
     readerName: string | null;
     tagPresent: boolean;
     tagUid: string | null;
+    /** GH #450: classified error from the pcsclite/reader layer. `null`
+     *  on a healthy reader; surfaced as a translated hint on the status
+     *  pill when set. */
+    lastError: {
+      code: "permission" | "busy" | "no-daemon" | "generic";
+      message: string;
+    } | null;
   }>;
   nfcReadTag: () => Promise<unknown>;
   nfcWriteTag: (payload: number[], productUrl?: string) => Promise<{ success: boolean }>;
@@ -44,6 +51,10 @@ interface ElectronAPI {
     readerName: string | null;
     tagPresent: boolean;
     tagUid: string | null;
+    lastError: {
+      code: "permission" | "busy" | "no-daemon" | "generic";
+      message: string;
+    } | null;
   }) => void) => () => void;
   onNfcTagRead: (callback: (data: unknown) => void) => () => void;
 

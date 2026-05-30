@@ -23,10 +23,31 @@ export default function NfcStatus() {
 
   if (!mounted || !isElectron) return null;
 
+  // GH #450: classify the reader's lastError into a human-readable hint
+  // so a macOS user denied Smart Card access (or whose reader is busy
+  // with another app) sees an actionable message instead of the generic
+  // "No reader connected" pill. `status.lastError` is null on healthy
+  // readers — render the normal three-state pill in that case.
+  const errorHint = status.lastError
+    ? (() => {
+        const code = status.lastError.code;
+        const knownCodes = ["permission", "busy", "no-daemon", "generic"] as const;
+        const i18nKey = (knownCodes as readonly string[]).includes(code)
+          ? `nfc.error.${code}`
+          : "nfc.error.generic";
+        return t(i18nKey);
+      })()
+    : null;
+
   let dotColor: string;
   let label: string;
 
-  if (!status.readerConnected) {
+  if (errorHint) {
+    // Error takes precedence over reader/tag state — the user needs to
+    // see what to fix before "Tag detected" matters.
+    dotColor = "bg-red-500";
+    label = errorHint;
+  } else if (!status.readerConnected) {
     dotColor = "bg-gray-500";
     label = t("nfc.status.noReader");
   } else if (!status.tagPresent) {
@@ -45,6 +66,13 @@ export default function NfcStatus() {
       label = t("nfc.status.tagDetected");
     }
   }
+
+  // Tooltip surfaces the raw error message when we have one (PR-Q #476)
+  // — useful for diagnostics even if the classified hint already
+  // explains what to do.
+  const tooltip = status.lastError
+    ? `${label}\n\n${status.lastError.message}`
+    : label;
 
   // GH #451 follow-up (Codex P2 on PR #475): when an NFC scan has
   // landed but the dialog is currently dismissed (either auto-suppressed
@@ -83,7 +111,7 @@ export default function NfcStatus() {
       <button
         type="button"
         onClick={reopenTagRead}
-        title={`${label} — ${t("nfc.reopen")}`}
+        title={`${tooltip}\n\n${t("nfc.reopen")}`}
         aria-label={`${label} — ${t("nfc.reopen")}`}
         aria-live="polite"
         aria-atomic="true"
@@ -106,7 +134,7 @@ export default function NfcStatus() {
       aria-live="polite"
       aria-atomic="true"
       className={sharedClasses}
-      title={label}
+      title={tooltip}
     >
       {inner}
     </div>

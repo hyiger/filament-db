@@ -104,7 +104,7 @@ export function useNfcContext(): NfcContextValue {
     // Return a safe default for non-Electron / outside provider
     return {
       isElectron: false,
-      status: { readerConnected: false, readerName: null, tagPresent: false, tagUid: null },
+      status: { readerConnected: false, readerName: null, tagPresent: false, tagUid: null, lastError: null },
       writing: false,
       writeError: null,
       writeTag: async () => {},

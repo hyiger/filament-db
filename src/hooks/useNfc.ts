@@ -2,11 +2,17 @@
 
 import { useState, useEffect, useCallback } from "react";
 
+export type NfcErrorCode = "permission" | "busy" | "no-daemon" | "generic";
+
 export interface NfcStatus {
   readerConnected: boolean;
   readerName: string | null;
   tagPresent: boolean;
   tagUid: string | null;
+  /** GH #450: surfaced on the NFC status pill with a translated hint.
+   *  `null` when the reader is healthy; the renderer reads `code` for
+   *  the i18n key and falls back to `message` for the tooltip. */
+  lastError: { code: NfcErrorCode; message: string } | null;
 }
 
 const DEFAULT_STATUS: NfcStatus = {
@@ -14,6 +20,7 @@ const DEFAULT_STATUS: NfcStatus = {
   readerName: null,
   tagPresent: false,
   tagUid: null,
+  lastError: null,
 };
 
 export function useNfc() {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -133,6 +133,25 @@ export default function InventoryPage() {
   // having to seed it.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
+  // GH #420: per-spool selection state for batch actions ("move N to…",
+  // "retire N"). Keyed by `filamentId:spoolId` so the same selection
+  // set works across groups and survives filter changes (rows that
+  // dropped out of the current view stay selected but invisible —
+  // the action bar count reflects the current visible-AND-selected
+  // intersection so the user isn't surprised by hidden writes).
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [batchBusy, setBatchBusy] = useState(false);
+  const spoolKey = (row: SpoolRow) => `${row.filamentId}:${row._id}`;
+  const toggleSelected = useCallback((key: string) => {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => setSelectedKeys(new Set()), []);
+
   const fetchInventory = useCallback(
     async (signal?: AbortSignal) => {
       setLoading(true);
@@ -261,6 +280,79 @@ export default function InventoryPage() {
     [t, toast],
   );
 
+  // GH #420: rows currently selected AND visible in the filtered view.
+  // A row that scrolled out via a search refinement still lives in
+  // `selectedKeys` (so changing filter back resurrects it) but doesn't
+  // count toward the action-bar tally — the user only sees what they
+  // can act on.
+  const visibleSelectedRows = useMemo(() => {
+    const out: SpoolRow[] = [];
+    for (const g of filteredGroups) {
+      for (const s of g.spools) {
+        if (selectedKeys.has(spoolKey(s))) out.push(s);
+      }
+    }
+    return out;
+  }, [filteredGroups, selectedKeys]);
+
+  // GH #420: run the same PUT for every selected row, sequentially so
+  // a transient failure doesn't trigger a thundering-herd of retries.
+  // Surface partial-success ("3 of 5") explicitly because dropping the
+  // failed-row count silently would be a data-loss-shaped UX surprise.
+  const applyBatchPatch = useCallback(
+    async (patch: Record<string, unknown>): Promise<void> => {
+      if (visibleSelectedRows.length === 0) return;
+      setBatchBusy(true);
+      let okCount = 0;
+      let failCount = 0;
+      for (const row of visibleSelectedRows) {
+        const ok = await updateSpool(row, patch);
+        if (ok) okCount += 1;
+        else failCount += 1;
+      }
+      setBatchBusy(false);
+      const total = visibleSelectedRows.length;
+      if (failCount === 0) {
+        toast(t("inventory.batch.success", { count: okCount }), "success");
+      } else if (okCount === 0) {
+        toast(t("inventory.batch.allFailed"), "error");
+      } else {
+        toast(
+          t("inventory.batch.partial", { ok: okCount, count: total, failed: failCount }),
+          "info",
+        );
+      }
+      clearSelection();
+      await fetchInventory();
+    },
+    [visibleSelectedRows, updateSpool, toast, t, clearSelection, fetchInventory],
+  );
+
+  const handleBatchMoveTo = useCallback(
+    (locationId: string) => {
+      // `locationId === ""` is the "no location" sentinel — the API
+      // accepts null to clear the field.
+      void applyBatchPatch({ locationId: locationId || null });
+    },
+    [applyBatchPatch],
+  );
+
+  const handleBatchRetire = useCallback(
+    async (retire: boolean) => {
+      if (retire) {
+        const ok = await confirm({
+          message: t("inventory.batch.confirmRetire", {
+            count: visibleSelectedRows.length,
+          }),
+          destructive: true,
+        });
+        if (!ok) return;
+      }
+      void applyBatchPatch({ retired: retire });
+    },
+    [confirm, applyBatchPatch, t, visibleSelectedRows.length],
+  );
+
   return (
     <main id="main-content" className="w-full max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-start justify-between mb-6 gap-4">
@@ -347,6 +439,73 @@ export default function InventoryPage() {
         </label>
       </div>
 
+      {/* GH #420: batch-action bar — appears only when at least one
+          visible spool is selected. Sticky to the top of the viewport
+          so a user scrolling a long shelf list keeps the controls in
+          reach. Hits the same per-spool PUT the inline edits use, so
+          retire/move semantics stay consistent across the page. */}
+      {visibleSelectedRows.length > 0 && (
+        <div
+          className="sticky top-2 z-30 mb-3 flex flex-wrap items-center gap-3 rounded-lg border border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-blue-900/40 p-3 shadow-sm"
+          role="region"
+          aria-label={t("inventory.selected.count", { count: visibleSelectedRows.length })}
+        >
+          <span className="text-sm font-medium text-blue-900 dark:text-blue-200">
+            {t("inventory.selected.count", { count: visibleSelectedRows.length })}
+          </span>
+          <select
+            aria-label={t("inventory.batch.moveTo", { count: visibleSelectedRows.length })}
+            disabled={batchBusy}
+            value=""
+            onChange={(e) => {
+              if (!e.target.value) return;
+              handleBatchMoveTo(e.target.value === "_none" ? "" : e.target.value);
+            }}
+            className="px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900"
+          >
+            <option value="" disabled>
+              {t("inventory.batch.moveTo", { count: visibleSelectedRows.length })}
+            </option>
+            <option value="_none">{t("inventory.noLocation")}</option>
+            {locations.map((l) => (
+              <option key={l._id} value={l._id}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+          {/* Batch retire — show "unretire" instead when every selected
+              row is already retired (the dropdown above moves work the
+              same in either direction; retire is the asymmetric one). */}
+          {visibleSelectedRows.every((r) => r.retired) ? (
+            <button
+              type="button"
+              disabled={batchBusy}
+              onClick={() => handleBatchRetire(false)}
+              className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50"
+            >
+              {t("inventory.batch.unretire", { count: visibleSelectedRows.length })}
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={batchBusy}
+              onClick={() => handleBatchRetire(true)}
+              className="px-3 py-1 text-sm border border-amber-400 text-amber-700 dark:text-amber-300 dark:border-amber-600 rounded bg-white dark:bg-gray-900 hover:bg-amber-50 dark:hover:bg-amber-900/30 disabled:opacity-50"
+            >
+              {t("inventory.batch.retire", { count: visibleSelectedRows.length })}
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={batchBusy}
+            onClick={clearSelection}
+            className="ml-auto px-3 py-1 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white disabled:opacity-50"
+          >
+            {t("inventory.deselectAll")}
+          </button>
+        </div>
+      )}
+
       {/* Groups */}
       {loading ? (
         // GH #449: skeleton placeholders instead of a single "Loading…"
@@ -425,6 +584,19 @@ export default function InventoryPage() {
                     <table className="w-full text-sm">
                       <thead className="border-b border-gray-200 dark:border-gray-800 text-xs text-gray-500">
                         <tr>
+                          <th scope="col" className="w-8 py-2 px-2">
+                            {/* GH #420: header checkbox toggles the
+                                whole group's selection in/out. Indeterminate
+                                when partial, checked when all rows
+                                selected. */}
+                            <GroupSelectAllCheckbox
+                              rows={group.spools}
+                              selectedKeys={selectedKeys}
+                              spoolKey={spoolKey}
+                              setSelected={setSelectedKeys}
+                              label={t("inventory.selectAll")}
+                            />
+                          </th>
                           <th scope="col" className="text-left py-2 px-3">{t("inventory.col.filament")}</th>
                           <th scope="col" className="text-left py-2 px-3">{t("inventory.col.spool")}</th>
                           <th scope="col" className="text-right py-2 px-3">{t("inventory.col.weight")}</th>
@@ -442,6 +614,9 @@ export default function InventoryPage() {
                             updateSpool={updateSpool}
                             confirmRetire={confirm}
                             onChanged={() => fetchInventory()}
+                            selected={selectedKeys.has(spoolKey(row))}
+                            onToggleSelected={() => toggleSelected(spoolKey(row))}
+                            selectLabel={t("inventory.selectRow")}
                           />
                         ))}
                       </tbody>
@@ -472,9 +647,22 @@ interface RowProps {
   updateSpool: (row: SpoolRow, patch: Record<string, unknown>) => Promise<boolean>;
   confirmRetire: ReturnType<typeof useConfirm>;
   onChanged: () => void;
+  /** GH #420: selection state for batch actions. */
+  selected: boolean;
+  onToggleSelected: () => void;
+  selectLabel: string;
 }
 
-function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }: RowProps) {
+function SpoolEditRow({
+  row,
+  locations,
+  updateSpool,
+  confirmRetire,
+  onChanged,
+  selected,
+  onToggleSelected,
+  selectLabel,
+}: RowProps) {
   const { t, locale } = useTranslation();
   const grams = remainingGrams(row);
   const pct = remainingPct(row);
@@ -540,8 +728,17 @@ function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }:
     <tr
       className={`border-b border-gray-100 dark:border-gray-900 ${
         row.retired ? "opacity-50" : "hover:bg-gray-50 dark:hover:bg-gray-900/40"
-      }`}
+      } ${selected ? "bg-blue-50 dark:bg-blue-900/20" : ""}`}
     >
+      <td className="py-2 px-2 text-center">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelected}
+          aria-label={selectLabel}
+          className="accent-blue-600"
+        />
+      </td>
       <td className="py-2 px-3">
         <div className="flex items-center gap-2 min-w-0">
           <span
@@ -711,5 +908,72 @@ function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }:
         </div>
       </td>
     </tr>
+  );
+}
+
+/**
+ * GH #420: header checkbox in each group's table that mirrors the
+ * three states the selection set can be in for this group's rows:
+ *   - none selected → unchecked
+ *   - some selected → indeterminate (browsers render a dash)
+ *   - all selected → checked
+ *
+ * Click toggles the whole group: full→empty when fully selected,
+ * partial/empty→full otherwise. Using `useRef` to set the
+ * `indeterminate` property because there's no React JSX attribute
+ * for it.
+ */
+function GroupSelectAllCheckbox({
+  rows,
+  selectedKeys,
+  spoolKey,
+  setSelected,
+  label,
+}: {
+  rows: SpoolRow[];
+  selectedKeys: Set<string>;
+  spoolKey: (row: SpoolRow) => string;
+  setSelected: (updater: (prev: Set<string>) => Set<string>) => void;
+  label: string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  const total = rows.length;
+  const selectedInGroup = rows.reduce(
+    (n, r) => (selectedKeys.has(spoolKey(r)) ? n + 1 : n),
+    0,
+  );
+  const allChecked = total > 0 && selectedInGroup === total;
+  const indeterminate = selectedInGroup > 0 && selectedInGroup < total;
+
+  // Indeterminate is a DOM property, not an HTML attribute — React
+  // doesn't expose it via JSX so we sync it on each render.
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+
+  const onChange = () => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allChecked) {
+        // Drop every row in this group from the selection.
+        for (const r of rows) next.delete(spoolKey(r));
+      } else {
+        // Add every row in this group.
+        for (const r of rows) next.add(spoolKey(r));
+      }
+      return next;
+    });
+  };
+
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={allChecked}
+      onChange={onChange}
+      disabled={total === 0}
+      aria-label={label}
+      className="accent-blue-600"
+    />
   );
 }
