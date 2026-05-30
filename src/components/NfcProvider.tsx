@@ -119,6 +119,40 @@ function pickLoadedName(result: NfcTagReadResult): string | null {
   return result.match?.name ?? result.data?.materialName ?? null;
 }
 
+/**
+ * GH #451: returns true when the currently-focused element is a
+ * text-entry surface (input, textarea, or contenteditable). Used to
+ * suppress the NFC auto-open dialog mid-typing so we don't steal focus
+ * from a user filling out a form when a teammate scans a tag.
+ *
+ * Duck-typed (`tagName` + attribute reads) rather than `instanceof
+ * HTMLInputElement` so it stays unit-testable without a DOM env — the
+ * project's vitest config doesn't carry jsdom. Safe to call with `null`
+ * (returns false).
+ */
+export function isTypingTarget(
+  el: { tagName?: string; getAttribute?: (name: string) => string | null } | null,
+): boolean {
+  if (!el) return false;
+  const tag = (el.tagName || "").toUpperCase();
+  if (tag === "INPUT") {
+    // type="button"/"checkbox"/"radio" etc. are not typing surfaces;
+    // only the text-entry input types should suppress the auto-open.
+    const t = (el.getAttribute?.("type") ?? "text").toLowerCase();
+    const typingTypes = new Set([
+      "text", "search", "url", "tel", "email", "password",
+      "number", "date", "datetime-local", "month", "week", "time",
+    ]);
+    return typingTypes.has(t);
+  }
+  if (tag === "TEXTAREA") return true;
+  const editable = el.getAttribute?.("contenteditable");
+  if (editable != null && editable !== "false" && editable !== "inherit") {
+    return true;
+  }
+  return false;
+}
+
 export default function NfcProvider({ children }: { children: ReactNode }) {
   const { isElectron, status, writing, error: writeError, writeTag } = useNfc();
   const [tagReadResult, setTagReadResult] = useState<NfcTagReadResult | null>(null);
@@ -156,7 +190,16 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
       onResult: (result) => {
         setTagReadResult(result);
         setLoadedTagName(pickLoadedName(result));
-        setDialogOpen(true);
+        // GH #451: never steal focus from a user actively typing.
+        // Auto-opening this modal mid-keystroke is jarring on shared
+        // workshop machines where another user might be filling a form
+        // while a teammate scans a tag at the reader. The pill update
+        // (loadedTagName above) still happens; the user can open the
+        // dialog manually from the NFC status if they want to act on
+        // the scan.
+        if (!isTypingTarget(document.activeElement)) {
+          setDialogOpen(true);
+        }
       },
       onPublish: publishScan,
     });

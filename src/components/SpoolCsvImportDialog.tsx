@@ -121,7 +121,7 @@ export default function SpoolCsvImportDialog({ onClose, onImported }: Props) {
           </div>
 
           <div className="flex items-center justify-between mb-2">
-            <label className="text-sm font-medium">{t("spoolImport.csvLabel")}</label>
+            <label htmlFor="spool-csv-paste" className="text-sm font-medium">{t("spoolImport.csvLabel")}</label>
             <div className="flex items-center gap-2">
               <input
                 ref={fileInputRef}
@@ -151,10 +151,12 @@ export default function SpoolCsvImportDialog({ onClose, onImported }: Props) {
             </div>
           </div>
           <textarea
+            id="spool-csv-paste"
             value={csv}
             onChange={(e) => setCsv(e.target.value)}
             rows={10}
             placeholder={SAMPLE_CSV}
+            aria-label={t("csv.import.pasteLabel")}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-xs font-mono bg-transparent"
           />
 

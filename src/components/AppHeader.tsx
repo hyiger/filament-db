@@ -71,7 +71,7 @@ export default function AppHeader() {
             <SyncStatusIndicator />
             <NfcStatus />
           </div>
-          <nav className="flex items-center gap-1" aria-label="Primary">
+          <nav className="flex items-center gap-1" aria-label={t("nav.aria.primary")}>
             {LINKS.map((link) => (
               <Link
                 key={link.href}
@@ -114,7 +114,7 @@ export default function AppHeader() {
         <nav
           id="mobile-nav"
           className="md:hidden border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950"
-          aria-label="Primary mobile"
+          aria-label={t("nav.aria.primaryMobile")}
         >
           <div className="w-full px-4 py-2 flex flex-col gap-1">
             {LINKS.map((link) => (

@@ -649,9 +649,19 @@ export default function Home() {
           <td className="py-2 px-2">
             <div className="flex items-center gap-1">
               <button
+                type="button"
                 onClick={() => toggleExpanded(f._id)}
                 className="text-gray-400 hover:text-gray-600 text-xs w-4 flex-shrink-0"
                 title={isExpanded ? t("filaments.collapseVariants") : t("filaments.expandVariants")}
+                // GH #416: a SR user could neither read the chevron glyph
+                // nor tell whether it was expanded. The translated label
+                // names the row and the `aria-expanded` state announces
+                // open/closed; `aria-controls` ties it to the variant
+                // tbody that gets toggled below.
+                aria-label={isExpanded
+                  ? t("filaments.collapseVariants")
+                  : t("filaments.expandVariants")}
+                aria-expanded={isExpanded}
               >
                 {isExpanded ? "▾" : "▸"}
               </button>

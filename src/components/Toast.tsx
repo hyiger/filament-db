@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useState, useCallback, type ReactNode } from "react";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface Toast {
   id: number;
@@ -49,6 +50,7 @@ export function computeToastDuration(
 }
 
 export default function ToastProvider({ children }: { children: ReactNode }) {
+  const { t } = useTranslation();
   const [toasts, setToasts] = useState<Toast[]>([]);
 
   const toast = useCallback(
@@ -63,7 +65,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
         opts.duration !== undefined ? opts.duration : computeToastDuration(message, type);
       if (duration > 0) {
         setTimeout(() => {
-          setToasts((prev) => prev.filter((t) => t.id !== id));
+          setToasts((prev) => prev.filter((entry) => entry.id !== id));
         }, duration);
       }
     },
@@ -71,7 +73,7 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
   );
 
   const dismiss = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    setToasts((prev) => prev.filter((entry) => entry.id !== id));
   }, []);
 
   return (
@@ -85,28 +87,28 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
        * viewports. `items-start` keeps the dismiss × aligned to the first
        * line of a multi-line message. */}
       <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 max-w-md md:max-w-lg">
-        {toasts.map((t) => (
+        {toasts.map((toastEntry) => (
           <div
-            key={t.id}
+            key={toastEntry.id}
             // GH #442: only errors warrant `role="alert"` (assertive
             // — interrupts SR output). Success and info are routine
             // confirmations; `role="status"` (polite) lets the SR
             // finish what it's reading before announcing.
-            role={t.type === "error" ? "alert" : "status"}
-            aria-live={t.type === "error" ? "assertive" : "polite"}
+            role={toastEntry.type === "error" ? "alert" : "status"}
+            aria-live={toastEntry.type === "error" ? "assertive" : "polite"}
             className={`px-4 py-3 rounded-lg shadow-lg text-sm text-white flex items-start gap-2 animate-slide-in ${
-              t.type === "success"
+              toastEntry.type === "success"
                 ? "bg-green-600"
-                : t.type === "error"
+                : toastEntry.type === "error"
                   ? "bg-red-600"
                   : "bg-blue-600"
             }`}
           >
-            <span className="flex-1 whitespace-pre-wrap break-words">{t.message}</span>
+            <span className="flex-1 whitespace-pre-wrap break-words">{toastEntry.message}</span>
             <button
-              onClick={() => dismiss(t.id)}
+              onClick={() => dismiss(toastEntry.id)}
               className="text-white/70 hover:text-white text-lg leading-none"
-              aria-label="Dismiss"
+              aria-label={t("common.dismiss")}
             >
               &times;
             </button>

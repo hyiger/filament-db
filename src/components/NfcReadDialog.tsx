@@ -37,19 +37,36 @@ export default function NfcReadDialog() {
     const dialog = dialogRef.current;
     const handleTab = (e: KeyboardEvent) => {
       if (e.key !== "Tab") return;
-      const focusable = dialog.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      );
+      // GH #418: re-query focusables on every Tab — the dialog has
+      // multiple sub-templates (error / empty / match / unknown-data)
+      // that mount different button sets, and the candidate-list view
+      // also gains/loses rows as data resolves. A snapshot taken on
+      // open would let Tab escape once the layout changes.
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((el) => !el.hasAttribute("disabled"));
       if (focusable.length === 0) return;
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      // GH #418 (mirrors ConfirmDialog #351 round 2): if focus has
+      // escaped the dialog entirely (parent re-render, focusing a
+      // background list link via assistive tech, etc.) yank it back
+      // rather than letting the user wander outside the modal.
+      if (!active || (active !== dialog && !dialog.contains(active))) {
+        e.preventDefault();
+        first.focus();
+        return;
+      }
       if (e.shiftKey) {
-        if (document.activeElement === first || document.activeElement === dialog) {
+        if (active === first || active === dialog) {
           e.preventDefault();
           last.focus();
         }
       } else {
-        if (document.activeElement === last) {
+        if (active === last) {
           e.preventDefault();
           first.focus();
         }
@@ -58,7 +75,15 @@ export default function NfcReadDialog() {
     document.addEventListener("keydown", handleTab);
     return () => {
       document.removeEventListener("keydown", handleTab);
-      prevFocus?.focus?.();
+      // GH #451: the element that had focus when the dialog opened may
+      // have been unmounted while the dialog was up (a parent route
+      // navigated away, or a list re-rendered). Calling `.focus()` on a
+      // detached node either no-ops silently or — in some browsers —
+      // scrolls the viewport to where the node used to be. Verify the
+      // node is still in the document before restoring.
+      if (prevFocus && document.contains(prevFocus)) {
+        prevFocus.focus?.();
+      }
     };
   }, [visible]);
 

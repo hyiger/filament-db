@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "@/i18n/TranslationProvider";
 import { expandAndScrollToSection } from "./CollapsibleSection";
 
 export interface TocEntry {
@@ -34,6 +35,7 @@ interface Props {
  *   collapsed section. The buttons let us coordinate "open + scroll".
  */
 export default function FormToc({ entries, hideOnMobile = true }: Props) {
+  const { t } = useTranslation();
   const [activeId, setActiveId] = useState<string | null>(entries[0]?.id ?? null);
   const observerRef = useRef<IntersectionObserver | null>(null);
 
@@ -82,7 +84,7 @@ export default function FormToc({ entries, hideOnMobile = true }: Props) {
 
   return (
     <nav
-      aria-label="Form sections"
+      aria-label={t("form.toc.aria")}
       className={`${hideOnMobile ? "hidden lg:block" : ""} sticky top-4 self-start max-h-[calc(100vh-2rem)] overflow-y-auto pr-2`}
     >
       <ul className="space-y-0.5 text-sm">
@@ -115,6 +117,7 @@ export default function FormToc({ entries, hideOnMobile = true }: Props) {
  * above the `lg` breakpoint (where the desktop sidebar takes over).
  */
 export function FormTocMobileButton({ entries }: { entries: TocEntry[] }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
 
   // Close the popover whenever the user picks an entry.
@@ -156,7 +159,7 @@ export function FormTocMobileButton({ entries }: { entries: TocEntry[] }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-label="Jump to form section"
+        aria-label={t("form.toc.aria.jump")}
         aria-expanded={open}
         className="w-12 h-12 rounded-full bg-blue-600 text-white shadow-lg hover:bg-blue-700 flex items-center justify-center"
       >

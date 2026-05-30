@@ -25,7 +25,7 @@ const FILTERS: { key: QuickFilter; labelKey: string }[] = [
 export default function QuickFilterChips({ active, onChange, counts }: Props) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-wrap gap-1.5 mb-2" role="tablist" aria-label="Quick filters">
+    <div className="flex flex-wrap gap-1.5 mb-2" role="tablist" aria-label={t("filter.aria.quick")}>
       {FILTERS.map((f) => {
         const isActive = active === f.key;
         const count = counts?.[f.key];

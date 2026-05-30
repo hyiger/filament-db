@@ -41,10 +41,19 @@ export default function NfcStatus() {
 
   return (
     <div
+      // GH #417: a screen reader user has no other way to know an NFC
+      // tag landed — wrap the live-updating label in a polite live region
+      // so SRs announce the change without interrupting other speech.
+      // `aria-atomic` ensures the full label re-reads each time (the
+      // text varies between "no reader", "ready", and "<tag name>" — a
+      // partial update would sound clipped).
+      role="status"
+      aria-live="polite"
+      aria-atomic="true"
       className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full text-xs text-gray-600 dark:text-gray-300 max-w-[260px]"
       title={label}
     >
-      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} />
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} aria-hidden="true" />
       <span className="truncate">{label}</span>
     </div>
   );

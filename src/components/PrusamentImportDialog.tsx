@@ -248,7 +248,7 @@ export default function PrusamentImportDialog({
           <h2 id="prusament-import-title" className="text-lg font-semibold">{t("prusament.import.title")}</h2>
           <button
             onClick={onClose}
-            aria-label="Close"
+            aria-label={t("common.close")}
             className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 text-xl leading-none"
           >
             &times;
@@ -268,7 +268,11 @@ export default function PrusamentImportDialog({
               <p className="text-sm text-zinc-600 dark:text-zinc-400">
                 {t("prusament.import.description")}
               </p>
+              <label htmlFor="prusament-spool-id" className="sr-only">
+                {t("prusament.import.spoolIdLabel")}
+              </label>
               <input
+                id="prusament-spool-id"
                 type="text"
                 value={spoolInput}
                 onChange={(e) => setSpoolInput(e.target.value)}

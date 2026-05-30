@@ -198,7 +198,11 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
                 <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
                   {t("atlas.import.description")}
                 </p>
+                <label htmlFor="atlas-uri" className="sr-only">
+                  {t("atlas.import.uriLabel")}
+                </label>
                 <input
+                  id="atlas-uri"
                   type="password"
                   className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent text-gray-900 dark:text-gray-100 mb-3"
                   value={uri}
@@ -278,8 +282,18 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
 
             {/* Step 4: Importing */}
             {step === "importing" && (
-              <div className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-300">
-                <svg className="w-5 h-5 animate-spin text-blue-400" fill="none" viewBox="0 0 24 24">
+              <div
+                className="flex items-center gap-3 text-sm text-gray-600 dark:text-gray-300"
+                role="status"
+                aria-live="polite"
+                aria-atomic="true"
+              >
+                <svg
+                  className="w-5 h-5 animate-spin text-blue-400"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
