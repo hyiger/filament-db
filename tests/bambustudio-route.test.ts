@@ -570,5 +570,57 @@ describe("Bambu Studio importer routes", () => {
       );
       expect(res.status).toBe(404);
     });
+
+    // Codex P1 on PR #473 round 2: pin the augment-helper wire-up. The
+    // unit tests in tests/bambuStudioApply.test.ts verify the
+    // $unset-on-revert-to-parent behavior of buildStructuredUpdate, but
+    // they pass in a hand-built `existing` shape that already includes
+    // the inheritable scalars. If the route's augment helper strips
+    // those scalars (as the first round of this PR did), the unset path
+    // is unreachable at runtime. This test goes through the real route
+    // with a real variant to prove the wire-up.
+    it("$unsets a stale variant override when the parsed value matches the parent (Codex P1 PR #473 r2)", async () => {
+      const parent = await Filament.create({
+        name: "QA Parent",
+        vendor: "QA",
+        type: "PLA",
+        diameter: 1.75,
+        density: 1.24,
+      });
+      // Variant with a stale local density that diverges from the parent.
+      const variant = await Filament.create({
+        name: "QA Variant",
+        vendor: "QA",
+        type: "PLA",
+        diameter: 1.75,
+        density: 1.30,
+        parentId: parent._id,
+      });
+      // Sanity: variant has its own density before the sync.
+      const before = await Filament.findById(variant._id).lean();
+      expect((before as { density: number }).density).toBe(1.30);
+
+      const { POST } = await import("@/app/api/filaments/[id]/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          `http://localhost/api/filaments/${variant._id}/bambustudio`,
+          minimalProfile({
+            // Sync an import whose density MATCHES the parent — the
+            // stale variant override should be cleared.
+            filament_density: ["1.24"],
+          }),
+        ),
+        { params: Promise.resolve({ id: String(variant._id) }) },
+      );
+      expect(res.status).toBe(200);
+
+      const after = await Filament.findById(variant._id).lean();
+      // Density should be unset (undefined or null) on the variant
+      // doc — `resolveFilament` then falls back to the parent's 1.24.
+      // `$unset` removes the field; depending on Mongoose schema
+      // defaults the lean read may surface it as undefined or null.
+      const afterDensity = (after as { density?: number | null }).density;
+      expect(afterDensity == null).toBe(true);
+    });
   });
 });

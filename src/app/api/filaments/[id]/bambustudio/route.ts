@@ -180,6 +180,18 @@ export async function POST(
     }
 
     const existingWithParent = {
+      // Codex P1 on PR #473 round 2: inheritable scalars MUST ride
+      // along so `buildStructuredUpdate` can detect a stale variant
+      // override and emit $unset. Pre-fix these were stripped, leaving
+      // the unset branch unreachable in this route.
+      type: existing.type ?? null,
+      vendor: existing.vendor ?? null,
+      diameter: existing.diameter ?? null,
+      density: existing.density ?? null,
+      cost: existing.cost ?? null,
+      maxVolumetricSpeed: existing.maxVolumetricSpeed ?? null,
+      shrinkageXY: existing.shrinkageXY ?? null,
+      shrinkageZ: existing.shrinkageZ ?? null,
       temperatures: existing.temperatures as Record<string, unknown> | undefined,
       bedTypeTemps: existing.bedTypeTemps,
       settings: existing.settings as Record<string, unknown> | undefined,

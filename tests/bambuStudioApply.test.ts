@@ -354,7 +354,10 @@ describe("buildStructuredUpdate", () => {
       const existing = {
         parentId: "parent-id",
         parent,
-        vendor: "" as unknown,
+        // Empty-string vendor — resolveFilament treats this as "no local
+        // value" (variant is considered to be inheriting), so we should
+        // NOT emit $unset for it.
+        vendor: "",
       };
       const { unset } = buildStructuredUpdate(
         makeParsed({ vendor: "Polymaker" }),

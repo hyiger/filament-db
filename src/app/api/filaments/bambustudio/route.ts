@@ -294,6 +294,20 @@ async function augmentExistingWithParent(existing: {
     }).lean()) as Record<string, unknown> | null;
   }
   return {
+    // Codex P1 on PR #473 round 2: inheritable scalars MUST ride along
+    // so `buildStructuredUpdate` can detect a stale variant override
+    // (variant=1.30, parent=1.24, import=1.24 → emit $unset). Pre-fix
+    // these were stripped, making the $unset branch unreachable in
+    // the actual route even though unit tests passed against a richer
+    // shape.
+    type: existing.type ?? null,
+    vendor: existing.vendor ?? null,
+    diameter: existing.diameter ?? null,
+    density: existing.density ?? null,
+    cost: existing.cost ?? null,
+    maxVolumetricSpeed: existing.maxVolumetricSpeed ?? null,
+    shrinkageXY: existing.shrinkageXY ?? null,
+    shrinkageZ: existing.shrinkageZ ?? null,
     temperatures: existing.temperatures,
     bedTypeTemps: existing.bedTypeTemps,
     settings: existing.settings,

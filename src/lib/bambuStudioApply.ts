@@ -38,8 +38,25 @@ import type {
 /** Loose shape for the `existing` filament parameter. The full Mongoose
  * doc type has stricter null-vs-undefined on its embedded arrays
  * (`number | null` vs `number | undefined`) — only `bedType` is read
- * here for dedup, so accept anything with that field. */
+ * here for dedup, so accept anything with that field.
+ *
+ * Codex P1 on PR #473 round 2: the inheritable scalar fields below
+ * (type, vendor, density, cost, diameter, maxVolumetricSpeed,
+ * shrinkageXY, shrinkageZ) are read by `buildStructuredUpdate` to
+ * decide whether a variant has a stale local override worth
+ * `$unset`-ing. They MUST be populated on whatever the caller passes —
+ * the previous augment helpers stripped them, so the unset path was
+ * unreachable in practice even though the unit tests passed against
+ * the unstripped shape. */
 export interface ExistingFilamentForApply {
+  type?: string | null;
+  vendor?: string | null;
+  diameter?: number | null;
+  density?: number | null;
+  cost?: number | null;
+  maxVolumetricSpeed?: number | null;
+  shrinkageXY?: number | null;
+  shrinkageZ?: number | null;
   temperatures?: Record<string, unknown>;
   bedTypeTemps?: Array<{
     bedType: string;
