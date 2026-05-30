@@ -431,6 +431,47 @@ Liefert:
 
 ---
 
+## Bambu Studio Filament-Preset
+
+Bambu Studio ist ein OrcaSlicer-Fork und teilt das `.json`-Filament-Preset-Schema. Die App stellt Export und Import für Bambu Studio bereit. Round-Trip ist verlustfrei für die strukturierten Felder; unbekannte Slicer-Keys fließen in den `settings`-Bag und überleben einen Export → Re-Import.
+
+| Methode | Endpunkt | Beschreibung |
+|--------|----------|-------------|
+| `GET`  | `/api/filaments/:id/bambustudio` | Lädt ein einzelnes Filament als Bambu-Studio-Preset (`.json`) herunter |
+| `POST` | `/api/filaments/:id/bambustudio` | Synchronisiert ein Bambu-Studio-Preset IN dieses spezifische Filament (per ID gepinnt — der geparste Name wird ignoriert) |
+| `POST` | `/api/filaments/bambustudio`     | Importiert ein Bambu-Studio-Preset per Name (Upsert; bei vorhandenem Trash-Eintrag mit gleichem Namen wird dieser wiederbelebt statt eines Duplikats) |
+
+### GET /api/filaments/:id/bambustudio
+
+Identisches Datenmodell wie der OrcaSlicer-Export, mit `from: "User"` gestempelt, damit Bambu Studio das Preset als benutzerdefiniert klassifiziert. Variant-Filamente werden gegen ihren Parent aufgelöst, sodass das exportierte Preset die vollständigen wirksamen Werte trägt. Setzt `Content-Disposition: attachment` mit einem aus dem Filament-Namen abgeleiteten Dateinamen.
+
+### POST /api/filaments/:id/bambustudio
+
+Sync per ID — wird vom „Sync von Bambu Studio“-Button auf der Filament-Detailseite verwendet. Der Body ist entweder `multipart/form-data` mit einem `file`-Feld ODER `application/json` mit dem Bambu-Profil direkt. Der geparste `name`/`filament_settings_id` wird IGNORIERT (das Pinning erfolgt per ID — ein in Bambu Studio umbenanntes Preset aktualisiert weiterhin den richtigen Datensatz). Spulen-Subdokumente, `usageHistory` und `dryCycles` werden bei einem Sync NIE angerührt — das ist lokaler Bestand und nicht in der Bambu-Datei.
+
+Antwort:
+
+```json
+{
+  "created": false,
+  "updated": true,
+  "filamentId": "…",
+  "name": "…",
+  "calibrationApplied": true,
+  "calibrationUnresolved": false,
+  "calibrationContext": { "printerId": "…", "printerName": "…", "nozzleId": "…", "nozzleDiameter": 0.4 },
+  "settingsAdded": ["filament_unique_key", "…"]
+}
+```
+
+### POST /api/filaments/bambustudio
+
+Bulk-Variante — Upsert per Name (`filament_settings_id` bevorzugt, sonst Top-Level-`name`). Drei-Phasen-Pattern: aktualisiert eine aktive Zeile gleichen Namens; belebt eine getrashte (nicht-purged) Zeile wieder; legt sonst neu an (mit E11000-Race-Recovery falls ein paralleler Import zwischen Find und Create denselben Namen erstellt hat). Calibration-Auto-Detect wie bei der Per-ID-Variante; `calibrationUnresolved: true` wenn die Drucker-Modell-Hint mehrere Treffer hat oder kein eindeutiger Nozzle am angegebenen Durchmesser auflösbar ist.
+
+400, wenn `filament_type` oder `filament_vendor` beim Anlegen fehlen. 413 bei Multipart-Uploads über 10 MB.
+
+---
+
 ## Scan-Stream
 
 Pusht Live-NFC-Tag-Lesungen in einen langlebigen Stream, sodass Slicer abonnieren und automatisch das passende Filament-Preset auswählen können. Der Renderer veröffentlicht jeden Scan, nachdem er ein Tag dekodiert und gegen die DB gematcht hat; Konsumenten (das PrusaSlicer-/OrcaSlicer-FilamentDB-Modul oder jeder andere Client) abonnieren per Server-Sent Events.
@@ -1018,6 +1059,8 @@ Per-Job-Ledger der Druckläufe. Reduziert Spulengewichte, hängt Spulen-Level-`u
 |--------|----------|-------------|
 | `GET`    | `/api/print-history`      | Listet Druckaufträge auf (absteigend nach `startedAt`). Query: `filamentId`, `printerId`, `limit` (Standard 100, Max 1000) |
 | `POST`   | `/api/print-history`      | Zeichnet einen Druckauftrag auf (siehe Body unten) |
+| `GET`    | `/api/print-history/{id}` | Lädt einen einzelnen Druckauftrag mit denselben populierten Feldern wie die Liste (Druckername + Filament-Name/Vendor/Typ/Farbe je Verbrauchszeile). Tombstoned-Zeilen liefern 404 |
+| `PUT`    | `/api/print-history/{id}` | Aktualisiert nur Job-Metadaten (jobLabel, notes, source, printer, startedAt, durationSeconds). Verbrauchszeilen + Spulen-Grammwerte sind hier NICHT änderbar — bei Änderungen mit DELETE + POST neu anlegen |
 | `DELETE` | `/api/print-history/{id}` | Macht einen Druckauftrag rückgängig — erstattet das Spulengewicht, entfernt die passenden `usageHistory`-Einträge, soft-löscht die Zeile |
 
 ### POST /api/print-history

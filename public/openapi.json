@@ -1692,6 +1692,41 @@
         "responses": {
           "200": { "description": "OrcaSlicer profile array", "content": { "application/json": { "schema": { "type": "array", "items": { "type": "object" } } } } }
         }
+      },
+      "post": {
+        "tags": ["OrcaSlicer"],
+        "summary": "Bulk OrcaSlicer import (not yet implemented)",
+        "description": "Returns 501. Bulk OrcaSlicer bundle import is not yet supported; the route exists as a documented placeholder. Use POST /api/filaments/{id}/orcaslicer to sync an individual preset back, or POST /api/filaments/prusaslicer for the PrusaSlicer-INI equivalent (which IS supported).",
+        "responses": {
+          "501": { "description": "Not implemented", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      }
+    },
+    "/api/filaments/colors": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "List distinct color-name → hex pairs",
+        "description": "Returns the deduplicated set of `(colorName, color)` pairs in use across non-deleted filaments. Powers the color-name typeahead on the filament form so users can autocomplete previously-used color names and reuse the matching hex. Each (name, hex) pair appears at most once; different hexes under the same name are returned as separate entries (e.g. three brands of \"Galaxy Black\" with slightly different shades stay distinct).",
+        "responses": {
+          "200": {
+            "description": "Distinct (colorName, color) pairs sorted by colorName",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": ["colorName", "color"],
+                    "properties": {
+                      "colorName": { "type": "string" },
+                      "color": { "type": "string", "description": "Uppercase hex string like #FF0000" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/filaments/{id}/orcaslicer": {
@@ -2037,6 +2072,50 @@
       }
     },
     "/api/print-history/{id}": {
+      "get": {
+        "tags": ["Print History"],
+        "summary": "Get a single print job",
+        "description": "Returns one PrintHistory row with the same populated fields as the list endpoint (printer name plus per-usage filament name/vendor/type/color). Tombstoned (`_deletedAt`) rows return 404.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "PrintHistory ObjectId" }
+        ],
+        "responses": {
+          "200": { "description": "Print history entry", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Invalid id", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Print history not found or already deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      },
+      "put": {
+        "tags": ["Print History"],
+        "summary": "Update print job metadata",
+        "description": "Metadata-only PUT. Updates user-editable fields (jobLabel, notes, source, printer reference, startedAt, durationSeconds). Usage rows + per-spool gram totals are NOT mutable here — refund + re-record via DELETE + POST if you need to change a usage. Length caps apply to jobLabel and notes (#350).",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "PrintHistory ObjectId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "jobLabel": { "type": "string", "maxLength": 200 },
+                  "notes": { "type": "string", "maxLength": 5000 },
+                  "source": { "type": "string" },
+                  "printerId": { "type": "string", "nullable": true },
+                  "startedAt": { "type": "string", "format": "date-time" },
+                  "durationSeconds": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Updated print history entry", "content": { "application/json": { "schema": { "type": "object" } } } },
+          "400": { "description": "Invalid id or body", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+          "404": { "description": "Print history not found or already deleted", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+        }
+      },
       "delete": {
         "tags": ["Print History"],
         "summary": "Undo print job",

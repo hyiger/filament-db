@@ -11,7 +11,8 @@
   "scripts": {
     "dev": "next dev -p 3456",
     "build": "next build",
-    "start": "node .next/standalone/server.js",
+    "start:prep": "node scripts/start-prep.mjs",
+    "start": "npm run start:prep && node .next/standalone/server.js",
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
