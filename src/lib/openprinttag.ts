@@ -307,7 +307,12 @@ export function decodeCBORFloat16(bits: number): number {
   return sign ? -val : val;
 }
 
-/** Encode a CBOR text string (major type 3) and push bytes to `buf`. */
+/**
+ * Encode a CBOR text string (major type 3) and push bytes to `buf`.
+ * @internal Exported for unit testing in `tests/openprinttag.test.ts`.
+ *   Not part of the public API — production callers should consume
+ *   `generateOpenPrintTagBinary`, which composes this helper.
+ */
 export function encodeCBORText(buf: number[], text: string): void {
   const utf8 = new TextEncoder().encode(text);
   const len = utf8.length;
@@ -336,7 +341,10 @@ export function encodeCBORBytes(buf: number[], bytes: number[]): void {
   buf.push(...bytes);
 }
 
-/** Write a CBOR map key (unsigned int). */
+/**
+ * Write a CBOR map key (unsigned int).
+ * @internal Exported for unit testing — consume via `generateOpenPrintTagBinary`.
+ */
 export function encodeCBORKey(buf: number[], key: number): void {
   encodeCBORUint(buf, key);
 }
@@ -437,7 +445,10 @@ export function resolveMaterialType(type: string): number | undefined {
   return MATERIAL_TYPE_MAP[key];
 }
 
-/** Derive a short material abbreviation from a filament type string. */
+/**
+ * Derive a short material abbreviation from a filament type string.
+ * @internal Exported for unit testing — consume via `generateOpenPrintTagBinary`.
+ */
 export function deriveMaterialAbbreviation(type: string): string {
   const upper = type.toUpperCase().replace(/\s+/g, "");
   // Return as-is if already short enough (max 7 chars per spec)

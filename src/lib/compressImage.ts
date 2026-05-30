@@ -79,7 +79,12 @@ function loadImage(file: File): Promise<HTMLImageElement | null> {
   });
 }
 
-/** Approximate decoded size of a base64 data URL payload. */
+/**
+ * Approximate decoded size of a base64 data URL payload.
+ * @internal Exported for unit testing in `tests/compressImage.test.ts`.
+ *   Not part of the public API — consume via `compressImageToDataUrl`,
+ *   which uses this helper to decide whether to recompress.
+ */
 export function dataUrlSizeBytes(dataUrl: string): number {
   const commaIdx = dataUrl.indexOf(",");
   if (commaIdx < 0) return dataUrl.length;

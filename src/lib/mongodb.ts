@@ -7,9 +7,14 @@ interface MongooseCache {
   /** Per-migration completion flags. Each migration only runs until it
    * succeeds — a transient failure (network blip, MongoDB busy) won't
    * permanently mark the migration done, so the next request will retry
-   * instead of leaving the install stuck on stale data/index state. */
+   * instead of leaving the install stuck on stale data/index state.
+   *
+   * GH #457 — the `instanceIds` backfill that used to run here was
+   * retired in v1.32.x: it predates v1.0 and any production install
+   * has been backfilled long ago. The flag was removed from this
+   * cache shape; if you ever see legacy callsites referencing
+   * `cached.migrations.instanceIds`, they're safe to drop. */
   migrations: {
-    instanceIds: boolean;
     sharedCatalogIndexes: boolean;
     /** GH #232 — split nozzles that are referenced by >1 printer into
      * one physical instance per printer. Idempotent: on a clean DB the
@@ -39,7 +44,7 @@ export default async function dbConnect() {
     conn: null,
     promise: null,
     uri: null,
-    migrations: { instanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
+    migrations: { sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
   };
 
   if (!global.mongoose) {
@@ -53,7 +58,7 @@ export default async function dbConnect() {
     cached.conn = null;
     cached.promise = null;
     cached.uri = null;
-    cached.migrations = { instanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
+    cached.migrations = { sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
   }
 
   // GH #312: a cached connection can go dead after a DB outage or an
@@ -72,7 +77,6 @@ export default async function dbConnect() {
   // early return and skip the migration block entirely.
   if (
     cached.conn &&
-    cached.migrations.instanceIds &&
     cached.migrations.sharedCatalogIndexes &&
     cached.migrations.nozzlePhysicalInstances &&
     cached.migrations.coreModelIndexes
@@ -91,23 +95,19 @@ export default async function dbConnect() {
     cached.conn = await cached.promise;
   }
 
+  // GH #457: the per-startup `backfillInstanceIds` pass that used to
+  // live here was retired in v1.32.x. Every production install older
+  // than ~2 years has been backfilled long ago, and fresh installs
+  // immediately set the flag with `count === 0`. The retry-tracking
+  // cost outweighed the diagnostic benefit. The
+  // `Filament.backfillInstanceIds` export was kept for ad-hoc rescue
+  // use via the scripts/ directory if a future migration restores
+  // legacy data.
+
   // One-time migrations on first connect after process start. Each
   // migration tracks its own success flag — a transient failure on one
   // doesn't poison the cache for the rest, and the next request retries
   // any that didn't complete instead of skipping the whole block.
-  if (!cached.migrations.instanceIds) {
-    try {
-      const { backfillInstanceIds } = await import("@/models/Filament");
-      const count = await backfillInstanceIds();
-      if (count > 0) {
-        console.log(`[migration] Backfilled instanceId for ${count} filament(s)`);
-      }
-      cached.migrations.instanceIds = true;
-    } catch (err) {
-      console.error("[migration] Failed to backfill instanceIds (will retry on next connect):", err);
-    }
-  }
-
   // SharedCatalog's slug index changed from a plain unique index to
   // a partial-unique-on-_deletedAt-null index when soft-delete landed.
   // MongoDB won't mutate existing index options in-place, so on
