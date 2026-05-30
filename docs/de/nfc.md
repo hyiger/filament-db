@@ -2,7 +2,7 @@
 
 # NFC-Tag lesen/schreiben
 
-[< Zurück zur README](../README.md)
+[< Zurück zur README](../../README.md)
 
 Filament DB unterstützt das Lesen und Schreiben von [OpenPrintTag](https://openprinttag.io/)-NFC-V-Tags (ISO 15693) und das Lesen von Bambu-Lab-MIFARE-Classic-Spulen-Tags direkt aus der Desktop-App.
 

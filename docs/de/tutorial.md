@@ -2,7 +2,7 @@
 
 # Einstieg in Filament DB
 
-[< Zurück zur README](../README.md)
+[< Zurück zur README](../../README.md)
 
 Schritt-für-Schritt-Anleitung durch jede Funktion der App — vom ersten Start bis zum NFC-Tag-Beschreiben.
 

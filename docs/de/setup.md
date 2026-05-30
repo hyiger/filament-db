@@ -2,7 +2,7 @@
 
 # Einrichtungsanleitung
 
-[< Zurück zur README](../README.md)
+[< Zurück zur README](../../README.md)
 
 ## Option 1: Desktop-App (am einfachsten)
 

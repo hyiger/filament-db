@@ -2,7 +2,7 @@
 
 # Fehlerbehebung
 
-[< Zurück zur README](../README.md)
+[< Zurück zur README](../../README.md)
 
 ## „MongoServerError: bad auth" beim Ausführen des Seed-Skripts
 

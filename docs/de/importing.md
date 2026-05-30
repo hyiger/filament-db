@@ -2,7 +2,7 @@
 
 # Filamente importieren
 
-[< Zurück zur README](../README.md)
+[< Zurück zur README](../../README.md)
 
 ## Config Bundle aus PrusaSlicer exportieren
 
