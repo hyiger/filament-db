@@ -43,7 +43,7 @@ describe("dbConnect", () => {
       conn: null,
       promise: connectPromise,
       uri: process.env.MONGODB_URI,
-      migrations: { sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
+      migrations: { instanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
     };
 
     const result = await dbConnect();
@@ -56,11 +56,36 @@ describe("dbConnect", () => {
     expect((global as Record<string, unknown>).mongoose).toBeDefined();
   });
 
-  // GH #457: the `backfillInstanceIds` startup migration was retired
-  // in v1.32.x — every install has been backfilled long ago and the
-  // retry-tracking cost outweighed the diagnostic benefit. The
-  // accompanying test was dropped with it. The Filament model still
-  // exports `backfillInstanceIds` for scripts/ad-hoc use.
+  // GH #457 RESTORED: the backfill stays in the startup path because
+  // the `coreModelIndexes` migration depends on every Filament having
+  // an `instanceId` before it can build the partial-unique index.
+  // See the matching docblock in src/lib/mongodb.ts.
+  it("logs when migration backfills instanceIds", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    await Filament.collection.insertOne({
+      name: "MigrationTest",
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      _deletedAt: null,
+    });
+    const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
+    cached.migrations = { instanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
+    cached.conn = null;
+    cached.promise = null;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await dbConnect();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[migration] Backfilled instanceId"),
+      );
+    } finally {
+      logSpy.mockRestore();
+      await Filament.deleteMany({ name: "MigrationTest" });
+    }
+  });
 
 
   it("reconnects when URI changes", async () => {

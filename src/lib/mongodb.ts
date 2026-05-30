@@ -15,6 +15,7 @@ interface MongooseCache {
    * cache shape; if you ever see legacy callsites referencing
    * `cached.migrations.instanceIds`, they're safe to drop. */
   migrations: {
+    instanceIds: boolean;
     sharedCatalogIndexes: boolean;
     /** GH #232 — split nozzles that are referenced by >1 printer into
      * one physical instance per printer. Idempotent: on a clean DB the
@@ -44,7 +45,7 @@ export default async function dbConnect() {
     conn: null,
     promise: null,
     uri: null,
-    migrations: { sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
+    migrations: { instanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
   };
 
   if (!global.mongoose) {
@@ -77,6 +78,7 @@ export default async function dbConnect() {
   // early return and skip the migration block entirely.
   if (
     cached.conn &&
+    cached.migrations.instanceIds &&
     cached.migrations.sharedCatalogIndexes &&
     cached.migrations.nozzlePhysicalInstances &&
     cached.migrations.coreModelIndexes
@@ -95,14 +97,30 @@ export default async function dbConnect() {
     cached.conn = await cached.promise;
   }
 
-  // GH #457: the per-startup `backfillInstanceIds` pass that used to
-  // live here was retired in v1.32.x. Every production install older
-  // than ~2 years has been backfilled long ago, and fresh installs
-  // immediately set the flag with `count === 0`. The retry-tracking
-  // cost outweighed the diagnostic benefit. The
-  // `Filament.backfillInstanceIds` export was kept for ad-hoc rescue
-  // use via the scripts/ directory if a future migration restores
-  // legacy data.
+  // GH #457 — RESTORED (Codex P1 on PR #467): the per-startup
+  // `backfillInstanceIds` pass cannot be retired safely. The
+  // `coreModelIndexes` migration below calls `Filament.syncIndexes()`,
+  // and the Filament schema declares a unique partial index on
+  // `instanceId`. MongoDB treats missing single-field values in a
+  // unique index as `null`, so a DB with >1 active filament missing
+  // `instanceId` would E11000 the index build, and the migration
+  // would retry forever instead of converging.
+  //
+  // The backfill is cheap on fresh / already-migrated installs
+  // (count === 0, flag flips immediately) and the retry tracking
+  // ensures a transient blip is recoverable on the next request.
+  if (!cached.migrations.instanceIds) {
+    try {
+      const { backfillInstanceIds } = await import("@/models/Filament");
+      const count = await backfillInstanceIds();
+      if (count > 0) {
+        console.log(`[migration] Backfilled instanceId for ${count} filament(s)`);
+      }
+      cached.migrations.instanceIds = true;
+    } catch (err) {
+      console.error("[migration] Failed to backfill instanceIds (will retry on next connect):", err);
+    }
+  }
 
   // One-time migrations on first connect after process start. Each
   // migration tracks its own success flag — a transient failure on one
