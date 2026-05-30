@@ -59,7 +59,7 @@ export default async function dbConnect() {
     cached.conn = null;
     cached.promise = null;
     cached.uri = null;
-    cached.migrations = { sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
+    cached.migrations = { instanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
   }
 
   // GH #312: a cached connection can go dead after a DB outage or an
