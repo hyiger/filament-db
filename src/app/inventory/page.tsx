@@ -305,25 +305,42 @@ export default function InventoryPage() {
       setBatchBusy(true);
       let okCount = 0;
       let failCount = 0;
-      for (const row of visibleSelectedRows) {
-        const ok = await updateSpool(row, patch);
-        if (ok) okCount += 1;
-        else failCount += 1;
+      // Codex P2 on PR #476 round 2: wrap the per-row loop in try/finally
+      // so a network rejection (LAN drop before the fetch resolves) can't
+      // escape with `batchBusy` still true. Pre-fix, the sticky action
+      // bar stayed disabled with the same selection and no aggregate
+      // toast — the user had no signal that the batch had failed.
+      try {
+        for (const row of visibleSelectedRows) {
+          try {
+            const ok = await updateSpool(row, patch);
+            if (ok) okCount += 1;
+            else failCount += 1;
+          } catch {
+            // updateSpool already toasts its own error; count this as
+            // a failed row so the aggregate summary still surfaces.
+            failCount += 1;
+          }
+        }
+        const total = visibleSelectedRows.length;
+        if (failCount === 0) {
+          toast(t("inventory.batch.success", { count: okCount }), "success");
+        } else if (okCount === 0) {
+          toast(t("inventory.batch.allFailed"), "error");
+        } else {
+          toast(
+            t("inventory.batch.partial", { ok: okCount, count: total, failed: failCount }),
+            "info",
+          );
+        }
+      } finally {
+        setBatchBusy(false);
+        clearSelection();
+        // Best-effort refresh — failures here are non-fatal (the page
+        // just keeps showing the previous data) and shouldn't block
+        // the UI reset above.
+        await fetchInventory().catch(() => {});
       }
-      setBatchBusy(false);
-      const total = visibleSelectedRows.length;
-      if (failCount === 0) {
-        toast(t("inventory.batch.success", { count: okCount }), "success");
-      } else if (okCount === 0) {
-        toast(t("inventory.batch.allFailed"), "error");
-      } else {
-        toast(
-          t("inventory.batch.partial", { ok: okCount, count: total, failed: failCount }),
-          "info",
-        );
-      }
-      clearSelection();
-      await fetchInventory();
     },
     [visibleSelectedRows, updateSpool, toast, t, clearSelection, fetchInventory],
   );

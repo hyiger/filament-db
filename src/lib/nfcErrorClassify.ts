@@ -60,8 +60,17 @@ export function classifyNfcError(err: unknown): NfcErrorCode {
 
   // pcscd / "Smart Card Services" not running. `SCardEstablishContext`
   // failures usually mean the daemon isn't reachable.
+  //
+  // Codex P2 on PR #476 round 2: the canonical macOS wording is
+  // "SCardEstablishContext: Service not available" — neither "no
+  // service" nor "daemon" appears as a substring of that. Add the
+  // wider "service not available" / "service unavailable" wordings
+  // so a stopped pcscd / Smart Card Service surfaces the actionable
+  // no-daemon hint instead of falling through to generic.
   if (
     lower.includes("no service") ||
+    lower.includes("service not available") ||
+    lower.includes("service unavailable") ||
     lower.includes("scard_e_no_service") ||
     lower.includes("daemon") ||
     lower.includes("scardestablishcontext")

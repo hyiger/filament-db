@@ -71,6 +71,17 @@ describe("classifyNfcError", () => {
     it("matches SCardEstablishContext failures", () => {
       expect(classifyNfcError(new Error("SCardEstablishContext failed"))).toBe("no-daemon");
     });
+
+    it("matches the macOS 'service not available' wording (Codex P2 PR #476 r2)", () => {
+      // The canonical macOS message when pcscd / Smart Card Service is
+      // stopped is "SCardEstablishContext: Service not available".
+      // Round 1 only checked "no service" / "daemon", so this dropped
+      // through to "generic" — the bug this fix addresses.
+      expect(
+        classifyNfcError(new Error("SCardEstablishContext: Service not available")),
+      ).toBe("no-daemon");
+      expect(classifyNfcError(new Error("Service unavailable"))).toBe("no-daemon");
+    });
   });
 
   describe("generic bucket (fallback)", () => {
