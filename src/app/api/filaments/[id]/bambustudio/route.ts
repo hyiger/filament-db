@@ -188,7 +188,10 @@ export async function POST(
       parent,
     };
 
-    const update = buildStructuredUpdate(parsed.filament, existingWithParent);
+    const { set: update, unset: unsetKeys } = buildStructuredUpdate(
+      parsed.filament,
+      existingWithParent,
+    );
 
     const settingsResult = mergeSlicerSettings(
       (existing.settings as Record<string, unknown>) || {},
@@ -213,6 +216,15 @@ export async function POST(
     // state and not in the Bambu file.
     delete (update as Record<string, unknown>).spools;
 
+    // Codex P1 on PR #473: when the import value equals the parent's
+    // value AND the variant carries a diverging local override, unset
+    // that field so the variant returns to inheriting. `$unset` payload
+    // value is conventionally the empty string in Mongo.
+    const mongoUpdate: Record<string, unknown> = { $set: update };
+    if (unsetKeys.length > 0) {
+      mongoUpdate.$unset = Object.fromEntries(unsetKeys.map((k) => [k, ""]));
+    }
+
     // Codex P2 on PR #387: `runValidators` so the new numeric range
     // validators (#337) actually fire on a Bambu sync.
     //
@@ -225,7 +237,7 @@ export async function POST(
     try {
       updateRes = await Filament.updateOne(
         { _id: existing._id, _deletedAt: null },
-        { $set: update },
+        mongoUpdate,
         { runValidators: true, context: "query" },
       );
     } catch (validationErr) {

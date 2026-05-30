@@ -31,7 +31,7 @@ function makeParsed(over: Partial<ParsedFilament> = {}): ParsedFilament {
 describe("buildStructuredUpdate", () => {
   describe("scalar field mapping (only non-null fields are projected)", () => {
     it("emits every scalar field that's set on the parsed input", () => {
-      const update = buildStructuredUpdate(
+      const { set: update, unset } = buildStructuredUpdate(
         makeParsed({
           type: "PLA",
           vendor: "Bambu Lab",
@@ -56,15 +56,16 @@ describe("buildStructuredUpdate", () => {
       expect(update.notes).toBe("test");
       expect(update.shrinkageXY).toBe(1.5);
       expect(update.shrinkageZ).toBe(1.0);
+      expect(unset).toEqual([]);
     });
 
     it("skips fields that are not set on the parsed input (keeps update tiny)", () => {
-      const update = buildStructuredUpdate(makeParsed({ type: "PLA" }), null);
+      const { set: update } = buildStructuredUpdate(makeParsed({ type: "PLA" }), null);
       expect(Object.keys(update)).toEqual(["type"]);
     });
 
     it("treats numeric 0 as a real value, not as missing", () => {
-      const update = buildStructuredUpdate(
+      const { set: update } = buildStructuredUpdate(
         makeParsed({ shrinkageXY: 0, shrinkageZ: 0 }),
         null,
       );
@@ -82,7 +83,7 @@ describe("buildStructuredUpdate", () => {
           nozzleRangeMax: 230,
         },
       };
-      const update = buildStructuredUpdate(
+      const { set: update } = buildStructuredUpdate(
         makeParsed({ temperatures: { nozzle: 220, bed: 60 } }),
         existing,
       );
@@ -95,12 +96,12 @@ describe("buildStructuredUpdate", () => {
     });
 
     it("does not emit temperatures when the parsed bag has no non-null values", () => {
-      const update = buildStructuredUpdate(makeParsed(), null);
+      const { set: update } = buildStructuredUpdate(makeParsed(), null);
       expect("temperatures" in update).toBe(false);
     });
 
     it("skips parsed temperature keys whose value is null", () => {
-      const update = buildStructuredUpdate(
+      const { set: update } = buildStructuredUpdate(
         makeParsed({ temperatures: { nozzle: 220, bed: null as unknown as number } }),
         null,
       );
@@ -116,7 +117,7 @@ describe("buildStructuredUpdate", () => {
           { bedType: "Glass", temperature: 50 },
         ],
       };
-      const update = buildStructuredUpdate(
+      const { set: update } = buildStructuredUpdate(
         makeParsed({
           bedTypeTemps: [
             { bedType: "PEI", temperature: 65, firstLayerTemperature: 70 },
@@ -151,7 +152,7 @@ describe("buildStructuredUpdate", () => {
           },
         ],
       };
-      const update = buildStructuredUpdate(
+      const { set: update } = buildStructuredUpdate(
         makeParsed({
           bedTypeTemps: [{ bedType: "PEI", temperature: 70 }],
         }),
@@ -168,14 +169,14 @@ describe("buildStructuredUpdate", () => {
     });
 
     it("does not emit bedTypeTemps when the parsed array is empty", () => {
-      const update = buildStructuredUpdate(makeParsed(), null);
+      const { set: update } = buildStructuredUpdate(makeParsed(), null);
       expect("bedTypeTemps" in update).toBe(false);
     });
   });
 
   describe("create branch (existing === null)", () => {
     it("emits temperatures from the parsed bag with no merge anchor", () => {
-      const update = buildStructuredUpdate(
+      const { set: update } = buildStructuredUpdate(
         makeParsed({ temperatures: { nozzle: 215 } }),
         null,
       );
@@ -183,7 +184,7 @@ describe("buildStructuredUpdate", () => {
     });
 
     it("emits bedTypeTemps from the parsed array directly when existing is null", () => {
-      const update = buildStructuredUpdate(
+      const { set: update } = buildStructuredUpdate(
         makeParsed({
           bedTypeTemps: [{ bedType: "PEI", temperature: 60 }],
         }),
@@ -209,7 +210,7 @@ describe("buildStructuredUpdate", () => {
     it("does NOT pin a scalar on a variant when the parent already has the same value", () => {
       const parent = { type: "PLA", vendor: "Polymaker", density: 1.24, cost: 25 };
       const existing = { parentId: "parent-id", parent };
-      const update = buildStructuredUpdate(
+      const { set: update, unset } = buildStructuredUpdate(
         makeParsed({ type: "PLA", vendor: "Polymaker", density: 1.24, cost: 25 }),
         existing,
       );
@@ -217,12 +218,14 @@ describe("buildStructuredUpdate", () => {
       expect("vendor" in update).toBe(false);
       expect("density" in update).toBe(false);
       expect("cost" in update).toBe(false);
+      // No stale variant value to clear — variant already inherited.
+      expect(unset).toEqual([]);
     });
 
     it("DOES pin a scalar on a variant when the parsed value differs from the parent", () => {
       const parent = { type: "PLA", density: 1.24 };
       const existing = { parentId: "parent-id", parent };
-      const update = buildStructuredUpdate(
+      const { set: update } = buildStructuredUpdate(
         makeParsed({ type: "PLA+", density: 1.30 }),
         existing,
       );
@@ -233,7 +236,7 @@ describe("buildStructuredUpdate", () => {
     it("always emits color even on a variant (color is NOT inheritable)", () => {
       const parent = { color: "#FF0000" };
       const existing = { parentId: "parent-id", parent };
-      const update = buildStructuredUpdate(
+      const { set: update } = buildStructuredUpdate(
         makeParsed({ color: "#FF0000" }),
         existing,
       );
@@ -243,7 +246,7 @@ describe("buildStructuredUpdate", () => {
     });
 
     it("treats existing without parentId as a root filament — every scalar emits", () => {
-      const update = buildStructuredUpdate(
+      const { set: update } = buildStructuredUpdate(
         makeParsed({ type: "PLA", vendor: "Polymaker" }),
         { parentId: null, parent: null },
       );
@@ -257,11 +260,107 @@ describe("buildStructuredUpdate", () => {
       // on the variant). The downstream resolveFilament call at read
       // time then returns the variant's own value, which is what we
       // wrote here.
-      const update = buildStructuredUpdate(
+      const { set: update } = buildStructuredUpdate(
         makeParsed({ type: "PLA" }),
         { parentId: "missing", parent: null },
       );
       expect(update.type).toBe("PLA");
+    });
+  });
+
+  describe("stale variant override clearance (Codex P1 on PR #473)", () => {
+    // The original variant-aware branch checked "parent has same value
+    // → don't pin". But that left a window: if the variant already
+    // carried a STALE local override (variant=1.30, parent=1.24,
+    // imported=1.24), we'd skip writing — the variant's stale 1.30
+    // would stick around forever because subsequent imports matching
+    // the parent would also no-op. Emit `$unset` for those fields so
+    // the variant returns to inheriting from the parent.
+
+    it("emits $unset for a variant field whose parsed value matches the parent and whose variant override diverges", () => {
+      const parent = { density: 1.24, cost: 25 };
+      const existing = {
+        parentId: "parent-id",
+        parent,
+        // Stale local overrides — different from parent.
+        density: 1.30,
+        cost: 30,
+      };
+      const { set: update, unset } = buildStructuredUpdate(
+        makeParsed({ density: 1.24, cost: 25 }),
+        existing,
+      );
+      // No $set for these fields — they shouldn't be pinned…
+      expect("density" in update).toBe(false);
+      expect("cost" in update).toBe(false);
+      // …but they DO need to be unset so inheritance resumes.
+      expect(unset.sort()).toEqual(["cost", "density"]);
+    });
+
+    it("does NOT emit $unset when the variant already lacks a local value (no stale override)", () => {
+      const parent = { density: 1.24 };
+      // Variant has no local density — already inheriting.
+      const existing = { parentId: "parent-id", parent };
+      const { unset } = buildStructuredUpdate(
+        makeParsed({ density: 1.24 }),
+        existing,
+      );
+      expect(unset).toEqual([]);
+    });
+
+    it("does NOT emit $unset when the variant's local value already matches the parent", () => {
+      // Variant has the same local value as the parent. No new pin
+      // needed AND no unset needed — the doc is already consistent.
+      const parent = { density: 1.24 };
+      const existing = { parentId: "parent-id", parent, density: 1.24 };
+      const { set: update, unset } = buildStructuredUpdate(
+        makeParsed({ density: 1.24 }),
+        existing,
+      );
+      expect("density" in update).toBe(false);
+      expect(unset).toEqual([]);
+    });
+
+    it("emits $set when the parsed value differs from the parent — no $unset entry for the same field", () => {
+      const parent = { density: 1.24 };
+      const existing = { parentId: "parent-id", parent, density: 1.30 };
+      const { set: update, unset } = buildStructuredUpdate(
+        makeParsed({ density: 1.40 }),
+        existing,
+      );
+      expect(update.density).toBe(1.40);
+      expect(unset).not.toContain("density");
+    });
+
+    it("does NOT emit $unset on root filaments — no parent to inherit from", () => {
+      // A root filament cannot 'inherit' a field — there's no parent
+      // doc. A no-op import value should never produce $unset on it.
+      const existing = { parentId: null, parent: null, density: 1.24 };
+      const { set: update, unset } = buildStructuredUpdate(
+        makeParsed({ density: 1.24 }),
+        existing,
+      );
+      // Root with same value: still gets $set (parent-aware skip
+      // requires both parentId AND parent doc).
+      expect(update.density).toBe(1.24);
+      expect(unset).toEqual([]);
+    });
+
+    it("treats empty-string variant overrides as 'no local value' (mirrors resolveFilament)", () => {
+      // resolveFilament treats "" the same as null/missing — variant
+      // is considered to be inheriting. So an empty-string override
+      // doesn't need clearing.
+      const parent = { vendor: "Polymaker" };
+      const existing = {
+        parentId: "parent-id",
+        parent,
+        vendor: "" as unknown,
+      };
+      const { unset } = buildStructuredUpdate(
+        makeParsed({ vendor: "Polymaker" }),
+        existing,
+      );
+      expect(unset).toEqual([]);
     });
   });
 });

@@ -141,7 +141,7 @@ export async function POST(request: NextRequest) {
       try {
         const updated = await Filament.findOneAndUpdate(
           { _id: existingActive._id, _deletedAt: null },
-          { $set: payload.update },
+          composeMongoUpdate(payload),
           { runValidators: true, context: "query", returnDocument: "after" },
         );
         if (updated) {
@@ -176,13 +176,21 @@ export async function POST(request: NextRequest) {
       }
       delete (payload.update as Record<string, unknown>).spools;
       try {
+        // Splice `_deletedAt: null` into the $set body so the resurrect
+        // atomic also drops the tombstone; $unset (if any) for stale
+        // variant overrides composes alongside.
+        const resurrectUpdate = composeMongoUpdate(payload);
+        resurrectUpdate.$set = {
+          ...(resurrectUpdate.$set as Record<string, unknown>),
+          _deletedAt: null,
+        };
         const resurrected = await Filament.findOneAndUpdate(
           {
             _id: existingTrashed._id,
             _deletedAt: { $ne: null },
             _purged: { $ne: true },
           },
-          { $set: { ...payload.update, _deletedAt: null } },
+          resurrectUpdate,
           { runValidators: true, context: "query", returnDocument: "after" },
         );
         if (resurrected) {
@@ -249,7 +257,7 @@ export async function POST(request: NextRequest) {
       try {
         const merged = await Filament.findOneAndUpdate(
           { _id: racing._id, _deletedAt: null },
-          { $set: racePayload.update },
+          composeMongoUpdate(racePayload),
           { runValidators: true, context: "query", returnDocument: "after" },
         );
         if (!merged) {
@@ -293,6 +301,22 @@ async function augmentExistingWithParent(existing: {
     parentId: existing.parentId ? String(existing.parentId) : null,
     parent,
   };
+}
+
+/** Codex P1 on PR #473: when the parsed Bambu value equals the parent
+ *  and the variant carries a stale local override, `prepareBambuUpdate`
+ *  flags those fields in `unsetKeys` so they can be cleared. Compose a
+ *  Mongo update body that carries both `$set` and (when needed) `$unset`
+ *  in one atomic write — the resurrection branch then splices
+ *  `_deletedAt: null` into the `$set` portion. */
+function composeMongoUpdate(
+  payload: Awaited<ReturnType<typeof prepareBambuUpdate>>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { $set: payload.update };
+  if (payload.unsetKeys.length > 0) {
+    out.$unset = Object.fromEntries(payload.unsetKeys.map((k) => [k, ""]));
+  }
+  return out;
 }
 
 /** Common response shape so all three upsert phases return the same

@@ -62,6 +62,11 @@ export interface BambuUpdatePayload {
    * the doc body passed to `Filament.create`. Already contains structured
    * fields, settings, and the calibrations[] row (when resolved). */
   update: Record<string, unknown>;
+  /** Field names that must be `$unset` on the variant doc — the import
+   * matched the parent's value, but the variant currently carries a
+   * stale local override that's diverged from the parent. Empty for
+   * root filaments and create-branch calls. (Codex P1 on PR #473.) */
+  unsetKeys: string[];
   /** Settings-merge outcome — passed back so the caller can include
    * `settingsAdded` in the response and return early on a size-cap error. */
   settingsResult: SettingsMergeResult;
@@ -69,6 +74,15 @@ export interface BambuUpdatePayload {
    * UI can show "applied to printer X / nozzle Y" or the unresolved
    * nudge. */
   calibrationOutcome: CalibrationOutcome;
+}
+
+/** Structured-projection result. `set` is the `$set` body; `unset` lists
+ *  variant fields that should be cleared (the import matched the
+ *  parent's value but the variant had a stale local override that would
+ *  otherwise persist). Empty `unset` for root filaments. */
+export interface StructuredUpdateResult {
+  set: Record<string, unknown>;
+  unset: string[];
 }
 
 /**
@@ -90,7 +104,10 @@ export async function prepareBambuUpdate(
   parsed: BambuParseResult,
   existing: ExistingFilamentForApply | null,
 ): Promise<BambuUpdatePayload> {
-  const update = buildStructuredUpdate(parsed.filament, existing);
+  const { set: update, unset: unsetKeys } = buildStructuredUpdate(
+    parsed.filament,
+    existing,
+  );
 
   const settingsResult = mergeSlicerSettings(
     (existing?.settings as Record<string, unknown>) || {},
@@ -112,14 +129,15 @@ export async function prepareBambuUpdate(
     existing,
   );
 
-  return { update, settingsResult, calibrationOutcome };
+  return { update, unsetKeys, settingsResult, calibrationOutcome };
 }
 
 export function buildStructuredUpdate(
   parsed: ParsedFilament,
   existing: ExistingFilamentForApply | null,
-): Record<string, unknown> {
+): StructuredUpdateResult {
   const u: Record<string, unknown> = {};
+  const unset: string[] = [];
 
   // GH #403: when the existing doc is a variant of another filament,
   // only PIN an inheritable scalar to the variant when the parsed
@@ -129,19 +147,38 @@ export function buildStructuredUpdate(
   // time. Same class as the GH #106 / #223 / #265 guards the
   // PrusaSlicer-sync path uses.
   //
+  // Codex P1 on PR #473: "leave the variant alone" only works when the
+  // variant doesn't ALREADY carry a stale local override. If the
+  // imported value matches the parent AND the variant currently has its
+  // own diverging value, a no-op leaves the stale value in place forever
+  // (it would never be cleared by a subsequent identical-to-parent
+  // import either). Emit an `$unset` for that field so the variant
+  // returns to inheriting from the parent — which is what the user
+  // expects when their slicer profile finally agrees with the parent.
+  //
   // `color` is intentionally NOT inheritable (each variant has its
   // own color — that's the whole point of being a variant) so it
   // sets unconditionally below.
   const parent = existing?.parent ?? null;
   const isVariantWithParent = !!(existing?.parentId && parent);
+  const existingRow = existing as Record<string, unknown> | null;
+  const variantHasLocalValue = (key: string): boolean => {
+    if (!existingRow) return false;
+    const v = existingRow[key];
+    return v != null && v !== "";
+  };
   const setIfNotInherited = (
     key: string,
     parsedVal: unknown,
   ) => {
     if (parsedVal == null) return;
     if (isVariantWithParent && parent && parent[key] === parsedVal) {
-      // Parent already carries this exact value — leave variant
-      // unpinned so inheritance keeps working.
+      // Parent already carries this exact value. If the variant doc
+      // currently has a stale local value for this field, unset it so
+      // inheritance resumes; otherwise leave the variant alone.
+      if (variantHasLocalValue(key) && existingRow?.[key] !== parsedVal) {
+        unset.push(key);
+      }
       return;
     }
     u[key] = parsedVal;
@@ -192,7 +229,7 @@ export function buildStructuredUpdate(
     u.bedTypeTemps = [...byName.values()];
   }
 
-  return u;
+  return { set: u, unset };
 }
 
 export interface CalibrationOutcome {
