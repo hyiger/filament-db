@@ -129,7 +129,15 @@ function FilamentDetail() {
   const [weightSaving, setWeightSaving] = useState(false);
   const weightRef = useRef<HTMLInputElement>(null);
 
-  const [fetchError, setFetchError] = useState<string | null>(null);
+  // GH #405 follow-up (Codex on PR #460): store the error TYPE rather
+  // than the translated string. With `t` removed from the fetch
+  // effect's dep array (intentional — see the comment there),
+  // capturing the translated string at fetch time would freeze the
+  // message in whichever locale was active when the request failed.
+  // Render-time translation via the JSX path picks up the current
+  // locale on every re-render.
+  type FetchErrorKey = "loadFailed" | "connectionFailed" | null;
+  const [fetchError, setFetchError] = useState<FetchErrorKey>(null);
   const [showPrusamentImport, setShowPrusamentImport] = useState(false);
   const [locations, setLocations] = useState<{ _id: string; name: string; kind: string }[]>([]);
   const [printers, setPrinters] = useState<PrinterLite[]>([]);
@@ -207,12 +215,12 @@ function FilamentDetail() {
 
   useEffect(() => {
     const controller = new AbortController();
-    // GH #405: `t` is intentionally NOT in the dep array. The fetched
-    // payload doesn't depend on locale; the error-toast strings are
-    // re-rendered via `t` on locale change naturally because they're
-    // read inside JSX, not closed over inside the effect. Including
-    // `t` triggered a full filament re-fetch (and a flicker) on every
-    // language switch.
+    // GH #405: fetch the filament without `t` in the dep array. The
+    // payload is locale-independent and re-fetching on every
+    // `setLocale` was wasted bandwidth plus a flicker. Errors are
+    // stored as TYPE KEYS (`loadFailed` / `connectionFailed`) and
+    // resolved through `t(...)` at render time, so a locale switch
+    // mid-error retranslates without any new round-trip.
     //
     // Same-route navigation (`/filaments/A` → `/filaments/B`) state-
     // reset is handled by the `key={params.id}` on the wrapper below
@@ -222,13 +230,12 @@ function FilamentDetail() {
     fetch(`/api/filaments/${params.id}`, { signal: controller.signal })
       .then((r) => {
         if (r.status === 404) { setNotFound(true); return null; }
-        if (!r.ok) { setFetchError(t("detail.error.loadFailed")); return null; }
+        if (!r.ok) { setFetchError("loadFailed"); return null; }
         return r.json();
       })
       .then((data) => { if (data) setFilament(data); })
-      .catch((err) => { if (err.name !== "AbortError") setFetchError(t("detail.error.connectionFailed")); });
+      .catch((err) => { if (err.name !== "AbortError") setFetchError("connectionFailed"); });
     return () => controller.abort();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id]);
 
   // Load locations once so the spool cards can show a picker without each
@@ -704,7 +711,7 @@ function FilamentDetail() {
       <Link href="/" className="text-blue-600 hover:underline text-sm">&larr; {t("detail.backToFilaments")}</Link>
     </div>
   );
-  if (fetchError) return <p className="p-8 text-red-500">{fetchError}</p>;
+  if (fetchError) return <p className="p-8 text-red-500">{t(`detail.error.${fetchError}`)}</p>;
   if (!filament) return <p className="p-8 text-gray-500">{t("common.loading")}</p>;
 
   const inherited = new Set(filament._inherited || []);
