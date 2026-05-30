@@ -6,6 +6,7 @@ import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { formatDate } from "@/lib/dateFormat";
+import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 
 /**
  * GH #389 — Spool Inventory page.
@@ -348,7 +349,22 @@ export default function InventoryPage() {
 
       {/* Groups */}
       {loading ? (
-        <p className="text-gray-500">{t("inventory.loading")}</p>
+        // GH #449: skeleton placeholders instead of a single "Loading…"
+        // line. Three card-shaped blocks mirror the group cards that
+        // arrive once the fetch completes, so the layout doesn't
+        // reflow when content lands.
+        <SkeletonRegion label={t("inventory.loading")} className="space-y-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div
+              key={i}
+              className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 space-y-3"
+            >
+              <Skeleton className="h-5 w-48 rounded" />
+              <Skeleton className="h-4 w-full rounded" />
+              <Skeleton className="h-4 w-3/4 rounded" />
+            </div>
+          ))}
+        </SkeletonRegion>
       ) : filteredGroups.length === 0 ? (
         <div className="text-center py-12 border border-dashed border-gray-300 dark:border-gray-700 rounded-lg">
           <p className="text-gray-500 mb-3">{t("inventory.empty")}</p>

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { formatDate, formatDateTime } from "@/lib/dateFormat";
 import { useCurrency } from "@/hooks/useCurrency";
+import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 
 interface DashboardData {
   counts: {
@@ -104,9 +105,36 @@ export default function DashboardPage() {
   }
 
   if (!data) {
+    // GH #449: skeleton placeholders — 6 metric tiles + a couple of
+    // section blocks — so the layout doesn't reflow when content
+    // lands. Matches the shape that comes back from /api/dashboard.
     return (
       <main id="main-content" className="w-full px-4 py-8">
-        <p className="text-sm text-gray-500">{t("common.loading")}</p>
+        <SkeletonRegion label={t("common.loading")} className="space-y-6">
+          <Skeleton className="h-9 w-48 rounded" />
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div
+                key={i}
+                className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 space-y-2"
+              >
+                <Skeleton className="h-3 w-20 rounded" />
+                <Skeleton className="h-7 w-16 rounded" />
+              </div>
+            ))}
+          </div>
+          {Array.from({ length: 2 }).map((_, i) => (
+            <div
+              key={i}
+              className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 space-y-2"
+            >
+              <Skeleton className="h-5 w-40 rounded" />
+              {Array.from({ length: 3 }).map((__, j) => (
+                <Skeleton key={j} className="h-4 w-full rounded" />
+              ))}
+            </div>
+          ))}
+        </SkeletonRegion>
       </main>
     );
   }

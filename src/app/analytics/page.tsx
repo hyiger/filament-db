@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 
 interface AnalyticsData {
   since: string;
@@ -99,7 +100,30 @@ export default function AnalyticsPage() {
         </div>
       </div>
 
-      {loading && !data && <p className="text-sm text-gray-500">{t("common.loading")}</p>}
+      {loading && !data && (
+        // GH #449: skeleton placeholders — totals row + chart area +
+        // 4-row table — so the layout doesn't reflow when the
+        // analytics fetch lands.
+        <SkeletonRegion label={t("common.loading")} className="space-y-6">
+          <div className="grid grid-cols-3 gap-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div
+                key={i}
+                className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 space-y-2"
+              >
+                <Skeleton className="h-3 w-20 rounded" />
+                <Skeleton className="h-7 w-16 rounded" />
+              </div>
+            ))}
+          </div>
+          <Skeleton className="h-48 w-full rounded" />
+          <div className="border border-gray-200 dark:border-gray-800 rounded-lg p-4 space-y-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-5 w-full rounded" />
+            ))}
+          </div>
+        </SkeletonRegion>
+      )}
 
       {error && !loading && (
         <div className="border border-gray-200 dark:border-gray-800 rounded p-6 text-center">
