@@ -418,7 +418,16 @@ export class NfcService extends EventEmitter {
     const protocol = await this.connect();
 
     try {
-      return await fn(protocol);
+      const result = await fn(protocol);
+      // Codex P2 on PR #476 round 2: a successful round-trip proves the
+      // reader + PC/SC daemon are healthy, so clear any lingering
+      // lastError. Without this, a user who resolves a transient busy /
+      // permission issue and then successfully reads or writes a tag
+      // would still see the red error pill until a reader status event
+      // fires (which doesn't have to happen if the same tag is still
+      // sitting on the reader).
+      this.clearLastError();
+      return result;
     } finally {
       try { await this.disconnect(); } catch { /* */ }
     }
