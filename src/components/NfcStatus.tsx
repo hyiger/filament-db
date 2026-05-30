@@ -72,12 +72,19 @@ export default function NfcStatus() {
     // omitted because it would override the implicit button role and
     // strip the click affordance. The live-region behaviour matches
     // the <div> branch below.
+    //
+    // Codex P2 on PR #475 round 3: also DON'T clobber the visible pill
+    // text with a static "Reopen NFC scan details" aria-label — that
+    // hides the actual NFC status (the very thing the user needs to
+    // discover via this pill). Fold the visible status into the
+    // accessible name so a SR user hears "<status> — Reopen scan
+    // details", preserving both the state and the action affordance.
     return (
       <button
         type="button"
         onClick={reopenTagRead}
-        title={t("nfc.reopen")}
-        aria-label={t("nfc.reopen")}
+        title={`${label} — ${t("nfc.reopen")}`}
+        aria-label={`${label} — ${t("nfc.reopen")}`}
         aria-live="polite"
         aria-atomic="true"
         className={`${sharedClasses} cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500`}

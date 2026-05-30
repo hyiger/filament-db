@@ -247,12 +247,17 @@ export default function SyncStatusIndicator() {
         onClick={() => setShowTooltip(!showTooltip)}
         // GH #414: SR users had no signal that this pill expands a
         // tooltip with sync controls. `aria-haspopup="dialog"` plus
-        // `aria-expanded` makes the trigger announce its role, and a
-        // stable `aria-label` survives `pill.label` reading as a raw
-        // timestamp like "Synced 5 minutes ago".
+        // `aria-expanded` makes the trigger announce its role.
+        //
+        // Codex P2 on PR #475 round 3: an aria-label of just "Open sync
+        // details" hid the visible state from SR users — failures,
+        // partial-sync, offline, syncing-in-progress all collapsed to
+        // the same generic name. Fold pill.label into the accessible
+        // name so the status the sighted user sees is the status the
+        // SR user hears, with the action affordance appended.
         aria-haspopup="dialog"
         aria-expanded={showTooltip}
-        aria-label={t("sync.tooltip.openDetails")}
+        aria-label={`${pill.label} — ${t("sync.tooltip.openDetails")}`}
         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs ${pill.bg} ${pill.text} hover:opacity-80 transition-opacity`}
       >
         <span className={`w-1.5 h-1.5 rounded-full ${pill.dot}`} aria-hidden="true" />
