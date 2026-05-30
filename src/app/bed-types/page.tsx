@@ -102,7 +102,7 @@ export default function BedTypesPage() {
   };
 
   return (
-    <main className="max-w-4xl mx-auto px-4 py-8">
+    <main id="main-content" className="max-w-4xl mx-auto px-4 py-8">
       <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">{t("bedTypes.title")}</h1>

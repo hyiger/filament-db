@@ -255,7 +255,7 @@ export default function SharedCatalogPage() {
 
   if (error) {
     return (
-      <main className="max-w-3xl mx-auto px-4 py-8">
+      <main id="main-content" className="max-w-3xl mx-auto px-4 py-8">
         <p className="text-red-600 dark:text-red-400">{error}</p>
         <Link href="/" className="text-blue-600 hover:underline text-sm mt-3 inline-block">
           &larr; {t("share.backToFilaments")}
@@ -266,14 +266,14 @@ export default function SharedCatalogPage() {
 
   if (!data) {
     return (
-      <main className="max-w-3xl mx-auto px-4 py-8">
+      <main id="main-content" className="max-w-3xl mx-auto px-4 py-8">
         <p className="text-sm text-gray-500">{t("common.loading")}</p>
       </main>
     );
   }
 
   return (
-    <main className="max-w-3xl mx-auto px-4 py-8">
+    <main id="main-content" className="max-w-3xl mx-auto px-4 py-8">
       <div className="mb-4">
         <Link href="/" className="text-blue-600 hover:underline text-sm">
           &larr; {t("share.backToFilaments")}

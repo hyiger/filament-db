@@ -242,7 +242,7 @@ export default function InventoryPage() {
   );
 
   return (
-    <main className="w-full max-w-7xl mx-auto px-4 py-8">
+    <main id="main-content" className="w-full max-w-7xl mx-auto px-4 py-8">
       <div className="flex items-start justify-between mb-6 gap-4">
         <div>
           <h1 className="text-3xl font-bold">{t("inventory.title")}</h1>

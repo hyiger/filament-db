@@ -85,7 +85,7 @@ export default function EditLocation() {
   if (!location) return <p className="p-8 text-gray-500">{t("locations.loading")}</p>;
 
   return (
-    <main className="max-w-2xl mx-auto px-4 py-8">
+    <main id="main-content" className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
         <Link href="/locations" className="text-blue-600 hover:underline text-sm" onClick={handleBack}>
           &larr; {t("locations.backToLocations")}

@@ -39,7 +39,7 @@ export default function NewBedType() {
   };
 
   return (
-    <main className="max-w-2xl mx-auto px-4 py-8">
+    <main id="main-content" className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
         <Link href="/bed-types" className="text-blue-600 hover:underline text-sm" onClick={handleBack}>
           {t("bedTypes.backToBedTypes")}

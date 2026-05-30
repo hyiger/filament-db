@@ -106,7 +106,7 @@ export default function SetupPage() {
   // Mode not yet selected — show options
   if (!mode) {
     return (
-      <main className="min-h-screen flex items-center justify-center px-4">
+      <main id="main-content" className="min-h-screen flex items-center justify-center px-4">
         <div className="max-w-lg w-full">
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold mb-2">{t("setup.title")}</h1>
@@ -185,7 +185,7 @@ export default function SetupPage() {
   // Offline mode — confirm and go
   if (mode === "offline") {
     return (
-      <main className="min-h-screen flex items-center justify-center px-4">
+      <main id="main-content" className="min-h-screen flex items-center justify-center px-4">
         <div className="max-w-md w-full">
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold mb-2">{t("setup.title")}</h1>
@@ -229,7 +229,7 @@ export default function SetupPage() {
 
   // Atlas or Hybrid mode — need connection string
   return (
-    <main className="min-h-screen flex items-center justify-center px-4">
+    <main id="main-content" className="min-h-screen flex items-center justify-center px-4">
       <div className="max-w-md w-full">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold mb-2">{t("setup.title")}</h1>

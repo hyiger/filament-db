@@ -185,7 +185,7 @@ export default function TrashPage() {
   };
 
   return (
-    <main className="max-w-4xl mx-auto px-4 py-8">
+    <main id="main-content" className="max-w-4xl mx-auto px-4 py-8">
       <div className="mb-4">
         <Link href="/" className="text-blue-600 hover:underline text-sm">
           &larr; {t("trash.backToFilaments")}

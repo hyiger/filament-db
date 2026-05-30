@@ -71,7 +71,7 @@ export default function EditNozzle() {
   if (!nozzle) return <p className="p-8 text-gray-500">{t("nozzles.loading")}</p>;
 
   return (
-    <main className="max-w-2xl mx-auto px-4 py-8">
+    <main id="main-content" className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
         <Link href="/nozzles" className="text-blue-600 hover:underline text-sm" onClick={handleBack}>
           &larr; {t("nozzles.backToNozzles")}
