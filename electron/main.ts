@@ -9,6 +9,7 @@ import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
 import { initAutoUpdater } from "./auto-updater";
 import { assertTrustedSender, validateMongoUri } from "./ipc-security";
+import { shouldApplyAppCsp } from "./csp-scope";
 
 // ── Diagnostic log ──
 // Writes lifecycle and crash events to a file in userData so users on
@@ -1129,13 +1130,13 @@ app.whenReady().then(async () => {
   // Gate on the response URL's origin matching the app origin.
   const APP_ORIGIN = `http://localhost:${PORT}`;
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    let requestOrigin: string | null = null;
-    try {
-      requestOrigin = new URL(details.url).origin;
-    } catch {
-      // Malformed URL — fall through and don't touch the headers.
-    }
-    if (requestOrigin !== APP_ORIGIN) {
+    // Critical: shouldApplyAppCsp returns false for vendor TDS iframe
+    // responses (origin !== APP_ORIGIN). Without that early-out, the
+    // `frame-ancestors 'none'` directive below would land on the
+    // vendor document and Chromium would refuse to embed it. See
+    // `electron/csp-scope.ts` for the rationale and the dedicated
+    // unit test that pins this contract.
+    if (!shouldApplyAppCsp(details.url, APP_ORIGIN)) {
       callback({ responseHeaders: details.responseHeaders });
       return;
     }

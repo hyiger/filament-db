@@ -55,16 +55,36 @@ const KNOWN_DIRECTIVES = [
   "child-src",
 ] as const;
 
+/**
+ * Strip JS / TS comments before scanning for directives. Codex
+ * follow-up on PR #462 round 2: the regex matches directive names
+ * followed by a CSP value token, but the source file contains
+ * COMMENTS that quote real CSP fragments verbatim (e.g.
+ * `// 'base-uri 'self'' (prevents <base> injection)`). Those
+ * comment mentions would falsely satisfy the parity assertion.
+ *
+ * Doesn't try to be a full TS parser — the only comment shapes in
+ * this repo are `// line` and `/* block *​/`, so a tiny regex pass
+ * is enough. The negative lookbehind on `//` (preceding char not
+ * `:`) keeps `https://` / `mongodb://` URLs in code from being
+ * misread as line comments.
+ */
+function stripComments(text: string): string {
+  return text
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
 function readDirectives(filePath: string): Set<string> {
-  const text = readFileSync(resolve(REPO_ROOT, filePath), "utf8");
+  const raw = readFileSync(resolve(REPO_ROOT, filePath), "utf8");
+  const text = stripComments(raw);
   const seen = new Set<string>();
   for (const name of KNOWN_DIRECTIVES) {
     // Match the directive name preceded by a non-word-char boundary
     // (so `style-src` doesn't accidentally match inside `frame-style-src`)
     // and followed by whitespace + a value that starts with a CSP value
     // token (`'self'`, `'none'`, `https:`, `data:`, `blob:`, `*`, `ws:`,
-    // or a hostname-like character). That filters out prose mentions
-    // and comment text.
+    // or a hostname-like character).
     const pattern = new RegExp(
       String.raw`(?:^|[^a-z\-])` +
         name.replace(/-/g, "\\-") +
