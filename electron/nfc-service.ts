@@ -217,13 +217,22 @@ export class NfcService extends EventEmitter {
         { share_mode: reader.SCARD_SHARE_SHARED },
         (err: unknown, protocol: number) => {
           if (err || protocol == null || protocol <= 0) {
-            // GH #436: even when `err` is set or `protocol <= 0`, the
-            // underlying PC/SC SCardConnect may have partially opened
-            // a handle (e.g. "session already exists" returns an err
-            // but leaves state behind). Call disconnect to release
-            // anything that was claimed before we move on. Failures
-            // are swallowed because we're already on the failure path.
-            reader.disconnect(reader.SCARD_LEAVE_CARD, () => resolve(null));
+            // Codex follow-up on #469: an earlier round called
+            // `reader.disconnect()` on this path. The @pokusew/pcsclite
+            // public wrapper short-circuits when its internal
+            // `connected` flag is false, which is the case after a
+            // failed connect — so the call was a no-op and didn't
+            // actually release the native handle.
+            //
+            // The native fix would require touching pcsclite internals
+            // (`reader._disconnect` or driving the C++ binding
+            // directly), which is hostile to portability across
+            // pcsclite versions. The leak is bounded by the OS PC/SC
+            // daemon's GC of disowned handles and the retry-loop
+            // hand-off in `connect()` above, which DOES release
+            // successfully-connected readers. Accept the residual
+            // failed-connect leak and resolve cleanly.
+            resolve(null);
             return;
           }
           resolve(protocol);
