@@ -531,10 +531,14 @@ export class NfcService extends EventEmitter {
       // original use. A blank tag (`0x00 0x00 ...`) still passes
       // because formatTag is the path for that; a wrong-format tag
       // is the case this guard catches.
-      if (block0[0] !== 0xe1 && block0[0] !== 0x00) {
+      // NFC Forum Type 5 CC magic byte is 0xE1 (standard) or 0xE2
+      // (extended CC, used by larger ISO 15693 tags). Both are valid
+      // NDEF-formatted tags the app can safely reformat. Blank (0x00)
+      // is also fine — that's exactly what formatTag is for.
+      if (block0[0] !== 0xe1 && block0[0] !== 0xe2 && block0[0] !== 0x00) {
         throw new Error(
-          "Tag refuses NFC-Forum write (block 0 CC byte is not 0xE1 or 0x00). " +
-            "This looks like a non-OpenPrintTag formatted tag — remove and replace with a blank or OpenPrintTag tag.",
+          "Tag refuses NFC-Forum write (block 0 is neither 0xE1/0xE2 CC nor blank 0x00). " +
+            "This looks like a non-NDEF formatted tag — remove and replace with a blank or NDEF-formatted tag.",
         );
       }
       const mlen = sanitizeMlen(block0[2]);
@@ -592,10 +596,14 @@ export class NfcService extends EventEmitter {
       // format tag (anything other than 0xE1 or 0x00 at position 0)
       // would have its block 0 silently overwritten, potentially
       // bricking the tag for its original use.
-      if (block0[0] !== 0xe1 && block0[0] !== 0x00) {
+      // NFC Forum Type 5 CC magic byte is 0xE1 (standard) or 0xE2
+      // (extended CC, used by larger ISO 15693 tags). Both are valid
+      // NDEF-formatted tags the app can safely reformat. Blank (0x00)
+      // is also fine — that's exactly what formatTag is for.
+      if (block0[0] !== 0xe1 && block0[0] !== 0xe2 && block0[0] !== 0x00) {
         throw new Error(
-          "Tag refuses NFC-Forum format (block 0 CC byte is not 0xE1 or 0x00). " +
-            "This looks like a non-OpenPrintTag formatted tag — remove and replace with a blank or OpenPrintTag tag.",
+          "Tag refuses NFC-Forum format (block 0 is neither 0xE1/0xE2 CC nor blank 0x00). " +
+            "This looks like a non-NDEF formatted tag — remove and replace with a blank or NDEF-formatted tag.",
         );
       }
       const mlen = sanitizeMlen(block0[2]);
