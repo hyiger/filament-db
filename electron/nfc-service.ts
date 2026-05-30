@@ -216,7 +216,16 @@ export class NfcService extends EventEmitter {
       reader.connect(
         { share_mode: reader.SCARD_SHARE_SHARED },
         (err: unknown, protocol: number) => {
-          if (err || protocol == null || protocol <= 0) return resolve(null);
+          if (err || protocol == null || protocol <= 0) {
+            // GH #436: even when `err` is set or `protocol <= 0`, the
+            // underlying PC/SC SCardConnect may have partially opened
+            // a handle (e.g. "session already exists" returns an err
+            // but leaves state behind). Call disconnect to release
+            // anything that was claimed before we move on. Failures
+            // are swallowed because we're already on the failure path.
+            reader.disconnect(reader.SCARD_LEAVE_CARD, () => resolve(null));
+            return;
+          }
           resolve(protocol);
         },
       );
@@ -256,11 +265,27 @@ export class NfcService extends EventEmitter {
 
     // Try each reader instance with SHARED mode.
     // Re-read this.readers on each attempt since new readers may register during waits.
+    //
+    // GH #436: when a retry iteration succeeds on reader B after a
+    // previous iteration had set `this.activeReader = readerA` (and
+    // returned a valid protocol on A, but withConnection's caller
+    // failed somewhere in between), readerA's handle stays open. PC/SC
+    // handles are scarce on Linux pcscd; after a few cycles the OS
+    // reports "no readers." Track every reader we've connected to in
+    // this attempt so they all get released if we hand off to a new one
+    // or fall through to the final throw.
+    const connectedReaders = new Set<CardReader>();
     const tryAllReaders = async (): Promise<number | null> => {
       for (const reader of this.readers.values()) {
         const protocol = await this.trySharedConnect(reader);
         if (protocol) {
+          // Hand-off: previous candidate (if any) loses its connection.
+          if (this.activeReader && this.activeReader !== reader) {
+            await this.disconnectReader(this.activeReader).catch(() => {});
+            connectedReaders.delete(this.activeReader);
+          }
           this.activeReader = reader;
+          connectedReaders.add(reader);
           return protocol;
         }
       }
@@ -284,6 +309,14 @@ export class NfcService extends EventEmitter {
       }
     }
 
+    // GH #436: every reader we ever opened in this attempt is now stale —
+    // there's no `activeReader` to hand back, and `withConnection`'s
+    // disconnect path only knows about `activeReader`. Walk our tracking
+    // set and release each handle.
+    for (const r of connectedReaders) {
+      await this.disconnectReader(r).catch(() => {});
+    }
+    this.activeReader = null;
     throw new Error(
       "Cannot connect to tag — the reader detected a tag but could not establish a connection. " +
       "Try removing and replacing the tag.",
@@ -489,6 +522,21 @@ export class NfcService extends EventEmitter {
   async writeTag(cborPayload: Uint8Array, productUrl?: string): Promise<void> {
     return this.withConnection(async (protocol) => {
       const block0 = await this.readBlock(protocol, 0);
+      // GH #437: refuse to overwrite a tag that doesn't carry an NFC-
+      // Forum Type 5 CC byte. The read path checks this; the write
+      // path historically didn't, so a user with a non-blank tag of
+      // a different format (proprietary, RFID inventory, transit
+      // card) in the field at the moment they triggered Write got
+      // its block 0 overwritten — potentially bricking it for its
+      // original use. A blank tag (`0x00 0x00 ...`) still passes
+      // because formatTag is the path for that; a wrong-format tag
+      // is the case this guard catches.
+      if (block0[0] !== 0xe1 && block0[0] !== 0x00) {
+        throw new Error(
+          "Tag refuses NFC-Forum write (block 0 CC byte is not 0xE1 or 0x00). " +
+            "This looks like a non-OpenPrintTag formatted tag — remove and replace with a blank or OpenPrintTag tag.",
+        );
+      }
       const mlen = sanitizeMlen(block0[2]);
       // GH #301/#322: cap the write extent at the SLIX2-class size the
       // app's own payloads are built for. sanitizeMlen now preserves a
@@ -539,6 +587,17 @@ export class NfcService extends EventEmitter {
       // written back into the CC — a corrupt byte written here would
       // brick the tag for the app.
       const block0 = await this.readBlock(protocol, 0);
+      // GH #437: same CC-byte guard as writeTag. A blank tag (0x00)
+      // is fine — that's exactly what formatTag is for. A wrong-
+      // format tag (anything other than 0xE1 or 0x00 at position 0)
+      // would have its block 0 silently overwritten, potentially
+      // bricking the tag for its original use.
+      if (block0[0] !== 0xe1 && block0[0] !== 0x00) {
+        throw new Error(
+          "Tag refuses NFC-Forum format (block 0 CC byte is not 0xE1 or 0x00). " +
+            "This looks like a non-OpenPrintTag formatted tag — remove and replace with a blank or OpenPrintTag tag.",
+        );
+      }
       const mlen = sanitizeMlen(block0[2]);
       const numBlocks = Math.min(Math.ceil((mlen * 8) / BLOCK_SIZE), DEFAULT_BLOCK_COUNT);
 

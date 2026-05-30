@@ -79,6 +79,15 @@ export function initAutoUpdater(win: BrowserWindow) {
 
   ipcMain.handle("update-check", async () => {
     if (!app.isPackaged) return { ok: false, error: "dev-mode" };
+    // GH #433: don't re-check while a download is in flight or an
+    // update is sitting ready to install. `autoUpdater.checkForUpdates()`
+    // re-emits `update-available` / `update-not-available`, which would
+    // overwrite the in-progress `downloading` / `ready` state in
+    // `currentState` and blow away the progress UI. The download itself
+    // continues internally but the renderer briefly sees a stale state.
+    if (currentState.state === "downloading" || currentState.state === "ready") {
+      return { ok: true, skipped: currentState.state };
+    }
     try {
       await autoUpdater.checkForUpdates();
       return { ok: true };
@@ -200,9 +209,16 @@ export function initAutoUpdater(win: BrowserWindow) {
   // Check once shortly after startup, then every 6 hours while running.
   // A short initial delay avoids hammering the API while the window is still
   // mounting and lets the user see the app first.
-  setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 20 * 1000);
-  setInterval(
-    () => autoUpdater.checkForUpdates().catch(() => {}),
-    6 * 60 * 60 * 1000,
-  );
+  //
+  // GH #433: skip when an update is downloading or ready — re-checking
+  // would overwrite the progress state. The IPC `update-check` handler
+  // has the same guard.
+  const checkUnlessBusy = () => {
+    if (currentState.state === "downloading" || currentState.state === "ready") {
+      return;
+    }
+    autoUpdater.checkForUpdates().catch(() => {});
+  };
+  setTimeout(checkUnlessBusy, 20 * 1000);
+  setInterval(checkUnlessBusy, 6 * 60 * 60 * 1000);
 }

@@ -42,11 +42,26 @@ export async function startLocalMongo(): Promise<string> {
     },
   });
 
-  uri = mongod.getUri();
-  // Append the database name
-  const url = new URL(uri);
-  url.pathname = "/filament-db";
-  uri = url.toString();
+  // GH #435: if anything in the URI-parse / db-name-append block
+  // throws (malformed URI is the obvious case), the catch must roll
+  // back the partially-initialised state. Without rollback `mongod`
+  // stays set with `uri` still null — the next startLocalMongo()
+  // call's `if (mongod && uri) return uri` guard is false (uri is
+  // null), so it re-enters `MongoMemoryServer.create()` while the
+  // previous instance is still running → port conflict + orphaned
+  // mongod.
+  try {
+    let rawUri = mongod.getUri();
+    const url = new URL(rawUri);
+    url.pathname = "/filament-db";
+    rawUri = url.toString();
+    uri = rawUri;
+  } catch (err) {
+    await mongod.stop().catch(() => {});
+    mongod = null;
+    uri = null;
+    throw err;
+  }
 
   console.log("Local MongoDB started:", uri);
   return uri;
