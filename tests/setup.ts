@@ -47,16 +47,40 @@ afterEach(async () => {
 
 // Bump the hook timeout — vitest's default of 10s isn't enough for the
 // disconnect + mongod stop pipeline on slow / first-run machines.
+//
 // GH #186 + GH #399: mongodb-memory-server's stop() default sends
 // SIGINT to mongod and waits ~10s before falling back to SIGKILL — but
-// vitest's worker-level SIGINT→SIGKILL grace is shorter than that, so
-// vitest force-kills the worker (with a noisy SIGKILL warning) before
-// mongod even gets the chance to exit cleanly. `force: true` below
-// skips mongod's SIGINT phase entirely and goes straight to SIGKILL,
-// so the per-worker teardown completes in <1s and vitest sees a clean
-// exit — eliminating both the warning noise AND the apparent "stalled"
-// progress while workers wait to die.
+// vitest's worker-level SIGINT→SIGKILL grace is shorter, so vitest
+// force-kills the worker (with a noisy SIGKILL warning) before mongod
+// has a chance to exit cleanly.
+//
+// Codex P2 on PR #479 r3: `stop({ force: true })` does NOT shorten
+// the kill phase. In mongodb-memory-server-core@11.0.1, `force` is
+// only consumed by `cleanup()` to allow removing non-temp data dirs;
+// `_instanceInfo.instance.stop()` (which actually kills mongod) still
+// runs the full SIGINT→wait→SIGKILL dance via the upstream
+// `killProcess` helper.
+//
+// Real fix: SIGKILL the mongod child process directly via
+// `process.kill(pid, 'SIGKILL')` BEFORE calling `mongoServer.stop()`.
+// `stop()` then races a 1ms-ish wait for the already-dead child to be
+// reaped and proceeds straight to cleanup() — per-worker teardown
+// completes in well under 1s. The data directory is a temp dir and
+// mongodb-memory-server-core registers a `process.on('exit')` hook
+// that wipes it regardless of how we got there, so no orphaned state.
 const TEARDOWN_TIMEOUT_MS = 30_000;
+
+/** Reach into mongodb-memory-server's internals to find the mongod
+ *  child pid. The shape is intentionally narrowed; if upstream
+ *  refactors a field name in a future release, the optional chain
+ *  short-circuits to undefined and the teardown falls back to the
+ *  slow stop() path with a logged warning rather than throwing. */
+function getMongodPid(server: MongoMemoryServer): number | undefined {
+  type Reach = {
+    instanceInfo?: { instance?: { childProcess?: { pid?: number } } };
+  };
+  return (server as unknown as Reach).instanceInfo?.instance?.childProcess?.pid;
+}
 
 afterAll(async () => {
   // Guard each step — if beforeAll failed, mongoServer may be null and
@@ -70,10 +94,18 @@ afterAll(async () => {
     // ignore
   }
   if (mongoServer) {
-    // GH #399: `force: true` skips the SIGINT-then-wait dance and
-    // SIGKILLs mongod immediately. Safe here because the in-memory
-    // mongod has no persistent state to lose — its data directory is
-    // a temp dir that gets cleaned up next.
-    await mongoServer.stop({ force: true, doCleanup: true }).catch(() => {});
+    // GH #399 (Codex P2 PR #479 r3): kill mongod BEFORE calling stop()
+    // so the stop()'s internal `killProcess` doesn't sit in its 10s
+    // SIGINT wait. The kill is best-effort — if it fails or the child
+    // is already gone, stop() handles cleanup as usual.
+    const pid = getMongodPid(mongoServer);
+    if (pid != null) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // child already exited, or we don't own it — let stop() decide.
+      }
+    }
+    await mongoServer.stop({ doCleanup: true, force: true }).catch(() => {});
   }
 }, TEARDOWN_TIMEOUT_MS);
