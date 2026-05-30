@@ -194,15 +194,18 @@ export async function GET(request: NextRequest) {
       // Retired filter happens AFTER unwind because it's on the spool
       // subdoc, not the filament.
       ...(!includeRetired ? [{ $match: { "spools.retired": { $ne: true } } }] : []),
-      // GH #429: belt-and-braces cap on the post-unwind spool stream.
-      // The aggregation expands to one doc per spool across every
-      // active filament, and the inventory page renders them all in a
-      // single DOM tree — both the response payload and the client
-      // memory footprint are unbounded in size. Drop `photoDataUrl`
-      // up above removed the worst-case per-row size; this stops a
-      // pathological deployment (10k+ filaments) from streaming
-      // hundreds of thousands of rows in one response.
-      { $limit: 10000 },
+      // GH #429: the response is still nominally unbounded (one row
+      // per spool across every active filament). The earlier
+      // photoDataUrl drop killed the worst-case per-row size — a
+      // realistic deployment with thousands of spools now serialises
+      // to a few hundred KB rather than tens of MB. A post-`$unwind`
+      // `$limit` was tried here but Codex pointed out it would have
+      // SILENTLY truncated groups: `kind=printer` etc. filters run
+      // AFTER unwind, so the cap would drop spools by document order
+      // and leave `totalSpools`/per-location counts wrong. Pagination
+      // (limit/offset with deterministic sort + truncated flag) is the
+      // correct fix when a deployment really has 10k+ spools; tracked
+      // separately rather than capping unsafely here.
       {
         $group: {
           _id: "$spools.locationId",

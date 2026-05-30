@@ -170,15 +170,31 @@ export async function POST(request: NextRequest) {
   // action === "create" — create a new filament
   const name = `Prusament ${spool.material} ${spool.colorName}`;
 
+  // GH #430 (Codex follow-up on #463): the create flow ALSO has to
+  // carry the Prusament traceability fields onto every spool subdoc
+  // it writes. Pre-fix the create branch + the existing-name $push
+  // fallback both wrote `{ label, totalWeight }` only, silently
+  // dropping the spool id and manufacture date that are the whole
+  // point of a Prusament import — even though the add-spool branch
+  // higher up already did the right thing.
+  const purchaseDateForCreate = isValidIsoDateString(
+    spool.manufactureDate.split(" ")[0],
+  )
+    ? new Date(spool.manufactureDate.split(" ")[0])
+    : null;
+  const prusamentSpoolFields = {
+    label: spoolLabel,
+    totalWeight: spool.totalWeight,
+    lotNumber: spool.spoolId,
+    ...(purchaseDateForCreate ? { purchaseDate: purchaseDateForCreate } : {}),
+  };
+
   // Atomically check for existing filament with same name and add spool if found
   const existingUpdated = await Filament.findOneAndUpdate(
     { name, _deletedAt: null },
     {
       $push: {
-        spools: {
-          label: spoolLabel,
-          totalWeight: spool.totalWeight,
-        },
+        spools: prusamentSpoolFields,
       },
     },
     { returnDocument: "after" },
@@ -209,12 +225,7 @@ export async function POST(request: NextRequest) {
     },
     spoolWeight: spool.spoolWeight,
     netFilamentWeight: spool.netWeight,
-    spools: [
-      {
-        label: spoolLabel,
-        totalWeight: spool.totalWeight,
-      },
-    ],
+    spools: [prusamentSpoolFields],
     tdsUrl: spool.pageUrl,
     settings: {
       prusament_spool_id: spool.spoolId,
