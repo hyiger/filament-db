@@ -24,6 +24,7 @@
     "electron:pack": "electron-builder --config electron-builder.yml"
   },
   "dependencies": {
+    "@pokusew/pcsclite": "^0.6.0",
     "electron-store": "^11.0.2",
     "electron-updater": "^6.8.3",
     "exceljs": "^4.4.0",
