@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { formatDateTime } from "@/lib/dateFormat";
 
 interface SyncStatus {
   // GH #369: "partial" = at least one collection synced, at least one failed.
@@ -22,7 +23,7 @@ function formatRelativeTime(iso: string, t: (key: string, params?: Record<string
 }
 
 export default function SyncStatusIndicator() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [status, setStatus] = useState<SyncStatus | null>(null);
   const [mode, setMode] = useState<string>("");
   const [isFallback, setIsFallback] = useState(false);
@@ -274,7 +275,7 @@ export default function SyncStatusIndicator() {
           </div>
           {status.lastSyncAt && (
             <div className="text-gray-500 dark:text-gray-400 mb-2">
-              <strong>{t("sync.tooltip.lastSync")}:</strong> {new Date(status.lastSyncAt).toLocaleString()}
+              <strong>{t("sync.tooltip.lastSync")}:</strong> {formatDateTime(status.lastSyncAt, locale)}
             </div>
           )}
           {status.error && (

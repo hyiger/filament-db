@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { formatDate } from "@/lib/dateFormat";
 
 /**
  * GH #389 — Spool Inventory page.
@@ -458,7 +459,7 @@ interface RowProps {
 }
 
 function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }: RowProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const grams = remainingGrams(row);
   const pct = remainingPct(row);
 
@@ -638,7 +639,7 @@ function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }:
       <td className="py-2 px-3 text-xs text-gray-500">
         {row.lastDryAt ? (
           <div className="inline-flex items-center gap-1.5">
-            <span>{new Date(row.lastDryAt).toLocaleDateString()}</span>
+            <span>{formatDate(row.lastDryAt, locale)}</span>
             {/* GH #443: dry-cycle count was buried inside a title=
                 tooltip — touch-only iPad / tablet users never see it.
                 Surface as a visible chip next to the date. */}

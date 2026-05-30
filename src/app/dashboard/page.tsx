@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { formatDate, formatDateTime } from "@/lib/dateFormat";
 import { useCurrency } from "@/hooks/useCurrency";
 
 interface DashboardData {
@@ -42,7 +43,7 @@ interface DashboardData {
 }
 
 export default function DashboardPage() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   useCurrency(); // reserved for per-vendor cost summaries later
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -84,7 +85,7 @@ export default function DashboardPage() {
   const prettifySpoolLabel = (label: string): string =>
     label.replace(/\((\d{4}-\d{2}-\d{2}T[\d:+\-Z.]+)\)/g, (_, iso) => {
       const d = new Date(iso);
-      return Number.isNaN(d.getTime()) ? `(${iso})` : `(${d.toLocaleDateString()})`;
+      return Number.isNaN(d.getTime()) ? `(${iso})` : `(${formatDate(d, locale)})`;
     });
 
   if (error) {
@@ -202,7 +203,7 @@ export default function DashboardPage() {
                 <span className="text-gray-500 text-xs ml-2">
                   {d.lastDried
                     ? t("dashboard.dryDue.lastDried", {
-                        date: new Date(d.lastDried).toLocaleDateString(),
+                        date: formatDate(d.lastDried, locale),
                       })
                     : t("dashboard.dryDue.never")}
                 </span>
@@ -225,7 +226,7 @@ export default function DashboardPage() {
                   <p className="font-medium truncate">{p.jobLabel}</p>
                   <p className="text-xs text-gray-500">
                     {p.printerName ? `${p.printerName} · ` : ""}
-                    {new Date(p.startedAt).toLocaleString()}
+                    {formatDateTime(p.startedAt, locale)}
                     {p.source !== "manual" && ` · ${p.source}`}
                   </p>
                 </div>

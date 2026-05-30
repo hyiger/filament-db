@@ -365,6 +365,21 @@ Funktioniert auch von der Detailseite eines Filaments, um eine weitere Spule des
 
 ---
 
+## Spulen-Inventar *(v1.32)*
+
+Die **Inventar**-Seite unter `/inventory` zeigt dieselben Daten wie die Filamentliste, jedoch aus der entgegengesetzten Perspektive — statt „jedes Filament mit seinen Spulen darunter" siehst du „jeden Standort mit den dort gelagerten Filamenten darunter". Nutze sie, um ein Regal oder eine Trockenbox auf einen Blick zu prüfen, oder um häufige Spulen-Details (Etikett, verbleibende Gramm, Standort wechseln, ausmustern) an mehreren Spulen gleichzeitig zu aktualisieren, ohne dich durch jede Filament-Detailseite zu klicken.
+
+Was du siehst:
+
+- **Kopfzeilen-Statistiken** — Gesamtspulenanzahl, Standortanzahl, aktive Gramm im Bestand
+- **Filterzeile** — Suche nach Filamentname / Etikett / Lot-Nummer (clientseitig), Filter nach Standortart (Regal, Trockenbox, Drucker, …), Filter nach Filamenttyp oder Vendor, „Ausgemusterte einschließen"-Schalter (standardmäßig aus — ausgemusterte Spulen sind nicht im Bestand)
+- **Aufklappbare Gruppe pro Standort** — der Zusammenfassungs-Chip jeder Gruppe zeigt Spulenanzahl und Gesamtgramm. Eine synthetische **„Kein Standort"**-Gruppe fängt jede Spule mit `locationId: null` ab und wird absichtlich an das ENDE der Liste sortiert, damit man Nachzügler als „benötigen Aufmerksamkeit" erkennt statt sie mit dem Hauptbestand zu verwechseln.
+- **Spulen-Zeile** — Farbtupfer, Filamentname, Typ, Vendor, Etikett, **Inline-Gewichtseditor** (klicke den Gramm-Wert zum Bearbeiten, Enter zum Speichern, Esc zum Abbrechen), Rest-Prozentbalken, letztes Trocknungsdatum, **„Verschieben nach"**-Dropdown für den Standort der Spule, **Ausmustern/Reaktivieren**-Schalter (Ausmustern zeigt eine Bestätigung, um das Entfernen aus dem Bestand explizit zu machen).
+
+Alle Bearbeitungen laufen über denselben `PUT /api/filaments/{id}/spools/{spoolId}`-Endpunkt wie die Filament-Detailseite, sodass die Semantik — Ausmustern-bei-Null-Prompts, Gewichtsvalidierung, Sync-Verhalten — identisch zur SpoolCard ist.
+
+---
+
 ## CSV- und XLSX-Import/-Export
 
 ### Exportieren

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { formatDate, formatTime } from "@/lib/dateFormat";
 
 interface TrashedFilament {
   _id: string;
@@ -18,7 +19,7 @@ interface TrashedFilament {
 }
 
 export default function TrashPage() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { toast } = useToast();
   const confirm = useConfirm();
   const [items, setItems] = useState<TrashedFilament[]>([]);
@@ -251,8 +252,8 @@ export default function TrashPage() {
                     {item.parentId && ` · ${t("trash.variantBadge")}`}
                     <span className="ml-2">
                       {t("trash.deletedAt", {
-                        date: deleted.toLocaleDateString(),
-                        time: deleted.toLocaleTimeString(),
+                        date: formatDate(deleted, locale),
+                        time: formatTime(deleted, locale),
                       })}
                     </span>
                   </p>

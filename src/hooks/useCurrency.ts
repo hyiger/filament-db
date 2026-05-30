@@ -233,9 +233,40 @@ export function useCurrency() {
 
   const symbol = getCurrencySymbol(currency, customCurrencies);
 
+  /**
+   * GH #447 — format a numeric value as currency using Intl.NumberFormat
+   * where the code is an ISO 4217 built-in (USD, EUR, GBP, etc.) so
+   * screen-readers hear "12 US dollars" rather than "dollar 12" and
+   * thousands grouping respects the locale. Custom user-added currency
+   * codes fall back to the legacy `${symbol}${value}` shape because
+   * Intl.NumberFormat rejects unknown codes.
+   *
+   * Defensive try/catch: a future Node/Chromium that drops support for
+   * a code, or a malformed numeric input, just falls back to the raw
+   * shape rather than throwing into the render.
+   */
+  const format = useCallback(
+    (value: number, locale?: string): string => {
+      const isBuiltin = CURRENCIES.some((c) => c.code === currency);
+      if (isBuiltin) {
+        try {
+          return new Intl.NumberFormat(locale ?? undefined, {
+            style: "currency",
+            currency,
+          }).format(value);
+        } catch {
+          // fall through
+        }
+      }
+      return `${symbol}${value}`;
+    },
+    [currency, symbol],
+  );
+
   return {
     currency,
     symbol,
+    format,
     setCurrency,
     customCurrencies,
     addCustom,
