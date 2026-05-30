@@ -2088,7 +2088,7 @@
       "put": {
         "tags": ["Print History"],
         "summary": "Update print job metadata",
-        "description": "Metadata-only PUT. Accepts ONLY the five user-editable metadata fields below — usage rows + per-spool gram totals are NOT mutable here (refund + re-record via DELETE + POST to change a usage). `jobLabel` is trimmed and capped at 200 chars; `notes` is truncated to 2000 chars; `source` must be one of `manual | prusaslicer | orcaslicer | bambu | other`; `printerId` accepts `null` to clear. Unknown body keys are silently ignored — only the documented fields take effect.",
+        "description": "Metadata-only PUT. Accepts ONLY the five user-editable metadata fields below — usage rows + per-spool gram totals are NOT mutable here (refund + re-record via DELETE + POST to change a usage). `jobLabel` is trimmed and capped at 200 chars; `notes` is truncated to 2000 chars; `source` must be one of `manual | prusaslicer | orcaslicer | bambu | other`; `printerId` accepts `null` to clear. **Unknown body keys are REJECTED with 400** — a stray `_purged` or `_deletedAt` doesn't silently slip through. Generated clients sending legacy/extension fields like `durationSeconds` will get a 400, not a silent drop.",
         "parameters": [
           { "name": "id", "in": "path", "required": true, "schema": { "type": "string" }, "description": "PrintHistory ObjectId" }
         ],

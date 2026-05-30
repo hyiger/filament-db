@@ -1072,7 +1072,7 @@ Per-job ledger of print runs. Decrements spool weights, appends spool-level usag
 | `GET`    | `/api/print-history`      | List print jobs (desc by `startedAt`). Query: `filamentId`, `printerId`, `limit` (default 100, max 1000) |
 | `POST`   | `/api/print-history`      | Record a print job (see body below) |
 | `GET`    | `/api/print-history/{id}` | Fetch one print job with the same populated fields as the list (printer name + per-usage filament name/vendor/type/color). Tombstoned rows return 404 |
-| `PUT`    | `/api/print-history/{id}` | Update job metadata only. Accepts five fields: `jobLabel` (trimmed, capped 200), `notes` (truncated to 2000), `source` (enum), `printerId` (or `null`), `startedAt`. Unknown keys are ignored. Usage rows + spool gram totals are NOT mutable here — refund + re-record via DELETE + POST to change a usage |
+| `PUT`    | `/api/print-history/{id}` | Update job metadata only. Accepts five fields: `jobLabel` (trimmed, capped 200), `notes` (truncated to 2000), `source` (enum), `printerId` (or `null`), `startedAt`. **Unknown keys are rejected with 400** (a stray `_purged` or legacy `durationSeconds` doesn't slip through). Usage rows + spool gram totals are NOT mutable here — refund + re-record via DELETE + POST to change a usage |
 | `DELETE` | `/api/print-history/{id}` | Undo a print job — refund the spool weight, remove the matching `usageHistory` entries, soft-delete the row |
 
 ### POST /api/print-history
