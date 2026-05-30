@@ -117,6 +117,30 @@ describe("GET /api/scan/stream", () => {
     await reader.cancel();
   });
 
+  it("returns 429 when the concurrent-subscriber cap is exceeded (GH #428)", async () => {
+    // Open subscriptions up to the cap and verify the next one is
+    // rejected. 100 connections is the in-module cap; we just verify
+    // the 101st gets the 429 + Retry-After contract.
+    const readers: ReadableStreamDefaultReader<Uint8Array>[] = [];
+    try {
+      for (let i = 0; i < 100; i++) {
+        const res = await stream(streamReq("?replay=0"));
+        expect(res.status).toBe(200);
+        readers.push(res.body!.getReader());
+      }
+      const denied = await stream(streamReq("?replay=0"));
+      expect(denied.status).toBe(429);
+      expect(denied.headers.get("retry-after")).toBe("60");
+    } finally {
+      for (const r of readers) await r.cancel().catch(() => {});
+    }
+    // After cancelling all opened streams, a fresh connection should
+    // pass again — the cap is per-active-subscriber, not lifetime.
+    const fresh = await stream(streamReq("?replay=0"));
+    expect(fresh.status).toBe(200);
+    await fresh.body!.getReader().cancel();
+  });
+
   it("unsubscribes from the bus when the stream is cancelled", async () => {
     const res = await stream(streamReq("?replay=0"));
     const reader = res.body!.getReader();

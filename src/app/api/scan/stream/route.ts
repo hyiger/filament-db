@@ -29,6 +29,23 @@ export const dynamic = "force-dynamic";
 const HEARTBEAT_MS = 25_000;
 const encoder = new TextEncoder();
 
+/**
+ * GH #428 — concurrent-subscriber cap. The bus uses
+ * `EventEmitter.setMaxListeners(0)` to suppress Node's leak warning,
+ * which means there's no upper bound on how many sub-processes can
+ * attach. A misbehaving / hostile client on the LAN could open
+ * thousands of long-lived SSE connections, each holding open a heart-
+ * beat interval and a scan listener for the process lifetime.
+ *
+ * 100 concurrent is generously above any real workload — a typical
+ * PrusaSlicer + Bambu Studio + browser-tab setup hits 3-5. Beyond
+ * that we 429 the new connections; the existing ones keep working.
+ * Cap is per-process (module-level counter), so this is local-only
+ * mitigation; a multi-process deployment would need a shared limit.
+ */
+const MAX_CONCURRENT_SUBSCRIBERS = 100;
+let activeSubscribers = 0;
+
 function formatEvent(eventType: string, data: ScanEvent): Uint8Array {
   return encoder.encode(
     `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`,
@@ -36,15 +53,38 @@ function formatEvent(eventType: string, data: ScanEvent): Uint8Array {
 }
 
 export async function GET(request: NextRequest) {
+  // GH #428: enforce the concurrent-subscriber cap before allocating
+  // any per-connection resources (listener, interval, ReadableStream).
+  // 429 with a Retry-After signals the standard "back off, try again"
+  // shape to EventSource consumers.
+  if (activeSubscribers >= MAX_CONCURRENT_SUBSCRIBERS) {
+    console.warn(
+      `[scan/stream] Rejected SSE connection: ${activeSubscribers} active subscribers (cap=${MAX_CONCURRENT_SUBSCRIBERS})`,
+    );
+    return new Response("Too many active SSE subscribers", {
+      status: 429,
+      headers: { "retry-after": "60" },
+    });
+  }
+
   const replayParam = request.nextUrl.searchParams.get("replay");
   const replay = replayParam !== "0";
 
   let unsubscribe: (() => void) | null = null;
   let heartbeat: ReturnType<typeof setInterval> | null = null;
   let aborted = false;
+  let counted = false;
+  const release = () => {
+    if (counted) {
+      counted = false;
+      activeSubscribers--;
+    }
+  };
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      counted = true;
+      activeSubscribers++;
       const safeEnqueue = (chunk: Uint8Array) => {
         if (aborted) return;
         try {
@@ -77,6 +117,7 @@ export async function GET(request: NextRequest) {
         aborted = true;
         if (heartbeat) clearInterval(heartbeat);
         if (unsubscribe) unsubscribe();
+        release();
         try {
           controller.close();
         } catch {
@@ -88,6 +129,7 @@ export async function GET(request: NextRequest) {
       aborted = true;
       if (heartbeat) clearInterval(heartbeat);
       if (unsubscribe) unsubscribe();
+      release();
     },
   });
 
