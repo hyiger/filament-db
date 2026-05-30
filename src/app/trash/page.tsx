@@ -130,6 +130,60 @@ export default function TrashPage() {
     fetchTrash();
   };
 
+  /**
+   * GH #419: Bulk "Restore all" counterpart to "Empty trash". When a
+   * user soft-deletes a large set by accident, one-by-one restore is
+   * painful. Mirrors the empty-trash flow:
+   *   - confirmation modal (non-destructive here, but still gated)
+   *   - variants restored BEFORE parents to avoid the name-conflict
+   *     409 against an already-restored sibling
+   *   - per-item failure is collected, surfaced via toast, and doesn't
+   *     halt the loop
+   * Wait — actually we want PARENTS first here, opposite of empty-
+   * trash: a variant restore requires the parent to be present
+   * (active), and the partial-unique-on-non-deleted name index
+   * checks against currently-active rows. Restoring a variant whose
+   * parent is still trashed would either dangle or 409 against a
+   * stale-active sibling on a name collision. Parent-first is safe
+   * because variant names are typically distinct from parent names.
+   */
+  const handleRestoreAll = async () => {
+    if (items.length === 0) return;
+    if (
+      !(await confirm({
+        message: t("trash.restoreAllConfirm", { count: items.length }),
+        confirmLabel: t("trash.restore"),
+      }))
+    ) {
+      return;
+    }
+    let ok = 0;
+    const errors: string[] = [];
+    // Parents-first restore order. Inverse of empty-trash's variants-first
+    // ordering, for the reason in the docblock above.
+    const ordered = [...items].sort((a, b) => {
+      if (!a.parentId && b.parentId) return -1;
+      if (a.parentId && !b.parentId) return 1;
+      return 0;
+    });
+    for (const item of ordered) {
+      const res = await fetch(`/api/filaments/${item._id}/restore`, {
+        method: "POST",
+      });
+      if (res.ok) {
+        ok++;
+      } else {
+        const body = await res.json().catch(() => null);
+        errors.push(body?.error || item.name);
+      }
+    }
+    toast(t("trash.restoreAllDone", { count: ok }));
+    if (errors.length > 0) {
+      toast(errors.slice(0, 3).join("; "), "error");
+    }
+    fetchTrash();
+  };
+
   return (
     <main className="max-w-4xl mx-auto px-4 py-8">
       <div className="mb-4">
@@ -144,13 +198,22 @@ export default function TrashPage() {
           <p className="text-sm text-gray-500 mt-1">{t("trash.subtitle")}</p>
         </div>
         {items.length > 0 && (
-          <button
-            type="button"
-            onClick={handleEmptyTrash}
-            className="px-3 py-1.5 text-sm bg-red-700 text-white rounded hover:bg-red-600"
-          >
-            {t("trash.emptyAll", { count: items.length })}
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={handleRestoreAll}
+              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+            >
+              {t("trash.restoreAll", { count: items.length })}
+            </button>
+            <button
+              type="button"
+              onClick={handleEmptyTrash}
+              className="px-3 py-1.5 text-sm bg-red-700 text-white rounded hover:bg-red-600"
+            >
+              {t("trash.emptyAll", { count: items.length })}
+            </button>
+          </div>
         )}
       </div>
 
