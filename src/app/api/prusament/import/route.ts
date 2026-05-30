@@ -108,26 +108,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid filament id" }, { status: 400 });
     }
 
-    // GH #430: cap per-filament spool count to keep a hostile client
-    // from $push-ing an unbounded stream onto a single doc. 500
-    // matches the order of magnitude of every other per-doc array
-    // we touch (printer.amsSlots, filament.calibrations, etc.).
-    const existing = await Filament.findOne(
-      { _id: filamentId, _deletedAt: null },
-      { spools: 1 },
-    ).lean();
-    if (!existing) {
-      return NextResponse.json({ error: "Filament not found" }, { status: 404 });
-    }
     const MAX_SPOOLS_PER_FILAMENT = 500;
-    if ((existing.spools?.length ?? 0) >= MAX_SPOOLS_PER_FILAMENT) {
-      return NextResponse.json(
-        {
-          error: `This filament already has ${MAX_SPOOLS_PER_FILAMENT} spools (the per-filament limit)`,
-        },
-        { status: 400 },
-      );
-    }
 
     // GH #430: carry the Prusament-specific traceability fields onto
     // the spool subdoc. Pre-fix the $push only carried label +
@@ -140,9 +121,24 @@ export async function POST(request: NextRequest) {
       ? new Date(purchaseDateStr)
       : null;
 
-    // Add spool to existing filament
+    // GH #430 (Codex round 4 follow-up): cap per-filament spool count
+    // ATOMICALLY using `$expr: { $lt: [{ $size: spools }, 500] }`.
+    // The previous "fetch → check length → $push" sequence was a
+    // race: several concurrent add-spool requests against the same
+    // filament could each see length<500, then all $push, blowing
+    // past the cap. The atomic conditional update fixes the race
+    // — only one writer can satisfy the size check at a time.
     const filament = await Filament.findOneAndUpdate(
-      { _id: filamentId, _deletedAt: null },
+      {
+        _id: filamentId,
+        _deletedAt: null,
+        $expr: {
+          $lt: [
+            { $size: { $ifNull: ["$spools", []] } },
+            MAX_SPOOLS_PER_FILAMENT,
+          ],
+        },
+      },
       {
         $push: {
           spools: {
@@ -157,6 +153,21 @@ export async function POST(request: NextRequest) {
     ).lean();
 
     if (!filament) {
+      // The conditional didn't match — either the filament doesn't
+      // exist, or it's already at cap. Probe to differentiate so the
+      // caller gets a clear error rather than a generic 404.
+      const probe = await Filament.findOne(
+        { _id: filamentId, _deletedAt: null },
+        { spools: 1 },
+      ).lean();
+      if (probe && (probe.spools?.length ?? 0) >= MAX_SPOOLS_PER_FILAMENT) {
+        return NextResponse.json(
+          {
+            error: `This filament already has ${MAX_SPOOLS_PER_FILAMENT} spools (the per-filament limit)`,
+          },
+          { status: 400 },
+        );
+      }
       return NextResponse.json({ error: "Filament not found" }, { status: 404 });
     }
 
