@@ -71,15 +71,18 @@ afterEach(async () => {
 const TEARDOWN_TIMEOUT_MS = 30_000;
 
 /** Reach into mongodb-memory-server's internals to find the mongod
- *  child pid. The shape is intentionally narrowed; if upstream
- *  refactors a field name in a future release, the optional chain
- *  short-circuits to undefined and the teardown falls back to the
- *  slow stop() path with a logged warning rather than throwing. */
+ *  child pid. The field is `mongodProcess` on the MongoInstance — the
+ *  short-lived `childProcess` alias was removed in
+ *  mongodb-memory-server-core@11.0.0 (Codex P2 on PR #479 r4 caught
+ *  the silent no-op from looking up the old name). The shape is
+ *  intentionally narrowed; if upstream renames the field again, the
+ *  optional chain short-circuits to undefined and the teardown falls
+ *  back to the slow stop() path rather than throwing. */
 function getMongodPid(server: MongoMemoryServer): number | undefined {
   type Reach = {
-    instanceInfo?: { instance?: { childProcess?: { pid?: number } } };
+    instanceInfo?: { instance?: { mongodProcess?: { pid?: number } } };
   };
-  return (server as unknown as Reach).instanceInfo?.instance?.childProcess?.pid;
+  return (server as unknown as Reach).instanceInfo?.instance?.mongodProcess?.pid;
 }
 
 afterAll(async () => {
