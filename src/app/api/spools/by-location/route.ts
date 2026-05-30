@@ -54,7 +54,11 @@ interface AggregatedSpool {
   purchaseDate: Date | null;
   openedDate: Date | null;
   retired: boolean;
-  photoDataUrl: string | null;
+  /** Lazy-loaded by the client from `/api/filaments/{id}` on row expand;
+   * dropped from this aggregation (GH #429) to keep the payload small —
+   * a deployment with 5k filaments × 3 spools each could otherwise
+   * stream ~15k photo data URLs in one response. */
+  photoDataUrl?: string | null;
   dryCycleCount: number;
   lastDryAt: Date | null;
   filamentId: string;
@@ -190,6 +194,15 @@ export async function GET(request: NextRequest) {
       // Retired filter happens AFTER unwind because it's on the spool
       // subdoc, not the filament.
       ...(!includeRetired ? [{ $match: { "spools.retired": { $ne: true } } }] : []),
+      // GH #429: belt-and-braces cap on the post-unwind spool stream.
+      // The aggregation expands to one doc per spool across every
+      // active filament, and the inventory page renders them all in a
+      // single DOM tree — both the response payload and the client
+      // memory footprint are unbounded in size. Drop `photoDataUrl`
+      // up above removed the worst-case per-row size; this stops a
+      // pathological deployment (10k+ filaments) from streaming
+      // hundreds of thousands of rows in one response.
+      { $limit: 10000 },
       {
         $group: {
           _id: "$spools.locationId",
@@ -202,7 +215,9 @@ export async function GET(request: NextRequest) {
               purchaseDate: "$spools.purchaseDate",
               openedDate: "$spools.openedDate",
               retired: "$spools.retired",
-              photoDataUrl: "$spools.photoDataUrl",
+              // GH #429: photoDataUrl intentionally omitted — see the
+              // AggregatedSpool field comment above. The /inventory page
+              // lazy-loads photos when expanding a row.
               dryCycleCount: { $size: { $ifNull: ["$spools.dryCycles", []] } },
               lastDryAt: {
                 // Latest dryCycles[].date if any. Subdocs are appended

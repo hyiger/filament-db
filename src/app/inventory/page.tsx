@@ -35,7 +35,12 @@ interface SpoolRow {
   purchaseDate: string | null;
   openedDate: string | null;
   retired: boolean;
-  photoDataUrl: string | null;
+  /** GH #429: not in the by-location aggregation payload anymore — the
+   * inventory list doesn't render photos and the per-row data URLs
+   * could push the response into the megabytes range on large
+   * catalogs. Kept optional in the type so a future row-expand can
+   * lazy-load it from `/api/filaments/{id}`. */
+  photoDataUrl?: string | null;
   dryCycleCount: number;
   lastDryAt: string | null;
   filamentId: string;

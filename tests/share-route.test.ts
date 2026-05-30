@@ -120,6 +120,24 @@ describe("/api/share", () => {
       expect(res.status).toBe(400);
     });
 
+    it("returns 400 when expiresAt is a malformed date string (GH #426)", async () => {
+      // Pre-fix: `new Date("not a date")` is an Invalid Date — got
+      // persisted with a NaN timestamp, and downstream `$gt: now`
+      // comparisons against NaN are false, so the catalog was
+      // effectively immortal.
+      const { filament } = await makeFilamentWithRefs();
+      const res = await createShare(
+        postReq({
+          title: "Bad date",
+          filamentIds: [String(filament._id)],
+          expiresAt: "not a date",
+        }),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/expiresAt/i);
+    });
+
     it("returns 404 when none of the requested filaments exist", async () => {
       const res = await createShare(
         postReq({

@@ -132,6 +132,14 @@ export async function POST(request: NextRequest) {
       typeof body.expiresAt === "string" && body.expiresAt
         ? new Date(body.expiresAt)
         : null;
+    // GH #426: a malformed `expiresAt` (e.g. "not a date") parses to
+    // `Invalid Date`. Persisting that makes the catalog effectively
+    // immortal — downstream `expiresAt: { $gt: now }` compares against
+    // NaN and the expiry branch is silently bypassed. Reject up front
+    // (matches the print-history POST handler's post-#306 posture).
+    if (expiresAt && Number.isNaN(expiresAt.getTime())) {
+      return errorResponse("expiresAt is not a valid date", 400);
+    }
 
     // GH #282: the catalog document must stay under MongoDB's 16MB BSON
     // limit. Spool subdocuments (which carry base64 photoDataUrl images

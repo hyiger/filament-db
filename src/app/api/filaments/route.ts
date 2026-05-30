@@ -194,6 +194,28 @@ export async function POST(request: NextRequest) {
   delete body.instanceId;
   delete body.syncId;
 
+  // GH #431: the PUT handler explicitly strips `body.spools` to prevent a
+  // bulk rewrite of a spool's `usageHistory` ledger. The POST handler
+  // didn't filter spool subdocs at all — a fresh filament could be
+  // created with client-supplied `usageHistory` / `dryCycles` (and faked
+  // `createdAt`), which the analytics aggregator + spool-check refund
+  // would then count as real history. Allowlist only the legitimate
+  // "this is what the user is registering on the new spool" fields and
+  // drop everything else, matching the PUT handler's posture.
+  if (Array.isArray(body.spools)) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    body.spools = body.spools.map((s: any) => ({
+      label: s?.label,
+      totalWeight: s?.totalWeight,
+      lotNumber: s?.lotNumber,
+      purchaseDate: s?.purchaseDate,
+      openedDate: s?.openedDate,
+      locationId: s?.locationId,
+      photoDataUrl: s?.photoDataUrl,
+      retired: s?.retired,
+    }));
+  }
+
   // If an initial totalWeight is provided, auto-create a spool entry
   if (body.totalWeight != null && (!body.spools || body.spools.length === 0)) {
     body.spools = [{ label: "", totalWeight: body.totalWeight }];

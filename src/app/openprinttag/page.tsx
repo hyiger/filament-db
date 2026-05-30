@@ -387,8 +387,11 @@ export default function OpenPrintTagBrowser() {
       setLoading(true);
       setError(null);
       try {
-        const url = refresh ? "/api/openprinttag?refresh=true" : "/api/openprinttag";
-        const res = await fetch(url);
+        // GH #427: refresh moved from `GET ?refresh=true` to POST so
+        // the cache-mutation isn't a GET-with-side-effect.
+        const res = refresh
+          ? await fetch("/api/openprinttag", { method: "POST" })
+          : await fetch("/api/openprinttag");
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || `HTTP ${res.status}`);

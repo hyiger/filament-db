@@ -1,8 +1,10 @@
+import mongoose from "mongoose";
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import type { PrusamentScrapeResult } from "../route";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { isValidIsoDateString } from "@/lib/validateSpoolBody";
 
 /**
  * GH #307: validate a renderer-supplied Prusament spool payload before
@@ -100,6 +102,44 @@ export async function POST(request: NextRequest) {
   const spoolLabel = `${spool.spoolId} (${spool.manufactureDate.split(" ")[0]})`;
 
   if (action === "add-spool" && filamentId) {
+    // GH #430: validate the filament id up front so a malformed id
+    // surfaces as 400, not a downstream CastError → bare 500.
+    if (!mongoose.isValidObjectId(filamentId)) {
+      return NextResponse.json({ error: "Invalid filament id" }, { status: 400 });
+    }
+
+    // GH #430: cap per-filament spool count to keep a hostile client
+    // from $push-ing an unbounded stream onto a single doc. 500
+    // matches the order of magnitude of every other per-doc array
+    // we touch (printer.amsSlots, filament.calibrations, etc.).
+    const existing = await Filament.findOne(
+      { _id: filamentId, _deletedAt: null },
+      { spools: 1 },
+    ).lean();
+    if (!existing) {
+      return NextResponse.json({ error: "Filament not found" }, { status: 404 });
+    }
+    const MAX_SPOOLS_PER_FILAMENT = 500;
+    if ((existing.spools?.length ?? 0) >= MAX_SPOOLS_PER_FILAMENT) {
+      return NextResponse.json(
+        {
+          error: `This filament already has ${MAX_SPOOLS_PER_FILAMENT} spools (the per-filament limit)`,
+        },
+        { status: 400 },
+      );
+    }
+
+    // GH #430: carry the Prusament-specific traceability fields onto
+    // the spool subdoc. Pre-fix the $push only carried label +
+    // totalWeight, silently dropping the lot number and manufacture
+    // date that are the whole point of a Prusament import.
+    // `manufactureDate` is "YYYY-MM-DD HH:MM" — split off the time
+    // and validate before persisting.
+    const purchaseDateStr = spool.manufactureDate.split(" ")[0];
+    const purchaseDate = isValidIsoDateString(purchaseDateStr)
+      ? new Date(purchaseDateStr)
+      : null;
+
     // Add spool to existing filament
     const filament = await Filament.findOneAndUpdate(
       { _id: filamentId, _deletedAt: null },
@@ -108,6 +148,8 @@ export async function POST(request: NextRequest) {
           spools: {
             label: spoolLabel,
             totalWeight: spool.totalWeight,
+            lotNumber: spool.spoolId,
+            ...(purchaseDate ? { purchaseDate } : {}),
           },
         },
       },

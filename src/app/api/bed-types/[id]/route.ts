@@ -41,15 +41,15 @@ export async function PUT(
   try {
     await dbConnect();
     const { id } = await params;
-    delete body._id;
-    delete body._deletedAt;
-    delete body.createdAt;
-    delete body.updatedAt;
-    delete body.__v;
-    delete body.syncId;
+    // GH #424: explicit allowlist so a future schema field isn't
+    // automatically client-writable (e.g. an ownership flag).
+    const update: Record<string, unknown> = {};
+    if ("name" in body) update.name = body.name;
+    if ("material" in body) update.material = body.material;
+    if ("notes" in body) update.notes = body.notes;
     const bedType = await BedType.findOneAndUpdate(
       { _id: id, _deletedAt: null },
-      body,
+      update,
       { returnDocument: "after", runValidators: true }
     ).lean();
     if (!bedType) {

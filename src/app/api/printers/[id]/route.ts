@@ -103,9 +103,26 @@ export async function PUT(
       }
     }
 
+    // GH #424: explicit allowlist so a future schema field doesn't
+    // silently become client-writable. Matches the Filament PUT
+    // pattern.
+    const update: Record<string, unknown> = {};
+    if ("name" in body) update.name = body.name;
+    if ("manufacturer" in body) update.manufacturer = body.manufacturer;
+    if ("printerModel" in body) update.printerModel = body.printerModel;
+    if ("installedNozzles" in body) update.installedNozzles = body.installedNozzles;
+    if ("installedBedTypes" in body) update.installedBedTypes = body.installedBedTypes;
+    if ("notes" in body) update.notes = body.notes;
+    if ("buildVolume" in body) update.buildVolume = body.buildVolume;
+    if ("maxFlow" in body) update.maxFlow = body.maxFlow;
+    if ("maxSpeed" in body) update.maxSpeed = body.maxSpeed;
+    if ("enclosed" in body) update.enclosed = body.enclosed;
+    if ("autoBedLevel" in body) update.autoBedLevel = body.autoBedLevel;
+    if ("amsSlots" in body) update.amsSlots = body.amsSlots;
+
     const printer = await Printer.findOneAndUpdate(
       { _id: id, _deletedAt: null },
-      body,
+      update,
       { returnDocument: "after", runValidators: true }
     ).lean();
     if (!printer) {

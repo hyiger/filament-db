@@ -1,8 +1,10 @@
+import mongoose from "mongoose";
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 export async function POST(
   request: NextRequest,
@@ -57,6 +59,13 @@ export async function POST(
     await dbConnect();
     const { id } = await params;
 
+    // GH #425: validate the filament id up front — a garbage id used to
+    // surface as a 500 "Failed to add spool" from a downstream CastError
+    // rather than a 400 with a useful message.
+    if (!mongoose.isValidObjectId(id)) {
+      return errorResponse("Invalid filament id", 400);
+    }
+
     // Only push fields the validator captured. Previously the $push
     // dropped lotNumber / purchaseDate / openedDate / locationId /
     // photoDataUrl / retired even when the client supplied them — a
@@ -86,7 +95,6 @@ export async function POST(
     // documented REST semantics and trips polite HTTP clients.
     return NextResponse.json(filament, { status: 201 });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to add spool", detail: message }, { status: 500 });
+    return errorResponseFromCaught(err, "Failed to add spool");
   }
 }

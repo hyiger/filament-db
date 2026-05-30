@@ -39,6 +39,19 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
+    // GH #427: cap the per-request slug count. The loop below does a
+    // per-slug findOneAndUpdate followed by a findById on match, so a
+    // 50k-slug payload performed 50k+ sequential round-trips. Sibling
+    // import routes already enforce caps (share/POST: 500,
+    // print-history/POST: 100, filaments/import: 10k). 500 is plenty
+    // for any realistic bulk import from the OpenPrintTag browse page.
+    const MAX_SLUGS = 500;
+    if (slugs.length > MAX_SLUGS) {
+      return NextResponse.json(
+        { error: `Too many slugs (max ${MAX_SLUGS})` },
+        { status: 400 },
+      );
+    }
 
     await dbConnect();
 

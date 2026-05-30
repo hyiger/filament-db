@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
@@ -5,6 +6,7 @@ import Printer from "@/models/Printer";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 export async function PUT(
   request: NextRequest,
@@ -31,6 +33,16 @@ export async function PUT(
   try {
     await dbConnect();
     const { id, spoolId } = await params;
+
+    // GH #425: validate ObjectIds up front. Without this, a garbage id
+    // throws CastError on the findOneAndUpdate which fell through to a
+    // 500 with "Failed to update spool" — the client got no usable
+    // signal that the request was malformed rather than the server
+    // being broken. The print-history route does the same up-front
+    // check.
+    if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(spoolId)) {
+      return errorResponse("Invalid filament or spool id", 400);
+    }
 
     const update: Record<string, unknown> = {};
     if (validation.totalWeight !== undefined) update["spools.$.totalWeight"] = validation.totalWeight;
@@ -69,8 +81,7 @@ export async function PUT(
 
     return NextResponse.json(filament);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to update spool", detail: message }, { status: 500 });
+    return errorResponseFromCaught(err, "Failed to update spool");
   }
 }
 
@@ -84,6 +95,12 @@ export async function DELETE(
   try {
     await dbConnect();
     const { id, spoolId } = await params;
+
+    // GH #425: same ObjectId guard as PUT — garbage id used to surface as
+    // 500 "Failed to delete spool" rather than 400 "Invalid id".
+    if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(spoolId)) {
+      return errorResponse("Invalid filament or spool id", 400);
+    }
 
     // Require the spool to exist on the filament. Without this guard, a
     // $pull with a missing spoolId is a silent no-op — the client gets a
@@ -106,7 +123,6 @@ export async function DELETE(
 
     return NextResponse.json(filament);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to delete spool", detail: message }, { status: 500 });
+    return errorResponseFromCaught(err, "Failed to delete spool");
   }
 }

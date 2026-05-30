@@ -66,12 +66,22 @@ export async function PUT(
     const printerIds: string[] | undefined = Array.isArray(body.printerIds)
       ? body.printerIds
       : undefined;
-    delete body.printerIds;
-    delete body.printers; // never persist the enrichment on the Nozzle doc
+
+    // GH #424: replace the "delete each known leak field + spread the rest"
+    // pattern with an explicit allowlist so a future schema field doesn't
+    // become automatically client-writable. Matches the Filament PUT
+    // posture.
+    const update: Record<string, unknown> = {};
+    if ("name" in body) update.name = body.name;
+    if ("diameter" in body) update.diameter = body.diameter;
+    if ("type" in body) update.type = body.type;
+    if ("highFlow" in body) update.highFlow = body.highFlow;
+    if ("hardened" in body) update.hardened = body.hardened;
+    if ("notes" in body) update.notes = body.notes;
 
     const nozzle = await Nozzle.findOneAndUpdate(
       { _id: id, _deletedAt: null },
-      body,
+      update,
       { returnDocument: "after", runValidators: true }
     ).lean();
     if (!nozzle) {
