@@ -115,8 +115,9 @@ export default function LocationForm({ initialData, onSubmit, onDirtyChange }: P
       </div>
 
       <div>
-        <label className={labelClass}>{t("locations.form.humidity")}</label>
+        <label htmlFor="location-humidity" className={labelClass}>{t("locations.form.humidity")}</label>
         <input
+          id="location-humidity"
           type="number"
           min="0"
           max="100"

@@ -1066,8 +1066,9 @@ function FilamentDetail() {
 
             {!hasSpools && filament.spoolWeight != null && (
               <div className="flex items-center gap-2 mb-3 flex-wrap">
-                <label className="text-sm text-gray-500 flex-shrink-0">{t("detail.weight.updateScaleWeight")}:</label>
+                <label htmlFor="filament-scale-weight" className="text-sm text-gray-500 flex-shrink-0">{t("detail.weight.updateScaleWeight")}:</label>
                 <input
+                  id="filament-scale-weight"
                   ref={weightRef}
                   type="number"
                   step="1"
@@ -1152,6 +1153,7 @@ function FilamentDetail() {
                       placeholder={t("detail.spool.addLabelPlaceholder")}
                       value={addSpoolForm.label}
                       onChange={(e) => setAddSpoolForm((s) => ({ ...s, label: e.target.value }))}
+                      aria-label={t("detail.spool.addLabelPlaceholder")}
                       className="flex-1 min-w-[10rem] px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
                     />
                     <input
@@ -1161,6 +1163,7 @@ function FilamentDetail() {
                       placeholder={t("detail.spool.addWeightPlaceholder")}
                       value={addSpoolForm.totalWeight}
                       onChange={(e) => setAddSpoolForm((s) => ({ ...s, totalWeight: e.target.value }))}
+                      aria-label={t("detail.spool.addWeightPlaceholder")}
                       className="w-32 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
                     />
                     <button
@@ -1239,6 +1242,7 @@ function FilamentDetail() {
                     placeholder={t("detail.spool.addLabelPlaceholder")}
                     value={addSpoolForm.label}
                     onChange={(e) => setAddSpoolForm((s) => ({ ...s, label: e.target.value }))}
+                    aria-label={t("detail.spool.addLabelPlaceholder")}
                     className="flex-1 min-w-[10rem] px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
                   />
                   <input
@@ -1248,6 +1252,7 @@ function FilamentDetail() {
                     placeholder={t("detail.spool.addWeightPlaceholder")}
                     value={addSpoolForm.totalWeight}
                     onChange={(e) => setAddSpoolForm((s) => ({ ...s, totalWeight: e.target.value }))}
+                    aria-label={t("detail.spool.addWeightPlaceholder")}
                     className="w-32 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
                   />
                   <button
@@ -1731,6 +1736,7 @@ function SpoolCard({
               onKeyDown={(e) => { if (e.key === "Enter") handleLabelSave(); if (e.key === "Escape") { setLabelInput(spool.label); setEditingLabel(false); } }}
               autoFocus
               placeholder={t("detail.spool.labelPlaceholder")}
+              aria-label={t("detail.spool.labelPlaceholder")}
             />
           ) : (
             <button
@@ -1799,6 +1805,9 @@ function SpoolCard({
             onChange={(e) => setWeightInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }}
             placeholder={spool.totalWeight != null ? `${spool.totalWeight}g` : "grams"}
+            aria-label={t("detail.spool.scaleWeightAriaLabel", {
+              label: spool.label || t("detail.spool.unnamed"),
+            })}
           />
           <button
             onClick={handleSave}
@@ -1965,6 +1974,7 @@ function SpoolCard({
                 step="1"
                 className="w-20 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
                 placeholder={t("detail.spool.dryTemp")}
+                aria-label={t("detail.spool.dryTemp")}
                 value={dryTemp}
                 onChange={(e) => setDryTemp(e.target.value)}
               />
@@ -1974,6 +1984,7 @@ function SpoolCard({
                 step="1"
                 className="w-20 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
                 placeholder={t("detail.spool.dryDuration")}
+                aria-label={t("detail.spool.dryDuration")}
                 value={dryDuration}
                 onChange={(e) => setDryDuration(e.target.value)}
               />
@@ -2019,6 +2030,7 @@ function SpoolCard({
                 step="1"
                 className="w-20 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
                 placeholder={t("detail.spool.usageGrams")}
+                aria-label={t("detail.spool.usageGrams")}
                 value={usageGrams}
                 onChange={(e) => setUsageGrams(e.target.value)}
               />
@@ -2026,6 +2038,7 @@ function SpoolCard({
                 type="text"
                 className="flex-1 min-w-0 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
                 placeholder={t("detail.spool.usageJobLabel")}
+                aria-label={t("detail.spool.usageJobLabel")}
                 value={usageLabel}
                 onChange={(e) => setUsageLabel(e.target.value)}
               />

@@ -311,9 +311,15 @@ export default function SharedCatalogPage() {
         {data.payload.filaments.map((f) => (
           <li key={f._id} className="px-3 py-2 flex items-center gap-3 text-sm">
             <input
+              id={`share-import-${f._id}`}
               type="checkbox"
               checked={selectedIds.has(f._id)}
               onChange={() => toggleSelect(f._id)}
+              aria-label={t("share.public.selectFilamentForImport", {
+                name: f.name,
+                vendor: f.vendor,
+                type: f.type,
+              })}
               className="w-4 h-4"
             />
             <span
@@ -321,14 +327,14 @@ export default function SharedCatalogPage() {
               style={{ backgroundColor: f.color }}
               aria-hidden="true"
             />
-            <div className="flex-1 min-w-0">
+            <label htmlFor={`share-import-${f._id}`} className="flex-1 min-w-0 cursor-pointer">
               <p className="font-medium truncate">{f.name}</p>
               <p className="text-xs text-gray-500">
                 {f.vendor} · {f.type}
                 {f.temperatures?.nozzle ? ` · ${f.temperatures.nozzle}°C nozzle` : ""}
                 {f.temperatures?.bed ? ` · ${f.temperatures.bed}°C bed` : ""}
               </p>
-            </div>
+            </label>
           </li>
         ))}
       </ul>
