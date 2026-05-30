@@ -1,5 +1,7 @@
 {
   "filaments.title": "Filament DB",
+  "filaments.pageTitle": "Filamente",
+  "a11y.skipToContent": "Zum Hauptinhalt springen",
   "filaments.addNew": "+ Filament hinzufügen",
   "filaments.importExport": "Import / Export",
   "filaments.import.prusamentQR": "Prusament QR",

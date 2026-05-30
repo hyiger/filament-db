@@ -166,7 +166,7 @@ export default function PrintersPage() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b border-gray-300">
-                <th className="py-3 px-2 w-8">
+                <th scope="col" className="py-3 px-2 w-8">
                   <input
                     type="checkbox"
                     checked={selected.size === printers.length && printers.length > 0}
@@ -175,13 +175,13 @@ export default function PrintersPage() {
                     className="accent-red-600"
                   />
                 </th>
-                <th className="text-left py-3 px-2">{t("printers.table.name")}</th>
-                <th className="text-left py-3 px-2">{t("printers.table.manufacturer")}</th>
-                <th className="text-left py-3 px-2">{t("printers.table.model")}</th>
-                <th className="text-left py-3 px-2">{t("printers.table.nozzles")}</th>
-                <th className="text-left py-3 px-2">{t("printers.table.bedTypes")}</th>
-                <th className="text-left py-3 px-2">{t("printers.table.notes")}</th>
-                <th className="text-right py-3 px-2">{t("printers.table.actions")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("printers.table.name")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("printers.table.manufacturer")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("printers.table.model")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("printers.table.nozzles")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("printers.table.bedTypes")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("printers.table.notes")}</th>
+                <th scope="col" className="text-right py-3 px-2">{t("printers.table.actions")}</th>
               </tr>
             </thead>
             <tbody>

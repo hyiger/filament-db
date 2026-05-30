@@ -88,7 +88,12 @@ export default function ToastProvider({ children }: { children: ReactNode }) {
         {toasts.map((t) => (
           <div
             key={t.id}
-            role="alert"
+            // GH #442: only errors warrant `role="alert"` (assertive
+            // — interrupts SR output). Success and info are routine
+            // confirmations; `role="status"` (polite) lets the SR
+            // finish what it's reading before announcing.
+            role={t.type === "error" ? "alert" : "status"}
+            aria-live={t.type === "error" ? "assertive" : "polite"}
             className={`px-4 py-3 rounded-lg shadow-lg text-sm text-white flex items-start gap-2 animate-slide-in ${
               t.type === "success"
                 ? "bg-green-600"

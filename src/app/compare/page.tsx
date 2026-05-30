@@ -263,7 +263,7 @@ function ComparePageInner() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b border-gray-300 dark:border-gray-700">
-                <th className="text-left py-2 px-2 font-medium text-gray-500 sticky left-0 bg-white dark:bg-gray-950 z-10">
+                <th scope="col" className="text-left py-2 px-2 font-medium text-gray-500 sticky left-0 bg-white dark:bg-gray-950 z-10">
                   {t("compare.col.property")}
                 </th>
                 {comparison.map((f) => (

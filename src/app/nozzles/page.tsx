@@ -154,7 +154,7 @@ export default function NozzlesPage() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b border-gray-300">
-                <th className="py-3 px-2 w-8">
+                <th scope="col" className="py-3 px-2 w-8">
                   <input
                     type="checkbox"
                     checked={selected.size === nozzles.length && nozzles.length > 0}
@@ -163,14 +163,14 @@ export default function NozzlesPage() {
                     className="accent-red-600"
                   />
                 </th>
-                <th className="text-left py-3 px-2">{t("nozzles.table.name")}</th>
-                <th className="text-right py-3 px-2">{t("nozzles.table.diameter")}</th>
-                <th className="text-left py-3 px-2">{t("nozzles.table.type")}</th>
-                <th className="text-center py-3 px-2">{t("nozzles.table.highFlow")}</th>
-                <th className="text-center py-3 px-2">{t("nozzles.table.hardened")}</th>
-                <th className="text-left py-3 px-2">{t("nozzles.table.installedIn")}</th>
-                <th className="text-left py-3 px-2">{t("nozzles.table.notes")}</th>
-                <th className="text-right py-3 px-2">{t("nozzles.table.actions")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("nozzles.table.name")}</th>
+                <th scope="col" className="text-right py-3 px-2">{t("nozzles.table.diameter")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("nozzles.table.type")}</th>
+                <th scope="col" className="text-center py-3 px-2">{t("nozzles.table.highFlow")}</th>
+                <th scope="col" className="text-center py-3 px-2">{t("nozzles.table.hardened")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("nozzles.table.installedIn")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("nozzles.table.notes")}</th>
+                <th scope="col" className="text-right py-3 px-2">{t("nozzles.table.actions")}</th>
               </tr>
             </thead>
             <tbody>

@@ -742,7 +742,13 @@ export default function Home() {
   };
 
   return (
-    <main className="w-full px-4 py-8">
+    <main id="main-content" className="w-full px-4 py-8">
+      {/* GH #411: visually-hidden h1 so screen-reader users navigating
+          by heading land on the page title. Sighted users already get
+          the "Filaments" cue from the AppHeader brand pill + active
+          nav link, so keeping the heading visible was rejected in
+          #176; the a11y need is met by sr-only. */}
+      <h1 className="sr-only">{t("filaments.pageTitle")}</h1>
       {mounted && (
         <input
           ref={fileInputRef}
@@ -992,7 +998,7 @@ export default function Home() {
           <table className="w-full text-sm border-collapse min-w-[900px]">
             <thead className="sticky z-10 bg-white dark:bg-gray-950 shadow-[0_1px_0_0_rgba(209,213,219,0.5)]" style={{ top: `${stickyHeaderHeight}px` }}>
               <tr className="border-b border-gray-300">
-                <th className="py-3 px-2 w-8">
+                <th scope="col" className="py-3 px-2 w-8">
                   <input
                     type="checkbox"
                     checked={selected.size === allFilamentIds.length && allFilamentIds.length > 0}
@@ -1001,10 +1007,11 @@ export default function Home() {
                     className="accent-red-600"
                   />
                 </th>
-                <th className="text-left py-3 px-2">{t("filaments.table.color")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("filaments.table.color")}</th>
                 {(["name", "vendor", "type", "nozzle", "bed", "cost", "remaining"] as SortKey[]).map((col) => (
                   <th
                     key={col}
+                    scope="col"
                     className={`${["nozzle", "bed", "cost", "remaining"].includes(col) ? "text-right" : "text-left"} ${thClass}`}
                     onClick={() => handleSort(col)}
                     role="columnheader"
@@ -1017,7 +1024,7 @@ export default function Home() {
                     <SortIcon column={col} sortKey={sortKey} sortDir={sortDir} />
                   </th>
                 ))}
-                <th className="text-right py-3 px-2">{t("filaments.table.actions")}</th>
+                <th scope="col" className="text-right py-3 px-2">{t("filaments.table.actions")}</th>
               </tr>
             </thead>
             <tbody>

@@ -1324,21 +1324,21 @@ function FilamentDetail() {
                     <table className="w-full text-sm border-collapse">
                       <thead>
                         <tr className="border-b border-gray-300">
-                          <th className="text-left py-2 px-2">{t("detail.calibration.nozzle")}</th>
-                          {hasBedTypes && <th className="text-left py-2 px-2">{t("detail.calibration.bedType")}</th>}
-                          <th className="text-right py-2 px-2">{t("detail.calibration.em")}</th>
-                          <th className="text-right py-2 px-2">{t("detail.calibration.maxVol")}</th>
-                          <th className="text-right py-2 px-2">{t("detail.calibration.pa")}</th>
-                          <th className="text-right py-2 px-2">{t("detail.calibration.retract")}</th>
-                          <th className="text-right py-2 px-2">{t("detail.calibration.speed")}</th>
-                          <th className="text-right py-2 px-2">{t("detail.calibration.zLift")}</th>
+                          <th scope="col" className="text-left py-2 px-2">{t("detail.calibration.nozzle")}</th>
+                          {hasBedTypes && <th scope="col" className="text-left py-2 px-2">{t("detail.calibration.bedType")}</th>}
+                          <th scope="col" className="text-right py-2 px-2">{t("detail.calibration.em")}</th>
+                          <th scope="col" className="text-right py-2 px-2">{t("detail.calibration.maxVol")}</th>
+                          <th scope="col" className="text-right py-2 px-2">{t("detail.calibration.pa")}</th>
+                          <th scope="col" className="text-right py-2 px-2">{t("detail.calibration.retract")}</th>
+                          <th scope="col" className="text-right py-2 px-2">{t("detail.calibration.speed")}</th>
+                          <th scope="col" className="text-right py-2 px-2">{t("detail.calibration.zLift")}</th>
                           {hasTemps && (
                             <>
-                              <th className="text-right py-2 px-2">{t("detail.calibration.nozzleTemp")}</th>
-                              <th className="text-right py-2 px-2">{t("detail.calibration.bedTempShort")}</th>
+                              <th scope="col" className="text-right py-2 px-2">{t("detail.calibration.nozzleTemp")}</th>
+                              <th scope="col" className="text-right py-2 px-2">{t("detail.calibration.bedTempShort")}</th>
                             </>
                           )}
-                          {hasFans && <th className="text-right py-2 px-2">{t("detail.calibration.fan")}</th>}
+                          {hasFans && <th scope="col" className="text-right py-2 px-2">{t("detail.calibration.fan")}</th>}
                         </tr>
                       </thead>
                       <tbody>
@@ -1439,12 +1439,12 @@ function FilamentDetail() {
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="border-b border-gray-300">
-                  <th className="text-left py-2 px-2">{t("detail.preset.label")}</th>
-                  <th className="text-right py-2 px-2">{t("detail.calibration.em")}</th>
-                  <th className="text-right py-2 px-2">{t("detail.calibration.nozzle")}</th>
-                  <th className="text-right py-2 px-2">{t("detail.preset.nozzleFirst")}</th>
-                  <th className="text-right py-2 px-2">{t("detail.preset.bed")}</th>
-                  <th className="text-right py-2 px-2">{t("detail.preset.bedFirst")}</th>
+                  <th scope="col" className="text-left py-2 px-2">{t("detail.preset.label")}</th>
+                  <th scope="col" className="text-right py-2 px-2">{t("detail.calibration.em")}</th>
+                  <th scope="col" className="text-right py-2 px-2">{t("detail.calibration.nozzle")}</th>
+                  <th scope="col" className="text-right py-2 px-2">{t("detail.preset.nozzleFirst")}</th>
+                  <th scope="col" className="text-right py-2 px-2">{t("detail.preset.bed")}</th>
+                  <th scope="col" className="text-right py-2 px-2">{t("detail.preset.bedFirst")}</th>
                 </tr>
               </thead>
               <tbody>

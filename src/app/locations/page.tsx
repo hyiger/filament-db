@@ -164,7 +164,7 @@ export default function LocationsPage() {
           <table className="w-full text-sm border-collapse">
             <thead>
               <tr className="border-b border-gray-300">
-                <th className="py-3 px-2 w-8">
+                <th scope="col" className="py-3 px-2 w-8">
                   <input
                     type="checkbox"
                     checked={
@@ -175,19 +175,19 @@ export default function LocationsPage() {
                     className="accent-red-600"
                   />
                 </th>
-                <th className="text-left py-3 px-2">{t("locations.table.name")}</th>
-                <th className="text-left py-3 px-2">{t("locations.table.kind")}</th>
-                <th className="text-right py-3 px-2">
+                <th scope="col" className="text-left py-3 px-2">{t("locations.table.name")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("locations.table.kind")}</th>
+                <th scope="col" className="text-right py-3 px-2">
                   {t("locations.table.humidity")}
                 </th>
-                <th className="text-right py-3 px-2">
+                <th scope="col" className="text-right py-3 px-2">
                   {t("locations.table.spools")}
                 </th>
-                <th className="text-right py-3 px-2">
+                <th scope="col" className="text-right py-3 px-2">
                   {t("locations.table.weight")}
                 </th>
-                <th className="text-left py-3 px-2">{t("locations.table.notes")}</th>
-                <th className="text-right py-3 px-2">{t("locations.table.actions")}</th>
+                <th scope="col" className="text-left py-3 px-2">{t("locations.table.notes")}</th>
+                <th scope="col" className="text-right py-3 px-2">{t("locations.table.actions")}</th>
               </tr>
             </thead>
             <tbody>
