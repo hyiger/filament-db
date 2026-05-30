@@ -64,14 +64,22 @@ export default function NfcStatus() {
   );
 
   if (canReopen) {
+    // Codex P2 on PR #475 round 2: don't drop the live region when the
+    // pill becomes a button — a SR user would lose announcements while
+    // the dialog is dismissed (which is the very state this branch
+    // exists to support). `aria-live` + `aria-atomic` work on any
+    // element, so they go on the button directly; `role="status"` is
+    // omitted because it would override the implicit button role and
+    // strip the click affordance. The live-region behaviour matches
+    // the <div> branch below.
     return (
       <button
         type="button"
         onClick={reopenTagRead}
         title={t("nfc.reopen")}
         aria-label={t("nfc.reopen")}
-        // Keep the live region wrapper so SR announcement still fires
-        // on label changes; the button itself sits inside it.
+        aria-live="polite"
+        aria-atomic="true"
         className={`${sharedClasses} cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500`}
       >
         {inner}
