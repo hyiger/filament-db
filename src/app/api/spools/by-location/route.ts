@@ -124,45 +124,67 @@ export async function GET(request: NextRequest) {
           as: "_parent",
         },
       },
-      // Optional filament-level filters — resolve own → parent so
-      // variants that inherit type / vendor are matched correctly.
-      ...(typeFilter
-        ? [
-            {
-              $match: {
-                $expr: {
-                  $eq: [
-                    {
-                      $ifNull: [
-                        "$type",
-                        { $arrayElemAt: ["$_parent.type", 0] },
-                      ],
-                    },
-                    typeFilter,
-                  ],
-                },
+      // Compute effective (parent-fallback) `type` and `vendor` ONCE so
+      // both the filter stages below AND the row projection share the
+      // same value. `resolveFilament` treats all three of MISSING /
+      // NULL / EMPTY-STRING as "inherit from parent" (see
+      // INHERITABLE_FIELDS in src/lib/resolveFilament.ts:67-72), so we
+      // do the same here — otherwise `?type=PLA` would exclude a
+      // variant that left the field blank to inherit, even though the
+      // rest of the app resolves it as PLA.
+      //
+      // Important quirk: `{ $eq: ["$missingField", null] }` returns
+      // FALSE in MongoDB aggregation (NOT true). Missing and null are
+      // distinct types and `$eq` does NOT collapse them. To detect
+      // null-or-missing, wrap in `$ifNull` first — that returns the
+      // 2nd arg for BOTH null and missing. Then the empty-string check
+      // is a separate $eq branch.
+      {
+        $set: {
+          _effectiveType: {
+            $let: {
+              vars: { v: { $ifNull: ["$type", null] } },
+              in: {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ["$$v", null] },
+                      { $eq: ["$$v", ""] },
+                    ],
+                  },
+                  { $arrayElemAt: ["$_parent.type", 0] },
+                  "$$v",
+                ],
               },
             },
-          ]
+          },
+          _effectiveVendor: {
+            $let: {
+              vars: { v: { $ifNull: ["$vendor", null] } },
+              in: {
+                $cond: [
+                  {
+                    $or: [
+                      { $eq: ["$$v", null] },
+                      { $eq: ["$$v", ""] },
+                    ],
+                  },
+                  { $arrayElemAt: ["$_parent.vendor", 0] },
+                  "$$v",
+                ],
+              },
+            },
+          },
+        },
+      },
+      // Optional filament-level filters use the EFFECTIVE values so an
+      // inheriting variant is matched the same way the rest of the app
+      // sees it via resolveFilament.
+      ...(typeFilter
+        ? [{ $match: { _effectiveType: typeFilter } }]
         : []),
       ...(vendorFilter
-        ? [
-            {
-              $match: {
-                $expr: {
-                  $eq: [
-                    {
-                      $ifNull: [
-                        "$vendor",
-                        { $arrayElemAt: ["$_parent.vendor", 0] },
-                      ],
-                    },
-                    vendorFilter,
-                  ],
-                },
-              },
-            },
-          ]
+        ? [{ $match: { _effectiveVendor: vendorFilter } }]
         : []),
       { $unwind: "$spools" },
       // Retired filter happens AFTER unwind because it's on the spool
@@ -198,17 +220,10 @@ export async function GET(request: NextRequest) {
               },
               filamentId: "$_id",
               filamentName: "$name",
-              // Use EFFECTIVE values for vendor/type (variant overrides
-              // parent, parent if variant blank) so the row's displayed
-              // chip and the page-side filters see the same value the
-              // rest of the app does via resolveFilament. Codex P2
-              // round 2 on PR #391.
-              filamentVendor: {
-                $ifNull: ["$vendor", { $arrayElemAt: ["$_parent.vendor", 0] }],
-              },
-              filamentType: {
-                $ifNull: ["$type", { $arrayElemAt: ["$_parent.type", 0] }],
-              },
+              // Use the same EFFECTIVE values the filter stages used so
+              // the page's chips and the server's filters can't disagree.
+              filamentVendor: "$_effectiveVendor",
+              filamentType: "$_effectiveType",
               filamentColor: "$color",
               spoolWeight: "$spoolWeight",
               netFilamentWeight: "$netFilamentWeight",

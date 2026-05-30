@@ -281,6 +281,50 @@ describe("GET /api/spools/by-location", () => {
     expect(byVendor.totalSpools).toBe(1);
   });
 
+  it("?type= and ?vendor= treat EMPTY-STRING inherited values as missing (Codex P2 #400)", async () => {
+    // The case Codex specifically flagged: a variant with explicit
+    // empty-string `type`/`vendor` should still fall back to the
+    // parent's values, because `resolveFilament` treats `""` the same
+    // way it treats null/missing for INHERITABLE_FIELDS
+    // (src/lib/resolveFilament.ts:67-72). A naïve `$ifNull` would keep
+    // the `""` and exclude the row from `?type=PLA`.
+    const shelf = await Location.create({ name: "Shelf B", kind: "shelf" });
+    const parent = await Filament.create({
+      name: "EmptyParent",
+      vendor: "Polymaker",
+      type: "PLA",
+      diameter: 1.75,
+    });
+    await Filament.collection.insertOne({
+      name: "EmptyVariant",
+      // Explicit empty strings instead of missing/null — the case
+      // Codex called out.
+      type: "",
+      vendor: "",
+      parentId: parent._id,
+      diameter: 1.75,
+      _deletedAt: null,
+      spools: [
+        {
+          _id: new mongoose.Types.ObjectId(),
+          label: "S1",
+          totalWeight: 1000,
+          retired: false,
+          locationId: shelf._id,
+        },
+      ],
+    });
+
+    const { GET } = await import("@/app/api/spools/by-location/route");
+    const byType = await (
+      await GET(req("http://localhost/api/spools/by-location?type=PLA"))
+    ).json();
+    expect(byType.totalSpools).toBe(1);
+    expect(byType.groups[0].spools[0].filamentName).toBe("EmptyVariant");
+    expect(byType.groups[0].spools[0].filamentType).toBe("PLA");
+    expect(byType.groups[0].spools[0].filamentVendor).toBe("Polymaker");
+  });
+
   it("counts dry cycles + reports lastDryAt", async () => {
     const shelf = await Location.create({ name: "Shelf A", kind: "shelf" });
     const old = new Date("2024-01-01T00:00:00.000Z");
