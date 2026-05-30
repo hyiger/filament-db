@@ -229,6 +229,58 @@ describe("GET /api/spools/by-location", () => {
     expect(onlyPETG.groups[0].spools[0].filamentType).toBe("PETG");
   });
 
+  it("?type= and ?vendor= match variants that INHERIT those fields from a parent (Codex P2 #391 r2)", async () => {
+    // `type` and `vendor` are listed in `INHERITABLE_FIELDS` — pre-fix
+    // the server filtered on the variant's raw value, so a variant
+    // that left either blank to inherit was dropped from filtered
+    // results even though the rest of the app treats it as that
+    // type / vendor.
+    //
+    // The schema marks both as required, so we have to bypass
+    // Mongoose validation to seed the inheriting-variant case. Real
+    // data in this shape exists when CSV imports or hand-crafted docs
+    // leave the fields off, and it's exactly the case Codex flagged.
+    const shelf = await Location.create({ name: "Shelf A", kind: "shelf" });
+    const parent = await Filament.create({
+      name: "Polymaker PLA Parent",
+      vendor: "Polymaker",
+      type: "PLA",
+      diameter: 1.75,
+    });
+    await Filament.collection.insertOne({
+      name: "Polymaker PLA Black",
+      // vendor + type intentionally OMITTED — inherits from parent.
+      parentId: parent._id,
+      diameter: 1.75,
+      _deletedAt: null,
+      spools: [
+        {
+          _id: new mongoose.Types.ObjectId(),
+          label: "S1",
+          totalWeight: 1000,
+          retired: false,
+          locationId: shelf._id,
+        },
+      ],
+    });
+
+    const { GET } = await import("@/app/api/spools/by-location/route");
+    const byType = await (
+      await GET(req("http://localhost/api/spools/by-location?type=PLA"))
+    ).json();
+    expect(byType.totalSpools).toBe(1);
+    expect(byType.groups[0].spools[0].filamentName).toBe("Polymaker PLA Black");
+    // Response carries the EFFECTIVE (inherited) type/vendor so the
+    // page's chips don't render blank.
+    expect(byType.groups[0].spools[0].filamentType).toBe("PLA");
+    expect(byType.groups[0].spools[0].filamentVendor).toBe("Polymaker");
+
+    const byVendor = await (
+      await GET(req("http://localhost/api/spools/by-location?vendor=Polymaker"))
+    ).json();
+    expect(byVendor.totalSpools).toBe(1);
+  });
+
   it("counts dry cycles + reports lastDryAt", async () => {
     const shelf = await Location.create({ name: "Shelf A", kind: "shelf" });
     const old = new Date("2024-01-01T00:00:00.000Z");

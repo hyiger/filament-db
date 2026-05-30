@@ -168,20 +168,36 @@ export default function InventoryPage() {
   // Client-side search filter — runs over the already-server-filtered
   // groups so the filament/type/vendor server filters compose with a
   // free-text local match against filament name / spool label / lot.
+  //
+  // Codex P2 on PR #391 round 2: recompute `count` and `totalGrams`
+  // from the FILTERED spools — previously the cloned group kept the
+  // server-side counts, so a one-result search on a 20-spool shelf
+  // still rendered "20 spools · 18000g" in the header. Use the same
+  // tare-subtracted remaining-grams math the server applies so the
+  // header value stays consistent with the row-level bar.
   const filteredGroups = useMemo(() => {
     if (!data) return [];
     const q = search.trim().toLowerCase();
     if (!q) return data.groups;
     return data.groups
-      .map((g) => ({
-        ...g,
-        spools: g.spools.filter(
+      .map((g) => {
+        const matching = g.spools.filter(
           (s) =>
             s.filamentName.toLowerCase().includes(q) ||
             (s.label || "").toLowerCase().includes(q) ||
             (s.lotNumber || "").toLowerCase().includes(q),
-        ),
-      }))
+        );
+        const totalGrams = matching.reduce(
+          (sum, s) => sum + (remainingGrams(s) ?? 0),
+          0,
+        );
+        return {
+          ...g,
+          spools: matching,
+          count: matching.length,
+          totalGrams,
+        };
+      })
       .filter((g) => g.spools.length > 0);
   }, [data, search]);
 

@@ -95,22 +95,75 @@ export async function GET(request: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pipeline: any[] = [
       { $match: { _deletedAt: null, spools: { $exists: true, $ne: [] } } },
-      // Optional filament-level filters before the unwind so we narrow
-      // the working set as early as possible.
-      ...(typeFilter ? [{ $match: { type: typeFilter } }] : []),
-      ...(vendorFilter ? [{ $match: { vendor: vendorFilter } }] : []),
-      // Self-lookup for parent (needed for spoolWeight / netFilamentWeight
-      // inheritance — see resolveFilament INHERITABLE_FIELDS). Only one
-      // doc, so $arrayElemAt below safely flattens.
+      // Self-lookup for parent — needed for spoolWeight / netFilamentWeight
+      // inheritance (see resolveFilament INHERITABLE_FIELDS) AND for the
+      // type / vendor filters, which both fields inherit from. Done
+      // BEFORE the type/vendor matches so a variant that leaves either
+      // field blank still resolves to its parent's value. Only one
+      // parent doc, so $arrayElemAt below safely flattens.
+      //
+      // Codex P2 on PR #391 round 2: type and vendor are listed in
+      // INHERITABLE_FIELDS, so filtering on the variant's raw value
+      // dropped any variant that inherited those fields. Project both
+      // into the parent lookup and match on effective values below.
       {
         $lookup: {
           from: "filaments",
           localField: "parentId",
           foreignField: "_id",
-          pipeline: [{ $project: { spoolWeight: 1, netFilamentWeight: 1 } }],
+          pipeline: [
+            {
+              $project: {
+                spoolWeight: 1,
+                netFilamentWeight: 1,
+                type: 1,
+                vendor: 1,
+              },
+            },
+          ],
           as: "_parent",
         },
       },
+      // Optional filament-level filters — resolve own → parent so
+      // variants that inherit type / vendor are matched correctly.
+      ...(typeFilter
+        ? [
+            {
+              $match: {
+                $expr: {
+                  $eq: [
+                    {
+                      $ifNull: [
+                        "$type",
+                        { $arrayElemAt: ["$_parent.type", 0] },
+                      ],
+                    },
+                    typeFilter,
+                  ],
+                },
+              },
+            },
+          ]
+        : []),
+      ...(vendorFilter
+        ? [
+            {
+              $match: {
+                $expr: {
+                  $eq: [
+                    {
+                      $ifNull: [
+                        "$vendor",
+                        { $arrayElemAt: ["$_parent.vendor", 0] },
+                      ],
+                    },
+                    vendorFilter,
+                  ],
+                },
+              },
+            },
+          ]
+        : []),
       { $unwind: "$spools" },
       // Retired filter happens AFTER unwind because it's on the spool
       // subdoc, not the filament.
@@ -145,8 +198,17 @@ export async function GET(request: NextRequest) {
               },
               filamentId: "$_id",
               filamentName: "$name",
-              filamentVendor: "$vendor",
-              filamentType: "$type",
+              // Use EFFECTIVE values for vendor/type (variant overrides
+              // parent, parent if variant blank) so the row's displayed
+              // chip and the page-side filters see the same value the
+              // rest of the app does via resolveFilament. Codex P2
+              // round 2 on PR #391.
+              filamentVendor: {
+                $ifNull: ["$vendor", { $arrayElemAt: ["$_parent.vendor", 0] }],
+              },
+              filamentType: {
+                $ifNull: ["$type", { $arrayElemAt: ["$_parent.type", 0] }],
+              },
               filamentColor: "$color",
               spoolWeight: "$spoolWeight",
               netFilamentWeight: "$netFilamentWeight",
