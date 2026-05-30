@@ -285,15 +285,26 @@ export default function InventoryPage() {
   // `selectedKeys` (so changing filter back resurrects it) but doesn't
   // count toward the action-bar tally — the user only sees what they
   // can act on.
+  //
+  // Codex P2 on PR #476 round 2: ALSO skip rows whose group is
+  // currently collapsed. The user can't see those rows, so including
+  // them in the batch count + applying move/retire to them would be
+  // the same hidden-write surprise this selection logic exists to
+  // avoid. Collapsing a group with selected rows quietly drops them
+  // from the action-bar tally; re-expanding the group re-includes them
+  // (the underlying selection set is unchanged so the round-trip is
+  // lossless).
   const visibleSelectedRows = useMemo(() => {
     const out: SpoolRow[] = [];
     for (const g of filteredGroups) {
+      const key = g.locationId ?? "_none";
+      if (collapsed.has(key)) continue;
       for (const s of g.spools) {
         if (selectedKeys.has(spoolKey(s))) out.push(s);
       }
     }
     return out;
-  }, [filteredGroups, selectedKeys]);
+  }, [filteredGroups, selectedKeys, collapsed]);
 
   // GH #420: run the same PUT for every selected row, sequentially so
   // a transient failure doesn't trigger a thundering-herd of retries.
