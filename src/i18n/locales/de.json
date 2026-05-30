@@ -12,6 +12,7 @@
   "filaments.expandVariants": "Varianten anzeigen",
   "filaments.collapseVariants": "Varianten ausblenden",
   "sync.tooltip.openDetails": "Sync-Details öffnen",
+  "nfc.reopen": "NFC-Scan-Details erneut öffnen",
   "atlas.import.uriLabel": "MongoDB-Atlas-Verbindungs-URI",
   "prusament.import.spoolIdLabel": "Prusament-Spulen-ID",
   "csv.import.pasteLabel": "CSV-Zeilen einfügen",

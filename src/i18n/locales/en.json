@@ -12,6 +12,7 @@
   "filaments.expandVariants": "Expand variants",
   "filaments.collapseVariants": "Collapse variants",
   "sync.tooltip.openDetails": "Open sync details",
+  "nfc.reopen": "Reopen NFC scan details",
   "atlas.import.uriLabel": "MongoDB Atlas connection URI",
   "prusament.import.spoolIdLabel": "Prusament spool ID",
   "csv.import.pasteLabel": "Paste CSV rows",

@@ -41,6 +41,13 @@ interface NfcContextValue {
   dialogOpen: boolean;
   /** Hide the dialog without clearing `tagReadResult`. */
   dismissTagRead: () => void;
+  /** GH #451 follow-up (Codex P2 on PR #475): re-show the dialog after
+   *  it was suppressed because the user was typing, or after they
+   *  manually dismissed it but want a second look. No-op when there's
+   *  no scan to show. The NFC status pill becomes a button while
+   *  `tagReadResult != null && !dialogOpen` so this path is reachable
+   *  from the global header. */
+  reopenTagRead: () => void;
   /**
    * Call this from the write button on the filament detail page after
    * `writeTag` resolves successfully. Updates the pill to reflect the
@@ -105,6 +112,7 @@ export function useNfcContext(): NfcContextValue {
       loadedTagName: null,
       dialogOpen: false,
       dismissTagRead: () => {},
+      reopenTagRead: () => {},
       notifyTagWritten: () => {},
       notifyTagErased: () => {},
     };
@@ -208,6 +216,15 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
   }, [isElectron]);
 
   const dismissTagRead = useCallback(() => setDialogOpen(false), []);
+  // GH #451 follow-up (Codex P2 on PR #475): a typing-suppressed scan
+  // still updates tagReadResult, but `dialogOpen` stays false. Expose a
+  // reopen path so the user can pull the dialog back up — wired to the
+  // NFC pill in the header which becomes clickable while a scan is
+  // dismissable.
+  const reopenTagRead = useCallback(() => {
+    setDialogOpen((prev) => prev); // no-op write — guards against React staleness
+    if (tagReadResult != null) setDialogOpen(true);
+  }, [tagReadResult]);
 
   // Called by the filament detail page after a successful Write NFC.
   // Synthesises a `tagReadResult` that mirrors what a fresh read would
@@ -242,6 +259,7 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
         loadedTagName,
         dialogOpen,
         dismissTagRead,
+        reopenTagRead,
         notifyTagWritten,
         notifyTagErased,
       }}

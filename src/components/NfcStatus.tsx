@@ -5,7 +5,14 @@ import { useNfcContext } from "@/components/NfcProvider";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function NfcStatus() {
-  const { isElectron, status, loadedTagName } = useNfcContext();
+  const {
+    isElectron,
+    status,
+    loadedTagName,
+    tagReadResult,
+    dialogOpen,
+    reopenTagRead,
+  } = useNfcContext();
   const { t } = useTranslation();
   const [mounted, setMounted] = useState(false);
 
@@ -39,6 +46,39 @@ export default function NfcStatus() {
     }
   }
 
+  // GH #451 follow-up (Codex P2 on PR #475): when an NFC scan has
+  // landed but the dialog is currently dismissed (either auto-suppressed
+  // because the user was typing, or manually closed), make the pill
+  // clickable so the user can pull the scan dialog back up. Without
+  // this, a typing-suppressed scan was unreachable until the next
+  // physical tag-rescan.
+  const canReopen = tagReadResult != null && !dialogOpen;
+  const sharedClasses =
+    "inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full text-xs text-gray-600 dark:text-gray-300 max-w-[260px]";
+
+  const inner = (
+    <>
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} aria-hidden="true" />
+      <span className="truncate">{label}</span>
+    </>
+  );
+
+  if (canReopen) {
+    return (
+      <button
+        type="button"
+        onClick={reopenTagRead}
+        title={t("nfc.reopen")}
+        aria-label={t("nfc.reopen")}
+        // Keep the live region wrapper so SR announcement still fires
+        // on label changes; the button itself sits inside it.
+        className={`${sharedClasses} cursor-pointer hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500`}
+      >
+        {inner}
+      </button>
+    );
+  }
+
   return (
     <div
       // GH #417: a screen reader user has no other way to know an NFC
@@ -50,11 +90,10 @@ export default function NfcStatus() {
       role="status"
       aria-live="polite"
       aria-atomic="true"
-      className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-full text-xs text-gray-600 dark:text-gray-300 max-w-[260px]"
+      className={sharedClasses}
       title={label}
     >
-      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} aria-hidden="true" />
-      <span className="truncate">{label}</span>
+      {inner}
     </div>
   );
 }
