@@ -20,36 +20,58 @@ import { resolve } from "node:path";
  */
 const REPO_ROOT = resolve(__dirname, "..");
 
+/**
+ * Codex feedback on PR #462: the earlier regex required the directive
+ * name to follow `;` or start-of-file, which never matches the web CSP
+ * where each directive lives in its own JS string literal like
+ * `"default-src 'self'"`. The directive name there is right after a
+ * `"` — not after a `;`.
+ *
+ * Replace the position-anchored regex with one that finds each known
+ * CSP directive name preceded by ANY non-word boundary (`;`, `"`, `'`,
+ * `\``, whitespace, BOL) and followed by whitespace + a value. This
+ * matches both:
+ *   - one big template literal: `"… ;${scriptSrc}; style-src 'self'…"`
+ *   - per-line quoted strings: `"default-src 'self'"`, `"style-src…"`
+ * Comments in the file (the prose mentioning a directive name) won't
+ * match because they're not followed by whitespace + a CSP value
+ * unless the test ALSO accepts a comma / period, which we don't.
+ */
+const KNOWN_DIRECTIVES = [
+  "default-src",
+  "script-src",
+  "style-src",
+  "img-src",
+  "font-src",
+  "connect-src",
+  "frame-src",
+  "frame-ancestors",
+  "base-uri",
+  "form-action",
+  "object-src",
+  "media-src",
+  "worker-src",
+  "manifest-src",
+  "child-src",
+] as const;
+
 function readDirectives(filePath: string): Set<string> {
   const text = readFileSync(resolve(REPO_ROOT, filePath), "utf8");
-  // Match every CSP directive name (the token right after `;` or at the
-  // start of a CSP string literal, before the value). We grep across the
-  // whole file rather than parse it so the test doesn't depend on the
-  // exact line layout.
   const seen = new Set<string>();
-  for (const match of text.matchAll(/(?:^|;\s*)([a-z\-]+)\s+[^;'"]*?(?=[;'"])/g)) {
-    const name = match[1];
-    // Filter to real CSP directive names — there are only ~15 of them
-    // and we don't want to pick up arbitrary CSS-like tokens.
-    if (
-      [
-        "default-src",
-        "script-src",
-        "style-src",
-        "img-src",
-        "font-src",
-        "connect-src",
-        "frame-src",
-        "frame-ancestors",
-        "base-uri",
-        "form-action",
-        "object-src",
-        "media-src",
-        "worker-src",
-        "manifest-src",
-        "child-src",
-      ].includes(name)
-    ) {
+  for (const name of KNOWN_DIRECTIVES) {
+    // Match the directive name preceded by a non-word-char boundary
+    // (so `style-src` doesn't accidentally match inside `frame-style-src`)
+    // and followed by whitespace + a value that starts with a CSP value
+    // token (`'self'`, `'none'`, `https:`, `data:`, `blob:`, `*`, `ws:`,
+    // or a hostname-like character). That filters out prose mentions
+    // and comment text.
+    const pattern = new RegExp(
+      String.raw`(?:^|[^a-z\-])` +
+        name.replace(/-/g, "\\-") +
+        String.raw`\s+(?:'(?:self|none|unsafe-(?:inline|eval))'|https?:|wss?:|data:|blob:|\*|[a-z0-9.\-]+)`,
+      "i",
+    );
+    if (pattern.test(text)) {
       seen.add(name);
     }
   }
