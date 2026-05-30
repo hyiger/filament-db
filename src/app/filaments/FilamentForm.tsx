@@ -1436,8 +1436,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           })()}
         </div>
         <div>
-          <label className={labelClass}>{t("form.cost", { symbol: currencySymbol })}</label>
+          <label htmlFor="filament-cost" className={labelClass}>{t("form.cost", { symbol: currencySymbol })}</label>
           <input
+            id="filament-cost"
             type="number"
             step="0.01"
             min="0"
@@ -1448,8 +1449,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           />
         </div>
         <div>
-          <label className={labelClass}>{t("form.density")}</label>
+          <label htmlFor="filament-density" className={labelClass}>{t("form.density")}</label>
           <input
+            id="filament-density"
             type="number"
             step="0.01"
             min="0"
@@ -1468,8 +1470,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
       >
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
-            <label className={labelClass}>{t("form.netFilament")}</label>
+            <label htmlFor="filament-net-filament" className={labelClass}>{t("form.netFilament")}</label>
             <input
+              id="filament-net-filament"
               type="number"
               step="1"
               min="0"
@@ -1481,8 +1484,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             <p className="text-xs text-gray-400 mt-1">{t("form.netFilamentHint")}</p>
           </div>
           <div>
-            <label className={labelClass}>{t("form.emptySpool")}</label>
+            <label htmlFor="filament-spool-weight" className={labelClass}>{t("form.emptySpool")}</label>
             <input
+              id="filament-spool-weight"
               type="number"
               step="1"
               min="0"
@@ -1494,8 +1498,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             <p className="text-xs text-gray-400 mt-1">{t("form.emptySpoolHint")}</p>
           </div>
           <div>
-            <label className={labelClass}>{t("form.initialWeight")}</label>
+            <label htmlFor="filament-initial-weight" className={labelClass}>{t("form.initialWeight")}</label>
             <input
+              id="filament-initial-weight"
               type="number"
               step="1"
               min="0"
@@ -1511,8 +1516,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             </p>
           </div>
           <div>
-            <label className={labelClass}>{t("form.lowStockThreshold")}</label>
+            <label htmlFor="filament-low-stock-threshold" className={labelClass}>{t("form.lowStockThreshold")}</label>
             <input
+              id="filament-low-stock-threshold"
               type="number"
               step="1"
               min="0"
@@ -1530,24 +1536,24 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           Calibrations section below, not here at the top level. */}
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
-          <label className={labelClass}>{t("form.minPrintSpeed")}</label>
-          <input type="number" step="1" min="0" className={inputClass}
+          <label htmlFor="filament-min-print-speed" className={labelClass}>{t("form.minPrintSpeed")}</label>
+          <input id="filament-min-print-speed" type="number" step="1" min="0" className={inputClass}
             value={form.minPrintSpeed}
             onChange={(e) => setForm({ ...form, minPrintSpeed: e.target.value })}
             placeholder={parentPh("minPrintSpeed")}
           />
         </div>
         <div>
-          <label className={labelClass}>{t("form.maxPrintSpeed")}</label>
-          <input type="number" step="1" min="0" className={inputClass}
+          <label htmlFor="filament-max-print-speed" className={labelClass}>{t("form.maxPrintSpeed")}</label>
+          <input id="filament-max-print-speed" type="number" step="1" min="0" className={inputClass}
             value={form.maxPrintSpeed}
             onChange={(e) => setForm({ ...form, maxPrintSpeed: e.target.value })}
             placeholder={parentPh("maxPrintSpeed")}
           />
         </div>
         <div>
-          <label className={labelClass}>{t("form.zOffset")}</label>
-          <input type="number" step="0.001" className={inputClass}
+          <label htmlFor="filament-z-offset" className={labelClass}>{t("form.zOffset")}</label>
+          <input id="filament-z-offset" type="number" step="0.001" className={inputClass}
             value={form.zOffset}
             onChange={(e) => setForm({ ...form, zOffset: e.target.value })}
             placeholder={t("form.placeholder.zOffset")}
@@ -1562,8 +1568,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
       >
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
-            <label className={labelClass}>{t("form.nozzleTemp")}</label>
+            <label htmlFor="filament-temp-nozzle" className={labelClass}>{t("form.nozzleTemp")}</label>
             <input
+              id="filament-temp-nozzle"
               type="number"
               min="0"
               className={inputClass}
@@ -1578,8 +1585,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             />
           </div>
           <div>
-            <label className={labelClass}>{t("form.nozzleFirstLayer")}</label>
+            <label htmlFor="filament-temp-nozzle-first-layer" className={labelClass}>{t("form.nozzleFirstLayer")}</label>
             <input
+              id="filament-temp-nozzle-first-layer"
               type="number"
               min="0"
               className={inputClass}
@@ -1594,8 +1602,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             />
           </div>
           <div>
-            <label className={labelClass}>{t("form.bedTemp")}</label>
+            <label htmlFor="filament-temp-bed" className={labelClass}>{t("form.bedTemp")}</label>
             <input
+              id="filament-temp-bed"
               type="number"
               min="0"
               className={inputClass}
@@ -1610,8 +1619,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             />
           </div>
           <div>
-            <label className={labelClass}>{t("form.bedFirstLayer")}</label>
+            <label htmlFor="filament-temp-bed-first-layer" className={labelClass}>{t("form.bedFirstLayer")}</label>
             <input
+              id="filament-temp-bed-first-layer"
               type="number"
               min="0"
               className={inputClass}
@@ -1626,8 +1636,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             />
           </div>
           <div>
-            <label className={labelClass}>{t("form.chamberTemp")}</label>
+            <label htmlFor="filament-temp-chamber" className={labelClass}>{t("form.chamberTemp")}</label>
             <input
+              id="filament-temp-chamber"
               type="number"
               min="0"
               className={inputClass}
@@ -1641,8 +1652,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             />
           </div>
           <div>
-            <label className={labelClass}>{t("form.standbyTemp")}</label>
+            <label htmlFor="filament-temp-standby" className={labelClass}>{t("form.standbyTemp")}</label>
             <input
+              id="filament-temp-standby"
               type="number"
               min="0"
               className={inputClass}
@@ -1657,8 +1669,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             />
           </div>
           <div>
-            <label className={labelClass}>{t("form.nozzleRangeMin")}</label>
+            <label htmlFor="filament-temp-nozzle-range-min" className={labelClass}>{t("form.nozzleRangeMin")}</label>
             <input
+              id="filament-temp-nozzle-range-min"
               type="number"
               min="0"
               className={inputClass}
@@ -1673,8 +1686,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             />
           </div>
           <div>
-            <label className={labelClass}>{t("form.nozzleRangeMax")}</label>
+            <label htmlFor="filament-temp-nozzle-range-max" className={labelClass}>{t("form.nozzleRangeMax")}</label>
             <input
+              id="filament-temp-nozzle-range-max"
               type="number"
               min="0"
               className={inputClass}
@@ -2576,8 +2590,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <label className={labelClass}>{t("form.diameter")}</label>
+          <label htmlFor="filament-diameter" className={labelClass}>{t("form.diameter")}</label>
           <input
+            id="filament-diameter"
             type="number"
             step="0.01"
             className={inputClass}

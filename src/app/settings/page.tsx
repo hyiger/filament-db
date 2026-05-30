@@ -420,10 +420,11 @@ export default function SettingsPage() {
           <div className="mt-4 p-4 rounded border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                <label htmlFor="custom-currency-code" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
                   {t("settings.customCurrency.codeLabel")}
                 </label>
                 <input
+                  id="custom-currency-code"
                   type="text"
                   value={newCurrCode}
                   onChange={(e) => {
@@ -436,10 +437,11 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                <label htmlFor="custom-currency-symbol" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
                   {t("settings.customCurrency.symbolLabel")}
                 </label>
                 <input
+                  id="custom-currency-symbol"
                   type="text"
                   value={newCurrSymbol}
                   onChange={(e) => {
@@ -452,10 +454,11 @@ export default function SettingsPage() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                <label htmlFor="custom-currency-name" className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
                   {t("settings.customCurrency.nameLabel")}
                 </label>
                 <input
+                  id="custom-currency-name"
                   type="text"
                   value={newCurrName}
                   onChange={(e) => setNewCurrName(e.target.value)}

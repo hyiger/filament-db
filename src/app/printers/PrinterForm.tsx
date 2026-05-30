@@ -487,8 +487,9 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
         </legend>
         <div className="grid grid-cols-3 gap-3">
           <div>
-            <label className={labelClass}>{t("printers.form.buildX")}</label>
+            <label htmlFor="printer-build-x" className={labelClass}>{t("printers.form.buildX")}</label>
             <input
+              id="printer-build-x"
               type="number"
               min="0"
               step="1"
@@ -500,8 +501,9 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
             />
           </div>
           <div>
-            <label className={labelClass}>{t("printers.form.buildY")}</label>
+            <label htmlFor="printer-build-y" className={labelClass}>{t("printers.form.buildY")}</label>
             <input
+              id="printer-build-y"
               type="number"
               min="0"
               step="1"
@@ -513,8 +515,9 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
             />
           </div>
           <div>
-            <label className={labelClass}>{t("printers.form.buildZ")}</label>
+            <label htmlFor="printer-build-z" className={labelClass}>{t("printers.form.buildZ")}</label>
             <input
+              id="printer-build-z"
               type="number"
               min="0"
               step="1"
@@ -528,8 +531,9 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
         </div>
         <div className="grid grid-cols-2 gap-3 mt-3">
           <div>
-            <label className={labelClass}>{t("printers.form.maxFlow")}</label>
+            <label htmlFor="printer-max-flow" className={labelClass}>{t("printers.form.maxFlow")}</label>
             <input
+              id="printer-max-flow"
               type="number"
               min="0"
               step="0.1"
@@ -540,8 +544,9 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
             />
           </div>
           <div>
-            <label className={labelClass}>{t("printers.form.maxSpeed")}</label>
+            <label htmlFor="printer-max-speed" className={labelClass}>{t("printers.form.maxSpeed")}</label>
             <input
+              id="printer-max-speed"
               type="number"
               min="0"
               step="1"
@@ -589,6 +594,9 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
                     value={slot.slotName}
                     onChange={(e) => updateSlot(slot._uid, { slotName: e.target.value })}
                     placeholder={t("printers.form.amsSlotNamePlaceholder")}
+                    aria-label={t("printers.form.amsSlotNameAriaLabel", {
+                      name: slot.slotName || t("printers.form.amsSlotUnnamed"),
+                    })}
                   />
                   <select
                     className={`col-span-5 ${inputClass}`}
@@ -599,6 +607,9 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
                         spoolId: null, // reset spool when filament changes
                       })
                     }
+                    aria-label={t("printers.form.amsFilamentAriaLabel", {
+                      name: slot.slotName || t("printers.form.amsSlotUnnamed"),
+                    })}
                   >
                     <option value="">{t("printers.form.amsEmpty")}</option>
                     {filamentOptions.map((f) => (
@@ -614,6 +625,9 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
                       updateSlot(slot._uid, { spoolId: e.target.value || null })
                     }
                     disabled={!slot.filamentId || !filament?.spools?.length}
+                    aria-label={t("printers.form.amsSpoolAriaLabel", {
+                      name: slot.slotName || t("printers.form.amsSlotUnnamed"),
+                    })}
                   >
                     <option value="">{t("printers.form.amsAnySpool")}</option>
                     {filament?.spools?.map((s) => (
