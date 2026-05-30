@@ -327,13 +327,21 @@ export default function SharedCatalogPage() {
               style={{ backgroundColor: f.color }}
               aria-hidden="true"
             />
-            <label htmlFor={`share-import-${f._id}`} className="flex-1 min-w-0 cursor-pointer">
-              <p className="font-medium truncate">{f.name}</p>
-              <p className="text-xs text-gray-500">
+            {/* Codex P3 on PR #480: <label> only allows phrasing
+                content; wrapping <p> tags is invalid HTML. Use a
+                span-based layout with block utility classes so the
+                checkbox association stays intact and validators stop
+                flagging this surface. */}
+            <label
+              htmlFor={`share-import-${f._id}`}
+              className="flex-1 min-w-0 cursor-pointer"
+            >
+              <span className="block font-medium truncate">{f.name}</span>
+              <span className="block text-xs text-gray-500">
                 {f.vendor} · {f.type}
                 {f.temperatures?.nozzle ? ` · ${f.temperatures.nozzle}°C nozzle` : ""}
                 {f.temperatures?.bed ? ` · ${f.temperatures.bed}°C bed` : ""}
-              </p>
+              </span>
             </label>
           </li>
         ))}
