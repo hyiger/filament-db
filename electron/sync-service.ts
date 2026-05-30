@@ -3,22 +3,33 @@ import { randomUUID } from "crypto";
 import { MongoClient, ObjectId, Document } from "mongodb";
 
 /**
- * Recognise the MongoDB driver's duplicate-key error so the local-only
- * push / pull paths can treat a concurrent peer winning the
- * `syncId`-unique race as a no-op rather than a sync failure
- * (GH #439). The driver surfaces this as `MongoServerError` with
- * `code === 11000`; `MongoBulkWriteError` from `insertMany` carries
- * the same code on its `writeErrors[]` array, but the local-only
- * paths here use `insertOne`, so just checking the top-level code
- * is sufficient.
+ * Recognise a duplicate-key error specifically on the `syncId` index,
+ * so the local-only push / pull paths can treat a concurrent peer
+ * winning that race as a no-op (GH #439).
+ *
+ * Codex follow-up on PR #464: an earlier version accepted ANY
+ * E11000 and silently swallowed real conflicts. Every synced
+ * collection also has unique indexes on at least one other field
+ * — filament `name` / `instanceId`, nozzle `name`, etc. A real
+ * collision on those would have left the doc unsynced forever
+ * while the cycle still reported success.
+ *
+ * The MongoDB driver decorates the error with:
+ *   - `code: 11000`
+ *   - `keyPattern: { <indexedField>: 1 }`  (which index conflicted)
+ *   - `keyValue`: { <indexedField>: <colliding value> }
+ * Constrain to the `syncId` case by checking `keyPattern.syncId` —
+ * a key in the pattern means the violation involved that index.
+ * Without a keyPattern (some driver versions surface a bare code on
+ * older error shapes), err on the side of NOT swallowing so the
+ * cycle still surfaces the conflict.
  */
 export function isDuplicateKeyError(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "code" in err &&
-    (err as { code?: number }).code === 11000
-  );
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { code?: number; keyPattern?: Record<string, unknown> };
+  if (e.code !== 11000) return false;
+  if (!e.keyPattern || typeof e.keyPattern !== "object") return false;
+  return Object.prototype.hasOwnProperty.call(e.keyPattern, "syncId");
 }
 
 /**
