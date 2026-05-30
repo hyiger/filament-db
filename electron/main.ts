@@ -1119,7 +1119,26 @@ app.whenReady().then(async () => {
   const scriptSrc = app.isPackaged
     ? "script-src 'self' 'unsafe-inline'"
     : "script-src 'self' 'unsafe-inline' 'unsafe-eval'";
+  // CSP header rewrite, scoped to the embedded Next app's own
+  // responses. Codex flagged a P1 on PR #462: an unfiltered handler
+  // would also rewrite the CSP on the vendor TDS document loaded
+  // inside the `<iframe>` (the `frame-src https:` flow), and setting
+  // `frame-ancestors 'none'` on the vendor doc's response tells
+  // Chromium it can't be embedded by ANY parent — Chromium would
+  // block the frame even though the vendor's own CSP allowed it.
+  // Gate on the response URL's origin matching the app origin.
+  const APP_ORIGIN = `http://localhost:${PORT}`;
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    let requestOrigin: string | null = null;
+    try {
+      requestOrigin = new URL(details.url).origin;
+    } catch {
+      // Malformed URL — fall through and don't touch the headers.
+    }
+    if (requestOrigin !== APP_ORIGIN) {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
     callback({
       responseHeaders: {
         ...details.responseHeaders,
