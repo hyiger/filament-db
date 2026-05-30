@@ -189,23 +189,51 @@ export async function POST(request: NextRequest) {
     ...(purchaseDateForCreate ? { purchaseDate: purchaseDateForCreate } : {}),
   };
 
-  // Atomically check for existing filament with same name and add spool if found
-  const existingUpdated = await Filament.findOneAndUpdate(
-    { name, _deletedAt: null },
+  // GH #430 (Codex follow-up r3): cap per-filament spool count on
+  // the existing-name $push fallback too — the cap previously only
+  // applied to the dedicated add-spool branch above, so a hostile
+  // client routed through the default `action=create` flow could
+  // push past the limit by re-importing against an existing name.
+  const PRUSAMENT_MAX_SPOOLS_PER_FILAMENT = 500;
+  const conditionalUpdate = await Filament.findOneAndUpdate(
     {
-      $push: {
-        spools: prusamentSpoolFields,
+      name,
+      _deletedAt: null,
+      $expr: {
+        $lt: [
+          { $size: { $ifNull: ["$spools", []] } },
+          PRUSAMENT_MAX_SPOOLS_PER_FILAMENT,
+        ],
       },
     },
+    { $push: { spools: prusamentSpoolFields } },
     { returnDocument: "after" },
   ).lean();
 
-  if (existingUpdated) {
+  if (conditionalUpdate) {
     return NextResponse.json({
       action: "add-spool",
-      filament: existingUpdated,
+      filament: conditionalUpdate,
       message: `Filament "${name}" already exists. Added spool ${spool.spoolId}.`,
     });
+  }
+
+  // No conditional match — either the name doesn't exist (continue
+  // to create) OR the name exists but is over cap. Check which.
+  const blocked = await Filament.findOne(
+    { name, _deletedAt: null },
+    { spools: 1 },
+  ).lean();
+  if (
+    blocked &&
+    (blocked.spools?.length ?? 0) >= PRUSAMENT_MAX_SPOOLS_PER_FILAMENT
+  ) {
+    return NextResponse.json(
+      {
+        error: `Filament "${name}" already has ${PRUSAMENT_MAX_SPOOLS_PER_FILAMENT} spools (the per-filament limit)`,
+      },
+      { status: 400 },
+    );
   }
 
   // Use the max nozzle temp as the default (Prusament typically recommends a range)
