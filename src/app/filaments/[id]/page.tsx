@@ -100,6 +100,13 @@ export default function FilamentDetail() {
   const [addSpoolForm, setAddSpoolForm] = useState<
     { open: boolean; label: string; totalWeight: string }
   >({ open: false, label: "", totalWeight: "" });
+  // GH #440: double-submit guard for the Add Spool Create button.
+  // Pre-fix both inline Add Spool buttons `await`-ed handleAddSpool
+  // without disabling, so a second click during the POST created a
+  // duplicate spool. Lifts to component-level state because BOTH
+  // create buttons (the regular flow and the empty-state fallback)
+  // need to share the same in-flight flag.
+  const [addSpoolSubmitting, setAddSpoolSubmitting] = useState(false);
   const { isElectron, status: nfcStatus, writing: nfcWriting, writeTag, notifyTagWritten } = useNfcContext();
   const [nfcWriteSuccess, setNfcWriteSuccess] = useState<boolean | null>(null);
   const nfcWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1121,22 +1128,30 @@ export default function FilamentDetail() {
                       className="w-32 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
                     />
                     <button
+                      disabled={addSpoolSubmitting}
                       onClick={async () => {
+                        if (addSpoolSubmitting) return;
                         const weight = addSpoolForm.totalWeight
                           ? Number(addSpoolForm.totalWeight)
                           : null;
-                        await handleAddSpool(addSpoolForm.label.trim(), weight);
-                        setAddSpoolForm({ open: false, label: "", totalWeight: "" });
+                        setAddSpoolSubmitting(true);
+                        try {
+                          await handleAddSpool(addSpoolForm.label.trim(), weight);
+                          setAddSpoolForm({ open: false, label: "", totalWeight: "" });
+                        } finally {
+                          setAddSpoolSubmitting(false);
+                        }
                       }}
-                      className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                      className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {t("detail.spool.addCreate")}
                     </button>
                     <button
+                      disabled={addSpoolSubmitting}
                       onClick={() =>
                         setAddSpoolForm({ open: false, label: "", totalWeight: "" })
                       }
-                      className="px-4 py-1.5 border border-gray-300 dark:border-gray-700 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-800"
+                      className="px-4 py-1.5 border border-gray-300 dark:border-gray-700 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50"
                     >
                       {t("common.cancel")}
                     </button>
@@ -1200,20 +1215,28 @@ export default function FilamentDetail() {
                     className="w-32 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
                   />
                   <button
+                    disabled={addSpoolSubmitting}
                     onClick={async () => {
+                      if (addSpoolSubmitting) return;
                       const weight = addSpoolForm.totalWeight
                         ? Number(addSpoolForm.totalWeight)
                         : null;
-                      await handleAddSpool(addSpoolForm.label.trim(), weight);
-                      setAddSpoolForm({ open: false, label: "", totalWeight: "" });
+                      setAddSpoolSubmitting(true);
+                      try {
+                        await handleAddSpool(addSpoolForm.label.trim(), weight);
+                        setAddSpoolForm({ open: false, label: "", totalWeight: "" });
+                      } finally {
+                        setAddSpoolSubmitting(false);
+                      }
                     }}
-                    className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                    className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {t("detail.spool.addCreate")}
                   </button>
                   <button
+                    disabled={addSpoolSubmitting}
                     onClick={() => setAddSpoolForm({ open: false, label: "", totalWeight: "" })}
-                    className="px-4 py-1.5 border border-gray-300 dark:border-gray-700 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-800"
+                    className="px-4 py-1.5 border border-gray-300 dark:border-gray-700 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50"
                   >
                     {t("common.cancel")}
                   </button>

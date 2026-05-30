@@ -461,12 +461,29 @@ function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }:
     }
   };
 
+  // GH #404: the move-to <select> and retire button used to fire
+  // PUTs without a busy guard. On a slow LAN (Pi-hosted instance,
+  // etc.) a second click would race the first PUT; on retire toggle
+  // the response order could end in the wrong state. Per-handler
+  // saving flags disable the matching control until the round-trip
+  // completes. The weight editor already did this via its own
+  // `saving` state.
+  const [movePending, setMovePending] = useState(false);
+  const [retirePending, setRetirePending] = useState(false);
+
   const moveTo = async (locId: string) => {
-    const ok = await updateSpool(row, { locationId: locId || null });
-    if (ok) onChanged();
+    if (movePending) return;
+    setMovePending(true);
+    try {
+      const ok = await updateSpool(row, { locationId: locId || null });
+      if (ok) onChanged();
+    } finally {
+      setMovePending(false);
+    }
   };
 
   const toggleRetire = async () => {
+    if (retirePending) return;
     if (!row.retired) {
       // Retiring removes the spool from inventory totals — confirm
       // because it's the kind of action a click can fire by mistake.
@@ -475,8 +492,13 @@ function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }:
         confirmLabel: t("inventory.retire"),
       }))) return;
     }
-    const ok = await updateSpool(row, { retired: !row.retired });
-    if (ok) onChanged();
+    setRetirePending(true);
+    try {
+      const ok = await updateSpool(row, { retired: !row.retired });
+      if (ok) onChanged();
+    } finally {
+      setRetirePending(false);
+    }
   };
 
   return (
@@ -599,6 +621,7 @@ function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }:
         <div className="inline-flex items-center gap-1">
           <select
             value=""
+            disabled={movePending}
             onChange={(e) => {
               const v = e.target.value;
               if (v === "__none") moveTo("");
@@ -607,7 +630,7 @@ function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }:
             }}
             aria-label={t("inventory.moveTo")}
             title={t("inventory.moveTo")}
-            className="text-xs px-1 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+            className="text-xs px-1 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-transparent disabled:opacity-50"
           >
             <option value="">{t("inventory.moveTo")}</option>
             <option value="__none">{t("inventory.noLocation")}</option>
@@ -620,7 +643,8 @@ function SpoolEditRow({ row, locations, updateSpool, confirmRetire, onChanged }:
           <button
             type="button"
             onClick={toggleRetire}
-            className={`text-xs px-2 py-0.5 rounded ${
+            disabled={retirePending}
+            className={`text-xs px-2 py-0.5 rounded disabled:opacity-50 ${
               row.retired
                 ? "border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800"
                 : "text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950"
