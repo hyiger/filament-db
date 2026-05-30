@@ -43,7 +43,23 @@ function computeRemaining(filament: Filament, overrideTotalWeight?: number | nul
   return { remainingWeight, pct, lengthMeters };
 }
 
-export default function FilamentDetail() {
+/**
+ * GH #402: same-route navigation (`/filaments/A` → `/filaments/B`)
+ * triggers a params change without an unmount, so all the inner
+ * component's state would otherwise leak into the next filament
+ * (typed Add-Spool form, stale 404, NFC-write banner, etc.). Wrap
+ * the inner component with `key={params.id}` so React unmounts and
+ * remounts it on every id change — the whole state graph resets
+ * naturally without any per-field reset boilerplate inside the
+ * fetch effect.
+ */
+export default function FilamentDetailPage() {
+  const params = useParams();
+  const keyId = Array.isArray(params.id) ? params.id[0] : params.id ?? "";
+  return <FilamentDetail key={String(keyId)} />;
+}
+
+function FilamentDetail() {
   const { t } = useTranslation();
   const { symbol: currencySymbol } = useCurrency();
   const params = useParams();
@@ -191,6 +207,18 @@ export default function FilamentDetail() {
 
   useEffect(() => {
     const controller = new AbortController();
+    // GH #405: `t` is intentionally NOT in the dep array. The fetched
+    // payload doesn't depend on locale; the error-toast strings are
+    // re-rendered via `t` on locale change naturally because they're
+    // read inside JSX, not closed over inside the effect. Including
+    // `t` triggered a full filament re-fetch (and a flicker) on every
+    // language switch.
+    //
+    // Same-route navigation (`/filaments/A` → `/filaments/B`) state-
+    // reset is handled by the `key={params.id}` on the wrapper below
+    // (GH #402) — React unmounts/remounts the inner component on id
+    // change, so the entire local state graph resets without any
+    // per-field clearing here.
     fetch(`/api/filaments/${params.id}`, { signal: controller.signal })
       .then((r) => {
         if (r.status === 404) { setNotFound(true); return null; }
@@ -200,7 +228,8 @@ export default function FilamentDetail() {
       .then((data) => { if (data) setFilament(data); })
       .catch((err) => { if (err.name !== "AbortError") setFetchError(t("detail.error.connectionFailed")); });
     return () => controller.abort();
-  }, [params.id, t]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.id]);
 
   // Load locations once so the spool cards can show a picker without each
   // spool re-fetching. Small list — OK to keep in state.
