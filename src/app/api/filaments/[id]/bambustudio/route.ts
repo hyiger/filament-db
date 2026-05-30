@@ -167,7 +167,28 @@ export async function POST(
       return errorResponse("Filament not found", 404);
     }
 
-    const update = buildStructuredUpdate(parsed.filament, existing);
+    // GH #403: when `existing` is a variant, load its parent so
+    // `buildStructuredUpdate` can detect inheritable scalars whose
+    // parsed value already matches the parent and skip writing them
+    // (preserves inheritance). Lookup is a no-op for root filaments.
+    let parent: Record<string, unknown> | null = null;
+    if (existing.parentId) {
+      parent = (await Filament.findOne({
+        _id: existing.parentId,
+        _deletedAt: null,
+      }).lean()) as Record<string, unknown> | null;
+    }
+
+    const existingWithParent = {
+      temperatures: existing.temperatures as Record<string, unknown> | undefined,
+      bedTypeTemps: existing.bedTypeTemps,
+      settings: existing.settings as Record<string, unknown> | undefined,
+      calibrations: existing.calibrations,
+      parentId: existing.parentId ? String(existing.parentId) : null,
+      parent,
+    };
+
+    const update = buildStructuredUpdate(parsed.filament, existingWithParent);
 
     const settingsResult = mergeSlicerSettings(
       (existing.settings as Record<string, unknown>) || {},

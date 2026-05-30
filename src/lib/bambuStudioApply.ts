@@ -48,6 +48,13 @@ export interface ExistingFilamentForApply {
   }>;
   settings?: Record<string, unknown>;
   calibrations?: unknown[];
+  /** GH #403: variant detection. When the existing doc is a variant
+   * (has a parentId), inheritable scalars whose parsed value already
+   * matches what the parent provides should be SKIPPED — writing the
+   * field would pin the variant's local value and sever inheritance.
+   * `parent` is the resolved parent doc (or null if not a variant). */
+  parentId?: string | null;
+  parent?: Record<string, unknown> | null;
 }
 
 export interface BambuUpdatePayload {
@@ -113,16 +120,43 @@ export function buildStructuredUpdate(
   existing: ExistingFilamentForApply | null,
 ): Record<string, unknown> {
   const u: Record<string, unknown> = {};
-  if (parsed.type != null) u.type = parsed.type;
-  if (parsed.vendor != null) u.vendor = parsed.vendor;
-  if (parsed.color != null) u.color = parsed.color;
-  if (parsed.diameter != null) u.diameter = parsed.diameter;
-  if (parsed.density != null) u.density = parsed.density;
-  if (parsed.cost != null) u.cost = parsed.cost;
-  if (parsed.maxVolumetricSpeed != null) u.maxVolumetricSpeed = parsed.maxVolumetricSpeed;
-  if (parsed.notes != null) u.notes = parsed.notes;
-  if (parsed.shrinkageXY != null) u.shrinkageXY = parsed.shrinkageXY;
-  if (parsed.shrinkageZ != null) u.shrinkageZ = parsed.shrinkageZ;
+
+  // GH #403: when the existing doc is a variant of another filament,
+  // only PIN an inheritable scalar to the variant when the parsed
+  // value DIFFERS from what the parent already provides. If the parent
+  // already carries the same value, leave the variant alone so it
+  // continues to inherit dynamically via `resolveFilament` at read
+  // time. Same class as the GH #106 / #223 / #265 guards the
+  // PrusaSlicer-sync path uses.
+  //
+  // `color` is intentionally NOT inheritable (each variant has its
+  // own color — that's the whole point of being a variant) so it
+  // sets unconditionally below.
+  const parent = existing?.parent ?? null;
+  const isVariantWithParent = !!(existing?.parentId && parent);
+  const setIfNotInherited = (
+    key: string,
+    parsedVal: unknown,
+  ) => {
+    if (parsedVal == null) return;
+    if (isVariantWithParent && parent && parent[key] === parsedVal) {
+      // Parent already carries this exact value — leave variant
+      // unpinned so inheritance keeps working.
+      return;
+    }
+    u[key] = parsedVal;
+  };
+
+  setIfNotInherited("type", parsed.type);
+  setIfNotInherited("vendor", parsed.vendor);
+  if (parsed.color != null) u.color = parsed.color; // not inheritable
+  setIfNotInherited("diameter", parsed.diameter);
+  setIfNotInherited("density", parsed.density);
+  setIfNotInherited("cost", parsed.cost);
+  setIfNotInherited("maxVolumetricSpeed", parsed.maxVolumetricSpeed);
+  if (parsed.notes != null) u.notes = parsed.notes; // not inheritable
+  setIfNotInherited("shrinkageXY", parsed.shrinkageXY);
+  setIfNotInherited("shrinkageZ", parsed.shrinkageZ);
 
   // Temperatures: merge with whatever's already on the doc so we don't
   // clobber e.g. nozzleRangeMin when the import only carries `nozzle`.

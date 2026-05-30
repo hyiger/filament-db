@@ -130,7 +130,10 @@ export async function POST(request: NextRequest) {
       _deletedAt: null,
     });
     if (existingActive) {
-      const payload = await prepareBambuUpdate(parsed, existingActive);
+      const payload = await prepareBambuUpdate(
+        parsed,
+        await augmentExistingWithParent(existingActive),
+      );
       if (payload.settingsResult.error) {
         return errorResponse(payload.settingsResult.error, 400);
       }
@@ -164,7 +167,10 @@ export async function POST(request: NextRequest) {
       _purged: { $ne: true },
     });
     if (existingTrashed) {
-      const payload = await prepareBambuUpdate(parsed, existingTrashed);
+      const payload = await prepareBambuUpdate(
+        parsed,
+        await augmentExistingWithParent(existingTrashed),
+      );
       if (payload.settingsResult.error) {
         return errorResponse(payload.settingsResult.error, 400);
       }
@@ -232,7 +238,10 @@ export async function POST(request: NextRequest) {
         // original error rather than spinning.
         return errorResponseFromCaught(createErr, "Failed to create filament");
       }
-      const racePayload = await prepareBambuUpdate(parsed, racing);
+      const racePayload = await prepareBambuUpdate(
+        parsed,
+        await augmentExistingWithParent(racing),
+      );
       if (racePayload.settingsResult.error) {
         return errorResponse(racePayload.settingsResult.error, 400);
       }
@@ -257,6 +266,33 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to import Bambu Studio profile");
   }
+}
+
+/**
+ * GH #403: load the parent doc when `existing` is a variant, so
+ * `prepareBambuUpdate` → `buildStructuredUpdate` can skip pinning
+ * inheritable scalars whose parsed value already matches the parent
+ * (keeps inheritance live). A no-op for root filaments.
+ */
+async function augmentExistingWithParent(existing: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  [k: string]: any;
+}) {
+  let parent: Record<string, unknown> | null = null;
+  if (existing.parentId) {
+    parent = (await Filament.findOne({
+      _id: existing.parentId,
+      _deletedAt: null,
+    }).lean()) as Record<string, unknown> | null;
+  }
+  return {
+    temperatures: existing.temperatures,
+    bedTypeTemps: existing.bedTypeTemps,
+    settings: existing.settings,
+    calibrations: existing.calibrations,
+    parentId: existing.parentId ? String(existing.parentId) : null,
+    parent,
+  };
 }
 
 /** Common response shape so all three upsert phases return the same

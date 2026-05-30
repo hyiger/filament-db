@@ -194,4 +194,74 @@ describe("buildStructuredUpdate", () => {
       ]);
     });
   });
+
+  describe("variant inheritance preservation (GH #403)", () => {
+    // The per-id Bambu sync route used to stamp every parsed scalar
+    // onto the target document even when the target was a variant
+    // currently inheriting those fields from its parent. After one
+    // sync, density/cost/diameter/etc. were pinned on the variant —
+    // silently severing inheritance for every field the Bambu profile
+    // carried. The variant-aware branch in buildStructuredUpdate
+    // skips a scalar when the parsed value already matches what the
+    // parent provides, so inheritance continues to resolve dynamically
+    // at read time via resolveFilament().
+
+    it("does NOT pin a scalar on a variant when the parent already has the same value", () => {
+      const parent = { type: "PLA", vendor: "Polymaker", density: 1.24, cost: 25 };
+      const existing = { parentId: "parent-id", parent };
+      const update = buildStructuredUpdate(
+        makeParsed({ type: "PLA", vendor: "Polymaker", density: 1.24, cost: 25 }),
+        existing,
+      );
+      expect("type" in update).toBe(false);
+      expect("vendor" in update).toBe(false);
+      expect("density" in update).toBe(false);
+      expect("cost" in update).toBe(false);
+    });
+
+    it("DOES pin a scalar on a variant when the parsed value differs from the parent", () => {
+      const parent = { type: "PLA", density: 1.24 };
+      const existing = { parentId: "parent-id", parent };
+      const update = buildStructuredUpdate(
+        makeParsed({ type: "PLA+", density: 1.30 }),
+        existing,
+      );
+      expect(update.type).toBe("PLA+");
+      expect(update.density).toBe(1.30);
+    });
+
+    it("always emits color even on a variant (color is NOT inheritable)", () => {
+      const parent = { color: "#FF0000" };
+      const existing = { parentId: "parent-id", parent };
+      const update = buildStructuredUpdate(
+        makeParsed({ color: "#FF0000" }),
+        existing,
+      );
+      // Even though parent.color matches, color is the variant's own
+      // identity — never inherited.
+      expect(update.color).toBe("#FF0000");
+    });
+
+    it("treats existing without parentId as a root filament — every scalar emits", () => {
+      const update = buildStructuredUpdate(
+        makeParsed({ type: "PLA", vendor: "Polymaker" }),
+        { parentId: null, parent: null },
+      );
+      expect(update.type).toBe("PLA");
+      expect(update.vendor).toBe("Polymaker");
+    });
+
+    it("treats existing with parentId but missing parent doc as a root (defensive)", () => {
+      // If the parent doc was deleted between the variant fetch and
+      // the parent lookup, fall back to emitting (avoid losing data
+      // on the variant). The downstream resolveFilament call at read
+      // time then returns the variant's own value, which is what we
+      // wrote here.
+      const update = buildStructuredUpdate(
+        makeParsed({ type: "PLA" }),
+        { parentId: "missing", parent: null },
+      );
+      expect(update.type).toBe("PLA");
+    });
+  });
 });
