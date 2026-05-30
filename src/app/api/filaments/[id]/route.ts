@@ -116,10 +116,22 @@ export async function GET(
       .select("name color secondaryColors cost optTags")
       .sort({ name: 1 })
       .lean();
+    // GH #477 (Codex P2 on PR #482 r2): apply the same array-fallback
+    // resolution to `secondaryColors` that we apply to `optTags` —
+    // otherwise a variant that inherits its parent's multi-color slots
+    // (empty own array) renders single-color on the parent's variant
+    // chips while the same variant resolves correctly everywhere else.
+    // Mirrors resolveFilament's secondaryColors block + the list
+    // aggregation's $project ternary.
     const parentOptTags = (filament.optTags ?? []) as number[];
+    const parentSecondaryColors = (filament.secondaryColors ?? []) as string[];
     const variants = rawVariants.map((v) => ({
       ...v,
       optTags: v.optTags && v.optTags.length > 0 ? v.optTags : parentOptTags,
+      secondaryColors:
+        v.secondaryColors && v.secondaryColors.length > 0
+          ? v.secondaryColors
+          : parentSecondaryColors,
     }));
 
     if (parentSummary) {
