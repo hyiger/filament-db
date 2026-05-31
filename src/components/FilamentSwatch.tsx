@@ -2,10 +2,31 @@
 
 import type { CSSProperties } from "react";
 import type { Finish } from "@/lib/filamentFinish";
+import type { ColorArrangement } from "@/lib/filamentColors";
+import { allColors } from "@/lib/filamentColors";
 
 interface FilamentSwatchProps {
-  /** Hex color string; ignored when `isParent` is true. */
+  /** Primary hex color string; ignored when `isParent` is true. May be
+   *  null per OpenPrintTag spec key 19 (coextruded / rainbow filaments
+   *  have no single primary — colors live in `secondaryColors`). */
   color: string | null | undefined;
+  /** GH #477: additional color hexes mirroring OpenPrintTag spec keys
+   *  20–24. When `arrangement` is `"coextruded"` or `"gradient"` and this
+   *  array has ≥1 entry, the swatch renders the full multi-color
+   *  treatment; otherwise it falls back to single-color rendering of
+   *  the primary. */
+  secondaryColors?: string[];
+  /** GH #477: derived from `optTags` via `deriveArrangement()`. Drives
+   *  multi-color rendering mode:
+   *   - "coextruded": equal-width vertical stripes
+   *   - "gradient": linear-gradient left→right
+   *   - "solid" (default): primary color only, ignoring `secondaryColors`
+   *  Ignored when `isParent` is true (parents always render hatched).
+   *  Finish overlays (matte/silk/sparkle/glow) compose on top of the
+   *  multi-color base. `transparent`/`translucent` still use the checker
+   *  backdrop and apply alpha to the primary only (multi-color +
+   *  translucent isn't a meaningful real-world combination). */
+  arrangement?: ColorArrangement;
   /**
    * True when this filament currently has ≥1 variant pointing at it. A
    * filament is never a parent unless it actually has variants — there is
@@ -46,6 +67,8 @@ interface FilamentSwatchProps {
  */
 export default function FilamentSwatch({
   color,
+  secondaryColors = [],
+  arrangement = "solid",
   isParent = false,
   finish = null,
   size = 20,
@@ -81,11 +104,34 @@ export default function FilamentSwatch({
     );
   }
 
-  const baseColor = color ?? "#808080";
+  // GH #477: gather every non-null color for multi-color modes.
+  // `allColors` returns primary first (or skips if null) then each
+  // non-empty secondary. We render multi-color when the user actually
+  // has more than one color to show AND has set an arrangement —
+  // single-color filaments and misconfigured "arrangement without
+  // secondaries" cases both fall through to the single-color path.
+  const colorList = allColors({ color, secondaryColors });
+  const isMultiColorMode =
+    arrangement !== "solid" && colorList.length >= 2;
+
+  const baseColor = color ?? colorList[0] ?? "#808080";
   const rgb = hexToRgb(baseColor);
+
+  // GH #477: a multi-color filament's aria-label and tooltip should
+  // describe the arrangement + every color, not just the (possibly
+  // null) primary. e.g. "Coextruded: #FF0000 / #00FF00 / #0000FF".
+  const multiColorDescription = isMultiColorMode
+    ? `${arrangement === "coextruded" ? "Coextruded" : "Gradient"}: ${colorList.join(" / ")}`
+    : null;
   const finalLabel =
-    ariaLabel ?? (finish ? `${title ?? baseColor} (${finish})` : title ?? `Color swatch: ${baseColor}`);
-  const finalTitle = finish ? `${title ?? baseColor} · ${finish}` : title;
+    ariaLabel ??
+    multiColorDescription ??
+    (finish ? `${title ?? baseColor} (${finish})` : title ?? `Color swatch: ${baseColor}`);
+  const finalTitle = multiColorDescription
+    ? `${multiColorDescription}${finish ? ` · ${finish}` : ""}`
+    : finish
+      ? `${title ?? baseColor} · ${finish}`
+      : title;
 
   // Transparent / translucent: real alpha over a checkered backdrop.
   // Falls back to a neutral light grey if we couldn't parse the hex
@@ -128,6 +174,53 @@ export default function FilamentSwatch({
             backgroundColor: fillRgba,
           }}
         />
+      </div>
+    );
+  }
+
+  // GH #477: multi-color modes — base layer is the multi-color treatment
+  // (stripes or gradient), finish overlay composes on top per usual.
+  if (isMultiColorMode) {
+    const baseStyle: CSSProperties =
+      arrangement === "gradient"
+        ? {
+            ...dimensionStyle,
+            // linear-gradient(to right, c0, c1, c2, …): smooth gradient
+            // across the swatch. Matches how a rainbow / color-change
+            // filament unspools — color shifts along the length.
+            backgroundImage: `linear-gradient(to right, ${colorList.join(", ")})`,
+          }
+        : {
+            ...dimensionStyle,
+            // Coextruded: equal-width vertical stripes via a single
+            // linear-gradient with hard stops at each color boundary.
+            // For N colors, slot K spans (K/N × 100%) → ((K+1)/N × 100%).
+            // Matches how a coextruded filament's cross-section reads.
+            backgroundImage: `linear-gradient(to right, ${colorList
+              .map((c, i) => {
+                const start = ((i / colorList.length) * 100).toFixed(2);
+                const end = (((i + 1) / colorList.length) * 100).toFixed(2);
+                return `${c} ${start}%, ${c} ${end}%`;
+              })
+              .join(", ")})`,
+          };
+    const overlay = solidFinishOverlay(finish, rgb);
+    return (
+      <div
+        className={`rounded-full border border-gray-300 dark:border-gray-600 flex-shrink-0 relative overflow-hidden ${className}`}
+        style={baseStyle}
+        title={finalTitle}
+        aria-label={finalLabel}
+        role="img"
+        data-arrangement={arrangement}
+        {...(finish ? { "data-finish": finish } : {})}
+      >
+        {overlay && (
+          <div
+            aria-hidden="true"
+            style={{ position: "absolute", inset: 0, ...overlay }}
+          />
+        )}
       </div>
     );
   }

@@ -14,6 +14,7 @@ import CopyButton from "@/components/CopyButton";
 import FilamentSwatch from "@/components/FilamentSwatch";
 import FinishChip from "@/components/FinishChip";
 import { deriveFinish } from "@/lib/filamentFinish";
+import { deriveArrangement } from "@/lib/filamentColors";
 import type { FilamentDetail, FilamentCalibration } from "@/types/filament";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
@@ -733,6 +734,10 @@ function FilamentDetail() {
   // so a variant only shows a finish when its own optTags include one
   // of the FINISH_TAG_IDS.
   const finish = !isParent ? deriveFinish(filament.optTags) : null;
+  // GH #477: drive multi-color rendering from the filament's own optTags.
+  // Parents render hatched regardless, so we compute this anyway for
+  // consistency — `<FilamentSwatch isParent>` ignores `arrangement`.
+  const arrangement = !isParent ? deriveArrangement(filament.optTags) : "solid";
 
   return (
     <main id="main-content" className="max-w-4xl mx-auto px-4 py-8">
@@ -745,6 +750,8 @@ function FilamentDetail() {
       <div className="flex flex-wrap items-center gap-4 mb-6">
         <FilamentSwatch
           color={filament.color}
+          secondaryColors={filament.secondaryColors}
+          arrangement={arrangement}
           isParent={isParent}
           finish={finish}
           size={40}
@@ -970,6 +977,8 @@ function FilamentDetail() {
                 >
                   <FilamentSwatch
                     color={v.color}
+                    secondaryColors={v.secondaryColors}
+                    arrangement={deriveArrangement(v.optTags)}
                     finish={vFinish}
                     size={20}
                     ariaLabel={`Color swatch: ${v.color}`}

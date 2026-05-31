@@ -11,6 +11,14 @@ import {
   lookupCssNamedColor,
   type ColorSuggestion,
 } from "@/lib/cssNamedColors";
+import { deriveArrangement, type ColorArrangement } from "@/lib/filamentColors";
+
+/** GH #477: OpenPrintTag tag IDs for color arrangement. Sourced from
+ *  the prusa3d/OpenPrintTag `data/tags_enum.yaml` spec file. Constants
+ *  rather than magic numbers so the form's tag-toggle logic reads
+ *  clearly. */
+const TAG_GRADUAL_COLOR_CHANGE = 28;
+const TAG_COEXTRUDED = 29;
 
 interface BedTypeTempEntry {
   /** Client-only stable row id for React keys. Stripped before API submission. */
@@ -24,7 +32,18 @@ interface FilamentFormData {
   name: string;
   vendor: string;
   type: string;
+  /** GH #477: primary color (OpenPrintTag spec key 19). Nullable for
+   *  coextruded / rainbow filaments where the spec says primary "can
+   *  be null". The form normalises `null` to empty string in the input
+   *  for editing purposes, but the submit handler converts back to
+   *  null when the user has explicitly cleared it (multi-color
+   *  arrangement was set). */
   color: string;
+  /** GH #477: up to 5 additional color hexes (OpenPrintTag spec keys
+   *  20–24). The arrangement radio derived from optTags 28/29 drives
+   *  the swatch rendering — coextruded shows stripes, gradient shows a
+   *  linear-gradient. */
+  secondaryColors: string[];
   colorName: string;
   cost: string;
   density: string;
@@ -226,7 +245,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     name: initialData?.name || "",
     vendor: initialData?.vendor || "",
     type: initialData?.type || "PLA",
-    color: initialData?.color || "#808080",
+    color: initialData?.color ?? "#808080",
+    secondaryColors: initialData?.secondaryColors ?? [],
     colorName: initialData?.colorName || "",
     cost: initialData?.cost?.toString() || "",
     density: initialData?.density?.toString() || "",
@@ -717,11 +737,22 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     }
 
     try {
+      // GH #477: when the user has opted into the "Coextruded"
+      // arrangement (auto-toggled via tag 29 in optTags), the
+      // OpenPrintTag spec says primary color SHOULD be null —
+      // "Does not have a primary color, number of colors can be
+      // derived from the defined secondary colors." Submit null so
+      // resolveFilament + every read site honour that semantic. For
+      // gradient and solid arrangements the primary stays as set.
+      const submittedColor = form.optTags.includes(29)
+        ? null
+        : form.color;
       await onSubmit({
         name: form.name,
         vendor: form.vendor,
         type: form.type,
-        color: form.color,
+        color: submittedColor,
+        secondaryColors: form.secondaryColors,
         colorName: form.colorName || null,
         cost: parseNum(form.cost),
         density: parseNum(form.density),
@@ -1434,6 +1465,15 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               </ul>
             );
           })()}
+        </div>
+        {/* GH #477: Multi-color editor + arrangement radio. Spans the
+            full 2-col grid via sm:col-span-2. */}
+        <div className="sm:col-span-2">
+          <MultiColorEditor
+            form={form}
+            setForm={setForm}
+            t={t}
+          />
         </div>
         <div>
           <label htmlFor="filament-cost" className={labelClass}>{t("form.cost", { symbol: currencySymbol })}</label>
@@ -2687,5 +2727,212 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     </aside>
     <FormTocMobileButton entries={tocEntries} />
     </div>
+  );
+}
+
+/**
+ * GH #477 — Multi-color editor + arrangement radio.
+ *
+ * Renders below the primary color picker. The arrangement radio toggles
+ * the OpenPrintTag arrangement tags (28 = gradual_color_change, 29 =
+ * coextruded) in the user's `optTags` array — there's no separate
+ * "arrangement" field on the schema, just bits in the existing tags
+ * list. When the user opts into the multi-color treatment we surface
+ * 0–5 secondary-color slots; the swatch preview to the right updates
+ * live so the user sees what the list / detail page will render.
+ *
+ * Kept as a sub-component so the (already very long) FilamentForm body
+ * doesn't grow another 100 lines. State stays in the parent — we read
+ * `form` / call `setForm` — so the existing dirty-tracking +
+ * unsaved-changes guard work unchanged.
+ */
+function MultiColorEditor({
+  form,
+  setForm,
+  t,
+}: {
+  form: FilamentFormData;
+  setForm: (next: FilamentFormData) => void;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}) {
+  const arrangement: ColorArrangement = deriveArrangement(form.optTags);
+
+  /** Toggle a single arrangement tag on/off in optTags, removing the
+   *  OTHER arrangement tag so the two are always mutually exclusive
+   *  from the UI's perspective. Coextruded + gradient simultaneously
+   *  is theoretically possible per spec but the form only models one
+   *  arrangement at a time — the swatch can't render both. */
+  const setArrangement = (next: ColorArrangement) => {
+    const stripped = form.optTags.filter(
+      (id) => id !== TAG_COEXTRUDED && id !== TAG_GRADUAL_COLOR_CHANGE,
+    );
+    if (next === "coextruded") {
+      setForm({ ...form, optTags: [...stripped, TAG_COEXTRUDED] });
+    } else if (next === "gradient") {
+      setForm({ ...form, optTags: [...stripped, TAG_GRADUAL_COLOR_CHANGE] });
+    } else {
+      setForm({ ...form, optTags: stripped });
+    }
+  };
+
+  const addColor = () => {
+    if (form.secondaryColors.length >= 5) return; // spec cap
+    setForm({
+      ...form,
+      secondaryColors: [...form.secondaryColors, "#808080"],
+    });
+  };
+
+  const removeColor = (idx: number) => {
+    setForm({
+      ...form,
+      secondaryColors: form.secondaryColors.filter((_, i) => i !== idx),
+    });
+  };
+
+  const setColorAt = (idx: number, hex: string) => {
+    const next = [...form.secondaryColors];
+    next[idx] = hex;
+    setForm({ ...form, secondaryColors: next });
+  };
+
+  const labelClass =
+    "block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1";
+  const radioBase =
+    "px-3 py-1.5 text-sm rounded border cursor-pointer transition-colors";
+
+  return (
+    <fieldset className="border border-gray-300 dark:border-gray-700 rounded p-3 space-y-3">
+      <legend className="px-2 text-sm font-medium">
+        {t("form.multiColor.title")}
+      </legend>
+
+      {/* Arrangement radio — three exclusive options driving optTags
+          28/29. "None" clears both, "Coextruded" sets 29, "Gradient"
+          sets 28. */}
+      <div>
+        <span className={labelClass}>{t("form.multiColor.arrangement")}</span>
+        <div className="flex flex-wrap gap-2" role="radiogroup"
+          aria-label={t("form.multiColor.arrangement")}>
+          {(["solid", "coextruded", "gradient"] as ColorArrangement[]).map(
+            (opt) => {
+              const active = arrangement === opt;
+              return (
+                <label
+                  key={opt}
+                  className={`${radioBase} ${
+                    active
+                      ? "border-blue-500 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-200 font-medium"
+                      : "border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500"
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="filament-arrangement"
+                    value={opt}
+                    checked={active}
+                    onChange={() => setArrangement(opt)}
+                    className="sr-only"
+                  />
+                  {t(`form.multiColor.arrangement.${opt}`)}
+                </label>
+              );
+            },
+          )}
+        </div>
+        {arrangement === "coextruded" && (
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            {t("form.multiColor.coextrudedHint")}
+          </p>
+        )}
+        {arrangement === "gradient" && (
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            {t("form.multiColor.gradientHint")}
+          </p>
+        )}
+      </div>
+
+      {/* Secondary color slots — only render when the user has chosen a
+          multi-color arrangement OR already has secondaries set. Lets
+          a "solid" single-color filament keep a quiet form. */}
+      {(arrangement !== "solid" || form.secondaryColors.length > 0) && (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className={labelClass}>
+              {t("form.multiColor.secondaryColors")}
+              <span className="ml-1 text-xs text-gray-500 font-normal">
+                ({form.secondaryColors.length}/5)
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={addColor}
+              disabled={form.secondaryColors.length >= 5}
+              className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              + {t("form.multiColor.addColor")}
+            </button>
+          </div>
+          {form.secondaryColors.length === 0 ? (
+            <p className="text-xs text-gray-500 dark:text-gray-400 italic">
+              {t("form.multiColor.noColorsYet")}
+            </p>
+          ) : (
+            <ul className="space-y-1.5">
+              {form.secondaryColors.map((c, i) => (
+                <li key={i} className="flex gap-2 items-center">
+                  <span className="text-xs text-gray-500 w-6 text-right select-none">
+                    #{i + 2}
+                  </span>
+                  <input
+                    type="color"
+                    aria-label={t("form.multiColor.colorAriaLabel", {
+                      n: i + 2,
+                    })}
+                    className="h-9 w-11 rounded border border-gray-300 dark:border-gray-600 cursor-pointer bg-transparent flex-shrink-0"
+                    value={c}
+                    onChange={(e) => setColorAt(i, e.target.value)}
+                  />
+                  <input
+                    type="text"
+                    inputMode="text"
+                    className="flex-1 min-w-0 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent font-mono uppercase"
+                    value={c}
+                    placeholder="#RRGGBB"
+                    maxLength={7}
+                    onChange={(e) => {
+                      const raw = e.target.value.trim();
+                      let v = raw.startsWith("#") ? raw : `#${raw}`;
+                      v = "#" + v.slice(1).replace(/[^0-9a-fA-F]/g, "");
+                      setColorAt(i, v.slice(0, 7));
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeColor(i)}
+                    aria-label={t("form.multiColor.removeColor", { n: i + 2 })}
+                    className="px-2 py-1 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950 rounded"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* Live preview using the same swatch the list / detail page
+              renders — the user sees exactly what their multi-color
+              filament will look like everywhere else. */}
+          <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+            <span>{t("form.multiColor.preview")}:</span>
+            <FilamentSwatch
+              color={form.color}
+              secondaryColors={form.secondaryColors}
+              arrangement={arrangement}
+              size={40}
+            />
+          </div>
+        </div>
+      )}
+    </fieldset>
   );
 }

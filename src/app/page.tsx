@@ -11,6 +11,7 @@ import QuickFilterChips, { type QuickFilter } from "@/components/QuickFilterChip
 import FilamentSwatch from "@/components/FilamentSwatch";
 import FinishChip from "@/components/FinishChip";
 import { deriveFinish } from "@/lib/filamentFinish";
+import { deriveArrangement } from "@/lib/filamentColors";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
@@ -550,6 +551,8 @@ export default function Home() {
           {isVariant && <span className="text-gray-400 text-xs ml-2">&#8627;</span>}
           <FilamentSwatch
             color={f.color}
+            secondaryColors={f.secondaryColors}
+            arrangement={deriveArrangement(f.optTags)}
             isParent={!isVariant && f.hasVariants === true}
             finish={deriveFinish(f.optTags)}
             size={isVariant ? 20 : 24}
@@ -736,6 +739,8 @@ export default function Home() {
                   >
                     <FilamentSwatch
                       color={v.color}
+                      secondaryColors={v.secondaryColors}
+                      arrangement={deriveArrangement(v.optTags)}
                       finish={deriveFinish(v.optTags)}
                       size={16}
                       className="hover:ring-2 hover:ring-blue-400 transition-all"
