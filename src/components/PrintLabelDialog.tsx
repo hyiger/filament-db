@@ -144,10 +144,13 @@ export default function PrintLabelDialog({
       };
     }
     // Web case: window.location.origin is usually a real URL. Fall
-    // back when it's not localhost.
+    // back when it's not localhost. The main-process validator in
+    // electron/main.ts isLoopbackHostname() is the security boundary;
+    // this regex is the matching UX gate — keep it covering the same
+    // shapes (localhost, 127/8, ::1 bare + bracketed, 0.0.0.0).
     const origin = window.location.origin;
     const isLocalhost =
-      /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:|\/|$)/i.test(origin);
+      /^(https?:\/\/)?(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\]|0\.0\.0\.0)(:|\/|$)/i.test(origin);
     if (!isLocalhost) {
       return {
         deepLinkUrl: `${origin}/filaments/${filament._id}`,

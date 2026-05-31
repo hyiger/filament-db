@@ -6,6 +6,7 @@ import Store from "electron-store";
 import http from "http";
 import { NfcService } from "./nfc-service";
 import { listLabelPrinters, printLabel as printLabelToDevice } from "./label-printer";
+import { isLoopbackHostname } from "./loopback-host";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
 import { initAutoUpdater } from "./auto-updater";
@@ -1046,12 +1047,7 @@ ipcMain.handle("label-printer-set-public-url", (event, url: string | null) => {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("URL must use http or https");
   }
-  if (
-    parsed.hostname === "localhost" ||
-    parsed.hostname === "127.0.0.1" ||
-    parsed.hostname === "::1" ||
-    parsed.hostname === "0.0.0.0"
-  ) {
+  if (isLoopbackHostname(parsed.hostname)) {
     throw new Error(
       "URL points to localhost — labels encoded with this URL would be unscannable from other devices.",
     );
