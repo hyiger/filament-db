@@ -42,6 +42,12 @@ import { promises as fs } from "node:fs";
 import { dirname } from "node:path";
 import sharp from "sharp";
 import QRCode from "qrcode";
+import {
+  encodeLabel,
+  packGrayscaleBitmap,
+  PRINT_HEAD_DOTS as ENCODER_PRINT_HEAD_DOTS,
+  type TapeWidthMm,
+} from "@/lib/labelEncoder";
 
 /* ---------- CLI parsing ----------------------------------------------- */
 
@@ -93,10 +99,9 @@ function parseArgs(argv: string[]): Args {
 
 /* ---------- bitmap rendering ------------------------------------------ */
 
-/** Brother print head height in dots. Same for 12mm and 24mm tape — the
- *  difference is how many of those dots are actually addressable on the
- *  narrower tape. 24mm uses the full 128. */
-const PRINT_HEAD_DOTS = 128;
+/** Re-exported from the encoder so this file's geometry constants stay
+ *  in lockstep with what the wire format expects. */
+const PRINT_HEAD_DOTS = ENCODER_PRINT_HEAD_DOTS;
 
 /** Side padding inside the printable area, in dots. Keeps the QR /
  *  text off the literal edge of the 18mm printable strip. */
@@ -241,110 +246,6 @@ function escapeXml(s: string): string {
   }[c]!));
 }
 
-/* ---------- bitmap → raster bytes ------------------------------------- */
-
-/** Pack one raster line (128 dots, one byte = one pixel from sharp's raw
- *  grayscale buffer) into 16 bytes (1 bit per dot, MSB-first, black = 1). */
-function packRasterLine(grayRow: Buffer): Buffer {
-  if (grayRow.length !== PRINT_HEAD_DOTS) {
-    throw new Error(`Raster row length ${grayRow.length} != ${PRINT_HEAD_DOTS}`);
-  }
-  const packed = Buffer.alloc(16);
-  for (let dotIdx = 0; dotIdx < PRINT_HEAD_DOTS; dotIdx++) {
-    const black = grayRow[dotIdx] < 128 ? 1 : 0;
-    if (black) {
-      const byteIdx = dotIdx >> 3;
-      const bitInByte = 7 - (dotIdx & 7); // MSB first
-      packed[byteIdx] |= 1 << bitInByte;
-    }
-  }
-  return packed;
-}
-
-/* ---------- Brother raster command encoding --------------------------- */
-
-/** Concatenate Buffers — small helper to keep the encoder readable. */
-function concat(...parts: (Buffer | number[])[]): Buffer {
-  return Buffer.concat(
-    parts.map((p) => (Buffer.isBuffer(p) ? p : Buffer.from(p))),
-  );
-}
-
-/** Build the complete byte stream for one label.
- *
- *  Sequence per Brother Raster Command Reference §2 — every byte is
- *  cited inline. The PT-P710BT supports both compressed (M=02 packbits)
- *  and uncompressed (M=00) modes; uncompressed is simpler and 128 dots
- *  per line is small enough that compression isn't worth the bug surface. */
-function encodeRaster(opts: {
-  raster: Buffer;
-  rasterLines: number;
-  tapeWidthMm: number;
-  autoCut: boolean;
-}): Buffer {
-  const parts: (Buffer | number[])[] = [];
-
-  // 1. Invalidate (clear any half-finished command in the printer's buffer).
-  //    Reference impls use 100 bytes of 0x00; 64 is the documented minimum.
-  parts.push(Buffer.alloc(100, 0x00));
-
-  // 2. Initialize: ESC @
-  parts.push([0x1b, 0x40]);
-
-  // 3. Switch to raster mode: ESC i a <mode>. mode=01 = raster.
-  parts.push([0x1b, 0x69, 0x61, 0x01]);
-
-  // 4. Print info: ESC i z <flags> <media> <width-mm> <length-mm>
-  //                       <n3-n6 raster line count, LE u32>
-  //                       <starting-page> <00>
-  //    flags = 0x84 = "validity flags for media type + width + line count"
-  //    media = 0x01 = laminated tape (the only kind PT-P710BT takes)
-  //    length-mm = 0x00 means "auto length from raster count"
-  const linesLE = Buffer.alloc(4);
-  linesLE.writeUInt32LE(opts.rasterLines, 0);
-  parts.push(
-    [
-      0x1b, 0x69, 0x7a,
-      0x84,                  // flags: validity (type|width|length)
-      0x01,                  // media type: laminated
-      opts.tapeWidthMm,      // width in mm (24 = 0x18)
-      0x00,                  // length in mm (0 = auto)
-    ],
-    linesLE,
-    [0x00, 0x00],            // page 0, reserved
-  );
-
-  // 5. Mode bits: ESC i M <mode>. 0x40 enables auto-cut at end of job.
-  parts.push([0x1b, 0x69, 0x4d, opts.autoCut ? 0x40 : 0x00]);
-
-  // 6. Expansion mode: ESC i K <flags>. 0x00 = no chain printing, no half-cut.
-  parts.push([0x1b, 0x69, 0x4b, 0x00]);
-
-  // 7. Margin (feed amount before print): ESC i d <n1 n2> (dots, LE).
-  //    14 dots ≈ 2mm — the documented minimum for clean tape feed.
-  parts.push([0x1b, 0x69, 0x64, 0x0e, 0x00]);
-
-  // 8. Compression: M <mode>. 00 = uncompressed (our choice).
-  parts.push([0x4d, 0x00]);
-
-  // 9. Raster lines: G <n1 n2> <16 data bytes> per line.
-  //    n1 n2 = LE byte count (always 16 for uncompressed full-width line).
-  for (let lineIdx = 0; lineIdx < opts.rasterLines; lineIdx++) {
-    const row = opts.raster.subarray(
-      lineIdx * PRINT_HEAD_DOTS,
-      (lineIdx + 1) * PRINT_HEAD_DOTS,
-    );
-    const packed = packRasterLine(Buffer.from(row));
-    parts.push([0x47, 0x10, 0x00], packed);
-  }
-
-  // 10. Print + feed/cut: 1A = print with feed (and cut if autoCut bit set).
-  //     0C = print without feed (for chain printing — not used here).
-  parts.push([0x1a]);
-
-  return concat(...parts);
-}
-
 /* ---------- sinks ----------------------------------------------------- */
 
 async function writeToFile(bytes: Buffer, path: string) {
@@ -396,12 +297,19 @@ async function main() {
       `(≈ ${(rasterLines / 7.087).toFixed(1)}mm long)`,
   );
 
-  const bytes = encodeRaster({
-    raster,
-    rasterLines,
-    tapeWidthMm: args.tapeWidthMm,
-    autoCut: args.autoCut,
-  });
+  // Pack the grayscale row-major bitmap into the encoder's 1-bit packed
+  // format, then serialize per Brother's raster command set. Both helpers
+  // live in src/lib/labelEncoder.ts so the dialog and the CLI share the
+  // same source of truth.
+  const packed = packGrayscaleBitmap(new Uint8Array(raster), rasterLines);
+  const bytes = Buffer.from(
+    encodeLabel({
+      bitmap: packed,
+      rasterLines,
+      tapeWidthMm: args.tapeWidthMm as TapeWidthMm,
+      autoCut: args.autoCut,
+    }),
+  );
 
   // Also write a PNG preview so the user can eyeball the bitmap without
   // running the simulator. Default location next to --out, or /tmp.
