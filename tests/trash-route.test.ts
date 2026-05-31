@@ -59,6 +59,65 @@ describe("Filament trash workflow", () => {
     expect(items.some((i: { _id: string }) => i._id === String(b._id))).toBe(false);
   });
 
+  it("GH #477: trashed variants surface their parent's secondaryColors + optTags", async () => {
+    // A trashed variant with its own arrays empty must inherit the
+    // parent's multi-color data — otherwise a deleted variant under a
+    // coextruded parent would render as a gray/solid dot in the trash
+    // UI even though it inherits stripes everywhere else in the app.
+    // (Codex P2 on PR #486 r6.)
+    const parent = await Filament.create({
+      name: "Tri-color silk",
+      vendor: "T",
+      type: "PLA",
+      color: null,
+      secondaryColors: ["#FF0000", "#00FF00", "#0000FF"],
+      optTags: [29], // coextruded
+    });
+    const variant = await Filament.create({
+      name: "Tri-color silk — Glossy",
+      vendor: "T",
+      type: "PLA",
+      parentId: parent._id,
+      // intentionally no secondaryColors / optTags — inherits from parent
+    });
+    await softDelete(String(variant._id));
+
+    const res = await listTrash();
+    const items = await res.json();
+    const row = items.find((i: { _id: string }) => i._id === String(variant._id));
+    expect(row).toBeDefined();
+    expect(row.secondaryColors).toEqual(["#FF0000", "#00FF00", "#0000FF"]);
+    expect(row.optTags).toEqual([29]);
+  });
+
+  it("GH #477: a trashed variant with its own secondaryColors overrides the parent", async () => {
+    // Array-fallback inheritance: variant's own non-empty array wins.
+    const parent = await Filament.create({
+      name: "Parent multi",
+      vendor: "T",
+      type: "PLA",
+      color: null,
+      secondaryColors: ["#FF0000", "#00FF00"],
+      optTags: [29],
+    });
+    const variant = await Filament.create({
+      name: "Variant override",
+      vendor: "T",
+      type: "PLA",
+      parentId: parent._id,
+      secondaryColors: ["#111111", "#222222"],
+      optTags: [28], // gradient instead of coextruded
+    });
+    await softDelete(String(variant._id));
+
+    const res = await listTrash();
+    const items = await res.json();
+    const row = items.find((i: { _id: string }) => i._id === String(variant._id));
+    expect(row).toBeDefined();
+    expect(row.secondaryColors).toEqual(["#111111", "#222222"]);
+    expect(row.optTags).toEqual([28]);
+  });
+
   it("restore brings a trashed filament back, then it disappears from /trash", async () => {
     const f = await Filament.create({
       name: "Restore me",
