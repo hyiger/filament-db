@@ -537,7 +537,18 @@
                         "type": "string"
                       },
                       "color": {
-                        "type": "string"
+                        "type": "string",
+                        "nullable": true,
+                        "description": "Primary color hex. May be null for coextruded filaments — see Filament.secondaryColors."
+                      },
+                      "secondaryColors": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "pattern": "^#[0-9A-Fa-f]{6}$"
+                        },
+                        "maxItems": 5,
+                        "description": "Up to 5 additional color slots, mirroring Filament.secondaryColors."
                       },
                       "cost": {
                         "type": "number",
@@ -1090,7 +1101,9 @@
                                 "type": "string"
                               },
                               "color": {
-                                "type": "string"
+                                "type": "string",
+                                "nullable": true,
+                                "description": "Primary color hex from the Atlas source. May be null for coextruded filaments."
                               },
                               "parentId": {
                                 "type": "string",
@@ -1255,7 +1268,9 @@
                         "type": "string"
                       },
                       "color": {
-                        "type": "string"
+                        "type": "string",
+                        "nullable": true,
+                        "description": "Primary color hex. May be null for coextruded parents — children inherit secondaryColors via Filament.secondaryColors."
                       }
                     }
                   }
