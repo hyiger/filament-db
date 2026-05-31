@@ -112,4 +112,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     ipcRenderer.invoke("label-printer-set-device-path", devicePath),
   labelPrinterPrint: (bytes: number[]) =>
     ipcRenderer.invoke("label-printer-print", bytes),
+  labelPrinterGetPublicUrl: () => ipcRenderer.invoke("label-printer-get-public-url"),
+  labelPrinterSetPublicUrl: (url: string | null) =>
+    ipcRenderer.invoke("label-printer-set-public-url", url),
 });

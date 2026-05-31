@@ -79,6 +79,14 @@ interface ElectronAPI {
   labelPrinterGetDevicePath: () => Promise<string | null>;
   labelPrinterSetDevicePath: (devicePath: string | null) => Promise<{ ok: boolean }>;
   labelPrinterPrint: (bytes: number[]) => Promise<{ ok: boolean }>;
+  /** Public base URL for URL-mode label QRs. Required for URL mode in
+   *  packaged Electron because window.location.origin is localhost.
+   *  null means "not configured"; the dialog then disables URL mode
+   *  when in Electron (web users fall back to window.location.origin). */
+  labelPrinterGetPublicUrl: () => Promise<string | null>;
+  /** Throws on validation errors (bad URL shape, non-http(s) scheme,
+   *  loopback host). Pass null/empty to clear. */
+  labelPrinterSetPublicUrl: (url: string | null) => Promise<{ ok: boolean }>;
 }
 
 export interface LabelPrinterDevice {

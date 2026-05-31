@@ -103,15 +103,72 @@ export default function PrintLabelDialog({
   }, [qrMode]);
 
   /* --- QR payload derivation --- */
-  // The deep link points at the same origin the renderer is running on
-  // so a self-hosted instance prints its own URL, an Atlas user's
-  // instance prints theirs, etc. — no hardcoded brand domain.
-  const deepLinkUrl = useMemo(() => {
-    if (typeof window === "undefined") return "";
-    return `${window.location.origin}/filaments/${filament._id}`;
-  }, [filament._id]);
+  // The deep link's base URL needs to be REACHABLE by whoever scans
+  // the printed label. Two sources, in priority order:
+  //
+  //   1. Settings → Label Printer → "Public URL" (electron-store key
+  //      labelPrinterPublicUrl). User sets this when they expose
+  //      Filament DB on the LAN or a public domain. (Codex P2 on
+  //      PR #487.)
+  //   2. window.location.origin — only useful when it's NOT localhost.
+  //      Packaged Electron always serves on localhost so this branch
+  //      only helps web users with a real domain.
+  //
+  // If neither yields a non-localhost URL, the deep-link mode is
+  // gated off — the radio renders disabled with a pointer to Settings.
+  const [publicUrl, setPublicUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || !isElectron || !window.electronAPI?.labelPrinterGetPublicUrl) return;
+    let cancelled = false;
+    window.electronAPI
+      .labelPrinterGetPublicUrl()
+      .then((url) => {
+        if (!cancelled) setPublicUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setPublicUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, isElectron]);
 
-  const qrPayload = effectiveQrMode === "instanceId" ? filament.instanceId ?? "" : deepLinkUrl;
+  const { deepLinkUrl, deepLinkAvailable } = useMemo(() => {
+    if (typeof window === "undefined") {
+      return { deepLinkUrl: "", deepLinkAvailable: false };
+    }
+    if (publicUrl) {
+      return {
+        deepLinkUrl: `${publicUrl}/filaments/${filament._id}`,
+        deepLinkAvailable: true,
+      };
+    }
+    // Web case: window.location.origin is usually a real URL. Fall
+    // back when it's not localhost.
+    const origin = window.location.origin;
+    const isLocalhost =
+      /^(https?:\/\/)?(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:|\/|$)/i.test(origin);
+    if (!isLocalhost) {
+      return {
+        deepLinkUrl: `${origin}/filaments/${filament._id}`,
+        deepLinkAvailable: true,
+      };
+    }
+    return { deepLinkUrl: "", deepLinkAvailable: false };
+  }, [publicUrl, filament._id]);
+
+  // Effective mode considers BOTH "instanceId exists" and "URL is
+  // reachable" — if URL mode is selected but no reachable URL exists,
+  // fall through to instanceId (or vice versa). When neither is
+  // available, qrPayload is empty and the Print button stays disabled.
+  const fallbackQrMode: QrMode =
+    effectiveQrMode === "url" && !deepLinkAvailable
+      ? filament.instanceId
+        ? "instanceId"
+        : "url" // still URL but payload will be empty → Print disabled
+      : effectiveQrMode;
+
+  const qrPayload = fallbackQrMode === "instanceId" ? filament.instanceId ?? "" : deepLinkUrl;
 
   /* --- live preview --- */
   // Combined state for the preview keeps the effect down to a single
@@ -318,17 +375,18 @@ export default function PrintLabelDialog({
               </label>
               <label
                 className={`flex items-start gap-2 p-3 border rounded cursor-pointer ${
-                  effectiveQrMode === "url"
+                  fallbackQrMode === "url" && deepLinkAvailable
                     ? "border-blue-500 bg-blue-50 dark:bg-blue-950/40"
                     : "border-gray-200 dark:border-gray-700"
-                }`}
+                } ${!deepLinkAvailable ? "opacity-60 cursor-not-allowed" : ""}`}
               >
                 <input
                   type="radio"
                   name="qrMode"
                   value="url"
-                  checked={effectiveQrMode === "url"}
+                  checked={fallbackQrMode === "url" && deepLinkAvailable}
                   onChange={() => setQrMode("url")}
+                  disabled={!deepLinkAvailable}
                   className="mt-0.5"
                 />
                 <div className="flex-1 min-w-0">
@@ -336,11 +394,15 @@ export default function PrintLabelDialog({
                     {t("printLabel.qrMode.url")}
                   </p>
                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                    {t("printLabel.qrMode.url.help")}
+                    {deepLinkAvailable
+                      ? t("printLabel.qrMode.url.help")
+                      : t("printLabel.qrMode.url.unavailable")}
                   </p>
-                  <code className="text-xs text-gray-700 dark:text-gray-300 font-mono mt-1 block break-all">
-                    {deepLinkUrl}
-                  </code>
+                  {deepLinkAvailable && (
+                    <code className="text-xs text-gray-700 dark:text-gray-300 font-mono mt-1 block break-all">
+                      {deepLinkUrl}
+                    </code>
+                  )}
                 </div>
               </label>
             </div>

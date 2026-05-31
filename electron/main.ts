@@ -1012,6 +1012,57 @@ ipcMain.handle("label-printer-set-device-path", (event, devicePath: string | nul
   return { ok: true };
 });
 
+// Public base URL used for URL-mode label QR payloads (e.g.
+// "https://filament-db.lan" or "https://my-instance.example.com").
+// Required for URL mode in packaged Electron because the renderer's
+// window.location.origin is `http://localhost:<port>` — labels encoded
+// with that URL are unscannable from any other device. Web users
+// (renderer running in a regular browser) usually have a real origin
+// already and don't need this setting; the dialog uses it as an
+// override when set, falling back to `window.location.origin`
+// otherwise. (Codex P2 on PR #487.)
+ipcMain.handle("label-printer-get-public-url", (event) => {
+  assertTrustedSender(event, "label-printer-get-public-url");
+  return (store as Store<Record<string, unknown>>).get("labelPrinterPublicUrl", null);
+});
+
+ipcMain.handle("label-printer-set-public-url", (event, url: string | null) => {
+  assertTrustedSender(event, "label-printer-set-public-url");
+  if (url != null && typeof url !== "string") {
+    throw new Error("url must be a string or null");
+  }
+  if (url == null || url.trim() === "") {
+    (store as Store<Record<string, unknown>>).delete("labelPrinterPublicUrl");
+    return { ok: true };
+  }
+  // Validate shape: must parse + must be http(s) + must not be the
+  // loopback host (which defeats the whole point of this setting).
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error("Not a valid URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("URL must use http or https");
+  }
+  if (
+    parsed.hostname === "localhost" ||
+    parsed.hostname === "127.0.0.1" ||
+    parsed.hostname === "::1" ||
+    parsed.hostname === "0.0.0.0"
+  ) {
+    throw new Error(
+      "URL points to localhost — labels encoded with this URL would be unscannable from other devices.",
+    );
+  }
+  // Strip trailing slash so callers can safely concat `${url}/filaments/...`
+  // without producing double slashes.
+  const normalized = url.replace(/\/+$/, "");
+  (store as Store<Record<string, unknown>>).set("labelPrinterPublicUrl", normalized);
+  return { ok: true };
+});
+
 ipcMain.handle("label-printer-print", async (event, bytes: number[]) => {
   assertTrustedSender(event, "label-printer-print");
   // Validate the payload from the renderer up front — bad inputs here

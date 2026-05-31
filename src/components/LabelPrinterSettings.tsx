@@ -43,6 +43,12 @@ export default function LabelPrinterSettings() {
   const [state, setState] = useState<State>({ status: "loading" });
   const [testing, setTesting] = useState(false);
 
+  // Public base URL for URL-mode label QR payloads (Codex P2 on
+  // PR #487). Loaded on mount, persisted on blur with main-process
+  // validation. Empty string in the input means "not configured".
+  const [publicUrlDraft, setPublicUrlDraft] = useState<string>("");
+  const [publicUrlSavedAs, setPublicUrlSavedAs] = useState<string | null>(null);
+
   // Memoised loader so the Refresh button can reuse it without
   // duplicating the IPC dance.
   const loadDevices = useCallback(async () => {
@@ -75,7 +81,49 @@ export default function LabelPrinterSettings() {
     // on the indirect setState inside loadDevices.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadDevices();
+    // Public URL: load once alongside device list. Stored alongside
+    // because both surface in the same Settings panel.
+    if (window.electronAPI?.labelPrinterGetPublicUrl) {
+      window.electronAPI
+        .labelPrinterGetPublicUrl()
+        .then((url) => {
+          // setState inside an async then callback isn't flagged by
+          // the rule (only sync-in-effect-body is).
+          setPublicUrlDraft(url ?? "");
+          setPublicUrlSavedAs(url);
+        })
+        .catch(() => {
+          /* silent — stays blank, no harm */
+        });
+    }
   }, [isElectron, loadDevices]);
+
+  const handleSavePublicUrl = useCallback(async () => {
+    if (!window.electronAPI?.labelPrinterSetPublicUrl) return;
+    const trimmed = publicUrlDraft.trim();
+    try {
+      await window.electronAPI.labelPrinterSetPublicUrl(trimmed === "" ? null : trimmed);
+      const saved = trimmed === "" ? null : trimmed.replace(/\/+$/, "");
+      setPublicUrlSavedAs(saved);
+      setPublicUrlDraft(saved ?? "");
+      toast(
+        trimmed === ""
+          ? t("settings.labelPrinter.publicUrl.cleared")
+          : t("settings.labelPrinter.publicUrl.saved"),
+        "success",
+      );
+    } catch (err) {
+      // Main-process validation surfaces here (bad scheme, loopback
+      // host, malformed URL). Show the message inline so the user can
+      // fix and retry without losing what they typed.
+      toast(
+        t("settings.labelPrinter.publicUrl.saveFailed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+        "error",
+      );
+    }
+  }, [publicUrlDraft, t, toast]);
 
   const handlePick = useCallback(
     async (path: string) => {
@@ -251,6 +299,43 @@ export default function LabelPrinterSettings() {
           </div>
         </div>
       )}
+
+      {/* Public base URL for URL-mode QR codes. Without this the
+          packaged Electron app would encode http://localhost:<port>
+          into the QR — unscannable from any other device. (Codex P2
+          on PR #487.) */}
+      <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+        <label htmlFor="label-printer-public-url" className="block text-sm font-medium text-gray-900 dark:text-gray-100">
+          {t("settings.labelPrinter.publicUrl")}
+        </label>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 mb-2">
+          {t("settings.labelPrinter.publicUrl.desc")}
+        </p>
+        <div className="flex gap-2">
+          <input
+            id="label-printer-public-url"
+            type="url"
+            inputMode="url"
+            placeholder="https://filament-db.local"
+            value={publicUrlDraft}
+            onChange={(e) => setPublicUrlDraft(e.target.value)}
+            className="flex-1 px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <button
+            type="button"
+            onClick={handleSavePublicUrl}
+            disabled={publicUrlDraft.trim() === (publicUrlSavedAs ?? "")}
+            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {t("settings.labelPrinter.publicUrl.save")}
+          </button>
+        </div>
+        {publicUrlSavedAs && (
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+            {t("settings.labelPrinter.publicUrl.current", { url: publicUrlSavedAs })}
+          </p>
+        )}
+      </div>
     </section>
   );
 }
