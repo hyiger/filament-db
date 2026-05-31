@@ -16,10 +16,24 @@
  * when the printer/nozzle/plate context changes — they are NOT baked into the profiles.
  */
 
-import { displayColor } from "@/lib/filamentColors";
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FilamentDoc = Record<string, any>;
+
+/**
+ * The single hex string a slicer preset should carry for a multi-color
+ * filament. When neither a primary nor a secondary exists this returns
+ * `null` so the `set()` helper skips the key entirely and OrcaSlicer
+ * falls back to its own default — rather than emitting a forced
+ * `#808080` gray the user never picked (Codex P2 on PR #485).
+ */
+function slicerExportColor(filament: FilamentDoc): string | null {
+  if (filament.color != null && filament.color !== "") return filament.color;
+  if (Array.isArray(filament.secondaryColors) && filament.secondaryColors.length > 0) {
+    const first = filament.secondaryColors[0];
+    if (first != null && first !== "") return first;
+  }
+  return null;
+}
 
 /**
  * OrcaSlicer bed-type name → config key prefix mapping.
@@ -65,10 +79,13 @@ export function filamentToOrcaSlicerKeys(
   set("filament_vendor", filament.vendor);
   // Slicer presets are single-color — coextruded / multi-color filaments
   // surface their primary, falling back to the first secondary when the
-  // primary is null (the spec-aligned "coextruded" shape). Secondary
-  // colors beyond the primary are intentionally dropped; the detail
-  // page's slicer-export menu warns the user about this trade-off.
-  set("filament_colour", displayColor(filament));
+  // primary is null (the spec-aligned "coextruded" shape). When NEITHER
+  // a primary nor a secondary exists `slicerExportColor` returns null so
+  // `set` is a no-op and OrcaSlicer uses its own default — we never
+  // invent a gray the user did not pick. Secondary colors beyond the
+  // primary are intentionally dropped; the detail page's slicer-export
+  // menu warns the user about this trade-off.
+  set("filament_colour", slicerExportColor(filament));
   set("filament_diameter", filament.diameter);
   set("filament_density", filament.density);
   set("filament_cost", filament.cost);

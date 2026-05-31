@@ -293,10 +293,34 @@ describe("filamentToSlicerKeys", () => {
 
     const keys = filamentToSlicerKeys(filament);
 
-    // Primary is null but displayColor() promotes the first secondary so
-    // the slicer at least sees a valid color rather than its bare default.
+    // Primary is null but the slicer-export fallback promotes the first
+    // secondary so the slicer sees a valid color rather than its bare
+    // default.
     expect(keys.filament_colour).toBe("#3366CC");
     expect(JSON.stringify(keys)).not.toContain("#CC3366");
+  });
+
+  it("coextruded filament with NO secondaries omits filament_colour entirely", () => {
+    // Reachable state: user picked "coextruded" in the form (clears
+    // primary to null) and saved before adding any secondary slots.
+    // We must NOT fall back to displayColor()'s gray sentinel — that
+    // would force a #808080 the user never picked. Better to omit the
+    // key and let the slicer use its own default. (Codex P2 on PR #485.)
+    const filament = {
+      name: "Coextruded Empty",
+      vendor: "Test",
+      type: "PLA",
+      color: null,
+      secondaryColors: [],
+      diameter: 1.75,
+      temperatures: {},
+      settings: {},
+    };
+
+    const keys = filamentToSlicerKeys(filament);
+
+    expect(keys).not.toHaveProperty("filament_colour");
+    expect(JSON.stringify(keys)).not.toContain("#808080");
   });
 
   it("null structured fields must not emit nil; settings bag nil is preserved", () => {

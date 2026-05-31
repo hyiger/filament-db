@@ -20,10 +20,25 @@
  * Filament DB doesn't model (e.g. filament_ramming_parameters, start_filament_gcode).
  */
 
-import { displayColor } from "@/lib/filamentColors";
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FilamentDoc = Record<string, any>;
+
+/**
+ * The single hex string a slicer preset should carry for a multi-color
+ * filament. Differs from `displayColor()` in one important way: when
+ * neither a primary nor a secondary exists, this returns `null` so the
+ * `set()` helper skips the key entirely and the slicer falls back to its
+ * own default — rather than emitting a forced `#808080` gray the user
+ * never picked (Codex P2 on PR #485).
+ */
+function slicerExportColor(filament: FilamentDoc): string | null {
+  if (filament.color != null && filament.color !== "") return filament.color;
+  if (Array.isArray(filament.secondaryColors) && filament.secondaryColors.length > 0) {
+    const first = filament.secondaryColors[0];
+    if (first != null && first !== "") return first;
+  }
+  return null;
+}
 
 /**
  * Map a resolved Filament DB document to PrusaSlicer INI key-value pairs.
@@ -57,10 +72,13 @@ export function filamentToSlicerKeys(
   set("filament_vendor", filament.vendor);
   // Slicer presets are single-color — coextruded / multi-color filaments
   // surface their primary, falling back to the first secondary when the
-  // primary is null (the spec-aligned "coextruded" shape). Secondary
-  // colors beyond the primary are intentionally dropped; the detail
-  // page's slicer-export menu warns the user about this trade-off.
-  set("filament_colour", displayColor(filament));
+  // primary is null (the spec-aligned "coextruded" shape). When NEITHER
+  // a primary nor a secondary exists `slicerExportColor` returns null so
+  // `set` is a no-op and the slicer uses its own default — we never
+  // invent a gray the user did not pick. Secondary colors beyond the
+  // primary are intentionally dropped; the detail page's slicer-export
+  // menu warns the user about this trade-off.
+  set("filament_colour", slicerExportColor(filament));
   set("filament_diameter", filament.diameter);
   set("filament_density", filament.density);
   set("filament_cost", filament.cost);

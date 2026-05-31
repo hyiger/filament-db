@@ -116,6 +116,28 @@ describe("filamentToOrcaSlicerKeys", () => {
     expect(JSON.stringify(keys)).not.toContain("#CC3366");
   });
 
+  it("coextruded filament with NO secondaries omits filament_colour entirely", () => {
+    // Reachable state: user picked "coextruded" in the form (clears
+    // primary to null) and saved before adding any secondary slots.
+    // We must NOT fall back to displayColor()'s gray sentinel — that
+    // would force a #808080 the user never picked. (Codex P2 on PR #485.)
+    const filament = {
+      name: "Coextruded Empty",
+      vendor: "Test",
+      type: "PLA",
+      color: null,
+      secondaryColors: [],
+      diameter: 1.75,
+      temperatures: {},
+      settings: {},
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+
+    expect(keys).not.toHaveProperty("filament_colour");
+    expect(JSON.stringify(keys)).not.toContain("#808080");
+  });
+
   it("preserves settings bag keys as arrays", () => {
     const filament = {
       name: "Test",
