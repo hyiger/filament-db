@@ -35,6 +35,14 @@ describe("isLoopbackHostname — should return true for", () => {
     "[::ffff:127.0.0.1]",
     "::ffff:127.42.13.9",
     "::FFFF:127.0.0.1", // mixed case
+
+    // DNS absolute-name notation (trailing dot) — same meaning, but
+    // URL.hostname preserves it, so any equality-based check has to
+    // strip first. (Codex P2 round 3 on PR #487.)
+    "localhost.",
+    "localhost..", // multiple trailing dots
+    "127.0.0.1.",
+    "0.0.0.0.",
   ];
 
   for (const hostname of cases) {
@@ -89,6 +97,12 @@ describe("isLoopbackHostname — matches the URL.hostname output for common loop
     "http://[0:0:0:0:0:0:0:1]:3456",
     "http://[::ffff:127.0.0.1]:3456",
     "http://0.0.0.0:3456",
+    // DNS absolute-name forms — what a user would paste if they
+    // copy-pasted from a DNS tool or made a typo. (Codex P2 round 3
+    // on PR #487.)
+    "http://localhost.:3456",
+    "https://localhost./",
+    "http://127.0.0.1.:3456",
   ];
   for (const url of urls) {
     it(url, () => {

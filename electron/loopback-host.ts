@@ -26,6 +26,13 @@ export function isLoopbackHostname(hostname: string): boolean {
   if (h.startsWith("[") && h.endsWith("]")) h = h.slice(1, -1);
   h = h.toLowerCase();
 
+  // DNS absolute-name notation appends a trailing dot — `localhost.`,
+  // `127.0.0.1.`, etc. — and the URL parser preserves it. They still
+  // address the local machine, so trim before comparing. Multiple
+  // trailing dots are also valid per DNS; strip them all. (Codex P2
+  // round 3 on PR #487.)
+  h = h.replace(/\.+$/, "");
+
   if (h === "localhost" || h === "0.0.0.0") return true;
 
   // IPv4 loopback range 127.0.0.0/8 — anything 127.x.x.x.
