@@ -320,10 +320,18 @@ export function mapToFilamentPayload(
     name: `${m.brandName} ${m.name}`,
     vendor: m.brandName,
     type: m.type,
-    color: m.color || "#808080",
-    // GH #477: pass through secondary colors so a coextruded /
-    // multi-color material in the OPT database imports with all
-    // slots populated, not just the primary.
+    // GH #477 (Codex P2 on PR #484): preserve null primary when the
+    // material has secondary colors but no primary. The OPT spec says
+    // coextruded / rainbow materials have null primary; the old `||
+    // "#808080"` fallback would inject a phantom gray as the first
+    // "color" in the swatch's allColors() list and re-export with a
+    // gray slot that wasn't in the source. Only fall back to gray
+    // when there are NO colors at all (single-color material with
+    // missing primary — preserves the previous behaviour for the
+    // common case).
+    color: m.color || (m.secondaryColors.length > 0 ? null : "#808080"),
+    // Pass through secondary colors so a coextruded / multi-color
+    // material in the OPT database imports with all slots populated.
     secondaryColors: m.secondaryColors,
     density: m.density,
     diameter: 1.75,

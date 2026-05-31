@@ -36,7 +36,15 @@ export async function GET(
       materialName: resolved.name,
       brandName: resolved.vendor,
       materialType: resolved.type,
-      color: resolved.color,
+      // GH #477: nullable primary per OpenPrintTag spec key 19 →
+      // `undefined` omits the CBOR key entirely (coextruded case).
+      color: resolved.color ?? undefined,
+      // GH #477 (Codex P2 on PR #484): the Electron NFC write path
+      // surfaces secondaryColors but this browser-download route was
+      // missed in round 1 — so a `.bin` downloaded from the detail
+      // page only carried the primary. Surface here too so the
+      // downloaded tag binary is faithful to the multi-color filament.
+      secondaryColors: resolved.secondaryColors,
       density: resolved.density,
       diameter: resolved.diameter,
       nozzleTemp: resolved.temperatures?.nozzle,
