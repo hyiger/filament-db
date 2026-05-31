@@ -5723,7 +5723,18 @@
             "type": "string"
           },
           "color": {
-            "type": "string"
+            "type": "string",
+            "nullable": true,
+            "description": "Primary color as a hex string. Send null for coextruded multi-color filaments where no single slot is the primary — colors then go in secondaryColors."
+          },
+          "secondaryColors": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}$"
+            },
+            "maxItems": 5,
+            "description": "Up to 5 additional color slots in display order, mirroring OpenPrintTag's secondary_color_0..4 keys. Sending an empty array on a variant inherits the parent's array; send a non-empty array to override."
           },
           "cost": {
             "type": "number",
