@@ -125,10 +125,26 @@ async function renderLabelBitmap(args: Args): Promise<{
 }> {
   /* --- QR --- */
   // errorCorrectionLevel 'M' is the practical sweet spot for label use:
-  // robust against tape scuffs, doesn't bloat short payloads. 'scale' is
-  // module size in pixels; we pick by payload length so a tiny instanceId
-  // produces a tiny QR and a long URL still fits the tape height.
-  const qrSize = args.qr.length <= 16 ? 4 : 3;
+  // robust against tape scuffs, doesn't bloat short payloads. To match
+  // the renderer's labelBitmap.ts behavior, probe at scale=1 to find
+  // the QR module count and pick the largest fitting scale — payloads
+  // too long even at scale=1 throw rather than silently clip.
+  const MAX_QR_DOTS_SPIKE = PRINT_HEAD_DOTS - 12; // 6 padding each side
+  const probePng = await QRCode.toBuffer(args.qr, {
+    errorCorrectionLevel: "M",
+    margin: 0,
+    scale: 1,
+    color: { dark: "#000000", light: "#FFFFFF" },
+  });
+  const probeMeta = await sharp(probePng).metadata();
+  const qrModules = probeMeta.width!;
+  if (qrModules > MAX_QR_DOTS_SPIKE) {
+    throw new Error(
+      `QR payload (${args.qr.length} chars) needs ${qrModules} dots tall — ` +
+        `exceeds the ${MAX_QR_DOTS_SPIKE}-dot budget for 24mm tape.`,
+    );
+  }
+  const qrSize = Math.floor(MAX_QR_DOTS_SPIKE / qrModules);
   const qrPng = await QRCode.toBuffer(args.qr, {
     errorCorrectionLevel: "M",
     margin: 0,

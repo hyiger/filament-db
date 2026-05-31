@@ -84,11 +84,27 @@ export function printLabel(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const settle = (err: Error | null) => {
+
+    // Always route post-open errors through cleanup: close the port
+    // before rejecting so a Bluetooth drop / write failure / drain
+    // failure doesn't leave the OS handle open and block the next
+    // print attempt as "port busy" until the app restarts.
+    // (Codex P2 round 4 on PR #487.)
+    const settleWithCleanup = (port: SerialPort | null, err: Error | null) => {
       if (settled) return;
       settled = true;
-      if (err) reject(err);
-      else resolve();
+      if (port && port.isOpen) {
+        port.close((closeErr) => {
+          // Prefer the original error if there was one — closeErr on
+          // an already-broken port is just noise.
+          if (err) reject(err);
+          else if (closeErr) reject(closeErr);
+          else resolve();
+        });
+      } else {
+        if (err) reject(err);
+        else resolve();
+      }
     };
 
     let port: SerialPort | null = null;
@@ -102,38 +118,40 @@ export function printLabel(
         (err) => {
           // SerialPort's constructor takes an optional open callback,
           // but we want to control timing — use autoOpen: false and call
-          // .open() below. This handler fires only on constructor errors.
-          if (err) settle(err);
+          // .open() below. This handler fires only on constructor errors
+          // (which fire before .open() so there's no port to close).
+          if (err) settleWithCleanup(null, err);
         },
       );
     } catch (err) {
-      settle(err instanceof Error ? err : new Error(String(err)));
+      settleWithCleanup(null, err instanceof Error ? err : new Error(String(err)));
       return;
     }
-    if (!port) return; // settle() already called
+    if (!port) return; // settleWithCleanup already called
 
     const p = port;
     p.open((openErr) => {
       if (openErr) {
-        settle(openErr);
+        // open() failure means nothing was opened — no cleanup needed,
+        // but settle through the same path for consistency.
+        settleWithCleanup(null, openErr);
         return;
       }
       // Surface any post-open error (USB disconnect, BT drop, etc.)
-      // so the caller doesn't hang on a silent failure.
-      p.on("error", settle);
+      // through the cleanup path so a stale handle can't linger.
+      p.on("error", (err) => settleWithCleanup(p, err));
       p.write(Buffer.from(bytes), (writeErr) => {
         if (writeErr) {
-          settle(writeErr);
+          settleWithCleanup(p, writeErr);
           return;
         }
         p.drain((drainErr) => {
           if (drainErr) {
-            settle(drainErr);
+            settleWithCleanup(p, drainErr);
             return;
           }
-          p.close((closeErr) => {
-            settle(closeErr ?? null);
-          });
+          // Happy path — close + resolve.
+          settleWithCleanup(p, null);
         });
       });
     });

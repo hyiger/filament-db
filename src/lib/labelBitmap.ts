@@ -35,6 +35,53 @@ const VERTICAL_PADDING_DOTS = 6;
 /** Gap between QR and the text band, in dots. */
 const QR_TEXT_GAP_DOTS = 12;
 
+/** Largest QR pixel size that fits the print band with vertical padding.
+ *  PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS = 116. */
+const MAX_QR_DOTS = PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS;
+
+/**
+ * Render the QR at the largest module-pixel scale that fits the print
+ * band. The naive `scale: 3` for any payload >16 chars would overflow
+ * once the URL pushes the QR past v10 (≈57 modules → 171 px at scale 3,
+ * clipped by the 128-dot head). Probe at scale=1 first to discover
+ * the module count, then pick `floor(MAX_QR_DOTS / modules)` as the
+ * largest fitting scale. Throws if even scale=1 doesn't fit (the
+ * payload is genuinely too long for a 24mm tape label). (Codex P2
+ * round 4 on PR #487.)
+ */
+async function renderQrForTape(
+  payload: string,
+  errorCorrection: "L" | "M" | "Q" | "H",
+): Promise<HTMLCanvasElement> {
+  // scale=1 → output width equals the QR module count, so we don't
+  // need a separate "get version info" API.
+  const probe = document.createElement("canvas");
+  await QRCode.toCanvas(probe, payload, {
+    errorCorrectionLevel: errorCorrection,
+    margin: 0,
+    scale: 1,
+    color: { dark: "#000000", light: "#FFFFFF" },
+  });
+  const modules = probe.width;
+  if (modules > MAX_QR_DOTS) {
+    throw new Error(
+      `QR payload is too long for 24mm tape — would render at ${modules} ` +
+        `dots tall, but the print band is only ${MAX_QR_DOTS} dots after padding. ` +
+        `Use a shorter payload (the instance ID mode is always safe) or print ` +
+        `to a wider tape.`,
+    );
+  }
+  const scale = Math.floor(MAX_QR_DOTS / modules);
+  const finalCanvas = document.createElement("canvas");
+  await QRCode.toCanvas(finalCanvas, payload, {
+    errorCorrectionLevel: errorCorrection,
+    margin: 0,
+    scale,
+    color: { dark: "#000000", light: "#FFFFFF" },
+  });
+  return finalCanvas;
+}
+
 export interface RenderLabelOpts {
   filamentName: string;
   qrPayload: string;
@@ -69,16 +116,12 @@ export async function renderLabelBitmap(
   }
 
   /* --- QR --- */
-  // Pick module size by payload length so a short instanceId produces
-  // a chunky readable QR and a long URL still fits the tape height.
-  const qrScale = opts.qrPayload.length <= 16 ? 4 : 3;
-  const qrCanvas = document.createElement("canvas");
-  await QRCode.toCanvas(qrCanvas, opts.qrPayload, {
-    errorCorrectionLevel: opts.qrErrorCorrection ?? "M",
-    margin: 0,
-    scale: qrScale,
-    color: { dark: "#000000", light: "#FFFFFF" },
-  });
+  // Helper picks the largest scale that fits the print band and throws
+  // on payloads too long even at scale=1.
+  const qrCanvas = await renderQrForTape(
+    opts.qrPayload,
+    opts.qrErrorCorrection ?? "M",
+  );
   const qrDots = qrCanvas.width;
 
   /* --- text --- */
@@ -183,14 +226,10 @@ export async function renderLabelPreviewDataUrl(
     );
   }
 
-  const qrScale = opts.qrPayload.length <= 16 ? 4 : 3;
-  const qrCanvas = document.createElement("canvas");
-  await QRCode.toCanvas(qrCanvas, opts.qrPayload, {
-    errorCorrectionLevel: opts.qrErrorCorrection ?? "M",
-    margin: 0,
-    scale: qrScale,
-    color: { dark: "#000000", light: "#FFFFFF" },
-  });
+  const qrCanvas = await renderQrForTape(
+    opts.qrPayload,
+    opts.qrErrorCorrection ?? "M",
+  );
   const qrDots = qrCanvas.width;
 
   const textHeight = Math.min(56, PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS);
