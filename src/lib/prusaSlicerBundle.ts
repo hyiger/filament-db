@@ -20,6 +20,8 @@
  * Filament DB doesn't model (e.g. filament_ramming_parameters, start_filament_gcode).
  */
 
+import { displayColor } from "@/lib/filamentColors";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FilamentDoc = Record<string, any>;
 
@@ -53,7 +55,12 @@ export function filamentToSlicerKeys(
   // Core identification
   set("filament_type", filament.type);
   set("filament_vendor", filament.vendor);
-  set("filament_colour", filament.color);
+  // Slicer presets are single-color — coextruded / multi-color filaments
+  // surface their primary, falling back to the first secondary when the
+  // primary is null (the spec-aligned "coextruded" shape). Secondary
+  // colors beyond the primary are intentionally dropped; the detail
+  // page's slicer-export menu warns the user about this trade-off.
+  set("filament_colour", displayColor(filament));
   set("filament_diameter", filament.diameter);
   set("filament_density", filament.density);
   set("filament_cost", filament.cost);

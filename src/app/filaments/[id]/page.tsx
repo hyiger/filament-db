@@ -846,7 +846,17 @@ function FilamentDetail() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
             </summary>
-            <div className="absolute right-0 z-20 mt-1 w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg py-1">
+            <div className="absolute right-0 z-20 mt-1 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg py-1">
+              {/* GH #477 Phase 4: warn the user that slicer presets only
+                  carry one color so secondary colors won't make it into
+                  the exported file. Surfaces ONLY when the filament has
+                  multi-color data — single-color exports show the menu
+                  with no extra chrome. */}
+              {(filament.secondaryColors && filament.secondaryColors.length > 0) && (
+                <p className="px-3 py-2 mb-1 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800">
+                  {t("detail.slicerExport.multiColorNotice")}
+                </p>
+              )}
               {([
                 ["prusaslicer", t("detail.slicerExport.prusa"), ".ini"],
                 ["orcaslicer", t("detail.slicerExport.orca"), ".json"],

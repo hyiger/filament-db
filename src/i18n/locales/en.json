@@ -755,6 +755,7 @@
   "detail.slicerExport.prusa": "PrusaSlicer config bundle",
   "detail.slicerExport.orca": "OrcaSlicer filament preset",
   "detail.slicerExport.bambu": "Bambu Studio filament preset",
+  "detail.slicerExport.multiColorNotice": "Slicer presets only support one color. The primary will be exported; secondaries are dropped.",
   "detail.addSpool": "Add Spool",
   "detail.spool.addLabelPlaceholder": "Label (e.g. Spool 2, Drybox A)",
   "detail.spool.addWeightPlaceholder": "Initial weight (g)",

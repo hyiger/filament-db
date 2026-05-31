@@ -755,6 +755,7 @@
   "detail.slicerExport.prusa": "PrusaSlicer-Konfigurationspaket",
   "detail.slicerExport.orca": "OrcaSlicer-Filamentvorlage",
   "detail.slicerExport.bambu": "Bambu Studio-Filamentvorlage",
+  "detail.slicerExport.multiColorNotice": "Slicer-Voreinstellungen unterstützen nur eine Farbe. Die Primärfarbe wird exportiert; Sekundärfarben werden verworfen.",
   "detail.addSpool": "Spule hinzufügen",
   "detail.spool.addLabelPlaceholder": "Bezeichnung (z. B. Spule 2, Trockenbox A)",
   "detail.spool.addWeightPlaceholder": "Anfangsgewicht (g)",

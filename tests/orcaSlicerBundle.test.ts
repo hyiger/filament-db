@@ -77,6 +77,45 @@ describe("filamentToOrcaSlicerKeys", () => {
     expect(keys.textured_cool_plate_temp_initial_layer).toEqual(["50"]);
   });
 
+  it("multi-color filament exports only the primary; secondaries are dropped", () => {
+    const filament = {
+      name: "Multi Solid",
+      vendor: "Test",
+      type: "PLA",
+      color: "#FF0000",
+      secondaryColors: ["#00FF00", "#0000FF"],
+      diameter: 1.75,
+      temperatures: {},
+      settings: {},
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+
+    expect(keys.filament_colour).toEqual(["#FF0000"]);
+    // No secondary-color values are ever emitted — OrcaSlicer presets
+    // are single-color and the detail page warns the user about this.
+    expect(JSON.stringify(keys)).not.toContain("#00FF00");
+    expect(JSON.stringify(keys)).not.toContain("#0000FF");
+  });
+
+  it("coextruded filament (null primary) falls back to the first secondary", () => {
+    const filament = {
+      name: "Coextruded",
+      vendor: "Test",
+      type: "PLA",
+      color: null,
+      secondaryColors: ["#3366CC", "#CC3366"],
+      diameter: 1.75,
+      temperatures: {},
+      settings: {},
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+
+    expect(keys.filament_colour).toEqual(["#3366CC"]);
+    expect(JSON.stringify(keys)).not.toContain("#CC3366");
+  });
+
   it("preserves settings bag keys as arrays", () => {
     const filament = {
       name: "Test",

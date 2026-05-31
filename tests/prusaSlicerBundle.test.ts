@@ -258,6 +258,47 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.filament_settings_id).toBe("Original Slicer ID");
   });
 
+  it("multi-color filament exports only the primary; secondaries are dropped", () => {
+    const filament = {
+      name: "Multi Solid",
+      vendor: "Test",
+      type: "PLA",
+      color: "#FF0000",
+      secondaryColors: ["#00FF00", "#0000FF"],
+      diameter: 1.75,
+      temperatures: {},
+      settings: {},
+    };
+
+    const keys = filamentToSlicerKeys(filament);
+
+    expect(keys.filament_colour).toBe("#FF0000");
+    // No secondary-color keys are ever emitted — slicer presets are
+    // single-color and the detail page warns the user about this.
+    expect(JSON.stringify(keys)).not.toContain("#00FF00");
+    expect(JSON.stringify(keys)).not.toContain("#0000FF");
+  });
+
+  it("coextruded filament (null primary) falls back to the first secondary", () => {
+    const filament = {
+      name: "Coextruded",
+      vendor: "Test",
+      type: "PLA",
+      color: null, // coextruded: no single primary
+      secondaryColors: ["#3366CC", "#CC3366"],
+      diameter: 1.75,
+      temperatures: {},
+      settings: {},
+    };
+
+    const keys = filamentToSlicerKeys(filament);
+
+    // Primary is null but displayColor() promotes the first secondary so
+    // the slicer at least sees a valid color rather than its bare default.
+    expect(keys.filament_colour).toBe("#3366CC");
+    expect(JSON.stringify(keys)).not.toContain("#CC3366");
+  });
+
   it("null structured fields must not emit nil; settings bag nil is preserved", () => {
     const filament = {
       name: "Nil Test",
