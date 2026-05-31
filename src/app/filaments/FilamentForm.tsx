@@ -2921,11 +2921,16 @@ function MultiColorEditor({
           )}
           {/* Live preview using the same swatch the list / detail page
               renders — the user sees exactly what their multi-color
-              filament will look like everywhere else. */}
+              filament will look like everywhere else. Codex P2 on PR
+              #483: mirror the submit handler's "coextruded clears
+              primary to null" so the preview doesn't show a phantom
+              extra gray stripe (#808080) that would disappear after
+              save. For coextruded, only secondaryColors paint the
+              swatch — exactly what the list/detail view will render. */}
           <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
             <span>{t("form.multiColor.preview")}:</span>
             <FilamentSwatch
-              color={form.color}
+              color={arrangement === "coextruded" ? null : form.color}
               secondaryColors={form.secondaryColors}
               arrangement={arrangement}
               size={40}
