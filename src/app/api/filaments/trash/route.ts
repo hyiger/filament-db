@@ -22,7 +22,10 @@ export async function GET() {
       _deletedAt: { $ne: null },
       _purged: { $ne: true },
     })
-      .select("name vendor type color cost _deletedAt parentId")
+      // GH #477: secondaryColors so the trash row's swatch can render
+      // coextruded filaments faithfully — without it a trashed row with
+      // color: null would have no color data at all on the wire.
+      .select("name vendor type color secondaryColors cost _deletedAt parentId")
       .sort({ _deletedAt: -1 })
       .lean();
     return NextResponse.json(trashed);
