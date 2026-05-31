@@ -648,6 +648,43 @@ describe("upsertImportRows — Parent column (GH #379)", () => {
       expect(docs[1].secondaryColors).toEqual([]);
     });
 
+    it("preserves null primary on coextruded CSV round-trip (Codex P2 r2)", async () => {
+      // Coextruded filaments have `color: null` per OpenPrintTag spec.
+      // Export writes an empty Color cell; pre-fix import would skip
+      // setting `doc.color` so the schema default "#808080" applied,
+      // re-introducing a phantom gray primary. Now: secondaryColors
+      // present + color empty → doc.color = null explicitly.
+      await Filament.create({
+        name: "Coextruded Round-Trip",
+        vendor: "Test",
+        type: "PLA",
+        color: null,
+        secondaryColors: ["#FF0000", "#00FF00", "#0000FF"],
+      });
+      const { getExportRows } = await import("@/lib/exportFilaments");
+      const exportRows = await getExportRows();
+      const row = exportRows.find((r) => r.name === "Coextruded Round-Trip")!;
+      expect(row.color).toBeNull();
+      await Filament.deleteOne({ name: "Coextruded Round-Trip" });
+      const result = await upsertImportRows([
+        {
+          name: row.name,
+          vendor: row.vendor,
+          type: row.type,
+          // `row.color === null` simulating the empty Color cell on
+          // re-import.
+          color: row.color ?? undefined,
+          secondaryColors: row.secondaryColors,
+        },
+      ]);
+      expect(result.created).toBe(1);
+      const reimported = await Filament.findOne({ name: "Coextruded Round-Trip" });
+      expect(reimported?.color).toBeNull();
+      expect(reimported?.secondaryColors).toEqual([
+        "#FF0000", "#00FF00", "#0000FF",
+      ]);
+    });
+
     it("round-trips via export → import without drift", async () => {
       await Filament.create({
         name: "Round Trip",

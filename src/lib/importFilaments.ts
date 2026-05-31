@@ -355,7 +355,20 @@ export async function upsertImportRows(
           .map((c) => c.trim())
           .filter((c) => /^#[0-9A-Fa-f]{6}$/.test(c))
           .slice(0, 5);
-        if (slots.length > 0) doc.secondaryColors = slots;
+        if (slots.length > 0) {
+          doc.secondaryColors = slots;
+          // GH #477 (Codex P2 on PR #484 r2): preserve null primary for
+          // coextruded CSV round-trips. When the export side wrote an
+          // empty Color cell (coextruded filaments have `color: null`
+          // per OpenPrintTag spec) AND secondaryColors has entries,
+          // the import would otherwise skip setting `doc.color` and the
+          // schema default "#808080" would re-introduce a phantom gray
+          // primary. Explicit `null` keeps the export → import → re-
+          // export round-trip identity-preserving.
+          if (row.color === null || row.color === "" || row.color === undefined) {
+            doc.color = null;
+          }
+        }
       }
     }
     if (row.diameter !== undefined && row.diameter !== null) {
