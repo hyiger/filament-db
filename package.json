@@ -22,7 +22,9 @@
     "electron:dev": "npm run electron:rebuild && npm run electron:compile && concurrently \"next dev -p 3456\" \"wait-on http://localhost:3456 && electron .\"",
     "electron:build": "npm run build && npm run electron:fixlinks && npm run electron:rebuild && npm run electron:compile && npm run electron:pack",
     "electron:fixlinks": "node -e \"const fs=require('fs'),path=require('path');function fix(d){fs.readdirSync(d,{withFileTypes:true}).forEach(e=>{const f=path.join(d,e.name);if(e.isSymbolicLink()){const t=fs.realpathSync(f);fs.rmSync(f);fs.cpSync(t,f,{recursive:true})}else if(e.isDirectory())fix(f)})}fix('.next/standalone');fs.cpSync('.next/standalone','standalone',{recursive:true});fs.cpSync('.next/static','standalone/.next/static',{recursive:true});fs.cpSync('public','standalone/public',{recursive:true})\"",
-    "electron:pack": "electron-builder --config electron-builder.yml"
+    "electron:pack": "electron-builder --config electron-builder.yml",
+    "label:print": "tsx scripts/print-label-spike.ts",
+    "label:sim": "tsx scripts/print-label-sim.ts"
   },
   "dependencies": {
     "@pokusew/pcsclite": "^0.6.0",
@@ -51,6 +53,7 @@
     "@electron/rebuild": "^4.0.3",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@types/react-window": "^1.8.8",
@@ -63,6 +66,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.1",
     "mongodb-memory-server": "^11.0.1",
+    "qrcode": "^1.5.4",
     "sharp": "^0.34.5",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
