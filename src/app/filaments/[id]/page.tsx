@@ -150,10 +150,13 @@ function FilamentDetail() {
   const [locations, setLocations] = useState<{ _id: string; name: string; kind: string }[]>([]);
   const [printers, setPrinters] = useState<PrinterLite[]>([]);
 
-  // Slicer-export dropdown (<details>). The ref lets us close the menu
-  // after a download click and on an outside click — a bare <details>
+  // Three action-menu dropdowns (Export / Sync / Variants). Each one is
+  // a native <details> with a custom <summary> trigger; refs let us close
+  // them after a click and on an outside click — a bare <details>
   // doesn't collapse on outside click on its own.
-  const slicerExportRef = useRef<HTMLDetailsElement>(null);
+  const exportMenuRef = useRef<HTMLDetailsElement>(null);
+  const syncMenuRef = useRef<HTMLDetailsElement>(null);
+  const variantsMenuRef = useRef<HTMLDetailsElement>(null);
 
   // "Sync from Bambu Studio" file input + in-flight flag. Pinned to this
   // filament's id (POST /api/filaments/{id}/bambustudio) so the user is
@@ -209,12 +212,17 @@ function FilamentDetail() {
     return () => { if (nfcWriteTimerRef.current) clearTimeout(nfcWriteTimerRef.current); };
   }, []);
 
-  // Collapse the slicer-export dropdown when the user clicks elsewhere.
+  // Collapse any open action-menu dropdown when the user clicks elsewhere.
+  // Single listener covers all three menus so they also auto-close each
+  // other on outside-click (clicking on a different menu's summary closes
+  // any other that's already open).
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
-      const el = slicerExportRef.current;
-      if (el && el.open && !el.contains(e.target as Node)) {
-        el.removeAttribute("open");
+      for (const ref of [exportMenuRef, syncMenuRef, variantsMenuRef]) {
+        const el = ref.current;
+        if (el && el.open && !el.contains(e.target as Node)) {
+          el.removeAttribute("open");
+        }
       }
     };
     document.addEventListener("click", onDocClick);
@@ -814,46 +822,72 @@ function FilamentDetail() {
                     : t("detail.nfc.write")}
             </button>
           )}
-          <button
-            onClick={() => {
-              const a = document.createElement("a");
-              a.href = `/api/filaments/${filament._id}/openprinttag`;
-              a.download = "";
-              a.click();
-            }}
-            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm inline-flex items-center gap-1.5"
-            title={t("detail.exportOpt.title")}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-            </svg>
-            {t("detail.exportOpt")}
-          </button>
-          {/* Export this filament as a slicer config — PrusaSlicer .ini or
-              OrcaSlicer / Bambu Studio .json. <details> is a self-contained
-              disclosure widget; the outside-click effect above handles the
-              one thing it doesn't do natively (collapse on outside click). */}
-          <details ref={slicerExportRef} className="relative inline-block">
+          {/* Export ▾ — anything that emits filament data: label-printer
+              output, NFC tag binary, and slicer config files. The single
+              dropdown replaces three separate buttons (Export OPT,
+              Print Label, Export for slicer ▾) so the action row stays
+              short as more output formats land. */}
+          <details ref={exportMenuRef} className="relative inline-block">
             <summary
               className="px-4 py-2 bg-sky-600 text-white rounded hover:bg-sky-700 text-sm inline-flex items-center gap-1.5 cursor-pointer list-none [&::-webkit-details-marker]:hidden"
-              title={t("detail.slicerExport.title")}
+              title={t("detail.exportMenu.title")}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              {t("detail.slicerExport")}
+              {t("detail.exportMenu")}
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
             </summary>
             <div className="absolute right-0 z-20 mt-1 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg py-1">
-              {/* GH #477 Phase 4: warn the user that slicer presets only
-                  carry one color so secondary colors won't make it into
-                  the exported file. Surfaces ONLY when the filament has
-                  multi-color data — single-color exports show the menu
-                  with no extra chrome. */}
+              {/* Label printer — opens the print dialog. Wired in a
+                  follow-up commit; for now it surfaces a "coming soon"
+                  toast so the menu structure is reviewable. */}
+              <button
+                type="button"
+                onClick={() => {
+                  toast(t("detail.printLabel.comingSoon"), "info");
+                  exportMenuRef.current?.removeAttribute("open");
+                }}
+                className="w-full text-left px-3 py-1.5 text-sm text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
+                title={t("detail.printLabel.title")}
+              >
+                <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                </svg>
+                <span>{t("detail.printLabel")}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const a = document.createElement("a");
+                  a.href = `/api/filaments/${filament._id}/openprinttag`;
+                  a.download = "";
+                  a.click();
+                  exportMenuRef.current?.removeAttribute("open");
+                }}
+                className="w-full text-left px-3 py-1.5 text-sm text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-between gap-3"
+                title={t("detail.exportOpt.title")}
+              >
+                <span className="flex items-center gap-2">
+                  <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0" />
+                  </svg>
+                  {t("detail.exportOpt")}
+                </span>
+                <span className="text-xs text-gray-400 font-mono">.bin</span>
+              </button>
+              {/* Slicer-format exports below the divider. Multi-color
+                  warning still surfaces here (GH #477 Phase 4) — slicer
+                  presets only carry one color, secondary colors are
+                  dropped on export. */}
+              <div className="my-1 border-t border-gray-200 dark:border-gray-700" />
+              <p className="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                {t("detail.exportMenu.slicerSection")}
+              </p>
               {(filament.secondaryColors && filament.secondaryColors.length > 0) && (
-                <p className="px-3 py-2 mb-1 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border-b border-amber-200 dark:border-amber-800">
+                <p className="px-3 py-2 my-1 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border-y border-amber-200 dark:border-amber-800">
                   {t("detail.slicerExport.multiColorNotice")}
                 </p>
               )}
@@ -870,7 +904,7 @@ function FilamentDetail() {
                     a.href = `/api/filaments/${filament._id}/${target}`;
                     a.download = "";
                     a.click();
-                    slicerExportRef.current?.removeAttribute("open");
+                    exportMenuRef.current?.removeAttribute("open");
                   }}
                   className="w-full text-left px-3 py-1.5 text-sm text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center justify-between gap-3"
                 >
@@ -880,22 +914,40 @@ function FilamentDetail() {
               ))}
             </div>
           </details>
-          {/* Sync FROM Bambu Studio — inverse of the slicer-export menu
-              above. Pinned to this filament's id (the file's name doesn't
-              have to match), so it's the right entry point when the user
-              has calibrated in Bambu and wants the values back here. */}
-          <button
-            type="button"
-            onClick={() => bambuSyncRef.current?.click()}
-            disabled={bambuSyncing}
-            className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 text-sm inline-flex items-center gap-1.5"
-            title={t("bambuImport.syncFromBambuTitle")}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M16 12l-4-4m0 0l-4 4m4-4v12" />
-            </svg>
-            {bambuSyncing ? t("bambuImport.importing") : t("bambuImport.syncFromBambu")}
-          </button>
+          {/* Sync ▾ — pulls calibration data INTO this filament from
+              external tools. Currently just Bambu Studio; PrusaSlicer
+              and OrcaSlicer per-filament sync will live alongside when
+              they land. Hidden file input stays out-of-flow next to the
+              <details> so the keyboard tab order doesn't change. */}
+          <details ref={syncMenuRef} className="relative inline-block">
+            <summary
+              className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm inline-flex items-center gap-1.5 cursor-pointer list-none [&::-webkit-details-marker]:hidden"
+              title={t("detail.syncMenu.title")}
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M16 12l-4-4m0 0l-4 4m4-4v12" />
+              </svg>
+              {bambuSyncing ? t("bambuImport.importing") : t("detail.syncMenu")}
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </summary>
+            <div className="absolute right-0 z-20 mt-1 w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg py-1">
+              <button
+                type="button"
+                onClick={() => {
+                  bambuSyncRef.current?.click();
+                  syncMenuRef.current?.removeAttribute("open");
+                }}
+                disabled={bambuSyncing}
+                className="w-full text-left px-3 py-1.5 text-sm text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 flex items-center justify-between gap-3"
+                title={t("bambuImport.syncFromBambuTitle")}
+              >
+                <span>{t("bambuImport.syncFromBambu")}</span>
+                <span className="text-xs text-gray-400 font-mono">.json</span>
+              </button>
+            </div>
+          </details>
           <input
             ref={bambuSyncRef}
             type="file"
@@ -903,37 +955,46 @@ function FilamentDetail() {
             className="hidden"
             onChange={handleBambuSync}
           />
-          {/* Clone is available on every filament — root or variant. The new-
-              page clone path at src/app/filaments/new/page.tsx:192 does
-              `filament.parentId || filament._id`, so cloning a variant
-              produces a sibling variant of the same parent, and cloning a
-              root produces a variant of that root. The "Create variant" CTA
-              below is gated on `!isVariant` because variants-of-variants
-              isn't a thing in this design (a parent must be a top-level
-              filament). The old gate here was a v0.3.0 leftover from before
-              the parent/variant system landed in its current form. */}
-          <Link
-            href={`/filaments/new?cloneId=${filament._id}`}
-            className="px-4 py-2 bg-amber-600 text-white rounded hover:bg-amber-700 text-sm inline-flex items-center gap-1.5"
-            title={t("detail.clone.title")}
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-            {t("detail.clone")}
-          </Link>
-          {!isVariant && (
-            <Link
-              href={`/filaments/new?parentId=${filament._id}`}
-              className="px-4 py-2 bg-fuchsia-600 text-white rounded hover:bg-fuchsia-700 text-sm inline-flex items-center gap-1.5"
-              title={t("detail.createVariant.title")}
+          {/* Variants ▾ — actions that produce a NEW filament off this
+              one. Duplicate is available on every filament (clone path
+              at src/app/filaments/new/page.tsx:192 does `parentId || _id`,
+              so cloning a variant produces a sibling). Create variant is
+              gated on `!isVariant` because variants-of-variants aren't a
+              thing in this design. */}
+          <details ref={variantsMenuRef} className="relative inline-block">
+            <summary
+              className="px-4 py-2 bg-amber-600 text-white rounded hover:bg-amber-700 text-sm inline-flex items-center gap-1.5 cursor-pointer list-none [&::-webkit-details-marker]:hidden"
+              title={t("detail.variantsMenu.title")}
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
               </svg>
-              {t("detail.createVariant")}
-            </Link>
-          )}
+              {t("detail.variantsMenu")}
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </summary>
+            <div className="absolute right-0 z-20 mt-1 w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg py-1">
+              <Link
+                href={`/filaments/new?cloneId=${filament._id}`}
+                onClick={() => variantsMenuRef.current?.removeAttribute("open")}
+                className="block px-3 py-1.5 text-sm text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700"
+                title={t("detail.clone.title")}
+              >
+                {t("detail.clone")}
+              </Link>
+              {!isVariant && (
+                <Link
+                  href={`/filaments/new?parentId=${filament._id}`}
+                  onClick={() => variantsMenuRef.current?.removeAttribute("open")}
+                  className="block px-3 py-1.5 text-sm text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700"
+                  title={t("detail.createVariant.title")}
+                >
+                  {t("detail.createVariant")}
+                </Link>
+              )}
+            </div>
+          </details>
           <Link
             href={`/filaments/${filament._id}/edit`}
             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
