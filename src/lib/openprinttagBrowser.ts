@@ -66,6 +66,10 @@ export interface OPTMaterial {
   type: string;
   abbreviation: string;
   color: string | null;
+  /** GH #477: secondary color hexes from OpenPrintTag spec keys 20–24
+   *  (`secondary_color_0..4`). Empty array when the material has no
+   *  secondary colors. Up to 5 entries. */
+  secondaryColors: string[];
   density: number | null;
   nozzleTempMin: number | null;
   nozzleTempMax: number | null;
@@ -239,6 +243,22 @@ export function parseMaterialYaml(
     const brand = brandMap.get(brandSlug);
     const props = (raw.properties || {}) as Record<string, unknown>;
     const primaryColor = raw.primary_color as Record<string, unknown> | undefined;
+    // GH #477: parse secondary_color_0..4 in slot order (spec keys 20–24).
+    // Each is a `{ color_rgba: "AABBCCDD" }` object on the raw material;
+    // rgbaToHex drops the alpha to match our `#RRGGBB`-only model.
+    const SECONDARY_KEYS = [
+      "secondary_color_0",
+      "secondary_color_1",
+      "secondary_color_2",
+      "secondary_color_3",
+      "secondary_color_4",
+    ];
+    const secondaryColors: string[] = [];
+    for (const key of SECONDARY_KEYS) {
+      const slot = raw[key] as Record<string, unknown> | undefined;
+      const hex = rgbaToHex(slot?.color_rgba as string | undefined);
+      if (hex) secondaryColors.push(hex);
+    }
     const photos = raw.photos as Array<Record<string, unknown>> | undefined;
 
     const score = computeCompletenessScore(raw);
@@ -252,6 +272,7 @@ export function parseMaterialYaml(
       type: (raw.type as string) || "Unknown",
       abbreviation: (raw.abbreviation as string) || (raw.type as string) || "",
       color: rgbaToHex(primaryColor?.color_rgba as string | undefined),
+      secondaryColors,
       density: (props.density as number) ?? null,
       nozzleTempMin: (props.min_print_temperature as number) ?? null,
       nozzleTempMax: (props.max_print_temperature as number) ?? null,
@@ -300,6 +321,10 @@ export function mapToFilamentPayload(
     vendor: m.brandName,
     type: m.type,
     color: m.color || "#808080",
+    // GH #477: pass through secondary colors so a coextruded /
+    // multi-color material in the OPT database imports with all
+    // slots populated, not just the primary.
+    secondaryColors: m.secondaryColors,
     density: m.density,
     diameter: 1.75,
     temperatures: {

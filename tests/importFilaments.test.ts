@@ -578,4 +578,104 @@ describe("upsertImportRows — Parent column (GH #379)", () => {
     // No spurious `variantCount` field landed on the model.
     expect("variantCount" in (doc.toObject?.() ?? {})).toBe(false);
   });
+
+  describe("secondaryColors (#477)", () => {
+    it("parses comma-separated string into the schema array", async () => {
+      const result = await upsertImportRows([
+        {
+          name: "Multi Import",
+          vendor: "Test",
+          type: "PLA",
+          color: "#ffffff",
+          secondaryColors: "#FF0000,#00FF00,#0000FF",
+        },
+      ]);
+      expect(result.created).toBe(1);
+      const doc = await Filament.findOne({ name: "Multi Import" });
+      expect(doc?.secondaryColors).toEqual(["#FF0000", "#00FF00", "#0000FF"]);
+    });
+
+    it("trims whitespace and drops malformed hex entries", async () => {
+      const result = await upsertImportRows([
+        {
+          name: "Sloppy Hex",
+          vendor: "Test",
+          type: "PLA",
+          color: "#ffffff",
+          // Mixed: valid + extra whitespace + malformed + named color
+          // (which the schema would reject) + empty entries.
+          secondaryColors: " #FF0000 , red , #BAD , , #00FF00 ",
+        },
+      ]);
+      expect(result.created).toBe(1);
+      const doc = await Filament.findOne({ name: "Sloppy Hex" });
+      // Only the two valid 6-char hex entries survive; "red", "#BAD"
+      // (3-char), and the empties are dropped before reaching the
+      // schema validator.
+      expect(doc?.secondaryColors).toEqual(["#FF0000", "#00FF00"]);
+    });
+
+    it("caps at 5 entries on import (spec ceiling)", async () => {
+      const result = await upsertImportRows([
+        {
+          name: "Too Many Colors",
+          vendor: "Test",
+          type: "PLA",
+          secondaryColors:
+            "#FF0000,#FF8800,#FFFF00,#00FF00,#0000FF,#8800FF",
+        },
+      ]);
+      expect(result.created).toBe(1);
+      const doc = await Filament.findOne({ name: "Too Many Colors" });
+      expect(doc?.secondaryColors).toHaveLength(5);
+      // 6th entry (#8800FF) dropped silently — there's no spec key for it.
+      expect(doc?.secondaryColors).toEqual([
+        "#FF0000", "#FF8800", "#FFFF00", "#00FF00", "#0000FF",
+      ]);
+    });
+
+    it("omits the field when the column is empty / missing", async () => {
+      const result = await upsertImportRows([
+        { name: "Plain Row 477", vendor: "Test", type: "PLA", secondaryColors: "" },
+        { name: "Plain Row 477b", vendor: "Test", type: "PLA" },
+      ]);
+      expect(result.created).toBe(2);
+      const docs = await Filament.find({
+        name: { $in: ["Plain Row 477", "Plain Row 477b"] },
+      });
+      // Schema default is []. Either way, no entries.
+      expect(docs[0].secondaryColors).toEqual([]);
+      expect(docs[1].secondaryColors).toEqual([]);
+    });
+
+    it("round-trips via export → import without drift", async () => {
+      await Filament.create({
+        name: "Round Trip",
+        vendor: "Test",
+        type: "PLA",
+        color: "#ffffff",
+        secondaryColors: ["#FF0000", "#00FF00", "#0000FF"],
+      });
+      const { getExportRows } = await import("@/lib/exportFilaments");
+      const exportRows = await getExportRows();
+      const row = exportRows.find((r) => r.name === "Round Trip")!;
+      // Drop the original then re-import the export row as a new
+      // filament — the unique-name index requires removing first.
+      await Filament.deleteOne({ name: "Round Trip" });
+      const result = await upsertImportRows([
+        {
+          name: row.name,
+          vendor: row.vendor,
+          type: row.type,
+          color: row.color ?? undefined,
+          secondaryColors: row.secondaryColors,
+        },
+      ]);
+      expect(result.created).toBe(1);
+      const reimported = await Filament.findOne({ name: "Round Trip" });
+      expect(reimported?.secondaryColors).toEqual([
+        "#FF0000", "#00FF00", "#0000FF",
+      ]);
+    });
+  });
 });

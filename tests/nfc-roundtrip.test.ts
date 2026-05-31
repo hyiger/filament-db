@@ -51,7 +51,9 @@ describe("NFC round-trip: encode → NDEF wrap → NDEF parse → decode", () =>
     expect(decoded.materialName).toBe("Prusament PLA Galaxy Black");
     expect(decoded.brandName).toBe("Prusament");
     expect(decoded.materialType).toBe("PLA");
-    expect(decoded.color).toBe("#3d3e3dff");
+    // GH #477: decoder truncates alpha to RGB only — documented
+    // spec-superset gap (translucency rides finish tags instead).
+    expect(decoded.color).toBe("#3d3e3d");
     expect(decoded.density).toBeCloseTo(1.24, 1);
     expect(decoded.diameter).toBe(1.75);
     expect(decoded.nozzleTemp).toBe(215);

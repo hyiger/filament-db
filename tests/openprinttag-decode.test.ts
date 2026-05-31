@@ -101,7 +101,15 @@ describe("decodeOpenPrintTagBinary", () => {
     expect(decoded.color).toBe("#ff0000");
   });
 
-  it("round-trips color with alpha", () => {
+  it("truncates alpha when decoding RGBA-encoded color (GH #477)", () => {
+    // GH #477: documented spec-superset gap — OpenPrintTag spec's
+    // `color_rgba` is RGB or RGBA, but our DB only stores `#RRGGBB`
+    // (translucency rides finish tags 5/6 with real CSS opacity
+    // instead). The decoder now drops the alpha byte; round-trip
+    // preserves only the RGB triple. A tag written with alpha in a
+    // previous version still decodes successfully — it just loses
+    // the alpha component, which was never round-tripped to a UI
+    // surface that rendered alpha anyway.
     const input: OpenPrintTagInput = {
       materialName: "Translucent",
       brandName: "Brand",
@@ -111,7 +119,7 @@ describe("decodeOpenPrintTagBinary", () => {
     const binary = generateOpenPrintTagBinary(input);
     const decoded = decodeOpenPrintTagBinary(binary);
 
-    expect(decoded.color).toBe("#ff000080");
+    expect(decoded.color).toBe("#ff0000");
   });
 
   it("round-trips weight", () => {
@@ -188,7 +196,8 @@ describe("decodeOpenPrintTagBinary", () => {
     expect(decoded.materialName).toBe("Prusament PLA Galaxy Black");
     expect(decoded.brandName).toBe("Prusament");
     expect(decoded.materialType).toBe("PLA");
-    expect(decoded.color).toBe("#3d3e3dff");
+    // GH #477: decoder truncates alpha to RGB only.
+    expect(decoded.color).toBe("#3d3e3d");
     expect(decoded.density).toBeCloseTo(1.24, 1);
     expect(decoded.diameter).toBe(1.75);
     expect(decoded.nozzleTemp).toBe(215);
@@ -552,5 +561,75 @@ describe("decodeOpenPrintTagBinary", () => {
 
     expect(decoded.shoreHardnessA).toBeUndefined();
     expect(decoded.shoreHardnessD).toBeUndefined();
+  });
+
+  // GH #477: multi-color filaments — encode/decode round-trip for
+  // secondaryColors (OpenPrintTag spec keys 20–24). Mirrors the
+  // primary-color path and verifies the alpha-truncation behavior.
+  describe("secondaryColors (#477)", () => {
+    it("round-trips a tri-color coextruded tag with null primary", () => {
+      // Spec key 19 "can be null for materials without a single primary
+      // color (rainbow / coextruded)". Encoder omits the key when color
+      // is undefined; decoder leaves `color` undefined.
+      const input: OpenPrintTagInput = {
+        materialName: "Galaxy Tri-Color",
+        brandName: "Test",
+        materialType: "PLA",
+        secondaryColors: ["#FF0000", "#00FF00", "#0000FF"],
+      };
+      const binary = generateOpenPrintTagBinary(input);
+      const decoded = decodeOpenPrintTagBinary(binary);
+      expect(decoded.color).toBeUndefined();
+      // Decoder returns lowercase hex per existing convention.
+      expect(decoded.secondaryColors).toEqual(["#ff0000", "#00ff00", "#0000ff"]);
+    });
+
+    it("round-trips primary + secondaries together (gradient case)", () => {
+      const input: OpenPrintTagInput = {
+        materialName: "Rainbow PLA",
+        brandName: "Test",
+        materialType: "PLA",
+        color: "#FF0000",
+        secondaryColors: ["#FFFF00", "#00FF00", "#00FFFF", "#0000FF"],
+      };
+      const binary = generateOpenPrintTagBinary(input);
+      const decoded = decodeOpenPrintTagBinary(binary);
+      expect(decoded.color).toBe("#ff0000");
+      expect(decoded.secondaryColors).toEqual([
+        "#ffff00", "#00ff00", "#00ffff", "#0000ff",
+      ]);
+    });
+
+    it("caps at 5 entries on encode (spec ceiling)", () => {
+      // Spec defines secondary_color_0..4 (5 slots). The 6th+ entry
+      // should be silently dropped — there's no key for it.
+      const input: OpenPrintTagInput = {
+        materialName: "Too Many",
+        brandName: "Test",
+        materialType: "PLA",
+        color: "#FFFFFF",
+        secondaryColors: [
+          "#FF0000", "#FF8800", "#FFFF00", "#00FF00", "#0000FF", "#8800FF",
+        ],
+      };
+      const binary = generateOpenPrintTagBinary(input);
+      const decoded = decodeOpenPrintTagBinary(binary);
+      expect(decoded.secondaryColors).toHaveLength(5);
+      expect(decoded.secondaryColors).toEqual([
+        "#ff0000", "#ff8800", "#ffff00", "#00ff00", "#0000ff",
+      ]);
+    });
+
+    it("omits secondaryColors from the decoded result when no slots are set", () => {
+      const input: OpenPrintTagInput = {
+        materialName: "Single Color",
+        brandName: "Test",
+        materialType: "PLA",
+        color: "#808080",
+      };
+      const binary = generateOpenPrintTagBinary(input);
+      const decoded = decodeOpenPrintTagBinary(binary);
+      expect(decoded.secondaryColors).toBeUndefined();
+    });
   });
 });

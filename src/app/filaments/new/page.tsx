@@ -110,6 +110,20 @@ function NewFilamentContent() {
         vendor: searchParams.get("vendor") || "",
         type: searchParams.get("type") || "PLA",
         color: searchParams.get("color") || "#808080",
+        // GH #477: NFC tag's secondary slots arrive comma-separated;
+        // FilamentForm reads `initialData.secondaryColors` and surfaces
+        // them in the multi-color editor. Empty/blank entries filtered
+        // out so a tag with sparse slots doesn't produce empty strings
+        // that fail the hex validator at save time.
+        ...(searchParams.get("secondaryColors")
+          ? {
+              secondaryColors: searchParams
+                .get("secondaryColors")!
+                .split(",")
+                .map((c) => c.trim())
+                .filter((c) => /^#[0-9A-Fa-f]{6}$/.test(c)),
+            }
+          : {}),
         density: searchParams.get("density") ? Number(searchParams.get("density")) : null,
         diameter: searchParams.get("diameter") ? Number(searchParams.get("diameter")) : 1.75,
         temperatures: {

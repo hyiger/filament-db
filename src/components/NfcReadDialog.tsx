@@ -104,6 +104,12 @@ export default function NfcReadDialog() {
     if (data.brandName) params.set("vendor", data.brandName);
     if (data.materialType) params.set("type", data.materialType);
     if (data.color) params.set("color", data.color);
+    // GH #477: multi-color tags carry up to 5 additional colors in spec
+    // keys 20–24. Join them comma-separated; FilamentForm parses the
+    // param on mount and pre-populates the secondary-color slots.
+    if (data.secondaryColors && data.secondaryColors.length > 0) {
+      params.set("secondaryColors", data.secondaryColors.join(","));
+    }
     if (data.density != null) params.set("density", String(data.density));
     if (data.diameter != null) params.set("diameter", String(data.diameter));
     if (data.nozzleTemp != null) params.set("nozzle", String(data.nozzleTemp));
@@ -127,6 +133,12 @@ export default function NfcReadDialog() {
     params.set("parentId", parentId);
     if (data.materialName) params.set("name", data.materialName);
     if (data.color) params.set("color", data.color);
+    // GH #477: multi-color tags carry up to 5 additional colors in spec
+    // keys 20–24. Join them comma-separated; FilamentForm parses the
+    // param on mount and pre-populates the secondary-color slots.
+    if (data.secondaryColors && data.secondaryColors.length > 0) {
+      params.set("secondaryColors", data.secondaryColors.join(","));
+    }
     dismissTagRead();
     router.push(`/filaments/new?${params}`);
   };

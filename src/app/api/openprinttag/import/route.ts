@@ -99,6 +99,15 @@ export async function POST(request: NextRequest) {
           conditionalDefaults.density = payload.density;
         if (payload.color && payload.color !== "#808080")
           conditionalDefaults.color = payload.color;
+        // GH #477: OpenPrintTag spec keys 20–24. Apply only when the
+        // existing row has none — mirrors the "only set if currently
+        // null/sentinel" rule the other conditional defaults use.
+        if (
+          Array.isArray(payload.secondaryColors) &&
+          payload.secondaryColors.length > 0
+        ) {
+          conditionalDefaults.secondaryColors = payload.secondaryColors;
+        }
         if (payload.transmissionDistance != null)
           conditionalDefaults.transmissionDistance = payload.transmissionDistance;
         if (payload.dryingTemperature != null)
@@ -122,6 +131,14 @@ export async function POST(request: NextRequest) {
             conditionalSet.density = conditionalDefaults.density;
           if (conditionalDefaults.color && existing.color === "#808080")
             conditionalSet.color = conditionalDefaults.color;
+          // GH #477: only adopt the OPT db's secondaryColors when the
+          // existing row has none. Don't overwrite user-set arrays.
+          if (
+            conditionalDefaults.secondaryColors &&
+            (!existing.secondaryColors || existing.secondaryColors.length === 0)
+          ) {
+            conditionalSet.secondaryColors = conditionalDefaults.secondaryColors;
+          }
           if (conditionalDefaults.transmissionDistance != null && existing.transmissionDistance == null)
             conditionalSet.transmissionDistance = conditionalDefaults.transmissionDistance;
           if (conditionalDefaults.dryingTemperature != null && existing.dryingTemperature == null)

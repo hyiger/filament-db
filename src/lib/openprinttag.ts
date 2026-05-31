@@ -35,6 +35,16 @@ export const OPT_KEY = {
   ACTUAL_NETTO_FULL_WEIGHT: 17,
   EMPTY_CONTAINER_WEIGHT: 18,
   PRIMARY_COLOR: 19,
+  // GH #477: spec keys 20–24, up to 5 additional color slots for
+  // multi-color filaments (coextruded / gradient). Per the spec, when
+  // primary_color is null, the colors come from these slots. Each is
+  // an RGB or RGBA byte string (we always emit RGB — alpha is a
+  // documented gap; translucency is conveyed via tags 5/6 instead).
+  SECONDARY_COLOR_0: 20,
+  SECONDARY_COLOR_1: 21,
+  SECONDARY_COLOR_2: 22,
+  SECONDARY_COLOR_3: 23,
+  SECONDARY_COLOR_4: 24,
   TRANSMISSION_DISTANCE: 27,
   TAGS: 28,
   DENSITY: 29,
@@ -464,6 +474,10 @@ export interface OpenPrintTagInput {
   brandName: string;           // e.g. "Prusament"
   materialType: string;        // e.g. "PLA", "PETG", "PCTG"
   color?: string;              // hex colour #RRGGBB or #RRGGBBAA
+  /** GH #477: up to 5 additional color hexes for multi-color filaments
+   *  (OpenPrintTag spec keys 20–24). Each `#RRGGBB`. Extra entries
+   *  beyond 5 are silently dropped (spec ceiling). */
+  secondaryColors?: string[];
   density?: number | null;     // g/cm³ (encoded as CBOR float)
   diameter?: number;           // mm (encoded as CBOR float), default 1.75
   nozzleTemp?: number | null;  // °C – used as max print temp
@@ -610,6 +624,29 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
     if (rgba) {
       encodeCBORKey(buf, OPT_KEY.PRIMARY_COLOR);
       encodeCBORBytes(buf, rgba);
+    }
+  }
+
+  // GH #477: secondary_color_0..4 (spec keys 20–24). Each is a separate
+  // CBOR key→byte-string pair, in slot order — the spec doesn't define
+  // a list type for them. Cap at 5 to match the spec ceiling; entries
+  // that can't be parsed are skipped silently (defensive — the schema
+  // validates hex shape before this point so this should never fire).
+  if (input.secondaryColors && input.secondaryColors.length > 0) {
+    const SECONDARY_KEYS = [
+      OPT_KEY.SECONDARY_COLOR_0,
+      OPT_KEY.SECONDARY_COLOR_1,
+      OPT_KEY.SECONDARY_COLOR_2,
+      OPT_KEY.SECONDARY_COLOR_3,
+      OPT_KEY.SECONDARY_COLOR_4,
+    ];
+    const capped = input.secondaryColors.slice(0, SECONDARY_KEYS.length);
+    for (let i = 0; i < capped.length; i++) {
+      const rgba = parseHexColor(capped[i]);
+      if (rgba) {
+        encodeCBORKey(buf, SECONDARY_KEYS[i]);
+        encodeCBORBytes(buf, rgba);
+      }
     }
   }
 

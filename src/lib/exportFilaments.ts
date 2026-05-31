@@ -6,7 +6,12 @@ export interface ExportRow {
   name: string;
   vendor: string;
   type: string;
-  color: string;
+  color: string | null;
+  /** GH #477: comma-separated multi-color hexes (e.g.
+   *  "#FF0000,#00FF00,#0000FF"). Empty string when the filament has
+   *  no secondary colors. CSV-friendly representation — round-trips
+   *  through the importer's split-on-comma rule. */
+  secondaryColors: string;
   diameter: number;
   cost: number | null;
   density: number | null;
@@ -56,6 +61,9 @@ export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
   { key: "vendor", header: "Vendor" },
   { key: "type", header: "Type" },
   { key: "color", header: "Color" },
+  // GH #477: multi-color hexes joined with commas. Round-trips through
+  // the importer's split-on-comma + per-entry hex validation.
+  { key: "secondaryColors", header: "Secondary Colors" },
   { key: "diameter", header: "Diameter (mm)" },
   { key: "cost", header: "Cost" },
   { key: "density", header: "Density (g/cm³)" },
@@ -129,6 +137,7 @@ export async function getExportRows(): Promise<ExportRow[]> {
       vendor: resolved.vendor,
       type: resolved.type,
       color: resolved.color,
+      secondaryColors: (resolved.secondaryColors ?? []).join(","),
       diameter: resolved.diameter,
       cost: resolved.cost ?? null,
       density: resolved.density ?? null,

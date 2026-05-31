@@ -7,6 +7,14 @@ export interface ImportRow {
   vendor?: string;
   type?: string;
   color?: string;
+  /** GH #477: comma-separated list of secondary color hexes from the
+   *  "Secondary Colors" column. Round-trips with the EXPORT_COLUMNS
+   *  entry of the same name. Empty/blank entries are filtered out;
+   *  entries that don't match `#RRGGBB` are silently dropped (the
+   *  schema validator would reject them anyway and the importer's
+   *  job is to be tolerant of partial sources). Capped at 5 entries
+   *  to match the spec. */
+  secondaryColors?: string;
   diameter?: number | null;
   cost?: number | null;
   density?: number | null;
@@ -50,6 +58,9 @@ const HEADER_MAP: Record<string, keyof ImportRow | undefined> = {
   vendor: "vendor",
   type: "type",
   color: "color",
+  "secondary colors": "secondaryColors",
+  secondarycolors: "secondaryColors",
+  "secondary color": "secondaryColors",
   "diameter (mm)": "diameter",
   diameter: "diameter",
   cost: "cost",
@@ -330,6 +341,22 @@ export async function upsertImportRows(
     };
     if (row.color !== undefined && row.color !== "" && row.color !== null) {
       doc.color = row.color;
+    }
+    // GH #477: parse the comma-separated "Secondary Colors" column,
+    // trim/dedupe-empty, validate per-entry hex, cap at 5 to match the
+    // schema validator. Defensive — the schema rejects bad shapes too,
+    // but the importer should produce a clean doc rather than a
+    // bulk-import row that fails save.
+    if (row.secondaryColors !== undefined && row.secondaryColors !== null) {
+      const raw = String(row.secondaryColors).trim();
+      if (raw !== "") {
+        const slots = raw
+          .split(",")
+          .map((c) => c.trim())
+          .filter((c) => /^#[0-9A-Fa-f]{6}$/.test(c))
+          .slice(0, 5);
+        if (slots.length > 0) doc.secondaryColors = slots;
+      }
     }
     if (row.diameter !== undefined && row.diameter !== null) {
       doc.diameter = row.diameter;

@@ -278,4 +278,54 @@ describe("getExportRows", () => {
       expect(byName.get("Standalone TPU")!.variantCount).toBe(0);
     });
   });
+
+  describe("secondaryColors column (#477)", () => {
+    it("emits secondaryColors as a comma-separated string in the export row", async () => {
+      await Filament.create({
+        name: "Tri-Color",
+        vendor: "Test",
+        type: "PLA",
+        color: "#FF0000",
+        secondaryColors: ["#00FF00", "#0000FF"],
+      });
+      const rows = await getExportRows();
+      const row = rows.find((r) => r.name === "Tri-Color")!;
+      expect(row).toBeTruthy();
+      expect(row.secondaryColors).toBe("#00FF00,#0000FF");
+    });
+
+    it("emits an empty string when no secondaryColors are set", async () => {
+      await Filament.create({
+        name: "Single Color",
+        vendor: "Test",
+        type: "PLA",
+        color: "#FF0000",
+      });
+      const rows = await getExportRows();
+      const row = rows.find((r) => r.name === "Single Color")!;
+      expect(row.secondaryColors).toBe("");
+    });
+
+    it("inherits secondaryColors from parent for variants that don't override", async () => {
+      // Mirrors resolveFilament's array-fallback inheritance — a
+      // variant with empty secondaryColors should export the parent's
+      // full array (the export uses resolveFilament).
+      const parent = await Filament.create({
+        name: "Multi-Parent",
+        vendor: "Test",
+        type: "PLA",
+        secondaryColors: ["#FF0000", "#00FF00", "#0000FF"],
+      });
+      await Filament.create({
+        name: "Inheriting Variant",
+        vendor: "Test",
+        type: "PLA",
+        color: "#FFFFFF",
+        parentId: parent._id,
+      });
+      const rows = await getExportRows();
+      const row = rows.find((r) => r.name === "Inheriting Variant")!;
+      expect(row.secondaryColors).toBe("#FF0000,#00FF00,#0000FF");
+    });
+  });
 });

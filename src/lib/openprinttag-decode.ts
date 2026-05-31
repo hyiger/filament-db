@@ -45,6 +45,12 @@ export interface DecodedOpenPrintTag {
   materialType?: string;
   materialTypeRaw?: number;
   color?: string;
+  /** GH #477: up to 5 secondary color hexes for multi-color filaments
+   *  (OpenPrintTag spec keys 20–24). Present only when the tag carries
+   *  any of the secondary slots. Each is `#RRGGBB` — alpha bytes from
+   *  the spec's `color_rgba` are dropped silently per the documented
+   *  spec-superset gap. */
+  secondaryColors?: string[];
   density?: number;
   diameter?: number;
   nozzleTemp?: number;
@@ -310,11 +316,34 @@ export function decodeOpenPrintTagBinary(data: Uint8Array): DecodedOpenPrintTag 
     result.materialType = MATERIAL_TYPE_TO_NAME[typeNum] ?? `Unknown(${typeNum})`;
   }
   if (main.PRIMARY_COLOR !== undefined) {
-    const colorBytes = main.PRIMARY_COLOR as Uint8Array;
-    const hex = Array.from(colorBytes)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-    result.color = `#${hex}`;
+    // GH #477: spec `color_rgba` is RGB or RGBA. We always emit RGB on
+    // the DB side and document the alpha gap; truncate any incoming
+    // 4-byte color to its first 3 bytes so a tag with alpha doesn't
+    // produce an 8-char hex the Filament schema would reject.
+    const colorHex = bytesToRgbHex(main.PRIMARY_COLOR as Uint8Array);
+    if (colorHex) result.color = colorHex;
+  }
+  // GH #477: spec keys 20–24, parsed in slot order. Skipping null/missing
+  // slots; the resulting array is dense, so a tag with only
+  // SECONDARY_COLOR_2 set produces a one-entry array (callers can
+  // re-spread to specific slots if needed — Filament storage treats them
+  // as a positional list anyway).
+  const secondaryHexes: string[] = [];
+  const SECONDARY_NAMES = [
+    "SECONDARY_COLOR_0",
+    "SECONDARY_COLOR_1",
+    "SECONDARY_COLOR_2",
+    "SECONDARY_COLOR_3",
+    "SECONDARY_COLOR_4",
+  ];
+  for (const name of SECONDARY_NAMES) {
+    const raw = main[name];
+    if (raw === undefined) continue;
+    const hex = bytesToRgbHex(raw as Uint8Array);
+    if (hex) secondaryHexes.push(hex);
+  }
+  if (secondaryHexes.length > 0) {
+    result.secondaryColors = secondaryHexes;
   }
   if (main.DENSITY !== undefined) {
     result.density = main.DENSITY as number;
@@ -412,4 +441,25 @@ export function decodeOpenPrintTagBinary(data: Uint8Array): DecodedOpenPrintTag 
   }
 
   return result;
+}
+
+/**
+ * GH #477: Convert OpenPrintTag CBOR color bytes to a `#RRGGBB` hex
+ * string. Spec `color_rgba` may be 3 bytes (RGB) or 4 bytes (RGBA);
+ * we always emit RGB, dropping any 4th alpha byte. Returns null for
+ * malformed input (wrong byte length, not a Uint8Array, etc.) so
+ * callers can skip the slot rather than crashing.
+ *
+ * Centralised here because both the primary color path and the new
+ * secondary-color loop call it.
+ */
+function bytesToRgbHex(bytes: Uint8Array | undefined | null): string | null {
+  if (!bytes || !(bytes instanceof Uint8Array)) return null;
+  if (bytes.length < 3) return null;
+  // Lowercase hex to match the existing decoder convention; the schema
+  // validator accepts both cases.
+  const r = bytes[0].toString(16).padStart(2, "0");
+  const g = bytes[1].toString(16).padStart(2, "0");
+  const b = bytes[2].toString(16).padStart(2, "0");
+  return `#${r}${g}${b}`;
 }
