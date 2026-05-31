@@ -138,6 +138,21 @@ export async function POST(request: NextRequest) {
             (!existing.secondaryColors || existing.secondaryColors.length === 0)
           ) {
             conditionalSet.secondaryColors = conditionalDefaults.secondaryColors;
+            // GH #477 (Codex P2 on PR #484 r3): when the OPT material
+            // is coextruded (payload.color === null, secondaryColors
+            // populated) AND the existing row still has the gray
+            // sentinel "#808080", clear it to null so we don't end up
+            // with the gray+secondaries state the spec doesn't permit
+            // for coextruded materials. mapToFilamentPayload already
+            // emits null for this case so payload.color is null here,
+            // but the conditionalDefaults.color branch above only
+            // fires when payload.color is truthy — leaving the
+            // sentinel in place. This explicit clear closes the gap.
+            // Matches the create branch which gets null directly via
+            // mapToFilamentPayload.
+            if (payload.color === null && existing.color === "#808080") {
+              conditionalSet.color = null;
+            }
           }
           if (conditionalDefaults.transmissionDistance != null && existing.transmissionDistance == null)
             conditionalSet.transmissionDistance = conditionalDefaults.transmissionDistance;
