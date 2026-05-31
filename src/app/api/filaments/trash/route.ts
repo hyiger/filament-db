@@ -24,8 +24,11 @@ export async function GET() {
     })
       // GH #477: secondaryColors so the trash row's swatch can render
       // coextruded filaments faithfully — without it a trashed row with
-      // color: null would have no color data at all on the wire.
-      .select("name vendor type color secondaryColors cost _deletedAt parentId")
+      // color: null would have no color data at all on the wire. optTags
+      // rides along so <FilamentSwatch> can derive the arrangement
+      // (coextruded → stripes vs gradient → smooth) instead of falling
+      // back to a single solid dot.
+      .select("name vendor type color secondaryColors optTags cost _deletedAt parentId")
       .sort({ _deletedAt: -1 })
       .lean();
     return NextResponse.json(trashed);

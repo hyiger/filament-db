@@ -550,6 +550,13 @@
                         "maxItems": 5,
                         "description": "Up to 5 additional color slots, mirroring Filament.secondaryColors."
                       },
+                      "optTags": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer"
+                        },
+                        "description": "OpenPrintTag tag IDs. Includes the color-arrangement tags (28 = gradual_color_change, 29 = coextruded) so client swatches can render stripes vs gradient vs solid for trashed multi-color filaments."
+                      },
                       "cost": {
                         "type": "number",
                         "nullable": true
