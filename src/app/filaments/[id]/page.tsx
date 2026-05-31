@@ -10,6 +10,7 @@ import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useCurrency } from "@/hooks/useCurrency";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
+import PrintLabelDialog from "@/components/PrintLabelDialog";
 import CopyButton from "@/components/CopyButton";
 import FilamentSwatch from "@/components/FilamentSwatch";
 import FinishChip from "@/components/FinishChip";
@@ -157,6 +158,11 @@ function FilamentDetail() {
   const exportMenuRef = useRef<HTMLDetailsElement>(null);
   const syncMenuRef = useRef<HTMLDetailsElement>(null);
   const variantsMenuRef = useRef<HTMLDetailsElement>(null);
+
+  // PrintLabelDialog open state. Controlled here so the dialog mounts
+  // alongside the rest of the filament detail tree and can read the
+  // resolved filament directly.
+  const [printLabelOpen, setPrintLabelOpen] = useState(false);
 
   // "Sync from Bambu Studio" file input + in-flight flag. Pinned to this
   // filament's id (POST /api/filaments/{id}/bambustudio) so the user is
@@ -841,13 +847,15 @@ function FilamentDetail() {
               </svg>
             </summary>
             <div className="absolute right-0 z-20 mt-1 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg py-1">
-              {/* Label printer — opens the print dialog. Wired in a
-                  follow-up commit; for now it surfaces a "coming soon"
-                  toast so the menu structure is reviewable. */}
+              {/* Label printer — opens the PrintLabelDialog. On
+                  Electron (commit 5) this will send the encoded byte
+                  stream over IPC to the serial-port writer; on web (and
+                  Electron pre-commit-5) it falls back to downloading
+                  the .bin file so the simulator can decode it. */}
               <button
                 type="button"
                 onClick={() => {
-                  toast(t("detail.printLabel.comingSoon"), "info");
+                  setPrintLabelOpen(true);
                   exportMenuRef.current?.removeAttribute("open");
                 }}
                 className="w-full text-left px-3 py-1.5 text-sm text-gray-800 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
@@ -1705,6 +1713,15 @@ function FilamentDetail() {
           }}
         />
       )}
+      <PrintLabelDialog
+        open={printLabelOpen}
+        onClose={() => setPrintLabelOpen(false)}
+        filament={{
+          _id: filament._id,
+          name: filament.name,
+          instanceId: filament.instanceId ?? null,
+        }}
+      />
     </main>
   );
 }

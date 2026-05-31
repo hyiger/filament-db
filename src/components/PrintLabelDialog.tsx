@@ -1,0 +1,378 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "@/i18n/TranslationProvider";
+import { useToast } from "@/components/Toast";
+import { useIsElectron } from "@/hooks/useIsElectron";
+import {
+  renderLabelBitmap,
+  renderLabelPreviewDataUrl,
+} from "@/lib/labelBitmap";
+import { encodeLabel, packGrayscaleBitmap } from "@/lib/labelEncoder";
+
+/**
+ * Print-label dialog for the filament detail page.
+ *
+ * Two QR payload modes the user can pick between per print:
+ *   - "instanceId" — the 5-byte hex spool / filament identifier.
+ *     Tiny payload (≤ 16 chars), produces a compact dense QR.
+ *   - "url" — a deep link to the filament's detail page on the user's
+ *     own instance. ~55 chars; needs a larger QR.
+ *
+ * The choice persists in localStorage so the same mode is the default
+ * next time the user opens the dialog.
+ *
+ * Print delivery:
+ *   - **Web (no Electron)**: downloads the encoded .bin file. Useful
+ *     for "I want to inspect what would be sent" + a forward-compat
+ *     escape hatch for non-Electron deployments.
+ *   - **Electron** (commit 5): sends the bytes over IPC to the
+ *     serial-port writer in the main process. Until that commit lands,
+ *     Electron uses the same .bin-download path.
+ */
+
+const LAST_QR_MODE_KEY = "filamentdb.printLabel.qrMode";
+
+type QrMode = "instanceId" | "url";
+
+export interface PrintLabelDialogProps {
+  open: boolean;
+  onClose: () => void;
+  filament: {
+    _id: string;
+    name: string;
+    instanceId?: string | null;
+  };
+}
+
+export default function PrintLabelDialog({
+  open,
+  onClose,
+  filament,
+}: PrintLabelDialogProps) {
+  const { t } = useTranslation();
+  const { toast } = useToast();
+  const isElectron = useIsElectron();
+
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Default to the user's last choice; fall back to instanceId mode if
+  // the filament has one available, otherwise URL (the QR will always
+  // resolve to *something* the user can scan).
+  const [qrMode, setQrMode] = useState<QrMode>(() => {
+    if (typeof window === "undefined") return "instanceId";
+    const stored = localStorage.getItem(LAST_QR_MODE_KEY);
+    if (stored === "instanceId" || stored === "url") return stored;
+    return filament.instanceId ? "instanceId" : "url";
+  });
+
+  // Derive the *effective* mode at render time — if the user picked
+  // instanceId but this filament doesn't have one, fall through to URL
+  // without a re-render round-trip. (An effect that called setQrMode
+  // would trigger react-hooks/set-state-in-effect and cascade.)
+  const effectiveQrMode: QrMode =
+    qrMode === "instanceId" && !filament.instanceId ? "url" : qrMode;
+
+  // Persist the mode the user explicitly chose (not the fall-through),
+  // so toggling back to a filament that has an instanceId restores
+  // their preference.
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem(LAST_QR_MODE_KEY, qrMode);
+    }
+  }, [qrMode]);
+
+  /* --- QR payload derivation --- */
+  // The deep link points at the same origin the renderer is running on
+  // so a self-hosted instance prints its own URL, an Atlas user's
+  // instance prints theirs, etc. — no hardcoded brand domain.
+  const deepLinkUrl = useMemo(() => {
+    if (typeof window === "undefined") return "";
+    return `${window.location.origin}/filaments/${filament._id}`;
+  }, [filament._id]);
+
+  const qrPayload = effectiveQrMode === "instanceId" ? filament.instanceId ?? "" : deepLinkUrl;
+
+  /* --- live preview --- */
+  // Combined state for the preview keeps the effect down to a single
+  // setState call (per the project's react-hooks/set-state-in-effect
+  // rule, see CLAUDE.md). The cancelled flag lets a stale resolve drop
+  // its result when the user flips qrMode while a render is in flight.
+  type PreviewState =
+    | { status: "idle" }
+    | { status: "rendering" }
+    | { status: "ready"; dataUrl: string }
+    | { status: "error"; message: string };
+  const [preview, setPreview] = useState<PreviewState>({ status: "idle" });
+
+  useEffect(() => {
+    if (!open || !qrPayload) {
+      // Intentional synchronous state reset when the dialog closes or
+      // the payload becomes empty — the effect is the right driver here
+      // because the outputs depend on `open` / `qrPayload`. Matches the
+      // project's existing exceptions for data-fetching effects.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPreview({ status: "idle" });
+      return;
+    }
+    let cancelled = false;
+    setPreview({ status: "rendering" });
+    renderLabelPreviewDataUrl({
+      filamentName: filament.name,
+      qrPayload,
+    })
+      .then(({ dataUrl }) => {
+        if (!cancelled) setPreview({ status: "ready", dataUrl });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setPreview({
+            status: "error",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, qrPayload, filament.name]);
+
+  /* --- print / download handler --- */
+  const [printing, setPrinting] = useState(false);
+  const handlePrint = useCallback(async () => {
+    setPrinting(true);
+    try {
+      const { grayscale, rasterLines } = await renderLabelBitmap({
+        filamentName: filament.name,
+        qrPayload,
+      });
+      const packed = packGrayscaleBitmap(grayscale, rasterLines);
+      const bytes = encodeLabel({
+        bitmap: packed,
+        rasterLines,
+        tapeWidthMm: 24,
+      });
+
+      // Commit 5 will swap this branch for an IPC call to the Electron
+      // main process when running in Electron. For now both paths
+      // download the .bin file so the dialog is reviewable + the
+      // simulator can decode the output.
+      const filename = `${filament.name.replace(/[^a-z0-9]+/gi, "_")}_label.bin`;
+      const blob = new Blob([bytes as BlobPart], { type: "application/octet-stream" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast(
+        isElectron
+          ? t("printLabel.downloadedElectronStub", { filename })
+          : t("printLabel.downloadedWeb", { filename }),
+        "success",
+      );
+      onClose();
+    } catch (err) {
+      toast(
+        t("printLabel.printFailed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+        "error",
+      );
+    } finally {
+      setPrinting(false);
+    }
+  }, [filament.name, qrPayload, isElectron, toast, t, onClose]);
+
+  /* --- escape + outside click --- */
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open || !dialogRef.current) return;
+    const prev = document.activeElement as HTMLElement | null;
+    dialogRef.current.focus();
+    return () => {
+      if (prev && document.contains(prev)) prev.focus?.();
+    };
+  }, [open]);
+
+  if (!open) return null;
+
+  const instanceIdDisabled = !filament.instanceId;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="print-label-dialog-title"
+    >
+      <div
+        ref={dialogRef}
+        tabIndex={-1}
+        className="bg-white dark:bg-gray-900 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto outline-none"
+      >
+        <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h2
+            id="print-label-dialog-title"
+            className="text-lg font-semibold text-gray-900 dark:text-gray-100"
+          >
+            {t("printLabel.title")}
+          </h2>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+            {t("printLabel.subtitle", { name: filament.name })}
+          </p>
+        </div>
+
+        <div className="px-6 py-4 space-y-4">
+          {/* QR payload mode */}
+          <fieldset>
+            <legend className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              {t("printLabel.qrMode")}
+            </legend>
+            <div className="space-y-2">
+              <label
+                className={`flex items-start gap-2 p-3 border rounded cursor-pointer ${
+                  effectiveQrMode === "instanceId"
+                    ? "border-blue-500 bg-blue-50 dark:bg-blue-950/40"
+                    : "border-gray-200 dark:border-gray-700"
+                } ${instanceIdDisabled ? "opacity-50 cursor-not-allowed" : ""}`}
+              >
+                <input
+                  type="radio"
+                  name="qrMode"
+                  value="instanceId"
+                  checked={effectiveQrMode === "instanceId"}
+                  onChange={() => setQrMode("instanceId")}
+                  disabled={instanceIdDisabled}
+                  className="mt-0.5"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                    {t("printLabel.qrMode.instanceId")}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    {instanceIdDisabled
+                      ? t("printLabel.qrMode.instanceId.unavailable")
+                      : t("printLabel.qrMode.instanceId.help")}
+                  </p>
+                  {filament.instanceId && (
+                    <code className="text-xs text-gray-700 dark:text-gray-300 font-mono mt-1 block break-all">
+                      {filament.instanceId}
+                    </code>
+                  )}
+                </div>
+              </label>
+              <label
+                className={`flex items-start gap-2 p-3 border rounded cursor-pointer ${
+                  effectiveQrMode === "url"
+                    ? "border-blue-500 bg-blue-50 dark:bg-blue-950/40"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="qrMode"
+                  value="url"
+                  checked={effectiveQrMode === "url"}
+                  onChange={() => setQrMode("url")}
+                  className="mt-0.5"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                    {t("printLabel.qrMode.url")}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                    {t("printLabel.qrMode.url.help")}
+                  </p>
+                  <code className="text-xs text-gray-700 dark:text-gray-300 font-mono mt-1 block break-all">
+                    {deepLinkUrl}
+                  </code>
+                </div>
+              </label>
+            </div>
+          </fieldset>
+
+          {/* Preview */}
+          <div>
+            <p className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              {t("printLabel.preview")}
+            </p>
+            <div className="border border-gray-200 dark:border-gray-700 rounded p-4 bg-gray-50 dark:bg-gray-800 overflow-x-auto">
+              {preview.status === "error" ? (
+                <p className="text-sm text-red-600 dark:text-red-400">
+                  {t("printLabel.preview.error", { error: preview.message })}
+                </p>
+              ) : preview.status === "ready" ? (
+                // next/image is the wrong tool here — the preview is a
+                // dynamically-rendered data URL with pixelated rendering
+                // (we want to see the actual print dots). The Next image
+                // optimiser would smooth them out. Plain <img> is correct;
+                // suppress the lint warning rather than work around it.
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={preview.dataUrl}
+                  alt={t("printLabel.preview.alt")}
+                  className="block"
+                  // Render at native dot density so the preview matches
+                  // print output 1:1. CSS doubles it for legibility on
+                  // hi-DPI screens.
+                  style={{
+                    height: 128,
+                    width: "auto",
+                    imageRendering: "pixelated",
+                  }}
+                />
+              ) : (
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  {t("printLabel.preview.rendering")}
+                </p>
+              )}
+            </div>
+            {/* Notice for web users — Electron-specific path lands in
+                commit 5. Keeps expectations honest before plugging in
+                the printer. */}
+            {!isElectron ? (
+              <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">
+                {t("printLabel.webOnlyNotice")}
+              </p>
+            ) : (
+              <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">
+                {t("printLabel.electronStubNotice")}
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={printing}
+            className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 rounded"
+          >
+            {t("common.cancel")}
+          </button>
+          <button
+            type="button"
+            onClick={handlePrint}
+            disabled={printing || !qrPayload || preview.status !== "ready"}
+            className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {printing ? t("printLabel.printing") : t("printLabel.print")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
