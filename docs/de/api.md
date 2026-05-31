@@ -59,6 +59,7 @@ Liefert ein Array projizierter Filament-Zusammenfassungen (nicht die vollständi
   "vendor": "Prusament",
   "type": "PLA",
   "color": "#1a1a2e",
+  "secondaryColors": [],
   "cost": 35,
   "density": 1.24,
   "parentId": null,
@@ -78,6 +79,7 @@ Liefert ein Array projizierter Filament-Zusammenfassungen (nicht die vollständi
 - `hasCalibrations` ist `true`, wenn das Filament mindestens eine Kalibrierung besitzt, **oder** wenn es eine Variante ist, deren Elternfilament mindestens eine hat (per Aggregation `$lookup`). Der Schnellfilter „Fehlende Kalibrierung" auf der Listenseite liest dieses Feld — Varianten, die vom Elternfilament erben, werden korrekt als kalibriert gezählt.
 - `tdsUrl` ist enthalten, damit die vendor-gestützten TDS-Vorschläge im `FilamentForm` weiterhin funktionieren.
 - `spools[].label` ist enthalten, damit der AMS-Slot-Picker im `PrinterForm` `s.label || s._id.slice(-4)` rendern kann.
+- `color` ist **nullable** — coextrudierte mehrfarbige Filamente lassen es null und tragen ihre Farben in `secondaryColors`. `secondaryColors` ist ein geordnetes Array von bis zu 5 `#RRGGBB`-Hex-Codes, das die `secondary_color_0..4`-Schlüssel der OpenPrintTag-Spezifikation (Spec-Schlüssel 20–24) spiegelt. Varianten erben `secondaryColors` nach dem Array-Fallback-Schema: Eine Variante deklariert entweder ihr eigenes nicht-leeres Array oder erbt das vollständige Array des Eltern-Filaments (dasselbe Muster wie `optTags` / `bedTypeTemps`). Slicer-Exporte (PrusaSlicer / OrcaSlicer / Bambu Studio) verwerfen Sekundärfarben stillschweigend — Slicer-Voreinstellungen sind einfarbige Formate.
 
 Für das vollständige Dokument (Kalibrierungs-Array, Presets, Settings, vollständige Spulen-Subdokumente) rufe `GET /api/filaments/:id` auf.
 

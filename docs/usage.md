@@ -68,6 +68,49 @@ The trash page also has an **Empty trash** action that permanently deletes every
 
 ---
 
+## Multi-Color Filaments *(v1.33)*
+
+Some filaments carry more than one color in a single strand — tri-color silks (coextruded), gradient/rainbow rolls (gradual color change), and dual-tone materials. Filament DB models these natively, mirroring the OpenPrintTag spec.
+
+### Editing colors
+
+Open a filament and scroll to the **Colors** section of the form. Each filament has:
+
+- **Arrangement** — one of:
+  - **Solid** — a single color (the default for most filaments)
+  - **Coextruded** — multiple colors sit side-by-side across the strand (constant along the length)
+  - **Gradient** — color changes along the length as filament feeds (color-change / rainbow)
+- **Primary color** — the single main color. May be left blank for coextruded filaments where no one slot is "the" primary.
+- **Secondary colors (0–5)** — up to five additional color slots, in display order. Use the **+ Add color** / × buttons to add and remove slots.
+
+A live preview swatch beside the editor shows what the filament will render as in the list — stripes for coextruded, smooth gradient for gradient, plain fill for solid. Picking "Coextruded" automatically clears the primary so the secondary slots define the entire stripe set; switching back to "Solid" or "Gradient" restores a primary slot.
+
+### Display rules
+
+- **List and detail swatches** render the full color arrangement. Filaments with at least one secondary color also show a small color-count badge.
+- **Variants** inherit `secondaryColors` from their parent the same way they inherit other array fields (`optTags`, `bedTypeTemps`) — a variant either declares its own non-empty array, or inherits the parent's entire array. Setting a variant's array to empty `[]` does NOT clear; it falls through to the parent. To override and show as single-color, give it at least one secondary slot or a different `optTags` arrangement.
+
+### NFC and OpenPrintTag
+
+Filament DB's NFC reader/writer encodes the full color arrangement to OpenPrintTag fields (`primary_color`, `secondary_color_0..4`, and the `coextruded` / `gradual_color_change` tags). When you scan a multi-color OpenPrintTag tag, the form prefills every slot in the right order. Bambu's MIFARE tag format only carries a single color, so reading a Bambu tag populates the primary only.
+
+### Slicer export caveat
+
+PrusaSlicer, OrcaSlicer, and Bambu Studio presets are single-color formats — there's no key for multiple colors. When you export a multi-color filament to a slicer preset:
+
+- The **primary color** is exported.
+- If the primary is blank (coextruded), the **first secondary color** is exported in its place.
+- If both are blank (a freshly-created coextruded filament with no secondaries yet), `filament_colour` is omitted entirely and the slicer uses its own default — Filament DB will not invent a color you didn't pick.
+- **Secondary colors beyond the primary are silently dropped.**
+
+The "Export for slicer" disclosure on a multi-color filament's detail page shows an amber notice making this trade-off explicit before download.
+
+### CSV import/export
+
+The filament CSV export includes a **Secondary Colors** column with comma-separated hex codes (e.g. `#FF0000,#00FF00,#0000FF`). The importer recognises the same column on re-import: it parses up to 5 hex codes, drops malformed entries, and preserves a null primary when the row's `Color` cell is empty and `Secondary Colors` is populated (coextruded round-trip).
+
+---
+
 ## Bulk Import / Export
 
 Two ways to reach the bulk-data actions:

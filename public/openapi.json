@@ -5449,7 +5449,19 @@
           },
           "color": {
             "type": "string",
-            "example": "#1a1a2e"
+            "nullable": true,
+            "example": "#1a1a2e",
+            "description": "Primary color as a hex string. May be null for coextruded multi-color filaments where no single slot is the primary — see secondaryColors. The alpha byte from the OpenPrintTag spec is not stored (translucency is modelled via finish optTags instead)."
+          },
+          "secondaryColors": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}$"
+            },
+            "maxItems": 5,
+            "description": "Up to 5 additional color slots in display order, mirroring OpenPrintTag's secondary_color_0..4 keys. Coextruded filaments leave the primary null and put all colors here; gradient filaments put their stops here in feed order. Slicer-bound exports (PrusaSlicer/OrcaSlicer/Bambu Studio) drop these silently — slicer presets are single-color and the UI surfaces a notice on the export menu.",
+            "example": ["#FF0000", "#00FF00", "#0000FF"]
           },
           "cost": {
             "type": "number",

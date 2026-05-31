@@ -60,6 +60,7 @@ Returns an array of projected filament summaries (not the full documents — hea
   "vendor": "Prusament",
   "type": "PLA",
   "color": "#1a1a2e",
+  "secondaryColors": [],
   "cost": 35,
   "density": 1.24,
   "parentId": null,
@@ -79,6 +80,7 @@ Returns an array of projected filament summaries (not the full documents — hea
 - `hasCalibrations` is `true` when the filament has at least one calibration, **or** when it's a variant whose parent has at least one (via aggregation `$lookup`). The "Missing calibration" quick filter on the list page reads this — variants that inherit from a parent are correctly counted as calibrated.
 - `tdsUrl` is included so `FilamentForm`'s vendor-keyed TDS suggestions still work.
 - `spools[].label` is included so `PrinterForm`'s AMS slot picker can render `s.label || s._id.slice(-4)`.
+- `color` is **nullable** — coextruded multi-color filaments leave it null and put their colors in `secondaryColors`. `secondaryColors` is an ordered array of up to 5 `#RRGGBB` hex codes that mirrors OpenPrintTag's `secondary_color_0..4` keys (spec keys 20–24). Variants inherit `secondaryColors` array-fallback style: a variant either declares its own non-empty array or inherits the parent's entire array (same pattern as `optTags` / `bedTypeTemps`). Slicer-bound exports (PrusaSlicer / OrcaSlicer / Bambu Studio) drop secondaries silently — slicer presets are single-color formats.
 
 For the full document (calibrations array, presets, settings, full spool subdocs), call `GET /api/filaments/:id`.
 

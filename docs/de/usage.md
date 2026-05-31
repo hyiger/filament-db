@@ -70,6 +70,49 @@ Die Papierkorb-Seite hat zusätzlich eine **Papierkorb leeren**-Aktion, die alle
 
 ---
 
+## Mehrfarbige Filamente *(v1.33)*
+
+Manche Filamente tragen mehr als eine Farbe in einem einzigen Strang — dreifarbige Silks (coextrudiert), Verlauf-/Rainbow-Rollen (allmählicher Farbwechsel) und zweifarbige Materialien. Filament DB modelliert das nativ und folgt dabei der OpenPrintTag-Spezifikation.
+
+### Farben bearbeiten
+
+Öffne ein Filament und scrolle zum Abschnitt **Farben** im Formular. Jedes Filament hat:
+
+- **Anordnung** — eine der folgenden:
+  - **Solid** — eine einzige Farbe (Standard für die meisten Filamente)
+  - **Coextrudiert** — mehrere Farben liegen nebeneinander quer zum Strang (konstant entlang der Länge)
+  - **Verlauf** — die Farbe wechselt entlang der Länge beim Vorschub (Color-Change / Rainbow)
+- **Primärfarbe** — die einzige Hauptfarbe. Kann bei coextrudierten Filamenten leer bleiben, wenn kein Slot „die" Primärfarbe ist.
+- **Sekundärfarben (0–5)** — bis zu fünf zusätzliche Farb-Slots in Anzeigereihenfolge. Verwende die **+ Farbe hinzufügen** / × Buttons zum Hinzufügen und Entfernen.
+
+Eine Live-Vorschau neben dem Editor zeigt, wie das Filament in der Liste gerendert wird — Streifen für coextrudiert, weicher Verlauf für gradient, einfache Füllung für solid. Die Auswahl „Coextrudiert" leert automatisch die Primärfarbe, damit die Sekundär-Slots das gesamte Streifenmuster definieren; ein Wechsel zurück zu „Solid" oder „Verlauf" stellt einen Primärfarb-Slot wieder her.
+
+### Anzeige-Regeln
+
+- **List- und Detail-Swatches** rendern die vollständige Farbanordnung. Filamente mit mindestens einer Sekundärfarbe zeigen zusätzlich ein kleines Farbanzahl-Badge.
+- **Varianten** erben `secondaryColors` vom übergeordneten Filament nach demselben Schema wie andere Array-Felder (`optTags`, `bedTypeTemps`) — eine Variante deklariert entweder ihr eigenes nicht-leeres Array oder erbt das vollständige Array des Eltern-Filaments. Eine Variante auf `[]` zu setzen löscht NICHT, sondern fällt auf das Eltern-Filament zurück. Für einfarbige Darstellung muss mindestens ein Sekundär-Slot gesetzt oder eine andere `optTags`-Anordnung gewählt werden.
+
+### NFC und OpenPrintTag
+
+Filament DBs NFC-Reader/Writer kodiert die vollständige Farbanordnung in OpenPrintTag-Felder (`primary_color`, `secondary_color_0..4` und die Tags `coextruded` / `gradual_color_change`). Beim Scannen eines mehrfarbigen OpenPrintTag-Tags füllt das Formular jeden Slot in der richtigen Reihenfolge vor. Bambus MIFARE-Tag-Format trägt nur eine einzige Farbe, daher füllt das Lesen eines Bambu-Tags nur die Primärfarbe.
+
+### Slicer-Export-Hinweis
+
+PrusaSlicer, OrcaSlicer und Bambu Studio-Voreinstellungen sind einfarbige Formate — es gibt keinen Schlüssel für mehrere Farben. Beim Export eines mehrfarbigen Filaments als Slicer-Voreinstellung:
+
+- Die **Primärfarbe** wird exportiert.
+- Wenn die Primärfarbe leer ist (coextrudiert), wird die **erste Sekundärfarbe** an deren Stelle exportiert.
+- Wenn beide leer sind (ein frisch erstelltes coextrudiertes Filament ohne Sekundärfarben), wird `filament_colour` komplett weggelassen und der Slicer verwendet seine eigene Standardfarbe — Filament DB erfindet keine Farbe, die du nicht gewählt hast.
+- **Sekundärfarben jenseits der Primärfarbe werden stillschweigend verworfen.**
+
+Das „Für Slicer exportieren"-Aufklappmenü auf der Detailseite eines mehrfarbigen Filaments zeigt einen bernsteinfarbenen Hinweis, der diesen Kompromiss vor dem Download explizit macht.
+
+### CSV-Import/-Export
+
+Der Filament-CSV-Export enthält eine Spalte **Secondary Colors** mit kommagetrennten Hex-Codes (z. B. `#FF0000,#00FF00,#0000FF`). Der Importer erkennt dieselbe Spalte beim Re-Import: Er parst bis zu 5 Hex-Codes, verwirft fehlerhafte Einträge und bewahrt eine leere Primärfarbe, wenn die Zelle `Color` der Zeile leer ist und `Secondary Colors` befüllt ist (coextruded Round-Trip).
+
+---
+
 ## Bulk-Import / -Export
 
 Zwei Wege zu den Bulk-Daten-Aktionen:
