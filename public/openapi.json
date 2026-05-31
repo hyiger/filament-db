@@ -232,11 +232,29 @@
                                 "type": "string"
                               },
                               "color": {
-                                "type": "string"
+                                "type": "string",
+                                "nullable": true,
+                                "description": "Primary color hex. May be null for coextruded variants — colors are then in secondaryColors."
+                              },
+                              "secondaryColors": {
+                                "type": "array",
+                                "items": {
+                                  "type": "string",
+                                  "pattern": "^#[0-9A-Fa-f]{6}$"
+                                },
+                                "maxItems": 5,
+                                "description": "Up to 5 additional color slots in display order, mirroring the top-level Filament.secondaryColors. Inherits from parent when the variant declares no own array."
                               },
                               "cost": {
                                 "type": "number",
                                 "nullable": true
+                              },
+                              "optTags": {
+                                "type": "array",
+                                "items": {
+                                  "type": "integer"
+                                },
+                                "description": "OpenPrintTag tag IDs. Includes the color-arrangement tags (28 = gradual_color_change, 29 = coextruded) so client chips can render the right swatch shape."
                               }
                             }
                           }
