@@ -10,6 +10,7 @@ import { LOCALES } from "@/i18n";
 import { useTheme, type ThemePreference } from "@/components/ThemeProvider";
 import { useIsElectron } from "@/hooks/useIsElectron";
 import { useNfcContext } from "@/components/NfcProvider";
+import LabelPrinterSettings from "@/components/LabelPrinterSettings";
 
 export default function SettingsPage() {
   const { t, locale, setLocale } = useTranslation();
@@ -1026,6 +1027,12 @@ export default function SettingsPage() {
             {deleteResult.message}
           </div>
         )}
+      </div>
+
+      {/* Brother PT-P710BT label printer device picker. Self-gates on
+          isElectron so it disappears entirely in web mode. */}
+      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
+        <LabelPrinterSettings />
       </div>
 
       <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">

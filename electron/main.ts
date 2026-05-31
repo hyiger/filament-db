@@ -5,6 +5,7 @@ import { execFile } from "child_process";
 import Store from "electron-store";
 import http from "http";
 import { NfcService } from "./nfc-service";
+import { listLabelPrinters, printLabel as printLabelToDevice } from "./label-printer";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
 import { initAutoUpdater } from "./auto-updater";
@@ -562,11 +563,11 @@ const MAX_NFC_PAYLOAD_BYTES = 4096;
  * operations should report progress through their own status channel
  * instead.
  */
-function withIpcTimeout<T>(fn: () => Promise<T>, label: string): Promise<T> {
+function withIpcTimeout<T>(fn: () => Promise<T>, label: string, timeoutMs: number = IPC_TIMEOUT_MS): Promise<T> {
   return Promise.race([
     fn(),
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`IPC timeout: ${label} took longer than ${IPC_TIMEOUT_MS}ms`)), IPC_TIMEOUT_MS)
+      setTimeout(() => reject(new Error(`IPC timeout: ${label} took longer than ${timeoutMs}ms`)), timeoutMs)
     ),
   ]);
 }
@@ -974,6 +975,71 @@ ipcMain.handle("nfc-format-tag", async (event) => {
   if (!nfcService) throw new Error("NFC not initialized");
   await withIpcTimeout(() => nfcService!.formatTag(), "nfc-format-tag");
   return { success: true };
+});
+
+// ── Label printer (Brother PT-P710BT) ──
+// Transport-only; the byte stream is built in the renderer via
+// src/lib/labelEncoder.ts + labelBitmap.ts. Main owns serialport
+// because the renderer can't open native handles.
+
+ipcMain.handle("label-printer-list-devices", async (event) => {
+  assertTrustedSender(event, "label-printer-list-devices");
+  return await withIpcTimeout(
+    () => listLabelPrinters(),
+    "label-printer-list-devices",
+  );
+});
+
+ipcMain.handle("label-printer-get-device-path", (event) => {
+  assertTrustedSender(event, "label-printer-get-device-path");
+  // The picker's chosen device path lives in the same electron-store
+  // the rest of the app uses — see the get-config handler above. Kept
+  // as a separate handler so the renderer doesn't have to read the
+  // whole config object just to render the Print Label dialog.
+  return (store as Store<Record<string, unknown>>).get("labelPrinterDevicePath", null);
+});
+
+ipcMain.handle("label-printer-set-device-path", (event, devicePath: string | null) => {
+  assertTrustedSender(event, "label-printer-set-device-path");
+  if (devicePath != null && typeof devicePath !== "string") {
+    throw new Error("devicePath must be a string or null");
+  }
+  if (devicePath == null) {
+    (store as Store<Record<string, unknown>>).delete("labelPrinterDevicePath");
+  } else {
+    (store as Store<Record<string, unknown>>).set("labelPrinterDevicePath", devicePath);
+  }
+  return { ok: true };
+});
+
+ipcMain.handle("label-printer-print", async (event, bytes: number[]) => {
+  assertTrustedSender(event, "label-printer-print");
+  // Validate the payload from the renderer up front — bad inputs here
+  // would otherwise hang inside SerialPort.write.
+  if (!Array.isArray(bytes) || bytes.length === 0) {
+    throw new Error("bytes must be a non-empty array");
+  }
+  if (bytes.length > 5_000_000) {
+    // Safety cap. A maxed-out 24mm × 200mm label is ~270 KB, so 5 MB
+    // is well past any legitimate single-label print and ensures a
+    // misbehaving renderer can't lock the printer indefinitely.
+    throw new Error(`bytes array too large (${bytes.length} bytes)`);
+  }
+  const devicePath = (store as Store<Record<string, unknown>>).get(
+    "labelPrinterDevicePath",
+    null,
+  ) as string | null;
+  if (!devicePath) {
+    throw new Error(
+      "No label printer device path configured. Open Settings → Label Printer.",
+    );
+  }
+  await withIpcTimeout(
+    () => printLabelToDevice(devicePath, new Uint8Array(bytes)),
+    "label-printer-print",
+    30_000, // give long labels + slow Bluetooth a generous window
+  );
+  return { ok: true };
 });
 
 // ── App lifecycle ──

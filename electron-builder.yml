@@ -33,6 +33,12 @@ files:
   - package.json
   - node_modules/nfc-pcsc/**/*
   - node_modules/@pokusew/pcsclite/**/*
+  # serialport + its native binding for the Brother PT-P710BT label
+  # printer (electron/label-printer.ts). @serialport/bindings-cpp ships
+  # prebuilds for every Electron-supported platform; electron-rebuild
+  # confirms or rebuilds the matching .node before packaging.
+  - node_modules/serialport/**/*
+  - node_modules/@serialport/**/*
   - node_modules/mongodb/**/*
   - node_modules/bson/**/*
   - node_modules/mongodb-connection-string-url/**/*

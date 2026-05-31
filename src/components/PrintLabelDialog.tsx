@@ -56,6 +56,26 @@ export default function PrintLabelDialog({
 
   const dialogRef = useRef<HTMLDivElement>(null);
 
+  // Whether the user has picked a printer in Settings. Loaded lazily
+  // on dialog open so the renderer doesn't poll IPC on every page load.
+  // null = "haven't asked yet", string = path, "" = explicitly unset.
+  const [configuredDevice, setConfiguredDevice] = useState<string | null | undefined>(undefined);
+  useEffect(() => {
+    if (!open || !isElectron || !window.electronAPI?.labelPrinterGetDevicePath) return;
+    let cancelled = false;
+    window.electronAPI
+      .labelPrinterGetDevicePath()
+      .then((path) => {
+        if (!cancelled) setConfiguredDevice(path);
+      })
+      .catch(() => {
+        if (!cancelled) setConfiguredDevice(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, isElectron]);
+
   // Default to the user's last choice; fall back to instanceId mode if
   // the filament has one available, otherwise URL (the QR will always
   // resolve to *something* the user can scan).
@@ -137,7 +157,16 @@ export default function PrintLabelDialog({
     };
   }, [open, qrPayload, filament.name]);
 
-  /* --- print / download handler --- */
+  /* --- print / download handler ---
+   *
+   * Electron path: render bitmap → encode → send bytes over IPC to the
+   * serial-port writer in the main process. The renderer never touches
+   * `serialport` directly (native module, can't run in Chromium).
+   *
+   * Web path: render → encode → download .bin file so the simulator
+   * script can decode it. Useful for development without a printer and
+   * as a forward-compat escape hatch for users who run filament-db
+   * web-only and want to inspect the byte stream. */
   const [printing, setPrinting] = useState(false);
   const handlePrint = useCallback(async () => {
     setPrinting(true);
@@ -153,10 +182,29 @@ export default function PrintLabelDialog({
         tapeWidthMm: 24,
       });
 
-      // Commit 5 will swap this branch for an IPC call to the Electron
-      // main process when running in Electron. For now both paths
-      // download the .bin file so the dialog is reviewable + the
-      // simulator can decode the output.
+      if (isElectron && window.electronAPI?.labelPrinterPrint) {
+        // Uint8Array doesn't structured-clone cleanly across the IPC
+        // boundary in all Electron versions; passing as a plain number[]
+        // sidesteps any serialization quirks at the cost of a single
+        // O(n) marshal (the encoder caps total bytes at ~270 KB so this
+        // is cheap in absolute terms).
+        try {
+          await window.electronAPI.labelPrinterPrint(Array.from(bytes));
+          toast(t("printLabel.printedSuccess"), "success");
+          onClose();
+          return;
+        } catch (err) {
+          // Surface the failure but stay in the dialog so the user can
+          // open Settings and reconfigure the device path without losing
+          // their QR-mode selection.
+          const msg = err instanceof Error ? err.message : String(err);
+          toast(t("printLabel.printFailed", { error: msg }), "error");
+          return;
+        }
+      }
+
+      // Web fallback (or Electron with no electronAPI surface — unlikely
+      // but defensive). Downloads the .bin file for offline inspection.
       const filename = `${filament.name.replace(/[^a-z0-9]+/gi, "_")}_label.bin`;
       const blob = new Blob([bytes as BlobPart], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
@@ -165,12 +213,7 @@ export default function PrintLabelDialog({
       a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
-      toast(
-        isElectron
-          ? t("printLabel.downloadedElectronStub", { filename })
-          : t("printLabel.downloadedWeb", { filename }),
-        "success",
-      );
+      toast(t("printLabel.downloadedWeb", { filename }), "success");
       onClose();
     } catch (err) {
       toast(
@@ -339,16 +382,22 @@ export default function PrintLabelDialog({
                 </p>
               )}
             </div>
-            {/* Notice for web users — Electron-specific path lands in
-                commit 5. Keeps expectations honest before plugging in
-                the printer. */}
+            {/* Mode-aware notice. Web: tell users they're getting a
+                .bin download and how to inspect it. Electron with a
+                configured device: explain the IPC path + how to change
+                it. Electron without a configured device: tell users
+                they need to pair the printer and pick it in Settings. */}
             {!isElectron ? (
               <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">
                 {t("printLabel.webOnlyNotice")}
               </p>
+            ) : configuredDevice ? (
+              <p className="text-xs text-gray-600 dark:text-gray-400 mt-2">
+                {t("printLabel.electronNoticeConfigured")}
+              </p>
             ) : (
               <p className="text-xs text-amber-700 dark:text-amber-300 mt-2">
-                {t("printLabel.electronStubNotice")}
+                {t("printLabel.electronNoticeUnconfigured")}
               </p>
             )}
           </div>

@@ -1,0 +1,256 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "@/i18n/TranslationProvider";
+import { useToast } from "@/components/Toast";
+import { useIsElectron } from "@/hooks/useIsElectron";
+import type { LabelPrinterDevice } from "@/types/electron";
+import { renderLabelBitmap } from "@/lib/labelBitmap";
+import { encodeLabel, packGrayscaleBitmap } from "@/lib/labelEncoder";
+
+/**
+ * Settings panel for the Brother PT-P710BT label printer. Electron
+ * only — the device picker calls into the main process's serialport
+ * module, which has no browser counterpart.
+ *
+ * Flow:
+ *   1. User pairs the printer in System Settings → Bluetooth (PIN
+ *      "0000" or no PIN depending on firmware).
+ *   2. This panel lists every serial port the OS exposes, badging the
+ *      ones whose name/manufacturer matches a PT-series printer.
+ *   3. User picks one; we persist the device path in electron-store
+ *      via IPC. The PrintLabelDialog reads that path before every print.
+ *   4. "Test print" sends a small known-good label so the user
+ *      verifies pairing + tape feed before the real workflow.
+ *
+ * Renders nothing in web mode (the hook returns false) so this can
+ * sit unconditionally in the settings page.
+ */
+
+export default function LabelPrinterSettings() {
+  const { t } = useTranslation();
+  const { toast } = useToast();
+  const isElectron = useIsElectron();
+
+  type State =
+    | { status: "loading" }
+    | {
+        status: "ready";
+        devices: LabelPrinterDevice[];
+        selectedPath: string | null;
+      }
+    | { status: "error"; message: string };
+  const [state, setState] = useState<State>({ status: "loading" });
+  const [testing, setTesting] = useState(false);
+
+  // Memoised loader so the Refresh button can reuse it without
+  // duplicating the IPC dance.
+  const loadDevices = useCallback(async () => {
+    if (!window.electronAPI?.labelPrinterListDevices) {
+      setState({
+        status: "error",
+        message: "electronAPI.labelPrinterListDevices unavailable",
+      });
+      return;
+    }
+    setState({ status: "loading" });
+    try {
+      const [devices, selectedPath] = await Promise.all([
+        window.electronAPI.labelPrinterListDevices(),
+        window.electronAPI.labelPrinterGetDevicePath?.() ?? Promise.resolve(null),
+      ]);
+      setState({ status: "ready", devices, selectedPath });
+    } catch (err) {
+      setState({
+        status: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isElectron) return;
+    // Data-fetching effect, same pattern as the project's other
+    // settings-loaders (src/app/nozzles/page.tsx etc.); the rule fires
+    // on the indirect setState inside loadDevices.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    loadDevices();
+  }, [isElectron, loadDevices]);
+
+  const handlePick = useCallback(
+    async (path: string) => {
+      if (!window.electronAPI?.labelPrinterSetDevicePath) return;
+      try {
+        await window.electronAPI.labelPrinterSetDevicePath(path);
+        toast(t("settings.labelPrinter.deviceSaved"), "success");
+        setState((s) =>
+          s.status === "ready" ? { ...s, selectedPath: path } : s,
+        );
+      } catch (err) {
+        toast(
+          t("settings.labelPrinter.deviceSaveFailed", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+          "error",
+        );
+      }
+    },
+    [t, toast],
+  );
+
+  const handleClear = useCallback(async () => {
+    if (!window.electronAPI?.labelPrinterSetDevicePath) return;
+    try {
+      await window.electronAPI.labelPrinterSetDevicePath(null);
+      toast(t("settings.labelPrinter.deviceCleared"), "success");
+      setState((s) => (s.status === "ready" ? { ...s, selectedPath: null } : s));
+    } catch (err) {
+      toast(
+        t("settings.labelPrinter.deviceSaveFailed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+        "error",
+      );
+    }
+  }, [t, toast]);
+
+  const handleTestPrint = useCallback(async () => {
+    if (!window.electronAPI?.labelPrinterPrint) return;
+    setTesting(true);
+    try {
+      // A short canonical label that exercises every part of the
+      // pipeline (QR + text + cutter) without wasting much tape.
+      const { grayscale, rasterLines } = await renderLabelBitmap({
+        filamentName: "Filament DB ✓",
+        qrPayload: "filament-db-test",
+      });
+      const packed = packGrayscaleBitmap(grayscale, rasterLines);
+      const bytes = encodeLabel({
+        bitmap: packed,
+        rasterLines,
+        tapeWidthMm: 24,
+      });
+      await window.electronAPI.labelPrinterPrint(Array.from(bytes));
+      toast(t("settings.labelPrinter.testSuccess"), "success");
+    } catch (err) {
+      toast(
+        t("settings.labelPrinter.testFailed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+        "error",
+      );
+    } finally {
+      setTesting(false);
+    }
+  }, [t, toast]);
+
+  if (!isElectron) return null;
+
+  return (
+    <section className="mb-8">
+      <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-200 mb-1">
+        {t("settings.labelPrinter")}
+      </h2>
+      <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+        {t("settings.labelPrinter.desc")}
+      </p>
+
+      {state.status === "loading" ? (
+        <p className="text-sm text-gray-500 dark:text-gray-400">
+          {t("settings.labelPrinter.scanning")}
+        </p>
+      ) : state.status === "error" ? (
+        <div className="border border-red-300 dark:border-red-700 rounded p-3 bg-red-50 dark:bg-red-950/40">
+          <p className="text-sm text-red-700 dark:text-red-300">
+            {t("settings.labelPrinter.scanError", { error: state.message })}
+          </p>
+          <button
+            type="button"
+            onClick={loadDevices}
+            className="mt-2 text-sm text-red-700 dark:text-red-300 underline"
+          >
+            {t("settings.labelPrinter.retry")}
+          </button>
+        </div>
+      ) : state.devices.length === 0 ? (
+        <div className="border border-gray-200 dark:border-gray-700 rounded p-3 bg-gray-50 dark:bg-gray-800">
+          <p className="text-sm text-gray-700 dark:text-gray-300">
+            {t("settings.labelPrinter.noDevices")}
+          </p>
+          <button
+            type="button"
+            onClick={loadDevices}
+            className="mt-2 text-sm text-blue-600 dark:text-blue-400 hover:underline"
+          >
+            {t("settings.labelPrinter.refresh")}
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {state.devices.map((d) => {
+            const selected = state.selectedPath === d.path;
+            return (
+              <label
+                key={d.path}
+                className={`flex items-start gap-2 p-3 border rounded cursor-pointer ${
+                  selected
+                    ? "border-blue-500 bg-blue-50 dark:bg-blue-950/40"
+                    : "border-gray-200 dark:border-gray-700"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="labelPrinterDevice"
+                  checked={selected}
+                  onChange={() => handlePick(d.path)}
+                  className="mt-0.5"
+                />
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                    {d.friendlyName}
+                    {d.looksLikePrinter && (
+                      <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] uppercase tracking-wide bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 rounded">
+                        {t("settings.labelPrinter.looksLikePrinter")}
+                      </span>
+                    )}
+                  </p>
+                  <code className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                    {d.path}
+                  </code>
+                </div>
+              </label>
+            );
+          })}
+          <div className="flex flex-wrap gap-2 pt-2">
+            <button
+              type="button"
+              onClick={loadDevices}
+              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              {t("settings.labelPrinter.refresh")}
+            </button>
+            <button
+              type="button"
+              onClick={handleTestPrint}
+              disabled={!state.selectedPath || testing}
+              className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+            >
+              {testing
+                ? t("settings.labelPrinter.testing")
+                : t("settings.labelPrinter.testPrint")}
+            </button>
+            {state.selectedPath && (
+              <button
+                type="button"
+                onClick={handleClear}
+                className="px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:underline"
+              >
+                {t("settings.labelPrinter.clear")}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
