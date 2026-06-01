@@ -78,21 +78,37 @@ export async function listLabelPrinters(): Promise<LabelPrinterDevice[]> {
  * SPP/RFCOMM ignores the baud rate but the serialport API requires
  * one; 9600 is the conventional placeholder.
  */
+/** Hard ceiling on a single print operation. Bluetooth Classic SPP
+ *  writes for a typical 24mm label complete in ≤5s; 25s leaves ample
+ *  headroom for a long-label slow-flush case and stays inside the IPC
+ *  timeout (30s in electron/main.ts) so the transport's own cleanup
+ *  fires before the IPC race rejects. The Codex round 5 catch (PR #487)
+ *  was that the IPC timeout alone doesn't close the port — the
+ *  underlying operation keeps running on a stalled SerialPort handle
+ *  and the next print sees "port busy". This timer is the in-transport
+ *  cleanup that fixes that. */
+const PRINT_TIMEOUT_MS = 25_000;
+
 export function printLabel(
   devicePath: string,
   bytes: Uint8Array,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
     // Always route post-open errors through cleanup: close the port
     // before rejecting so a Bluetooth drop / write failure / drain
-    // failure doesn't leave the OS handle open and block the next
-    // print attempt as "port busy" until the app restarts.
-    // (Codex P2 round 4 on PR #487.)
+    // failure / *stall* doesn't leave the OS handle open and block
+    // the next print attempt as "port busy" until the app restarts.
+    // (Codex P2 rounds 4 + 5 on PR #487.)
     const settleWithCleanup = (port: SerialPort | null, err: Error | null) => {
       if (settled) return;
       settled = true;
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+        timeoutHandle = null;
+      }
       if (port && port.isOpen) {
         port.close((closeErr) => {
           // Prefer the original error if there was one — closeErr on
@@ -137,6 +153,18 @@ export function printLabel(
         settleWithCleanup(null, openErr);
         return;
       }
+      // Once the port is open, start the stall watchdog. If any step
+      // hangs (Bluetooth stack stops calling our callbacks) the timer
+      // fires and routes through cleanup → port.close() → reject.
+      timeoutHandle = setTimeout(() => {
+        settleWithCleanup(
+          p,
+          new Error(
+            `Print stalled — no progress in ${PRINT_TIMEOUT_MS}ms. ` +
+              `Power-cycle the printer and try again.`,
+          ),
+        );
+      }, PRINT_TIMEOUT_MS);
       // Surface any post-open error (USB disconnect, BT drop, etc.)
       // through the cleanup path so a stale handle can't linger.
       p.on("error", (err) => settleWithCleanup(p, err));

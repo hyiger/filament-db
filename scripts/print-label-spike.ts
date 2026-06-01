@@ -126,28 +126,32 @@ async function renderLabelBitmap(args: Args): Promise<{
   /* --- QR --- */
   // errorCorrectionLevel 'M' is the practical sweet spot for label use:
   // robust against tape scuffs, doesn't bloat short payloads. To match
-  // the renderer's labelBitmap.ts behavior, probe at scale=1 to find
-  // the QR module count and pick the largest fitting scale — payloads
-  // too long even at scale=1 throw rather than silently clip.
+  // the renderer's labelBitmap.ts behavior, probe at scale=1 (with the
+  // spec-required 4-module quiet zone included) to find the total
+  // pixel height and pick the largest fitting scale. Payloads too long
+  // even at scale=1 throw rather than silently clipping or producing
+  // an unscannable code. (Codex P2 rounds 4 + 5 on PR #487.)
+  const QR_QUIET_ZONE_MODULES = 4;
   const MAX_QR_DOTS_SPIKE = PRINT_HEAD_DOTS - 12; // 6 padding each side
   const probePng = await QRCode.toBuffer(args.qr, {
     errorCorrectionLevel: "M",
-    margin: 0,
+    margin: QR_QUIET_ZONE_MODULES,
     scale: 1,
     color: { dark: "#000000", light: "#FFFFFF" },
   });
   const probeMeta = await sharp(probePng).metadata();
-  const qrModules = probeMeta.width!;
-  if (qrModules > MAX_QR_DOTS_SPIKE) {
+  const widthWithQuietZone = probeMeta.width!;
+  if (widthWithQuietZone > MAX_QR_DOTS_SPIKE) {
     throw new Error(
-      `QR payload (${args.qr.length} chars) needs ${qrModules} dots tall — ` +
-        `exceeds the ${MAX_QR_DOTS_SPIKE}-dot budget for 24mm tape.`,
+      `QR payload (${args.qr.length} chars) needs ${widthWithQuietZone} dots ` +
+        `including the required 4-module quiet zone — exceeds the ` +
+        `${MAX_QR_DOTS_SPIKE}-dot budget for 24mm tape.`,
     );
   }
-  const qrSize = Math.floor(MAX_QR_DOTS_SPIKE / qrModules);
+  const qrSize = Math.floor(MAX_QR_DOTS_SPIKE / widthWithQuietZone);
   const qrPng = await QRCode.toBuffer(args.qr, {
     errorCorrectionLevel: "M",
-    margin: 0,
+    margin: QR_QUIET_ZONE_MODULES,
     scale: qrSize,
     color: { dark: "#000000", light: "#FFFFFF" },
   });

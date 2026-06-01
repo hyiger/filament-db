@@ -39,43 +39,50 @@ const QR_TEXT_GAP_DOTS = 12;
  *  PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS = 116. */
 const MAX_QR_DOTS = PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS;
 
+/** QR specification requires a 4-module quiet zone (the all-white
+ *  border) around the data for reliable scanning. We render the QR
+ *  with `margin: 4` so the qrcode library includes it, and include
+ *  it in the fit calculation. (Codex P2 round 5 on PR #487.) */
+const QR_QUIET_ZONE_MODULES = 4;
+
 /**
  * Render the QR at the largest module-pixel scale that fits the print
- * band. The naive `scale: 3` for any payload >16 chars would overflow
+ * band, accounting for the spec-required 4-module quiet zone on each
+ * side. The naive `scale: 3` for any payload >16 chars would overflow
  * once the URL pushes the QR past v10 (≈57 modules → 171 px at scale 3,
- * clipped by the 128-dot head). Probe at scale=1 first to discover
- * the module count, then pick `floor(MAX_QR_DOTS / modules)` as the
- * largest fitting scale. Throws if even scale=1 doesn't fit (the
- * payload is genuinely too long for a 24mm tape label). (Codex P2
- * round 4 on PR #487.)
+ * clipped by the 128-dot head). Probe at scale=1 with margin=4 first
+ * to discover total width (modules + 8 quiet-zone), then pick
+ * `floor(MAX_QR_DOTS / total)` as the largest fitting scale. Throws
+ * if even scale=1 doesn't fit (the payload is genuinely too long for
+ * a 24mm tape label). (Codex P2 rounds 4 + 5 on PR #487.)
  */
 async function renderQrForTape(
   payload: string,
   errorCorrection: "L" | "M" | "Q" | "H",
 ): Promise<HTMLCanvasElement> {
-  // scale=1 → output width equals the QR module count, so we don't
-  // need a separate "get version info" API.
+  // scale=1 with margin=4 → output width = modules + 2 × 4 = modules + 8.
   const probe = document.createElement("canvas");
   await QRCode.toCanvas(probe, payload, {
     errorCorrectionLevel: errorCorrection,
-    margin: 0,
+    margin: QR_QUIET_ZONE_MODULES,
     scale: 1,
     color: { dark: "#000000", light: "#FFFFFF" },
   });
-  const modules = probe.width;
-  if (modules > MAX_QR_DOTS) {
+  const widthWithQuietZone = probe.width;
+  if (widthWithQuietZone > MAX_QR_DOTS) {
+    const modules = widthWithQuietZone - 2 * QR_QUIET_ZONE_MODULES;
     throw new Error(
-      `QR payload is too long for 24mm tape — would render at ${modules} ` +
-        `dots tall, but the print band is only ${MAX_QR_DOTS} dots after padding. ` +
-        `Use a shorter payload (the instance ID mode is always safe) or print ` +
-        `to a wider tape.`,
+      `QR payload is too long for 24mm tape — would render at ${widthWithQuietZone} ` +
+        `dots tall including the required 4-module quiet zone (QR data: ${modules} modules), ` +
+        `but the print band is only ${MAX_QR_DOTS} dots after padding. ` +
+        `Use a shorter payload (the instance ID mode is always safe) or print to a wider tape.`,
     );
   }
-  const scale = Math.floor(MAX_QR_DOTS / modules);
+  const scale = Math.floor(MAX_QR_DOTS / widthWithQuietZone);
   const finalCanvas = document.createElement("canvas");
   await QRCode.toCanvas(finalCanvas, payload, {
     errorCorrectionLevel: errorCorrection,
-    margin: 0,
+    margin: QR_QUIET_ZONE_MODULES,
     scale,
     color: { dark: "#000000", light: "#FFFFFF" },
   });
