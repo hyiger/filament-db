@@ -18,6 +18,7 @@ import { deriveFinish } from "@/lib/filamentFinish";
 import { deriveArrangement } from "@/lib/filamentColors";
 import type { FilamentDetail, FilamentCalibration } from "@/types/filament";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { formatDate } from "@/lib/dateFormat";
 
 type Filament = FilamentDetail;
 
@@ -1779,7 +1780,7 @@ function SpoolCard({
   nfcAvailable,
   nfcWriting,
 }: SpoolCardProps) {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const [weightInput, setWeightInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingLabel, setEditingLabel] = useState(false);
@@ -2118,7 +2119,7 @@ function SpoolCard({
             {spool.dryCycles && spool.dryCycles.length > 0 && (
               <p className="text-xs text-gray-400 mt-1">
                 {t("detail.spool.lastDried", {
-                  date: new Date(spool.dryCycles[spool.dryCycles.length - 1].date).toLocaleDateString(),
+                  date: formatDate(spool.dryCycles[spool.dryCycles.length - 1].date, locale),
                 })}
               </p>
             )}
