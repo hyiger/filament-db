@@ -112,6 +112,22 @@ describe("/api/filaments/match", () => {
     expect(body.match?.name).toBe("ABS+");
   });
 
+  it("PR #487 r15: case-insensitivity works in BOTH directions (uppercase stored / lowercase queried)", async () => {
+    // The schema generates lowercase hex going forward, but legacy /
+    // re-imported filaments may carry uppercase or mixed-case values.
+    // Both directions must match — the comparison can't normalise just
+    // one side. (Codex P2 round 14 on PR #487.)
+    await Filament.create({
+      name: "Legacy uppercase",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "DEADBEEF42",
+    });
+    const res = await matchFilaments(matchReq({ instanceId: "deadbeef42" }));
+    const body = await res.json();
+    expect(body.match?.name).toBe("Legacy uppercase");
+  });
+
   it("PR #487: instanceId no-match falls through to name/vendor/type", async () => {
     // A label-printer QR for a filament that no longer exists shouldn't
     // 404 — fall through so the scanner UI can still offer suggestions

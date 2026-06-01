@@ -34,13 +34,21 @@ export async function GET(request: NextRequest) {
     //    label printer dialog has no resolver, so scanning the printed
     //    QR returns an opaque hex string with nowhere to go.)
     if (instanceId) {
-      // Normalize: instance IDs are stored lowercase, but a QR scan or
-      // user paste could be any case. Restrict to plausible shapes
-      // (1-32 hex) so a stray query value can't blow up the regex.
-      const normalized = instanceId.trim().toLowerCase();
-      if (/^[0-9a-f]{1,32}$/.test(normalized)) {
+      // Case-insensitive comparison on BOTH sides. The schema generates
+      // lowercase hex going forward, but legacy / re-imported filaments
+      // may carry uppercase or mixed-case values, and a QR scan or user
+      // paste of either case has to find them. Match the stored value
+      // via case-insensitive regex (the same pattern the
+      // name/vendor/type branches below use). Restrict the input to
+      // 1-32 hex chars so a stray query value can't blow up the regex
+      // or accidentally inject. (Codex P2 round 14 on PR #487.)
+      const trimmed = instanceId.trim();
+      if (/^[0-9a-fA-F]{1,32}$/.test(trimmed)) {
         const byInstanceId = await Filament.findOne({
-          instanceId: normalized,
+          instanceId: {
+            $regex: `^${escapeRegex(trimmed)}$`,
+            $options: "i",
+          },
           _deletedAt: null,
         }).lean();
         if (byInstanceId) {
