@@ -1052,6 +1052,18 @@ ipcMain.handle("label-printer-set-public-url", (event, url: string | null) => {
       "URL points to localhost — labels encoded with this URL would be unscannable from other devices.",
     );
   }
+  // Reject query string and fragment — the dialog concatenates
+  // `${publicUrl}/filaments/<id>` and a stored URL like
+  // `https://example.com/?utm=x` would produce
+  // `https://example.com/?utm=x/filaments/<id>` (query slurps the
+  // path). Cleaner to reject than to silently strip the user's
+  // pasted tracking params. (Codex P2 round 8 on PR #487.)
+  if (parsed.search) {
+    throw new Error("URL must not contain a query string (?...)");
+  }
+  if (parsed.hash) {
+    throw new Error("URL must not contain a fragment (#...)");
+  }
   // Strip trailing slash so callers can safely concat `${url}/filaments/...`
   // without producing double slashes.
   const normalized = url.replace(/\/+$/, "");
