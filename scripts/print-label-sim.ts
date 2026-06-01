@@ -1,7 +1,7 @@
 /**
  * Brother PT-P710BT label-print simulator.
  *
- * Companion to print-label-spike.ts. Reads a Brother raster command
+ * Companion to print-label.ts. Reads a Brother raster command
  * byte stream, decodes every command, validates structure, reconstructs
  * the bitmap, and writes a preview PNG so you can verify what would
  * have come out of the printer.

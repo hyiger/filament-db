@@ -11,7 +11,7 @@
  * renderer (PrintLabelDialog live preview + print payload) and in the
  * eventual Storybook/test harness.
  *
- * The CLI spike at scripts/print-label-spike.ts uses sharp instead
+ * The CLI at scripts/print-label.ts uses sharp instead
  * because Node can't use HTMLCanvas without a polyfill; both paths
  * produce the same wire output because they share the encoder.
  *

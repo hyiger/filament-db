@@ -13,16 +13,16 @@
  * USAGE
  *   # Default: render and write the byte stream to /tmp/label.bin, plus a
  *   # PNG preview to /tmp/label-preview.png
- *   npx tsx scripts/print-label-spike.ts \
+ *   npx tsx scripts/print-label.ts \
  *     --name "Prusament PLA Galaxy Black" \
  *     --qr "https://filament-db.local/filaments/507f1f77bcf86cd799439011"
  *
  *   # Different sink:
- *   npx tsx scripts/print-label-spike.ts --name "ABS" --qr 2acc21072a \
+ *   npx tsx scripts/print-label.ts --name "ABS" --qr 2acc21072a \
  *     --out ./out/short.bin
  *
  *   # Tuesday — when the real printer arrives:
- *   npx tsx scripts/print-label-spike.ts --name "ABS" --qr 2acc21072a \
+ *   npx tsx scripts/print-label.ts --name "ABS" --qr 2acc21072a \
  *     --device /dev/tty.PT-P710BT-XXXX-Serialport
  *
  * PROTOCOL REFERENCE
@@ -79,7 +79,7 @@ function parseArgs(argv: string[]): Args {
       case "--no-cut": out.autoCut = false; break;
       case "-h": case "--help":
         console.log(
-          "Usage: tsx scripts/print-label-spike.ts --name <text> --qr <payload> [--out <file>|--device <path>] [--preview <png>]",
+          "Usage: tsx scripts/print-label.ts --name <text> --qr <payload> [--out <file>|--device <path>] [--preview <png>]",
         );
         process.exit(0);
         break;

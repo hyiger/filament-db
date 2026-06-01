@@ -4,7 +4,7 @@
  * Pure JavaScript / TypeScript, no Node or browser dependencies — usable
  * from both the Electron main process (over a serial port) and the
  * renderer (for download-fallback when not running in Electron) and
- * from the standalone CLI spike in `scripts/print-label-spike.ts`.
+ * from the standalone CLI in `scripts/print-label.ts`.
  *
  * The encoder takes a row-major **1-bit-per-pixel** bitmap as a packed
  * Uint8Array — one bit per print dot, MSB-first across each row, exactly
