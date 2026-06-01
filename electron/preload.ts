@@ -115,4 +115,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
   labelPrinterGetPublicUrl: () => ipcRenderer.invoke("label-printer-get-public-url"),
   labelPrinterSetPublicUrl: (url: string | null) =>
     ipcRenderer.invoke("label-printer-set-public-url", url),
+
+  // Runtime mode (packaged vs dev). Used by the DevModeBanner to warn
+  // when the renderer's data source (next dev's .env.local) doesn't
+  // match the connection-mode wizard the user clicked through (#489).
+  getRuntimeMode: () => ipcRenderer.invoke("get-runtime-mode"),
 });
