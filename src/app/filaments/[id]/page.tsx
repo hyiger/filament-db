@@ -848,10 +848,11 @@ function FilamentDetail() {
             </summary>
             <div className="absolute right-0 z-20 mt-1 w-72 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg py-1">
               {/* Label printer — opens the PrintLabelDialog. On
-                  Electron (commit 5) this will send the encoded byte
-                  stream over IPC to the serial-port writer; on web (and
-                  Electron pre-commit-5) it falls back to downloading
-                  the .bin file so the simulator can decode it. */}
+                  Electron, the dialog sends the encoded byte stream
+                  over IPC to the serial-port writer in
+                  electron/label-printer.ts. On web (no Electron) it
+                  falls back to downloading the .bin file so the
+                  simulator at scripts/print-label-sim.ts can decode it. */}
               <button
                 type="button"
                 onClick={() => {

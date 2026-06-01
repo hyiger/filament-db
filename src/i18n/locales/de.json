@@ -804,7 +804,6 @@
   "printLabel.print": "Drucken",
   "printLabel.printing": "Drucke…",
   "printLabel.downloadedWeb": "{filename} heruntergeladen. Decodieren mit `npm run label:sim --in <Pfad>` für eine Vorschau.",
-  "printLabel.downloadedElectronStub": "{filename} heruntergeladen. Direkter Druckersupport folgt im nächsten Commit.",
   "printLabel.printFailed": "Druck fehlgeschlagen: {error}",
   "detail.syncMenu": "Synchronisieren",
   "detail.syncMenu.title": "Kalibrierdaten aus einem externen Tool in dieses Filament übernehmen",

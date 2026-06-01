@@ -455,6 +455,43 @@ Jedes Filament hat eine eindeutige Instance-ID (5-Byte-Hex-String, z. B. `2acc21
 
 ---
 
+## Etikettendrucker (nur Desktop-App) *(v1.33)*
+
+Drucke ein Spulen-Etikett (24-mm-Band) direkt von der Filament-Detailseite auf einen **Brother PT-P710BT** (P-touch CUBE) über Bluetooth. Das Etikett enthält einen QR-Code und den Filamentnamen. Zwei QR-Modi, die du pro Druck wählen kannst:
+
+- **Spulen-Instanz-ID** — die 5-Byte-Hex-ID (z. B. `2acc21072a`). Kompakter, dichter QR; lässt sich erneut über den Match-Endpunkt einlesen und entspricht dem, was auf einem NFC-Tag steht.
+- **Deep-Link-URL** — eine vollständige URL zur Filament-Detailseite (z. B. `https://meine-instanz.lan/filaments/<id>`). Beim Scannen mit einem beliebigen Smartphone öffnet sich die Seite direkt — keine App nötig.
+
+Deine letzte Auswahl wird als Standard für den nächsten Druck gemerkt.
+
+### Einmalige Einrichtung
+
+1. **Drucker zuerst im Betriebssystem koppeln**: Halte die Power-Taste des Druckers gedrückt, bis die Bluetooth-LED dauerhaft blau leuchtet. Füge ihn dann über Systemeinstellungen → Bluetooth hinzu (PIN ist meist leer oder `0000`). Brother liefert den PT-P710BT zwar mit Fokus auf iOS/Android aus, Desktop-Betriebssysteme (macOS / Windows / Linux) koppeln ihn aber als Bluetooth-Classic-Serial-Port-Gerät.
+2. **Desktop-App öffnen → Einstellungen → Etikettendrucker**. Klicke auf **Aktualisieren**, um gekoppelte serielle Ports zu scannen. Der PT-P710BT erscheint mit einem grünen **PT-Touch**-Badge. Wähle ihn aus.
+3. **(Optional) Öffentliche URL für QR-Modus-Etiketten**: Wenn du Etiketten mit Deep-Link-URLs drucken willst, die auch vom Smartphone aus scanbar sind, setze zusätzlich das Feld **Öffentliche Basis-URL**. Der URL-Modus in der Desktop-App benötigt eine Nicht-Localhost-Adresse, weil `window.location.origin` im Renderer `http://localhost:3456` ist — von einem anderen Gerät aus nicht erreichbar. Beispiele: `https://filament-db.lan`, `https://meine-instanz.example.com`. Loopback-Adressen, Query-Strings und URL-Fragmente werden mit einer beschreibenden Fehlermeldung abgelehnt. Lass das Feld leer, um den URL-Modus in der Desktop-App zu deaktivieren — der Instanz-ID-Modus funktioniert auch ohne diese Einstellung.
+4. **Test-Druck**: Klicke auf **Test-Etikett drucken**, um ein kurzes Standard-Etikett zu senden. Bestätige, dass der QR scanbar und der Text gestochen scharf ist, bevor du echte Etiketten druckst.
+
+### Etiketten drucken
+
+Auf einer beliebigen Filament-Detailseite → **Export ▾** → **Etikett drucken**. Der Dialog rendert eine Live-Vorschau in nativer Druckauflösung (pixelated CSS, damit du siehst was gedruckt wird). Wähle zwischen Instanz-ID / Deep-Link, dann klicke auf **Drucken**.
+
+Wenn du die Web-App statt Electron nutzt, lädt der Drucken-Button stattdessen eine `.bin`-Datei mit dem kodierten Byte-Stream herunter — nützlich zur Inspektion. Lokal mit `npm run label:sim --in <Datei>` decodieren, um zu sehen was gedruckt worden wäre.
+
+### Was gedruckt wird
+
+- **QR-Code** links, mit der größten Modul-Skala, die in das 116-Dot-Druckband passt (nach der spec-vorgegebenen 4-Modul-Quiet-Zone). Bei Payloads, die selbst auf Skala 1 nicht passen, verweigert der Dialog den Druck statt still abzuschneiden.
+- **Filamentname** rechts in fettem Helvetica/Arial, skaliert auf die 56-Dot-Text-Bandhöhe.
+- Etikettenlänge ist auto: kurze Namen + kleiner QR ≈ 35 mm; lange Namen + URL-QR ≈ 95 mm.
+
+### Fehlerbehebung
+
+- **„Keine seriellen Ports gefunden"** in Einstellungen → Etikettendrucker: Den PT-P710BT zuerst über Systemeinstellungen → Bluetooth koppeln, dann auf **Aktualisieren** klicken.
+- **„Druck stockt — kein Fortschritt in 25000ms"**: Drucker aus- und einschalten und erneut versuchen. Der Transport schließt den seriellen Port bei einem Stall, sodass Wiederholungen nicht auf einen „Port belegt"-Fehler stoßen.
+- **macOS-Erstdruck-Hinweis**: macOS 15+ fragt eventuell beim ersten Mal nach Berechtigung, einen Bluetooth-basierten seriellen Port zu öffnen. In Systemeinstellungen → Datenschutz & Sicherheit bestätigen, falls die Abfrage nicht automatisch erscheint.
+- **Brother sagt, der PT-P710BT-Bluetooth sei „nur mobil"** — der Desktop-Pfad dieser App nutzt das Standard-Bluetooth-Serial-Port-Profile des Druckers und ist Community-validiert. Ein zukünftiges Firmware-Update könnte das Protokoll theoretisch ändern; eine bekannt funktionierende Firmware-Version festhalten, falls man stark auf das Feature angewiesen ist.
+
+---
+
 ## OpenPrintTag-Community-Datenbank-Browser
 
 Durchstöbere die [OpenPrintTag-Community-Datenbank](https://github.com/OpenPrintTag/openprinttag-database) direkt aus Filament DB, um Tausende FDM-Filamente von vielen Marken zu entdecken und zu importieren. Der Untertitel des Browsers zeigt die Live-Anzahl aus der Upstream-Datenbank (sie wächst, je mehr die Community beiträgt).

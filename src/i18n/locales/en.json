@@ -804,7 +804,6 @@
   "printLabel.print": "Print",
   "printLabel.printing": "Printing…",
   "printLabel.downloadedWeb": "Downloaded {filename}. Decode with `npm run label:sim --in <path>` to preview.",
-  "printLabel.downloadedElectronStub": "Downloaded {filename}. Direct printer support ships in the next commit.",
   "printLabel.printFailed": "Print failed: {error}",
   "detail.syncMenu": "Sync",
   "detail.syncMenu.title": "Pull calibration data from an external tool into this filament",

@@ -27,9 +27,9 @@ import { isLoopbackUrl } from "@/lib/loopbackHost";
  *   - **Web (no Electron)**: downloads the encoded .bin file. Useful
  *     for "I want to inspect what would be sent" + a forward-compat
  *     escape hatch for non-Electron deployments.
- *   - **Electron** (commit 5): sends the bytes over IPC to the
- *     serial-port writer in the main process. Until that commit lands,
- *     Electron uses the same .bin-download path.
+ *   - **Electron**: sends the bytes over IPC to the serial-port
+ *     writer in the main process (electron/label-printer.ts), which
+ *     opens the OS-paired SPP device and writes the byte stream.
  */
 
 const LAST_QR_MODE_KEY = "filamentdb.printLabel.qrMode";
