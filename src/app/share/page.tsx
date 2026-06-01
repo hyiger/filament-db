@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import CopyButton from "@/components/CopyButton";
+import FilamentPicker from "@/components/FilamentPicker";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface SharedCatalog {
@@ -20,6 +21,7 @@ interface FilamentOption {
   name: string;
   vendor: string;
   color: string;
+  type: string;
 }
 
 export default function ShareManagementPage() {
@@ -142,28 +144,12 @@ export default function ShareManagementPage() {
             <label className="block text-sm font-medium mb-1">
               {t("share.pickFilaments", { count: selectedIds.size })}
             </label>
-            <div className="max-h-48 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded">
-              {filaments.map((f) => (
-                <label
-                  key={f._id}
-                  className="flex items-center gap-3 px-2 py-1 border-b border-gray-100 dark:border-gray-800 last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-900 cursor-pointer text-sm"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(f._id)}
-                    onChange={() => toggleFilament(f._id)}
-                    className="w-4 h-4"
-                  />
-                  <span
-                    className="inline-block w-4 h-4 rounded-full border border-gray-300"
-                    style={{ backgroundColor: f.color }}
-                    aria-hidden="true"
-                  />
-                  <span className="flex-1 min-w-0 truncate">{f.name}</span>
-                  <span className="text-xs text-gray-500">{f.vendor}</span>
-                </label>
-              ))}
-            </div>
+            <FilamentPicker
+              filaments={filaments}
+              selectedIds={selectedIds}
+              onToggle={toggleFilament}
+              ariaLabel={t("share.pickerAriaLabel")}
+            />
           </div>
           <button
             type="button"

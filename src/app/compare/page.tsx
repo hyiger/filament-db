@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useCurrency } from "@/hooks/useCurrency";
+import FilamentPicker from "@/components/FilamentPicker";
 
 interface FilamentOption {
   _id: string;
@@ -223,31 +224,13 @@ function ComparePageInner() {
         <h2 className="text-sm font-medium mb-2">
           {t("compare.selectPrompt", { count: selectedIds.length, max: 8 })}
         </h2>
-        <div className="max-h-60 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded">
-          {allFilaments.map((f) => (
-            <label
-              key={f._id}
-              className="flex items-center gap-3 px-3 py-2 border-b border-gray-100 dark:border-gray-800 last:border-b-0 hover:bg-gray-50 dark:hover:bg-gray-900 cursor-pointer text-sm"
-            >
-              <input
-                type="checkbox"
-                checked={selectedIds.includes(f._id)}
-                onChange={() => toggleFilament(f._id)}
-                className="w-4 h-4"
-                disabled={!selectedIds.includes(f._id) && selectedIds.length >= 8}
-              />
-              <span
-                className="inline-block w-4 h-4 rounded-full border border-gray-300"
-                style={{ backgroundColor: f.color }}
-                aria-hidden="true"
-              />
-              <span className="flex-1 min-w-0 truncate">{f.name}</span>
-              <span className="text-xs text-gray-500">
-                {f.vendor} · {f.type}
-              </span>
-            </label>
-          ))}
-        </div>
+        <FilamentPicker
+          filaments={allFilaments}
+          selectedIds={useMemo(() => new Set(selectedIds), [selectedIds])}
+          onToggle={toggleFilament}
+          maxSelections={8}
+          ariaLabel={t("compare.pickerAriaLabel")}
+        />
       </section>
 
       {/* Comparison grid */}
