@@ -346,7 +346,7 @@ export default function PrintLabelDialog({
             <div className="space-y-2">
               <label
                 className={`flex items-start gap-2 p-3 border rounded cursor-pointer ${
-                  effectiveQrMode === "instanceId"
+                  fallbackQrMode === "instanceId"
                     ? "border-blue-500 bg-blue-50 dark:bg-blue-950/40"
                     : "border-gray-200 dark:border-gray-700"
                 } ${instanceIdDisabled ? "opacity-50 cursor-not-allowed" : ""}`}
@@ -355,7 +355,7 @@ export default function PrintLabelDialog({
                   type="radio"
                   name="qrMode"
                   value="instanceId"
-                  checked={effectiveQrMode === "instanceId"}
+                  checked={fallbackQrMode === "instanceId"}
                   onChange={() => setQrMode("instanceId")}
                   disabled={instanceIdDisabled}
                   className="mt-0.5"
