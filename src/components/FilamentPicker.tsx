@@ -34,8 +34,8 @@ export interface FilamentPickerProps {
    *  /compare passes 8 (the comparison table caps at 8 columns). */
   maxSelections?: number;
   /** Optional ARIA label for the picker. Falls back to a generic
-   *  "Filaments" label translated via t("compare.pickFilaments") if
-   *  you don't want callers to plumb a custom one. */
+   *  "Filaments" label via picker.listAriaLabel if you don't want
+   *  callers to plumb a custom one. */
   ariaLabel?: string;
 }
 
