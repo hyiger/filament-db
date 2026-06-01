@@ -95,22 +95,23 @@ export function printLabel(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     let settled = false;
-    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    let port: SerialPort | null = null;
 
-    // Always route post-open errors through cleanup: close the port
-    // before rejecting so a Bluetooth drop / write failure / drain
-    // failure / *stall* doesn't leave the OS handle open and block
-    // the next print attempt as "port busy" until the app restarts.
-    // (Codex P2 rounds 4 + 5 on PR #487.)
-    const settleWithCleanup = (port: SerialPort | null, err: Error | null) => {
+    // Always route any failure through cleanup: close the port (if
+    // open) before rejecting so a Bluetooth drop / write failure /
+    // drain failure / stall doesn't leave the OS handle open and
+    // block the next print attempt as "port busy". (Codex P2 rounds
+    // 4-6 on PR #487.)
+    const settleWithCleanup = (err: Error | null) => {
       if (settled) return;
       settled = true;
       if (timeoutHandle) {
         clearTimeout(timeoutHandle);
         timeoutHandle = null;
       }
-      if (port && port.isOpen) {
-        port.close((closeErr) => {
+      const p = port;
+      if (p && p.isOpen) {
+        p.close((closeErr) => {
           // Prefer the original error if there was one — closeErr on
           // an already-broken port is just noise.
           if (err) reject(err);
@@ -123,7 +124,20 @@ export function printLabel(
       }
     };
 
-    let port: SerialPort | null = null;
+    // Arm the stall watchdog BEFORE calling .open() so a stalled
+    // RFCOMM driver in the open phase also gets caught. Round 5 only
+    // armed it inside the open callback, which round 6 caught as a
+    // gap — open() itself can hang forever on a flaky Bluetooth
+    // stack. (Codex P2 round 6 on PR #487.)
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      settleWithCleanup(
+        new Error(
+          `Print stalled — no progress in ${PRINT_TIMEOUT_MS}ms. ` +
+            `Power-cycle the printer and try again.`,
+        ),
+      );
+    }, PRINT_TIMEOUT_MS);
+
     try {
       port = new SerialPort(
         {
@@ -136,50 +150,49 @@ export function printLabel(
           // but we want to control timing — use autoOpen: false and call
           // .open() below. This handler fires only on constructor errors
           // (which fire before .open() so there's no port to close).
-          if (err) settleWithCleanup(null, err);
+          if (err) settleWithCleanup(err);
         },
       );
     } catch (err) {
-      settleWithCleanup(null, err instanceof Error ? err : new Error(String(err)));
+      settleWithCleanup(err instanceof Error ? err : new Error(String(err)));
       return;
     }
     if (!port) return; // settleWithCleanup already called
 
     const p = port;
     p.open((openErr) => {
-      if (openErr) {
-        // open() failure means nothing was opened — no cleanup needed,
-        // but settle through the same path for consistency.
-        settleWithCleanup(null, openErr);
+      // Belt and braces: if the timer already fired while open() was
+      // hung, this callback can still arrive later. If we're already
+      // settled, the only cleanup left is to close any handle that
+      // open() did eventually acquire so it doesn't leak.
+      if (settled) {
+        if (!openErr && p.isOpen) {
+          p.close(() => {
+            /* best-effort; the caller already saw the timeout error */
+          });
+        }
         return;
       }
-      // Once the port is open, start the stall watchdog. If any step
-      // hangs (Bluetooth stack stops calling our callbacks) the timer
-      // fires and routes through cleanup → port.close() → reject.
-      timeoutHandle = setTimeout(() => {
-        settleWithCleanup(
-          p,
-          new Error(
-            `Print stalled — no progress in ${PRINT_TIMEOUT_MS}ms. ` +
-              `Power-cycle the printer and try again.`,
-          ),
-        );
-      }, PRINT_TIMEOUT_MS);
+      if (openErr) {
+        // open() failure — settle through the same path for consistency.
+        settleWithCleanup(openErr);
+        return;
+      }
       // Surface any post-open error (USB disconnect, BT drop, etc.)
       // through the cleanup path so a stale handle can't linger.
-      p.on("error", (err) => settleWithCleanup(p, err));
+      p.on("error", (err) => settleWithCleanup(err));
       p.write(Buffer.from(bytes), (writeErr) => {
         if (writeErr) {
-          settleWithCleanup(p, writeErr);
+          settleWithCleanup(writeErr);
           return;
         }
         p.drain((drainErr) => {
           if (drainErr) {
-            settleWithCleanup(p, drainErr);
+            settleWithCleanup(drainErr);
             return;
           }
           // Happy path — close + resolve.
-          settleWithCleanup(p, null);
+          settleWithCleanup(null);
         });
       });
     });
