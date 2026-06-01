@@ -163,12 +163,22 @@ export function encodeLabel(opts: EncodeOpts): Uint8Array {
   out[pos++] = 0x4d;
   out[pos++] = autoCut ? 0x40 : 0x00;
 
-  // 6. Expansion mode — 0x00 = no chain printing, no half-cut. The
-  // value is required even though we don't use the features.
+  // 6. Various-mode flags (ESC i K). Per the Brother Raster Command
+  // Reference for PT-E550W/P750W/P710BT, bit 3 controls the chain-
+  // printing behavior:
+  //   bit 3 = 1  → no chain printing (feed + cut after the LAST label)
+  //   bit 3 = 0  → chain printing    (printer holds the label after the
+  //                                   job, expecting another to follow)
+  //
+  // 0x08 (bit 3 set) is what we want for a one-click single-label
+  // workflow. With 0x00 the autoCut bit in ESC i M still issues a
+  // cut, but chain mode means the tape isn't advanced through the
+  // cutter — users see the label "stuck" in the head. (Codex P1
+  // round 17 on PR #487.)
   out[pos++] = 0x1b;
   out[pos++] = 0x69;
   out[pos++] = 0x4b;
-  out[pos++] = 0x00;
+  out[pos++] = 0x08;
 
   // 7. Margin (leading feed before the printed area), in dots, LE u16.
   out[pos++] = 0x1b;

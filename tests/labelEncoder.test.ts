@@ -49,8 +49,11 @@ describe("encodeLabel — wire format", () => {
     expect(bytes[118]).toBe(0x00); // reserved
     // ESC i M 0x40 (auto-cut)
     expect([bytes[119], bytes[120], bytes[121], bytes[122]]).toEqual([0x1b, 0x69, 0x4d, 0x40]);
-    // ESC i K 0x00
-    expect([bytes[123], bytes[124], bytes[125], bytes[126]]).toEqual([0x1b, 0x69, 0x4b, 0x00]);
+    // ESC i K 0x08 — bit 3 set = no-chain mode (feed + cut after the
+    // last label, which is what we want for a single-label print).
+    // Codex P1 round 17 on PR #487 caught this: with 0x00 the printer
+    // accepts the job but holds the label, breaking the one-click flow.
+    expect([bytes[123], bytes[124], bytes[125], bytes[126]]).toEqual([0x1b, 0x69, 0x4b, 0x08]);
     // ESC i d 0x0E 0x00 (14 dots = 2mm margin)
     expect([bytes[127], bytes[128], bytes[129], bytes[130], bytes[131]]).toEqual([0x1b, 0x69, 0x64, 0x0e, 0x00]);
     // M 0x00 (uncompressed)
