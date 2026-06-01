@@ -170,15 +170,15 @@ export function encodeLabel(opts: EncodeOpts): Uint8Array {
   //   bit 3 = 0  → chain printing    (printer holds the label after the
   //                                   job, expecting another to follow)
   //
-  // 0x08 (bit 3 set) is what we want for a one-click single-label
-  // workflow. With 0x00 the autoCut bit in ESC i M still issues a
-  // cut, but chain mode means the tape isn't advanced through the
-  // cutter — users see the label "stuck" in the head. (Codex P1
-  // round 17 on PR #487.)
+  // We tie this to autoCut: a one-shot single-label print wants
+  // no-chain (0x08) so the label feeds out + gets cut; a deliberate
+  // chain print (autoCut=false, --no-cut on the CLI) wants chain mode
+  // (0x00) so the printer holds the tape ready for the next job.
+  // (Codex P1+P2 rounds 17+18 on PR #487.)
   out[pos++] = 0x1b;
   out[pos++] = 0x69;
   out[pos++] = 0x4b;
-  out[pos++] = 0x08;
+  out[pos++] = autoCut ? 0x08 : 0x00;
 
   // 7. Margin (leading feed before the printed area), in dots, LE u16.
   out[pos++] = 0x1b;

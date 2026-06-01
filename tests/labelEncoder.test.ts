@@ -78,14 +78,19 @@ describe("encodeLabel — wire format", () => {
     expect([bytes[113], bytes[114], bytes[115], bytes[116]]).toEqual([0xe1, 0x10, 0, 0]);
   });
 
-  it("autoCut=false swaps mode bits 0x40 → 0x00 and trailer 0x1A → 0x0C", () => {
+  it("autoCut=false swaps mode bits 0x40 → 0x00, K flag 0x08 → 0x00, and trailer 0x1A → 0x0C", () => {
+    // autoCut: false is chain-mode intent — caller will issue more
+    // labels later. The ESC i K byte (offset 126) must mirror that
+    // so the printer holds the tape instead of feeding + cutting it.
+    // (Codex P2 round 18 on PR #487.)
     const bytes = encodeLabel({
       bitmap: makeBitmap(1),
       rasterLines: 1,
       tapeWidthMm: 24,
       autoCut: false,
     });
-    expect(bytes[122]).toBe(0x00); // mode bits
+    expect(bytes[122]).toBe(0x00); // mode bits — auto-cut off
+    expect(bytes[126]).toBe(0x00); // ESC i K — chain mode
     expect(bytes[bytes.length - 1]).toBe(0x0c); // trailer (print, no cut)
   });
 
