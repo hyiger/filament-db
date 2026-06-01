@@ -34,27 +34,48 @@ export async function GET(request: NextRequest) {
     //    label printer dialog has no resolver, so scanning the printed
     //    QR returns an opaque hex string with nowhere to go.)
     if (instanceId) {
-      // Case-insensitive comparison on BOTH sides. The schema generates
-      // lowercase hex going forward, but legacy / re-imported filaments
-      // may carry mixed-case hex OR arbitrary non-hex strings
-      // (importFilaments.ts assigns row.instanceId verbatim; the model
-      // tests use values like "custom-id-123"). Match the stored value
-      // via case-insensitive regex with escapeRegex protecting against
-      // injection — same pattern the name/vendor/type branches below
-      // use. Length cap is the only validator we need: it bounds the
-      // regex compile cost so a 10MB query string can't DoS the route.
+      // Length cap bounds the regex compile cost so a 10MB query
+      // string can't DoS the route. escapeRegex handles the actual
+      // injection defense for the case-insensitive fallback below.
       // (Codex P2 rounds 13-15 on PR #487.)
       const trimmed = instanceId.trim();
       if (trimmed.length > 0 && trimmed.length <= 128) {
-        const byInstanceId = await Filament.findOne({
+        // 1. Exact-case match first — unambiguous, fast, and
+        //    deterministic when the query case matches what's stored.
+        //    This wins immediately in the common case where the
+        //    caller's QR scan / NFC tag carries the same case as the
+        //    DB record. (Codex P2 round 16 on PR #487.)
+        const exact = await Filament.findOne({
+          instanceId: trimmed,
+          _deletedAt: null,
+        }).lean();
+        if (exact) {
+          return NextResponse.json({ match: exact, candidates: [] });
+        }
+
+        // 2. Case-insensitive fallback for legacy case drift. The
+        //    partial unique index on instanceId is case-sensitive
+        //    (so "ABC" and "abc" can both exist), but if the CI
+        //    fallback turns up exactly ONE row that's still an
+        //    unambiguous match — only multiple CI hits are
+        //    genuinely ambiguous. Cap the find at 2 to detect "more
+        //    than one" without scanning the full DB.
+        const ciMatches = await Filament.find({
           instanceId: {
             $regex: `^${escapeRegex(trimmed)}$`,
             $options: "i",
           },
           _deletedAt: null,
-        }).lean();
-        if (byInstanceId) {
-          return NextResponse.json({ match: byInstanceId, candidates: [] });
+        })
+          .limit(2)
+          .lean();
+        if (ciMatches.length === 1) {
+          return NextResponse.json({ match: ciMatches[0], candidates: [] });
+        }
+        if (ciMatches.length > 1) {
+          // Ambiguous — case-only collision in legacy data. Surface as
+          // candidates instead of returning an arbitrary row.
+          return NextResponse.json({ match: null, candidates: ciMatches });
         }
       }
       // No match → fall through so the caller can still get name /

@@ -195,6 +195,56 @@ describe("/api/filaments/match", () => {
     expect(body.match).toBeNull();
   });
 
+  it("PR #487 r17: case-only collision picks the exact-case row deterministically", async () => {
+    // Legacy data can hold both "ABC" and "abc" because the partial
+    // unique index on instanceId is case-sensitive. A query for one
+    // of them must return THAT one, not the other — the exact-case
+    // match runs before the case-insensitive fallback. (Codex P2
+    // round 16 on PR #487.)
+    await Filament.create({
+      name: "Upper case",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "ABC123",
+    });
+    await Filament.create({
+      name: "Lower case",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "abc123",
+    });
+    const upper = await matchFilaments(matchReq({ instanceId: "ABC123" }));
+    expect((await upper.json()).match?.name).toBe("Upper case");
+    const lower = await matchFilaments(matchReq({ instanceId: "abc123" }));
+    expect((await lower.json()).match?.name).toBe("Lower case");
+  });
+
+  it("PR #487 r17: case-only collision with no exact hit returns candidates (no arbitrary pick)", async () => {
+    // If the query case matches NEITHER stored row but does match
+    // both case-insensitively, we'd be picking arbitrarily — refuse
+    // and surface both as candidates instead.
+    await Filament.create({
+      name: "Upper case",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "ABC123",
+    });
+    await Filament.create({
+      name: "Lower case",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "abc123",
+    });
+    const res = await matchFilaments(matchReq({ instanceId: "AbC123" }));
+    const body = await res.json();
+    expect(body.match).toBeNull();
+    expect(body.candidates).toHaveLength(2);
+    expect(body.candidates.map((c: { name: string }) => c.name).sort()).toEqual([
+      "Lower case",
+      "Upper case",
+    ]);
+  });
+
   it("PR #487: instanceId excludes soft-deleted filaments", async () => {
     await Filament.create({
       name: "Trashed",
