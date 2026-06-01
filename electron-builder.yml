@@ -37,8 +37,20 @@ files:
   # printer (electron/label-printer.ts). @serialport/bindings-cpp ships
   # prebuilds for every Electron-supported platform; electron-rebuild
   # confirms or rebuilds the matching .node before packaging.
+  #
+  # node-gyp-build is the RUNTIME loader for the .node binary — without
+  # it `require("serialport")` throws "Cannot find module 'node-gyp-build'"
+  # in the packaged app. node-addon-api ships only build-time headers but
+  # include it defensively since it's tiny. debug is serialport's logging
+  # dependency (already a transitive of many other modules, but include
+  # explicitly so the @serialport scope's require resolves). (Codex P2
+  # round 9 on PR #487.)
   - node_modules/serialport/**/*
   - node_modules/@serialport/**/*
+  - node_modules/node-gyp-build/**/*
+  - node_modules/node-addon-api/**/*
+  - node_modules/debug/**/*
+  - node_modules/ms/**/*
   - node_modules/mongodb/**/*
   - node_modules/bson/**/*
   - node_modules/mongodb-connection-string-url/**/*

@@ -1052,16 +1052,21 @@ ipcMain.handle("label-printer-set-public-url", (event, url: string | null) => {
       "URL points to localhost — labels encoded with this URL would be unscannable from other devices.",
     );
   }
-  // Reject query string and fragment — the dialog concatenates
-  // `${publicUrl}/filaments/<id>` and a stored URL like
-  // `https://example.com/?utm=x` would produce
-  // `https://example.com/?utm=x/filaments/<id>` (query slurps the
-  // path). Cleaner to reject than to silently strip the user's
-  // pasted tracking params. (Codex P2 round 8 on PR #487.)
-  if (parsed.search) {
+  // (Query + fragment rejection moved below to the raw-input check
+  // which also catches bare `?` / `#` delimiters that URL parses as
+  // empty search/hash — Codex P2 round 9 on PR #487.)
+  // Reject bare delimiters too: `https://example.com?` parses with
+  // `parsed.search === ""` (falsy), so the structured check above lets
+  // it through and the original raw string gets stored. Concatenating
+  // `/filaments/<id>` onto that produces `...?/filaments/<id>` which
+  // routes the scan to the wrong place. URL-path `?` and `#` characters
+  // are always delimiters per RFC 3986 — literal versions must be
+  // percent-encoded as `%3F` / `%23` — so checking the raw input is
+  // valid. (Codex P2 round 9 on PR #487.)
+  if (url.includes("?")) {
     throw new Error("URL must not contain a query string (?...)");
   }
-  if (parsed.hash) {
+  if (url.includes("#")) {
     throw new Error("URL must not contain a fragment (#...)");
   }
   // Strip trailing slash so callers can safely concat `${url}/filaments/...`
