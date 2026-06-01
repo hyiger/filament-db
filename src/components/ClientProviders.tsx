@@ -7,6 +7,7 @@ import ToastProvider from "./Toast";
 import ConfirmProvider from "./ConfirmDialog";
 import ThemeProvider from "./ThemeProvider";
 import UpdateBanner from "./UpdateBanner";
+import DevModeBanner from "./DevModeBanner";
 import { TranslationProvider } from "@/i18n/TranslationProvider";
 
 export default function ClientProviders({ children }: { children: ReactNode }) {
@@ -18,6 +19,10 @@ export default function ClientProviders({ children }: { children: ReactNode }) {
               themed, asynchronous, and doesn't freeze the renderer. */}
           <ConfirmProvider>
             <NfcProvider>
+              {/* #489: warn in dev mode that the connection-mode
+                  wizard doesn't control the renderer's actual
+                  database (which is .env.local's MONGODB_URI). */}
+              <DevModeBanner />
               <UpdateBanner />
               {children}
               <NfcReadDialog />

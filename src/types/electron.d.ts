@@ -87,6 +87,11 @@ interface ElectronAPI {
   /** Throws on validation errors (bad URL shape, non-http(s) scheme,
    *  loopback host). Pass null/empty to clear. */
   labelPrinterSetPublicUrl: (url: string | null) => Promise<{ ok: boolean }>;
+
+  /** Runtime-environment flags. Used by the DevModeBanner to warn the
+   *  user when their connection-mode wizard selection has no effect on
+   *  the renderer's actual data source (issue #489). */
+  getRuntimeMode: () => Promise<{ isPackaged: boolean }>;
 }
 
 export interface LabelPrinterDevice {

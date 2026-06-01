@@ -704,6 +704,19 @@ ipcMain.handle("get-config", (event) => {
   };
 });
 
+// (#489) Expose whether Electron is running packaged or in dev mode.
+// In dev mode the renderer is served by `next dev` (separate process)
+// which reads MONGODB_URI from .env.local, NOT from electron-store.
+// So the connection-mode wizard setting is purely cosmetic in dev —
+// the embedded MongoDB Electron starts is unreachable from the
+// renderer. The DevModeBanner uses this flag to surface the gap so
+// users don't think they're working "offline" when writes actually
+// hit whatever .env.local points to.
+ipcMain.handle("get-runtime-mode", (event) => {
+  assertTrustedSender(event, "get-runtime-mode");
+  return { isPackaged: app.isPackaged };
+});
+
 ipcMain.handle("save-config", async (event, config: {
   mongodbUri?: string;
   connectionMode?: ConnectionMode;
