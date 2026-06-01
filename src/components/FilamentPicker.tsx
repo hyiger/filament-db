@@ -71,20 +71,31 @@ export default function FilamentPicker({
       .map(([type]) => type);
   }, [filaments]);
 
+  const selectedCount = selectedIds.size;
+  // Codex P2 round 1 on PR #497: the selected-only toggle hides when
+  // there are no selections (the chrome is meaningless without any),
+  // but if `showSelectedOnly` was true when the last selection got
+  // removed (manual unchecks, /share's publish handler clearing
+  // selectedIds, etc.) the filter kept applying with no way to turn
+  // it off. Derive the *effective* value at render time so the empty-
+  // selection case automatically falls back to "show everything"
+  // regardless of the persisted toggle state. Same pattern PR #487's
+  // PrintLabelDialog uses for its QR-mode fallback.
+  const effectiveSelectedOnly = showSelectedOnly && selectedCount > 0;
+
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
     return filaments.filter((f) => {
       if (typeFilter && f.type !== typeFilter) return false;
-      if (showSelectedOnly && !selectedIds.has(f._id)) return false;
+      if (effectiveSelectedOnly && !selectedIds.has(f._id)) return false;
       if (needle) {
         const hay = `${f.name} ${f.vendor} ${f.type} ${f.color}`.toLowerCase();
         if (!hay.includes(needle)) return false;
       }
       return true;
     });
-  }, [filaments, search, typeFilter, showSelectedOnly, selectedIds]);
+  }, [filaments, search, typeFilter, effectiveSelectedOnly, selectedIds]);
 
-  const selectedCount = selectedIds.size;
   const showControls = filaments.length >= CONTROL_THRESHOLD;
   const capReached =
     maxSelections != null && selectedCount >= maxSelections;
@@ -160,7 +171,7 @@ export default function FilamentPicker({
       >
         {filtered.length === 0 ? (
           <p className="px-3 py-4 text-xs text-gray-500 dark:text-gray-400 text-center">
-            {showSelectedOnly
+            {effectiveSelectedOnly
               ? t("picker.noSelectedMatches")
               : search || typeFilter
                 ? t("picker.noMatches")
