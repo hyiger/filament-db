@@ -21,7 +21,7 @@
 | `POST` | `/api/filaments/import` | Upload an INI file to import filament profiles |
 | `POST` | `/api/filaments/import-csv` | Upload a CSV file to import filaments |
 | `POST` | `/api/filaments/import-xlsx` | Upload an XLSX file to import filaments |
-| `GET` | `/api/filaments/match` | Match an NFC tag against existing filaments. Query params: `name`, `vendor`, `type` |
+| `GET` | `/api/filaments/match` | Match an NFC tag or scanned label QR against existing filaments. Query params: `instanceId` (highest priority), `name`, `vendor`, `type` |
 | `GET` | `/api/filaments/types` | List all distinct filament types |
 | `GET` | `/api/filaments/vendors` | List all distinct vendor names |
 | `GET` | `/api/filaments/parents` | List filaments that can be used as parents. Query params: `search`, `exclude` |
@@ -171,11 +171,14 @@ Returns:
 
 ### GET /api/filaments/match
 
-Match an NFC tag's decoded data against existing filaments. Used internally by the NFC read workflow.
+Match an NFC tag's decoded data or a scanned Brother label-printer QR against existing filaments. Used internally by the NFC read workflow and by anything that scans an instance-ID QR back into the app.
 
+- `instanceId` -- exact instance-ID match (highest-confidence; checked first). Same value carried on NFC tags and printed by the label-printer dialog's instance-ID QR mode. Exact-case is preferred; falls back to case-insensitive when no exact hit. A case-only collision (legacy data with both `ABC` and `abc` stored) returns both as `candidates` instead of an arbitrary pick. Max length 128; the value is escaped before the case-insensitive regex so regex-special characters in stored IDs are matched literally.
 - `name` -- material name (exact match, case-insensitive)
 - `vendor` -- brand name (substring match, case-insensitive)
 - `type` -- material type (exact match, case-insensitive)
+
+The four parameters are checked in priority order: `instanceId` → `name` → `vendor`+`type` → `vendor` only. If `instanceId` misses, the route falls through to the next branch when the relevant params are also supplied, so a label scan against a since-deleted filament can still surface suggestions instead of 404ing.
 
 Returns:
 ```json

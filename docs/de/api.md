@@ -23,7 +23,7 @@
 | `POST` | `/api/filaments/import` | Lädt eine INI-Datei hoch, um Filamentprofile zu importieren |
 | `POST` | `/api/filaments/import-csv` | Lädt eine CSV-Datei hoch, um Filamente zu importieren |
 | `POST` | `/api/filaments/import-xlsx` | Lädt eine XLSX-Datei hoch, um Filamente zu importieren |
-| `GET` | `/api/filaments/match` | Gleicht ein NFC-Tag mit vorhandenen Filamenten ab. Query-Parameter: `name`, `vendor`, `type` |
+| `GET` | `/api/filaments/match` | Gleicht ein NFC-Tag oder einen gescannten Etiketten-QR mit vorhandenen Filamenten ab. Query-Parameter: `instanceId` (höchste Priorität), `name`, `vendor`, `type` |
 | `GET` | `/api/filaments/types` | Listet alle eindeutigen Filamenttypen auf |
 | `GET` | `/api/filaments/vendors` | Listet alle eindeutigen Herstellernamen auf |
 | `GET` | `/api/filaments/parents` | Listet Filamente auf, die als Elternfilament dienen können. Query-Parameter: `search`, `exclude` |
@@ -170,11 +170,14 @@ Liefert:
 
 ### GET /api/filaments/match
 
-Gleicht die dekodierten Daten eines NFC-Tags mit vorhandenen Filamenten ab. Intern vom NFC-Lese-Workflow genutzt.
+Gleicht die dekodierten Daten eines NFC-Tags oder einen gescannten Brother-Etikettendrucker-QR-Code mit vorhandenen Filamenten ab. Intern vom NFC-Lese-Workflow genutzt und überall dort, wo ein Instanz-ID-QR zurück in die App gescannt wird.
 
+- `instanceId` -- exakte Instanz-ID-Übereinstimmung (höchste Konfidenz; zuerst geprüft). Derselbe Wert, der auf NFC-Tags getragen und vom Instanz-ID-QR-Modus des Etikettendruckers gedruckt wird. Exakte Groß-/Kleinschreibung bevorzugt; fällt auf case-insensitive zurück, wenn keine exakte Übereinstimmung gefunden wird. Eine Kollision nur durch Groß-/Kleinschreibung (Legacy-Daten mit gespeichertem `ABC` und `abc`) liefert beide als `candidates` statt willkürlicher Auswahl. Max. Länge 128; der Wert wird vor dem case-insensitive Regex escaped, sodass Regex-Sonderzeichen in gespeicherten IDs wörtlich übereinstimmen.
 - `name` -- Materialname (exakte Übereinstimmung, case-insensitive)
 - `vendor` -- Markenname (Teilstring-Übereinstimmung, case-insensitive)
 - `type` -- Materialtyp (exakte Übereinstimmung, case-insensitive)
+
+Die vier Parameter werden in Prioritätsreihenfolge geprüft: `instanceId` → `name` → `vendor`+`type` → nur `vendor`. Wenn `instanceId` nicht trifft, fällt die Route auf den nächsten Zweig zurück, wenn die entsprechenden Parameter ebenfalls angegeben sind — so kann ein Etiketten-Scan gegen ein inzwischen gelöschtes Filament noch Vorschläge liefern statt 404 zu liefern.
 
 Liefert:
 ```json
