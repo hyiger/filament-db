@@ -6,6 +6,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import CopyButton from "@/components/CopyButton";
 import FilamentPicker from "@/components/FilamentPicker";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { formatDate } from "@/lib/dateFormat";
 
 interface SharedCatalog {
   slug: string;
@@ -25,7 +26,7 @@ interface FilamentOption {
 }
 
 export default function ShareManagementPage() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { toast } = useToast();
   const confirm = useConfirm();
   const [catalogs, setCatalogs] = useState<SharedCatalog[]>([]);
@@ -187,7 +188,7 @@ export default function ShareManagementPage() {
                     </div>
                     <p className="text-xs text-gray-500 mt-1">
                       {t("share.viewCount", { count: c.viewCount })} ·{" "}
-                      {new Date(c.createdAt).toLocaleDateString()}
+                      {formatDate(c.createdAt, locale)}
                     </p>
                   </div>
                   <button
