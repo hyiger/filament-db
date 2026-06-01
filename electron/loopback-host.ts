@@ -35,6 +35,13 @@ export function isLoopbackHostname(hostname: string): boolean {
 
   if (h === "localhost" || h === "0.0.0.0") return true;
 
+  // IPv6 unspecified address `::` is the v6 analog of 0.0.0.0 —
+  // bind-anywhere — and means the same thing for our purposes
+  // (the QR scanner would route to its own machine). Brackets are
+  // already stripped above. (Codex P2 round 10 on PR #487.)
+  if (h === "::") return true;
+  if (/^0+(:0+){7}$/.test(h)) return true; // "0:0:0:0:0:0:0:0" etc
+
   // IPv4 loopback range 127.0.0.0/8 — anything 127.x.x.x.
   if (/^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h)) return true;
 

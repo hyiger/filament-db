@@ -24,6 +24,13 @@ describe("isLoopbackHostname — should return true for", () => {
     // The all-zeros bind address (humans type this to mean "this machine")
     "0.0.0.0",
 
+    // IPv6 unspecified address — the v6 analog of 0.0.0.0 (Codex P2
+    // round 10 on PR #487)
+    "::",
+    "[::]",
+    "0:0:0:0:0:0:0:0",
+    "[0:0:0:0:0:0:0:0]",
+
     // IPv6 loopback, every representation URL.hostname can produce
     "::1",
     "[::1]",
@@ -103,6 +110,9 @@ describe("isLoopbackHostname — matches the URL.hostname output for common loop
     "http://localhost.:3456",
     "https://localhost./",
     "http://127.0.0.1.:3456",
+    // IPv6 unspecified bind address (Codex P2 round 10 on PR #487)
+    "http://[::]:3456",
+    "http://[0:0:0:0:0:0:0:0]:3456",
   ];
   for (const url of urls) {
     it(url, () => {
