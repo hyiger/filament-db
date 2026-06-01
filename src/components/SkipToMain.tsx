@@ -1,6 +1,7 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { Suspense } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 /**
@@ -24,16 +25,39 @@ import { useTranslation } from "@/i18n/TranslationProvider";
  * skip link still pointing at /settings#main-content after
  * navigation. Including pathname in the rendered href changes the
  * attribute value, which forces the AX cache to refresh.
+ *
+ * Codex round 1 on PR #496: also include the current query string
+ * so URL-state pages keep their state when the skip link is
+ * activated. /compare encodes selected ids in `?ids=...` (see
+ * src/app/compare/page.tsx — useSearchParams + a router.replace
+ * effect); rendering `/compare#main-content` would drop the
+ * comparison.
  */
-export default function SkipToMain() {
+
+// useSearchParams() requires a Suspense boundary because reading
+// search params in App Router can suspend during static rendering /
+// transitions. Without the boundary, every page that mounts
+// <SkipToMain /> would bubble the suspension to its own boundary.
+function SkipToMainInner() {
   const { t } = useTranslation();
   const pathname = usePathname() || "/";
+  const searchParams = useSearchParams();
+  const qs = searchParams?.toString() ?? "";
+  const href = `${pathname}${qs ? `?${qs}` : ""}#main-content`;
   return (
     <a
-      href={`${pathname}#main-content`}
+      href={href}
       className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[1000] focus:bg-blue-600 focus:text-white focus:px-3 focus:py-2 focus:rounded focus:shadow-lg focus:no-underline"
     >
       {t("a11y.skipToContent")}
     </a>
+  );
+}
+
+export default function SkipToMain() {
+  return (
+    <Suspense fallback={null}>
+      <SkipToMainInner />
+    </Suspense>
   );
 }
