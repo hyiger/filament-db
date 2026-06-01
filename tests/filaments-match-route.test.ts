@@ -148,15 +148,51 @@ describe("/api/filaments/match", () => {
     expect(body.match?.name).toBe("Bambu PC Black");
   });
 
-  it("PR #487: malformed instanceId values are rejected (no regex injection)", async () => {
-    // Stray query values shouldn't blow up the regex or accidentally
-    // match anything — the validator restricts to 1–32 hex chars.
+  it("PR #487: non-hex instance IDs (legacy imports) still match", async () => {
+    // The schema doesn't enforce hex — importFilaments.ts assigns
+    // row.instanceId verbatim, and existing rows may carry strings
+    // like "custom-id-123". The match endpoint must resolve them.
+    // (Codex P2 round 15 on PR #487.)
+    await Filament.create({
+      name: "Imported custom ID",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "custom-id-123",
+    });
     const res = await matchFilaments(
-      matchReq({ instanceId: ".*; drop table filaments; --" }),
+      matchReq({ instanceId: "custom-id-123" }),
     );
     const body = await res.json();
+    expect(body.match?.name).toBe("Imported custom ID");
+  });
+
+  it("PR #487: regex-special characters in stored instanceId are matched literally", async () => {
+    // escapeRegex protects against accidental regex semantics — a
+    // stored value `a.b*c` must match the literal string, not "a"
+    // followed by any char, etc.
+    await Filament.create({
+      name: "Has regex chars",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "a.b*c",
+    });
+    const res = await matchFilaments(matchReq({ instanceId: "a.b*c" }));
+    const body = await res.json();
+    expect(body.match?.name).toBe("Has regex chars");
+  });
+
+  it("PR #487: regex-special queries don't match unrelated stored IDs", async () => {
+    // The opposite direction: a malformed query like ".*" must NOT
+    // match every filament. escapeRegex makes the query literal.
+    await Filament.create({
+      name: "Unrelated",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "deadbeef42",
+    });
+    const res = await matchFilaments(matchReq({ instanceId: ".*" }));
+    const body = await res.json();
     expect(body.match).toBeNull();
-    expect(body.candidates).toEqual([]);
   });
 
   it("PR #487: instanceId excludes soft-deleted filaments", async () => {

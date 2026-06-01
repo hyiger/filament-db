@@ -36,14 +36,16 @@ export async function GET(request: NextRequest) {
     if (instanceId) {
       // Case-insensitive comparison on BOTH sides. The schema generates
       // lowercase hex going forward, but legacy / re-imported filaments
-      // may carry uppercase or mixed-case values, and a QR scan or user
-      // paste of either case has to find them. Match the stored value
-      // via case-insensitive regex (the same pattern the
-      // name/vendor/type branches below use). Restrict the input to
-      // 1-32 hex chars so a stray query value can't blow up the regex
-      // or accidentally inject. (Codex P2 round 14 on PR #487.)
+      // may carry mixed-case hex OR arbitrary non-hex strings
+      // (importFilaments.ts assigns row.instanceId verbatim; the model
+      // tests use values like "custom-id-123"). Match the stored value
+      // via case-insensitive regex with escapeRegex protecting against
+      // injection — same pattern the name/vendor/type branches below
+      // use. Length cap is the only validator we need: it bounds the
+      // regex compile cost so a 10MB query string can't DoS the route.
+      // (Codex P2 rounds 13-15 on PR #487.)
       const trimmed = instanceId.trim();
-      if (/^[0-9a-fA-F]{1,32}$/.test(trimmed)) {
+      if (trimmed.length > 0 && trimmed.length <= 128) {
         const byInstanceId = await Filament.findOne({
           instanceId: {
             $regex: `^${escapeRegex(trimmed)}$`,
