@@ -43,6 +43,14 @@ describe("isLoopbackHostname — should return true for", () => {
     "::ffff:127.42.13.9",
     "::FFFF:127.0.0.1", // mixed case
 
+    // IPv4-mapped IPv6 unspecified — the v6-mapped form of 0.0.0.0
+    // (Codex P2 round 12 on PR #487)
+    "::ffff:0.0.0.0",
+    "[::ffff:0.0.0.0]",
+    "::ffff:0:0", // Node's URL parser normalises the dotted form here
+    "::ffff:0000:0000", // padded hex
+    "[::ffff:0:0]",
+
     // DNS absolute-name notation (trailing dot) — same meaning, but
     // URL.hostname preserves it, so any equality-based check has to
     // strip first. (Codex P2 round 3 on PR #487.)
@@ -113,6 +121,9 @@ describe("isLoopbackHostname — matches the URL.hostname output for common loop
     // IPv6 unspecified bind address (Codex P2 round 10 on PR #487)
     "http://[::]:3456",
     "http://[0:0:0:0:0:0:0:0]:3456",
+    // IPv4-mapped IPv6 unspecified (Codex P2 round 12 on PR #487)
+    "http://[::ffff:0.0.0.0]:3456",
+    "http://[::ffff:0:0]:3456",
   ];
   for (const url of urls) {
     it(url, () => {

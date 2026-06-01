@@ -62,6 +62,14 @@ export function isLoopbackHostname(hostname: string): boolean {
   // covers all of 127/8 in hex form.
   if (/^::ffff:7f[0-9a-f]{0,2}:[0-9a-f]{1,4}$/.test(h)) return true;
 
+  // IPv4-mapped IPv6 unspecified (the v6-mapped form of 0.0.0.0).
+  // Dotted: `::ffff:0.0.0.0`. Hex-normalised by Node's URL parser:
+  // `::ffff:0:0` (or with leading zeros `::ffff:0000:0000`). Same
+  // bind-anywhere semantic as bare 0.0.0.0 / ::. (Codex P2 round 12
+  // on PR #487.)
+  if (h === "::ffff:0.0.0.0") return true;
+  if (/^::ffff:0+:0+$/.test(h)) return true;
+
   return false;
 }
 
