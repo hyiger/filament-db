@@ -1168,9 +1168,18 @@
         "tags": [
           "Filaments"
         ],
-        "summary": "Match filament by name/vendor/type",
-        "description": "Finds the best-matching filament by exact name, vendor+type, or vendor-only. Returns a primary match and up to 5 candidates.",
+        "summary": "Match filament by instanceId or name/vendor/type",
+        "description": "Finds the best-matching filament by instanceId (highest-confidence), exact name, vendor+type, or vendor-only. Returns a primary match and up to 5 candidates.",
         "parameters": [
+          {
+            "name": "instanceId",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9a-fA-F]{1,32}$"
+            },
+            "description": "Exact instance-ID match (case-insensitive). Unambiguous because Filament DB auto-generates a unique 5-byte hex per filament — the same value NFC tags and Brother label-printer QR codes carry. When set and a match is found, the response carries that filament directly. When set but no match is found, the route falls through to name/vendor/type matching if those params are also supplied."
+          },
           {
             "name": "name",
             "in": "query",

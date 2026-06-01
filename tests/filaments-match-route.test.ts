@@ -84,6 +84,78 @@ describe("/api/filaments/match", () => {
     expect(body.candidates).toEqual([]);
   });
 
+  it("GH PR #487: returns a confident match on exact instanceId", async () => {
+    // The label-printer dialog's instance-ID QR mode encodes the bare
+    // 5-byte hex. Without this branch the QR resolves to nothing because
+    // /api/filaments/match originally only knew about name/vendor/type.
+    await Filament.create({
+      name: "Comgrow PLA Red",
+      vendor: "Comgrow",
+      type: "PLA",
+      instanceId: "bbf3c4352f",
+    });
+    const res = await matchFilaments(matchReq({ instanceId: "bbf3c4352f" }));
+    const body = await res.json();
+    expect(body.match?.name).toBe("Comgrow PLA Red");
+    expect(body.candidates).toEqual([]);
+  });
+
+  it("PR #487: instanceId match is case-insensitive", async () => {
+    await Filament.create({
+      name: "ABS+",
+      vendor: "eSun",
+      type: "ABS+",
+      instanceId: "deadbeef42",
+    });
+    const res = await matchFilaments(matchReq({ instanceId: "DEADBEEF42" }));
+    const body = await res.json();
+    expect(body.match?.name).toBe("ABS+");
+  });
+
+  it("PR #487: instanceId no-match falls through to name/vendor/type", async () => {
+    // A label-printer QR for a filament that no longer exists shouldn't
+    // 404 — fall through so the scanner UI can still offer suggestions
+    // from whatever else the caller provided.
+    await Filament.create({
+      name: "Bambu PC Black",
+      vendor: "Bambu Lab",
+      type: "PC",
+    });
+    const res = await matchFilaments(
+      matchReq({
+        instanceId: "0000000000",
+        name: "Bambu PC Black",
+      }),
+    );
+    const body = await res.json();
+    // No instanceId hit, but the name fallback fires.
+    expect(body.match?.name).toBe("Bambu PC Black");
+  });
+
+  it("PR #487: malformed instanceId values are rejected (no regex injection)", async () => {
+    // Stray query values shouldn't blow up the regex or accidentally
+    // match anything — the validator restricts to 1–32 hex chars.
+    const res = await matchFilaments(
+      matchReq({ instanceId: ".*; drop table filaments; --" }),
+    );
+    const body = await res.json();
+    expect(body.match).toBeNull();
+    expect(body.candidates).toEqual([]);
+  });
+
+  it("PR #487: instanceId excludes soft-deleted filaments", async () => {
+    await Filament.create({
+      name: "Trashed",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "deadbeefab",
+      _deletedAt: new Date(),
+    });
+    const res = await matchFilaments(matchReq({ instanceId: "deadbeefab" }));
+    const body = await res.json();
+    expect(body.match).toBeNull();
+  });
+
   it("excludes soft-deleted filaments from matches and candidates", async () => {
     await Filament.create({
       name: "Bambu PC Black",

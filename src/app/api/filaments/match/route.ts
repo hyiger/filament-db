@@ -22,6 +22,34 @@ export async function GET(request: NextRequest) {
     const name = params.get("name");
     const vendor = params.get("vendor");
     const type = params.get("type");
+    const instanceId = params.get("instanceId");
+
+    // 0. Instance-ID match — the strongest signal we have. Filament DB
+    //    auto-generates a unique 5-byte hex per filament (Prusament's
+    //    `brand_specific_instance_id` format) which is what NFC tags
+    //    and printed label QRs encode in instance-ID mode. An exact
+    //    instance-ID match is unambiguous: return the filament directly
+    //    and skip the name/vendor/type fallback. (Codex P2 round 13 on
+    //    PR #487 — without this branch the instance-ID QR mode on the
+    //    label printer dialog has no resolver, so scanning the printed
+    //    QR returns an opaque hex string with nowhere to go.)
+    if (instanceId) {
+      // Normalize: instance IDs are stored lowercase, but a QR scan or
+      // user paste could be any case. Restrict to plausible shapes
+      // (1-32 hex) so a stray query value can't blow up the regex.
+      const normalized = instanceId.trim().toLowerCase();
+      if (/^[0-9a-f]{1,32}$/.test(normalized)) {
+        const byInstanceId = await Filament.findOne({
+          instanceId: normalized,
+          _deletedAt: null,
+        }).lean();
+        if (byInstanceId) {
+          return NextResponse.json({ match: byInstanceId, candidates: [] });
+        }
+      }
+      // No match → fall through so the caller can still get name /
+      // vendor / type suggestions if they supplied those alongside.
+    }
 
     // 1. Exact name match (case-insensitive) — a confident match.
     if (name) {
