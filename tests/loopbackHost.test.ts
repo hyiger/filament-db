@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isLoopbackHostname } from "../electron/loopback-host";
+import { isLoopbackHostname } from "../src/lib/loopbackHost";
 
 /**
  * Pin every loopback hostname shape we care about, so a future

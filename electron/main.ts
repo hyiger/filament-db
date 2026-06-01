@@ -6,7 +6,7 @@ import Store from "electron-store";
 import http from "http";
 import { NfcService } from "./nfc-service";
 import { listLabelPrinters, printLabel as printLabelToDevice } from "./label-printer";
-import { isLoopbackHostname } from "./loopback-host";
+import { isLoopbackHostname } from "../src/lib/loopbackHost";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
 import { initAutoUpdater } from "./auto-updater";

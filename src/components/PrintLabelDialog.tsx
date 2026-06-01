@@ -9,6 +9,7 @@ import {
   renderLabelPreviewDataUrl,
 } from "@/lib/labelBitmap";
 import { encodeLabel, packGrayscaleBitmap } from "@/lib/labelEncoder";
+import { isLoopbackUrl } from "@/lib/loopbackHost";
 
 /**
  * Print-label dialog for the filament detail page.
@@ -144,14 +145,14 @@ export default function PrintLabelDialog({
       };
     }
     // Web case: window.location.origin is usually a real URL. Fall
-    // back when it's not localhost. The main-process validator in
-    // electron/main.ts isLoopbackHostname() is the security boundary;
-    // this regex is the matching UX gate — keep it covering the same
-    // shapes (localhost, 127/8, ::1 bare + bracketed, 0.0.0.0).
+    // back when it's not localhost. We share the same helper the
+    // main-process validator uses (src/lib/loopbackHost.ts) so the
+    // UX gate and the security boundary can't drift — Codex P2 round
+    // 11 caught a previous regex here that missed `localhost.`,
+    // `[::]`, IPv4-mapped IPv6, etc. that the main-process check
+    // already rejects.
     const origin = window.location.origin;
-    const isLocalhost =
-      /^(https?:\/\/)?(localhost|127(?:\.\d{1,3}){3}|::1|\[::1\]|0\.0\.0\.0)(:|\/|$)/i.test(origin);
-    if (!isLocalhost) {
+    if (!isLoopbackUrl(origin)) {
       return {
         deepLinkUrl: `${origin}/filaments/${filament._id}`,
         deepLinkAvailable: true,
