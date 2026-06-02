@@ -1175,7 +1175,7 @@ function FilamentDetail() {
                   value={weightInput}
                   onChange={(e) => setWeightInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleWeightUpdate(); }}
-                  placeholder={filament.totalWeight != null ? `${filament.totalWeight}g` : "grams"}
+                  placeholder={filament.totalWeight != null ? `${filament.totalWeight}g` : t("detail.spool.weightPlaceholder")}
                 />
                 <button
                   onClick={handleWeightUpdate}
@@ -1911,7 +1911,7 @@ function SpoolCard({
             value={weightInput}
             onChange={(e) => setWeightInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") handleSave(); }}
-            placeholder={spool.totalWeight != null ? `${spool.totalWeight}g` : "grams"}
+            placeholder={spool.totalWeight != null ? `${spool.totalWeight}g` : t("detail.spool.weightPlaceholder")}
             aria-label={t("detail.spool.scaleWeightAriaLabel", {
               label: spool.label || t("detail.spool.unnamed"),
             })}

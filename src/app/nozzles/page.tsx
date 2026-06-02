@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { nozzleTypeLabel } from "@/lib/nozzleTypes";
 
 interface Nozzle {
   _id: string;
@@ -184,7 +185,7 @@ export default function NozzlesPage() {
                       type="checkbox"
                       checked={selected.has(n._id)}
                       onChange={() => toggleSelect(n._id)}
-                      aria-label={n.name || "Select"}
+                      aria-label={n.name || t("common.select")}
                       className="accent-red-600"
                     />
                   </td>
@@ -192,7 +193,7 @@ export default function NozzlesPage() {
                   <td className="py-2 px-2 text-right">{n.diameter}mm</td>
                   <td className="py-2 px-2">
                     <span className="px-2 py-0.5 bg-gray-200 dark:bg-gray-800 rounded text-xs">
-                      {n.type}
+                      {nozzleTypeLabel(n.type, t)}
                     </span>
                   </td>
                   <td className="py-2 px-2 text-center">
