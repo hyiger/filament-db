@@ -138,8 +138,24 @@ export async function POST(request: NextRequest) {
           );
           updated++;
         } else {
-          // If a soft-deleted doc with the same name exists, resurrect it
-          const softDeleted = await Filament.findOne({ name: importName, _deletedAt: { $ne: null } });
+          // If a soft-deleted doc with the same name exists, resurrect it.
+          //
+          // GH #499: filter on `_purged: { $ne: true }` to match every
+          // other resurrection path (filament-import, bambustudio,
+          // restore, prusaslicer). A `_purged: true` doc is the v1.15
+          // permanent-delete tombstone — a one-way "gone forever on both
+          // peers" signal documented on the Filament model. Without this
+          // filter, an Atlas import containing a name that the user
+          // permanent-deleted locally would flip `_deletedAt` back to
+          // null while leaving `_purged: true` set — the row becomes
+          // invisible everywhere (list / trash both filter on `_purged:
+          // { $ne: true }`) but still occupies the name on the partial-
+          // unique active-name index, so the user can't recreate it.
+          const softDeleted = await Filament.findOne({
+            name: importName,
+            _deletedAt: { $ne: null },
+            _purged: { $ne: true },
+          });
           if (softDeleted) {
             await Filament.updateOne(
               { _id: softDeleted._id },
@@ -148,6 +164,11 @@ export async function POST(request: NextRequest) {
             );
             updated++;
           } else {
+              // The partial-unique index on `name` is filtered to
+            // `_deletedAt: null`, and `_purged` rows by definition have
+            // `_deletedAt != null` (the permanent-delete handler keeps
+            // the tombstone date set), so a `_purged` row owning this
+            // name doesn't block the create below.
             await Filament.create(filamentData);
             created++;
           }
