@@ -190,6 +190,11 @@ describe("parseBambuStudioProfile", () => {
       bedTempFirstLayer: 65,
       fanMinSpeed: 50,
       fanMaxSpeed: 100,
+      // GH #508: fanBridgeSpeed must round-trip too. Pre-fix
+      // calibrationToOrcaSlicerKeys never emitted bridge_fan_speed even
+      // though the importer side declared it in CALIBRATION_KEYS, so
+      // every export → calibrate → re-import cycle silently dropped it.
+      fanBridgeSpeed: 70,
     };
     const exported = calibrationToOrcaSlicerKeys(original);
     // Stamp a minimum identifier so the parser accepts the payload.
@@ -203,6 +208,7 @@ describe("parseBambuStudioProfile", () => {
     expect(calibrationHints.retractLift).toBe(original.retractLift);
     expect(calibrationHints.fanMinSpeed).toBe(original.fanMinSpeed);
     expect(calibrationHints.fanMaxSpeed).toBe(original.fanMaxSpeed);
+    expect(calibrationHints.fanBridgeSpeed).toBe(original.fanBridgeSpeed);
   });
 
   it("stashes unknown keys in the settings passthrough bag", () => {

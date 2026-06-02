@@ -18,31 +18,38 @@ describe("deriveArrangement", () => {
     expect(deriveArrangement([])).toBe("solid");
   });
 
-  it("returns 'coextruded' when tag 29 is present", () => {
+  // GH #507: canonical OPT_TAG ids — 27 = gradient, 28 = dual_color,
+  // 29 = triple_color. Both dual and triple render as coextruded.
+  it("returns 'coextruded' when tag 28 (dual_color) is present", () => {
+    expect(deriveArrangement([28])).toBe("coextruded");
+    expect(deriveArrangement([16, 28])).toBe("coextruded"); // tag 16 = MATTE
+  });
+
+  it("returns 'coextruded' when tag 29 (triple_color) is present", () => {
     expect(deriveArrangement([29])).toBe("coextruded");
-    expect(deriveArrangement([5, 29])).toBe("coextruded"); // tag 5 = matte
   });
 
-  it("returns 'gradient' when tag 28 is present", () => {
-    expect(deriveArrangement([28])).toBe("gradient");
-    expect(deriveArrangement([3, 28])).toBe("gradient");
+  it("returns 'gradient' when tag 27 (gradient) is present", () => {
+    expect(deriveArrangement([27])).toBe("gradient");
+    expect(deriveArrangement([3, 27])).toBe("gradient");
   });
 
-  it("returns 'coextruded' when BOTH tags are present (coextruded wins)", () => {
+  it("returns 'coextruded' when both coextruded and gradient tags are present (coextruded wins)", () => {
     // A "coextruded gradient" is theoretically possible per OpenPrintTag
     // spec; the rendering UI can only pick one mode, so the more
     // structural property (cross-section) wins over change-over-time.
-    expect(deriveArrangement([28, 29])).toBe("coextruded");
-    expect(deriveArrangement([29, 28])).toBe("coextruded");
+    expect(deriveArrangement([27, 28])).toBe("coextruded");
+    expect(deriveArrangement([29, 27])).toBe("coextruded");
   });
 
   it("returns 'solid' when only non-arrangement tags are present", () => {
-    // Tags 1–5, etc., are finishes (matte/silk/sparkle/glow/transparent).
+    // Tags 1–5 are FOOD_SAFE/BIODEGRADABLE/ABRASIVE/WATER_SOLUBLE/UV_RESISTANT etc;
+    // none of them describe color arrangement.
     expect(deriveArrangement([1, 2, 3, 4, 5])).toBe("solid");
   });
 
   it("type-checks to ColorArrangement", () => {
-    const result: ColorArrangement = deriveArrangement([29]);
+    const result: ColorArrangement = deriveArrangement([28]);
     expect(["solid", "coextruded", "gradient"]).toContain(result);
   });
 });

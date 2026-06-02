@@ -59,6 +59,16 @@ export async function POST(request: NextRequest) {
   delete body.instanceId;
   delete body.syncId;
 
+  // GH #524.4: dedupe ref arrays at entry so a body with the same valid id
+  // twice doesn't trip the `activeCount !== body.installedNozzles.length`
+  // comparison and 400 with the misleading "no longer exist." message.
+  if (Array.isArray(body.installedNozzles)) {
+    body.installedNozzles = Array.from(new Set(body.installedNozzles.map(String)));
+  }
+  if (Array.isArray(body.installedBedTypes)) {
+    body.installedBedTypes = Array.from(new Set(body.installedBedTypes.map(String)));
+  }
+
   try {
     // Validate that all referenced nozzle IDs exist and are active
     if (body.installedNozzles?.length > 0) {

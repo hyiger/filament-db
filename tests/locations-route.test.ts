@@ -193,7 +193,7 @@ describe("/api/locations", () => {
         name: "Inherit Variant",
         vendor: "Test",
         type: "PLA",
-        color: "#abc",
+        color: "#aabbcc",
         parentId: parent._id,
         // spoolWeight intentionally omitted — inherit.
         spools: [
