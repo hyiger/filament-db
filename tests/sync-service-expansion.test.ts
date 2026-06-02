@@ -698,6 +698,66 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
+  // ── GH #511 — slim-diff fetch + hydrate ───────────────────────────────
+
+  describe("#511 — slim diff + hydrate transfers the full body", () => {
+    it("pushes a heavy local-only filament body (photoDataUrl) intact", async () => {
+      // The diff loop reads only the slim projection, but the push must
+      // still carry the full document — including the spool subfields
+      // (photoDataUrl) the projection omits. This pins that the hydrate
+      // step refetches the body before transfer.
+      const bigPhoto = "data:image/png;base64," + "A".repeat(4096);
+      await localClient.db("filament-db").collection("filaments").insertOne({
+        _id: new ObjectId(),
+        name: "Heavy Body",
+        vendor: "T",
+        type: "PLA",
+        syncId: "heavy-1",
+        spools: [{ label: "S1", totalWeight: 1000, photoDataUrl: bigPhoto }],
+        usageHistory: [{ grams: 12, date: new Date("2026-05-01T00:00:00Z") }],
+        _deletedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+      expect(results.find((r) => r.collection === "filaments")?.pushed).toBe(1);
+
+      const remote = await remoteClient
+        .db("filament-db")
+        .collection("filaments")
+        .findOne({ syncId: "heavy-1" });
+      // Full body survived the slim-diff → hydrate → transfer path.
+      expect(remote?.spools?.[0]?.photoDataUrl).toBe(bigPhoto);
+      expect(remote?.spools?.[0]?.totalWeight).toBe(1000);
+    });
+
+    it("pulls a newer remote body intact on a last-write-wins update", async () => {
+      const syncId = "heavy-lww";
+      const older = new Date("2026-05-01T00:00:00Z");
+      const newer = new Date("2026-05-10T00:00:00Z");
+      await localClient.db("filament-db").collection("filaments").insertOne({
+        _id: new ObjectId(), name: "LWW", vendor: "T", type: "PLA", syncId,
+        spools: [{ label: "old", totalWeight: 500 }],
+        _deletedAt: null, createdAt: older, updatedAt: older,
+      });
+      await remoteClient.db("filament-db").collection("filaments").insertOne({
+        _id: new ObjectId(), name: "LWW", vendor: "T", type: "PLA", syncId,
+        spools: [{ label: "new", totalWeight: 999, photoDataUrl: "data:image/png;base64,ZZZZ" }],
+        _deletedAt: null, createdAt: older, updatedAt: newer,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      const local = await localClient.db("filament-db").collection("filaments").findOne({ syncId });
+      // Remote was newer → pulled with its full body (incl. photoDataUrl).
+      expect(local?.spools?.[0]?.totalWeight).toBe(999);
+      expect(local?.spools?.[0]?.photoDataUrl).toBe("data:image/png;base64,ZZZZ");
+    });
+  });
+
   // ── GH #317 — conflict-resolution edge cases ──────────────────────────
 
   describe("#317 — conflict resolution", () => {
