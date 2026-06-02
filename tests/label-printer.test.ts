@@ -66,11 +66,17 @@ vi.mock("serialport", () => {
     ) {
       this.path = opts.path;
       h.state.instances.push(this as unknown as never);
+      // With autoOpen:false the real SerialPort does NOT forward the
+      // constructor callback (it's only wired to the implicit open when
+      // autoOpen is on) — a bad path/options THROWS synchronously instead.
+      // So a "constructor error" must surface as a synchronous throw, which
+      // is exactly what the transport's try/catch around `new SerialPort`
+      // is there to catch. Calling cb here would exercise a code path the
+      // real dependency never takes (Codex P3 on PR #543).
       if (h.state.cfg.constructorError) {
-        cb?.(h.state.cfg.constructorError);
-        return;
+        throw h.state.cfg.constructorError;
       }
-      cb?.(null);
+      // autoOpen:false → the callback is never invoked on success either.
     }
 
     open(cb: (err: Error | null) => void) {

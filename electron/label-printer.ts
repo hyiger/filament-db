@@ -146,10 +146,14 @@ export function printLabel(
           autoOpen: false,
         },
         (err) => {
-          // SerialPort's constructor takes an optional open callback,
-          // but we want to control timing — use autoOpen: false and call
-          // .open() below. This handler fires only on constructor errors
-          // (which fire before .open() so there's no port to close).
+          // SerialPort's constructor takes an optional open callback, but
+          // with autoOpen:false it is NOT forwarded — the callback is only
+          // wired to the implicit open when autoOpen is on. A bad path /
+          // options THROWS synchronously and is caught by the try/catch
+          // below instead. This handler is therefore defensive only (it
+          // won't fire under autoOpen:false); the real constructor-error
+          // path is the catch block. Kept as belt-and-braces in case a
+          // future serialport version changes the contract.
           if (err) settleWithCleanup(err);
         },
       );
