@@ -32,7 +32,7 @@ Click any filament name in the table to see its full details:
    - **Import from TDS** to extract properties from a Technical Data Sheet URL using AI (requires API key — see [AI Settings](#ai-settings))
    - **Prusament QR** to fetch specs from a Prusament spool QR code
    - **Load from INI** to pick a profile from a PrusaSlicer config bundle
-   - **Clone Existing** to copy identity fields from another filament and inherit its settings as a variant. (On a filament's detail page, a dedicated **"+ Create variant"** button is also available on root filaments — quicker path when you already know which filament should be the parent.)
+   - **Duplicate Existing** to copy identity fields from another filament and inherit its settings as a variant. (On a filament's detail page, a dedicated **"+ Create variant"** button is also available on root filaments — quicker path when you already know which filament should be the parent.)
 3. Fill in the required fields (name, vendor, type)
 4. Optionally set temperatures, cost, density, color, fan settings, retraction, shrinkage, pressure advance, and other properties
 5. Select compatible nozzles and enter per-nozzle calibration overrides
@@ -438,7 +438,7 @@ Each filament has a unique instance identifier (5-byte hex string, e.g. `2acc210
 
 ---
 
-## Label Printer (Desktop App Only) *(v1.33)*
+## Label Printer (Desktop App Only) *(v1.34)*
 
 Print a 24mm-tape spool label directly from the filament detail page to a **Brother PT-P710BT** (P-touch CUBE) over Bluetooth. The label carries a QR code and the filament name. Two QR payload modes you can pick per print:
 
@@ -506,7 +506,7 @@ Click any material row to expand a detail panel with three columns:
 
 ### Importing Materials
 
-1. Select materials using checkboxes (or use **Select All** / **Clear Selection** in the toolbar)
+1. Select materials using checkboxes (or use **Select All** / **Deselect all** in the toolbar)
 2. Click **"Import Selected (N)"** to import
 3. Materials are matched by name and vendor:
    - **New materials** are created with all available fields
@@ -631,7 +631,7 @@ The **Share** page at `/share` lets you publish a static snapshot of selected fi
 
 ## Filament Comparison *(v1.11)*
 
-The **Compare** page at `/compare` takes up to 8 filaments (pass via query string, or add from the filament list) and renders a side-by-side table of temperatures, cost, density, diameter, calibrations, and current remaining weight. Useful when deciding which of several similar filaments to use for a job. Since v1.34.1 the picker has the same search-as-you-type, material-type filter chips, and "show selected only" toggle as `/share` (only appearing at ≥12 filaments) so picking 4–8 rows out of a large catalog stays quick.
+The **Compare** page at `/compare` takes up to 8 filaments (picked in its built-in picker, or passed via the `?ids=` query string) and renders a side-by-side table of temperatures, cost, density, diameter, calibrations, and current remaining weight. Useful when deciding which of several similar filaments to use for a job. Since v1.34.1 the picker has the same search-as-you-type, material-type filter chips, and "show selected only" toggle as `/share` (only appearing at ≥12 filaments) so picking 4–8 rows out of a large catalog stays quick.
 
 ## Spool Inventory *(v1.32)*
 

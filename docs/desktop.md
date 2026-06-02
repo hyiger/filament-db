@@ -57,7 +57,7 @@ The packaged app polls GitHub Releases for new versions and surfaces a banner at
 - **Windows**: unsigned NSIS installers auto-install fine. The user sees a SmartScreen warning the next time the app launches.
 - **Linux**: AppImage updates work when the app was launched via AppImageLauncher or a similar integration. `.deb` builds are not auto-updated — use your package manager instead.
 
-**How it finds updates:** the release workflow produces `latest-mac.yml`, `latest-linux.yml`, and `latest-linux-arm64.yml` on every `v*` tag. `electron-updater` reads those manifests from the GitHub release on startup (with a 20-second delay so the UI has time to mount) and every 6 hours while the app is running.
+**How it finds updates:** the release workflow produces the `electron-updater` manifests on every `v*` tag — `latest.yml` (Windows), `latest-mac.yml` / `latest-mac-x64.yml` (macOS), and `latest-linux.yml` / `latest-linux-arm64.yml` (Linux). `electron-updater` reads those manifests from the GitHub release on startup (with a 20-second delay so the UI has time to mount) and every 6 hours while the app is running.
 
 **In dev:** the IPC handlers are always registered but short-circuit to `{ ok: false, error: "dev-mode" }` for mutating actions so the banner never triggers in a packaged-false run.
 
@@ -86,7 +86,7 @@ npm run electron:build
 This runs five steps:
 1. `npm run build` -- builds Next.js in standalone mode
 2. `npm run electron:fixlinks` -- resolves symlinks in the standalone output and copies it with static assets
-3. `npm run electron:rebuild` -- rebuilds native modules (PC/SC) for Electron's Node.js
+3. `npm run electron:rebuild` -- rebuilds the native modules for Electron's Node.js ABI: `@pokusew/pcsclite` (PC/SC, for NFC) and `@serialport/bindings-cpp` (for the Brother label printer)
 4. `npm run electron:compile` -- bundles Electron TypeScript with esbuild
 5. `npm run electron:pack` -- packages everything with electron-builder
 
@@ -107,7 +107,7 @@ Then create a release on GitHub:
 gh release create v1.0.0 --title "v1.0.0" --generate-notes
 ```
 
-The workflow runs builds on macOS, Windows, and Ubuntu runners in parallel (Linux builds both x64 and arm64 via cross-compilation). Each platform's installers are uploaded to the GitHub Release automatically.
+The workflow runs builds on macOS, Windows, and Ubuntu runners in parallel — six jobs in total, since macOS (arm64 + x64), Windows (x64 + arm64), and Linux (x64 + arm64) each build both architectures (the second arch cross-compiled). Each platform's installers are uploaded to the GitHub Release automatically.
 
 ### What the workflow does:
 1. Checks out the code
@@ -154,7 +154,7 @@ The desktop app wraps the Next.js application in Electron:
 │  │ electron/preload.ts                   │  │
 │  │ - Secure IPC bridge (contextBridge)   │  │
 │  │ - Exposes: getConfig, saveConfig,     │  │
-│  │   resetConfig, showMessage,           │  │
+│  │   resetConfig, getRuntimeMode,        │  │
 │  │   nfcGetStatus, nfcReadTag,           │  │
 │  │   nfcWriteTag, sync status/trigger,   │  │
 │  │   event listeners                     │  │

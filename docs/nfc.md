@@ -120,11 +120,10 @@ The "Loaded" label persists after the tag-read dialog is dismissed (so you can s
 
 The app communicates with the ACR1552U via PC/SC using `@pokusew/pcsclite`:
 
-- **Connection**: Tries `SCARD_SHARE_SHARED` first (Windows/Linux), falls back to `SCARD_SHARE_DIRECT` (macOS workaround for ISO 15693)
+- **Connection**: Always connects with `SCARD_SHARE_SHARED`. On macOS the built-in `ifd-ccid` driver and Apple's `ifd-acsccid` driver both register an instance of the ACR1552U, but only the ACS driver handles ISO 15693 — the app tries a SHARED connect on each registered reader instance and uses whichever succeeds (it also waits briefly on hot-plug for both driver instances to register).
 - **Tag detection**: Tries MIFARE Classic read first (Bambu); on failure, falls through to ISO 15693 (OpenPrintTag)
 - **OpenPrintTag commands**: ACR1552U Pass Through (`FF FB`) wrapping ISO 15693 Read/Write Single Block commands
 - **Bambu commands**: Standard PC/SC pseudo-APDUs for MIFARE Classic — Get UID (`FF CA`), Load Key (`FF 82`), Authenticate (`FF 86`), Read Binary (`FF B0`)
-- **Fallback**: PCSC 2.0 Part 3 Transparent Exchange (`FF C2 00 01`) via `SCardControl` for DIRECT mode
 
 ### Data Format
 
@@ -136,7 +135,7 @@ The app communicates with the ACR1552U via PC/SC using `@pokusew/pcsclite`:
 **Bambu Lab (MIFARE Classic)**:
 - **Tag**: MIFARE Classic 1K — 16 sectors × 4 blocks × 16 bytes, encrypted with per-sector keys
 - **Key derivation**: HKDF-SHA256 with master key `9a759cf2c4f7caff222cb9769b41bc96`, UID as IKM, info `"RFID-A\0"` → 16 sector keys × 6 bytes
-- **Data layout**: Sectors 0–4 contain filament data (material type, color RGBA, temperatures, weight, diameter, production date, tray UID); sectors 5–9 are empty; sectors 10–15 contain an RSA-2048 signature
+- **Data layout**: The app reads sectors 0–9 as data (filament fields — material type, color RGBA, temperatures, weight, diameter, production date, tray UID — live in sectors 0–4); sectors 10–15 hold an RSA-2048 signature and are skipped
 - **Encoding**: All numbers are little-endian (uint16 LE, float32 LE); strings are null-padded ASCII
 - **Read-only**: Tags are RSA-2048 signed — changing any byte invalidates the signature
 
@@ -185,24 +184,32 @@ The app communicates with the ACR1552U via PC/SC using `@pokusew/pcsclite`:
 
 The following fields are encoded into each NFC tag:
 
+CBOR keys below are the actual values from `OPT_KEY` in `src/lib/openprinttag.ts`.
+
 | Field | CBOR Key | Description |
 |-------|----------|-------------|
-| Material name | 8 | Filament name |
-| Brand name | 9 | Vendor name |
-| Material type | 10 | PLA, PETG, ABS, etc. (numeric enum) |
-| Primary color | 11 | RGB color bytes |
-| Density | 17 | g/cm³ (float16) |
-| Filament diameter | 22 | mm (float16) |
-| Temperatures | 12–16, 18 | Nozzle (min/max), bed (min/max), chamber, preheat |
-| Weights | 19–21 | Net weight, actual weight, empty spool weight |
-| Instance ID | 5 | Brand-specific instance identifier (5-byte hex string, max 16 chars) |
-| Drying temperature | 57 | °C |
-| Drying time | 58 | Minutes |
+| Material type | 9 | PLA, PETG, ABS, etc. |
+| Material name | 10 | Filament name |
+| Brand name | 11 | Vendor name |
+| Net (nominal) full weight | 16 | Net weight, grams |
+| Actual netto full weight | 17 | Measured net weight, grams |
+| Empty container weight | 18 | Empty spool weight, grams |
+| Primary color | 19 | RGBA color bytes |
+| Secondary colors | 20–24 | `secondary_color_0..4` (multi-color filaments) |
 | Transmission distance | 27 | HueForge TD value |
+| Tags | 28 | Flags array (abrasive, soluble, matte, silk, sparkle, coextruded, gradual color change, etc.) |
+| Density | 29 | g/cm³ |
+| Filament diameter | 30 | mm |
 | Shore hardness A | 31 | Flexible materials (TPU/TPE/PEBA) |
 | Shore hardness D | 32 | Rigid materials |
-| Tags | 28 | Flags array (42 supported tags: abrasive, soluble, matte, silk, carbon fiber, high speed, recycled, etc.) |
-| Consumed weight | aux 0 | Tracked in auxiliary region (if set) |
+| Print temperatures | 34–35 | Min / max print (nozzle) temperature |
+| Preheat temperature | 36 | °C |
+| Bed temperatures | 37–38 | Min / max bed temperature |
+| Chamber temperature | 41 | °C |
+| Drying temperature | 57 | °C |
+| Drying time | 58 | Minutes |
+| Instance ID | aux 5 | `brand_specific_instance_id` — 5-byte hex string, max 16 chars |
+| Consumed weight | aux 0 | Tracked in the auxiliary region (if set) |
 
 Instance IDs are auto-generated for each filament (matching Prusament's 5-byte hex format, e.g. `2acc21072a`) and are written as the `brand_specific_instance_id` field per the OpenPrintTag specification.
 
@@ -242,7 +249,7 @@ These are mapped to the same data model as OpenPrintTag fields, so the matching,
 
 - Ensure the tag is centered on the reader and not moving
 - SLIX2 tags have a small antenna -- position matters
-- On macOS, `SCARD_SHARE_SHARED` can be intermittent for ISO 15693; the app falls back to DIRECT mode automatically
+- On macOS, two driver instances claim the ACR1552U but only Apple's `ifd-acsccid` handles ISO 15693; the app tries a SHARED connect on each reader instance and uses whichever works, so a transient failure on one instance is recovered automatically
 
 ### Write fails on last block (SW 640F)
 

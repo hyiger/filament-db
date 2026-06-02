@@ -58,7 +58,7 @@ Tests run against Node.js 20 and 22. Coverage reports are uploaded as artifacts 
 
 ### Release Workflow (`.github/workflows/release.yml`)
 
-Runs automatically on version tags (`v*`). Tests are run on all four build configurations (macOS, Windows, Linux x64, Linux arm64) before building the Electron installers. If tests fail, the build is skipped for that platform.
+Runs automatically on version tags (`v*`). Tests are run on all six build configurations (macOS arm64 + x64, Windows x64 + arm64, Linux x64 + arm64) before building the Electron installers. If tests fail, the build is skipped for that platform.
 
 ## Test Setup
 

@@ -212,7 +212,7 @@ Browse the [OpenPrintTag community database](https://github.com/OpenPrintTag/ope
    - **Identity** -- brand, type, color swatch, UUID
    - **Properties** -- density, temperatures (nozzle, bed, chamber, drying), hardness, transmission distance
    - **Data Quality & Links** -- completeness score bar, photo, product URL
-5. Select materials using checkboxes (or **Select All** / **Clear Selection** in the toolbar)
+5. Select materials using checkboxes (or **Select All** / **Deselect all** in the toolbar)
 6. Click **Import Selected (N)** to import the selected materials
 7. Imported filaments are matched by name and vendor -- existing filaments are updated (only null fields are filled), new filaments are created
 

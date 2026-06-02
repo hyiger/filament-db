@@ -152,7 +152,7 @@ On the **Add New Filament** page, the **"Populate from"** toolbar offers four bu
 - **Prusament QR** -- enter a spool ID or URL from a Prusament QR code to fetch full specs.
 - **Import from TDS** -- paste a Technical Data Sheet URL and the AI extracts temperatures, density, drying specs, Tg, HDT, shore hardness, and more. Requires an AI API key configured in Settings (see [Step 5b](#step-5b-import-from-a-technical-data-sheet)).
 - **Load from INI** -- upload a PrusaSlicer `.ini` config bundle. If it contains one filament profile, the form fills automatically. If multiple profiles are found, a picker dialog lets you choose which one.
-- **Clone Existing** -- search your library and select a filament. Only identification fields (name with " (copy)" suffix, color, vendor, type) carry over; everything else inherits live from the parent so the new variant tracks the parent's calibrations going forward.
+- **Duplicate Existing** -- search your library and select a filament. Only identification fields (name with " (copy)" suffix, color, vendor, type) carry over; everything else inherits live from the parent so the new variant tracks the parent's calibrations going forward.
 - **NFC Tag** (desktop only, no button — automatic) -- with a reader connected, place a tagged spool on it. The form auto-populates with material, vendor, temps, density, and color from the OpenPrintTag data.
 
 After populating, review and adjust any fields before clicking **Create Filament**.
@@ -292,14 +292,14 @@ Variants share a parent's settings (temperatures, density, retraction, calibrati
 There are two affordances on the detail page. They both produce a new variant, but they pre-fill the form differently:
 
 - **"+ Create variant"** (fuchsia button) — only shown on **root** filaments (i.e. not already a variant). The form opens with the parent linked, **vendor** and **type** pre-filled from the parent, and the parent's other values surfaced as **placeholder text** in each input (not pre-populated). Leaving a field blank keeps the variant inheriting from the parent live; type into a field to override only that one. This is the quickest path when you want a true variant that shares everything except color.
-- **Clone** (amber button) — shown on **every** filament, root or variant. The form opens with **name** (suffixed with " (copy)"), **color**, **colorName**, **vendor**, and **type** copied verbatim from the source filament — a full identity duplicate. The parent relationship is set automatically: cloning a root makes the new filament a variant of that root; cloning a variant makes the new filament a **sibling** under the same parent. Best when you want a starting point you can heavily edit.
+- **Duplicate** (amber button) — shown on **every** filament, root or variant. The form opens with **name** (suffixed with " (copy)"), **color**, **colorName**, **vendor**, and **type** copied verbatim from the source filament — a full identity duplicate. The parent relationship is set automatically: duplicating a root makes the new filament a variant of that root; duplicating a variant makes the new filament a **sibling** under the same parent. Best when you want a starting point you can heavily edit.
 
 Steps:
 
 1. Open a filament's detail page.
-2. Click **"+ Create variant"** (if available) or **Clone**.
+2. Click **"+ Create variant"** (if available) or **Duplicate**.
 3. The form opens pre-filled per the rules above. The fields that aren't pre-filled (or that you don't override) inherit live from the parent — that's the design from GH #106; placeholder text shows what you'll get.
-4. Edit the **name** (Clone only — Create variant leaves it blank for you to type), pick a new **color**, and optionally adjust **colorName**.
+4. Edit the **name** (Duplicate only — Create variant leaves it blank for you to type), pick a new **color**, and optionally adjust **colorName**.
 5. Click **Create Filament**. The new filament is registered as a variant of the parent and any future edits to the parent's calibrations / temperatures / settings flow through automatically to fields you didn't explicitly override.
 
 > **Design rule**: variants-of-variants are not supported. A parent must be a top-level filament. This is why the "+ Create variant" button is hidden on variant pages, and why cloning a variant gives you a sibling instead of nesting.
@@ -573,7 +573,7 @@ Recipients who open the URL see a read-only list. They can multi-select and clic
 
 ## Step 24: Compare Filaments *(v1.11)*
 
-On the filament list, tick the checkbox next to 2–4 rows and click **Compare**. The `/compare` page lays them out side-by-side — temperatures, cost, density, calibrations, and remaining weight — so you can pick the right one for a job.
+Open the **Compare** page (top-nav link, or go to `/compare`). It has a built-in filament picker — search by name/vendor/type and tick up to **8** filaments — then lays them out side-by-side: temperatures, cost, density, calibrations, and remaining weight, so you can pick the right one for a job. You can also deep-link a comparison via `/compare?ids=<id1>,<id2>`.
 
 ## Step 25: Bulk Import Spools from a Spreadsheet *(v1.11)*
 
@@ -591,7 +591,7 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 | Action | Where |
 |--------|-------|
 | Add filament | Home > + Add Filament |
-| Populate from NFC / TDS / INI / Clone | Add Filament > Populate from toolbar |
+| Populate from NFC / TDS / INI / Duplicate | Add Filament > Populate from toolbar |
 | Import from TDS | Add Filament > Import from TDS |
 | Configure AI provider | Settings > AI Features |
 | Import from PrusaSlicer | Home > Import/Export > Import INI |
@@ -605,7 +605,7 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 | Backup database | Settings > Backup & Restore > Download Snapshot |
 | View filament details | Home > click filament name |
 | Edit filament | Detail page > Edit |
-| Add color variant | Detail page > + Add Color |
+| Add color variant | Detail page > Create variant |
 | Manage nozzles | Settings > Nozzles |
 | Manage printers | Settings > Printers |
 | Browse API docs | Settings > API Documentation (or navigate to `/api-docs`) |
@@ -619,7 +619,7 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 | Log a dry cycle | Spool detail > + Log dry cycle |
 | View usage analytics | Top nav > Analytics |
 | Set low-stock threshold | Filament edit > Stock settings |
-| Compare filaments | List > select rows > Compare |
+| Compare filaments | Compare page > pick up to 8 (or /compare?ids=…) |
 | Publish a shared catalog | Top nav > Share > + New |
 | Import spools from CSV | Home > Import > Spools from CSV |
 | Switch theme | Settings > Theme |

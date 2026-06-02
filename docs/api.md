@@ -31,9 +31,12 @@
 | `GET` | `/api/filaments/:id/calibration` | Get calibration data for a filament and nozzle diameter |
 | `GET` | `/api/filaments/:id/spool-check` | Check if a spool has enough filament for a print job |
 | `POST` | `/api/filaments/:id` | Sync a filament preset back from PrusaSlicer |
+| `GET` | `/api/filaments/:id/prusaslicer` | Download one filament as a PrusaSlicer preset (`.ini`) |
+| `GET` | `/api/filaments/:id/orcaslicer` | Download one filament as an OrcaSlicer preset (`.json`) |
 | `GET` | `/api/filaments/:id/bambustudio` | Download one filament as a Bambu Studio preset (.json) |
 | `POST` | `/api/filaments/:id/bambustudio` | Sync a Bambu Studio preset INTO this filament (pinned by id) |
 | `POST` | `/api/filaments/bambustudio` | Import a Bambu Studio preset by name (upsert + auto-detect calibration) |
+| `GET` | `/api/filaments/colors` | Distinct `(colorName, color)` pairs across non-deleted filaments (backs the color-name typeahead) |
 
 ### Spools
 
@@ -400,7 +403,8 @@ Returns:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `GET` | `/api/filaments/orcaslicer` | Export filaments as OrcaSlicer-compatible JSON profiles |
+| `GET` | `/api/filaments/orcaslicer` | Export all filaments as OrcaSlicer-compatible JSON profiles (bundle) |
+| `GET` | `/api/filaments/:id/orcaslicer` | Export a single filament as an OrcaSlicer preset (`.json`) |
 | `POST` | `/api/filaments/:name-or-id/orcaslicer` | Sync filament settings back from OrcaSlicer |
 
 ### GET /api/filaments/orcaslicer
@@ -601,14 +605,14 @@ Returns `202 Accepted`:
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `GET` | `/api/openprinttag` | Browse the OpenPrintTag community database (FDM filaments only) |
+| `POST` | `/api/openprinttag` | Force-refresh the cache and re-fetch from GitHub (same-origin guarded) |
 | `POST` | `/api/openprinttag/import` | Import selected materials into Filament DB |
 
 ### GET /api/openprinttag
 
 Fetches the [OpenPrintTag community database](https://github.com/OpenPrintTag/openprinttag-database) from GitHub, parses all material YAML files, filters to FFF (FDM) filaments, and returns them with completeness scores. Results are cached for 1 hour.
 
-Query parameters:
-- `refresh=true` -- force re-fetch from GitHub (clears cache)
+To force a refresh, POST to the same path — the old `GET ?refresh=true` trigger was removed (a cache-busting side effect on a GET violated REST semantics; GH #427).
 
 Returns:
 ```json
@@ -1232,9 +1236,10 @@ All fields optional. Unspecified numeric fields are stored as `null`.
 |--------|----------|-------------|
 | `POST` | `/api/spools/import` | Bulk-create spools from CSV |
 
-Accepts either:
+Accepts any of:
 - `Content-Type: text/csv` with the raw CSV body
 - `Content-Type: application/json` with `{ "csv": "…" }`
+- `Content-Type: multipart/form-data` with the CSV as a `file` field
 
 ### Required columns
 
