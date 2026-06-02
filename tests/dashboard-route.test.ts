@@ -323,7 +323,7 @@ describe("/api/dashboard — totalGrams + low-stock subtract empty-spool mass (G
       name: "LS Variant",
       vendor: "Test",
       type: "PLA",
-      color: "#fff",
+      color: "#ffffff",
       parentId: parent._id,
       lowStockThreshold: 200,
       // 600 - inherited 500 = 100 remaining → below threshold 200.

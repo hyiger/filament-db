@@ -4,7 +4,7 @@ import dbConnect from "@/lib/mongodb";
 import PrintHistory from "@/models/PrintHistory";
 import Filament from "@/models/Filament";
 import Printer from "@/models/Printer";
-import { errorResponseFromCaught, getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { errorResponseFromCaught, getErrorMessage, errorResponse, handleVersionError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
@@ -271,6 +271,12 @@ export async function DELETE(
     );
     return NextResponse.json({ message: "Deleted and refunded" });
   } catch (err) {
+    // GH #504: same concurrent-edit pattern. DELETE refunds spool weight
+    // via filament.save(); if that races a slicer POST or another DELETE
+    // on the same filament, surface as 409 so the caller can retry
+    // instead of seeing a generic 500 toast.
+    const conflict = handleVersionError(err);
+    if (conflict) return conflict;
     return errorResponse("Failed to delete print history", 500, getErrorMessage(err));
   }
 }
