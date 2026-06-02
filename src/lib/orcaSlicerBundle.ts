@@ -165,6 +165,13 @@ export function calibrationToOrcaSlicerKeys(
   }
   set("overhang_fan_speed", calibration.fanMinSpeed);
   set("additional_cooling_fan_speed", calibration.fanMaxSpeed);
+  // GH #508: bridge_fan_speed flows IN via bambuStudioImport
+  // (CALIBRATION_KEYS includes it; calibrationHints.fanBridgeSpeed
+  // persists onto Filament.calibrations[].fanBridgeSpeed) but the
+  // export side was missing it — every export → user-edits-in-Bambu →
+  // re-import → re-export cycle silently dropped the bridge fan speed.
+  // Pinned in the bambuStudioImport round-trip test.
+  set("bridge_fan_speed", calibration.fanBridgeSpeed);
 
   return keys;
 }
