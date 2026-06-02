@@ -34,6 +34,10 @@ export interface ISharedCatalog extends Document {
   /** Soft-delete tombstone so a hard-delete on one peer doesn't get
    * resurrected by the next sync cycle from the other peer. */
   _deletedAt: Date | null;
+  /** GH #524.5: "delete forever" tombstone, mirroring Filament — the
+   * hybrid-sync engine's generic `_purged` branch propagates it so the
+   * row stays gone on both sides without resurrection. */
+  _purged: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -60,6 +64,7 @@ const SharedCatalogSchema = new Schema<ISharedCatalog>(
     expiresAt: { type: Date, default: null, index: true },
     viewCount: { type: Number, default: 0, min: 0 },
     _deletedAt: { type: Date, default: null },
+    _purged: { type: Boolean, default: false, index: true },
   },
   { timestamps: true }
 );
