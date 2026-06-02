@@ -55,8 +55,15 @@ export function parseCsv(
   // because non-header callers expect them; the per-iteration check
   // just stops counting them toward maxRows.
   let nonBlankRowCount = 0;
+  // Codex P2 round 1 on PR #536: a blank row from a spreadsheet export
+  // can carry delimiters — `,\n` parses to `["", ""]`, not `[""]`. The
+  // header-mode skip below uses `trimmed[r].every((v) => v === "")`, so
+  // the cap check must use the SAME "every field is blank" definition,
+  // not just the single-empty-field shape. Otherwise a file with
+  // maxRows emitted rows plus one comma-only separator still throws.
+  // Trim each field so a `" , "` whitespace-only separator counts too.
   const isBlankRow = (r: string[]): boolean =>
-    r.length === 0 || (r.length === 1 && r[0] === "");
+    r.length === 0 || r.every((v) => v.trim() === "");
   let row: string[] = [];
   let field = "";
   let i = 0;

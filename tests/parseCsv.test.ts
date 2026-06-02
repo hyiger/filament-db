@@ -122,6 +122,19 @@ describe("parseCsv", () => {
       ).toHaveLength(3);
     });
 
+    it("ignores COMMA-ONLY blank rows when enforcing maxRows (Codex P2 PR #536)", () => {
+      // A spreadsheet export's blank separator row carries delimiters:
+      // `,\n` → ["", ""], not [""]. Must still count as blank for the
+      // cap (it's skipped as fully-empty in header mode anyway).
+      expect(
+        parseCsv("h1,h2\nd1,d2\n,\n", { header: true, maxRows: 1 }),
+      ).toHaveLength(1);
+      // Whitespace-only fields in a separator row count as blank too.
+      expect(
+        parseCsv("h1,h2\na,b\n , \nc,d", { header: true, maxRows: 2 }),
+      ).toHaveLength(2);
+    });
+
     it("ignores blank rows when enforcing maxRows (header: false)", () => {
       // 4 data rows + trailing blank — emits 4, cap of 4 must accept.
       const result = parseCsv("a\nb\nc\nd\n\n", { header: false, maxRows: 4 }) as string[][];
