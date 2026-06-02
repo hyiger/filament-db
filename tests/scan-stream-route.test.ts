@@ -20,7 +20,7 @@ function sampleEvent(over: Partial<ScanEvent> = {}): ScanEvent {
       name: "Prusament PLA Galaxy Black",
       vendor: "Prusament",
       type: "PLA",
-      color: "#000",
+      color: "#000000",
     },
     candidates: [],
     decoded: { materialName: "Prusament PLA Galaxy Black" },

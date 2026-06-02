@@ -237,6 +237,30 @@ describe("Bambu Tag Decoder", () => {
       expect(result.materialName).toBe("PLA Basic");
     });
 
+    // GH #501: parseBambuBlocks extracts secondColorRGBA when block 16
+    // has formatId === 0x0002 && colorCount >= 2; bambuToDecodedTag now
+    // forwards it as DecodedOpenPrintTag.secondaryColors so the NFC
+    // prefill flow can render dual-color Bambu spools as multi-color
+    // (Galaxy line etc.).
+    it("forwards the parsed second color as secondaryColors", () => {
+      const blocks = buildFullBlocks();
+      // Block 16: format 0x0002, count 2, green secondary
+      blocks[16] = Buffer.alloc(16);
+      blocks[16]!.writeUInt16LE(0x0002, 0);
+      blocks[16]!.writeUInt16LE(2, 2);
+      blocks[16]![4] = 0x00;
+      blocks[16]![5] = 0xff;
+      blocks[16]![6] = 0x00;
+      blocks[16]![7] = 0xff;
+      const result = bambuToDecodedTag(parseBambuBlocks(blocks));
+      expect(result.secondaryColors).toEqual(["#00ff00"]);
+    });
+
+    it("omits secondaryColors when block 16 has no second color", () => {
+      const result = bambuToDecodedTag(makeBambuData());
+      expect(result.secondaryColors).toBeUndefined();
+    });
+
     it("extracts material type from filament type prefix", () => {
       const result = bambuToDecodedTag(makeBambuData());
       expect(result.materialType).toBe("PLA");
