@@ -542,7 +542,7 @@ export default function Home() {
           type="checkbox"
           checked={selected.has(f._id)}
           onChange={() => toggleSelect(f._id)}
-          aria-label={f.name || "Select"}
+          aria-label={f.name || t("common.select")}
           className="accent-red-600"
         />
       </td>
@@ -645,7 +645,7 @@ export default function Home() {
               type="checkbox"
               checked={selected.has(f._id)}
               onChange={() => toggleSelect(f._id)}
-              aria-label={f.name || "Select"}
+              aria-label={f.name || t("common.select")}
               className="accent-red-600"
             />
           </td>
@@ -915,10 +915,11 @@ export default function Home() {
 
       <div className="flex gap-3 mb-4 flex-wrap">
         <input
-          type="text"
+          type="search"
           placeholder={t("common.search")}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Escape") setSearch(""); }}
           className="px-3 py-2 border border-gray-300 rounded text-sm bg-transparent"
         />
         <select

@@ -1352,5 +1352,16 @@
   "printers.createError": "Failed to create printer",
   "printers.addNewTitle": "Add New Printer",
   "settings.aiCostNote.gemini": "Google Gemini offers a free tier (15 requests/minute). No charges for typical usage.",
-  "settings.aiCostNote.paid": "API calls to {provider} are billed per use. Check your provider's pricing page for current rates."
+  "settings.aiCostNote.paid": "API calls to {provider} are billed per use. Check your provider's pricing page for current rates.",
+  "detail.spool.weightPlaceholder": "grams",
+  "common.select": "Select",
+  "nozzleType.Brass": "Brass",
+  "nozzleType.HardenedSteel": "Hardened Steel",
+  "nozzleType.StainlessSteel": "Stainless Steel",
+  "nozzleType.Copper": "Copper",
+  "nozzleType.RubyTipped": "Ruby Tipped",
+  "nozzleType.TungstenCarbide": "Tungsten Carbide",
+  "nozzleType.ObXidian": "ObXidian",
+  "nozzleType.Diamondback": "Diamondback",
+  "nozzleType.Other": "Other"
 }
