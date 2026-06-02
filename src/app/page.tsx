@@ -467,13 +467,22 @@ export default function Home() {
     for (const item of groupedFilaments) {
       if ("parent" in item) {
         ids.push(item.parent._id);
-        for (const v of item.variants) ids.push(v._id);
+        // Codex P2 round 2 on PR #540: a collapsed parent group does
+        // NOT render its variant rows (renderParentRow only calls
+        // renderRow for variants when expanded), so they have no
+        // visible checkbox. Including them here would let select-all
+        // tick + bulk-delete hidden variants with no UI cue — the
+        // exact no-cue-deletion bug #500 was about. Only count variant
+        // ids as visible when the parent is actually expanded.
+        if (expandedParents.has(item.parent._id)) {
+          for (const v of item.variants) ids.push(v._id);
+        }
       } else {
         ids.push(item._id);
       }
     }
     return ids;
-  }, [groupedFilaments]);
+  }, [groupedFilaments, expandedParents]);
 
   // Codex P2 round 1 on PR #540: derive select-all state by MEMBERSHIP,
   // not a count comparison. `selected.size === visible.length` is wrong
