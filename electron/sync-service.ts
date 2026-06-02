@@ -291,9 +291,11 @@ export class SyncService extends EventEmitter {
         this.syncCollection(localDb, remoteDb, "nozzles"),
       ));
 
-      // Build nozzle syncId→ID maps for reference remapping
-      const localNozzles = await localDb.collection("nozzles").find({ _deletedAt: null }).toArray();
-      const remoteNozzles = await remoteDb.collection("nozzles").find({ _deletedAt: null }).toArray();
+      // Build nozzle syncId→ID maps for reference remapping.
+      // GH #511: project to {_id, syncId} so we don't pull the full doc
+      // payload across the wire just to build a 100-byte id map.
+      const localNozzles = await localDb.collection("nozzles").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
+      const remoteNozzles = await remoteDb.collection("nozzles").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
       const localNozzleBySyncId = new Map(localNozzles.filter(n => n.syncId).map(n => [n.syncId as string, n._id]));
       const remoteNozzleBySyncId = new Map(remoteNozzles.filter(n => n.syncId).map(n => [n.syncId as string, n._id]));
 
@@ -312,9 +314,10 @@ export class SyncService extends EventEmitter {
         this.syncCollection(localDb, remoteDb, "bedtypes"),
       ));
 
-      // Build bedType syncId→ID maps for printer + filament remap
-      const localBedTypes = await localDb.collection("bedtypes").find({ _deletedAt: null }).toArray();
-      const remoteBedTypes = await remoteDb.collection("bedtypes").find({ _deletedAt: null }).toArray();
+      // Build bedType syncId→ID maps for printer + filament remap.
+      // GH #511: project to {_id, syncId} — see nozzles comment above.
+      const localBedTypes = await localDb.collection("bedtypes").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
+      const remoteBedTypes = await remoteDb.collection("bedtypes").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
       const localBedTypeBySyncId = new Map(localBedTypes.filter(b => b.syncId).map(b => [b.syncId as string, b._id]));
       const remoteBedTypeBySyncId = new Map(remoteBedTypes.filter(b => b.syncId).map(b => [b.syncId as string, b._id]));
 
@@ -332,9 +335,10 @@ export class SyncService extends EventEmitter {
         ),
       ));
 
-      // Build printer syncId→ID maps for filament calibration reference remapping
-      const localPrinters = await localDb.collection("printers").find({ _deletedAt: null }).toArray();
-      const remotePrinters = await remoteDb.collection("printers").find({ _deletedAt: null }).toArray();
+      // Build printer syncId→ID maps for filament calibration reference remapping.
+      // GH #511: project to {_id, syncId} — see nozzles comment above.
+      const localPrinters = await localDb.collection("printers").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
+      const remotePrinters = await remoteDb.collection("printers").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
       const localPrinterBySyncId = new Map(localPrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
       const remotePrinterBySyncId = new Map(remotePrinters.filter(p => p.syncId).map(p => [p.syncId as string, p._id]));
 
@@ -355,9 +359,10 @@ export class SyncService extends EventEmitter {
         this.syncCollection(localDb, remoteDb, "locations"),
       ));
 
-      // Build location syncId→ID maps for spool reference remapping
-      const localLocations = await localDb.collection("locations").find({ _deletedAt: null }).toArray();
-      const remoteLocations = await remoteDb.collection("locations").find({ _deletedAt: null }).toArray();
+      // Build location syncId→ID maps for spool reference remapping.
+      // GH #511: project to {_id, syncId} — see nozzles comment above.
+      const localLocations = await localDb.collection("locations").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
+      const remoteLocations = await remoteDb.collection("locations").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
       const localLocationBySyncId = new Map(localLocations.filter(l => l.syncId).map(l => [l.syncId as string, l._id]));
       const remoteLocationBySyncId = new Map(remoteLocations.filter(l => l.syncId).map(l => [l.syncId as string, l._id]));
 
@@ -407,9 +412,13 @@ export class SyncService extends EventEmitter {
       // syncId on both sides.
       await this.reconcileFilamentsByName(localDb, remoteDb);
 
-      // Build filament syncId→ID maps for parentId remapping
-      const localFilaments = await localDb.collection("filaments").find({}).toArray();
-      const remoteFilaments = await remoteDb.collection("filaments").find({}).toArray();
+      // Build filament syncId→ID maps for parentId remapping.
+      // GH #511: project to {_id, syncId, updatedAt} — filament rows carry
+      // base64 photoDataUrl blobs in spools[] that we'd otherwise stream
+      // across the wire just to build a 100-byte id map. updatedAt is kept
+      // for the snapshot construction immediately below.
+      const localFilaments = await localDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, updatedAt: 1 } }).toArray();
+      const remoteFilaments = await remoteDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, updatedAt: 1 } }).toArray();
       const localFilamentBySyncId = new Map(localFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
       const remoteFilamentBySyncId = new Map(remoteFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
 
@@ -479,8 +488,10 @@ export class SyncService extends EventEmitter {
       // Rebuild filament syncId maps now that filament sync has settled —
       // both the printer amsSlots repair below and the print-history
       // transform need ids that exist on both sides post-sync.
-      const lFilPost = await localDb.collection("filaments").find({}).toArray();
-      const rFilPost = await remoteDb.collection("filaments").find({}).toArray();
+      // GH #511: project to {_id, syncId} — only used to rebuild the
+      // syncId→id maps below.
+      const lFilPost = await localDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1 } }).toArray();
+      const rFilPost = await remoteDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1 } }).toArray();
       const localFilPostBySyncId = new Map(lFilPost.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
       const remoteFilPostBySyncId = new Map(rFilPost.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
 
@@ -1009,8 +1020,11 @@ export class SyncService extends EventEmitter {
     localSnapshot: Map<string, number | null>,
     remoteSnapshot: Map<string, number | null>,
   ): Promise<void> {
-    const lf = await localDb.collection("filaments").find({}).toArray();
-    const rf = await remoteDb.collection("filaments").find({}).toArray();
+    // GH #511: project to {_id, syncId, parentId, updatedAt}. The repair
+    // loops only read parentId + updatedAt off each doc; full doc payload
+    // (incl. spools[].photoDataUrl base64) is irrelevant here.
+    const lf = await localDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, parentId: 1, updatedAt: 1 } }).toArray();
+    const rf = await remoteDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, parentId: 1, updatedAt: 1 } }).toArray();
 
     const localBySyncId = new Map<string, Document>();
     const localIdToSyncId = new Map<string, string>();
