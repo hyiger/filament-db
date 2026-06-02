@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import NozzleForm from "@/app/nozzles/NozzleForm";
 import { useToast } from "@/components/Toast";
@@ -11,7 +11,6 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function EditNozzle() {
   const params = useParams();
-  const router = useRouter();
   const { toast } = useToast();
   const { t } = useTranslation();
   const [nozzle, setNozzle] = useState(null);
@@ -20,7 +19,7 @@ export default function EditNozzle() {
 
   const {
     onDirtyChange, showUnsavedDialog, handleBack,
-    confirmNav, cancelNav, pendingNav,
+    navigate, confirmNav, cancelNav,
   } = useUnsavedChanges("/nozzles");
 
   useEffect(() => {
@@ -44,16 +43,11 @@ export default function EditNozzle() {
     });
     if (res.ok) {
       toast(t("nozzles.updated"));
-      router.push("/nozzles");
+      navigate("/nozzles");
     } else {
       const body = await res.json().catch(() => null);
       toast(body?.error || t("nozzles.updateError"), "error");
     }
-  };
-
-  const handleDiscard = () => {
-    confirmNav();
-    router.push(pendingNav ?? "/nozzles");
   };
 
   if (notFound) return (
@@ -81,7 +75,7 @@ export default function EditNozzle() {
       <NozzleForm initialData={nozzle} onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
 
       {showUnsavedDialog && (
-        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={confirmNav} />
       )}
     </main>
   );

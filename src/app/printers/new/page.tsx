@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import PrinterForm from "@/app/printers/PrinterForm";
 import { useToast } from "@/components/Toast";
@@ -10,13 +9,12 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import { NozzleConflictError, type NozzleConflict } from "@/lib/nozzleConflicts";
 
 export default function NewPrinter() {
-  const router = useRouter();
   const { toast } = useToast();
   const { t } = useTranslation();
 
   const {
     onDirtyChange, showUnsavedDialog, handleBack,
-    confirmNav, cancelNav, pendingNav,
+    navigate, confirmNav, cancelNav,
   } = useUnsavedChanges("/printers");
 
   const handleSubmit = async (data: Record<string, unknown>) => {
@@ -27,7 +25,7 @@ export default function NewPrinter() {
     });
     if (res.ok) {
       toast(t("printers.created"));
-      router.push("/printers");
+      navigate("/printers");
       return;
     }
     // GH #232 — a 409 with `conflicts[]` means one or more of the
@@ -41,11 +39,6 @@ export default function NewPrinter() {
     toast(body?.error || t("printers.createError"), "error");
   };
 
-  const handleDiscard = () => {
-    confirmNav();
-    router.push(pendingNav ?? "/printers");
-  };
-
   return (
     <main id="main-content" className="max-w-2xl mx-auto px-4 py-8">
       <div className="mb-4">
@@ -57,7 +50,7 @@ export default function NewPrinter() {
       <PrinterForm onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
 
       {showUnsavedDialog && (
-        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={confirmNav} />
       )}
     </main>
   );

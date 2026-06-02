@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
 import { useToast } from "@/components/Toast";
@@ -11,7 +11,6 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function EditFilament() {
   const params = useParams();
-  const router = useRouter();
   const { toast } = useToast();
   const { t } = useTranslation();
   const [filament, setFilament] = useState(null);
@@ -21,7 +20,7 @@ export default function EditFilament() {
   const detailUrl = `/filaments/${params.id}`;
   const {
     onDirtyChange, showUnsavedDialog, handleBack,
-    confirmNav, cancelNav, pendingNav,
+    navigate, confirmNav, cancelNav,
   } = useUnsavedChanges(detailUrl);
 
   useEffect(() => {
@@ -50,16 +49,11 @@ export default function EditFilament() {
     });
     if (res.ok) {
       toast(t("edit.toast.updated"));
-      router.push(detailUrl);
+      navigate(detailUrl);
     } else {
       const body = await res.json().catch(() => null);
       toast(body?.error || t("edit.toast.updateFailed"), "error");
     }
-  };
-
-  const handleDiscard = () => {
-    confirmNav();
-    router.push(pendingNav ?? detailUrl);
   };
 
   if (notFound) return (
@@ -87,7 +81,7 @@ export default function EditFilament() {
       <FilamentForm initialData={filament} onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
 
       {showUnsavedDialog && (
-        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={confirmNav} />
       )}
     </main>
   );

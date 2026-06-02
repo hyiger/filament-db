@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import BedTypeForm from "@/app/bed-types/BedTypeForm";
 import { useToast } from "@/components/Toast";
@@ -9,13 +8,12 @@ import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function NewBedType() {
-  const router = useRouter();
   const { toast } = useToast();
   const { t } = useTranslation();
 
   const {
     onDirtyChange, showUnsavedDialog, handleBack,
-    confirmNav, cancelNav, pendingNav,
+    navigate, confirmNav, cancelNav,
   } = useUnsavedChanges("/bed-types");
 
   const handleSubmit = async (data: Record<string, unknown>) => {
@@ -26,16 +24,11 @@ export default function NewBedType() {
     });
     if (res.ok) {
       toast(t("bedTypes.created"));
-      router.push("/bed-types");
+      navigate("/bed-types");
     } else {
       const body = await res.json().catch(() => null);
       toast(body?.error || t("bedTypes.createError"), "error");
     }
-  };
-
-  const handleDiscard = () => {
-    confirmNav();
-    router.push(pendingNav ?? "/bed-types");
   };
 
   return (
@@ -49,7 +42,7 @@ export default function NewBedType() {
       <BedTypeForm onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
 
       {showUnsavedDialog && (
-        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={confirmNav} />
       )}
     </main>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 import { Suspense, useEffect, useRef, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
 import { useToast } from "@/components/Toast";
@@ -19,7 +19,6 @@ interface FilamentOption {
 }
 
 function NewFilamentContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const { toast } = useToast();
   const { isElectron, status: nfcStatus, tagReadResult, dismissTagRead } = useNfcContext();
@@ -31,7 +30,7 @@ function NewFilamentContent() {
 
   const {
     dirtyRef, onDirtyChange, showUnsavedDialog, handleBack,
-    guardLink, confirmNav, cancelNav, pendingNav,
+    guardLink, navigate, confirmNav, cancelNav,
   } = useUnsavedChanges("/");
 
   // Pending populate-from action (held while confirmation is shown)
@@ -86,7 +85,7 @@ function NewFilamentContent() {
     if (res.ok) {
       const created = await res.json();
       toast(t("new.toast.created"));
-      router.push(`/filaments/${created._id}`);
+      navigate(`/filaments/${created._id}`);
     } else {
       const body = await res.json().catch(() => null);
       toast(body?.error || t("new.toast.createFailed"), "error");
@@ -871,7 +870,7 @@ function NewFilamentContent() {
       {showUnsavedDialog && (
         <UnsavedChangesDialog
           onCancel={cancelNav}
-          onDiscard={() => { confirmNav(); router.push(pendingNav ?? "/"); }}
+          onDiscard={confirmNav}
         />
       )}
 

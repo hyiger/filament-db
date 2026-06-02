@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import LocationForm from "@/app/locations/LocationForm";
 import { useToast } from "@/components/Toast";
@@ -11,14 +11,13 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function EditLocation() {
   const params = useParams();
-  const router = useRouter();
   const { toast } = useToast();
   const { t } = useTranslation();
   const [location, setLocation] = useState(null);
   const [notFound, setNotFound] = useState(false);
   const [fetchError, setFetchError] = useState(false);
 
-  const { onDirtyChange, showUnsavedDialog, handleBack, confirmNav, cancelNav, pendingNav } =
+  const { onDirtyChange, showUnsavedDialog, handleBack, navigate, confirmNav, cancelNav } =
     useUnsavedChanges("/locations");
 
   useEffect(() => {
@@ -52,16 +51,11 @@ export default function EditLocation() {
     });
     if (res.ok) {
       toast(t("locations.updated"));
-      router.push("/locations");
+      navigate("/locations");
     } else {
       const body = await res.json().catch(() => null);
       toast(body?.error || t("locations.updateError"), "error");
     }
-  };
-
-  const handleDiscard = () => {
-    confirmNav();
-    router.push(pendingNav ?? "/locations");
   };
 
   if (notFound)
@@ -95,7 +89,7 @@ export default function EditLocation() {
       <LocationForm initialData={location} onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
 
       {showUnsavedDialog && (
-        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={confirmNav} />
       )}
     </main>
   );

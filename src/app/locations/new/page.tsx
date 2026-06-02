@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import LocationForm from "@/app/locations/LocationForm";
 import { useToast } from "@/components/Toast";
@@ -9,11 +8,10 @@ import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function NewLocation() {
-  const router = useRouter();
   const { toast } = useToast();
   const { t } = useTranslation();
 
-  const { onDirtyChange, showUnsavedDialog, handleBack, confirmNav, cancelNav, pendingNav } =
+  const { onDirtyChange, showUnsavedDialog, handleBack, navigate, confirmNav, cancelNav } =
     useUnsavedChanges("/locations");
 
   const handleSubmit = async (data: Record<string, unknown>) => {
@@ -24,16 +22,11 @@ export default function NewLocation() {
     });
     if (res.ok) {
       toast(t("locations.created"));
-      router.push("/locations");
+      navigate("/locations");
     } else {
       const body = await res.json().catch(() => null);
       toast(body?.error || t("locations.createError"), "error");
     }
-  };
-
-  const handleDiscard = () => {
-    confirmNav();
-    router.push(pendingNav ?? "/locations");
   };
 
   return (
@@ -47,7 +40,7 @@ export default function NewLocation() {
       <LocationForm onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
 
       {showUnsavedDialog && (
-        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={confirmNav} />
       )}
     </main>
   );
