@@ -32,7 +32,7 @@ Click any filament name in the table to see its full details:
    - **Import from TDS** to extract properties from a Technical Data Sheet URL using AI (requires API key — see [AI Settings](#ai-settings))
    - **Prusament QR** to fetch specs from a Prusament spool QR code
    - **Load from INI** to pick a profile from a PrusaSlicer config bundle
-   - **Duplicate Existing** to copy identity fields from another filament and inherit its settings as a variant. (On a filament's detail page, a dedicated **"+ Create variant"** button is also available on root filaments — quicker path when you already know which filament should be the parent.)
+   - **Duplicate Existing** to copy identity fields from another filament and inherit its settings as a variant. (On a filament's detail page, a dedicated **"Create variant"** button is also available on root filaments — quicker path when you already know which filament should be the parent.)
 3. Fill in the required fields (name, vendor, type)
 4. Optionally set temperatures, cost, density, color, fan settings, retraction, shrinkage, pressure advance, and other properties
 5. Select compatible nozzles and enter per-nozzle calibration overrides

@@ -34,7 +34,7 @@ Klicke einen Filamentnamen in der Tabelle, um alle Details zu sehen:
    - **Aus TDS importieren** — extrahiert Eigenschaften aus einer Technical-Data-Sheet-URL per AI (erfordert API-Key — siehe [AI-Einstellungen](#ai-einstellungen))
    - **Prusament QR** — lädt Specs aus einem Prusament-Spulen-QR-Code
    - **Aus INI laden** — wählt ein Profil aus einem PrusaSlicer-Config-Bundle
-   - **Bestehendes duplizieren** — kopiert Identifikationsfelder eines anderen Filaments und erbt dessen Einstellungen als Variante. (Auf der Detailseite eines Filaments steht zusätzlich ein dedizierter **„+ Variante erstellen"**-Button bei Root-Filamenten — schnellster Weg, wenn du das Eltern-Filament bereits kennst.)
+   - **Bestehendes duplizieren** — kopiert Identifikationsfelder eines anderen Filaments und erbt dessen Einstellungen als Variante. (Auf der Detailseite eines Filaments steht zusätzlich ein dedizierter **„Variante erstellen"**-Button bei Root-Filamenten — schnellster Weg, wenn du das Eltern-Filament bereits kennst.)
 3. Pflichtfelder ausfüllen (Name, Vendor, Typ)
 4. Optional Temperaturen, Kosten, Dichte, Farbe, Lüftereinstellungen, Retraction, Schwindung, Pressure Advance und andere Eigenschaften setzen
 5. Kompatible Düsen auswählen und Pro-Düse-Kalibrierungs-Overrides eintragen
