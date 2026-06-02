@@ -140,7 +140,7 @@ describe("/api/filaments/compare — variant inheritance (GH #184)", () => {
       name: "Mixed Variant",
       vendor: "V",
       type: "PETG",
-      color: "#fff",
+      color: "#ffffff",
       parentId: parent._id,
     });
     const solo = await Filament.create({

@@ -340,6 +340,20 @@ export async function upsertImportRows(
       type: row.type,
     };
     if (row.color !== undefined && row.color !== "" && row.color !== null) {
+      // GH #503: drop bad-hex rows into skippedRows the same way the
+      // route-level validators reject them on direct API calls. Without
+      // this per-row guard the new schema validator on `color` would
+      // throw on the bulk save() and we'd lose the WHOLE batch's
+      // accounting rather than the one bad row.
+      if (!/^#[0-9A-Fa-f]{6}$/.test(String(row.color))) {
+        skippedRows.push({
+          row: rowIdx + 2,
+          name: row.name,
+          reason: `Invalid color hex "${row.color}" (expected #RRGGBB)`,
+        });
+        skipped++;
+        return;
+      }
       doc.color = row.color;
     }
     // GH #477: parse the comma-separated "Secondary Colors" column,
