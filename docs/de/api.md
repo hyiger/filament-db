@@ -26,6 +26,7 @@
 | `GET` | `/api/filaments/match` | Gleicht ein NFC-Tag oder einen gescannten Etiketten-QR mit vorhandenen Filamenten ab. Query-Parameter: `instanceId` (höchste Priorität), `name`, `vendor`, `type` |
 | `GET` | `/api/filaments/types` | Listet alle eindeutigen Filamenttypen auf |
 | `GET` | `/api/filaments/vendors` | Listet alle eindeutigen Herstellernamen auf |
+| `GET` | `/api/filaments/colors` | Eindeutige `(colorName, color)`-Paare über alle nicht gelöschten Filamente (Datenquelle für die Farbnamen-Autovervollständigung) |
 | `GET` | `/api/filaments/parents` | Listet Filamente auf, die als Elternfilament dienen können. Query-Parameter: `search`, `exclude` |
 | `POST` | `/api/filaments/parse-ini` | Parst eine INI-Datei und liefert die Filamentprofile zurück, ohne sie zu speichern |
 | `POST` | `/api/filaments/import-atlas` | Verbindet sich mit einer entfernten MongoDB-Atlas-Datenbank und importiert Filamente |
@@ -33,6 +34,8 @@
 | `GET` | `/api/filaments/:id/calibration` | Liefert Kalibrierungsdaten für ein Filament und einen Düsendurchmesser |
 | `GET` | `/api/filaments/:id/spool-check` | Prüft, ob eine Spule genug Filament für einen Druckauftrag hat |
 | `POST` | `/api/filaments/:id` | Synchronisiert ein Filament-Preset zurück aus PrusaSlicer |
+| `GET` | `/api/filaments/:id/prusaslicer` | Lädt ein einzelnes Filament als PrusaSlicer-Preset (`.ini`) herunter |
+| `GET` | `/api/filaments/:id/orcaslicer` | Lädt ein einzelnes Filament als OrcaSlicer-Preset (`.json`) herunter |
 
 ### Spulen
 
@@ -399,7 +402,8 @@ Liefert:
 
 | Methode | Endpunkt | Beschreibung |
 |--------|----------|-------------|
-| `GET` | `/api/filaments/orcaslicer` | Exportiert Filamente als OrcaSlicer-kompatible JSON-Profile |
+| `GET` | `/api/filaments/orcaslicer` | Exportiert alle Filamente als OrcaSlicer-kompatible JSON-Profile (Bundle) |
+| `GET` | `/api/filaments/:id/orcaslicer` | Exportiert ein einzelnes Filament als OrcaSlicer-Preset (`.json`) |
 | `POST` | `/api/filaments/:name-or-id/orcaslicer` | Synchronisiert Filament-Settings zurück aus OrcaSlicer |
 
 ### GET /api/filaments/orcaslicer
@@ -589,14 +593,14 @@ Liefert `202 Accepted`:
 | Methode | Endpunkt | Beschreibung |
 |--------|----------|-------------|
 | `GET` | `/api/openprinttag` | Durchsucht die OpenPrintTag-Community-Datenbank (nur FDM-Filamente) |
+| `POST` | `/api/openprinttag` | Erzwingt eine Cache-Aktualisierung und holt erneut von GitHub (Same-Origin-geschützt) |
 | `POST` | `/api/openprinttag/import` | Importiert ausgewählte Materialien in Filament DB |
 
 ### GET /api/openprinttag
 
 Holt die [OpenPrintTag-Community-Datenbank](https://github.com/OpenPrintTag/openprinttag-database) von GitHub, parst alle Material-YAML-Dateien, filtert auf FFF-(FDM-)Filamente und gibt sie mit Vollständigkeits-Scores zurück. Ergebnisse werden 1 Stunde gecacht.
 
-Query-Parameter:
-- `refresh=true` -- erzwingt erneuten Fetch von GitHub (leert den Cache)
+Um eine Aktualisierung zu erzwingen, sende ein POST an denselben Pfad — der alte `GET ?refresh=true`-Trigger wurde entfernt (ein Cache-leerender Seiteneffekt auf einem GET verletzt die REST-Semantik; GH #427).
 
 Liefert:
 ```json
@@ -1220,9 +1224,10 @@ Alle Felder optional. Nicht angegebene numerische Felder werden als `null` gespe
 |--------|----------|-------------|
 | `POST` | `/api/spools/import` | Bulk-Erstellung von Spulen aus CSV |
 
-Akzeptiert entweder:
+Akzeptiert eines von:
 - `Content-Type: text/csv` mit dem rohen CSV-Body
 - `Content-Type: application/json` mit `{ "csv": "…" }`
+- `Content-Type: multipart/form-data` mit der CSV als `file`-Feld
 
 ### Pflichtspalten
 

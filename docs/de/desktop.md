@@ -59,7 +59,7 @@ Die paketierte App fragt GitHub Releases regelmäßig nach neuen Versionen ab un
 - **Windows**: Unsignierte NSIS-Installer installieren automatisch problemlos. Beim nächsten App-Start erscheint eine SmartScreen-Warnung.
 - **Linux**: AppImage-Updates funktionieren, wenn die App über AppImageLauncher oder eine vergleichbare Integration gestartet wurde. `.deb`-Builds werden nicht automatisch aktualisiert — nutze stattdessen deinen Paketmanager.
 
-**Wie Updates gefunden werden:** Der Release-Workflow erzeugt bei jedem `v*`-Tag `latest-mac.yml`, `latest-linux.yml` und `latest-linux-arm64.yml`. `electron-updater` liest diese Manifeste beim Start vom GitHub-Release (mit 20 Sekunden Verzögerung, damit die UI Zeit zum Mounten hat) und danach alle 6 Stunden, solange die App läuft.
+**Wie Updates gefunden werden:** Der Release-Workflow erzeugt bei jedem `v*`-Tag die `electron-updater`-Manifeste — `latest.yml` (Windows), `latest-mac.yml` (macOS — beide Architekturen teilen sich ein Manifest; electron-builder hängt nur bei Linux ein Architektur-Suffix an) und `latest-linux.yml` / `latest-linux-arm64.yml` (Linux). `electron-updater` liest diese Manifeste beim Start vom GitHub-Release (mit 20 Sekunden Verzögerung, damit die UI Zeit zum Mounten hat) und danach alle 6 Stunden, solange die App läuft.
 
 **Im Dev-Modus:** Die IPC-Handler sind immer registriert, geben aber bei mutierenden Aktionen `{ ok: false, error: "dev-mode" }` zurück, damit der Banner in einem nicht-paketierten Lauf nie auslöst.
 
@@ -88,7 +88,7 @@ npm run electron:build
 Das führt fünf Schritte aus:
 1. `npm run build` — baut Next.js im Standalone-Modus
 2. `npm run electron:fixlinks` — löst Symlinks im Standalone-Output auf und kopiert ihn mit statischen Assets
-3. `npm run electron:rebuild` — baut native Module (PC/SC) für die Electron-Node.js-Version neu
+3. `npm run electron:rebuild` — baut die nativen Module für die Electron-Node.js-ABI neu: `@pokusew/pcsclite` (PC/SC, für NFC) und `@serialport/bindings-cpp` (für den Brother-Etikettendrucker)
 4. `npm run electron:compile` — bündelt Electron-TypeScript mit esbuild
 5. `npm run electron:pack` — paketiert alles mit electron-builder
 
@@ -109,7 +109,7 @@ Anschließend ein GitHub-Release erstellen:
 gh release create v1.0.0 --title "v1.0.0" --generate-notes
 ```
 
-Der Workflow läuft parallel auf macOS-, Windows- und Ubuntu-Runnern (Linux baut x64 und arm64 per Cross-Compilation). Die Installer jeder Plattform werden automatisch auf das GitHub-Release hochgeladen.
+Der Workflow läuft parallel auf macOS-, Windows- und Ubuntu-Runnern — insgesamt sechs Jobs, da macOS (arm64 + x64), Windows (x64 + arm64) und Linux (x64 + arm64) jeweils beide Architekturen bauen (die zweite Architektur per Cross-Compilation). Die Installer jeder Plattform werden automatisch auf das GitHub-Release hochgeladen.
 
 ### Was der Workflow tut:
 1. Code auschecken
@@ -156,7 +156,7 @@ Die Desktop-App kapselt die Next.js-Anwendung in Electron:
 │  │ electron/preload.ts                   │  │
 │  │ - Sichere IPC-Brücke (contextBridge)  │  │
 │  │ - Exponiert: getConfig, saveConfig,   │  │
-│  │   resetConfig, showMessage,           │  │
+│  │   resetConfig, getRuntimeMode,        │  │
 │  │   nfcGetStatus, nfcReadTag,           │  │
 │  │   nfcWriteTag, sync status/trigger,   │  │
 │  │   Event-Listener                      │  │

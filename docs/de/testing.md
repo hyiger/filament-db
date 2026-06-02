@@ -60,7 +60,7 @@ Tests laufen gegen Node.js 20 und 22. Abdeckungsberichte werden im Node-22-Lauf 
 
 ### Release-Workflow (`.github/workflows/release.yml`)
 
-Läuft automatisch bei Versions-Tags (`v*`). Tests werden in allen vier Build-Konfigurationen (macOS, Windows, Linux x64, Linux arm64) ausgeführt, bevor die Electron-Installer gebaut werden. Wenn Tests fehlschlagen, wird der Build für diese Plattform übersprungen.
+Läuft automatisch bei Versions-Tags (`v*`). Tests werden in allen sechs Build-Konfigurationen (macOS arm64 + x64, Windows x64 + arm64, Linux x64 + arm64) ausgeführt, bevor die Electron-Installer gebaut werden. Wenn Tests fehlschlagen, wird der Build für diese Plattform übersprungen.
 
 ## Test-Setup
 

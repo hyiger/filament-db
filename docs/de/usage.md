@@ -34,7 +34,7 @@ Klicke einen Filamentnamen in der Tabelle, um alle Details zu sehen:
    - **Aus TDS importieren** — extrahiert Eigenschaften aus einer Technical-Data-Sheet-URL per AI (erfordert API-Key — siehe [AI-Einstellungen](#ai-einstellungen))
    - **Prusament QR** — lädt Specs aus einem Prusament-Spulen-QR-Code
    - **Aus INI laden** — wählt ein Profil aus einem PrusaSlicer-Config-Bundle
-   - **Clone Existing** — kopiert Identifikationsfelder eines anderen Filaments und erbt dessen Einstellungen als Variante. (Auf der Detailseite eines Filaments steht zusätzlich ein dedizierter **„+ Variante erstellen"**-Button bei Root-Filamenten — schnellster Weg, wenn du das Eltern-Filament bereits kennst.)
+   - **Bestehendes duplizieren** — kopiert Identifikationsfelder eines anderen Filaments und erbt dessen Einstellungen als Variante. (Auf der Detailseite eines Filaments steht zusätzlich ein dedizierter **„+ Variante erstellen"**-Button bei Root-Filamenten — schnellster Weg, wenn du das Eltern-Filament bereits kennst.)
 3. Pflichtfelder ausfüllen (Name, Vendor, Typ)
 4. Optional Temperaturen, Kosten, Dichte, Farbe, Lüftereinstellungen, Retraction, Schwindung, Pressure Advance und andere Eigenschaften setzen
 5. Kompatible Düsen auswählen und Pro-Düse-Kalibrierungs-Overrides eintragen
@@ -455,7 +455,7 @@ Jedes Filament hat eine eindeutige Instance-ID (5-Byte-Hex-String, z. B. `2acc21
 
 ---
 
-## Etikettendrucker (nur Desktop-App) *(v1.33)*
+## Etikettendrucker (nur Desktop-App) *(v1.34)*
 
 Drucke ein Spulen-Etikett (24-mm-Band) direkt von der Filament-Detailseite auf einen **Brother PT-P710BT** (P-touch CUBE) über Bluetooth. Das Etikett enthält einen QR-Code und den Filamentnamen. Zwei QR-Modi, die du pro Druck wählen kannst:
 
@@ -523,7 +523,7 @@ Klicke eine Material-Zeile, um eine Detailansicht mit drei Spalten auszuklappen:
 
 ### Materialien importieren
 
-1. Wähle Materialien per Checkboxen aus (oder nutze **Alle auswählen** / **Auswahl löschen** in der Werkzeugleiste)
+1. Wähle Materialien per Checkboxen aus (oder nutze **Alle auswählen** / **Alle abwählen** in der Werkzeugleiste)
 2. Klicke auf **„Auswahl importieren (N)"** zum Import
 3. Materialien werden anhand von Name und Hersteller gematcht:
    - **Neue Materialien** werden mit allen verfügbaren Feldern angelegt
@@ -648,7 +648,7 @@ Die **Share**-Seite unter `/share` lässt dich einen statischen Snapshot ausgew�
 
 ## Filamentvergleich *(v1.11)*
 
-Die **Compare**-Seite unter `/compare` nimmt bis zu 8 Filamente (per Query-String übergeben oder aus der Filamentliste hinzufügen) und rendert eine Side-by-Side-Tabelle mit Temperaturen, Kosten, Dichte, Durchmesser, Kalibrierungen und aktuellem Restgewicht. Nützlich, wenn du dich zwischen mehreren ähnlichen Filamenten für einen Job entscheiden musst. Seit v1.34.1 hat die Auswahl dieselbe Sofortsuche, Materialtyp-Filterchips und den "Nur Ausgewählte anzeigen"-Schalter wie `/share` (erst ab ≥12 Filamenten sichtbar), damit das Herausgreifen von 4–8 Zeilen aus einem großen Katalog schnell bleibt.
+Die **Compare**-Seite unter `/compare` nimmt bis zu 8 Filamente (im eingebauten Picker ausgewählt oder per `?ids=`-Query-String übergeben) und rendert eine Side-by-Side-Tabelle mit Temperaturen, Kosten, Dichte, Durchmesser, Kalibrierungen und aktuellem Restgewicht. Nützlich, wenn du dich zwischen mehreren ähnlichen Filamenten für einen Job entscheiden musst. Seit v1.34.1 hat die Auswahl dieselbe Sofortsuche, Materialtyp-Filterchips und den "Nur Ausgewählte anzeigen"-Schalter wie `/share` (erst ab ≥12 Filamenten sichtbar), damit das Herausgreifen von 4–8 Zeilen aus einem großen Katalog schnell bleibt.
 
 ## System-Theme *(v1.11)*
 

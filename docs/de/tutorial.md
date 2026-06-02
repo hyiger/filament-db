@@ -154,7 +154,7 @@ Auf der **Neues Filament**-Seite bietet die Werkzeugleiste **„Vorbefüllen von
 - **Prusament QR** — gib eine Spulen-ID oder URL aus einem Prusament-QR-Code ein, um vollständige Specs zu laden.
 - **Aus TDS importieren** — füge eine Technical-Data-Sheet-URL ein, und die AI extrahiert Temperaturen, Dichte, Trockenspezifikationen, Tg, HDT, Shore-Härte und mehr. Erfordert einen in den Einstellungen konfigurierten AI-API-Key (siehe [Schritt 5b](#schritt-5b-aus-einem-technical-data-sheet-importieren)).
 - **Aus INI laden** — lade ein PrusaSlicer-`.ini`-Config-Bundle hoch. Enthält es ein Filament-Profil, wird das Formular automatisch befüllt. Bei mehreren Profilen erlaubt ein Auswahldialog die Wahl.
-- **Clone Existing** — durchsuche deine Bibliothek und wähle ein Filament. Es werden nur Identifikationsfelder (Name mit „(copy)"-Suffix, Farbe, Vendor, Typ) übernommen; alles andere wird live vom Eltern-Filament geerbt, sodass die neue Variante die Kalibrierungen des Elternfilaments verfolgt.
+- **Bestehendes duplizieren** — durchsuche deine Bibliothek und wähle ein Filament. Es werden nur Identifikationsfelder (Name mit „(copy)"-Suffix, Farbe, Vendor, Typ) übernommen; alles andere wird live vom Eltern-Filament geerbt, sodass die neue Variante die Kalibrierungen des Elternfilaments verfolgt.
 - **NFC-Tag** (nur Desktop, kein Button — automatisch) — bei verbundenem Reader eine Spule mit Tag auflegen. Das Formular befüllt sich automatisch mit Material, Hersteller, Temperaturen, Dichte und Farbe aus den OpenPrintTag-Daten.
 
 Nach dem Befüllen prüfe und passe Felder an, bevor du auf **Filament erstellen** klickst.
@@ -294,14 +294,14 @@ Varianten teilen sich die Einstellungen eines Elternfilaments (Temperaturen, Dic
 Es gibt zwei Affordances auf der Detailseite. Beide erzeugen eine neue Variante, sie befüllen das Formular aber unterschiedlich:
 
 - **„+ Variante erstellen"** (fuchsia Button) — nur auf **Root**-Filamenten sichtbar (also nicht bereits eine Variante). Das Formular öffnet sich mit verknüpftem Eltern-Filament, **Vendor** und **Typ** sind vom Eltern-Filament übernommen, und die weiteren Werte des Eltern-Filaments erscheinen als **Platzhalter-Text** in den Eingabefeldern (nicht vorbefüllt). Lässt du ein Feld leer, erbt die Variante weiterhin live vom Eltern-Filament; tippst du etwas hinein, überschreibt sie nur dieses eine Feld. Schnellster Weg, wenn du eine echte Variante willst, die alles außer der Farbe teilt.
-- **Klonen** (amber Button) — auf **jedem** Filament sichtbar, ob Root oder Variante. Das Formular öffnet sich mit **Name** (mit „(copy)"-Suffix), **Farbe**, **colorName**, **Vendor** und **Typ** wortgleich vom Quell-Filament kopiert — ein vollständiges Identitäts-Duplikat. Die Eltern-Beziehung wird automatisch gesetzt: Klonen eines Roots macht das neue Filament zu einer Variante dieses Roots; Klonen einer Variante macht das neue Filament zu einer **Schwester** unter demselben Eltern-Filament. Am besten, wenn du einen Ausgangspunkt willst, an dem du stark verändern möchtest.
+- **Duplizieren** (amber Button) — auf **jedem** Filament sichtbar, ob Root oder Variante. Das Formular öffnet sich mit **Name** (mit „(copy)"-Suffix), **Farbe**, **colorName**, **Vendor** und **Typ** wortgleich vom Quell-Filament kopiert — ein vollständiges Identitäts-Duplikat. Die Eltern-Beziehung wird automatisch gesetzt: Duplizieren eines Roots macht das neue Filament zu einer Variante dieses Roots; Duplizieren einer Variante macht das neue Filament zu einer **Schwester** unter demselben Eltern-Filament. Am besten, wenn du einen Ausgangspunkt willst, an dem du stark verändern möchtest.
 
 Schritte:
 
 1. Öffne die Detailseite eines Filaments.
-2. Klicke auf **„+ Variante erstellen"** (falls verfügbar) oder **Klonen**.
+2. Klicke auf **„+ Variante erstellen"** (falls verfügbar) oder **Duplizieren**.
 3. Das Formular öffnet sich nach den obigen Regeln vorbefüllt. Nicht vorbefüllte (bzw. nicht überschriebene) Felder erben live vom Eltern-Filament — das ist das Design aus GH #106; der Platzhalter-Text zeigt, was du bekommst.
-4. Bearbeite den **Namen** (nur bei Klonen — Variante erstellen lässt das Feld leer zum selbst-Eingeben), wähle eine neue **Farbe** und passe optional **colorName** an.
+4. Bearbeite den **Namen** (nur bei Duplizieren — Variante erstellen lässt das Feld leer zum selbst-Eingeben), wähle eine neue **Farbe** und passe optional **colorName** an.
 5. Klicke auf **Filament erstellen**. Das neue Filament wird als Variante des Eltern-Filaments registriert; künftige Änderungen an Kalibrierungen / Temperaturen / Einstellungen des Eltern-Filaments fließen automatisch in nicht überschriebene Felder.
 
 > **Designregel**: Varianten von Varianten werden nicht unterstützt. Ein Eltern-Filament muss ein Top-Level-Filament sein. Deshalb ist „+ Variante erstellen" auf Varianten-Seiten ausgeblendet, und Klonen einer Variante erzeugt eine Schwester statt einer Verschachtelung.
@@ -575,7 +575,7 @@ Empfänger, die die URL öffnen, sehen eine schreibgeschützte Liste. Sie könne
 
 ## Schritt 24: Filamente vergleichen *(v1.11)*
 
-Hake in der Filament-Liste die Checkboxen neben 2–4 Zeilen an und klicke auf **Vergleichen**. Die `/compare`-Seite legt sie nebeneinander — Temperaturen, Kosten, Dichte, Kalibrierungen und Restgewicht —, sodass du das passende für einen Job wählen kannst.
+Öffne die **Vergleich**-Seite (Link in der oberen Navigation oder gehe zu `/compare`). Sie hat einen eingebauten Filament-Picker — suche nach Name/Vendor/Typ und hake bis zu **8** Filamente an —, dann legt sie sie nebeneinander: Temperaturen, Kosten, Dichte, Kalibrierungen und Restgewicht, sodass du das passende für einen Job wählen kannst. Du kannst einen Vergleich auch per Deep-Link über `/compare?ids=<id1>,<id2>` aufrufen.
 
 ## Schritt 25: Spulen aus einer Tabelle bulk-importieren *(v1.11)*
 
@@ -593,7 +593,7 @@ Fehlende Locations werden automatisch angelegt, du musst sie nicht vorher anlege
 | Aktion | Ort |
 |--------|-----|
 | Filament hinzufügen | Startseite > + Filament hinzufügen |
-| Vorbefüllen via NFC / TDS / INI / Clone | Filament hinzufügen > Vorbefüllen-Werkzeugleiste |
+| Vorbefüllen via NFC / TDS / INI / Duplizieren | Filament hinzufügen > Vorbefüllen-Werkzeugleiste |
 | Aus TDS importieren | Filament hinzufügen > Aus TDS importieren |
 | AI-Provider konfigurieren | Einstellungen > AI-Funktionen |
 | Aus PrusaSlicer importieren | Startseite > Importieren/Exportieren > INI importieren |
@@ -607,7 +607,7 @@ Fehlende Locations werden automatisch angelegt, du musst sie nicht vorher anlege
 | Datenbank sichern | Einstellungen > Sicherung & Wiederherstellen > Snapshot herunterladen |
 | Filament-Details ansehen | Startseite > Filament-Namen klicken |
 | Filament bearbeiten | Detailseite > Bearbeiten |
-| Farbvariante hinzufügen | Detailseite > + Variante erstellen (oder Klonen) |
+| Farbvariante hinzufügen | Detailseite > Variante erstellen |
 | Düsen verwalten | Einstellungen > Düsen |
 | Drucker verwalten | Einstellungen > Drucker |
 | API-Dokumentation öffnen | Einstellungen > API-Dokumentation (oder zu `/api-docs` navigieren) |
@@ -621,7 +621,7 @@ Fehlende Locations werden automatisch angelegt, du musst sie nicht vorher anlege
 | Trockenzyklus protokollieren | Spulen-Detail > + Trockenzyklus protokollieren |
 | Verbrauchsanalysen ansehen | Obere Nav > Analytics |
 | Low-Stock-Schwelle setzen | Filament-Bearbeitung > Bestandseinstellungen |
-| Filamente vergleichen | Liste > Zeilen auswählen > Vergleichen |
+| Filamente vergleichen | Vergleich-Seite > bis zu 8 auswählen (oder /compare?ids=…) |
 | Shared Catalog veröffentlichen | Obere Nav > Teilen > + Neu |
 | Spulen aus CSV importieren | Startseite > Importieren > Spulen aus CSV |
 | Theme wechseln | Einstellungen > Theme |

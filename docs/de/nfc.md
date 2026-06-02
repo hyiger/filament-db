@@ -122,11 +122,10 @@ Das „Loaded"-Label bleibt sichtbar, nachdem der Tag-Lese-Dialog geschlossen wu
 
 Die App kommuniziert mit dem ACR1552U via PC/SC und `@pokusew/pcsclite`:
 
-- **Verbindung**: Versucht zunächst `SCARD_SHARE_SHARED` (Windows/Linux), fällt auf `SCARD_SHARE_DIRECT` zurück (macOS-Workaround für ISO 15693)
+- **Verbindung**: Verbindet immer mit `SCARD_SHARE_SHARED`. Auf macOS registrieren sowohl der eingebaute `ifd-ccid`-Treiber als auch Apples `ifd-acsccid`-Treiber je eine Instanz des ACR1552U, aber nur der ACS-Treiber beherrscht ISO 15693 — die App versucht einen SHARED-Connect auf jeder registrierten Reader-Instanz und nutzt diejenige, die funktioniert (beim Hot-Plug wartet sie zudem kurz, bis sich beide Treiber-Instanzen registriert haben)
 - **Tag-Erkennung**: Versucht zuerst MIFARE-Classic-Read (Bambu); bei Misserfolg fällt sie auf ISO 15693 (OpenPrintTag) zurück
 - **OpenPrintTag-Befehle**: ACR1552U-Pass-Through (`FF FB`), das ISO-15693-Read/Write-Single-Block-Befehle umschließt
 - **Bambu-Befehle**: Standard-PC/SC-Pseudo-APDUs für MIFARE Classic — Get UID (`FF CA`), Load Key (`FF 82`), Authenticate (`FF 86`), Read Binary (`FF B0`)
-- **Fallback**: PCSC 2.0 Part 3 Transparent Exchange (`FF C2 00 01`) via `SCardControl` für DIRECT-Modus
 
 ### Datenformat
 
@@ -138,7 +137,7 @@ Die App kommuniziert mit dem ACR1552U via PC/SC und `@pokusew/pcsclite`:
 **Bambu Lab (MIFARE Classic)**:
 - **Tag**: MIFARE Classic 1K — 16 Sektoren × 4 Blöcke × 16 Bytes, verschlüsselt mit Pro-Sektor-Schlüsseln
 - **Schlüsselableitung**: HKDF-SHA256 mit Master-Key `9a759cf2c4f7caff222cb9769b41bc96`, UID als IKM, Info `"RFID-A\0"` → 16 Sektorschlüssel × 6 Bytes
-- **Daten-Layout**: Sektoren 0–4 enthalten Filamentdaten (Materialtyp, Farbe RGBA, Temperaturen, Gewicht, Durchmesser, Produktionsdatum, Tray-UID); Sektoren 5–9 sind leer; Sektoren 10–15 enthalten eine RSA-2048-Signatur
+- **Daten-Layout**: Die App liest die Sektoren 0–9 als Daten (die Filamentfelder — Materialtyp, Farbe RGBA, Temperaturen, Gewicht, Durchmesser, Produktionsdatum, Tray-UID — liegen in den Sektoren 0–4); die Sektoren 10–15 enthalten eine RSA-2048-Signatur und werden übersprungen
 - **Codierung**: Alle Zahlen sind little-endian (uint16 LE, float32 LE); Zeichenketten sind null-padded ASCII
 - **Read-only**: Tags sind RSA-2048-signiert — das Ändern eines Bytes invalidiert die Signatur
 
@@ -187,24 +186,32 @@ Die App kommuniziert mit dem ACR1552U via PC/SC und `@pokusew/pcsclite`:
 
 Folgende Felder werden in jeden NFC-Tag codiert:
 
+Die folgenden CBOR-Keys sind die tatsächlichen Werte aus `OPT_KEY` in `src/lib/openprinttag.ts`.
+
 | Feld | CBOR-Key | Beschreibung |
 |-------|----------|-------------|
-| Materialname | 8 | Filament-Name |
-| Markenname | 9 | Herstellername |
-| Materialtyp | 10 | PLA, PETG, ABS etc. (numerisches Enum) |
-| Primärfarbe | 11 | RGB-Farbbytes |
-| Dichte | 17 | g/cm³ (float16) |
-| Filamentdurchmesser | 22 | mm (float16) |
-| Temperaturen | 12–16, 18 | Düse (min/max), Bett (min/max), Kammer, Preheat |
-| Gewichte | 19–21 | Nettogewicht, Istgewicht, Leergewicht der Spule |
-| Instance-ID | 5 | Markenspezifische Instanz-ID (5 Byte Hex-String, max. 16 Zeichen) |
-| Trockentemperatur | 57 | °C |
-| Trockenzeit | 58 | Minuten |
+| Materialtyp | 9 | Numerisches Enum (KEIN String) — der Encoder mappt Namen wie PLA/PETG/ABS über `MATERIAL_TYPE_MAP` und schreibt den Ganzzahlwert |
+| Materialname | 10 | Filament-Name |
+| Markenname | 11 | Herstellername |
+| Nominales Netto-Vollgewicht | 16 | Nominelles Netto-Filamentgewicht bei voller Spule, Gramm |
+| Aktuelles Nettogewicht | 17 | Aktuell **verbleibendes** Filament, Gramm (`max(0, totalWeight − spoolWeight)`); der Lese-Dialog zeigt es als „actual remaining" an |
+| Leergewicht des Behälters | 18 | Leergewicht der Spule, Gramm |
+| Primärfarbe | 19 | RGBA-Farbbytes |
+| Sekundärfarben | 20–24 | `secondary_color_0..4` (Mehrfarb-Filamente) |
 | Transmission Distance | 27 | HueForge-TD-Wert |
+| Tags | 28 | Flag-Array (abrasiv, löslich, matt, silk, sparkle, koextrudiert, gradueller Farbverlauf usw.) |
+| Dichte | 29 | g/cm³ |
+| Filamentdurchmesser | 30 | mm |
 | Shore-Härte A | 31 | Flexible Materialien (TPU/TPE/PEBA) |
 | Shore-Härte D | 32 | Starre Materialien |
-| Tags | 28 | Flag-Array (42 unterstützte Tags: abrasiv, löslich, matt, silk, Carbon-Faser, High Speed, recycelt usw.) |
-| Verbrauchtes Gewicht | aux 0 | Im Aux-Bereich getrackt (falls gesetzt) |
+| Drucktemperaturen | 34–35 | Min./Max. Drucktemperatur (Düse) |
+| Preheat-Temperatur | 36 | °C |
+| Betttemperaturen | 37–38 | Min./Max. Betttemperatur |
+| Kammertemperatur | 41 | °C |
+| Trockentemperatur | 57 | °C |
+| Trockenzeit | 58 | Minuten |
+| Instance-ID | 5 | `brand_specific_instance_id` (Main-Bereich) — 5 Byte Hex-String, max. 16 Zeichen |
+| Verbrauchtes Gewicht | aux 0 | Der einzige Schlüssel im Aux-Bereich — getracktes verbrauchtes Gewicht (falls gesetzt) |
 
 Instance-IDs werden für jedes Filament automatisch erzeugt (im 5-Byte-Hex-Format von Prusament, z. B. `2acc21072a`) und gemäß OpenPrintTag-Spezifikation als `brand_specific_instance_id`-Feld geschrieben.
 
@@ -244,7 +251,7 @@ Sie werden auf dasselbe Datenmodell wie OpenPrintTag-Felder gemappt, sodass die 
 
 - Stelle sicher, dass der Tag mittig auf dem Reader liegt und nicht bewegt wird
 - SLIX2-Tags haben eine kleine Antenne — die Position ist entscheidend
-- Auf macOS kann `SCARD_SHARE_SHARED` für ISO 15693 sporadisch sein; die App fällt automatisch auf DIRECT zurück
+- Auf macOS beanspruchen zwei Treiber-Instanzen den ACR1552U, aber nur Apples `ifd-acsccid` beherrscht ISO 15693; die App versucht einen SHARED-Connect auf jeder Reader-Instanz und nutzt diejenige, die funktioniert, sodass ein vorübergehender Fehler auf einer Instanz automatisch ausgeglichen wird
 
 ### Schreiben schlägt am letzten Block fehl (SW 640F)
 
