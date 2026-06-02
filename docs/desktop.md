@@ -59,7 +59,7 @@ The packaged app polls GitHub Releases for new versions and surfaces a banner at
 
 **How it finds updates:** the release workflow produces the `electron-updater` manifests on every `v*` tag — `latest.yml` (Windows), `latest-mac.yml` (macOS), and `latest-linux.yml` / `latest-linux-arm64.yml` (Linux). `electron-updater` reads those manifests from the GitHub release on startup (with a 20-second delay so the UI has time to mount) and every 6 hours while the app is running.
 
-> ⚠️ **Known limitation (macOS x64 auto-update):** macOS is built by two separate jobs (arm64 and x64), each emitting its own `latest-mac.yml` with no arch suffix. On upload the last one overwrites the previous, so only one `latest-mac.yml` survives in the release — currently it references the **arm64** build only. Intel/x64 macOS builds therefore can't auto-update from the manifest. (Tracked as a release-workflow fix.)
+> ⚠️ **Known limitation (macOS auto-update):** macOS is built by two separate, unordered jobs (arm64 and x64), each emitting its own `latest-mac.yml` with no arch suffix. On upload the last one overwrites the other, so only one `latest-mac.yml` survives in the release — and **which architecture it points at is non-deterministic** (whichever mac job uploads last; it was the arm64 build in the v1.34.4 release). The *other* macOS architecture is left unable to auto-update from the manifest. (Tracked as a release-workflow fix.)
 
 **In dev:** the IPC handlers are always registered but short-circuit to `{ ok: false, error: "dev-mode" }` for mutating actions so the banner never triggers in a packaged-false run.
 
