@@ -70,8 +70,25 @@ export function parseCsv(
   //
   // `rows.length` is therefore the count of rows that will actually be
   // returned (header mode: header + non-blank data; non-header: all),
-  // so the cap check is just `rows.length > rawRowCap`.
+  // so the emitted-row cap check is just `rows.length > rawRowCap`.
+  //
+  // Codex P2 round 4 on PR #536: keep a SEPARATE physical-row cap too.
+  // Because header-mode blank rows are discarded before the emitted cap,
+  // a blank / comma-only-line flood ("3 data rows + 10M blank lines")
+  // would otherwise make the parser scan the entire input even though
+  // those lines never count toward maxRows — tying up the import route
+  // (`/api/spools/import` calls parseCsv with no separate body cap).
+  // The physical cap counts EVERY parsed line (blanks + header) and is
+  // set generously — one full `maxRows` worth of blank lines beyond the
+  // data cap — so legitimate trailing / section-separator blanks pass
+  // while an abusive flood trips it.
+  const physicalRowCap = rawRowCap + maxRows;
+  let physicalRowCount = 0;
   const commitRow = (r: string[]): void => {
+    physicalRowCount++;
+    if (physicalRowCount > physicalRowCap) {
+      throw new CsvRowLimitExceededError(maxRows);
+    }
     if (opts.header && isBlankRow(r)) return; // discard — never buffered
     rows.push(r);
     if (rows.length > rawRowCap) throw new CsvRowLimitExceededError(maxRows);

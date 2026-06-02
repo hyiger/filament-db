@@ -156,15 +156,30 @@ describe("parseCsv", () => {
       ).toHaveLength(4);
     });
 
-    it("does not buffer blank rows in header mode — a blank flood under the data cap is accepted (Codex P2 round 3 PR #536)", () => {
-      // 2 data rows + 10k trailing blank lines. Blanks are discarded
-      // during parsing (never buffered), so this stays well under the
-      // cap and parses fine — proving the DoS guard can't be bypassed
-      // by buffering exempt rows, AND legitimate trailing-blank pastes
-      // still work.
-      const blanks = "\n".repeat(10_000);
-      const csv = `h1,h2\nd1,d2\nd3,d4\n${blanks}`;
-      expect(parseCsv(csv, { header: true, maxRows: 2 })).toHaveLength(2);
+    it("does not buffer blank rows in header mode (Codex P2 round 3 PR #536)", () => {
+      // Header-mode blank rows are discarded during parsing, so a modest
+      // run of trailing/section-separator blanks under the physical cap
+      // parses fine and never inflates the buffered/emitted row count.
+      // maxRows 2 → physical cap = (2+1) + 2 = 5: header + 2 data + 2
+      // blank lines = 5 physical, accepted; emits 2 data rows.
+      expect(
+        parseCsv("h1,h2\nd1,d2\nd3,d4\n\n\n", { header: true, maxRows: 2 }),
+      ).toHaveLength(2);
+    });
+
+    it("bounds PHYSICAL rows so a blank-line flood can't tie up parsing (Codex P2 round 4 PR #536)", () => {
+      // Even though blank rows don't count toward the DATA cap, a flood
+      // of them is bounded by the separate physical-row cap
+      // (rawRowCap + maxRows) so the parser can't scan an unbounded input.
+      const flood = "\n".repeat(10_000);
+      expect(() =>
+        parseCsv(`h1,h2\nd1,d2\n${flood}`, { header: true, maxRows: 2 }),
+      ).toThrow(CsvRowLimitExceededError);
+      // Comma-only separator flood is bounded the same way.
+      const commaFlood = ",\n".repeat(10_000);
+      expect(() =>
+        parseCsv(`h1,h2\nd1,d2\n${commaFlood}`, { header: true, maxRows: 2 }),
+      ).toThrow(CsvRowLimitExceededError);
     });
 
     it("pins the default 10,000-row cap", () => {
