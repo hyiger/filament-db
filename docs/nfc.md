@@ -194,7 +194,7 @@ CBOR keys below are the actual values from `OPT_KEY` in `src/lib/openprinttag.ts
 | Nominal net full weight | 16 | Nominal net filament weight when full, grams |
 | Actual net weight | 17 | Current **remaining** filament, grams (`max(0, totalWeight − spoolWeight)`); the read dialog shows it as "actual remaining" |
 | Empty container weight | 18 | Empty spool weight, grams |
-| Primary color | 19 | RGBA color bytes |
+| Primary color | 19 | RGB color bytes (Filament DB emits 3 bytes from `#RRGGBB`; the spec also allows 4 = RGBA) |
 | Secondary colors | 20–24 | `secondary_color_0..4` (multi-color filaments) |
 | Transmission distance | 27 | HueForge TD value |
 | Tags | 28 | Flags array (abrasive, soluble, matte, silk, sparkle, coextruded, gradual color change, etc.) |

@@ -196,7 +196,7 @@ Die folgenden CBOR-Keys sind die tatsächlichen Werte aus `OPT_KEY` in `src/lib/
 | Nominales Netto-Vollgewicht | 16 | Nominelles Netto-Filamentgewicht bei voller Spule, Gramm |
 | Aktuelles Nettogewicht | 17 | Aktuell **verbleibendes** Filament, Gramm (`max(0, totalWeight − spoolWeight)`); der Lese-Dialog zeigt es als „actual remaining" an |
 | Leergewicht des Behälters | 18 | Leergewicht der Spule, Gramm |
-| Primärfarbe | 19 | RGBA-Farbbytes |
+| Primärfarbe | 19 | RGB-Farbbytes (Filament DB schreibt 3 Bytes aus `#RRGGBB`; die Spezifikation erlaubt auch 4 = RGBA) |
 | Sekundärfarben | 20–24 | `secondary_color_0..4` (Mehrfarb-Filamente) |
 | Transmission Distance | 27 | HueForge-TD-Wert |
 | Tags | 28 | Flag-Array (abrasiv, löslich, matt, silk, sparkle, koextrudiert, gradueller Farbverlauf usw.) |
