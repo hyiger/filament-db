@@ -468,6 +468,33 @@ describe("/api/spools/import", () => {
     });
   });
 
+  // Codex P1 on PR #546: two rows for the SAME filament that resolve via
+  // different cache keys (one omits vendor, one supplies the matching vendor)
+  // used to hydrate two separate Mongoose document instances for the same
+  // _id. Only the bucket's instance was saved, so the other row's spool was
+  // silently dropped while the row still reported ok. Every row for a given
+  // filament must accumulate onto the one saved instance.
+  describe("mixed vendor-presence rows for the same filament (#546)", () => {
+    it("persists ALL spools when rows alternate omitted + matching vendor", async () => {
+      const f = await Filament.create({ name: "PLA", vendor: "Vendor A", type: "PLA" });
+      const csv =
+        "filament,vendor,totalWeight\n" +
+        `PLA,,800\n` + // no vendor → matches by name
+        `PLA,Vendor A,900\n` + // matching vendor → same _id, different cache key
+        `PLA,,700\n`; // no vendor again
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(3);
+      expect(body.failed).toBe(0);
+      expect(body.results.every((r: { ok: boolean }) => r.ok)).toBe(true);
+
+      // The bug dropped the matching-vendor row's spool: pre-fix this was 2.
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(3);
+      expect(fresh.spools.map((s: { totalWeight: number }) => s.totalWeight).sort()).toEqual([700, 800, 900]);
+    });
+  });
+
   describe("per-row save failure isolation", () => {
     it("continues processing remaining rows when one save() throws", async () => {
       await Filament.create({ name: "PLA Red", vendor: "V", type: "PLA" });

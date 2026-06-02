@@ -60,10 +60,11 @@ vi.mock("serialport", () => {
     errorHandler: ((err: Error) => void) | null = null;
     pendingOpenCb: ((err: Error | null) => void) | null = null;
 
-    constructor(
-      opts: { path: string; baudRate: number; autoOpen: boolean },
-      cb?: (err: Error | null) => void,
-    ) {
+    // The real SerialPort accepts an optional open callback as a 2nd arg, but
+    // with autoOpen:false it is never invoked, so the fake omits it entirely
+    // (JS ignores the extra constructor arg the transport still passes). A
+    // "constructor error" therefore surfaces as a synchronous throw below.
+    constructor(opts: { path: string; baudRate: number; autoOpen: boolean }) {
       this.path = opts.path;
       h.state.instances.push(this as unknown as never);
       // With autoOpen:false the real SerialPort does NOT forward the
