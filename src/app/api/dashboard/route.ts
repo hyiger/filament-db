@@ -27,7 +27,33 @@ export async function GET() {
       bedTypeCount,
       recentPrintHistory,
     ] = await Promise.all([
-      Filament.find({ _deletedAt: null }).lean(),
+      // GH #517: project only the fields the dashboard actually reads.
+      // Pre-fix this pulled every Filament with every spool subfield
+      // (incl. base64 photoDataUrl, unbounded usageHistory[], full
+      // calibrations[]/presets[]/settings) — a hot path on cold load
+      // and on every Electron sync-complete event. The fields below
+      // mirror exactly what the handler consumes downstream
+      // (inheritance via parentMap, low-stock math, dry-due loop).
+      Filament.find(
+        { _deletedAt: null },
+        {
+          _id: 1,
+          parentId: 1,
+          name: 1,
+          vendor: 1,
+          color: 1,
+          secondaryColors: 1,
+          optTags: 1,
+          spoolWeight: 1,
+          lowStockThreshold: 1,
+          dryingTemperature: 1,
+          "spools._id": 1,
+          "spools.label": 1,
+          "spools.totalWeight": 1,
+          "spools.retired": 1,
+          "spools.dryCycles.date": 1,
+        },
+      ).lean(),
       Nozzle.countDocuments({ _deletedAt: null }),
       Printer.countDocuments({ _deletedAt: null }),
       BedType.countDocuments({ _deletedAt: null }),
