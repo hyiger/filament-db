@@ -212,23 +212,6 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      // Codex P1 on PR #546: two rows for the SAME filament can resolve via
-      // different cache keys — e.g. `PLA,800,` (no vendor) then
-      // `PLA,900,Vendor A` (matching vendor) issue two findOne()s and hydrate
-      // two SEPARATE Mongoose document instances for the same _id. The save
-      // loop persists only the instance stored in the bucket, so a spool
-      // pushed onto the other instance would be silently dropped while the
-      // row still reports ok. Resolve (or create) the per-_id bucket FIRST
-      // and mutate ONLY `bucket.doc` so every row for a given filament
-      // accumulates onto the one instance that actually gets saved.
-      const fid = String(resolved._id);
-      let bucket = touched.get(fid);
-      if (!bucket) {
-        bucket = { doc: resolved, rows: [] };
-        touched.set(fid, bucket);
-      }
-      const filament = bucket.doc;
-
       // GH #372 (Codex follow-up): treat ISO-shaped-but-impossible dates
       // (Feb 29 outside a leap year, etc.) as bad input rather than
       // silently normalising them to a different day. `new Date(s)` alone
@@ -274,6 +257,26 @@ export async function POST(request: NextRequest) {
         openedDate: openedDate && !isNaN(+openedDate) ? openedDate : null,
         locationId: locationId || null,
       };
+
+      // Codex P1 on PR #546: two rows for the SAME filament can resolve via
+      // different cache keys — e.g. `PLA,800,` (no vendor) then
+      // `PLA,900,Vendor A` (matching vendor) issue two findOne()s and hydrate
+      // two SEPARATE Mongoose document instances for the same _id. The save
+      // loop persists only the instance stored in the bucket, so a spool
+      // pushed onto the other instance would be silently dropped while the
+      // row still reports ok. Resolve (or create) the per-_id bucket here —
+      // AFTER all per-row validation has passed (Codex P2 on PR #547: doing
+      // it before the date checks registered a filament for save() even when
+      // the row then failed validation and contributed no mutation) — and
+      // mutate ONLY `bucket.doc` so every row for a given filament
+      // accumulates onto the one instance that actually gets saved.
+      const fid = String(resolved._id);
+      let bucket = touched.get(fid);
+      if (!bucket) {
+        bucket = { doc: resolved, rows: [] };
+        touched.set(fid, bucket);
+      }
+      const filament = bucket.doc;
 
       // Round-trip dedup: when the CSV row carries a `spoolId` and the
       // matching filament already has a spool with that subdoc _id,

@@ -493,6 +493,30 @@ describe("/api/spools/import", () => {
       expect(fresh.spools).toHaveLength(3);
       expect(fresh.spools.map((s: { totalWeight: number }) => s.totalWeight).sort()).toEqual([700, 800, 900]);
     });
+
+    // Codex P2 on PR #547: registering the touched bucket BEFORE date
+    // validation meant a row that resolved a filament but then failed
+    // validation still got the filament save()'d (no mutation, wasted write).
+    // A row that fails validation must leave its filament completely untouched.
+    it("does not save a filament whose only row fails date validation", async () => {
+      const f = await Filament.create({ name: "Untouched", vendor: "V", type: "PLA" });
+      const saveSpy = vi.spyOn(mongoose.Model.prototype, "save");
+      try {
+        const csv =
+          "filament,totalWeight,purchaseDate\n" +
+          `Untouched,800,2025-02-29\n`; // impossible date → row fails
+        const res = await importSpools(csvRequest(csv));
+        const body = await res.json();
+        expect(body.imported).toBe(0);
+        expect(body.failed).toBe(1);
+        // No mutation occurred, so the filament must not be saved at all.
+        expect(saveSpy).not.toHaveBeenCalled();
+      } finally {
+        saveSpy.mockRestore();
+      }
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(0);
+    });
   });
 
   describe("per-row save failure isolation", () => {
