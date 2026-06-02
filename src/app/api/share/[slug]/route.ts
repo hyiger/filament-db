@@ -83,6 +83,26 @@ export async function DELETE(
   try {
     await dbConnect();
     const { slug } = await params;
+
+    // GH #524.5: ?permanent=true sets the `_purged` tombstone, mirroring
+    // Filament. Gated on the catalog ALREADY being unpublished
+    // (`_deletedAt != null`) so a permanent delete can't skip the
+    // unpublish step. Idempotent — a second purge returns 404.
+    const permanent = request.nextUrl.searchParams.get("permanent") === "true";
+    if (permanent) {
+      const res = await SharedCatalog.updateOne(
+        { slug, _deletedAt: { $ne: null }, _purged: { $ne: true } },
+        { $set: { _purged: true } },
+      );
+      if (res.matchedCount === 0) {
+        return errorResponse(
+          "Not found, or not unpublished (permanent delete requires the catalog to be unpublished first)",
+          404,
+        );
+      }
+      return NextResponse.json({ message: "Permanently deleted" });
+    }
+
     // Soft-delete instead of hard `deleteOne` so the unpublish actually
     // sticks across peers. syncCollection treats a missing row as
     // "pull/push back" rather than "propagate the delete" — without a

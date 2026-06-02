@@ -40,6 +40,13 @@ export interface IPrintHistory extends Document {
   /** Optional notes — success/fail, material issues, etc. */
   notes: string;
   _deletedAt: Date | null;
+  /** GH #524.5: "delete forever" tombstone, mirroring Filament. A
+   * permanent purge marker that the hybrid-sync engine's generic
+   * `_purged` branch propagates to the peer so the row stays gone on
+   * both sides. Physically deleting instead would let the sync engine
+   * treat "remote has it, local doesn't" as a fresh insert and
+   * resurrect it. */
+  _purged: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -71,6 +78,7 @@ const PrintHistorySchema = new Schema<IPrintHistory>(
     },
     notes: { type: String, default: "" },
     _deletedAt: { type: Date, default: null },
+    _purged: { type: Boolean, default: false, index: true },
   },
   { timestamps: true }
 );
