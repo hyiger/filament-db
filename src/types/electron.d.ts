@@ -4,7 +4,6 @@ interface ElectronAPI {
   saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string }) => Promise<{ success: boolean }>;
   resetConfig: () => Promise<{ success: boolean }>;
   testConnection: (uri: string) => Promise<{ success: boolean; error?: string }>;
-  showMessage: (options: { type: string; title: string; message: string }) => Promise<void>;
 
   // Sync
   getSyncStatus: () => Promise<{
