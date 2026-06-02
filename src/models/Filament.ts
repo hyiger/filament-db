@@ -218,9 +218,26 @@ const FilamentSchema = new Schema<IFilament>(
     // filaments where there's no single primary. Default stays "#808080"
     // so existing rows + every single-color filament keep current behavior;
     // null is only written when the user opts into the multi-color
-    // "Coextruded" arrangement. Hex shape is validated on writes via the
-    // route handlers (matches the existing posture for free-form strings).
-    color: { type: String, default: "#808080" },
+    // "Coextruded" arrangement.
+    //
+    // GH #503: schema-level hex validator (matching the per-entry
+    // validator on `secondaryColors` immediately below). The previous
+    // posture relied on "validated on writes via the route handlers"
+    // — that claim wasn't true: the POST handler called `Filament.create`
+    // without inspecting `color`, the PUT used `runValidators: true`
+    // against a no-op validator, the CSV importer wrote `row.color`
+    // straight through, and the round-trip ate garbage on OpenPrintTag
+    // / slicer exports. Allow null per the spec; otherwise enforce
+    // `#RRGGBB`.
+    color: {
+      type: String,
+      default: "#808080",
+      validate: {
+        validator: (v: string | null | undefined) =>
+          v == null || (typeof v === "string" && /^#[0-9A-Fa-f]{6}$/.test(v)),
+        message: "color must be a #RRGGBB hex string or null",
+      },
+    },
     // GH #477: spec keys 20–24 (`secondary_color_0..4`). Hex validation
     // applied per-entry; max-5 cap matches the spec exactly. Defaulting
     // to an empty array (vs undefined) so the read path never needs a

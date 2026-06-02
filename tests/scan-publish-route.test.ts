@@ -33,7 +33,7 @@ describe("POST /api/scan/publish", () => {
           name: "Prusament PLA Galaxy Black",
           vendor: "Prusament",
           type: "PLA",
-          color: "#000",
+          color: "#000000",
         },
         candidates: [],
         decoded: {
@@ -93,7 +93,7 @@ describe("POST /api/scan/publish", () => {
           name: "n",
           vendor: "v",
           type: "t",
-          color: "#fff",
+          color: "#ffffff",
           // Unknown field — must be dropped by the route's allow-list pick.
           maliciousScript: "<script>",
         },
@@ -117,7 +117,7 @@ describe("POST /api/scan/publish", () => {
       name: "n",
       vendor: "v",
       type: "t",
-      color: "#fff",
+      color: "#ffffff",
     });
     expect(event.candidates).toHaveLength(1);
     expect(event.candidates[0]!._id).toBe("y");

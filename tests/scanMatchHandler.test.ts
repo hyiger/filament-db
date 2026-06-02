@@ -58,7 +58,7 @@ function decoded(name: string): DecodedOpenPrintTag {
 }
 
 function matchFor(id: string, name: string): FilamentMatch {
-  return { _id: id, name, vendor: "Test Vendor", type: "PLA", color: "#000" };
+  return { _id: id, name, vendor: "Test Vendor", type: "PLA", color: "#000000" };
 }
 
 describe("createScanMatchHandler", () => {
