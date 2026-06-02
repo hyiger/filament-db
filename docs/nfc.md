@@ -191,8 +191,8 @@ CBOR keys below are the actual values from `OPT_KEY` in `src/lib/openprinttag.ts
 | Material type | 9 | PLA, PETG, ABS, etc. |
 | Material name | 10 | Filament name |
 | Brand name | 11 | Vendor name |
-| Net (nominal) full weight | 16 | Net weight, grams |
-| Actual netto full weight | 17 | Measured net weight, grams |
+| Nominal net full weight | 16 | Nominal net filament weight when full, grams |
+| Actual net weight | 17 | Current **remaining** filament, grams (`max(0, totalWeight − spoolWeight)`); the read dialog shows it as "actual remaining" |
 | Empty container weight | 18 | Empty spool weight, grams |
 | Primary color | 19 | RGBA color bytes |
 | Secondary colors | 20–24 | `secondary_color_0..4` (multi-color filaments) |
