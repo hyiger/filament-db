@@ -135,13 +135,25 @@ describe("parseCsv", () => {
       ).toHaveLength(2);
     });
 
-    it("ignores blank rows when enforcing maxRows (header: false)", () => {
-      // 4 data rows + trailing blank — emits 4, cap of 4 must accept.
-      const result = parseCsv("a\nb\nc\nd\n\n", { header: false, maxRows: 4 }) as string[][];
-      // The result includes the blank row in raw mode; the contract is
-      // that the CAP doesn't count it. Emit length is 5 (including blank)
-      // but no throw.
-      expect(result.length).toBeGreaterThanOrEqual(4);
+    it("COUNTS blank rows toward maxRows in header:false mode (Codex P2 round 2 PR #536)", () => {
+      // In header:false mode every parsed row is RETURNED verbatim, so
+      // every row — blank or not — is emitted and MUST count toward the
+      // cap. Exempting blanks here would let a file of maxRows+ blank /
+      // newline-only rows bypass the DoS guard while still buffering and
+      // returning all of them.
+      // 4 non-blank rows + 1 trailing blank = 5 emitted rows > cap of 4.
+      expect(() =>
+        parseCsv("a\nb\nc\nd\n\n", { header: false, maxRows: 4 }),
+      ).toThrow(CsvRowLimitExceededError);
+      // A file of pure blank/newline rows must also trip the guard —
+      // they're all emitted in raw mode.
+      expect(() =>
+        parseCsv("\n\n\n\n\n", { header: false, maxRows: 3 }),
+      ).toThrow(CsvRowLimitExceededError);
+      // Exactly maxRows rows (no blanks) still accepted.
+      expect(
+        parseCsv("a\nb\nc\nd", { header: false, maxRows: 4 }),
+      ).toHaveLength(4);
     });
 
     it("pins the default 10,000-row cap", () => {
