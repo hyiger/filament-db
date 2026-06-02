@@ -208,8 +208,8 @@ CBOR keys below are the actual values from `OPT_KEY` in `src/lib/openprinttag.ts
 | Chamber temperature | 41 | °C |
 | Drying temperature | 57 | °C |
 | Drying time | 58 | Minutes |
-| Instance ID | aux 5 | `brand_specific_instance_id` — 5-byte hex string, max 16 chars |
-| Consumed weight | aux 0 | Tracked in the auxiliary region (if set) |
+| Instance ID | 5 | `brand_specific_instance_id` (main region) — 5-byte hex string, max 16 chars |
+| Consumed weight | aux 0 | The one auxiliary-region key — tracked consumed weight (if set) |
 
 Instance IDs are auto-generated for each filament (matching Prusament's 5-byte hex format, e.g. `2acc21072a`) and are written as the `brand_specific_instance_id` field per the OpenPrintTag specification.
 
