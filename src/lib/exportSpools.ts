@@ -81,8 +81,15 @@ export const SPOOL_EXPORT_COLUMNS: { key: keyof SpoolExportRow; header: string }
   { key: "filamentId", header: "filamentId" },
   { key: "spoolId", header: "spoolId" },
   // Parent/variant context — matches the filament-level export columns.
-  { key: "parentName", header: "parentName" },
-  { key: "variantCount", header: "variantCount" },
+  // GH #515.3: header text aligns with exportFilaments.ts's
+  // "Parent" / "Variant Count" — pre-fix the spool exporter emitted
+  // camelCase headers while filament-export used Title-Case. Schema
+  // keys stay camelCase to match the SpoolExportRow interface; only
+  // the CSV header text shifts. Filament-export tests pin
+  // `parentName` and `variantCount` as object keys but not header
+  // text, so this is shape-safe.
+  { key: "parentName", header: "Parent" },
+  { key: "variantCount", header: "Variant Count" },
 ];
 
 function isoDateOnly(d: Date | string | null | undefined): string | null {

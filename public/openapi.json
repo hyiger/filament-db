@@ -781,6 +781,46 @@
                         "retractLift": {
                           "type": "number",
                           "nullable": true
+                        },
+                        "nozzleTemp": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Recommended nozzle temperature in °C (GH #514.5 — Codex follow-up on PR #542; the GET /calibration handler returns these alongside the original six)"
+                        },
+                        "nozzleTempFirstLayer": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "First-layer nozzle temperature override in °C"
+                        },
+                        "bedTemp": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Bed temperature in °C"
+                        },
+                        "bedTempFirstLayer": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "First-layer bed temperature override in °C"
+                        },
+                        "chamberTemp": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Enclosure / chamber temperature in °C"
+                        },
+                        "fanMinSpeed": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Overhang fan minimum speed (0–100)"
+                        },
+                        "fanMaxSpeed": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Additional-cooling fan maximum speed (0–100)"
+                        },
+                        "fanBridgeSpeed": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Bridge fan speed (0–100)"
                         }
                       }
                     }
@@ -1918,7 +1958,7 @@
           }
         },
         "responses": {
-          "200": {
+          "201": {
             "description": "Updated filament with new spool",
             "content": {
               "application/json": {
@@ -5452,6 +5492,51 @@
             "nullable": true,
             "description": "mm",
             "example": 0.2
+          },
+          "bedType": {
+            "type": "string",
+            "nullable": true,
+            "description": "BedType ObjectId — pins the calibration to a specific bed surface (GH #514.5)"
+          },
+          "nozzleTemp": {
+            "type": "number",
+            "nullable": true,
+            "description": "Recommended nozzle temperature in °C for this calibration"
+          },
+          "nozzleTempFirstLayer": {
+            "type": "number",
+            "nullable": true,
+            "description": "First-layer nozzle temperature override in °C"
+          },
+          "bedTemp": {
+            "type": "number",
+            "nullable": true,
+            "description": "Bed temperature in °C"
+          },
+          "bedTempFirstLayer": {
+            "type": "number",
+            "nullable": true,
+            "description": "First-layer bed temperature override in °C"
+          },
+          "chamberTemp": {
+            "type": "number",
+            "nullable": true,
+            "description": "Enclosure / chamber temperature in °C"
+          },
+          "fanMinSpeed": {
+            "type": "number",
+            "nullable": true,
+            "description": "Overhang fan minimum speed (0–100)"
+          },
+          "fanMaxSpeed": {
+            "type": "number",
+            "nullable": true,
+            "description": "Additional-cooling fan maximum speed (0–100)"
+          },
+          "fanBridgeSpeed": {
+            "type": "number",
+            "nullable": true,
+            "description": "Bridge fan speed (0–100). Round-trip pinned by PR #508."
           }
         },
         "required": [
