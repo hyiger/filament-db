@@ -91,6 +91,17 @@ PrinterSchema.index(
   { unique: true, partialFilterExpression: { _deletedAt: null } }
 );
 
+// GH #525.3: index the AMS-slot ref fields. spoolSlots.findSpoolSlot,
+// assignSpoolToSlot (clear-everywhere), clearSpoolsFromOtherPrinters,
+// and the sync-engine repair pass all query into amsSlots.spoolId /
+// amsSlots.filamentId on hot paths (every spool DELETE / retire /
+// assignment, every filament DELETE, every Printer save, every sync
+// cycle). Sparse so docs without amsSlots entries don't bloat the
+// index. Personal-use installs have 1-5 printers so the perf delta
+// is small; this is defensive hardening for the maker-space case.
+PrinterSchema.index({ "amsSlots.spoolId": 1 }, { sparse: true });
+PrinterSchema.index({ "amsSlots.filamentId": 1 }, { sparse: true });
+
 const Printer: Model<IPrinter> =
   mongoose.models.Printer || mongoose.model<IPrinter>("Printer", PrinterSchema);
 
