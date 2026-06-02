@@ -83,6 +83,12 @@ let serverProcess: UtilityProcess | null = null;
 let serverRestartCount = 0;
 const MAX_SERVER_RESTARTS = 5;
 let nfcService: NfcService | null = null;
+/** GH #505: when resolveMongoUri()'s Atlas-to-local fallback fires at
+ *  cold-boot, mainWindow is still null (resolveMongoUri runs before
+ *  createWindow), so the `mainWindow?.webContents.send(...)` short-
+ *  circuits and the renderer never learns. Stash the notice so the
+ *  did-finish-load handler can replay it. Cleared once delivered. */
+let pendingFallbackNotice: { intended: string; actual: string } | null = null;
 /** Guards initNfc() so the deferred init runs only once even though it's
  * wired to every window's "show" event (macOS dock-reopen creates a new
  * window each time). */
@@ -216,6 +222,18 @@ function createWindow(urlPath = "/") {
   mainWindow.once("ready-to-show", () => {
     diag("ready-to-show — showing window");
     mainWindow?.show();
+  });
+
+  // GH #505: replay any fallback notice that fired before the window
+  // existed. did-finish-load is the right moment because the renderer's
+  // IPC listeners are guaranteed registered by then (preload + bundle
+  // have run). Cleared after first delivery so a window reload doesn't
+  // re-fire a stale notice.
+  mainWindow.webContents.once("did-finish-load", () => {
+    if (pendingFallbackNotice && mainWindow && !mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send("connection-mode-fallback", pendingFallbackNotice);
+      pendingFallbackNotice = null;
+    }
   });
 
   // Kick off NFC init once the window is actually visible — never before,
@@ -637,11 +655,17 @@ async function resolveMongoUri(): Promise<string | null> {
       // Start sync so it'll push/pull once Atlas is reachable
       initSyncService(localUri, atlasUri);
 
-      // Notify renderer of the fallback
-      mainWindow?.webContents.send("connection-mode-fallback", {
-        intended: "atlas",
-        actual: "local-fallback",
-      });
+      // Notify renderer of the fallback. GH #505: at cold-boot this
+      // runs BEFORE createWindow, so mainWindow is null and the `?.`
+      // short-circuits silently — leaving the renderer to render the
+      // Atlas pill green while DB I/O actually targets local mongod.
+      // Stash for replay on did-finish-load.
+      const notice = { intended: "atlas", actual: "local-fallback" };
+      if (mainWindow && !mainWindow.webContents.isDestroyed()) {
+        mainWindow.webContents.send("connection-mode-fallback", notice);
+      } else {
+        pendingFallbackNotice = notice;
+      }
 
       return localUri;
     }
