@@ -59,7 +59,9 @@ Die paketierte App fragt GitHub Releases regelmäßig nach neuen Versionen ab un
 - **Windows**: Unsignierte NSIS-Installer installieren automatisch problemlos. Beim nächsten App-Start erscheint eine SmartScreen-Warnung.
 - **Linux**: AppImage-Updates funktionieren, wenn die App über AppImageLauncher oder eine vergleichbare Integration gestartet wurde. `.deb`-Builds werden nicht automatisch aktualisiert — nutze stattdessen deinen Paketmanager.
 
-**Wie Updates gefunden werden:** Der Release-Workflow erzeugt bei jedem `v*`-Tag die `electron-updater`-Manifeste — `latest.yml` (Windows), `latest-mac.yml` (macOS — beide Architekturen teilen sich ein Manifest; electron-builder hängt nur bei Linux ein Architektur-Suffix an) und `latest-linux.yml` / `latest-linux-arm64.yml` (Linux). `electron-updater` liest diese Manifeste beim Start vom GitHub-Release (mit 20 Sekunden Verzögerung, damit die UI Zeit zum Mounten hat) und danach alle 6 Stunden, solange die App läuft.
+**Wie Updates gefunden werden:** Der Release-Workflow erzeugt bei jedem `v*`-Tag die `electron-updater`-Manifeste — `latest.yml` (Windows), `latest-mac.yml` (macOS) und `latest-linux.yml` / `latest-linux-arm64.yml` (Linux). `electron-updater` liest diese Manifeste beim Start vom GitHub-Release (mit 20 Sekunden Verzögerung, damit die UI Zeit zum Mounten hat) und danach alle 6 Stunden, solange die App läuft.
+
+> ⚠️ **Bekannte Einschränkung (macOS x64-Auto-Update):** macOS wird von zwei separaten Jobs gebaut (arm64 und x64), die jeweils ein eigenes `latest-mac.yml` ohne Architektur-Suffix erzeugen. Beim Upload überschreibt das letzte das vorherige, sodass nur ein `latest-mac.yml` im Release verbleibt — aktuell referenziert es nur den **arm64**-Build. Intel-/x64-macOS-Builds lassen sich daher derzeit nicht über das Manifest automatisch aktualisieren. (Als Release-Workflow-Korrektur vorgemerkt.)
 
 **Im Dev-Modus:** Die IPC-Handler sind immer registriert, geben aber bei mutierenden Aktionen `{ ok: false, error: "dev-mode" }` zurück, damit der Banner in einem nicht-paketierten Lauf nie auslöst.
 
