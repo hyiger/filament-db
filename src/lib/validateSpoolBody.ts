@@ -79,6 +79,16 @@ export function isValidIsoDateString(s: string): boolean {
   // If a time portion is present, also confirm the whole string parses
   // (catches bad hours/minutes/offsets like "T25:00Z").
   if (s.length > 10 && isNaN(new Date(s).getTime())) return false;
+  // GH #524.2: ECMA-262 allows `T24:00` and `T24:00:00` as aliases for
+  // 00:00 of the following day, so `new Date('2025-01-01T24:00:00Z')`
+  // returns 2025-01-02 instead of failing. That's a silent +1-day shift
+  // a user wouldn't expect. Parse the hour component out of the regex
+  // capture and reject 24+ explicitly (every other invalid hour like 25
+  // is already caught by the `isNaN` check above).
+  if (m[4]) {
+    const hourMatch = /^T(\d{2}):/.exec(m[4]);
+    if (hourMatch && Number(hourMatch[1]) >= 24) return false;
+  }
   return true;
 }
 

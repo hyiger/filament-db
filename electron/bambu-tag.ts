@@ -188,6 +188,16 @@ export function bambuToDecodedTag(bambu: BambuTagData): DecodedOpenPrintTag {
     materialType,
     materialAbbreviation: bambu.materialVariantId || undefined,
     color: rgbaToHex(bambu.colorRGBA),
+    // GH #501: surface the second color that parseBambuBlocks already
+    // extracts when `formatId === 0x0002 && colorCount >= 2`. The OPT
+    // decoder downstream of this consumes `secondaryColors[]` to render
+    // multi-color swatches (Galaxy line etc.) so the form prefill picks
+    // it up automatically — pre-fix the second color was extracted into
+    // BambuTagData but never wired through, leaving these spools to
+    // scan as single-color.
+    secondaryColors: bambu.secondColorRGBA
+      ? [rgbaToHex(bambu.secondColorRGBA)]
+      : undefined,
     diameter: bambu.filamentDiameter > 0 ? bambu.filamentDiameter : undefined,
     nozzleTemp: bambu.maxHotendTemp > 0 ? bambu.maxHotendTemp : undefined,
     nozzleTempMin: bambu.minHotendTemp > 0 ? bambu.minHotendTemp : undefined,

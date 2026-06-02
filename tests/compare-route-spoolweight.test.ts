@@ -76,7 +76,7 @@ describe("/api/filaments/compare — inherited spoolWeight (Codex P2 PR #190)", 
       name: "Override-Variant",
       vendor: "V",
       type: "PLA",
-      color: "#fff",
+      color: "#ffffff",
       parentId: parent._id,
       spoolWeight: 300,
     });
@@ -104,7 +104,7 @@ describe("/api/filaments/compare — inherited spoolWeight (Codex P2 PR #190)", 
       name: "VNP",
       vendor: "V",
       type: "PLA",
-      color: "#fff",
+      color: "#ffffff",
       parentId: parent._id,
     });
     const res = await compareFilaments(req([String(variant._id)]));

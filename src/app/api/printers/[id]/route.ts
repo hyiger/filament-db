@@ -55,6 +55,14 @@ export async function PUT(
     delete body.instanceId;
     delete body.syncId;
 
+    // GH #524.4: see parallel comment in POST handler.
+    if (Array.isArray(body.installedNozzles)) {
+      body.installedNozzles = Array.from(new Set(body.installedNozzles.map(String)));
+    }
+    if (Array.isArray(body.installedBedTypes)) {
+      body.installedBedTypes = Array.from(new Set(body.installedBedTypes.map(String)));
+    }
+
     // Validate that all referenced nozzle IDs exist and are active
     if (body.installedNozzles?.length > 0) {
       const activeCount = await Nozzle.countDocuments({
