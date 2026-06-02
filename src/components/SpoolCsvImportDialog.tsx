@@ -52,19 +52,40 @@ export default function SpoolCsvImportDialog({ onClose, onImported }: Props) {
   // bounce focus, see #522.2 below), one for Escape (live onClose).
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    // Initial focus on the first focusable inside the dialog (or the
-    // dialog container itself as a fallback).
-    const first = dialogRef.current?.querySelector<HTMLElement>(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
-    );
-    (first ?? dialogRef.current)?.focus();
-    const handleKeydown = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !dialogRef.current) return;
-      const focusable = Array.from(
+    // Codex P2 round 1 on PR #540: filter out elements that can't
+    // actually receive focus. The dialog's first DOM input is the
+    // `className="hidden"` file input (display:none), so a naive
+    // "first focusable" query would .focus() something invisible — and
+    // including it in the Tab-boundary list means Shift+Tab from the
+    // first VISIBLE button lands on a hidden node, which the browser
+    // skips, letting focus escape to the page behind the modal. Filter
+    // on offsetParent !== null (covers display:none ancestors) +
+    // hidden/inert attributes.
+    const collectFocusable = (): HTMLElement[] => {
+      if (!dialogRef.current) return [];
+      return Array.from(
         dialogRef.current.querySelectorAll<HTMLElement>(
           'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
         ),
-      ).filter((el) => !el.hasAttribute("inert"));
+      ).filter(
+        (el) =>
+          !el.hasAttribute("inert") &&
+          !el.hasAttribute("hidden") &&
+          // offsetParent is null for display:none elements (and their
+          // descendants) — the cheapest visibility check that catches
+          // the hidden file input here.
+          el.offsetParent !== null,
+      );
+    };
+
+    // Initial focus on the first VISIBLE focusable (or the dialog
+    // container itself as a fallback).
+    const focusableOnOpen = collectFocusable();
+    (focusableOnOpen[0] ?? dialogRef.current)?.focus();
+
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = collectFocusable();
       if (focusable.length === 0) return;
       const firstEl = focusable[0];
       const lastEl = focusable[focusable.length - 1];

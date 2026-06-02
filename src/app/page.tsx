@@ -474,7 +474,21 @@ export default function Home() {
     }
     return ids;
   }, [groupedFilaments]);
-  const allFilamentIds = visibleFilamentIds;
+
+  // Codex P2 round 1 on PR #540: derive select-all state by MEMBERSHIP,
+  // not a count comparison. `selected.size === visible.length` is wrong
+  // when the user has N hidden rows selected and the filter now shows N
+  // DIFFERENT visible rows — the count matches but none of the visible
+  // rows are actually selected, so the header checkbox renders "checked"
+  // and a click would CLEAR the hidden selection instead of selecting
+  // the visible rows. Membership check: every visible id present.
+  const visibleSelectedCount = useMemo(
+    () => visibleFilamentIds.filter((id) => selected.has(id)).length,
+    [visibleFilamentIds, selected],
+  );
+  const allVisibleSelected =
+    visibleFilamentIds.length > 0 &&
+    visibleSelectedCount === visibleFilamentIds.length;
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -485,11 +499,18 @@ export default function Home() {
   };
 
   const toggleAll = () => {
-    if (selected.size === allFilamentIds.length) {
-      setSelected(new Set());
-    } else {
-      setSelected(new Set(allFilamentIds));
-    }
+    // When every visible row is already selected, clear ONLY the visible
+    // rows (preserve any off-screen selection the user might still want);
+    // otherwise add all visible rows to the selection.
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        for (const id of visibleFilamentIds) next.delete(id);
+      } else {
+        for (const id of visibleFilamentIds) next.add(id);
+      }
+      return next;
+    });
   };
 
   const handleBulkDelete = async () => {
@@ -973,7 +994,12 @@ export default function Home() {
         </select>
       </div>
 
-      {selected.size > 0 && (
+      {/* Codex P2 round 1 on PR #540: gate the bar + count on the VISIBLE
+          selection, not raw `selected.size`. Deletion is intersected with
+          visible IDs, so the bar must report the count it will actually
+          act on — otherwise it reads "5 selected · Delete 5" while only
+          2 are visible and deletable. */}
+      {visibleSelectedCount > 0 && (
         // GH #196: previously the bar used `bg-red-950/30` + `text-red-300`
         // + small text-sm — pink-on-dark-red is a low-contrast pairing on
         // a near-black page and the small thin font compounded the problem.
@@ -982,13 +1008,13 @@ export default function Home() {
         // gray-200 hover-white so all three elements meet WCAG-AA contrast
         // on dark mode.
         <div className="mb-4 flex items-center gap-3 px-3 py-2.5 bg-red-900/50 border border-red-700 rounded-lg">
-          <span className="text-sm font-medium text-red-100">{t("filaments.bulk.selected", { count: selected.size })}</span>
+          <span className="text-sm font-medium text-red-100">{t("filaments.bulk.selected", { count: visibleSelectedCount })}</span>
           <button
             onClick={handleBulkDelete}
             disabled={bulkDeleting}
             className="px-3 py-1.5 bg-red-700 text-white rounded text-sm font-medium hover:bg-red-600 disabled:opacity-50"
           >
-            {bulkDeleting ? t("filaments.bulk.deleting") : t("filaments.bulk.delete", { count: selected.size })}
+            {bulkDeleting ? t("filaments.bulk.deleting") : t("filaments.bulk.delete", { count: visibleSelectedCount })}
           </button>
           <button
             onClick={() => setSelected(new Set())}
@@ -1042,7 +1068,7 @@ export default function Home() {
                 <th scope="col" className="py-3 px-2 w-8">
                   <input
                     type="checkbox"
-                    checked={selected.size === allFilamentIds.length && allFilamentIds.length > 0}
+                    checked={allVisibleSelected}
                     onChange={toggleAll}
                     aria-label={t("filaments.bulk.selectAll") || "Select all"}
                     className="accent-red-600"
