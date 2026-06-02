@@ -293,18 +293,18 @@ Varianten teilen sich die Einstellungen eines Elternfilaments (Temperaturen, Dic
 
 Es gibt zwei Affordances auf der Detailseite. Beide erzeugen eine neue Variante, sie befüllen das Formular aber unterschiedlich:
 
-- **„+ Variante erstellen"** (fuchsia Button) — nur auf **Root**-Filamenten sichtbar (also nicht bereits eine Variante). Das Formular öffnet sich mit verknüpftem Eltern-Filament, **Vendor** und **Typ** sind vom Eltern-Filament übernommen, und die weiteren Werte des Eltern-Filaments erscheinen als **Platzhalter-Text** in den Eingabefeldern (nicht vorbefüllt). Lässt du ein Feld leer, erbt die Variante weiterhin live vom Eltern-Filament; tippst du etwas hinein, überschreibt sie nur dieses eine Feld. Schnellster Weg, wenn du eine echte Variante willst, die alles außer der Farbe teilt.
+- **„Variante erstellen"** (fuchsia Button) — nur auf **Root**-Filamenten sichtbar (also nicht bereits eine Variante). Das Formular öffnet sich mit verknüpftem Eltern-Filament, **Vendor** und **Typ** sind vom Eltern-Filament übernommen, und die weiteren Werte des Eltern-Filaments erscheinen als **Platzhalter-Text** in den Eingabefeldern (nicht vorbefüllt). Lässt du ein Feld leer, erbt die Variante weiterhin live vom Eltern-Filament; tippst du etwas hinein, überschreibt sie nur dieses eine Feld. Schnellster Weg, wenn du eine echte Variante willst, die alles außer der Farbe teilt.
 - **Duplizieren** (amber Button) — auf **jedem** Filament sichtbar, ob Root oder Variante. Das Formular öffnet sich mit **Name** (mit „(copy)"-Suffix), **Farbe**, **colorName**, **Vendor** und **Typ** wortgleich vom Quell-Filament kopiert — ein vollständiges Identitäts-Duplikat. Die Eltern-Beziehung wird automatisch gesetzt: Duplizieren eines Roots macht das neue Filament zu einer Variante dieses Roots; Duplizieren einer Variante macht das neue Filament zu einer **Schwester** unter demselben Eltern-Filament. Am besten, wenn du einen Ausgangspunkt willst, an dem du stark verändern möchtest.
 
 Schritte:
 
 1. Öffne die Detailseite eines Filaments.
-2. Klicke auf **„+ Variante erstellen"** (falls verfügbar) oder **Duplizieren**.
+2. Klicke auf **„Variante erstellen"** (falls verfügbar) oder **Duplizieren**.
 3. Das Formular öffnet sich nach den obigen Regeln vorbefüllt. Nicht vorbefüllte (bzw. nicht überschriebene) Felder erben live vom Eltern-Filament — das ist das Design aus GH #106; der Platzhalter-Text zeigt, was du bekommst.
 4. Bearbeite den **Namen** (nur bei Duplizieren — Variante erstellen lässt das Feld leer zum selbst-Eingeben), wähle eine neue **Farbe** und passe optional **colorName** an.
 5. Klicke auf **Filament erstellen**. Das neue Filament wird als Variante des Eltern-Filaments registriert; künftige Änderungen an Kalibrierungen / Temperaturen / Einstellungen des Eltern-Filaments fließen automatisch in nicht überschriebene Felder.
 
-> **Designregel**: Varianten von Varianten werden nicht unterstützt. Ein Eltern-Filament muss ein Top-Level-Filament sein. Deshalb ist „+ Variante erstellen" auf Varianten-Seiten ausgeblendet, und Klonen einer Variante erzeugt eine Schwester statt einer Verschachtelung.
+> **Designregel**: Varianten von Varianten werden nicht unterstützt. Ein Eltern-Filament muss ein Top-Level-Filament sein. Deshalb ist „Variante erstellen" auf Varianten-Seiten ausgeblendet, und Klonen einer Variante erzeugt eine Schwester statt einer Verschachtelung.
 
 Um ein bestehendes eigenständiges Filament in eine Variante umzuwandeln:
 
