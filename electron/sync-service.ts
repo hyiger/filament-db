@@ -623,12 +623,32 @@ export class SyncService extends EventEmitter {
     await this.backfillSyncIds(localCol);
     await this.backfillSyncIds(remoteCol);
 
-    // Fetch all docs (including soft-deleted) from both sides
-    const localDocs = await localCol.find({}).toArray();
-    const remoteDocs = await remoteCol.find({}).toArray();
+    // GH #511: fetch only the fields the diff loop below actually reads —
+    // syncId, _deletedAt, _purged, updatedAt (+ the always-present _id).
+    // The full document body (which for the filaments collection includes
+    // base64 photoDataUrl blobs, unbounded usageHistory[], calibrations[],
+    // etc.) is pulled across the wire ONLY for the docs that actually need
+    // to transfer, via the hydrateLocal/hydrateRemote helpers below.
+    // Pre-fix `find({})` streamed every full doc on both sides every
+    // cycle (default every 5 min) just to compare four metadata fields —
+    // on an Atlas hybrid install with photo-attached spools that's tens
+    // to hundreds of MB of metered egress per cycle.
+    const SLIM_PROJECTION = { syncId: 1, _deletedAt: 1, _purged: 1, updatedAt: 1 };
+    const localDocs = await localCol.find({}, { projection: SLIM_PROJECTION }).toArray();
+    const remoteDocs = await remoteCol.find({}, { projection: SLIM_PROJECTION }).toArray();
 
     const localBySyncId = new Map(localDocs.filter(d => d.syncId).map(d => [d.syncId as string, d]));
     const remoteBySyncId = new Map(remoteDocs.filter(d => d.syncId).map(d => [d.syncId as string, d]));
+
+    // Hydrate the full document only when a branch actually needs the body
+    // (push / pull / update / resurrect). Returns null if the doc vanished
+    // between the slim read and now (physical delete — doesn't happen in
+    // this app's soft-delete-only model, but guard defensively so a null
+    // can't be spread into an insert/update).
+    const hydrateLocal = (slim: Document): Promise<Document | null> =>
+      localCol.findOne({ _id: slim._id });
+    const hydrateRemote = (slim: Document): Promise<Document | null> =>
+      remoteCol.findOne({ _id: slim._id });
 
     const result: SyncResult = { collection: collectionName, pushed: 0, pulled: 0, updated: 0, deleted: 0 };
 
@@ -651,7 +671,9 @@ export class SyncService extends EventEmitter {
         // doc already exists. Without this branch the second insert
         // bubbled up as a collection-level failure in `trySync` and
         // the whole sync cycle reported "partial".
-        const doc = this.stripForTransfer(localDoc);
+        const full = await hydrateLocal(localDoc);
+        if (!full) continue;
+        const doc = this.stripForTransfer(full);
         const transformed = transformDoc ? transformDoc(doc, "toRemote") : doc;
         try {
           await remoteCol.insertOne({ ...transformed, _id: new ObjectId() });
@@ -665,7 +687,9 @@ export class SyncService extends EventEmitter {
         // Remote-only: pull to local. Same E11000 guard symmetry — a
         // concurrent sync from another instance could have already
         // pulled the same doc to a shared local store.
-        const doc = this.stripForTransfer(remoteDoc);
+        const full = await hydrateRemote(remoteDoc);
+        if (!full) continue;
+        const doc = this.stripForTransfer(full);
         const transformed = transformDoc ? transformDoc(doc, "toLocal") : doc;
         try {
           await localCol.insertOne({ ...transformed, _id: new ObjectId() });
@@ -722,10 +746,13 @@ export class SyncService extends EventEmitter {
             result.deleted++;
           } else {
             // Remote was updated strictly after local delete — resurrect locally
-            const doc = this.stripForTransfer(remoteDoc);
-            const transformed = transformDoc ? transformDoc(doc, "toLocal") : doc;
-            await localCol.updateOne({ _id: localDoc._id }, { $set: { ...transformed, _deletedAt: null } });
-            result.pulled++;
+            const full = await hydrateRemote(remoteDoc);
+            if (full) {
+              const doc = this.stripForTransfer(full);
+              const transformed = transformDoc ? transformDoc(doc, "toLocal") : doc;
+              await localCol.updateOne({ _id: localDoc._id }, { $set: { ...transformed, _deletedAt: null } });
+              result.pulled++;
+            }
           }
           continue;
         }
@@ -738,10 +765,13 @@ export class SyncService extends EventEmitter {
             await localCol.updateOne({ _id: localDoc._id }, { $set: { _deletedAt: remoteDoc._deletedAt } });
             result.deleted++;
           } else {
-            const doc = this.stripForTransfer(localDoc);
-            const transformed = transformDoc ? transformDoc(doc, "toRemote") : doc;
-            await remoteCol.updateOne({ _id: remoteDoc._id }, { $set: { ...transformed, _deletedAt: null } });
-            result.pushed++;
+            const full = await hydrateLocal(localDoc);
+            if (full) {
+              const doc = this.stripForTransfer(full);
+              const transformed = transformDoc ? transformDoc(doc, "toRemote") : doc;
+              await remoteCol.updateOne({ _id: remoteDoc._id }, { $set: { ...transformed, _deletedAt: null } });
+              result.pushed++;
+            }
           }
           continue;
         }
@@ -754,16 +784,22 @@ export class SyncService extends EventEmitter {
 
         if (localTime > remoteTime) {
           // Local is newer — push to remote
-          const doc = this.stripForTransfer(localDoc);
-          const transformed = transformDoc ? transformDoc(doc, "toRemote") : doc;
-          await remoteCol.updateOne({ _id: remoteDoc._id }, { $set: transformed });
-          result.updated++;
+          const full = await hydrateLocal(localDoc);
+          if (full) {
+            const doc = this.stripForTransfer(full);
+            const transformed = transformDoc ? transformDoc(doc, "toRemote") : doc;
+            await remoteCol.updateOne({ _id: remoteDoc._id }, { $set: transformed });
+            result.updated++;
+          }
         } else if (remoteTime > localTime) {
           // Remote is newer — pull to local
-          const doc = this.stripForTransfer(remoteDoc);
-          const transformed = transformDoc ? transformDoc(doc, "toLocal") : doc;
-          await localCol.updateOne({ _id: localDoc._id }, { $set: transformed });
-          result.updated++;
+          const full = await hydrateRemote(remoteDoc);
+          if (full) {
+            const doc = this.stripForTransfer(full);
+            const transformed = transformDoc ? transformDoc(doc, "toLocal") : doc;
+            await localCol.updateOne({ _id: localDoc._id }, { $set: transformed });
+            result.updated++;
+          }
         }
         // Equal timestamps — no action needed
       }
