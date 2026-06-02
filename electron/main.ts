@@ -1114,8 +1114,18 @@ ipcMain.handle("label-printer-print", async (event, bytes: number[]) => {
   // `ESC i z` media width, `ESC i M`/`K` mode bits, `0x1A`/`0x0C`
   // trailer — and a stray byte in the wrong slot leaves the printer
   // in a wrong-mode / chain-stuck state for the next print.
-  if (!bytes.every((b) => Number.isInteger(b) && b >= 0 && b <= 255)) {
-    throw new Error("bytes must contain only integers in [0, 255]");
+  //
+  // Codex P2 round 1: use an index loop, not Array.prototype.every —
+  // `every` skips sparse-array holes (`new Array(100)` or
+  // `delete arr[5]`), so a hostile renderer could send a 5MB array
+  // with NO actual bytes and the guard would pass. `new Uint8Array`
+  // would then convert every hole to 0x00, reintroducing the silent
+  // coercion this hardening is meant to block.
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i];
+    if (!Number.isInteger(b) || b < 0 || b > 255) {
+      throw new Error("bytes must contain only integers in [0, 255]");
+    }
   }
   const devicePath = (store as Store<Record<string, unknown>>).get(
     "labelPrinterDevicePath",
