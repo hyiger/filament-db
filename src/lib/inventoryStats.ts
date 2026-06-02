@@ -43,19 +43,27 @@ export function getSpoolCount(f: InventoryFilament): number {
  * set but `netFilamentWeight` blank, so the guard checks only the inputs
  * the calculation actually uses. */
 export function getRemainingGrams(f: InventoryFilament): number | null {
-  if (!f.spools || f.spools.length === 0 || f.spoolWeight == null) {
-    return null;
-  }
-  let grams = 0;
-  let any = false;
-  for (const s of f.spools) {
-    if (s.retired) continue;
-    if (s.totalWeight != null) {
-      grams += Math.max(0, s.totalWeight - f.spoolWeight);
-      any = true;
+  if (f.spools && f.spools.length > 0) {
+    if (f.spoolWeight == null) return null;
+    let grams = 0;
+    let any = false;
+    for (const s of f.spools) {
+      if (s.retired) continue;
+      if (s.totalWeight != null) {
+        grams += Math.max(0, s.totalWeight - f.spoolWeight);
+        any = true;
+      }
     }
+    return any ? grams : null;
   }
-  return any ? grams : null;
+  // GH #524.3: legacy single-spool fallback — same shape getSpoolCount
+  // and getRemainingPct already honour. Without this branch, the home
+  // page's isLowStock helper (which calls getRemainingGrams and treats
+  // null as "not low") never lights up the badge for a pre-migration
+  // filament with a top-level `totalWeight`, even though the same row's
+  // remaining-% bar renders correctly via getRemainingPct's legacy path.
+  if (f.totalWeight == null || f.spoolWeight == null) return null;
+  return Math.max(0, f.totalWeight - f.spoolWeight);
 }
 
 /** Percentage remaining (0-100, integer). Excludes retired spools so

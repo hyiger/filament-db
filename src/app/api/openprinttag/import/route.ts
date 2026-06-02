@@ -6,6 +6,7 @@ import {
   mapToFilamentPayload,
 } from "@/lib/openprinttagBrowser";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
 
 /**
  * POST /api/openprinttag/import
@@ -176,8 +177,39 @@ export async function POST(request: NextRequest) {
             );
             continue;
           }
-          await Filament.create(payload);
-          created++;
+          // GH #524.1: between the nameCollision check above and the
+          // create below, a concurrent POST can win the race and the
+          // loser's create throws E11000 with the raw MongoServerError
+          // text that used to leak into errors[]. Mirror the three-phase
+          // recovery the bambustudio / filament-import / prusament
+          // importers all use: on a duplicate-key error, re-fetch the
+          // winner and treat it as an update.
+          try {
+            await Filament.create(payload);
+            created++;
+          } catch (createErr) {
+            if (!isDuplicateKeyError(createErr)) throw createErr;
+            const winner = await Filament.findOneAndUpdate(
+              { name, vendor, _deletedAt: null },
+              { $set: optUpdateFields },
+              { returnDocument: "after" },
+            );
+            if (winner) {
+              updated++;
+            } else {
+              // The race winner is in a different vendor — same shape as
+              // the pre-create nameCollision branch above.
+              const racedCollision = await Filament.findOne({ name, _deletedAt: null }).lean();
+              if (racedCollision) {
+                errors.push(
+                  `${material.name}: skipped — a filament named "${name}" already exists under vendor "${racedCollision.vendor}"`,
+                );
+              } else {
+                // Shouldn't happen — but don't leak the raw E11000.
+                errors.push(`${material.name}: write conflict, please retry`);
+              }
+            }
+          }
         }
       } catch (err) {
         errors.push(`${material.name}: ${String(err)}`);
