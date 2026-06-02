@@ -14,19 +14,22 @@ export default function UnsavedChangesDialog({ onCancel, onDiscard }: Props) {
   const discardRef = useRef<HTMLButtonElement>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  // Focus the cancel button on mount (safer default for destructive dialogs),
-  // restore focus to the previously-focused element on unmount, and trap Tab
-  // so keyboard users can't escape behind the modal.
+  // GH #522.2: split the effect — capture/restore + initial focus + Tab
+  // trap run once on mount; the Escape→onCancel handler tracks the live
+  // callback in a separate effect. Pre-fix the whole block was keyed on
+  // [onCancel], so a parent re-render with an inline arrow function
+  // identity-changed onCancel, fired cleanup (which restored focus to
+  // the background), then immediately re-ran the effect (which snapshot
+  // the just-restored focus and re-focused the dialog). Net effect:
+  // focus bounced between the background field and the dialog's Cancel
+  // button on every parent re-render. /filaments/new re-renders on NFC
+  // events, so the trigger was real-world. Same fix shape ImportAtlasDialog
+  // applied for the identical bug.
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     cancelRef.current?.focus();
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onCancel();
-        return;
-      }
       if (e.key === "Tab") {
         // Simple two-element trap — the two action buttons are the only
         // focusable elements inside this dialog.
@@ -51,6 +54,19 @@ export default function UnsavedChangesDialog({ onCancel, onDiscard }: Props) {
       document.removeEventListener("keydown", handleKeyDown);
       previouslyFocused?.focus?.();
     };
+  }, []);
+
+  // Escape handler tracks the live callback so a Cancel-prop change
+  // doesn't get stale, but doesn't re-run the focus dance above.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
   }, [onCancel]);
 
   // Clicking the backdrop cancels, same as Escape.

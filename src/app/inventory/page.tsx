@@ -602,10 +602,17 @@ export default function InventoryPage() {
                     </h2>
                   </div>
                   <div className="text-sm text-gray-500 whitespace-nowrap">
-                    {t("inventory.group.summary", {
-                      count: group.count,
-                      grams: Math.round(group.totalGrams),
-                    })}
+                    {/* GH #528: proper pluralization — "1 spool" / "2 spools",
+                        "1 Spule" / "2 Spulen". inventory.group.summary
+                        stays as a no-suffix fallback so any stale callers
+                        keep working, but this site uses the singular/
+                        plural variants the renderer picks based on count. */}
+                    {t(
+                      group.count === 1
+                        ? "inventory.group.summary.one"
+                        : "inventory.group.summary.other",
+                      { count: group.count, grams: Math.round(group.totalGrams) },
+                    )}
                   </div>
                 </button>
                 {!isCollapsed && (
@@ -702,6 +709,13 @@ function SpoolEditRow({
   const [saving, setSaving] = useState(false);
 
   const saveWeight = async () => {
+    // GH #509: short-circuit re-entry while a save is in flight. The
+    // Save button is `disabled={saving}` so the click path is safe,
+    // but the input's onKeyDown Enter handler kept firing during the
+    // in-flight PUT — holding Enter (or two-tapping on a slow link)
+    // raced a second PUT against the refresh. Mirrors the
+    // movePending / retirePending guards added for #404.
+    if (saving) return;
     const n = Number(weightDraft);
     if (!Number.isFinite(n) || n < 0) return;
     setSaving(true);

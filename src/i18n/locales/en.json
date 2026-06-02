@@ -1353,6 +1353,8 @@
   "printers.addNewTitle": "Add New Printer",
   "settings.aiCostNote.gemini": "Google Gemini offers a free tier (15 requests/minute). No charges for typical usage.",
   "settings.aiCostNote.paid": "API calls to {provider} are billed per use. Check your provider's pricing page for current rates.",
+  "inventory.group.summary.one": "{count} spool · {grams}g",
+  "inventory.group.summary.other": "{count} spools · {grams}g",
   "detail.spool.weightPlaceholder": "grams",
   "common.select": "Select",
   "nozzleType.Brass": "Brass",

@@ -157,6 +157,13 @@ export default function SyncStatusIndicator() {
     );
   }
 
+  // GH #527: first-run Electron has connectionMode === "" because the
+  // wizard hasn't completed yet. Suppress the pill entirely until the
+  // user picks a mode — pre-fix the empty string fell through to the
+  // hybrid branch and rendered a misleading green "Connected" while
+  // /setup was still asking the user to choose.
+  if (!mode) return null;
+
   // Electron: offline mode
   if (mode === "offline") {
     return (

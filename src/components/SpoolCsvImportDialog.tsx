@@ -41,6 +41,69 @@ export default function SpoolCsvImportDialog({ onClose, onImported }: Props) {
   const acRef = useRef<AbortController | null>(null);
   useEffect(() => () => acRef.current?.abort(), []);
 
+  // GH #522.1: focus capture/restore + Tab loop + initial focus, mirroring
+  // ImportAtlasDialog and PrusamentImportDialog. Pre-fix the dialog
+  // declared role="dialog" aria-modal="true" but the dialogRef was unused,
+  // so keyboard users could Tab past the backdrop into the underlying
+  // page (still focusable, still actionable via Enter/Space) and
+  // screen-readers landed on whatever was previously focused, breaking
+  // the aria-modal contract. Two effects — one for capture/restore +
+  // initial-focus + Tab trap (empty deps so a parent re-render doesn't
+  // bounce focus, see #522.2 below), one for Escape (live onClose).
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    // Codex P2 round 1 on PR #540: filter out elements that can't
+    // actually receive focus. The dialog's first DOM input is the
+    // `className="hidden"` file input (display:none), so a naive
+    // "first focusable" query would .focus() something invisible — and
+    // including it in the Tab-boundary list means Shift+Tab from the
+    // first VISIBLE button lands on a hidden node, which the browser
+    // skips, letting focus escape to the page behind the modal. Filter
+    // on offsetParent !== null (covers display:none ancestors) +
+    // hidden/inert attributes.
+    const collectFocusable = (): HTMLElement[] => {
+      if (!dialogRef.current) return [];
+      return Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter(
+        (el) =>
+          !el.hasAttribute("inert") &&
+          !el.hasAttribute("hidden") &&
+          // offsetParent is null for display:none elements (and their
+          // descendants) — the cheapest visibility check that catches
+          // the hidden file input here.
+          el.offsetParent !== null,
+      );
+    };
+
+    // Initial focus on the first VISIBLE focusable (or the dialog
+    // container itself as a fallback).
+    const focusableOnOpen = collectFocusable();
+    (focusableOnOpen[0] ?? dialogRef.current)?.focus();
+
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = collectFocusable();
+      if (focusable.length === 0) return;
+      const firstEl = focusable[0];
+      const lastEl = focusable[focusable.length - 1];
+      if (e.shiftKey && document.activeElement === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && document.activeElement === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeydown);
+    return () => {
+      document.removeEventListener("keydown", handleKeydown);
+      previouslyFocused?.focus?.();
+    };
+  }, []);
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
