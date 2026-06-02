@@ -57,7 +57,7 @@ The packaged app polls GitHub Releases for new versions and surfaces a banner at
 - **Windows**: unsigned NSIS installers auto-install fine. The user sees a SmartScreen warning the next time the app launches.
 - **Linux**: AppImage updates work when the app was launched via AppImageLauncher or a similar integration. `.deb` builds are not auto-updated — use your package manager instead.
 
-**How it finds updates:** the release workflow produces the `electron-updater` manifests on every `v*` tag — `latest.yml` (Windows), `latest-mac.yml` / `latest-mac-x64.yml` (macOS), and `latest-linux.yml` / `latest-linux-arm64.yml` (Linux). `electron-updater` reads those manifests from the GitHub release on startup (with a 20-second delay so the UI has time to mount) and every 6 hours while the app is running.
+**How it finds updates:** the release workflow produces the `electron-updater` manifests on every `v*` tag — `latest.yml` (Windows), `latest-mac.yml` (macOS — both arches share one manifest; electron-builder only appends an arch suffix for Linux), and `latest-linux.yml` / `latest-linux-arm64.yml` (Linux). `electron-updater` reads those manifests from the GitHub release on startup (with a 20-second delay so the UI has time to mount) and every 6 hours while the app is running.
 
 **In dev:** the IPC handlers are always registered but short-circuit to `{ ok: false, error: "dev-mode" }` for mutating actions so the banner never triggers in a packaged-false run.
 
