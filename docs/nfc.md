@@ -188,7 +188,7 @@ CBOR keys below are the actual values from `OPT_KEY` in `src/lib/openprinttag.ts
 
 | Field | CBOR Key | Description |
 |-------|----------|-------------|
-| Material type | 9 | PLA, PETG, ABS, etc. |
+| Material type | 9 | Numeric enum (NOT a string) — the encoder maps names like PLA/PETG/ABS through `MATERIAL_TYPE_MAP` and writes the integer value |
 | Material name | 10 | Filament name |
 | Brand name | 11 | Vendor name |
 | Nominal net full weight | 16 | Nominal net filament weight when full, grams |
