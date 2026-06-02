@@ -48,36 +48,6 @@ export function useUnsavedChanges(fallbackUrl: string) {
     window.addEventListener("popstate", handlePopState);
     return () => {
       window.removeEventListener("popstate", handlePopState);
-      // GH #510: pop the guard entry we pushed on mount so navigations
-      // away from the form don't leave a sentinel history entry behind.
-      // Pre-fix every form mount leaked one entry, so back-back-back
-      // from a saved filament landed first on a phantom guard URL
-      // (re-mounting the form, adding yet another guard), then on the
-      // real form URL, then on the originating page. Across an editing
-      // session the stack accumulated unboundedly.
-      //
-      // Conditions:
-      //   - !dirtyRef.current — confirmNav already handled discard via
-      //     window.history.go(-2) and the guard has been consumed; a
-      //     second back() would over-shoot.
-      //   - history.state?.unsavedGuard === true — only pop if the
-      //     CURRENT top entry is actually our guard. Browser back/forward
-      //     mid-editing can leave the guard buried under the user's
-      //     subsequent navigation; popping then would cancel an
-      //     unrelated entry.
-      try {
-        if (
-          !dirtyRef.current &&
-          typeof window !== "undefined" &&
-          window.history.state &&
-          (window.history.state as { unsavedGuard?: boolean }).unsavedGuard === true
-        ) {
-          window.history.back();
-        }
-      } catch {
-        // window.history can throw in tests / restricted contexts —
-        // never let cleanup throw out of useEffect.
-      }
     };
   }, []);
 
