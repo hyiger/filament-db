@@ -430,6 +430,44 @@ describe("/api/spools/import", () => {
   // concurrent writers) must not abort the whole batch. Pre-fix the throw
   // escaped the row loop into the outer 500 catch and the user lost the
   // already-processed rows' results entirely.
+  // GH #525.1: a paste of N spools for the same filament must hit the
+  // filament collection ONCE (cached find) and save ONCE (batched), not
+  // N finds + N saves.
+  describe("filament cache + batched save (N+1 fix)", () => {
+    it("imports many spools of one filament with a single find + single save", async () => {
+      await Filament.create({ name: "Bulk PLA", vendor: "V", type: "PLA" });
+
+      // The route holds its own module-default Filament reference (the
+      // beforeEach re-registration replaces mongoose.models.Filament but the
+      // route's import is cached), so spy on the module default to observe
+      // the route's actual findOne calls.
+      const RouteFilament = (await import("@/models/Filament")).default;
+      const findSpy = vi.spyOn(RouteFilament, "findOne");
+      const saveSpy = vi.spyOn(mongoose.Model.prototype, "save");
+      try {
+        const rows = Array.from({ length: 20 }, (_, n) => `Bulk PLA,${800 + n}`).join("\n");
+        const res = await importSpools(csvRequest(`filament,totalWeight\n${rows}\n`));
+        const body = await res.json();
+        expect(body.imported).toBe(20);
+        expect(body.failed).toBe(0);
+
+        // The filament was looked up exactly once (cache hit for rows 2-20).
+        const bulkFinds = findSpy.mock.calls.filter(
+          (c) => (c[0] as { name?: string })?.name === "Bulk PLA",
+        );
+        expect(bulkFinds).toHaveLength(1);
+        // And saved exactly once — all 20 spools persisted in one write.
+        expect(saveSpy).toHaveBeenCalledTimes(1);
+
+        const fresh = await Filament.findOne({ name: "Bulk PLA" });
+        expect(fresh.spools).toHaveLength(20);
+      } finally {
+        findSpy.mockRestore();
+        saveSpy.mockRestore();
+      }
+    });
+  });
+
   describe("per-row save failure isolation", () => {
     it("continues processing remaining rows when one save() throws", async () => {
       await Filament.create({ name: "PLA Red", vendor: "V", type: "PLA" });

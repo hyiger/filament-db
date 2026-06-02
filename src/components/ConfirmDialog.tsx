@@ -37,6 +37,11 @@ export interface ConfirmOptions {
   cancelLabel?: string;
   /** When true, the confirm button is styled as a destructive action. */
   destructive?: boolean;
+  /** When true, hide the cancel button — turns the dialog into a simple
+   * acknowledge-only notice (e.g. an aggregated error report). The
+   * confirm button (and Esc / outside-click) still resolve, so the
+   * promise always settles. */
+  hideCancel?: boolean;
 }
 
 type ConfirmFn = (opts: ConfirmOptions | string) => Promise<boolean>;
@@ -176,14 +181,16 @@ export default function ConfirmProvider({ children }: { children: ReactNode }) {
               {pending.opts.message}
             </p>
             <div className="mt-5 flex justify-end gap-2">
-              <button
-                ref={cancelBtnRef}
-                type="button"
-                onClick={() => decide(false)}
-                className="px-4 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
-              >
-                {pending.opts.cancelLabel ?? t("common.cancel")}
-              </button>
+              {!pending.opts.hideCancel && (
+                <button
+                  ref={cancelBtnRef}
+                  type="button"
+                  onClick={() => decide(false)}
+                  className="px-4 py-1.5 rounded border border-gray-300 dark:border-gray-600 text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                >
+                  {pending.opts.cancelLabel ?? t("common.cancel")}
+                </button>
+              )}
               <button
                 ref={confirmBtnRef}
                 type="button"

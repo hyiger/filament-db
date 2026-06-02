@@ -178,6 +178,11 @@ export default function Home() {
   const [showImportExport, setShowImportExport] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  // GH #525.2: track live progress + allow aborting a long bulk delete.
+  // `bulkProgress` is { done, total } while a delete is running so the
+  // button can show "Deleting 12/40" instead of an indeterminate spinner.
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
+  const bulkAbortRef = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const importExportRef = useRef<HTMLDivElement>(null);
   const stickyHeaderRef = useRef<HTMLDivElement>(null);
@@ -532,23 +537,62 @@ export default function Home() {
     const count = targets.length;
     if (count === 0) return;
     if (!(await confirm({ message: t("filaments.deleteConfirm", { count }), destructive: true, confirmLabel: t("common.delete") }))) return;
+    bulkAbortRef.current = false;
     setBulkDeleting(true);
+    setBulkProgress({ done: 0, total: count });
     let deleted = 0;
     const errors: string[] = [];
+    const succeeded = new Set<string>();
+    let aborted = false;
     for (const id of targets) {
+      // GH #525.2: honour an abort request between rows. In-flight rows
+      // already issued aren't interrupted, but no further deletes start.
+      if (bulkAbortRef.current) {
+        aborted = true;
+        break;
+      }
       const res = await fetch(`/api/filaments/${id}`, { method: "DELETE" });
       if (res.ok) {
         deleted++;
+        succeeded.add(id);
       } else {
         const body = await res.json().catch(() => null);
         const name = filaments.find((f) => f._id === id)?.name ?? id;
         errors.push(body?.error || t("filaments.deleteError", { name }));
       }
+      setBulkProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
     }
-    if (deleted > 0) toast(t("filaments.deletedCount", { count: deleted }));
-    if (errors.length > 0) toast(errors.join("; "), "error");
+    if (deleted > 0) {
+      toast(
+        aborted
+          ? t("filaments.bulk.abortedCount", { count: deleted })
+          : t("filaments.deletedCount", { count: deleted }),
+      );
+    }
+    // GH #525.2: aggregate failures into a single scrollable dialog instead
+    // of one ever-growing toast that overflows the screen on a large batch.
+    if (errors.length > 0) {
+      const MAX_SHOWN = 10;
+      const shown = errors.slice(0, MAX_SHOWN);
+      const overflow = errors.length - shown.length;
+      const lines = shown.join("\n") + (overflow > 0 ? "\n" + t("filaments.bulk.errorsOverflow", { count: overflow }) : "");
+      await confirm({
+        title: t("filaments.bulk.errorsTitle", { count: errors.length }),
+        message: lines,
+        confirmLabel: t("common.close"),
+        hideCancel: true,
+      });
+    }
+    setBulkProgress(null);
     setBulkDeleting(false);
-    setSelected(new Set());
+    // Drop only the rows we actually deleted from the selection so a user
+    // who aborted (or hit per-row failures) keeps the un-processed rows
+    // selected and can retry.
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of succeeded) next.delete(id);
+      return next;
+    });
     fetchFilaments();
   };
 
@@ -1024,14 +1068,28 @@ export default function Home() {
             disabled={bulkDeleting}
             className="px-3 py-1.5 bg-red-700 text-white rounded text-sm font-medium hover:bg-red-600 disabled:opacity-50"
           >
-            {bulkDeleting ? t("filaments.bulk.deleting") : t("filaments.bulk.delete", { count: visibleSelectedCount })}
+            {bulkDeleting
+              ? bulkProgress
+                ? t("filaments.bulk.deletingProgress", { done: bulkProgress.done, total: bulkProgress.total })
+                : t("filaments.bulk.deleting")
+              : t("filaments.bulk.delete", { count: visibleSelectedCount })}
           </button>
-          <button
-            onClick={() => setSelected(new Set())}
-            className="text-sm text-gray-200 hover:text-white"
-          >
-            {t("common.clear")}
-          </button>
+          {bulkDeleting ? (
+            // GH #525.2: let the user stop a long bulk delete partway.
+            <button
+              onClick={() => { bulkAbortRef.current = true; }}
+              className="text-sm text-gray-200 hover:text-white"
+            >
+              {t("filaments.bulk.stop")}
+            </button>
+          ) : (
+            <button
+              onClick={() => setSelected(new Set())}
+              className="text-sm text-gray-200 hover:text-white"
+            >
+              {t("common.clear")}
+            </button>
+          )}
           <span className="ml-auto text-xs text-red-200">
             {t("filaments.bulk.deleteHint")}{" "}
             <Link href="/trash" className="underline hover:text-white">
