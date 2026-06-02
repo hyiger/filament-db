@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { nozzleTypeLabel } from "@/lib/nozzleTypes";
 
 interface Nozzle {
   _id: string;
@@ -210,7 +211,7 @@ export default function PrintersPage() {
                             key={n._id}
                             className="px-2 py-0.5 bg-gray-200 dark:bg-gray-800 rounded text-xs"
                           >
-                            {n.diameter}mm {n.type}
+                            {n.diameter}mm {nozzleTypeLabel(n.type, t)}
                           </span>
                         ))}
                       </div>

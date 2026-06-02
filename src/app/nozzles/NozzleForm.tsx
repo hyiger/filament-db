@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { NOZZLE_TYPES } from "@/lib/nozzleTypes";
 
 interface PrinterOption {
   _id: string;
@@ -34,23 +35,8 @@ interface Props {
   onDirtyChange?: (dirty: boolean) => void;
 }
 
-/** GH #529: stored values stay in English so existing DB rows and the
- *  CSV/Atlas import paths don't need a migration. Display labels are
- *  translated via the `nozzleType.<key>` keys (en defaults to the same
- *  English text, de carries "Messing" etc.). When extending this list,
- *  add a matching `nozzleType.<KeyName>` to both locale files or the
- *  i18n-key-coverage invariant test fails. */
-const NOZZLE_TYPES: { value: string; i18nKey: string }[] = [
-  { value: "Brass", i18nKey: "nozzleType.Brass" },
-  { value: "Hardened Steel", i18nKey: "nozzleType.HardenedSteel" },
-  { value: "Stainless Steel", i18nKey: "nozzleType.StainlessSteel" },
-  { value: "Copper", i18nKey: "nozzleType.Copper" },
-  { value: "Ruby Tipped", i18nKey: "nozzleType.RubyTipped" },
-  { value: "Tungsten Carbide", i18nKey: "nozzleType.TungstenCarbide" },
-  { value: "ObXidian", i18nKey: "nozzleType.ObXidian" },
-  { value: "Diamondback", i18nKey: "nozzleType.Diamondback" },
-  { value: "Other", i18nKey: "nozzleType.Other" },
-];
+// GH #529/#538: NOZZLE_TYPES moved to src/lib/nozzleTypes.ts so the list
+// pages + printer detail render the same translated labels the form uses.
 
 const COMMON_DIAMETERS = ["0.1", "0.15", "0.2", "0.25", "0.3", "0.35", "0.4", "0.5", "0.6", "0.7", "0.8", "1.0", "1.2", "1.4", "1.6", "1.8", "2.0"];
 
