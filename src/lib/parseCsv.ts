@@ -48,6 +48,15 @@ export function parseCsv(
   // turning `maxRows: N` into an `N-1` data-row ceiling in header mode.
   const rawRowCap = opts.header ? maxRows + 1 : maxRows;
   const rows: string[][] = [];
+  // GH #512: count non-blank rows for the cap so an Excel paste with
+  // trailing newlines (or a CSV with section-separator blank rows)
+  // doesn't throw CsvRowLimitExceededError even when the EMITTED row
+  // count would be under the cap. Blank rows are still kept in `rows`
+  // because non-header callers expect them; the per-iteration check
+  // just stops counting them toward maxRows.
+  let nonBlankRowCount = 0;
+  const isBlankRow = (r: string[]): boolean =>
+    r.length === 0 || (r.length === 1 && r[0] === "");
   let row: string[] = [];
   let field = "";
   let i = 0;
@@ -89,20 +98,22 @@ export function parseCsv(
       // Handle CRLF by skipping the LF; bare CR also treated as a line end.
       row.push(field);
       rows.push(row);
+      if (!isBlankRow(row)) nonBlankRowCount++;
       field = "";
       row = [];
       i++;
       if (input[i] === "\n") i++;
-      if (rows.length > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
+      if (nonBlankRowCount > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
       continue;
     }
     if (ch === "\n") {
       row.push(field);
       rows.push(row);
+      if (!isBlankRow(row)) nonBlankRowCount++;
       field = "";
       row = [];
       i++;
-      if (rows.length > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
+      if (nonBlankRowCount > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
       continue;
     }
     field += ch;
@@ -113,7 +124,8 @@ export function parseCsv(
   if (field.length > 0 || row.length > 0) {
     row.push(field);
     rows.push(row);
-    if (rows.length > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
+    if (!isBlankRow(row)) nonBlankRowCount++;
+    if (nonBlankRowCount > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
   }
 
   // Strip outer whitespace from unquoted strings — we keep quoted values

@@ -14,15 +14,31 @@ import Filament from "@/models/Filament";
  * vendor's filaments as `candidates` for the user to pick from, with
  * `match: null`.
  */
+/**
+ * GH #513: bound every regex-compile path's input length, not just the
+ * instanceId branch. escapeRegex prevents injection but NOT compile-cost
+ * DoS — a 10MB query still produces a 10MB escaped pattern Mongo's
+ * driver has to parse. The route is intentionally unguarded by
+ * assertSameOriginRequest so PrusaSlicer / OrcaSlicer can hit it
+ * cross-origin, which means anyone reachable can send any query string.
+ * 128 chars matches the cap already applied to instanceId; production
+ * filament names / vendors / types are well under that.
+ */
+function boundedParam(v: string | null): string | null {
+  if (!v) return null;
+  const trimmed = v.trim();
+  return trimmed.length > 0 && trimmed.length <= 128 ? trimmed : null;
+}
+
 export async function GET(request: NextRequest) {
   try {
     await dbConnect();
 
     const params = request.nextUrl.searchParams;
-    const name = params.get("name");
-    const vendor = params.get("vendor");
-    const type = params.get("type");
-    const instanceId = params.get("instanceId");
+    const name = boundedParam(params.get("name"));
+    const vendor = boundedParam(params.get("vendor"));
+    const type = boundedParam(params.get("type"));
+    const instanceId = boundedParam(params.get("instanceId"));
 
     // 0. Instance-ID match — the strongest signal we have. Filament DB
     //    auto-generates a unique 5-byte hex per filament (Prusament's
@@ -34,49 +50,43 @@ export async function GET(request: NextRequest) {
     //    label printer dialog has no resolver, so scanning the printed
     //    QR returns an opaque hex string with nowhere to go.)
     if (instanceId) {
-      // Length cap bounds the regex compile cost so a 10MB query
-      // string can't DoS the route. escapeRegex handles the actual
-      // injection defense for the case-insensitive fallback below.
-      // (Codex P2 rounds 13-15 on PR #487.)
-      const trimmed = instanceId.trim();
-      if (trimmed.length > 0 && trimmed.length <= 128) {
-        // 1. Exact-case match first — unambiguous, fast, and
-        //    deterministic when the query case matches what's stored.
-        //    This wins immediately in the common case where the
-        //    caller's QR scan / NFC tag carries the same case as the
-        //    DB record. (Codex P2 round 16 on PR #487.)
-        const exact = await Filament.findOne({
-          instanceId: trimmed,
-          _deletedAt: null,
-        }).lean();
-        if (exact) {
-          return NextResponse.json({ match: exact, candidates: [] });
-        }
+      // GH #513: boundedParam already trim+length-checked at the top.
+      // 1. Exact-case match first — unambiguous, fast, and
+      //    deterministic when the query case matches what's stored.
+      //    This wins immediately in the common case where the
+      //    caller's QR scan / NFC tag carries the same case as the
+      //    DB record. (Codex P2 round 16 on PR #487.)
+      const exact = await Filament.findOne({
+        instanceId,
+        _deletedAt: null,
+      }).lean();
+      if (exact) {
+        return NextResponse.json({ match: exact, candidates: [] });
+      }
 
-        // 2. Case-insensitive fallback for legacy case drift. The
-        //    partial unique index on instanceId is case-sensitive
-        //    (so "ABC" and "abc" can both exist), but if the CI
-        //    fallback turns up exactly ONE row that's still an
-        //    unambiguous match — only multiple CI hits are
-        //    genuinely ambiguous. Cap the find at 2 to detect "more
-        //    than one" without scanning the full DB.
-        const ciMatches = await Filament.find({
-          instanceId: {
-            $regex: `^${escapeRegex(trimmed)}$`,
-            $options: "i",
-          },
-          _deletedAt: null,
-        })
-          .limit(2)
-          .lean();
-        if (ciMatches.length === 1) {
-          return NextResponse.json({ match: ciMatches[0], candidates: [] });
-        }
-        if (ciMatches.length > 1) {
-          // Ambiguous — case-only collision in legacy data. Surface as
-          // candidates instead of returning an arbitrary row.
-          return NextResponse.json({ match: null, candidates: ciMatches });
-        }
+      // 2. Case-insensitive fallback for legacy case drift. The
+      //    partial unique index on instanceId is case-sensitive
+      //    (so "ABC" and "abc" can both exist), but if the CI
+      //    fallback turns up exactly ONE row that's still an
+      //    unambiguous match — only multiple CI hits are
+      //    genuinely ambiguous. Cap the find at 2 to detect "more
+      //    than one" without scanning the full DB.
+      const ciMatches = await Filament.find({
+        instanceId: {
+          $regex: `^${escapeRegex(instanceId)}$`,
+          $options: "i",
+        },
+        _deletedAt: null,
+      })
+        .limit(2)
+        .lean();
+      if (ciMatches.length === 1) {
+        return NextResponse.json({ match: ciMatches[0], candidates: [] });
+      }
+      if (ciMatches.length > 1) {
+        // Ambiguous — case-only collision in legacy data. Surface as
+        // candidates instead of returning an arbitrary row.
+        return NextResponse.json({ match: null, candidates: ciMatches });
       }
       // No match → fall through so the caller can still get name /
       // vendor / type suggestions if they supplied those alongside.

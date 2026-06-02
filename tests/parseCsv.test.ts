@@ -107,6 +107,30 @@ describe("parseCsv", () => {
       ).toThrow(CsvRowLimitExceededError);
     });
 
+    // GH #512: blank lines (Excel paste with trailing newlines,
+    // section-separator blanks) used to count toward the cap, so a
+    // maxRows-rows file with even one trailing blank would throw
+    // CsvRowLimitExceededError despite emitting <=maxRows rows.
+    it("ignores blank rows when enforcing maxRows (header: true)", () => {
+      // 2 data rows + 1 trailing blank — emits 2, cap of 2 must accept.
+      expect(
+        parseCsv("h\nd1\nd2\n\n", { header: true, maxRows: 2 }),
+      ).toHaveLength(2);
+      // Section-separator blank between data rows also doesn't count.
+      expect(
+        parseCsv("h\nd1\n\nd2\nd3", { header: true, maxRows: 3 }),
+      ).toHaveLength(3);
+    });
+
+    it("ignores blank rows when enforcing maxRows (header: false)", () => {
+      // 4 data rows + trailing blank — emits 4, cap of 4 must accept.
+      const result = parseCsv("a\nb\nc\nd\n\n", { header: false, maxRows: 4 }) as string[][];
+      // The result includes the blank row in raw mode; the contract is
+      // that the CAP doesn't count it. Emit length is 5 (including blank)
+      // but no throw.
+      expect(result.length).toBeGreaterThanOrEqual(4);
+    });
+
     it("pins the default 10,000-row cap", () => {
       const atLimit = parseCsv(rows(10_000), { header: false }) as string[][];
       expect(atLimit).toHaveLength(10_000);
