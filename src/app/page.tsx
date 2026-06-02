@@ -455,7 +455,26 @@ export default function Home() {
     setSortDir(next.sortDir);
   };
 
-  const allFilamentIds = useMemo(() => filaments.map((f) => f._id), [filaments]);
+  /** GH #500: Select-all and bulk delete operate on the CURRENTLY VISIBLE
+   *  rows only — not the full fetched set. Pre-fix, ticking the header
+   *  checkbox while a quick-filter chip was active selected every fetched
+   *  filament including invisible rows, and the bulk delete then
+   *  soft-deleted all of them with no UI cue. Mirrors the inventory
+   *  page's #420 pattern. Flatten parents + variants so a group whose
+   *  parent passed the filter pulls in its visible children too. */
+  const visibleFilamentIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const item of groupedFilaments) {
+      if ("parent" in item) {
+        ids.push(item.parent._id);
+        for (const v of item.variants) ids.push(v._id);
+      } else {
+        ids.push(item._id);
+      }
+    }
+    return ids;
+  }, [groupedFilaments]);
+  const allFilamentIds = visibleFilamentIds;
 
   const toggleSelect = (id: string) => {
     setSelected((prev) => {
@@ -474,12 +493,19 @@ export default function Home() {
   };
 
   const handleBulkDelete = async () => {
-    const count = selected.size;
+    // GH #500: intersect against visible IDs at delete time too — if the
+    // user toggles a filter AFTER selecting, the count + deletion target
+    // should reflect what they currently SEE. Selections that fell out
+    // of view are dropped (the same posture inventory uses).
+    const visibleSet = new Set(visibleFilamentIds);
+    const targets = Array.from(selected).filter((id) => visibleSet.has(id));
+    const count = targets.length;
+    if (count === 0) return;
     if (!(await confirm({ message: t("filaments.deleteConfirm", { count }), destructive: true, confirmLabel: t("common.delete") }))) return;
     setBulkDeleting(true);
     let deleted = 0;
     const errors: string[] = [];
-    for (const id of selected) {
+    for (const id of targets) {
       const res = await fetch(`/api/filaments/${id}`, { method: "DELETE" });
       if (res.ok) {
         deleted++;

@@ -108,6 +108,15 @@ function ComparePageInner() {
     });
   };
 
+  // GH #522.3: was previously inlined as
+  // `selectedIds={useMemo(() => new Set(selectedIds), [selectedIds])}`
+  // inside the FilamentPicker JSX, which calls useMemo lexically inside
+  // a JSX prop expression — still legal Hook rules-wise (the call is in
+  // the function component body, not a callback), but the React team
+  // flags this shape because the dep is read implicitly and refactors
+  // tend to break it. Hoisted into a real binding.
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+
   const totalGrams = useMemo(() => {
     return comparison.map((f) => {
       // GH #182: subtract the empty-spool weight so the "On hand" row
@@ -226,7 +235,7 @@ function ComparePageInner() {
         </h2>
         <FilamentPicker
           filaments={allFilaments}
-          selectedIds={useMemo(() => new Set(selectedIds), [selectedIds])}
+          selectedIds={selectedIdSet}
           onToggle={toggleFilament}
           maxSelections={8}
           ariaLabel={t("compare.pickerAriaLabel")}

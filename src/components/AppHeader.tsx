@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import SyncStatusIndicator from "@/components/SyncStatusIndicator";
 import NfcStatus from "@/components/NfcStatus";
@@ -31,8 +31,22 @@ export default function AppHeader() {
   const { t } = useTranslation();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  // Drawer closes on link click (handler below) — no useEffect on pathname,
-  // which the React Compiler rule flags as a cascading-render anti-pattern.
+  // Drawer closes on link click (handler below) AND on every client-side
+  // route change. The pathname-driven close (GH #520) handles
+  // navigations that DON'T go through the drawer's own LINKS: browser
+  // Back/Forward, in-page <Link> clicks (filament row, dashboard tile,
+  // NFC dialog), and programmatic router.push from save-and-redirect
+  // handlers. Pre-fix the drawer panel kept occluding the next page
+  // until the user noticed and tapped X.
+  //
+  // Convergent on pathname → setting mobileOpen=false when already
+  // false is a no-op React bails on; same pattern PR #496 used for the
+  // route-aware skip link. eslint-disable matches how similar
+  // navigation-reactive effects are handled elsewhere in the codebase.
+  useEffect(() => {
+    setMobileOpen(false); // eslint-disable-line react-hooks/set-state-in-effect -- close on route change
+  }, [pathname]);
+
   const closeDrawer = () => setMobileOpen(false);
 
   const isActive = (link: { href: string; exact?: boolean }) => {
@@ -62,15 +76,20 @@ export default function AppHeader() {
             v{process.env.APP_VERSION}
           </span>
         </Link>
-        {/* Right cluster: status pills + primary nav. Status pills (Sync,
-            NFC) used to live on the /filaments page header only; moving them
-            here makes them visible on every page (GH #156). Both render to
-            null when not in Electron / not relevant. */}
+        {/* Status pills: visible at every viewport so Sync state + NFC
+            reader/tag state stay surfaced on phones / iPad portrait /
+            narrow Electron windows (GH #520.2). Pre-fix this cluster
+            was gated `hidden md:flex`, hiding the pills below 768px
+            with no fallback — directly contradicting the GH #156
+            "visible on every page" intent. The two pills are narrow
+            enough to fit alongside the hamburger even at phone widths;
+            both render to null when not in Electron / not relevant. */}
+        <div className="flex items-center gap-2">
+          <SyncStatusIndicator />
+          <NfcStatus />
+        </div>
+        {/* Primary nav — desktop-only; mobile uses the drawer below. */}
         <div className="hidden md:flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <SyncStatusIndicator />
-            <NfcStatus />
-          </div>
           <nav className="flex items-center gap-1" aria-label={t("nav.aria.primary")}>
             {LINKS.map((link) => (
               <Link
