@@ -48,30 +48,35 @@ export function parseCsv(
   // turning `maxRows: N` into an `N-1` data-row ceiling in header mode.
   const rawRowCap = opts.header ? maxRows + 1 : maxRows;
   const rows: string[][] = [];
-  // GH #512: the cap must count rows that will actually be EMITTED:
-  //
-  //   - header mode: blank rows are filtered out of the output (the
-  //     `trimmed[r].every((v) => v === "")` skip below), so they must
-  //     NOT count toward maxRows. Otherwise an Excel paste with
-  //     trailing newlines / section-separator blanks throws even
-  //     when the emitted row count is under the cap (GH #512).
-  //   - non-header mode: every parsed row is RETURNED verbatim
-  //     (`if (!opts.header) return trimmed`), so every row — blank or
-  //     not — counts. Exempting blanks here would let a file of
-  //     maxRows+ blank/newline-only rows bypass the DoS guard while
-  //     still buffering and returning all of them (Codex P2 round 2
-  //     on PR #536).
-  //
-  // Codex P2 round 1: a blank row from a spreadsheet export can carry
-  // delimiters — `,\n` parses to `["", ""]`, not `[""]` — so use the
-  // SAME "every field trimmed-empty" definition the header skip uses.
-  let countedRowCount = 0;
+  // A blank row from a spreadsheet export can carry delimiters — `,\n`
+  // parses to `["", ""]`, not `[""]` — so "blank" means every field is
+  // empty after trimming (matches the header-mode output skip below).
   const isBlankRow = (r: string[]): boolean =>
     r.length === 0 || r.every((v) => v.trim() === "");
-  // In header mode, blank rows don't count (they're skipped from
-  // output). In non-header mode, they DO count (they're emitted).
-  const countsTowardCap = (r: string[]): boolean =>
-    !opts.header || !isBlankRow(r);
+
+  // Codex P2 round 3 on PR #536: the cap must bound BUFFERED memory, not
+  // just the emitted-row count. In header mode, blank rows are filtered
+  // out of the output (the `trimmed[r].every` skip below), so:
+  //   - GH #512: they must NOT count toward maxRows (an Excel paste with
+  //     trailing newlines / section-separator blanks shouldn't throw
+  //     when the emitted row count is under the cap), AND
+  //   - they must NOT be buffered at all — otherwise a flood of blank /
+  //     comma-only lines accumulates `rows` unbounded and the DoS guard
+  //     is bypassed by rows it's "exempting". So in header mode we
+  //     simply discard blank rows during parsing.
+  // In non-header mode every parsed row is RETURNED verbatim
+  // (`if (!opts.header) return trimmed`), so every row — blank or not —
+  // is both buffered AND counted.
+  //
+  // `rows.length` is therefore the count of rows that will actually be
+  // returned (header mode: header + non-blank data; non-header: all),
+  // so the cap check is just `rows.length > rawRowCap`.
+  const commitRow = (r: string[]): void => {
+    if (opts.header && isBlankRow(r)) return; // discard — never buffered
+    rows.push(r);
+    if (rows.length > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
+  };
+
   let row: string[] = [];
   let field = "";
   let i = 0;
@@ -112,23 +117,19 @@ export function parseCsv(
     if (ch === "\r") {
       // Handle CRLF by skipping the LF; bare CR also treated as a line end.
       row.push(field);
-      rows.push(row);
-      if (countsTowardCap(row)) countedRowCount++;
       field = "";
-      row = [];
       i++;
       if (input[i] === "\n") i++;
-      if (countedRowCount > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
+      commitRow(row);
+      row = [];
       continue;
     }
     if (ch === "\n") {
       row.push(field);
-      rows.push(row);
-      if (countsTowardCap(row)) countedRowCount++;
       field = "";
-      row = [];
       i++;
-      if (countedRowCount > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
+      commitRow(row);
+      row = [];
       continue;
     }
     field += ch;
@@ -138,9 +139,7 @@ export function parseCsv(
   // Flush any trailing field/row that didn't end with a newline
   if (field.length > 0 || row.length > 0) {
     row.push(field);
-    rows.push(row);
-    if (countsTowardCap(row)) countedRowCount++;
-    if (countedRowCount > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
+    commitRow(row);
   }
 
   // Strip outer whitespace from unquoted strings — we keep quoted values

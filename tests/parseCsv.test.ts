@@ -156,6 +156,17 @@ describe("parseCsv", () => {
       ).toHaveLength(4);
     });
 
+    it("does not buffer blank rows in header mode — a blank flood under the data cap is accepted (Codex P2 round 3 PR #536)", () => {
+      // 2 data rows + 10k trailing blank lines. Blanks are discarded
+      // during parsing (never buffered), so this stays well under the
+      // cap and parses fine — proving the DoS guard can't be bypassed
+      // by buffering exempt rows, AND legitimate trailing-blank pastes
+      // still work.
+      const blanks = "\n".repeat(10_000);
+      const csv = `h1,h2\nd1,d2\nd3,d4\n${blanks}`;
+      expect(parseCsv(csv, { header: true, maxRows: 2 })).toHaveLength(2);
+    });
+
     it("pins the default 10,000-row cap", () => {
       const atLimit = parseCsv(rows(10_000), { header: false }) as string[][];
       expect(atLimit).toHaveLength(10_000);
