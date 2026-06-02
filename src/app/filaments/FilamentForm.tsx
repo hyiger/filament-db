@@ -11,14 +11,12 @@ import {
   lookupCssNamedColor,
   type ColorSuggestion,
 } from "@/lib/cssNamedColors";
-import { deriveArrangement, type ColorArrangement } from "@/lib/filamentColors";
-
-/** GH #477: OpenPrintTag tag IDs for color arrangement. Sourced from
- *  the prusa3d/OpenPrintTag `data/tags_enum.yaml` spec file. Constants
- *  rather than magic numbers so the form's tag-toggle logic reads
- *  clearly. */
-const TAG_GRADUAL_COLOR_CHANGE = 28;
-const TAG_COEXTRUDED = 29;
+import {
+  deriveArrangement,
+  arrangementToOptTag,
+  stripArrangementTags,
+  type ColorArrangement,
+} from "@/lib/filamentColors";
 
 interface BedTypeTempEntry {
   /** Client-only stable row id for React keys. Stripped before API submission. */
@@ -739,14 +737,22 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     try {
       // GH #477: when the user has opted into the "Coextruded"
       // arrangement (auto-toggled via tag 29 in optTags), the
-      // OpenPrintTag spec says primary color SHOULD be null —
-      // "Does not have a primary color, number of colors can be
-      // derived from the defined secondary colors." Submit null so
-      // resolveFilament + every read site honour that semantic. For
+      // OpenPrintTag spec says primary color SHOULD be null for
+      // coextruded — "Does not have a primary color, number of colors
+      // can be derived from the defined secondary colors." Submit null
+      // so resolveFilament + every read site honour that semantic. For
       // gradient and solid arrangements the primary stays as set.
-      const submittedColor = form.optTags.includes(29)
-        ? null
-        : form.color;
+      //
+      // Codex P2 round 1 on PR #533: BOTH the dual_color tag (28) AND
+      // the triple_color tag (29) represent coextruded — pre-fix this
+      // only checked 29, so a dual-color save (the common 2-secondary
+      // shape) kept the primary on the doc and rendered with an extra
+      // unwanted stripe. Use deriveArrangement to stay aligned with
+      // every other render site.
+      const submittedColor =
+        deriveArrangement(form.optTags) === "coextruded"
+          ? null
+          : form.color;
       await onSubmit({
         name: form.name,
         vendor: form.vendor,
@@ -2757,36 +2763,61 @@ function MultiColorEditor({
 }) {
   const arrangement: ColorArrangement = deriveArrangement(form.optTags);
 
-  /** Toggle a single arrangement tag on/off in optTags, removing the
-   *  OTHER arrangement tag so the two are always mutually exclusive
-   *  from the UI's perspective. Coextruded + gradient simultaneously
-   *  is theoretically possible per spec but the form only models one
-   *  arrangement at a time — the swatch can't render both. */
+  /** Toggle a single arrangement tag on/off in optTags, removing every
+   *  other arrangement tag so they're always mutually exclusive from
+   *  the UI's perspective.
+   *
+   *  GH #507: arrangement is driven by the canonical OPT_TAG enum —
+   *  27 = gradient, 28 = dual_color, 29 = triple_color. Both 28 and 29
+   *  surface as `"coextruded"` at render time; `arrangementToOptTag`
+   *  picks dual vs triple based on the current secondary-color count
+   *  so toggling the radio writes the right id. `stripArrangementTags`
+   *  removes ALL three so a prior arrangement's tag doesn't survive
+   *  the switch (pre-fix, swapping gradient → coextruded left tag 27
+   *  on the doc and deriveArrangement would then disagree with the
+   *  UI on the next render).
+   *
+   *  Coextruded + gradient simultaneously is theoretically possible per
+   *  spec but the form only models one arrangement at a time. */
   const setArrangement = (next: ColorArrangement) => {
-    const stripped = form.optTags.filter(
-      (id) => id !== TAG_COEXTRUDED && id !== TAG_GRADUAL_COLOR_CHANGE,
-    );
-    if (next === "coextruded") {
-      setForm({ ...form, optTags: [...stripped, TAG_COEXTRUDED] });
-    } else if (next === "gradient") {
-      setForm({ ...form, optTags: [...stripped, TAG_GRADUAL_COLOR_CHANGE] });
-    } else {
-      setForm({ ...form, optTags: stripped });
-    }
+    const stripped = stripArrangementTags(form.optTags);
+    const newTag = arrangementToOptTag(next, form.secondaryColors.length);
+    setForm({
+      ...form,
+      optTags: newTag != null ? [...stripped, newTag] : stripped,
+    });
+  };
+
+  /** GH #507: when the user adds/removes a coextruded secondary slot,
+   *  refresh the arrangement tag so dual→triple (or back) flips on the
+   *  saved doc without the user having to re-click the radio. Gradient
+   *  + solid don't carry a count distinction so they're untouched. */
+  const refreshArrangementTagForCount = (
+    nextSecondaries: string[],
+    optTagsAfter: number[],
+  ): number[] => {
+    if (arrangement !== "coextruded") return optTagsAfter;
+    const stripped = stripArrangementTags(optTagsAfter);
+    const newTag = arrangementToOptTag("coextruded", nextSecondaries.length);
+    return newTag != null ? [...stripped, newTag] : stripped;
   };
 
   const addColor = () => {
     if (form.secondaryColors.length >= 5) return; // spec cap
+    const nextSecondaries = [...form.secondaryColors, "#808080"];
     setForm({
       ...form,
-      secondaryColors: [...form.secondaryColors, "#808080"],
+      secondaryColors: nextSecondaries,
+      optTags: refreshArrangementTagForCount(nextSecondaries, form.optTags),
     });
   };
 
   const removeColor = (idx: number) => {
+    const nextSecondaries = form.secondaryColors.filter((_, i) => i !== idx);
     setForm({
       ...form,
-      secondaryColors: form.secondaryColors.filter((_, i) => i !== idx),
+      secondaryColors: nextSecondaries,
+      optTags: refreshArrangementTagForCount(nextSecondaries, form.optTags),
     });
   };
 

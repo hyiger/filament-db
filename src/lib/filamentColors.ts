@@ -5,8 +5,10 @@
  * may be null for filaments without a single primary (rainbow,
  * coextruded). Secondary slots (`secondaryColors[]`, spec keys 20–24)
  * carry up to 5 additional colors. Color arrangement is NOT a separate
- * field — it's derived from `optTags` (tag 29 = `coextruded`, tag 28 =
- * `gradual_color_change`), keeping the storage spec-pure.
+ * field — it's derived from `optTags` using the canonical OPT_TAG enum
+ * values: 27 = `gradient`, 28 = `dual_color`, 29 = `triple_color`. Both
+ * 28 and 29 map to the `"coextruded"` arrangement at render time —
+ * the count is already implicit in `secondaryColors.length`.
  *
  * Kept DB-free so this can be unit-tested without mongoose / vitest
  * env config. Every function is pure and takes a minimal subset of the
@@ -14,11 +16,20 @@
  */
 
 /**
- * OpenPrintTag tag IDs that describe color arrangement. Sourced from
- * `data/tags_enum.yaml` in the prusa3d/OpenPrintTag spec repo.
+ * OpenPrintTag tag IDs that describe color arrangement.
+ *
+ * GH #507: pre-fix this file declared TAG_COEXTRUDED = 29 and
+ * TAG_GRADUAL_COLOR_CHANGE = 28 — contradicting the project's
+ * canonical OPT_TAG enum at `src/lib/openprinttag.ts:163-165` AND the
+ * OPT browser importer at `src/lib/openprinttagBrowser.ts:132-134`,
+ * which both encode 27 = gradient, 28 = dual_color, 29 = triple_color
+ * matching the upstream OpenPrintTag YAML. The mismatch made imported
+ * dual-color OPT materials render as a smooth gradient and imported
+ * gradient materials render as solid. Aligned here.
  */
-const TAG_COEXTRUDED = 29;
-const TAG_GRADUAL_COLOR_CHANGE = 28;
+const TAG_GRADIENT = 27;
+const TAG_DUAL_COLOR = 28;
+const TAG_TRIPLE_COLOR = 29;
 
 /** What arrangement the filament's colors are physically in. `"solid"`
  *  is the default for single-color filaments and for multi-color
@@ -43,9 +54,47 @@ export function deriveArrangement(
   optTags: number[] | null | undefined,
 ): ColorArrangement {
   if (!optTags || optTags.length === 0) return "solid";
-  if (optTags.includes(TAG_COEXTRUDED)) return "coextruded";
-  if (optTags.includes(TAG_GRADUAL_COLOR_CHANGE)) return "gradient";
+  if (optTags.includes(TAG_DUAL_COLOR) || optTags.includes(TAG_TRIPLE_COLOR)) {
+    return "coextruded";
+  }
+  if (optTags.includes(TAG_GRADIENT)) return "gradient";
   return "solid";
+}
+
+/**
+ * Inverse of deriveArrangement. The form's arrangement radio needs to
+ * write the right OPT tag for the requested arrangement, with the
+ * caveat that `"coextruded"` actually maps to dual vs triple based on
+ * how many colors are in play. Both forms render identically (striped
+ * coextruded) — only the spec tag id differs.
+ *
+ * Returns the tag id to add, or null when no arrangement tag applies
+ * ("solid").
+ */
+export function arrangementToOptTag(
+  arrangement: ColorArrangement,
+  secondaryColorCount: number,
+): number | null {
+  if (arrangement === "gradient") return TAG_GRADIENT;
+  if (arrangement === "coextruded") {
+    // Color count includes the primary, so secondaryColorCount >= 2
+    // means triple+ (primary + 2 secondaries). One secondary = dual.
+    return secondaryColorCount >= 2 ? TAG_TRIPLE_COLOR : TAG_DUAL_COLOR;
+  }
+  return null;
+}
+
+/**
+ * Strip every arrangement-related tag from an optTags array. Used by
+ * the form when the user switches arrangement, so leftover tags from
+ * the prior arrangement don't survive on the doc and silently override
+ * the next deriveArrangement() call.
+ */
+export function stripArrangementTags(optTags: number[] | null | undefined): number[] {
+  if (!optTags) return [];
+  return optTags.filter(
+    (t) => t !== TAG_GRADIENT && t !== TAG_DUAL_COLOR && t !== TAG_TRIPLE_COLOR,
+  );
 }
 
 /**
