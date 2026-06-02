@@ -128,13 +128,13 @@
         ],
         "responses": {
           "200": {
-            "description": "Array of filament objects sorted by name",
+            "description": "Array of filament summaries sorted by name. This is an aggregation projection (FilamentSummary), NOT the full Filament document — heavy spool subfields are dropped, temperatures is reduced to nozzle+bed, and two computed booleans (hasCalibrations, hasVariants) are added. Use GET /api/filaments/{id} for the full document.",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/Filament"
+                    "$ref": "#/components/schemas/FilamentSummary"
                   }
                 }
               }
@@ -1303,7 +1303,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Array of parent filaments (name, vendor, type, color)",
+            "description": "Array of parent filaments (name, vendor, type, color, hasVariants)",
             "content": {
               "application/json": {
                 "schema": {
@@ -1327,6 +1327,10 @@
                         "type": "string",
                         "nullable": true,
                         "description": "Primary color hex. May be null for coextruded parents — children inherit secondaryColors via Filament.secondaryColors."
+                      },
+                      "hasVariants": {
+                        "type": "boolean",
+                        "description": "True when this filament already has ≥1 non-deleted variant. Drives the cross-hatched 'parent of variants' swatch in the picker."
                       }
                     }
                   }
@@ -2016,6 +2020,7 @@
             "application/json": {
               "schema": {
                 "type": "object",
+                "description": "All fields optional ($set semantics — only supplied keys change). This is the primary spool-edit caller from the /inventory page.",
                 "properties": {
                   "label": {
                     "type": "string"
@@ -2023,6 +2028,34 @@
                   "totalWeight": {
                     "type": "number",
                     "nullable": true
+                  },
+                  "lotNumber": {
+                    "type": "string",
+                    "nullable": true
+                  },
+                  "purchaseDate": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "ISO date string (validated; impossible calendar dates rejected — GH #372)"
+                  },
+                  "openedDate": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "ISO date string (validated)"
+                  },
+                  "locationId": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Reference to a Location document"
+                  },
+                  "photoDataUrl": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Inline base64 image (JPEG/PNG/GIF/WebP/AVIF/HEIC/HEIF; SVG rejected)"
+                  },
+                  "retired": {
+                    "type": "boolean",
+                    "description": "Retiring a loaded spool also clears it from any printer AMS slot it occupied (side effect)."
                   }
                 }
               }
@@ -2036,6 +2069,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Filament"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid field type or value (e.g. negative weight, malformed/impossible date, rejected photo MIME)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -4933,20 +4976,7 @@
           "OpenPrintTag"
         ],
         "summary": "Browse OpenPrintTag community database",
-        "description": "Fetches the OpenPrintTag community database from GitHub, parses material YAML files, filters to FFF filaments, and returns them with completeness scores. Cached for 1 hour.",
-        "parameters": [
-          {
-            "name": "refresh",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": [
-                "true"
-              ]
-            },
-            "description": "Force re-fetch from GitHub"
-          }
-        ],
+        "description": "Fetches the OpenPrintTag community database from GitHub, parses material YAML files, filters to FFF filaments, and returns them with completeness scores. Cached for 1 hour. To force a refresh use POST /api/openprinttag (the old GET ?refresh=true trigger was removed — a cache-busting side effect on a GET violated REST semantics).",
         "responses": {
           "200": {
             "description": "Brands and materials list",
@@ -4954,6 +4984,45 @@
               "application/json": {
                 "schema": {
                   "type": "object"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "OpenPrintTag"
+        ],
+        "summary": "Refresh OpenPrintTag cache",
+        "description": "Force-busts the 1-hour cache and re-fetches the OpenPrintTag database from GitHub (GH #427). Replaces the removed GET ?refresh=true trigger. Same-origin guarded.",
+        "responses": {
+          "200": {
+            "description": "Refreshed brands and materials list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to refresh OpenPrintTag database",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
                 }
               }
             }
@@ -5760,15 +5829,24 @@
             },
             "description": "Per-bed-surface-type temperature overrides"
           },
-          "abrasive": {
-            "type": "boolean",
-            "default": false,
-            "description": "Whether the filament is abrasive"
+          "lowStockThreshold": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 0,
+            "description": "Grams remaining across all non-retired spools below which this filament is flagged as low-stock on the inventory list + dashboard. Null disables the warning."
           },
-          "soluble": {
+          "_deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "readOnly": true,
+            "description": "Soft-delete tombstone (v1.15). Non-null means the filament is in the trash. Active filaments have null."
+          },
+          "_purged": {
             "type": "boolean",
             "default": false,
-            "description": "Whether the filament is soluble (support material)"
+            "readOnly": true,
+            "description": "Permanent-delete tombstone (v1.15). True means the filament was purged from the trash; the row is retained only as a one-way sync signal so the deletion propagates instead of being resurrected. Stripped from all client-writable request bodies."
           },
           "spools": {
             "type": "array",
@@ -5801,10 +5879,68 @@
                   "format": "date",
                   "nullable": true,
                   "description": "Date the spool was opened"
+                },
+                "createdAt": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When this spool entry was created"
+                },
+                "locationId": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "Location ObjectId — the spool's semi-permanent home (v1.11). Distinct from a printer AMS slot, which is its transient loaded position."
+                },
+                "photoDataUrl": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "Inline data: URL of a spool photo (v1.11). SVG is rejected on write."
+                },
+                "retired": {
+                  "type": "boolean",
+                  "default": false,
+                  "description": "Retired spools are excluded from inventory totals but keep their history (v1.11)."
+                },
+                "dryCycles": {
+                  "type": "array",
+                  "description": "Drying-event log (v1.11)",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "_id": { "type": "string" },
+                      "date": { "type": "string", "format": "date-time" },
+                      "tempC": { "type": "number", "nullable": true, "minimum": 0, "maximum": 300 },
+                      "durationMin": { "type": "number", "nullable": true, "minimum": 0 },
+                      "notes": { "type": "string" }
+                    },
+                    "required": ["date"]
+                  }
+                },
+                "usageHistory": {
+                  "type": "array",
+                  "description": "Per-spool filament-consumption ledger (v1.11). Entries tagged source=job/slicer mirror a PrintHistory record; source=manual/nfc are standalone.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "_id": { "type": "string" },
+                      "grams": { "type": "number", "minimum": 0, "description": "Grams consumed (always positive)" },
+                      "jobLabel": { "type": "string" },
+                      "date": { "type": "string", "format": "date-time" },
+                      "source": {
+                        "type": "string",
+                        "enum": ["manual", "slicer", "job", "nfc"]
+                      },
+                      "jobId": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "PrintHistory _id for job/slicer entries; null for manual/nfc"
+                      }
+                    },
+                    "required": ["grams", "date"]
+                  }
                 }
               }
             },
-            "description": "Individual spool entries with weights"
+            "description": "Individual spool entries with weights + v1.11 location/photo/retire/dry-cycle/usage metadata"
           },
           "tdsUrl": {
             "type": "string",
@@ -5843,6 +5979,61 @@
           "vendor",
           "type"
         ]
+      },
+      "FilamentSummary": {
+        "type": "object",
+        "description": "Lightweight projection returned by GET /api/filaments (the list view). A subset of Filament plus two computed booleans; spools[] and temperatures are reduced. NOT the full document — fetch GET /api/filaments/{id} for everything.",
+        "properties": {
+          "_id": { "type": "string" },
+          "name": { "type": "string" },
+          "vendor": { "type": "string" },
+          "type": { "type": "string" },
+          "color": { "type": "string", "nullable": true },
+          "secondaryColors": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "maxItems": 5,
+            "description": "Effective array — a variant with its own empty array inherits the parent's via resolveFilament's array-fallback rule."
+          },
+          "cost": { "type": "number", "nullable": true },
+          "density": { "type": "number", "nullable": true },
+          "parentId": { "type": "string", "nullable": true },
+          "spoolWeight": { "type": "number", "nullable": true },
+          "netFilamentWeight": { "type": "number", "nullable": true },
+          "totalWeight": { "type": "number", "nullable": true },
+          "lowStockThreshold": { "type": "number", "nullable": true, "minimum": 0 },
+          "tdsUrl": { "type": "string", "nullable": true },
+          "optTags": { "type": "array", "items": { "type": "integer" } },
+          "temperatures": {
+            "type": "object",
+            "description": "Reduced to nozzle + bed only (first-layer + other fields dropped from the list projection).",
+            "properties": {
+              "nozzle": { "type": "number", "nullable": true },
+              "bed": { "type": "number", "nullable": true }
+            }
+          },
+          "hasCalibrations": {
+            "type": "boolean",
+            "description": "Computed — true when this filament OR (for a variant) its parent carries ≥1 calibration."
+          },
+          "hasVariants": {
+            "type": "boolean",
+            "description": "Computed — true when ≥1 non-deleted filament has this one as its parent."
+          },
+          "spools": {
+            "type": "array",
+            "description": "Reduced spool shape — only the fields the list + AMS slot picker need.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "_id": { "type": "string" },
+                "label": { "type": "string" },
+                "totalWeight": { "type": "number", "nullable": true },
+                "retired": { "type": "boolean" }
+              }
+            }
+          }
+        }
       },
       "FilamentInput": {
         "type": "object",
@@ -6124,10 +6315,59 @@
             "items": {
               "$ref": "#/components/schemas/Nozzle"
             },
-            "description": "Populated nozzle objects"
+            "description": "Populated nozzle objects. Physical instances — one nozzle belongs to exactly one printer (#232)."
+          },
+          "installedBedTypes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BedType"
+            },
+            "description": "Bed surfaces this printer can use (v1.23). Shared catalog — a surface like 'Textured PEI' can be referenced by many printers."
+          },
+          "buildVolume": {
+            "$ref": "#/components/schemas/BuildVolume"
+          },
+          "maxFlow": {
+            "type": "number",
+            "nullable": true,
+            "description": "Rated max volumetric flow in mm³/s (v1.11)"
+          },
+          "maxSpeed": {
+            "type": "number",
+            "nullable": true,
+            "description": "Max travel speed in mm/s (v1.11)"
+          },
+          "enclosed": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the printer has an enclosure (affects ABS/ASA/PC compatibility) (v1.11)"
+          },
+          "autoBedLevel": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether the printer has hardware auto bed levelling (v1.11)"
+          },
+          "amsSlots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AmsSlot"
+            },
+            "description": "Multi-material system (AMS/MMU) slots (v1.21). Empty = none."
           },
           "notes": {
             "type": "string"
+          },
+          "syncId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Hybrid-sync identifier"
+          },
+          "_deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "readOnly": true,
+            "description": "Soft-delete tombstone"
           },
           "createdAt": {
             "type": "string",
@@ -6143,6 +6383,54 @@
           "manufacturer",
           "printerModel"
         ]
+      },
+      "BuildVolume": {
+        "type": "object",
+        "description": "Build volume in mm; any axis may be null (unspecified).",
+        "properties": {
+          "x": { "type": "number", "nullable": true },
+          "y": { "type": "number", "nullable": true },
+          "z": { "type": "number", "nullable": true }
+        }
+      },
+      "AmsSlot": {
+        "type": "object",
+        "description": "One multi-material system slot. spoolId is intentionally ref-less (a spool is a subdocument of a Filament, not a top-level collection — see GH #280); it is also nulled on cross-side hybrid-sync remap.",
+        "properties": {
+          "_id": { "type": "string" },
+          "slotName": { "type": "string" },
+          "filamentId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Currently-loaded filament ObjectId; null = empty slot"
+          },
+          "spoolId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Currently-loaded spool subdocument id; null = no specific spool tracked"
+          }
+        },
+        "required": ["slotName"]
+      },
+      "BedType": {
+        "type": "object",
+        "description": "A bed/build-plate surface spec (v1.23). Shared catalog referenced by printers via installedBedTypes. DELETE is refused while any printer still references it.",
+        "properties": {
+          "_id": { "type": "string" },
+          "name": { "type": "string", "example": "Textured PEI" },
+          "material": { "type": "string", "example": "PEI" },
+          "notes": { "type": "string" },
+          "syncId": { "type": "string", "nullable": true },
+          "_deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "readOnly": true
+          },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        },
+        "required": ["name"]
       },
       "PrinterInput": {
         "type": "object",
@@ -6161,7 +6449,37 @@
             "items": {
               "type": "string"
             },
-            "description": "Array of Nozzle ObjectIds"
+            "description": "Array of Nozzle ObjectIds. Duplicate ids are de-duplicated at the route (GH #524.4)."
+          },
+          "installedBedTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Array of BedType ObjectIds (v1.23). Duplicates de-duplicated at the route."
+          },
+          "buildVolume": {
+            "$ref": "#/components/schemas/BuildVolume"
+          },
+          "maxFlow": {
+            "type": "number",
+            "nullable": true
+          },
+          "maxSpeed": {
+            "type": "number",
+            "nullable": true
+          },
+          "enclosed": {
+            "type": "boolean"
+          },
+          "autoBedLevel": {
+            "type": "boolean"
+          },
+          "amsSlots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AmsSlot"
+            }
           },
           "notes": {
             "type": "string"
