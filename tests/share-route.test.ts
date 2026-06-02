@@ -355,5 +355,40 @@ describe("/api/share", () => {
       );
       expect(res.status).toBe(404);
     });
+
+    // GH #524.5: ?permanent=true sets _purged on an already-unpublished
+    // catalog (mirrors Filament's trash→purge gate).
+    it("permanent delete sets _purged on an unpublished catalog; rejects an active one", async () => {
+      const catalog = await SharedCatalog.create({
+        title: "Purge Me",
+        payload: { version: 1, createdAt: new Date().toISOString(), filaments: [], nozzles: [], printers: [], bedTypes: [] },
+      });
+      const purgeReq = (slug: string) =>
+        new NextRequest(`http://localhost/api/share/${slug}?permanent=true`, { method: "DELETE" });
+
+      // Active (not unpublished) → refused.
+      const early = await deleteShare(purgeReq(catalog.slug), {
+        params: Promise.resolve({ slug: catalog.slug }),
+      });
+      expect(early.status).toBe(404);
+
+      // Unpublish, then purge.
+      await deleteShare(new NextRequest(`http://localhost/api/share/${catalog.slug}`), {
+        params: Promise.resolve({ slug: catalog.slug }),
+      });
+      const purge = await deleteShare(purgeReq(catalog.slug), {
+        params: Promise.resolve({ slug: catalog.slug }),
+      });
+      expect(purge.status).toBe(200);
+      const purged = await SharedCatalog.findOne({ slug: catalog.slug });
+      expect(purged?._purged).toBe(true);
+      expect(purged?._deletedAt).toBeInstanceOf(Date);
+
+      // Idempotent.
+      const again = await deleteShare(purgeReq(catalog.slug), {
+        params: Promise.resolve({ slug: catalog.slug }),
+      });
+      expect(again.status).toBe(404);
+    });
   });
 });

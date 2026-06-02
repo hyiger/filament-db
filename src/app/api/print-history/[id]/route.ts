@@ -170,6 +170,31 @@ export async function DELETE(
   try {
     await dbConnect();
     const { id } = await params;
+
+    // GH #524.5: ?permanent=true sets the `_purged` tombstone, mirroring
+    // the Filament permanent-delete path. Gated on the row ALREADY being
+    // soft-deleted (`_deletedAt != null`) so an accidental
+    // DELETE?permanent=true on an active entry can't skip the refund +
+    // soft-delete step. Idempotent — a second purge on an already-purged
+    // row returns 404 (filtered on `_purged: { $ne: true }`). No refund
+    // here: the spool weight was already refunded on the soft delete.
+    const permanent = request.nextUrl.searchParams.get("permanent") === "true";
+    if (permanent) {
+      const trashed = await PrintHistory.findOne({
+        _id: id,
+        _deletedAt: { $ne: null },
+        _purged: { $ne: true },
+      });
+      if (!trashed) {
+        return errorResponse(
+          "Not found, or not in trash (permanent delete requires the entry to be soft-deleted first)",
+          404,
+        );
+      }
+      await PrintHistory.updateOne({ _id: id }, { $set: { _purged: true } });
+      return NextResponse.json({ message: "Permanently deleted" });
+    }
+
     // Filter on _deletedAt: null so a retry / double-click / client-retry
     // after a timeout doesn't re-run the refund loop on an already
     // tombstoned entry. Without this, each repeat call would refund the

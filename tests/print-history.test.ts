@@ -270,6 +270,13 @@ describe("print-history DELETE (undo)", () => {
     return new NextRequest(`http://localhost/api/print-history/${id}`, { method: "DELETE" });
   }
 
+  function purgeReq(id: string) {
+    return new NextRequest(
+      `http://localhost/api/print-history/${id}?permanent=true`,
+      { method: "DELETE" },
+    );
+  }
+
   it("refunds spool weight and removes the matching usageHistory entry", async () => {
     const f = await Filament.create({
       name: "Refund Basic",
@@ -469,6 +476,47 @@ describe("print-history DELETE (undo)", () => {
     // Refund still happened
     const refunded = await Filament.findById(f._id);
     expect(refunded.spools[0].totalWeight).toBe(1000);
+  });
+
+  // GH #524.5: ?permanent=true sets the _purged tombstone, but ONLY on a
+  // row that's already soft-deleted (mirrors Filament's trash→purge gate).
+  it("permanent delete sets _purged on a soft-deleted row; rejects an active row", async () => {
+    const f = await Filament.create({
+      name: "Purge Check",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ label: "", totalWeight: 1000 }],
+    });
+    const job = await postJob(f, "purge-me", 100);
+
+    // Permanent delete on an ACTIVE (not-yet-trashed) entry is refused —
+    // can't skip the refund + soft-delete step.
+    const earlyPurge = await deletePrintHistory(purgeReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(earlyPurge.status).toBe(404);
+
+    // Soft-delete first (refund happens), then purge.
+    const soft = await deletePrintHistory(delReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(soft.status).toBe(200);
+
+    const purge = await deletePrintHistory(purgeReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(purge.status).toBe(200);
+    const purged = await PrintHistory.findById(job._id);
+    expect(purged._purged).toBe(true);
+    expect(purged._deletedAt).toBeInstanceOf(Date); // _deletedAt untouched
+
+    // Idempotent — a second purge is a 404 no-op.
+    const again = await deletePrintHistory(purgeReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(again.status).toBe(404);
   });
 
   // GH #228 + Codex P1 review on PR #229: refund clamps at the spool's
