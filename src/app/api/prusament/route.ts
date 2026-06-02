@@ -1,11 +1,55 @@
 import { NextRequest, NextResponse } from "next/server";
 import { extractSpoolData } from "@/lib/prusament";
-import { readBodyCapped } from "@/lib/externalUrlGuard";
+import {
+  assertExternalUrl,
+  readBodyCapped,
+  ssrfDispatcher,
+} from "@/lib/externalUrlGuard";
 
 /** GH #258: cap the Prusament HTML page. A real spool page is well under
  * 1 MB; the cap stops a hostile/compromised response from buffering an
  * unbounded body into memory before the regex/JSON.parse step. */
 const MAX_PRUSAMENT_HTML_BYTES = 4 * 1024 * 1024;
+
+/** GH #523: cap on redirect hops, matching tdsExtractor / embed-check. */
+const MAX_REDIRECTS = 5;
+
+/**
+ * Manually-followed fetch with per-hop SSRF revalidation. Same pattern as
+ * `src/lib/tdsExtractor.ts` and `src/app/api/embed-check/route.ts`. Without
+ * this, undici's automatic `redirect: "follow"` would silently chase a
+ * 3xx Location into RFC1918 / loopback / cloud-metadata space without
+ * re-checking the target. The risk on prusament.com specifically is low
+ * (hardcoded host) but the asymmetry breaks the invariant that every
+ * outbound fetch goes through the SSRF dispatcher.
+ */
+async function fetchWithSsrfGuard(
+  initialUrl: string,
+  init: RequestInit,
+): Promise<Response> {
+  let currentUrl = initialUrl;
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    await assertExternalUrl(currentUrl);
+    const res = await fetch(currentUrl, {
+      ...init,
+      redirect: "manual",
+      dispatcher: ssrfDispatcher,
+    } as RequestInit & { dispatcher?: typeof ssrfDispatcher });
+    const isRedirect = res.status >= 300 && res.status < 400 && res.status !== 304;
+    if (!isRedirect) return res;
+    const loc = res.headers.get("location");
+    res.body?.cancel().catch(() => {});
+    if (!loc) {
+      throw new Error(`Prusament fetch: HTTP ${res.status} with no Location header`);
+    }
+    if (hop === MAX_REDIRECTS) {
+      throw new Error(`Prusament fetch: too many redirects (>${MAX_REDIRECTS})`);
+    }
+    currentUrl = new URL(loc, currentUrl).toString();
+  }
+  // Unreachable — the loop either returns or throws.
+  throw new Error("Prusament fetch: redirect loop exited unexpectedly");
+}
 
 /** Shape of the spoolData JSON embedded in the Prusament spool page. */
 interface PrusamentSpoolData {
@@ -98,7 +142,7 @@ export async function GET(request: NextRequest) {
 
     let html: string;
     try {
-      const res = await fetch(pageUrl, {
+      const res = await fetchWithSsrfGuard(pageUrl, {
         headers: { "User-Agent": "FilamentDB/1.0" },
         signal: AbortSignal.timeout(10_000),
       });
