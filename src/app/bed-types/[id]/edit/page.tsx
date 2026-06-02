@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import BedTypeForm from "@/app/bed-types/BedTypeForm";
 import { useToast } from "@/components/Toast";
@@ -11,7 +11,6 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function EditBedType() {
   const params = useParams();
-  const router = useRouter();
   const { toast } = useToast();
   const { t } = useTranslation();
   const [bedType, setBedType] = useState(null);
@@ -20,7 +19,7 @@ export default function EditBedType() {
 
   const {
     onDirtyChange, showUnsavedDialog, handleBack,
-    confirmNav, cancelNav, pendingNav,
+    navigate, confirmNav, cancelNav,
   } = useUnsavedChanges("/bed-types");
 
   useEffect(() => {
@@ -44,16 +43,11 @@ export default function EditBedType() {
     });
     if (res.ok) {
       toast(t("bedTypes.updated"));
-      router.push("/bed-types");
+      navigate("/bed-types");
     } else {
       const body = await res.json().catch(() => null);
       toast(body?.error || t("bedTypes.updateError"), "error");
     }
-  };
-
-  const handleDiscard = () => {
-    confirmNav();
-    router.push(pendingNav ?? "/bed-types");
   };
 
   if (notFound) return (
@@ -81,7 +75,7 @@ export default function EditBedType() {
       <BedTypeForm initialData={bedType} onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
 
       {showUnsavedDialog && (
-        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={confirmNav} />
       )}
     </main>
   );

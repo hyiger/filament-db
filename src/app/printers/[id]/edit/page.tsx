@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import PrinterForm from "@/app/printers/PrinterForm";
 import { useToast } from "@/components/Toast";
@@ -12,7 +12,6 @@ import { NozzleConflictError, type NozzleConflict } from "@/lib/nozzleConflicts"
 
 export default function EditPrinter() {
   const params = useParams();
-  const router = useRouter();
   const { toast } = useToast();
   const { t } = useTranslation();
   const [printer, setPrinter] = useState(null);
@@ -21,7 +20,7 @@ export default function EditPrinter() {
 
   const {
     onDirtyChange, showUnsavedDialog, handleBack,
-    confirmNav, cancelNav, pendingNav,
+    navigate, confirmNav, cancelNav,
   } = useUnsavedChanges("/printers");
 
   useEffect(() => {
@@ -45,7 +44,7 @@ export default function EditPrinter() {
     });
     if (res.ok) {
       toast(t("printers.updated"));
-      router.push("/printers");
+      navigate("/printers");
       return;
     }
     // GH #232 — see comment in printers/new/page.tsx: 409 means the
@@ -55,11 +54,6 @@ export default function EditPrinter() {
       throw new NozzleConflictError(body.conflicts as NozzleConflict[]);
     }
     toast(body?.error || t("printers.updateError"), "error");
-  };
-
-  const handleDiscard = () => {
-    confirmNav();
-    router.push(pendingNav ?? "/printers");
   };
 
   if (notFound) return (
@@ -87,7 +81,7 @@ export default function EditPrinter() {
       <PrinterForm initialData={printer} onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
 
       {showUnsavedDialog && (
-        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={confirmNav} />
       )}
     </main>
   );

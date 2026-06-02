@@ -1,6 +1,5 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import NozzleForm from "@/app/nozzles/NozzleForm";
 import { useToast } from "@/components/Toast";
@@ -9,13 +8,12 @@ import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function NewNozzle() {
-  const router = useRouter();
   const { toast } = useToast();
   const { t } = useTranslation();
 
   const {
     onDirtyChange, showUnsavedDialog, handleBack,
-    confirmNav, cancelNav, pendingNav,
+    navigate, confirmNav, cancelNav,
   } = useUnsavedChanges("/nozzles");
 
   const handleSubmit = async (data: Record<string, unknown>) => {
@@ -26,16 +24,11 @@ export default function NewNozzle() {
     });
     if (res.ok) {
       toast(t("nozzles.created"));
-      router.push("/nozzles");
+      navigate("/nozzles");
     } else {
       const body = await res.json().catch(() => null);
       toast(body?.error || t("nozzles.createError"), "error");
     }
-  };
-
-  const handleDiscard = () => {
-    confirmNav();
-    router.push(pendingNav ?? "/nozzles");
   };
 
   return (
@@ -49,7 +42,7 @@ export default function NewNozzle() {
       <NozzleForm onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
 
       {showUnsavedDialog && (
-        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={handleDiscard} />
+        <UnsavedChangesDialog onCancel={cancelNav} onDiscard={confirmNav} />
       )}
     </main>
   );
