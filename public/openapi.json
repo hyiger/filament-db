@@ -781,6 +781,46 @@
                         "retractLift": {
                           "type": "number",
                           "nullable": true
+                        },
+                        "nozzleTemp": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Recommended nozzle temperature in °C (GH #514.5 — Codex follow-up on PR #542; the GET /calibration handler returns these alongside the original six)"
+                        },
+                        "nozzleTempFirstLayer": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "First-layer nozzle temperature override in °C"
+                        },
+                        "bedTemp": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Bed temperature in °C"
+                        },
+                        "bedTempFirstLayer": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "First-layer bed temperature override in °C"
+                        },
+                        "chamberTemp": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Enclosure / chamber temperature in °C"
+                        },
+                        "fanMinSpeed": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Overhang fan minimum speed (0–100)"
+                        },
+                        "fanMaxSpeed": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Additional-cooling fan maximum speed (0–100)"
+                        },
+                        "fanBridgeSpeed": {
+                          "type": "number",
+                          "nullable": true,
+                          "description": "Bridge fan speed (0–100)"
                         }
                       }
                     }
