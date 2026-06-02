@@ -118,6 +118,58 @@ export async function POST(request: NextRequest) {
         if (payload.shoreHardnessD != null)
           conditionalDefaults.shoreHardnessD = payload.shoreHardnessD;
 
+        /** Apply conditional defaults (only set if currently null) to a
+         *  row — used by both the normal existing-row path AND the
+         *  duplicate-key race-recovery path (Codex P2 round 1 on
+         *  PR #531). Without this shared helper, a doc that's created
+         *  by a concurrent caller between the existing-lookup and the
+         *  create below would land with ONLY the optUpdateFields set —
+         *  density/color/drying/etc. would never get backfilled from
+         *  the OPT material the user explicitly chose to import. */
+        const applyConditionalDefaults = async (
+          row: { _id: unknown; density?: number | null; color?: string | null; secondaryColors?: string[] | null; transmissionDistance?: number | null; dryingTemperature?: number | null; dryingTime?: number | null; shoreHardnessD?: number | null },
+        ): Promise<void> => {
+          const conditionalSet: Record<string, unknown> = {};
+          if (conditionalDefaults.density != null && row.density == null)
+            conditionalSet.density = conditionalDefaults.density;
+          if (conditionalDefaults.color && row.color === "#808080")
+            conditionalSet.color = conditionalDefaults.color;
+          // GH #477: only adopt the OPT db's secondaryColors when the
+          // existing row has none. Don't overwrite user-set arrays.
+          if (
+            conditionalDefaults.secondaryColors &&
+            (!row.secondaryColors || row.secondaryColors.length === 0)
+          ) {
+            conditionalSet.secondaryColors = conditionalDefaults.secondaryColors;
+            // GH #477 (Codex P2 on PR #484 r3): when the OPT material
+            // is coextruded (payload.color === null, secondaryColors
+            // populated) AND the row still has the gray sentinel
+            // "#808080", clear it to null so we don't end up with the
+            // gray+secondaries state the spec doesn't permit for
+            // coextruded materials. mapToFilamentPayload already emits
+            // null for this case so payload.color is null here, but the
+            // conditionalDefaults.color branch above only fires when
+            // payload.color is truthy — leaving the sentinel in place.
+            // This explicit clear closes the gap. Matches the create
+            // branch which gets null directly via mapToFilamentPayload.
+            if (payload.color === null && row.color === "#808080") {
+              conditionalSet.color = null;
+            }
+          }
+          if (conditionalDefaults.transmissionDistance != null && row.transmissionDistance == null)
+            conditionalSet.transmissionDistance = conditionalDefaults.transmissionDistance;
+          if (conditionalDefaults.dryingTemperature != null && row.dryingTemperature == null)
+            conditionalSet.dryingTemperature = conditionalDefaults.dryingTemperature;
+          if (conditionalDefaults.dryingTime != null && row.dryingTime == null)
+            conditionalSet.dryingTime = conditionalDefaults.dryingTime;
+          if (conditionalDefaults.shoreHardnessD != null && row.shoreHardnessD == null)
+            conditionalSet.shoreHardnessD = conditionalDefaults.shoreHardnessD;
+
+          if (Object.keys(conditionalSet).length > 0) {
+            await Filament.findByIdAndUpdate(row._id, { $set: conditionalSet });
+          }
+        };
+
         const existing = await Filament.findOneAndUpdate(
           { name, _deletedAt: null, vendor },
           { $set: optUpdateFields },
@@ -125,48 +177,7 @@ export async function POST(request: NextRequest) {
         );
 
         if (existing) {
-          // Apply conditional defaults (only set if currently null) in a
-          // second update — $set alone cannot express "set if null".
-          const conditionalSet: Record<string, unknown> = {};
-          if (conditionalDefaults.density != null && existing.density == null)
-            conditionalSet.density = conditionalDefaults.density;
-          if (conditionalDefaults.color && existing.color === "#808080")
-            conditionalSet.color = conditionalDefaults.color;
-          // GH #477: only adopt the OPT db's secondaryColors when the
-          // existing row has none. Don't overwrite user-set arrays.
-          if (
-            conditionalDefaults.secondaryColors &&
-            (!existing.secondaryColors || existing.secondaryColors.length === 0)
-          ) {
-            conditionalSet.secondaryColors = conditionalDefaults.secondaryColors;
-            // GH #477 (Codex P2 on PR #484 r3): when the OPT material
-            // is coextruded (payload.color === null, secondaryColors
-            // populated) AND the existing row still has the gray
-            // sentinel "#808080", clear it to null so we don't end up
-            // with the gray+secondaries state the spec doesn't permit
-            // for coextruded materials. mapToFilamentPayload already
-            // emits null for this case so payload.color is null here,
-            // but the conditionalDefaults.color branch above only
-            // fires when payload.color is truthy — leaving the
-            // sentinel in place. This explicit clear closes the gap.
-            // Matches the create branch which gets null directly via
-            // mapToFilamentPayload.
-            if (payload.color === null && existing.color === "#808080") {
-              conditionalSet.color = null;
-            }
-          }
-          if (conditionalDefaults.transmissionDistance != null && existing.transmissionDistance == null)
-            conditionalSet.transmissionDistance = conditionalDefaults.transmissionDistance;
-          if (conditionalDefaults.dryingTemperature != null && existing.dryingTemperature == null)
-            conditionalSet.dryingTemperature = conditionalDefaults.dryingTemperature;
-          if (conditionalDefaults.dryingTime != null && existing.dryingTime == null)
-            conditionalSet.dryingTime = conditionalDefaults.dryingTime;
-          if (conditionalDefaults.shoreHardnessD != null && existing.shoreHardnessD == null)
-            conditionalSet.shoreHardnessD = conditionalDefaults.shoreHardnessD;
-
-          if (Object.keys(conditionalSet).length > 0) {
-            await Filament.findByIdAndUpdate(existing._id, { $set: conditionalSet });
-          }
+          await applyConditionalDefaults(existing);
           updated++;
         } else {
           // Check if a filament exists with a different vendor (name collision)
@@ -195,6 +206,12 @@ export async function POST(request: NextRequest) {
               { returnDocument: "after" },
             );
             if (winner) {
+              // Codex P2 round 1: same conditional-default backfill the
+              // normal existing-row path applies — without this the
+              // duplicate-recovery branch would report "updated" while
+              // leaving the OPT material's density/color/drying-temp
+              // unset on the raced-in row.
+              await applyConditionalDefaults(winner);
               updated++;
             } else {
               // The race winner is in a different vendor — same shape as
