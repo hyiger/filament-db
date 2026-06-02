@@ -737,14 +737,22 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     try {
       // GH #477: when the user has opted into the "Coextruded"
       // arrangement (auto-toggled via tag 29 in optTags), the
-      // OpenPrintTag spec says primary color SHOULD be null —
-      // "Does not have a primary color, number of colors can be
-      // derived from the defined secondary colors." Submit null so
-      // resolveFilament + every read site honour that semantic. For
+      // OpenPrintTag spec says primary color SHOULD be null for
+      // coextruded — "Does not have a primary color, number of colors
+      // can be derived from the defined secondary colors." Submit null
+      // so resolveFilament + every read site honour that semantic. For
       // gradient and solid arrangements the primary stays as set.
-      const submittedColor = form.optTags.includes(29)
-        ? null
-        : form.color;
+      //
+      // Codex P2 round 1 on PR #533: BOTH the dual_color tag (28) AND
+      // the triple_color tag (29) represent coextruded — pre-fix this
+      // only checked 29, so a dual-color save (the common 2-secondary
+      // shape) kept the primary on the doc and rendered with an extra
+      // unwanted stripe. Use deriveArrangement to stay aligned with
+      // every other render site.
+      const submittedColor =
+        deriveArrangement(form.optTags) === "coextruded"
+          ? null
+          : form.color;
       await onSubmit({
         name: form.name,
         vendor: form.vendor,
