@@ -1,8 +1,44 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
-import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import Nozzle from "@/models/Nozzle";
+import Printer from "@/models/Printer";
+import BedType from "@/models/BedType";
+import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+
+/**
+ * GH #519: collect every cross-collection ref carried by a filament body and
+ * verify each id resolves to an active doc. Mirrors the printer-route shape
+ * (`assertActiveRefs(model, ids, label)`). Calibration refs are pulled out
+ * per-collection so the error message names the right field; null/missing
+ * refs in calibration entries are passed through (the schema marks
+ * `nozzle` required and handles it at validation time).
+ */
+async function assertFilamentBodyRefs(
+  body: Record<string, unknown>,
+): Promise<Response | null> {
+  const compatibleNozzles = Array.isArray(body.compatibleNozzles)
+    ? (body.compatibleNozzles as unknown[]).filter((id): id is string => typeof id === "string")
+    : [];
+  const nozzleRefs = new Set<string>(compatibleNozzles);
+  const printerRefs = new Set<string>();
+  const bedRefs = new Set<string>();
+  if (Array.isArray(body.calibrations)) {
+    for (const cal of body.calibrations as Array<Record<string, unknown>>) {
+      if (typeof cal?.nozzle === "string") nozzleRefs.add(cal.nozzle);
+      if (typeof cal?.printer === "string") printerRefs.add(cal.printer);
+      if (typeof cal?.bedType === "string") bedRefs.add(cal.bedType);
+    }
+  }
+  const nozzleGuard = await assertActiveRefs(Nozzle, Array.from(nozzleRefs), "referenced nozzles");
+  if (nozzleGuard) return nozzleGuard;
+  const printerGuard = await assertActiveRefs(Printer, Array.from(printerRefs), "referenced printers");
+  if (printerGuard) return printerGuard;
+  const bedGuard = await assertActiveRefs(BedType, Array.from(bedRefs), "referenced bed types");
+  if (bedGuard) return bedGuard;
+  return null;
+}
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -264,6 +300,9 @@ export async function POST(request: NextRequest) {
         body.diameter = null;
       }
     }
+
+    const refGuard = await assertFilamentBodyRefs(body);
+    if (refGuard) return refGuard;
 
     const filament = await Filament.create(body);
     return NextResponse.json(filament, { status: 201 });

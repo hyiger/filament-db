@@ -43,8 +43,38 @@ export async function POST(
     return errorResponse("notes must be 1000 characters or fewer", 400);
   }
 
+  // GH #502.1: mirror the print-history POST guard (#306) so an Invalid
+  // Date can't reach the doc. Without this, /api/dashboard later 500s
+  // when `new Date(invalidDate).toISOString()` throws RangeError.
+  const cycleDate = body?.date ? new Date(body.date) : new Date();
+  if (Number.isNaN(cycleDate.getTime())) {
+    return errorResponse("date is not a valid date", 400);
+  }
+
+  // GH #502.2: the schema declares `tempC { min: 0, max: 300 }` and
+  // `durationMin { min: 0 }`, but `findOneAndUpdate(..., { $push })`
+  // below intentionally omits `runValidators: true` to keep the
+  // atomic $slice cap (#304). Enforce the same bounds explicitly here
+  // so negatives / out-of-range values can't corrupt the row.
+  if (body?.tempC != null) {
+    if (typeof body.tempC !== "number" || !Number.isFinite(body.tempC)) {
+      return errorResponse("tempC must be a finite number", 400);
+    }
+    if (body.tempC < 0 || body.tempC > 300) {
+      return errorResponse("tempC must be between 0 and 300", 400);
+    }
+  }
+  if (body?.durationMin != null) {
+    if (typeof body.durationMin !== "number" || !Number.isFinite(body.durationMin)) {
+      return errorResponse("durationMin must be a finite number", 400);
+    }
+    if (body.durationMin < 0) {
+      return errorResponse("durationMin must be non-negative", 400);
+    }
+  }
+
   const entry: Record<string, unknown> = {
-    date: body?.date ? new Date(body.date) : new Date(),
+    date: cycleDate,
     tempC:
       typeof body?.tempC === "number" && Number.isFinite(body.tempC) ? body.tempC : null,
     durationMin:

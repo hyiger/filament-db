@@ -35,8 +35,6 @@ export interface TdsExtractedData {
     nozzleRangeMax?: number;
     bed?: number;
     bedFirstLayer?: number;
-    bedRangeMin?: number;
-    bedRangeMax?: number;
     standby?: number;
   };
   dryingTemperature?: number;
@@ -77,9 +75,7 @@ Return ONLY a JSON object with the following fields. Use null for any field not 
     "nozzle": "Recommended nozzle temperature in °C (use the typical/middle value if a range is given)",
     "nozzleRangeMin": "Minimum recommended nozzle temperature in °C",
     "nozzleRangeMax": "Maximum recommended nozzle temperature in °C",
-    "bed": "Recommended bed/platform temperature in °C (use the typical/middle value if a range is given)",
-    "bedRangeMin": "Minimum recommended bed temperature in °C",
-    "bedRangeMax": "Maximum recommended bed temperature in °C"
+    "bed": "Recommended bed/platform temperature in °C (use the typical/middle value if a range is given)"
   },
   "dryingTemperature": "Recommended drying temperature in °C",
   "dryingTime": "Recommended drying time in MINUTES (e.g. 480 for 8 hours — convert any TDS-quoted hours to minutes by multiplying by 60)",
@@ -96,7 +92,7 @@ Return ONLY a JSON object with the following fields. Use null for any field not 
 
 Important:
 - Temperature ranges like "210-230°C" should be split: nozzleRangeMin=210, nozzleRangeMax=230, nozzle=220 (midpoint)
-- For bed temperature ranges, do the same split
+- For bed temperature ranges, use the midpoint as 'bed' (the schema only stores a single bed temp, not a range)
 - Density is typically in g/cm³ (e.g. 1.24, not 1240 kg/m³ — convert if needed)
 - Drying time MUST be returned in minutes (multiply hours by 60 — e.g. "8 hours" → 480, "30 minutes" → 30). The downstream filament schema stores minutes.
 - Only include fields you can confidently extract from the document
