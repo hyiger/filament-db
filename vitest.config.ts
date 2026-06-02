@@ -15,6 +15,16 @@ export default defineConfig({
         // (dataUrlSizeBytes) are still tested; excluded here only to keep
         // function-coverage meaningful.
         "src/lib/compressImage.ts",
+        // GH #526: labelBitmap is the same shape — its public surface
+        // (renderQrForTape, renderLabelBitmap, renderLabelPreviewDataUrl)
+        // all build HTMLCanvasElement bitmaps via the browser-only
+        // CanvasRenderingContext2D API. The pure encoder it composes on
+        // top of (src/lib/labelEncoder.ts) IS tested. A proper test
+        // would need jsdom + node-canvas in the test env, which is too
+        // heavy for the regression value vs the encoder tests we
+        // already have. Pinned in CLAUDE.md so a future contributor
+        // knows the trade-off.
+        "src/lib/labelBitmap.ts",
       ],
       thresholds: {
         lines: 80,

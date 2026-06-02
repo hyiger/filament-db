@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
-import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught, handleVersionError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /** GH #304: hard cap on a spool's embedded usageHistory array. Far
@@ -88,6 +88,11 @@ export async function POST(
     await filament.save();
     return NextResponse.json(filament.toObject(), { status: 201 });
   } catch (err) {
+    // GH #504: surface optimistic-concurrency conflicts as 409 with a
+    // retry hint so a SpoolCard logging usage while a slicer concurrently
+    // posts print-history doesn't see a misleading 500.
+    const conflict = handleVersionError(err);
+    if (conflict) return conflict;
     return errorResponseFromCaught(err, "Failed to log usage");
   }
 }

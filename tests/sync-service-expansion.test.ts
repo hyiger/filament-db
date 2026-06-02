@@ -252,7 +252,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       const localFilId = new ObjectId();
       const remoteFilId = new ObjectId();
       const filDoc = {
-        name: "AMS PLA", vendor: "Test", type: "PLA", color: "#000",
+        name: "AMS PLA", vendor: "Test", type: "PLA", color: "#000000",
         diameter: 1.75, temperatures: {}, bedTypeTemps: [],
         compatibleNozzles: [], calibrations: [], spools: [], optTags: [], settings: {},
         syncId: "ams-fil",
@@ -339,7 +339,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       const localFilId = new ObjectId();
       const remoteFilId = new ObjectId();
       const filDoc = {
-        name: "Used PLA", vendor: "Test", type: "PLA", color: "#fff",
+        name: "Used PLA", vendor: "Test", type: "PLA", color: "#ffffff",
         diameter: 1.75, temperatures: {}, bedTypeTemps: [],
         compatibleNozzles: [], calibrations: [], spools: [], optTags: [], settings: {},
         syncId: "f-syncid",

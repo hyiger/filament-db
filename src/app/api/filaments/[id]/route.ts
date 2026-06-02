@@ -3,9 +3,9 @@ import dbConnect from "@/lib/mongodb";
 import Filament, { IFilament } from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
-import "@/models/BedType";
+import BedType from "@/models/BedType";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
-import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
@@ -215,6 +215,35 @@ export async function PUT(
       if (variantCount > 0) {
         return errorResponse("Cannot set parent on a filament that has variants — remove variants first", 400);
       }
+    }
+
+    // GH #519: same cross-collection ref existence check the POST handler
+    // runs (Nozzle / Printer / BedType from compatibleNozzles +
+    // calibrations[]). Without this, a PUT could attach phantom refs the
+    // GET handler's .populate() then silently drops, leaving the slicer
+    // / compare UI looking at calibrations that point at nothing.
+    {
+      const nozzleRefs = new Set<string>();
+      const printerRefs = new Set<string>();
+      const bedRefs = new Set<string>();
+      if (Array.isArray(body.compatibleNozzles)) {
+        for (const refId of body.compatibleNozzles) {
+          if (typeof refId === "string") nozzleRefs.add(refId);
+        }
+      }
+      if (Array.isArray(body.calibrations)) {
+        for (const cal of body.calibrations as Array<Record<string, unknown>>) {
+          if (typeof cal?.nozzle === "string") nozzleRefs.add(cal.nozzle);
+          if (typeof cal?.printer === "string") printerRefs.add(cal.printer);
+          if (typeof cal?.bedType === "string") bedRefs.add(cal.bedType);
+        }
+      }
+      const nozzleGuard = await assertActiveRefs(Nozzle, Array.from(nozzleRefs), "referenced nozzles");
+      if (nozzleGuard) return nozzleGuard;
+      const printerGuard = await assertActiveRefs(Printer, Array.from(printerRefs), "referenced printers");
+      if (printerGuard) return printerGuard;
+      const bedGuard = await assertActiveRefs(BedType, Array.from(bedRefs), "referenced bed types");
+      if (bedGuard) return bedGuard;
     }
 
     const filament = await Filament.findOneAndUpdate(

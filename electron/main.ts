@@ -865,15 +865,14 @@ ipcMain.handle("test-connection", async (event, uri: string) => {
   }
 });
 
-ipcMain.handle("show-message", async (_event, options: { type: string; title: string; message: string }) => {
-  if (mainWindow) {
-    await dialog.showMessageBox(mainWindow, {
-      type: options.type as "info" | "error" | "warning",
-      title: options.title,
-      message: options.message,
-    });
-  }
-});
+// GH #523: the `show-message` IPC handler that lived here was unguarded
+// (no assertTrustedSender) AND dead code (zero renderer callers — see
+// `grep -rn showMessage\|show-message src electron` before reintroducing).
+// It rendered an OS-native dialog parented to the main window from
+// renderer-controlled type/title/message strings — perfect material for
+// UI-spoofing / credential-phishing prompts if a sub-frame is ever
+// compromised. If a future feature needs it, re-add with
+// assertTrustedSender and a constrained payload allowlist.
 
 // Sync
 ipcMain.handle("get-sync-status", () => {
@@ -905,7 +904,13 @@ ipcMain.handle("trigger-sync", async (event) => {
   return { results };
 });
 
-ipcMain.handle("check-atlas-connectivity", async () => {
+// GH #506: same sub-frame attack surface as #432's trigger-sync — this
+// handler opens a real MongoClient to Atlas (per call when syncService
+// is null; per-cycle thereafter) and is polled by SyncStatusIndicator.
+// A compromised sub-frame can weaponise it for connection-pool / billing
+// exhaustion against the user's Atlas tier.
+ipcMain.handle("check-atlas-connectivity", async (event) => {
+  assertTrustedSender(event, "check-atlas-connectivity");
   if (!syncService) {
     // Try a direct check
     const atlasUri = store.get("atlasUri") as string;
@@ -1101,6 +1106,26 @@ ipcMain.handle("label-printer-print", async (event, bytes: number[]) => {
     // is well past any legitimate single-label print and ensures a
     // misbehaving renderer can't lock the printer indefinitely.
     throw new Error(`bytes array too large (${bytes.length} bytes)`);
+  }
+  // GH #523: per-byte validation mirroring nfc-write-tag (#278). Without
+  // this, `new Uint8Array(bytes)` silently coerces floats to truncated
+  // ints, NaN/Infinity/strings/objects/null to 0, and out-of-range
+  // values mod-256 wrap. Brother's raster protocol is positional —
+  // `ESC i z` media width, `ESC i M`/`K` mode bits, `0x1A`/`0x0C`
+  // trailer — and a stray byte in the wrong slot leaves the printer
+  // in a wrong-mode / chain-stuck state for the next print.
+  //
+  // Codex P2 round 1: use an index loop, not Array.prototype.every —
+  // `every` skips sparse-array holes (`new Array(100)` or
+  // `delete arr[5]`), so a hostile renderer could send a 5MB array
+  // with NO actual bytes and the guard would pass. `new Uint8Array`
+  // would then convert every hole to 0x00, reintroducing the silent
+  // coercion this hardening is meant to block.
+  for (let i = 0; i < bytes.length; i++) {
+    const b = bytes[i];
+    if (!Number.isInteger(b) || b < 0 || b > 255) {
+      throw new Error("bytes must contain only integers in [0, 255]");
+    }
   }
   const devicePath = (store as Store<Record<string, unknown>>).get(
     "labelPrinterDevicePath",

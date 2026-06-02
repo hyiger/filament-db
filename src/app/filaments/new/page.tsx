@@ -420,7 +420,14 @@ function NewFilamentContent() {
         nozzleRangeMin: d.temperatures?.nozzleRangeMin ?? null,
         nozzleRangeMax: d.temperatures?.nozzleRangeMax ?? null,
         bed: d.temperatures?.bed ?? null,
-        bedFirstLayer: d.temperatures?.bedRangeMin ?? d.temperatures?.bed ?? null,
+        // GH #518: the AI used to be prompted for bedRangeMin (since
+        // dropped — the schema doesn't store bed ranges). The fallback
+        // here was also semantically wrong: the AI's "minimum
+        // operating bed temp" was being routed to "first-layer bed
+        // temp", but first-layer is typically the HIGHER value (better
+        // adhesion), not the lower. Fall back to the recommended bed
+        // temp only.
+        bedFirstLayer: d.temperatures?.bed ?? null,
       },
       dryingTemperature: d.dryingTemperature ?? null,
       dryingTime: d.dryingTime ?? null,

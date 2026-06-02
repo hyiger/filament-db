@@ -111,6 +111,79 @@ export function errorResponseFromCaught(
   return errorResponse(fallbackMessage, fallbackStatus, getErrorMessage(err));
 }
 
+/**
+ * GH #504: Mongoose `Error.VersionError` is the optimistic-concurrency
+ * signal — two writers raced the same document version. Surface it as
+ * 409 so the caller can re-fetch and retry against the fresh state
+ * (instead of seeing a generic 500). `print-history`'s POST handler
+ * has had this branch since GH #224; this helper lifts the pattern so
+ * every `.save()` site can share it without duplicating message copy.
+ *
+ * Pass the caught error AND an optional context label for the message.
+ * Returns the 409 NextResponse on a VersionError, or null when the
+ * caller should fall through to its existing generic-error branch.
+ *
+ * Usage:
+ *   } catch (err) {
+ *     const conflict = handleVersionError(err);
+ *     if (conflict) return conflict;
+ *     return errorResponseFromCaught(err, "Failed to ...");
+ *   }
+ */
+export function handleVersionError(err: unknown): NextResponse | null {
+  // Use a runtime instanceof check — but lazy-import to avoid pulling
+  // mongoose into edge-runtime callers. Mongoose's VersionError extends
+  // Error with name "VersionError"; matching on the name is portable
+  // and survives across the framework-internal subclass.
+  if (
+    err instanceof Error &&
+    (err.name === "VersionError" || err.constructor?.name === "VersionError")
+  ) {
+    return errorResponse(
+      "This record was modified by another request. Please retry.",
+      409,
+    );
+  }
+  return null;
+}
+
+/**
+ * GH #519: assert every id in `ids` corresponds to an active (non-trashed)
+ * document in `model`. Returns null when every id resolves; returns a 400
+ * NextResponse naming the offending field when any are missing. Same shape
+ * as the printer-route existence checks so error messages stay consistent.
+ *
+ * The check ignores order and duplicates (`countDocuments` is on the
+ * deduped `$in` set) — combine with a `Array.from(new Set(ids))` at the
+ * route entry to make the per-route message match the deduped count
+ * (see GH #524.4).
+ */
+interface CountableModel {
+  countDocuments(filter: Record<string, unknown>): Promise<number> | { exec(): Promise<number> };
+}
+
+export async function assertActiveRefs(
+  model: CountableModel,
+  ids: string[] | undefined,
+  fieldLabel: string,
+): Promise<NextResponse | null> {
+  if (!ids || ids.length === 0) return null;
+  const deduped = Array.from(new Set(ids.map(String)));
+  const result = model.countDocuments({
+    _id: { $in: deduped },
+    _deletedAt: null,
+  });
+  // Both Mongoose Query and a plain Promise resolve to a number — handle
+  // either so route-level mocks don't have to fake the .exec() shape.
+  const activeCount = await (typeof (result as { exec?: () => Promise<number> }).exec === "function"
+    ? (result as { exec(): Promise<number> }).exec()
+    : (result as Promise<number>));
+  if (activeCount !== deduped.length) {
+    return errorResponse(`One or more ${fieldLabel} no longer exist.`, 400);
+  }
+  return null;
+}
+
 /** Maximum upload file size (10 MB) */
 export const MAX_UPLOAD_SIZE = 10 * 1024 * 1024;
 
