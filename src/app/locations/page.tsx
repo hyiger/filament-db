@@ -203,7 +203,7 @@ export default function LocationsPage() {
                       type="checkbox"
                       checked={selected.has(l._id)}
                       onChange={() => toggleSelect(l._id)}
-                      aria-label={l.name || "Select"}
+                      aria-label={l.name || t("common.select")}
                       className="accent-red-600"
                     />
                   </td>

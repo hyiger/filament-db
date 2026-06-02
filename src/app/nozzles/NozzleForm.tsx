@@ -34,16 +34,22 @@ interface Props {
   onDirtyChange?: (dirty: boolean) => void;
 }
 
-const NOZZLE_TYPES = [
-  "Brass",
-  "Hardened Steel",
-  "Stainless Steel",
-  "Copper",
-  "Ruby Tipped",
-  "Tungsten Carbide",
-  "ObXidian",
-  "Diamondback",
-  "Other",
+/** GH #529: stored values stay in English so existing DB rows and the
+ *  CSV/Atlas import paths don't need a migration. Display labels are
+ *  translated via the `nozzleType.<key>` keys (en defaults to the same
+ *  English text, de carries "Messing" etc.). When extending this list,
+ *  add a matching `nozzleType.<KeyName>` to both locale files or the
+ *  i18n-key-coverage invariant test fails. */
+const NOZZLE_TYPES: { value: string; i18nKey: string }[] = [
+  { value: "Brass", i18nKey: "nozzleType.Brass" },
+  { value: "Hardened Steel", i18nKey: "nozzleType.HardenedSteel" },
+  { value: "Stainless Steel", i18nKey: "nozzleType.StainlessSteel" },
+  { value: "Copper", i18nKey: "nozzleType.Copper" },
+  { value: "Ruby Tipped", i18nKey: "nozzleType.RubyTipped" },
+  { value: "Tungsten Carbide", i18nKey: "nozzleType.TungstenCarbide" },
+  { value: "ObXidian", i18nKey: "nozzleType.ObXidian" },
+  { value: "Diamondback", i18nKey: "nozzleType.Diamondback" },
+  { value: "Other", i18nKey: "nozzleType.Other" },
 ];
 
 const COMMON_DIAMETERS = ["0.1", "0.15", "0.2", "0.25", "0.3", "0.35", "0.4", "0.5", "0.6", "0.7", "0.8", "1.0", "1.2", "1.4", "1.6", "1.8", "2.0"];
@@ -53,7 +59,7 @@ export default function NozzleForm({ initialData, onSubmit, onDirtyChange }: Pro
   const [form, setForm] = useState<NozzleFormData>({
     name: initialData?.name || "",
     diameter: initialData?.diameter?.toString() || "0.4",
-    type: initialData?.type || "Brass",
+    type: initialData?.type || NOZZLE_TYPES[0].value,
     highFlow: initialData?.highFlow || false,
     hardened: initialData?.hardened || false,
     notes: initialData?.notes || "",
@@ -173,8 +179,8 @@ export default function NozzleForm({ initialData, onSubmit, onDirtyChange }: Pro
             onChange={(e) => updateForm({ type: e.target.value })}
           >
             {NOZZLE_TYPES.map((ntype) => (
-              <option key={ntype} value={ntype}>
-                {ntype}
+              <option key={ntype.value} value={ntype.value}>
+                {t(ntype.i18nKey)}
               </option>
             ))}
           </select>

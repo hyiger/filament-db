@@ -195,7 +195,7 @@ export default function PrintersPage() {
                       type="checkbox"
                       checked={selected.has(p._id)}
                       onChange={() => toggleSelect(p._id)}
-                      aria-label={p.name || "Select"}
+                      aria-label={p.name || t("common.select")}
                       className="accent-red-600"
                     />
                   </td>

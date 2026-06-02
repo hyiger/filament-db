@@ -180,7 +180,7 @@ export default function BedTypesPage() {
                       type="checkbox"
                       checked={selected.has(b._id)}
                       onChange={() => toggleSelect(b._id)}
-                      aria-label={b.name || "Select"}
+                      aria-label={b.name || t("common.select")}
                       className="accent-red-600"
                     />
                   </td>

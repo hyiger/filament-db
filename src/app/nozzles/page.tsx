@@ -184,7 +184,7 @@ export default function NozzlesPage() {
                       type="checkbox"
                       checked={selected.has(n._id)}
                       onChange={() => toggleSelect(n._id)}
-                      aria-label={n.name || "Select"}
+                      aria-label={n.name || t("common.select")}
                       className="accent-red-600"
                     />
                   </td>
