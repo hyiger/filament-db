@@ -223,6 +223,23 @@ describe("PR A — API validation & semantics", () => {
       expect(res.status).toBe(201);
     });
 
+    it("PUT rejects a Mongo update operator body ($set) → 400 (Codex P2 r5 on #577)", async () => {
+      // Operator bodies would slip past the field-level guards (range,
+      // parentId re-parent). The renderer never sends them; reject outright.
+      const created = await Filament.create({ name: "QA-OpReject", vendor: "x", type: "PLA" });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      for (const opBody of [
+        { $set: { "temperatures.nozzleRangeMin": 300, "temperatures.nozzleRangeMax": 200 } },
+        { $set: { parentId: "ffffffffffffffffffffffff" } },
+      ]) {
+        const res = await PUT(
+          jsonReq(`http://localhost/api/filaments/${created._id}`, opBody, "PUT"),
+          { params: Promise.resolve({ id: String(created._id) }) },
+        );
+        expect(res.status).toBe(400);
+      }
+    });
+
     it("PUT re-parent only (no range field) that inverts the stored min against the NEW parent max → 400 (Codex P2 r4 on #577)", async () => {
       const oldParent = await Filament.create({
         name: "QA-RP-Old", vendor: "x", type: "PLA",

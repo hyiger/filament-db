@@ -201,6 +201,20 @@ export async function PUT(
     // edit form never sends `spools`; strip it as a hard guarantee.
     delete body.spools;
 
+    // Codex P2 on PR #577: the renderer only ever sends a plain field object.
+    // A Mongo update OPERATOR ($set / $inc / $rename / …) in the body would be
+    // forwarded verbatim to findOneAndUpdate and slip past every field-level
+    // guard here — the cross-field range check, the parentId re-parent
+    // validation, and the mass-assignment strips above all key off top-level
+    // fields. Reject operator-style bodies outright; it closes that whole
+    // bypass class and is a latent NoSQL-operator-injection fix.
+    if (Object.keys(body).some((k) => k.startsWith("$"))) {
+      return errorResponse(
+        "Update operators (e.g. $set) are not allowed in the request body",
+        400,
+      );
+    }
+
     // Validate parentId if provided
     if (body.parentId) {
       const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null }).lean();
