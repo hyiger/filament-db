@@ -6,6 +6,7 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import CollapsibleSection, { expandAndScrollToSection } from "@/components/CollapsibleSection";
 import FormToc, { FormTocMobileButton, type TocEntry } from "@/components/FormToc";
 import FilamentSwatch from "@/components/FilamentSwatch";
+import { snapToStep } from "@/lib/snapToStep";
 import {
   filterColorSuggestions,
   lookupCssNamedColor,
@@ -247,14 +248,27 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     secondaryColors: initialData?.secondaryColors ?? [],
     colorName: initialData?.colorName || "",
     cost: initialData?.cost?.toString() || "",
-    density: initialData?.density?.toString() || "",
+    // density + diameter are CBOR half-floats on an OpenPrintTag, so an
+    // NFC/TDS prefill can hand us e.g. 1.2392578125 / 2.849609375. Snap to
+    // the inputs' step="0.01" grid so the value the user sees is one the
+    // field can actually hold — otherwise native step validation blocks
+    // save on every NFC-read filament (#570). Snapping an already-clean
+    // stored value (1.24, 2.85, 1.75) is a no-op.
+    density:
+      initialData?.density != null
+        ? snapToStep(initialData.density, 0.01).toString()
+        : "",
     // Variants leave diameter blank when inheriting from the parent — falling
     // back to "1.75" here would paint a value into the input that the user
     // never typed, and saving would persist 1.75 as an explicit override
     // (even if the parent's diameter is e.g. 2.85). The submit-side fallback
     // in handleSubmit keeps 1.75 as the default for standalone filaments.
     diameter:
-      initialData?.diameter?.toString() || (initialData?.parentId ? "" : "1.75"),
+      initialData?.diameter != null
+        ? snapToStep(initialData.diameter, 0.01).toString()
+        : initialData?.parentId
+          ? ""
+          : "1.75",
     temperatures: {
       nozzle: initialData?.temperatures?.nozzle?.toString() || "",
       nozzleFirstLayer: initialData?.temperatures?.nozzleFirstLayer?.toString() || "",
