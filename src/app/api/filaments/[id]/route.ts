@@ -9,6 +9,11 @@ import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assert
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
+import {
+  isInvertedNozzleRange,
+  effectiveNozzleRangeForUpdate,
+  inheritNozzleRangeFromParent,
+} from "@/lib/temperatureRange";
 
 /**
  * GH #261: clear every spool of a filament out of all printer AMS slots.
@@ -196,6 +201,20 @@ export async function PUT(
     // edit form never sends `spools`; strip it as a hard guarantee.
     delete body.spools;
 
+    // Codex P2 on PR #577: the renderer only ever sends a plain field object.
+    // A Mongo update OPERATOR ($set / $inc / $rename / …) in the body would be
+    // forwarded verbatim to findOneAndUpdate and slip past every field-level
+    // guard here — the cross-field range check, the parentId re-parent
+    // validation, and the mass-assignment strips above all key off top-level
+    // fields. Reject operator-style bodies outright; it closes that whole
+    // bypass class and is a latent NoSQL-operator-injection fix.
+    if (Object.keys(body).some((k) => k.startsWith("$"))) {
+      return errorResponse(
+        "Update operators (e.g. $set) are not allowed in the request body",
+        400,
+      );
+    }
+
     // Validate parentId if provided
     if (body.parentId) {
       const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null }).lean();
@@ -244,6 +263,87 @@ export async function PUT(
       if (printerGuard) return printerGuard;
       const bedGuard = await assertActiveRefs(BedType, Array.from(bedRefs), "referenced bed types");
       if (bedGuard) return bedGuard;
+    }
+
+    // #574: reject an inverted nozzle temperature range (min > max) on edit
+    // too. runValidators enforces the per-field 0–600 bounds but not the
+    // cross-field min ≤ max relationship.
+    //
+    // Codex P2 on PR #577: validate the range that will ACTUALLY be persisted.
+    // The update can carry the endpoints as a full `temperatures` object
+    // (replaces the subdoc), as dotted paths (`temperatures.nozzleRangeMin`),
+    // or wrapped in `$set` — and a dotted/partial update merges into the
+    // stored subdoc, so a lone min can combine with a stored max into an
+    // inverted range a body-only check would miss. Always fetch the stored
+    // endpoints (one indexed lookup on an edit) and validate the effective
+    // result; `effectiveNozzleRangeForUpdate` understands all the shapes.
+    const stored = await Filament.findOne({ _id: id, _deletedAt: null })
+      .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax parentId")
+      .lean();
+    const rangeUpdate = effectiveNozzleRangeForUpdate(body, stored?.temperatures);
+    // Codex P2 r3/r4 on #577: a variant inherits missing endpoints from its
+    // parent (resolveFilament: own ?? parent), so a lone min can invert
+    // against an inherited parent max. Two ways the effective range changes
+    // on edit: a range field is touched, OR the variant is re-parented (which
+    // swaps in a new parent's endpoints). Only validate when one of those
+    // happens — re-validating an unrelated edit could 400 on pre-existing
+    // data the user isn't touching.
+    const effectiveParentId =
+      body.parentId !== undefined ? body.parentId : stored?.parentId;
+    const reparenting =
+      body.parentId !== undefined &&
+      String(body.parentId ?? "") !== String(stored?.parentId ?? "");
+    if (rangeUpdate !== null || reparenting) {
+      // On a pure re-parent, seed the variant's own range from the stored
+      // endpoints (the request carries none) so an existing override is
+      // checked against the NEW parent (Codex P2 r4).
+      const own =
+        rangeUpdate ?? {
+          nozzleRangeMin: stored?.temperatures?.nozzleRangeMin ?? null,
+          nozzleRangeMax: stored?.temperatures?.nozzleRangeMax ?? null,
+        };
+      let effRange: ReturnType<typeof effectiveNozzleRangeForUpdate> = own;
+      if (effectiveParentId) {
+        const parent = await Filament.findOne({ _id: effectiveParentId, _deletedAt: null })
+          .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
+          .lean();
+        effRange = inheritNozzleRangeFromParent(own, parent?.temperatures);
+      }
+      if (isInvertedNozzleRange(effRange)) {
+        return errorResponse(
+          "Nozzle range minimum temperature must be less than or equal to the maximum",
+          400,
+        );
+      }
+
+      // Codex P2 r5 on #577: editing a PARENT's range can retroactively
+      // invert an inheriting variant's effective range — e.g. lowering this
+      // parent's max to 200 while a child overrides only its own min to 300
+      // leaves the child resolving to 300/200. The edited doc is a root
+      // parent when it has variants (no nested inheritance), so its new own
+      // range (`own`/`effRange`) is what children inherit. Reject the parent
+      // edit if it would invert any inheriting child. Only runs when a range
+      // field actually changed (rangeUpdate !== null).
+      if (rangeUpdate !== null) {
+        const children = await Filament.find({ parentId: id, _deletedAt: null })
+          .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
+          .lean();
+        for (const child of children) {
+          const childEffective = inheritNozzleRangeFromParent(
+            {
+              nozzleRangeMin: child.temperatures?.nozzleRangeMin ?? null,
+              nozzleRangeMax: child.temperatures?.nozzleRangeMax ?? null,
+            },
+            effRange,
+          );
+          if (isInvertedNozzleRange(childEffective)) {
+            return errorResponse(
+              "This nozzle range would create an inverted range on an inheriting variant — adjust the variant's override first",
+              400,
+            );
+          }
+        }
+      }
     }
 
     const filament = await Filament.findOneAndUpdate(

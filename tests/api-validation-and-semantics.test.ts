@@ -97,6 +97,218 @@ describe("PR A — API validation & semantics", () => {
     });
   });
 
+  // ─── #574: inverted nozzle temperature range (min > max) ───────────
+
+  describe("GH #574 — rejects an inverted nozzle temperature range", () => {
+    it("POST with nozzleRangeMin > nozzleRangeMax → 400", async () => {
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-InvRange", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 300, nozzleRangeMax: 200 },
+      }));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/less than or equal to the maximum/i);
+    });
+
+    it("POST with a normal range (min <= max) still passes", async () => {
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-OkRange", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 200, nozzleRangeMax: 220 },
+      }));
+      expect(res.status).toBe(201);
+    });
+
+    it("POST with only one end set is not treated as inverted", async () => {
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-PartialRange", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 300 },
+      }));
+      expect(res.status).toBe(201);
+    });
+
+    it("PUT with nozzleRangeMin > nozzleRangeMax → 400", async () => {
+      const created = await Filament.create({ name: "QA-PutInv", vendor: "x", type: "PLA" });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${created._id}`, {
+          temperatures: { nozzleRangeMin: 250, nozzleRangeMax: 100 },
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(created._id) }) },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("POST with numeric-STRING inverted range → 400 (Codex P2 on #577)", async () => {
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-StrInv", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: "300", nozzleRangeMax: "200" },
+      }));
+      expect(res.status).toBe(400);
+    });
+
+    it("PUT dotted partial min that inverts against the STORED max → 400 (Codex P2 on #577)", async () => {
+      const created = await Filament.create({
+        name: "QA-DottedInv", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 200 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${created._id}`, {
+          "temperatures.nozzleRangeMin": 300, // stored max is 200 → inverted
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(created._id) }) },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("PUT dotted partial min that stays valid against the stored max → 200", async () => {
+      const created = await Filament.create({
+        name: "QA-DottedOk", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 260 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${created._id}`, {
+          "temperatures.nozzleRangeMin": 240, // <= stored max 260
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(created._id) }) },
+      );
+      expect(res.status).toBe(200);
+    });
+
+    it("PUT $set operator partial min that inverts against the STORED max → 400 (Codex P2 r2 on #577)", async () => {
+      const created = await Filament.create({
+        name: "QA-SetInv", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 200 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${created._id}`, {
+          $set: { "temperatures.nozzleRangeMin": 300 }, // stored max 200 → inverted
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(created._id) }) },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("POST a variant whose lone min inverts against the inherited parent max → 400 (Codex P2 r3 on #577)", async () => {
+      const parent = await Filament.create({
+        name: "QA-RangeParent", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 200 },
+      });
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-RangeVariant", vendor: "x", type: "PLA",
+        parentId: String(parent._id),
+        temperatures: { nozzleRangeMin: 300 }, // inherits parent max 200 → inverted
+      }));
+      expect(res.status).toBe(400);
+    });
+
+    it("POST a variant whose lone min stays valid against the inherited parent max → 201", async () => {
+      const parent = await Filament.create({
+        name: "QA-RangeParentOk", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 260 },
+      });
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-RangeVariantOk", vendor: "x", type: "PLA",
+        parentId: String(parent._id),
+        temperatures: { nozzleRangeMin: 240 }, // <= inherited parent max 260
+      }));
+      expect(res.status).toBe(201);
+    });
+
+    it("PUT lowering a PARENT max below an inheriting child's own min → 400 (Codex P2 r5 on #577)", async () => {
+      const parent = await Filament.create({
+        name: "QA-CascadeParent", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 320 },
+      });
+      // Child overrides only its own min to 300 (valid while parent max is 320).
+      await Filament.create({
+        name: "QA-CascadeChild", vendor: "x", type: "PLA",
+        parentId: parent._id,
+        temperatures: { nozzleRangeMin: 300 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${parent._id}`, {
+          temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 200 }, // child inherits 200 → 300/200
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(parent._id) }) },
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/inheriting variant/i);
+    });
+
+    it("PUT lowering a PARENT max that stays valid for all children → 200", async () => {
+      const parent = await Filament.create({
+        name: "QA-CascadeParentOk", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 320 },
+      });
+      await Filament.create({
+        name: "QA-CascadeChildOk", vendor: "x", type: "PLA",
+        parentId: parent._id,
+        temperatures: { nozzleRangeMin: 210 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${parent._id}`, {
+          temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 250 }, // child 210 <= 250
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(parent._id) }) },
+      );
+      expect(res.status).toBe(200);
+    });
+
+    it("PUT rejects a Mongo update operator body ($set) → 400 (Codex P2 r5 on #577)", async () => {
+      // Operator bodies would slip past the field-level guards (range,
+      // parentId re-parent). The renderer never sends them; reject outright.
+      const created = await Filament.create({ name: "QA-OpReject", vendor: "x", type: "PLA" });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      for (const opBody of [
+        { $set: { "temperatures.nozzleRangeMin": 300, "temperatures.nozzleRangeMax": 200 } },
+        { $set: { parentId: "ffffffffffffffffffffffff" } },
+      ]) {
+        const res = await PUT(
+          jsonReq(`http://localhost/api/filaments/${created._id}`, opBody, "PUT"),
+          { params: Promise.resolve({ id: String(created._id) }) },
+        );
+        expect(res.status).toBe(400);
+      }
+    });
+
+    it("PUT re-parent only (no range field) that inverts the stored min against the NEW parent max → 400 (Codex P2 r4 on #577)", async () => {
+      const oldParent = await Filament.create({
+        name: "QA-RP-Old", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 320 },
+      });
+      const newParent = await Filament.create({
+        name: "QA-RP-New", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 200 },
+      });
+      // Variant overrides only its own min to 300 (valid under oldParent's 320).
+      const variant = await Filament.create({
+        name: "QA-RP-Variant", vendor: "x", type: "PLA",
+        parentId: oldParent._id,
+        temperatures: { nozzleRangeMin: 300 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${variant._id}`, {
+          parentId: String(newParent._id), // stored min 300 + new parent max 200 → inverted
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(variant._id) }) },
+      );
+      expect(res.status).toBe(400);
+    });
+  });
+
   // ─── #338: import endpoints 400 (not 500) on wrong content-type ────
 
   describe("GH #338 — import endpoints reject non-multipart with 400", () => {

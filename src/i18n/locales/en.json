@@ -1074,6 +1074,7 @@
   "form.standbyTemp": "Standby (dual extrusion)",
   "form.nozzleRangeMin": "Nozzle Range Min",
   "form.nozzleRangeMax": "Nozzle Range Max",
+  "form.error.nozzleRangeInverted": "Nozzle Range Min must be less than or equal to Nozzle Range Max.",
   "form.placeholder.safeMinimum": "Safe minimum",
   "form.placeholder.safeMaximum": "Safe maximum",
   "form.perBedTypeTemps": "Per-Bed-Type Temperatures",

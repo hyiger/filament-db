@@ -6,6 +6,11 @@ import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import {
+  isInvertedNozzleRange,
+  effectiveNozzleRangeForUpdate,
+  inheritNozzleRangeFromParent,
+} from "@/lib/temperatureRange";
 
 /**
  * GH #519: collect every cross-collection ref carried by a filament body and
@@ -361,6 +366,28 @@ export async function POST(request: NextRequest) {
 
     const refGuard = await assertFilamentBodyRefs(body);
     if (refGuard) return refGuard;
+
+    // #574: reject an inverted nozzle temperature range (min > max). The
+    // per-field 0–600 bounds don't catch a min above the max.
+    //
+    // Codex P2 r3 on #577: validate the EFFECTIVE range. A variant inherits
+    // each missing endpoint from its parent (resolveFilament: own ?? parent),
+    // so a variant that sets only `nozzleRangeMin: 300` while its parent has
+    // `nozzleRangeMax: 200` renders an inverted 300/200 range. Resolve the
+    // parent's endpoints into the variant's own before checking.
+    let createRange = effectiveNozzleRangeForUpdate(body, null);
+    if (body.parentId) {
+      const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null })
+        .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
+        .lean();
+      createRange = inheritNozzleRangeFromParent(createRange, parent?.temperatures);
+    }
+    if (isInvertedNozzleRange(createRange)) {
+      return errorResponse(
+        "Nozzle range minimum temperature must be less than or equal to the maximum",
+        400,
+      );
+    }
 
     const filament = await Filament.create(body);
     return NextResponse.json(filament, { status: 201 });

@@ -1074,6 +1074,7 @@
   "form.standbyTemp": "Standby (Dual-Extrusion)",
   "form.nozzleRangeMin": "Düsenbereich Min.",
   "form.nozzleRangeMax": "Düsenbereich Max.",
+  "form.error.nozzleRangeInverted": "Düsenbereich Min. muss kleiner oder gleich Düsenbereich Max. sein.",
   "form.placeholder.safeMinimum": "Sicheres Minimum",
   "form.placeholder.safeMaximum": "Sicheres Maximum",
   "form.perBedTypeTemps": "Temperaturen nach Betttyp",
