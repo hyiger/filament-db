@@ -317,6 +317,19 @@ export default function Home() {
     [filaments],
   );
 
+  // #575.1: the header type/vendor counts derive from the CURRENTLY-FETCHED
+  // set (which already reflects the search / type / vendor filters), not the
+  // global `types`/`vendors` dropdown options — otherwise filtering updates
+  // the filament count while "21 type(s) · 18 vendor(s)" stays frozen.
+  const filteredTypeCount = useMemo(
+    () => new Set(inventoryFilaments.map((f) => f.type)).size,
+    [inventoryFilaments],
+  );
+  const filteredVendorCount = useMemo(
+    () => new Set(inventoryFilaments.map((f) => f.vendor)).size,
+    [inventoryFilaments],
+  );
+
   // Group filaments: parents with their variants, standalone filaments as-is
   // Client-side quick filter (low stock / has spools / missing calibrations).
   // Applied before grouping so a parent whose variants are filtered out is
@@ -900,11 +913,22 @@ export default function Home() {
           className="text-sm text-gray-500 hover:text-gray-300 flex items-center gap-1 mb-3"
         >
           <span>{showStats ? "▾" : "▸"}</span>
-          <span>{t("filaments.stats.total", { count: inventoryFilaments.length })}</span>
+          {/* #573: the list collapses each parent's variants into one group,
+              so the headline count (parents excluded) disagrees with the
+              Dashboard/export totals that count every record. Surface both
+              numbers when variants exist instead of one unexplained figure. */}
+          <span>
+            {filaments.length > inventoryFilaments.length
+              ? t("filaments.stats.totalWithVariants", {
+                  count: inventoryFilaments.length,
+                  total: filaments.length,
+                })
+              : t("filaments.stats.total", { count: inventoryFilaments.length })}
+          </span>
           <span className="text-gray-600">·</span>
-          <span>{t("filaments.stats.typeCount", { count: types.length })}</span>
+          <span>{t("filaments.stats.typeCount", { count: filteredTypeCount })}</span>
           <span className="text-gray-600">·</span>
-          <span>{t("filaments.stats.vendorCount", { count: vendors.length })}</span>
+          <span>{t("filaments.stats.vendorCount", { count: filteredVendorCount })}</span>
         </button>
       )}
       {/* Statistics expansion — toggle lives on the stats text above; this
@@ -1118,6 +1142,11 @@ export default function Home() {
         <p className="text-gray-500">{t("common.loading")}</p>
       ) : filaments.length === 0 ? (
         <p className="text-gray-500">{t("filaments.noResults")}</p>
+      ) : groupedFilaments.length === 0 ? (
+        // #575.2: a client-side quick filter (e.g. Low stock) can empty the
+        // grouped list even though the fetch returned rows. Show a message
+        // instead of a bare header-only table.
+        <p className="text-gray-500">{t("filaments.noMatch")}</p>
       ) : (
         <div>
           {/* Expand-all / collapse-all — only worth showing when there's
