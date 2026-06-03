@@ -12,8 +12,10 @@
  *   - Clicking a *new* column always sets sortDir = "asc" (no
  *     per-column override — same rule for every column).
  *   - Clicking the *same* column toggles asc ↔ desc.
- *   - getSortValue uses -1 as the sentinel for null on numeric
- *     columns, so nulls sort *first* in asc and *last* in desc.
+ *   - getSortValue returns `null` for a missing numeric value, and the
+ *     comparator always sorts nulls/blanks LAST regardless of direction
+ *     (#575.6) — a filament with no cost shouldn't jump above the cheapest
+ *     real one in an ascending sort.
  */
 
 import type { FilamentSummary } from "@/types/filament";
@@ -30,7 +32,7 @@ export type SortableFilament = Pick<
   "name" | "vendor" | "type" | "cost" | "temperatures" | "spools" | "spoolWeight" | "netFilamentWeight" | "totalWeight"
 >;
 
-export function getSortValue(f: SortableFilament, key: SortKey): string | number {
+export function getSortValue(f: SortableFilament, key: SortKey): string | number | null {
   switch (key) {
     case "name":
       return f.name.toLowerCase();
@@ -39,27 +41,42 @@ export function getSortValue(f: SortableFilament, key: SortKey): string | number
     case "type":
       return f.type.toLowerCase();
     case "nozzle":
-      return f.temperatures.nozzle ?? -1;
+      return f.temperatures.nozzle ?? null;
     case "bed":
-      return f.temperatures.bed ?? -1;
+      return f.temperatures.bed ?? null;
     case "cost":
-      return f.cost ?? -1;
+      return f.cost ?? null;
     case "remaining":
-      return getRemainingPct(f as unknown as InventoryFilament) ?? -1;
+      return getRemainingPct(f as unknown as InventoryFilament) ?? null;
   }
+}
+
+/** A value that should sort to the very end (a missing numeric or a blank
+ * string), independent of sort direction. */
+function isBlank(v: string | number | null): boolean {
+  return v === null || v === "";
 }
 
 /**
  * Comparator factory. Returns a `(a, b) => number` that sorts
  * filaments by `key` in `dir` direction. Symmetric across every key
  * so the user gets the same first-click behaviour everywhere.
+ *
+ * Null/blank values always sink to the bottom regardless of `dir` (#575.6),
+ * so an ascending Cost sort lists the cheapest *real* price first and parks
+ * the un-priced filaments at the end.
  */
 export function compareFilaments(key: SortKey, dir: SortDir) {
   return (a: SortableFilament, b: SortableFilament): number => {
     const aVal = getSortValue(a, key);
     const bVal = getSortValue(b, key);
-    if (aVal < bVal) return dir === "asc" ? -1 : 1;
-    if (aVal > bVal) return dir === "asc" ? 1 : -1;
+    const aBlank = isBlank(aVal);
+    const bBlank = isBlank(bVal);
+    if (aBlank && bBlank) return 0;
+    if (aBlank) return 1; // a sinks below b
+    if (bBlank) return -1; // b sinks below a
+    if (aVal! < bVal!) return dir === "asc" ? -1 : 1;
+    if (aVal! > bVal!) return dir === "asc" ? 1 : -1;
     return 0;
   };
 }
