@@ -46,14 +46,14 @@ const fixtures: SortableFilament[] = [
   f({ name: "Bear", vendor: "BearCorp", type: "TPU", cost: 22, temperatures: { nozzle: 220, bed: 50 } }),
 ];
 
-describe("getSortValue — null-safe sentinel for numeric columns", () => {
-  it("returns -1 for null cost so nulls sort first in asc", () => {
-    expect(getSortValue(f({ cost: null }), "cost")).toBe(-1);
+describe("getSortValue — null for missing numeric columns", () => {
+  it("returns null for null cost so the comparator can sink it last", () => {
+    expect(getSortValue(f({ cost: null }), "cost")).toBe(null);
   });
 
-  it("returns -1 for null nozzle/bed temperatures (same shape as cost)", () => {
-    expect(getSortValue(f({ temperatures: { nozzle: null, bed: null } }), "nozzle")).toBe(-1);
-    expect(getSortValue(f({ temperatures: { nozzle: null, bed: null } }), "bed")).toBe(-1);
+  it("returns null for null nozzle/bed temperatures (same shape as cost)", () => {
+    expect(getSortValue(f({ temperatures: { nozzle: null, bed: null } }), "nozzle")).toBe(null);
+    expect(getSortValue(f({ temperatures: { nozzle: null, bed: null } }), "bed")).toBe(null);
   });
 
   it("lowercases text columns for case-insensitive sort", () => {
@@ -62,25 +62,25 @@ describe("getSortValue — null-safe sentinel for numeric columns", () => {
   });
 });
 
-describe("compareFilaments — Cost behaves identically to other numeric columns (GH #165)", () => {
-  it("Cost asc: nulls first (-1), then ascending price", () => {
+describe("compareFilaments — nulls always sort last, regardless of direction (#575.6)", () => {
+  it("Cost asc: ascending price first, nulls last", () => {
     const sorted = [...fixtures].sort(compareFilaments("cost", "asc"));
-    expect(sorted.map((x) => x.cost)).toEqual([null, 10, 22, 82]);
+    expect(sorted.map((x) => x.cost)).toEqual([10, 22, 82, null]);
   });
 
-  it("Cost desc: highest price first, nulls last", () => {
+  it("Cost desc: highest price first, nulls still last", () => {
     const sorted = [...fixtures].sort(compareFilaments("cost", "desc"));
     expect(sorted.map((x) => x.cost)).toEqual([82, 22, 10, null]);
   });
 
-  it("Nozzle asc behaves identically to Cost asc (nulls first)", () => {
+  it("Nozzle asc: ascending temp first, nulls last", () => {
     const sorted = [...fixtures].sort(compareFilaments("nozzle", "asc"));
-    expect(sorted.map((x) => x.temperatures.nozzle)).toEqual([null, 200, 220, 250]);
+    expect(sorted.map((x) => x.temperatures.nozzle)).toEqual([200, 220, 250, null]);
   });
 
-  it("Bed asc behaves identically to Cost asc (nulls first)", () => {
+  it("Bed asc: ascending temp first, nulls last", () => {
     const sorted = [...fixtures].sort(compareFilaments("bed", "asc"));
-    expect(sorted.map((x) => x.temperatures.bed)).toEqual([null, 50, 60, 90]);
+    expect(sorted.map((x) => x.temperatures.bed)).toEqual([50, 60, 90, null]);
   });
 
   it("Name asc sorts case-insensitively", () => {

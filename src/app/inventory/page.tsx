@@ -254,7 +254,13 @@ export default function InventoryPage() {
     if (!data) return { spoolCount: 0, locationCount: 0, totalGrams: 0 };
     return {
       spoolCount: data.totalSpools,
-      locationCount: data.groups.filter((g) => g.locationId != null).length,
+      // #575.5: count every group the inventory is spread across, including
+      // the synthetic "no location" bucket when it holds spools. Counting
+      // only real locations rendered "LOCATIONS 0" while 13 spools sat under
+      // "No location" — confusing, and out of step with the groups actually
+      // shown on the page. (Empty groups are never emitted by the
+      // aggregation, so this is exactly the number of buckets on screen.)
+      locationCount: data.groups.length,
       totalGrams: data.groups.reduce((s, g) => s + g.totalGrams, 0),
     };
   }, [data]);
