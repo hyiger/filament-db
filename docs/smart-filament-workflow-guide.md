@@ -301,8 +301,10 @@ editing, no hunting through notes.
 ![A filament's detail page in Filament DB](images/sfw-filamentdb-filament-detail.png)
 
 **Step 21 — Write an NFC tag for a spool.** To make a physical spool "smart", open that
-filament's detail page in Filament DB, place a blank NFC-V tag on the ACR1552U, and use
-**Export OPT** (OpenPrintTag) to encode the filament's properties to the tag. Peel the tag
+filament's detail page in Filament DB, place a blank NFC-V tag on the ACR1552U (the status
+pill turns green), and click **Write NFC** to encode the filament's properties to the tag.
+(The separate **Export OPT** action instead downloads an OpenPrintTag `.bin` file for use
+with external tag-writing software — it does not write to the reader.) Peel the tag
 and stick it on the spool — from then on any OpenPrintTag-compatible app or printer can
 read it instantly. The Spool Tracker on the same page records weight and remaining
 percentage; re-weigh a spool any time to keep it current.

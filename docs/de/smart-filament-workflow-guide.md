@@ -312,10 +312,12 @@ Notizen.
 
 **Schritt 21 — Einen NFC-Tag für eine Spule schreiben.** Um eine physische Spule „smart" zu machen,
 öffne die Detailseite dieses Filaments in Filament DB, lege einen leeren NFC-V-Tag auf den ACR1552U
-und nutze **OPT exportieren** (OpenPrintTag), um die Eigenschaften des Filaments auf den Tag zu
-schreiben. Ziehe den Tag ab und klebe ihn auf die Spule — von da an kann jede OpenPrintTag-
-kompatible App oder jeder kompatible Drucker ihn sofort lesen. Der Spulen-Tracker auf derselben
-Seite erfasst Gewicht und Restprozent; wiege eine Spule jederzeit neu, um sie aktuell zu halten.
+(die Status-Pille wird grün) und klicke **NFC beschreiben**, um die Eigenschaften des Filaments auf
+den Tag zu schreiben. (Die separate Aktion **OPT exportieren** lädt stattdessen eine OpenPrintTag-
+`.bin`-Datei für externe Tag-Schreibsoftware herunter — sie schreibt nicht auf den Reader.) Ziehe den
+Tag ab und klebe ihn auf die Spule — von da an kann jede OpenPrintTag-kompatible App oder jeder
+kompatible Drucker ihn sofort lesen. Der Spulen-Tracker auf derselben Seite erfasst Gewicht und
+Restprozent; wiege eine Spule jederzeit neu, um sie aktuell zu halten.
 
 **Schritt 22 — Tag nutzen und die Schleife schließen.** Der Tag reist mit der Spule. Tippe ihn auf
 den Reader (oder einen kompatiblen Drucker), und das Filament wird sofort identifiziert. Wenn eine

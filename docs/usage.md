@@ -47,11 +47,10 @@ Click any filament name in the table to see its full details:
 
 ## Deleting a Filament
 
-Deletion goes through the bulk-actions selection bar:
+There are two ways to delete:
 
-1. Tick the checkbox(es) next to one or more rows in the filament list.
-2. A red selection bar appears above the table with **"Delete {count}"**.
-3. Click it and confirm.
+- **From the filament list** — tick the checkbox(es) next to one or more rows. A red selection bar appears above the table with **"Delete {count}"**; click it and confirm.
+- **From the detail page** — click the red **Delete** button in the top-right action row (added in v1.29). It sends the same soft-delete, and is faster when the filament is already open.
 
 Deletion is **soft** — filaments move to the **trash** rather than disappearing for good. The selection bar includes a small "open trash" link so the destination is visible right when you delete.
 
@@ -212,7 +211,7 @@ Each bed type has:
 - **Material** -- the surface material (PEI, Textured PEI, Spring Steel, Glass, G10/FR4, BuildTak, PEX, Polypropylene, Other)
 - **Notes**
 
-Bed types are used in calibrations to store per-printer per-nozzle per-bed-type override values. They cannot be deleted if they are referenced by any filament calibrations.
+Bed types are used in calibrations to store per-printer per-nozzle per-bed-type override values. They cannot be deleted while they are referenced by any filament calibration, installed on any printer, or named in any filament's per-bed-type temperature table — the error message names what's blocking the delete.
 
 ---
 

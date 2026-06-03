@@ -348,7 +348,7 @@ Gehe zu **Einstellungen** und klicke auf **Druckbett-Typen**.
 
 - **Erstellen** — klicke „+ Druckbett-Typ hinzufügen", um eine Druckbett-Oberfläche zu definieren (z. B. „Smooth PEI", „Textured PEI", „G10/FR4").
 - **Bearbeiten** — klicke „Bearbeiten" neben einem Druckbett-Typ, um Name, Material oder Notizen zu ändern.
-- **Löschen** — klicke „Löschen", um einen Druckbett-Typ zu entfernen. Referenzieren Filament-Kalibrierungen ihn, wird das Löschen blockiert.
+- **Löschen** — klicke „Löschen", um einen Druckbett-Typ zu entfernen. Das Löschen wird blockiert, wenn eine Filament-Kalibrierung ihn referenziert, er auf einem Drucker installiert ist oder eine Filament-Pro-Druckbett-Typ-Temperaturtabelle ihn namentlich nennt.
 
 Sobald Druckbett-Typen definiert sind, zeigt der Kalibrierungs-Abschnitt im Filament-Formular einen Druckbett-Typ-Selektor, sodass du pro Druckbett-Typ Overrides für Temperaturen, Lüftereinstellungen und Kalibrierungswerte hinterlegen kannst.
 
@@ -565,9 +565,9 @@ Die **Trocknen nötig**-Liste des Dashboards zeigt Spulen, deren letzter Zyklus 
 Möchtest du einem Freund deinen exakten PLA- + PETG-Setup schicken?
 
 1. Navigiere zu **Teilen** (`/share`)
-2. Klicke auf **+ Neuen Shared Catalog**
-3. Wähle Filamente (Multi-Select), setze einen Titel, optional eine Beschreibung, optional Ablaufdatum
-4. Klicke auf **Veröffentlichen** — du bekommst eine Kurz-URL
+2. Gib unter **Neuen geteilten Katalog veröffentlichen** einen Titel ein (und optional eine Beschreibung)
+3. Wähle Filamente (Multi-Select)
+4. Klicke auf **Veröffentlichen** — du bekommst eine Kurz-URL (automatisch in die Zwischenablage kopiert) plus einen **Öffnen**-Link in der Katalogzeile
 
 Empfänger, die die URL öffnen, sehen eine schreibgeschützte Liste. Sie können per Multi-Select **Auswahl importieren** klicken, um die Filamente (plus referenzierte Düsen/Drucker/Druckbett-Typen) in ihre eigene Instanz zu ziehen. Gleichnamige Datensätze am Zielort werden wiederverwendet, sodass nichts doppelt entsteht.
 

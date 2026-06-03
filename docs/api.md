@@ -815,7 +815,7 @@ Soft-delete a printer by ID (sets `_deletedAt` timestamp). Cannot delete a print
 | `POST` | `/api/bed-types` | Create a new bed type |
 | `GET` | `/api/bed-types/:id` | Get a single bed type by ID |
 | `PUT` | `/api/bed-types/:id` | Update a bed type by ID |
-| `DELETE` | `/api/bed-types/:id` | Soft-delete a bed type (blocked if referenced by filament calibrations) |
+| `DELETE` | `/api/bed-types/:id` | Soft-delete a bed type (blocked if referenced by a filament calibration, installed on a printer, or named in a filament's per-bed-type temperatures) |
 
 ### GET /api/bed-types
 
@@ -833,7 +833,7 @@ Update a bed type. Send a JSON body with the fields to update.
 
 ### DELETE /api/bed-types/:id
 
-Soft-delete a bed type by ID (sets `_deletedAt` timestamp). Cannot delete a bed type that is referenced by filament calibrations. Returns `{ message: "Deleted" }`.
+Soft-delete a bed type by ID (sets `_deletedAt` timestamp). Returns `400` when the bed type is still in use — by any active filament's `calibrations[].bedType`, by any printer's `installedBedTypes`, or by name in any active filament's per-bed-type temperature table (`bedTypeTemps[].bedType`); the error message names what's blocking the delete. On success returns `{ message: "Deleted" }`.
 
 ---
 
@@ -1269,7 +1269,7 @@ A single request is capped at 10,000 rows by `parseCsv`; beyond that the request
 
 Mirror of `GET /api/filaments/export-csv` for spool inventory. Streams every active spool from every active filament as a single CSV with one row per spool. Columns include `filament`, `vendor`, `label`, `totalWeight`, `lotNumber`, `purchaseDate`, `openedDate`, `location`, and `retired`. Soft-deleted filaments and retired-only spools are excluded by default. Suitable for round-tripping through `POST /api/spools/import` when migrating between instances.
 
-Response headers: `Content-Type: text/csv` and `Content-Disposition: attachment; filename="spools-YYYY-MM-DD.csv"`.
+Response headers: `Content-Type: text/csv` and `Content-Disposition: attachment; filename="spools.csv"`.
 
 ---
 

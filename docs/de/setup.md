@@ -224,7 +224,7 @@ npm run dev                   # Entwicklung unter http://localhost:3456
 npm run build && npm start    # Produktion unter http://localhost:3000 (setze PORT=3456 für gleichen Port wie dev)
 ```
 
-`npm start` startet den Standalone-Server-Eintrittspunkt (`node .next/standalone/server.js`) — `next start` ist nicht mit dem `output: "standalone"`-Build-Modus kompatibel, den das Projekt für Docker- und Electron-Paketierung verwendet.
+`npm start` führt zuerst `start:prep` aus (kopiert `.next/static` und `public/` in die Standalone-Ausgabe) und startet dann den Standalone-Server-Eintrittspunkt (`node .next/standalone/server.js`) — `next start` ist nicht mit dem `output: "standalone"`-Build-Modus kompatibel, den das Projekt für Docker- und Electron-Paketierung verwendet.
 
 #### Desktop-App (aus Quellen)
 

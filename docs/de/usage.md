@@ -49,11 +49,10 @@ Klicke einen Filamentnamen in der Tabelle, um alle Details zu sehen:
 
 ## Filament löschen
 
-Löschen läuft über die Bulk-Aktionsleiste:
+Es gibt zwei Wege zu löschen:
 
-1. Hake eine oder mehrere Checkboxen neben Zeilen in der Filament-Liste an.
-2. Eine rote Auswahlleiste über der Tabelle erscheint mit **„{Anzahl} löschen"**.
-3. Klicke und bestätige.
+- **Aus der Filament-Liste** — hake eine oder mehrere Checkboxen neben Zeilen an. Eine rote Auswahlleiste über der Tabelle erscheint mit **„{Anzahl} löschen"**; klicke sie an und bestätige.
+- **Von der Detailseite** — klicke den roten **Löschen**-Button in der Aktionsleiste oben rechts (seit v1.29). Er löst dasselbe Soft-Delete aus und ist schneller, wenn das Filament bereits geöffnet ist.
 
 Das Löschen ist **soft** — Filamente landen im **Papierkorb**, statt endgültig zu verschwinden. Die Auswahlleiste enthält einen kleinen „Papierkorb öffnen"-Link, sodass das Ziel beim Löschen sichtbar ist.
 
@@ -214,7 +213,7 @@ Jeder Druckbett-Typ hat:
 - **Material** — die Oberflächenmaterial-Art (PEI, Textured PEI, Federstahl, Glas, G10/FR4, BuildTak, PEX, Polypropylen, Sonstiges)
 - **Notizen**
 
-Druckbett-Typen werden in Kalibrierungen verwendet, um Pro-Drucker-Pro-Düse-Pro-Druckbett-Typ-Override-Werte zu speichern. Sie können nicht gelöscht werden, wenn Filament-Kalibrierungen sie referenzieren.
+Druckbett-Typen werden in Kalibrierungen verwendet, um Pro-Drucker-Pro-Düse-Pro-Druckbett-Typ-Override-Werte zu speichern. Sie können nicht gelöscht werden, solange eine Filament-Kalibrierung sie referenziert, sie auf einem Drucker installiert sind oder eine Filament-Pro-Druckbett-Typ-Temperaturtabelle sie namentlich nennt — die Fehlermeldung zeigt, was das Löschen blockiert.
 
 ---
 

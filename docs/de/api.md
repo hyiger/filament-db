@@ -803,7 +803,7 @@ Soft-Delete eines Druckers per ID (setzt den Zeitstempel `_deletedAt`). Ein Druc
 | `POST` | `/api/bed-types` | Legt einen neuen Druckbett-Typ an |
 | `GET` | `/api/bed-types/:id` | Ruft einen einzelnen Druckbett-Typ per ID ab |
 | `PUT` | `/api/bed-types/:id` | Aktualisiert einen Druckbett-Typ per ID |
-| `DELETE` | `/api/bed-types/:id` | Soft-Delete eines Druckbett-Typs (blockiert, wenn von Filament-Kalibrierungen referenziert) |
+| `DELETE` | `/api/bed-types/:id` | Soft-Delete eines Druckbett-Typs (blockiert, wenn von einer Filament-Kalibrierung referenziert, auf einem Drucker installiert oder in einer Filament-Pro-Druckbett-Typ-Temperaturtabelle genannt) |
 
 ### GET /api/bed-types
 
@@ -821,7 +821,7 @@ Aktualisiert einen Druckbett-Typ. Sende einen JSON-Body mit den zu aktualisieren
 
 ### DELETE /api/bed-types/:id
 
-Soft-Delete eines Druckbett-Typs per ID (setzt den Zeitstempel `_deletedAt`). Ein Druckbett-Typ, der von Filament-Kalibrierungen referenziert wird, kann nicht gelöscht werden. Liefert `{ message: "Deleted" }`.
+Soft-Delete eines Druckbett-Typs per ID (setzt den Zeitstempel `_deletedAt`). Liefert `400`, wenn der Druckbett-Typ noch in Verwendung ist — durch `calibrations[].bedType` eines aktiven Filaments, durch `installedBedTypes` eines Druckers oder namentlich durch die Pro-Druckbett-Typ-Temperaturtabelle eines aktiven Filaments (`bedTypeTemps[].bedType`); die Fehlermeldung zeigt, was das Löschen blockiert. Bei Erfolg liefert er `{ message: "Deleted" }`.
 
 ---
 
@@ -1257,7 +1257,7 @@ Eine einzelne Anfrage ist von `parseCsv` auf 10.000 Zeilen gedeckelt; darüber w
 
 Pendant zu `GET /api/filaments/export-csv` für das Spulen-Inventar. Streamt jede aktive Spule aus jedem aktiven Filament als eine einzelne CSV mit einer Zeile pro Spule. Spalten umfassen `filament`, `vendor`, `label`, `totalWeight`, `lotNumber`, `purchaseDate`, `openedDate`, `location` und `retired`. Soft-gelöschte Filamente und ausschließlich ausgemusterte Spulen werden standardmäßig ausgeschlossen. Geeignet für Round-Trip über `POST /api/spools/import` bei der Migration zwischen Instanzen.
 
-Response-Header: `Content-Type: text/csv` und `Content-Disposition: attachment; filename="spools-YYYY-MM-DD.csv"`.
+Response-Header: `Content-Type: text/csv` und `Content-Disposition: attachment; filename="spools.csv"`.
 
 ---
 

@@ -346,7 +346,7 @@ Go to **Settings** and click **Bed Types**.
 
 - **Create** -- click + Add Bed Type to define a bed surface (e.g., "Smooth PEI", "Textured PEI", "G10/FR4").
 - **Edit** -- click Edit next to any bed type to change its name, material, or notes.
-- **Delete** -- click Delete to remove a bed type. If any filament calibrations reference it, deletion is blocked.
+- **Delete** -- click Delete to remove a bed type. Deletion is blocked if any filament calibration references it, it's installed on a printer, or a filament's per-bed-type temperature table names it.
 
 Once bed types are defined, the calibration section in the filament form shows a bed type selector so you can store per-bed-type overrides for temperatures, fan settings, and calibration values.
 
@@ -563,9 +563,9 @@ The dashboard's **Needs drying** list surfaces spools whose last cycle is older 
 Want to send a friend your exact PLA + PETG setup?
 
 1. Navigate to **Share** (`/share`)
-2. Click **+ New shared catalog**
-3. Pick filaments (multi-select), set a title, optional description, optional expiry
-4. Click **Publish** — you get back a short URL
+2. Under **Publish a new share**, enter a title (and an optional description)
+3. Pick filaments (multi-select)
+4. Click **Publish** — you get back a short URL (auto-copied to your clipboard), plus an **Open** link on the catalog row
 
 Recipients who open the URL see a read-only list. They can multi-select and click **Import selected** to pull the filaments (plus referenced nozzles/printers/bed-types) into their own instance. Same-named records on the destination are reused, so nothing gets duplicated.
 
