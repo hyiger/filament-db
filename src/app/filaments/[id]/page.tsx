@@ -1837,6 +1837,16 @@ function SpoolCard({
     setSaving(false);
   };
 
+  // #575.3: the weight field is the GROSS on-scale weight (spool + filament),
+  // so a value below the empty-spool weight clamps Remaining to 0. Surface a
+  // warning so an obvious typo (e.g. entering 100 g when the empty spool is
+  // 250 g) isn't silently swallowed.
+  const enteredWeight = parseFloat(weightInput);
+  const belowTare =
+    !isNaN(enteredWeight) &&
+    filament.spoolWeight != null &&
+    enteredWeight < filament.spoolWeight;
+
   const handleLabelSave = () => {
     if (labelInput !== spool.label) {
       onUpdateLabel(labelInput);
@@ -1917,6 +1927,7 @@ function SpoolCard({
 
       {/* Inline weight update */}
       {filament.spoolWeight != null && (
+        <>
         <div className="flex items-center gap-2 flex-wrap">
           <input
             type="number"
@@ -1956,6 +1967,15 @@ function SpoolCard({
             </button>
           )}
         </div>
+        {belowTare && (
+          <p className="mt-1 text-xs text-amber-600 dark:text-amber-400">
+            {t("detail.spool.belowTareWarning", {
+              weight: enteredWeight,
+              tare: filament.spoolWeight,
+            })}
+          </p>
+        )}
+        </>
       )}
 
       {/* Location picker + retire + more toggle */}
