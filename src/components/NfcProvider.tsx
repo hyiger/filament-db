@@ -243,9 +243,18 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
         setTagReadResult(result);
         setLoadedTagName(pickLoadedName(result));
         // #571: don't let a background scan (or the post-write read-back)
-        // pop the read modal over an in-flight / just-completed write. The
-        // decision was snapshotted when the raw event arrived (see the
-        // wrapper below) so a slow match can't let it leak past the window.
+        // pop the read modal over an in-flight / just-completed write.
+        // Suppress if the write window was active at EITHER the raw event's
+        // arrival OR now, at commit — two complementary races (Codex P2 on
+        // PR #580):
+        //   • arrival-time snapshot catches a read-back that arrives during
+        //     the window but whose slow match commits after it expires;
+        //   • commit-time check catches a scan that arrived BEFORE the write
+        //     (snapshot=false) but whose match commits mid-write.
+        const writeSuppressed =
+          eventTimeSuppressedRef.current ||
+          writingRef.current ||
+          Date.now() < suppressReadModalUntilRef.current;
         // GH #451: never steal focus from a user actively typing.
         // Auto-opening this modal mid-keystroke is jarring on shared
         // workshop machines where another user might be filling a form
@@ -253,7 +262,7 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
         // (loadedTagName above) still happens; the user can open the
         // dialog manually from the NFC status if they want to act on
         // the scan.
-        if (!eventTimeSuppressedRef.current && !isTypingTarget(document.activeElement)) {
+        if (!writeSuppressed && !isTypingTarget(document.activeElement)) {
           setDialogOpen(true);
         }
       },
