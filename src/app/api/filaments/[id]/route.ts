@@ -315,6 +315,35 @@ export async function PUT(
           400,
         );
       }
+
+      // Codex P2 r5 on #577: editing a PARENT's range can retroactively
+      // invert an inheriting variant's effective range — e.g. lowering this
+      // parent's max to 200 while a child overrides only its own min to 300
+      // leaves the child resolving to 300/200. The edited doc is a root
+      // parent when it has variants (no nested inheritance), so its new own
+      // range (`own`/`effRange`) is what children inherit. Reject the parent
+      // edit if it would invert any inheriting child. Only runs when a range
+      // field actually changed (rangeUpdate !== null).
+      if (rangeUpdate !== null) {
+        const children = await Filament.find({ parentId: id, _deletedAt: null })
+          .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
+          .lean();
+        for (const child of children) {
+          const childEffective = inheritNozzleRangeFromParent(
+            {
+              nozzleRangeMin: child.temperatures?.nozzleRangeMin ?? null,
+              nozzleRangeMax: child.temperatures?.nozzleRangeMax ?? null,
+            },
+            effRange,
+          );
+          if (isInvertedNozzleRange(childEffective)) {
+            return errorResponse(
+              "This nozzle range would create an inverted range on an inheriting variant — adjust the variant's override first",
+              400,
+            );
+          }
+        }
+      }
     }
 
     const filament = await Filament.findOneAndUpdate(

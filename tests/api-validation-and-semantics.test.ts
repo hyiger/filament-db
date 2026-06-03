@@ -223,6 +223,49 @@ describe("PR A — API validation & semantics", () => {
       expect(res.status).toBe(201);
     });
 
+    it("PUT lowering a PARENT max below an inheriting child's own min → 400 (Codex P2 r5 on #577)", async () => {
+      const parent = await Filament.create({
+        name: "QA-CascadeParent", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 320 },
+      });
+      // Child overrides only its own min to 300 (valid while parent max is 320).
+      await Filament.create({
+        name: "QA-CascadeChild", vendor: "x", type: "PLA",
+        parentId: parent._id,
+        temperatures: { nozzleRangeMin: 300 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${parent._id}`, {
+          temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 200 }, // child inherits 200 → 300/200
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(parent._id) }) },
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/inheriting variant/i);
+    });
+
+    it("PUT lowering a PARENT max that stays valid for all children → 200", async () => {
+      const parent = await Filament.create({
+        name: "QA-CascadeParentOk", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 320 },
+      });
+      await Filament.create({
+        name: "QA-CascadeChildOk", vendor: "x", type: "PLA",
+        parentId: parent._id,
+        temperatures: { nozzleRangeMin: 210 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${parent._id}`, {
+          temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 250 }, // child 210 <= 250
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(parent._id) }) },
+      );
+      expect(res.status).toBe(200);
+    });
+
     it("PUT rejects a Mongo update operator body ($set) → 400 (Codex P2 r5 on #577)", async () => {
       // Operator bodies would slip past the field-level guards (range,
       // parentId re-parent). The renderer never sends them; reject outright.
