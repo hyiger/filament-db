@@ -1,21 +1,60 @@
 "use client";
 
-import dynamic from "next/dynamic";
+import { useEffect, useRef } from "react";
+import type { Root } from "react-dom/client";
 import Link from "next/link";
 import "swagger-ui-react/swagger-ui.css";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
-const SwaggerUI = dynamic(() => import("swagger-ui-react"), { ssr: false });
-
 export default function ApiDocsPage() {
   const { t } = useTranslation();
+  const hostRef = useRef<HTMLDivElement>(null);
 
-  // GH #321: this page used to monkey-patch the global `console.error`
-  // to filter swagger-ui-react's legacy UNSAFE_* lifecycle warnings.
-  // That intercepted *every* console.error app-wide while /api-docs was
-  // open — other components, error boundaries, React's overlay. The
-  // swagger-ui warnings are harmless dev-only noise from a third-party
-  // dependency; we leave them rather than distort global logging.
+  // GH #321 / #554: swagger-ui-react's internal components (ModelCollapse,
+  // OperationContainer, …) still use the legacy UNSAFE_componentWillReceiveProps
+  // lifecycle. Under the app's React StrictMode (Next's default), React logs a
+  // "not recommended in strict mode" warning, and Next's dev overlay then
+  // surfaces it as a blocking "Issue" that makes /api-docs look broken during
+  // local/Electron QA.
+  //
+  // #321 removed the old global console.error monkey-patch (it intercepted ALL
+  // logging app-wide while this page was open) and deliberately left the
+  // warnings. Rather than re-patch console or disable StrictMode app-wide, we
+  // mount SwaggerUI in its OWN React root: a root created here is not a
+  // descendant of the StrictMode that Next wraps the app root in, so swagger's
+  // legacy lifecycles run without the strict-mode warning while the rest of the
+  // app keeps StrictMode. A fresh child node per effect run avoids React's
+  // "container already passed to createRoot" warning under StrictMode's dev
+  // double-invoke, and the unmount is deferred to a microtask to dodge the
+  // "synchronous unmount during render" warning when the effect tears down.
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const mount = document.createElement("div");
+    host.appendChild(mount);
+
+    let root: Root | null = null;
+    let cancelled = false;
+
+    Promise.all([import("react-dom/client"), import("swagger-ui-react")]).then(
+      ([{ createRoot }, { default: SwaggerUI }]) => {
+        if (cancelled) return;
+        root = createRoot(mount);
+        root.render(<SwaggerUI url="/api/openapi" />);
+      },
+    );
+
+    return () => {
+      cancelled = true;
+      const r = root;
+      root = null;
+      Promise.resolve().then(() => {
+        r?.unmount();
+        mount.remove();
+      });
+    };
+  }, []);
+
   return (
     <div className="min-h-screen">
       <div className="max-w-7xl mx-auto px-4 pt-6 pb-2">
@@ -25,9 +64,7 @@ export default function ApiDocsPage() {
           </Link>
         </div>
       </div>
-      <div className="swagger-wrapper">
-        <SwaggerUI url="/api/openapi" />
-      </div>
+      <div className="swagger-wrapper" ref={hostRef} />
       <style jsx global>{`
         .swagger-wrapper .swagger-ui .wrapper {
           max-width: 1400px;
