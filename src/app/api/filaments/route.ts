@@ -94,7 +94,29 @@ export async function GET(request: NextRequest) {
           // uses at read time. Without this the list drops inherited
           // multi-color data and the list-row swatch can't render it.
           // (Codex P2 on PR #482.)
-          pipeline: [{ $project: { calibrations: 1, optTags: 1, secondaryColors: 1 } }],
+          //
+          // GH #553: also carry the inheritable scalar fields (temperatures,
+          // cost, density, spoolWeight, netFilamentWeight) so the projection
+          // can resolve them server-side. The list page used to merge these
+          // client-side from the parent row, but a name search returns only
+          // the matching variant (its parent is filtered out by `$match`),
+          // so the variant rendered `—` for inherited Nozzle/Bed in search
+          // results. `$lookup` runs against the full collection regardless of
+          // the search filter, so the parent is always available here.
+          pipeline: [
+            {
+              $project: {
+                calibrations: 1,
+                optTags: 1,
+                secondaryColors: 1,
+                temperatures: 1,
+                cost: 1,
+                density: 1,
+                spoolWeight: 1,
+                netFilamentWeight: 1,
+              },
+            },
+          ],
         },
       },
       // Look up whether any non-deleted filament references this row as
@@ -148,11 +170,30 @@ export async function GET(request: NextRequest) {
               { $ifNull: [{ $arrayElemAt: ["$_parent.secondaryColors", 0] }, []] },
             ],
           },
-          cost: 1,
-          density: 1,
+          // GH #553: resolve inheritable scalars against the parent so a
+          // variant surfaced as a standalone search-result row still shows
+          // its effective cost/density/spool weights (the parent row is
+          // filtered out of search results). `$ifNull` collapses null +
+          // missing, matching resolveFilament's scalar-inheritance rule.
+          // `$_parent` holds 0-or-1 docs; `$arrayElemAt(…, 0)` is null when
+          // there's no parent, so standalones/parents are unaffected.
+          cost: { $ifNull: ["$cost", { $arrayElemAt: ["$_parent.cost", 0] }] },
+          density: {
+            $ifNull: ["$density", { $arrayElemAt: ["$_parent.density", 0] }],
+          },
           parentId: 1,
-          spoolWeight: 1,
-          netFilamentWeight: 1,
+          spoolWeight: {
+            $ifNull: [
+              "$spoolWeight",
+              { $arrayElemAt: ["$_parent.spoolWeight", 0] },
+            ],
+          },
+          netFilamentWeight: {
+            $ifNull: [
+              "$netFilamentWeight",
+              { $arrayElemAt: ["$_parent.netFilamentWeight", 0] },
+            ],
+          },
           totalWeight: 1,
           lowStockThreshold: 1,
           tdsUrl: 1,
@@ -176,8 +217,25 @@ export async function GET(request: NextRequest) {
               { $ifNull: [{ $arrayElemAt: ["$_parent.optTags", 0] }, []] },
             ],
           },
-          "temperatures.nozzle": 1,
-          "temperatures.bed": 1,
+          // GH #553: same parent-fallback as the scalars above. Built as a
+          // single computed object (not two `temperatures.x: 1` paths) both
+          // because mixing a computed field with dotted sub-paths of the
+          // same root is a projection-path collision, and so the variant
+          // inherits the parent's nozzle/bed temps in search-result rows.
+          temperatures: {
+            nozzle: {
+              $ifNull: [
+                "$temperatures.nozzle",
+                { $arrayElemAt: ["$_parent.temperatures.nozzle", 0] },
+              ],
+            },
+            bed: {
+              $ifNull: [
+                "$temperatures.bed",
+                { $arrayElemAt: ["$_parent.temperatures.bed", 0] },
+              ],
+            },
+          },
           hasCalibrations: {
             $or: [
               { $gt: [{ $size: { $ifNull: ["$calibrations", []] } }, 0] },
