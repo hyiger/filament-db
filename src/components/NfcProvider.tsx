@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { useNfc, type NfcStatus } from "@/hooks/useNfc";
 import type { DecodedOpenPrintTag } from "@/lib/openprinttag-decode";
 import {
@@ -179,6 +179,33 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
   // `dialogOpen && tagReadResult` — only a fresh scan re-opens it.
   const [loadedTagName, setLoadedTagName] = useState<string | null>(null);
 
+  // #571: while a Write NFC is in flight (and briefly after), the always-on
+  // background scanner can pop the read "Found in Database" modal —
+  // pre-empting the write and hiding the Write button's own progress/result.
+  // The main process also schedules a read-back ~2s after a successful write
+  // to refresh the tag data, which would otherwise auto-open the read modal
+  // right on top of the write. Suppress the auto-open during the write and
+  // for a short window after, so the user sees the write flow through. The
+  // pill still updates, and notifyTagWritten flips it to the just-written
+  // filament, so no information is lost. `writingRef` mirrors the latest
+  // `writing` value for the read handler's closure (which is created once,
+  // keyed on isElectron) without re-subscribing on every write.
+  const writingRef = useRef(writing);
+  const prevWritingRef = useRef(writing);
+  const suppressReadModalUntilRef = useRef(0);
+  useEffect(() => {
+    writingRef.current = writing;
+    if (writing && !prevWritingRef.current) {
+      // Write started — close any read modal the background scan opened.
+      setDialogOpen(false);
+    } else if (!writing && prevWritingRef.current) {
+      // Write finished — cover the main process's post-write read-back so it
+      // refreshes the pill without re-popping the read modal.
+      suppressReadModalUntilRef.current = Date.now() + 5000;
+    }
+    prevWritingRef.current = writing;
+  }, [writing]);
+
   // Clear the pill name as soon as the tag is lifted. We do NOT clear
   // tagReadResult here on purpose — the dialog may still be open and
   // the user may still want to act on its buttons.
@@ -198,6 +225,10 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
       onResult: (result) => {
         setTagReadResult(result);
         setLoadedTagName(pickLoadedName(result));
+        // #571: don't let a background scan (or the post-write read-back)
+        // pop the read modal over an in-flight / just-completed write.
+        const writeSuppressed =
+          writingRef.current || Date.now() < suppressReadModalUntilRef.current;
         // GH #451: never steal focus from a user actively typing.
         // Auto-opening this modal mid-keystroke is jarring on shared
         // workshop machines where another user might be filling a form
@@ -205,7 +236,7 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
         // (loadedTagName above) still happens; the user can open the
         // dialog manually from the NFC status if they want to act on
         // the scan.
-        if (!isTypingTarget(document.activeElement)) {
+        if (!writeSuppressed && !isTypingTarget(document.activeElement)) {
           setDialogOpen(true);
         }
       },
