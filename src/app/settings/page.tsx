@@ -1003,7 +1003,7 @@ export default function SettingsPage() {
                     setDeleteInput("");
                   }
                 }}
-                disabled={deleteInput !== "delete" || deleting}
+                disabled={deleteInput.trim() !== "DELETE" || deleting}
                 className="px-4 py-1.5 bg-red-700 text-white rounded text-sm hover:bg-red-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
               >
                 {deleting ? t("settings.deleting") : t("settings.confirmDelete")}
