@@ -194,6 +194,34 @@ describe("PR A — API validation & semantics", () => {
       );
       expect(res.status).toBe(400);
     });
+
+    it("POST a variant whose lone min inverts against the inherited parent max → 400 (Codex P2 r3 on #577)", async () => {
+      const parent = await Filament.create({
+        name: "QA-RangeParent", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 200 },
+      });
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-RangeVariant", vendor: "x", type: "PLA",
+        parentId: String(parent._id),
+        temperatures: { nozzleRangeMin: 300 }, // inherits parent max 200 → inverted
+      }));
+      expect(res.status).toBe(400);
+    });
+
+    it("POST a variant whose lone min stays valid against the inherited parent max → 201", async () => {
+      const parent = await Filament.create({
+        name: "QA-RangeParentOk", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 260 },
+      });
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-RangeVariantOk", vendor: "x", type: "PLA",
+        parentId: String(parent._id),
+        temperatures: { nozzleRangeMin: 240 }, // <= inherited parent max 260
+      }));
+      expect(res.status).toBe(201);
+    });
   });
 
   // ─── #338: import endpoints 400 (not 500) on wrong content-type ────

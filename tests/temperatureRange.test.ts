@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   isInvertedNozzleRange,
   effectiveNozzleRangeForUpdate,
+  inheritNozzleRangeFromParent,
 } from "@/lib/temperatureRange";
 
 describe("isInvertedNozzleRange", () => {
@@ -90,5 +91,36 @@ describe("effectiveNozzleRangeForUpdate (Codex P2 on #577)", () => {
     const eff = effectiveNozzleRangeForUpdate(body, { nozzleRangeMin: 200, nozzleRangeMax: 220 });
     expect(eff).toEqual({ nozzleRangeMin: 200, nozzleRangeMax: 260 });
     expect(isInvertedNozzleRange(eff)).toBe(false);
+  });
+});
+
+describe("inheritNozzleRangeFromParent (Codex P2 r3 on #577)", () => {
+  it("inherits the parent's max when the variant sets only min — and flags inversion", () => {
+    const eff = inheritNozzleRangeFromParent(
+      { nozzleRangeMin: 300, nozzleRangeMax: null },
+      { nozzleRangeMin: 180, nozzleRangeMax: 200 },
+    );
+    expect(eff).toEqual({ nozzleRangeMin: 300, nozzleRangeMax: 200 });
+    expect(isInvertedNozzleRange(eff)).toBe(true);
+  });
+
+  it("the variant's own endpoint wins over the parent's", () => {
+    const eff = inheritNozzleRangeFromParent(
+      { nozzleRangeMin: 240, nozzleRangeMax: 260 },
+      { nozzleRangeMin: 300, nozzleRangeMax: 100 },
+    );
+    expect(eff).toEqual({ nozzleRangeMin: 240, nozzleRangeMax: 260 });
+    expect(isInvertedNozzleRange(eff)).toBe(false);
+  });
+
+  it("a standalone (no parent) keeps its own range", () => {
+    expect(inheritNozzleRangeFromParent({ nozzleRangeMin: 200, nozzleRangeMax: 220 }, null)).toEqual({
+      nozzleRangeMin: 200,
+      nozzleRangeMax: 220,
+    });
+  });
+
+  it("returns null when neither own nor parent carries a range", () => {
+    expect(inheritNozzleRangeFromParent(null, null)).toBe(null);
   });
 });

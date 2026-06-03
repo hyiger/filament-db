@@ -104,3 +104,27 @@ export function effectiveNozzleRangeForUpdate(
     nozzleRangeMax: hasMax ? max : storedTemps?.nozzleRangeMax,
   };
 }
+
+/**
+ * Resolve a variant's effective nozzle range the way resolveFilament does —
+ * each endpoint falls back to the parent's when the variant's own is
+ * null/undefined (`variant ?? parent`). A variant that sets only one endpoint
+ * inherits the other, which can yield an inverted EFFECTIVE range (e.g. own
+ * min 300 + inherited parent max 200) the variant renders/exports even though
+ * its own body looked like a harmless partial range (Codex P2 r3 on #577).
+ *
+ * Pass the variant's own (post-update) range as `own` and the parent's range
+ * as `parent`; for a standalone (no parent) pass `parent = null` and the own
+ * range is returned unchanged.
+ */
+export function inheritNozzleRangeFromParent(
+  own: NozzleTemperatureRange | null,
+  parent: NozzleTemperatureRange | null | undefined,
+): NozzleTemperatureRange | null {
+  if (!own && !parent) return null;
+  const o = own ?? {};
+  return {
+    nozzleRangeMin: o.nozzleRangeMin ?? parent?.nozzleRangeMin ?? null,
+    nozzleRangeMax: o.nozzleRangeMax ?? parent?.nozzleRangeMax ?? null,
+  };
+}

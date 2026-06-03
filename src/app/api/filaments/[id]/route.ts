@@ -12,6 +12,7 @@ import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import {
   isInvertedNozzleRange,
   effectiveNozzleRangeForUpdate,
+  inheritNozzleRangeFromParent,
 } from "@/lib/temperatureRange";
 
 /**
@@ -263,13 +264,22 @@ export async function PUT(
     // endpoints (one indexed lookup on an edit) and validate the effective
     // result; `effectiveNozzleRangeForUpdate` understands all the shapes.
     const stored = await Filament.findOne({ _id: id, _deletedAt: null })
-      .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
+      .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax parentId")
       .lean();
-    if (
-      isInvertedNozzleRange(
-        effectiveNozzleRangeForUpdate(body, stored?.temperatures),
-      )
-    ) {
+    let updateRange = effectiveNozzleRangeForUpdate(body, stored?.temperatures);
+    // Codex P2 r3 on #577: a variant inherits missing endpoints from its
+    // parent, so resolve them in before checking (a lone min on the variant
+    // can invert against an inherited parent max). Honour a re-parent in the
+    // same PUT (body.parentId) over the stored parentId.
+    const effectiveParentId =
+      body.parentId !== undefined ? body.parentId : stored?.parentId;
+    if (effectiveParentId) {
+      const parent = await Filament.findOne({ _id: effectiveParentId, _deletedAt: null })
+        .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
+        .lean();
+      updateRange = inheritNozzleRangeFromParent(updateRange, parent?.temperatures);
+    }
+    if (isInvertedNozzleRange(updateRange)) {
       return errorResponse(
         "Nozzle range minimum temperature must be less than or equal to the maximum",
         400,
