@@ -146,6 +146,22 @@ export class NfcService extends EventEmitter {
         // throwing a scary error on every plug-in.
         if (firstStatus) {
           firstStatus = false;
+          // GH #572: PC/SC reports a tag already resting on the reader at
+          // connect time as this very first status event — which we skip to
+          // dodge the documented plug-in phantom (GH #230). For a tag that
+          // never moves there is no further state-change event, so the
+          // present-edge auto-read in main.ts never fires and the pill stays
+          // "Ready — place tag" while a tag is sitting there. We still skip
+          // (not flipping tagPresent here keeps the SAM-slot persistent
+          // phantom from blocking tag-removal detection), but signal that a
+          // card MIGHT be resting so the main process can do a one-shot,
+          // silent verification read: a real tag connects and reads (its
+          // connect emits an INUSE status event that flips tagPresent
+          // organically); a phantom/empty reader fails the connect and stays
+          // quiet.
+          if (isPresent) {
+            this.emit("presentAtConnect");
+          }
           return;
         }
 

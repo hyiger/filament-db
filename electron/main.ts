@@ -1251,53 +1251,87 @@ async function initNfc(): Promise<void> {
     let prevTagPresent = false;
     let lastAutoReadAt = 0;
     const AUTO_READ_COOLDOWN_MS = 4000;
+    // GH #572: small settle before the connect-time verification read so the
+    // reader/native layer is past its initial status burst.
+    const PRESENT_AT_CONNECT_VERIFY_MS = 700;
+
+    // Read the tag and route the result to the renderer. `silentOnError`
+    // suppresses the generic error path (used by the #572 connect-time
+    // verification, which must stay quiet when the reader is empty / holds a
+    // card the user didn't deliberately tap). Cooldown-guarded so a real
+    // placement and the verification can't double-read.
+    const triggerAutoRead = (silentOnError: boolean) => {
+      if (!nfcService) return;
+      const now = Date.now();
+      if (now - lastAutoReadAt < AUTO_READ_COOLDOWN_MS) return;
+      // Stamp BEFORE the async read to prevent concurrent triggers.
+      lastAutoReadAt = now;
+      nfcService.readTag()
+        .then((data) => {
+          mainWindow?.webContents.send("nfc-tag-detected", { data });
+        })
+        .catch((err) => {
+          // Phantom-present recovery: PC/SC said `isPresent=true` but
+          // the connect retries (up to ~6s) all failed — the present
+          // bit was a driver/SCARD_STATE_CHANGED artifact, not a real
+          // tag. Without this corrective clear, the renderer pill is
+          // stuck at "Tag detected" indefinitely (the reason behind
+          // this fix). The service handles the actual state mutation;
+          // we don't emit a separate nfc-tag-detected here because
+          // there is no tag to report on.
+          if (err.message?.includes("Cannot connect to tag")) {
+            nfcService?.clearPhantomPresence();
+            return;
+          }
+          // Blank/erased tags have no NDEF data — tell the renderer so it
+          // can show an "empty tag" indication instead of silently ignoring.
+          // Covers an erased NDEF-formatted tag (No NDEF TLV/record) and a
+          // never-formatted blank tag whose all-zero memory has no CC byte
+          // (#556) — both are the friendly "write me to initialize" case,
+          // not a raw error worth surfacing.
+          if (
+            err.message?.includes("No NDEF TLV") ||
+            err.message?.includes("No NDEF record") ||
+            err.message?.includes("Blank or unformatted")
+          ) {
+            mainWindow?.webContents.send("nfc-tag-detected", { empty: true });
+            return;
+          }
+          // #572: the connect-time verification must not surface an
+          // unexpected error (e.g. a non-OpenPrintTag card already sitting on
+          // the reader); only a deliberate present-edge read does.
+          if (silentOnError) return;
+          mainWindow?.webContents.send("nfc-tag-detected", { error: err.message });
+        });
+    };
+
     nfcService.on("statusChange", (status) => {
       mainWindow?.webContents.send("nfc-status-changed", status);
-
-      if (status.tagPresent && !prevTagPresent && nfcService) {
-        const now = Date.now();
-        if (now - lastAutoReadAt < AUTO_READ_COOLDOWN_MS) {
-          prevTagPresent = status.tagPresent;
-          return;
-        }
-        // Set timestamp BEFORE async read to prevent concurrent triggers
-        lastAutoReadAt = now;
-        nfcService.readTag()
-          .then((data) => {
-            mainWindow?.webContents.send("nfc-tag-detected", { data });
-          })
-          .catch((err) => {
-            // Phantom-present recovery: PC/SC said `isPresent=true` but
-            // the connect retries (up to ~6s) all failed — the present
-            // bit was a driver/SCARD_STATE_CHANGED artifact, not a real
-            // tag. Without this corrective clear, the renderer pill is
-            // stuck at "Tag detected" indefinitely (the reason behind
-            // this fix). The service handles the actual state mutation;
-            // we don't emit a separate nfc-tag-detected here because
-            // there is no tag to report on.
-            if (err.message?.includes("Cannot connect to tag")) {
-              nfcService?.clearPhantomPresence();
-              return;
-            }
-            // Blank/erased tags have no NDEF data — tell the renderer so it
-            // can show an "empty tag" indication instead of silently ignoring.
-            // Covers an erased NDEF-formatted tag (No NDEF TLV/record) and a
-            // never-formatted blank tag whose all-zero memory has no CC byte
-            // (#556) — both are the friendly "write me to initialize" case,
-            // not a raw error worth surfacing.
-            if (
-              err.message?.includes("No NDEF TLV") ||
-              err.message?.includes("No NDEF record") ||
-              err.message?.includes("Blank or unformatted")
-            ) {
-              mainWindow?.webContents.send("nfc-tag-detected", { empty: true });
-              return;
-            }
-            mainWindow?.webContents.send("nfc-tag-detected", { error: err.message });
-          });
+      if (status.tagPresent && !prevTagPresent) {
+        triggerAutoRead(false);
       }
       prevTagPresent = status.tagPresent;
     });
+
+    // GH #572: a tag already resting on the reader at connect time only
+    // produces the first (skipped) status event, so the present-edge path
+    // above never fires. The service emits `presentAtConnect` when that first
+    // event reported present — do a one-shot, silent verification read. A
+    // real tag connects and reads (its connect emits an INUSE status event
+    // that flips tagPresent), and the cooldown stops that from double-reading;
+    // an empty reader / phantom fails the connect and stays quiet. Gated on no
+    // tag already detected (a real placement during the settle wins).
+    nfcService.on("presentAtConnect", () => {
+      setTimeout(() => {
+        if (
+          nfcService?.getStatus().readerConnected &&
+          !nfcService.getStatus().tagPresent
+        ) {
+          triggerAutoRead(true);
+        }
+      }, PRESENT_AT_CONNECT_VERIFY_MS);
+    });
+
     nfcService.on("error", (err) => {
       console.error("NFC error:", err.message);
     });
