@@ -266,24 +266,41 @@ export async function PUT(
     const stored = await Filament.findOne({ _id: id, _deletedAt: null })
       .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax parentId")
       .lean();
-    let updateRange = effectiveNozzleRangeForUpdate(body, stored?.temperatures);
-    // Codex P2 r3 on #577: a variant inherits missing endpoints from its
-    // parent, so resolve them in before checking (a lone min on the variant
-    // can invert against an inherited parent max). Honour a re-parent in the
-    // same PUT (body.parentId) over the stored parentId.
+    const rangeUpdate = effectiveNozzleRangeForUpdate(body, stored?.temperatures);
+    // Codex P2 r3/r4 on #577: a variant inherits missing endpoints from its
+    // parent (resolveFilament: own ?? parent), so a lone min can invert
+    // against an inherited parent max. Two ways the effective range changes
+    // on edit: a range field is touched, OR the variant is re-parented (which
+    // swaps in a new parent's endpoints). Only validate when one of those
+    // happens — re-validating an unrelated edit could 400 on pre-existing
+    // data the user isn't touching.
     const effectiveParentId =
       body.parentId !== undefined ? body.parentId : stored?.parentId;
-    if (effectiveParentId) {
-      const parent = await Filament.findOne({ _id: effectiveParentId, _deletedAt: null })
-        .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
-        .lean();
-      updateRange = inheritNozzleRangeFromParent(updateRange, parent?.temperatures);
-    }
-    if (isInvertedNozzleRange(updateRange)) {
-      return errorResponse(
-        "Nozzle range minimum temperature must be less than or equal to the maximum",
-        400,
-      );
+    const reparenting =
+      body.parentId !== undefined &&
+      String(body.parentId ?? "") !== String(stored?.parentId ?? "");
+    if (rangeUpdate !== null || reparenting) {
+      // On a pure re-parent, seed the variant's own range from the stored
+      // endpoints (the request carries none) so an existing override is
+      // checked against the NEW parent (Codex P2 r4).
+      const own =
+        rangeUpdate ?? {
+          nozzleRangeMin: stored?.temperatures?.nozzleRangeMin ?? null,
+          nozzleRangeMax: stored?.temperatures?.nozzleRangeMax ?? null,
+        };
+      let effRange: ReturnType<typeof effectiveNozzleRangeForUpdate> = own;
+      if (effectiveParentId) {
+        const parent = await Filament.findOne({ _id: effectiveParentId, _deletedAt: null })
+          .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
+          .lean();
+        effRange = inheritNozzleRangeFromParent(own, parent?.temperatures);
+      }
+      if (isInvertedNozzleRange(effRange)) {
+        return errorResponse(
+          "Nozzle range minimum temperature must be less than or equal to the maximum",
+          400,
+        );
+      }
     }
 
     const filament = await Filament.findOneAndUpdate(

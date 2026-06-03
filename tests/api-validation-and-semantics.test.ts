@@ -222,6 +222,31 @@ describe("PR A — API validation & semantics", () => {
       }));
       expect(res.status).toBe(201);
     });
+
+    it("PUT re-parent only (no range field) that inverts the stored min against the NEW parent max → 400 (Codex P2 r4 on #577)", async () => {
+      const oldParent = await Filament.create({
+        name: "QA-RP-Old", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 320 },
+      });
+      const newParent = await Filament.create({
+        name: "QA-RP-New", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 200 },
+      });
+      // Variant overrides only its own min to 300 (valid under oldParent's 320).
+      const variant = await Filament.create({
+        name: "QA-RP-Variant", vendor: "x", type: "PLA",
+        parentId: oldParent._id,
+        temperatures: { nozzleRangeMin: 300 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${variant._id}`, {
+          parentId: String(newParent._id), // stored min 300 + new parent max 200 → inverted
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(variant._id) }) },
+      );
+      expect(res.status).toBe(400);
+    });
   });
 
   // ─── #338: import endpoints 400 (not 500) on wrong content-type ────
