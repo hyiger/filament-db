@@ -193,6 +193,13 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
   const writingRef = useRef(writing);
   const prevWritingRef = useRef(writing);
   const suppressReadModalUntilRef = useRef(0);
+  // Codex P2 on PR #580: the modal-suppression decision must be captured when
+  // the raw NFC event ARRIVES, not when createScanMatchHandler commits — the
+  // commit happens after an async /api/filaments/match round-trip, so a slow
+  // match could let the post-write read-back commit after the suppression
+  // window expired and re-pop the modal. This ref holds the decision snapshot
+  // taken synchronously on each raw event.
+  const eventTimeSuppressedRef = useRef(false);
   useEffect(() => {
     writingRef.current = writing;
     if (writing && !prevWritingRef.current) {
@@ -226,9 +233,9 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
         setTagReadResult(result);
         setLoadedTagName(pickLoadedName(result));
         // #571: don't let a background scan (or the post-write read-back)
-        // pop the read modal over an in-flight / just-completed write.
-        const writeSuppressed =
-          writingRef.current || Date.now() < suppressReadModalUntilRef.current;
+        // pop the read modal over an in-flight / just-completed write. The
+        // decision was snapshotted when the raw event arrived (see the
+        // wrapper below) so a slow match can't let it leak past the window.
         // GH #451: never steal focus from a user actively typing.
         // Auto-opening this modal mid-keystroke is jarring on shared
         // workshop machines where another user might be filling a form
@@ -236,13 +243,21 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
         // (loadedTagName above) still happens; the user can open the
         // dialog manually from the NFC status if they want to act on
         // the scan.
-        if (!writeSuppressed && !isTypingTarget(document.activeElement)) {
+        if (!eventTimeSuppressedRef.current && !isTypingTarget(document.activeElement)) {
           setDialogOpen(true);
         }
       },
       onPublish: publishScan,
     });
-    const unsub = api.onNfcTagRead(handler);
+    // Snapshot the write-suppression decision synchronously on the raw event,
+    // BEFORE createScanMatchHandler's async match work, then hand off. Only
+    // the latest event's handler commits (seq guard inside the sequencer), so
+    // the ref reliably reflects the committing event's arrival-time state.
+    const unsub = api.onNfcTagRead((raw) => {
+      eventTimeSuppressedRef.current =
+        writingRef.current || Date.now() < suppressReadModalUntilRef.current;
+      return handler(raw);
+    });
     return unsub;
   }, [isElectron]);
 
