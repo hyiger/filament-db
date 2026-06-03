@@ -17,6 +17,7 @@ import {
   stripArrangementTags,
   type ColorArrangement,
 } from "@/lib/filamentColors";
+import { isInvertedNozzleRange } from "@/lib/temperatureRange";
 
 interface BedTypeTempEntry {
   /** Client-only stable row id for React keys. Stripped before API submission. */
@@ -361,7 +362,25 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
   const [colorNameDropdownOpen, setColorNameDropdownOpen] = useState(false);
   const [colorNameHighlight, setColorNameHighlight] = useState(-1);
   const colorNameRef = useRef<HTMLDivElement>(null);
+  const nozzleRangeMaxRef = useRef<HTMLInputElement>(null);
   const [fetchErrors, setFetchErrors] = useState<string[]>([]);
+
+  // #574: a nozzle range with min > max is physically nonsense but each end
+  // only has its own 0–600 bound, so the browser accepted the inverted pair.
+  // Drive a cross-field native validity message off the max input so submit
+  // is blocked and the existing onInvalidCapture handler scrolls to the
+  // Temperatures section. Reactive so it clears the moment the user fixes it.
+  useEffect(() => {
+    const el = nozzleRangeMaxRef.current;
+    if (!el) return;
+    const min = parseFloat(form.temperatures.nozzleRangeMin);
+    const max = parseFloat(form.temperatures.nozzleRangeMax);
+    el.setCustomValidity(
+      isInvertedNozzleRange({ nozzleRangeMin: min, nozzleRangeMax: max })
+        ? t("form.error.nozzleRangeInverted")
+        : "",
+    );
+  }, [form.temperatures.nozzleRangeMin, form.temperatures.nozzleRangeMax, t]);
 
   const addFetchError = (label: string) =>
     setFetchErrors((prev) => (prev.includes(label) ? prev : [...prev, label]));
@@ -1734,6 +1753,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           <div>
             <label htmlFor="filament-temp-nozzle-range-max" className={labelClass}>{t("form.nozzleRangeMax")}</label>
             <input
+              ref={nozzleRangeMaxRef}
               id="filament-temp-nozzle-range-max"
               type="number"
               min="0"

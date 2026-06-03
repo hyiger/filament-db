@@ -6,6 +6,7 @@ import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { isInvertedNozzleRange } from "@/lib/temperatureRange";
 
 /**
  * GH #519: collect every cross-collection ref carried by a filament body and
@@ -361,6 +362,15 @@ export async function POST(request: NextRequest) {
 
     const refGuard = await assertFilamentBodyRefs(body);
     if (refGuard) return refGuard;
+
+    // #574: reject an inverted nozzle temperature range (min > max). The
+    // per-field 0–600 bounds don't catch a min above the max.
+    if (isInvertedNozzleRange(body.temperatures)) {
+      return errorResponse(
+        "Nozzle range minimum temperature must be less than or equal to the maximum",
+        400,
+      );
+    }
 
     const filament = await Filament.create(body);
     return NextResponse.json(filament, { status: 201 });

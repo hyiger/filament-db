@@ -9,6 +9,7 @@ import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assert
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
+import { isInvertedNozzleRange } from "@/lib/temperatureRange";
 
 /**
  * GH #261: clear every spool of a filament out of all printer AMS slots.
@@ -244,6 +245,16 @@ export async function PUT(
       if (printerGuard) return printerGuard;
       const bedGuard = await assertActiveRefs(BedType, Array.from(bedRefs), "referenced bed types");
       if (bedGuard) return bedGuard;
+    }
+
+    // #574: reject an inverted nozzle temperature range (min > max) on edit
+    // too. runValidators enforces the per-field 0–600 bounds but not the
+    // cross-field min ≤ max relationship.
+    if (isInvertedNozzleRange(body.temperatures)) {
+      return errorResponse(
+        "Nozzle range minimum temperature must be less than or equal to the maximum",
+        400,
+      );
     }
 
     const filament = await Filament.findOneAndUpdate(

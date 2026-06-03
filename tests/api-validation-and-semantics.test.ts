@@ -97,6 +97,51 @@ describe("PR A — API validation & semantics", () => {
     });
   });
 
+  // ─── #574: inverted nozzle temperature range (min > max) ───────────
+
+  describe("GH #574 — rejects an inverted nozzle temperature range", () => {
+    it("POST with nozzleRangeMin > nozzleRangeMax → 400", async () => {
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-InvRange", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 300, nozzleRangeMax: 200 },
+      }));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/less than or equal to the maximum/i);
+    });
+
+    it("POST with a normal range (min <= max) still passes", async () => {
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-OkRange", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 200, nozzleRangeMax: 220 },
+      }));
+      expect(res.status).toBe(201);
+    });
+
+    it("POST with only one end set is not treated as inverted", async () => {
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-PartialRange", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 300 },
+      }));
+      expect(res.status).toBe(201);
+    });
+
+    it("PUT with nozzleRangeMin > nozzleRangeMax → 400", async () => {
+      const created = await Filament.create({ name: "QA-PutInv", vendor: "x", type: "PLA" });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${created._id}`, {
+          temperatures: { nozzleRangeMin: 250, nozzleRangeMax: 100 },
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(created._id) }) },
+      );
+      expect(res.status).toBe(400);
+    });
+  });
+
   // ─── #338: import endpoints 400 (not 500) on wrong content-type ────
 
   describe("GH #338 — import endpoints reject non-multipart with 400", () => {
