@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { isInvertedNozzleRange } from "@/lib/temperatureRange";
+import {
+  isInvertedNozzleRange,
+  effectiveNozzleRangeForUpdate,
+} from "@/lib/temperatureRange";
 
 describe("isInvertedNozzleRange", () => {
   it("flags an inverted range (min > max) (#574)", () => {
@@ -30,5 +33,43 @@ describe("isInvertedNozzleRange", () => {
     expect(isInvertedNozzleRange({ nozzleRangeMin: NaN, nozzleRangeMax: 200 })).toBe(false);
     expect(isInvertedNozzleRange({ nozzleRangeMin: 300, nozzleRangeMax: NaN })).toBe(false);
     expect(isInvertedNozzleRange({ nozzleRangeMin: Infinity, nozzleRangeMax: 200 })).toBe(false);
+  });
+
+  it("coerces numeric strings before comparing (Codex P2 on #577)", () => {
+    expect(isInvertedNozzleRange({ nozzleRangeMin: "300", nozzleRangeMax: "200" })).toBe(true);
+    expect(isInvertedNozzleRange({ nozzleRangeMin: "200", nozzleRangeMax: "220" })).toBe(false);
+    expect(isInvertedNozzleRange({ nozzleRangeMin: "300", nozzleRangeMax: 200 })).toBe(true);
+    // Blank / non-numeric strings are treated as "no value", not 0.
+    expect(isInvertedNozzleRange({ nozzleRangeMin: "", nozzleRangeMax: "200" })).toBe(false);
+    expect(isInvertedNozzleRange({ nozzleRangeMin: "abc", nozzleRangeMax: "200" })).toBe(false);
+  });
+});
+
+describe("effectiveNozzleRangeForUpdate (Codex P2 on #577)", () => {
+  it("returns the body's full temperatures object (which replaces the subdoc)", () => {
+    const body = { temperatures: { nozzleRangeMin: 300, nozzleRangeMax: 200 } };
+    expect(effectiveNozzleRangeForUpdate(body, { nozzleRangeMin: 0, nozzleRangeMax: 999 })).toEqual({
+      nozzleRangeMin: 300,
+      nozzleRangeMax: 200,
+    });
+  });
+
+  it("merges a dotted partial min with the stored max", () => {
+    const body = { "temperatures.nozzleRangeMin": 300 };
+    const eff = effectiveNozzleRangeForUpdate(body, { nozzleRangeMin: 180, nozzleRangeMax: 200 });
+    expect(eff).toEqual({ nozzleRangeMin: 300, nozzleRangeMax: 200 });
+    expect(isInvertedNozzleRange(eff)).toBe(true);
+  });
+
+  it("merges a dotted partial max with the stored min", () => {
+    const body = { "temperatures.nozzleRangeMax": 100 };
+    const eff = effectiveNozzleRangeForUpdate(body, { nozzleRangeMin: 250, nozzleRangeMax: 260 });
+    expect(eff).toEqual({ nozzleRangeMin: 250, nozzleRangeMax: 100 });
+    expect(isInvertedNozzleRange(eff)).toBe(true);
+  });
+
+  it("returns null when the body touches no nozzle-range endpoint", () => {
+    expect(effectiveNozzleRangeForUpdate({ name: "x" }, { nozzleRangeMin: 1, nozzleRangeMax: 2 })).toBe(null);
+    expect(effectiveNozzleRangeForUpdate({ "temperatures.bed": 60 }, {})).toBe(null);
   });
 });

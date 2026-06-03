@@ -140,6 +140,45 @@ describe("PR A — API validation & semantics", () => {
       );
       expect(res.status).toBe(400);
     });
+
+    it("POST with numeric-STRING inverted range → 400 (Codex P2 on #577)", async () => {
+      const { POST } = await import("@/app/api/filaments/route");
+      const res = await POST(jsonReq("http://localhost/api/filaments", {
+        name: "QA-StrInv", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: "300", nozzleRangeMax: "200" },
+      }));
+      expect(res.status).toBe(400);
+    });
+
+    it("PUT dotted partial min that inverts against the STORED max → 400 (Codex P2 on #577)", async () => {
+      const created = await Filament.create({
+        name: "QA-DottedInv", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 200 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${created._id}`, {
+          "temperatures.nozzleRangeMin": 300, // stored max is 200 → inverted
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(created._id) }) },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("PUT dotted partial min that stays valid against the stored max → 200", async () => {
+      const created = await Filament.create({
+        name: "QA-DottedOk", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 260 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${created._id}`, {
+          "temperatures.nozzleRangeMin": 240, // <= stored max 260
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(created._id) }) },
+      );
+      expect(res.status).toBe(200);
+    });
   });
 
   // ─── #338: import endpoints 400 (not 500) on wrong content-type ────

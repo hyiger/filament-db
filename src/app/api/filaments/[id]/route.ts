@@ -9,7 +9,10 @@ import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assert
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
-import { isInvertedNozzleRange } from "@/lib/temperatureRange";
+import {
+  isInvertedNozzleRange,
+  effectiveNozzleRangeForUpdate,
+} from "@/lib/temperatureRange";
 
 /**
  * GH #261: clear every spool of a filament out of all printer AMS slots.
@@ -250,7 +253,25 @@ export async function PUT(
     // #574: reject an inverted nozzle temperature range (min > max) on edit
     // too. runValidators enforces the per-field 0–600 bounds but not the
     // cross-field min ≤ max relationship.
-    if (isInvertedNozzleRange(body.temperatures)) {
+    //
+    // Codex P2 on PR #577: validate the range that will ACTUALLY be persisted.
+    // A full `temperatures` object replaces the subdoc, but a dotted partial
+    // update (`{"temperatures.nozzleRangeMin": 300}`) merges into the stored
+    // doc — so a lone min can combine with a stored max into an inverted
+    // range that a body-only check would miss. Only fetch the stored doc for
+    // that dotted case (the common full-object path needs nothing extra).
+    let storedTemps: { nozzleRangeMin?: number | null; nozzleRangeMax?: number | null } | null | undefined;
+    if (
+      !(body.temperatures && typeof body.temperatures === "object") &&
+      (Object.prototype.hasOwnProperty.call(body, "temperatures.nozzleRangeMin") ||
+        Object.prototype.hasOwnProperty.call(body, "temperatures.nozzleRangeMax"))
+    ) {
+      const stored = await Filament.findOne({ _id: id, _deletedAt: null })
+        .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
+        .lean();
+      storedTemps = stored?.temperatures;
+    }
+    if (isInvertedNozzleRange(effectiveNozzleRangeForUpdate(body, storedTemps))) {
       return errorResponse(
         "Nozzle range minimum temperature must be less than or equal to the maximum",
         400,
