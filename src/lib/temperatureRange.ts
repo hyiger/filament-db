@@ -56,31 +56,51 @@ export function isInvertedNozzleRange(
  *     into the stored subdocument — so the effective range is the incoming
  *     endpoint combined with the stored other endpoint.
  *
- * Returns null when the body touches neither nozzle-range endpoint (no
+ * Either shape can also arrive wrapped in a Mongo `$set` operator
+ * (`{"$set":{"temperatures.nozzleRangeMin":300}}`), which the route forwards
+ * to `findOneAndUpdate` verbatim — so both the top level and `$set` are
+ * scanned (Codex P2 on PR #577, round 2).
+ *
+ * Returns null when the update touches neither nozzle-range endpoint (no
  * range change to validate).
  */
 export function effectiveNozzleRangeForUpdate(
   body: Record<string, unknown>,
   storedTemps: NozzleTemperatureRange | null | undefined,
 ): NozzleTemperatureRange | null {
-  if (body.temperatures && typeof body.temperatures === "object") {
-    return body.temperatures as NozzleTemperatureRange;
+  // The endpoints can live at the top level or inside `$set`; scan both.
+  const sources: Record<string, unknown>[] = [body];
+  if (body && typeof body.$set === "object" && body.$set !== null) {
+    sources.push(body.$set as Record<string, unknown>);
   }
-  const hasMin = Object.prototype.hasOwnProperty.call(
-    body,
-    "temperatures.nozzleRangeMin",
-  );
-  const hasMax = Object.prototype.hasOwnProperty.call(
-    body,
-    "temperatures.nozzleRangeMax",
-  );
+
+  // A full `temperatures` object (top-level or under $set) replaces the
+  // subdoc, so it fully determines the effective range.
+  for (const src of sources) {
+    if (src.temperatures && typeof src.temperatures === "object") {
+      return src.temperatures as NozzleTemperatureRange;
+    }
+  }
+
+  // Dotted-path endpoints merge into the stored subdoc; take whichever
+  // endpoints the update specifies, falling back to stored for the rest.
+  let hasMin = false;
+  let hasMax = false;
+  let min: number | string | null | undefined;
+  let max: number | string | null | undefined;
+  for (const src of sources) {
+    if (Object.prototype.hasOwnProperty.call(src, "temperatures.nozzleRangeMin")) {
+      hasMin = true;
+      min = src["temperatures.nozzleRangeMin"] as number | string | null;
+    }
+    if (Object.prototype.hasOwnProperty.call(src, "temperatures.nozzleRangeMax")) {
+      hasMax = true;
+      max = src["temperatures.nozzleRangeMax"] as number | string | null;
+    }
+  }
   if (!hasMin && !hasMax) return null;
   return {
-    nozzleRangeMin: hasMin
-      ? (body["temperatures.nozzleRangeMin"] as number | string | null)
-      : storedTemps?.nozzleRangeMin,
-    nozzleRangeMax: hasMax
-      ? (body["temperatures.nozzleRangeMax"] as number | string | null)
-      : storedTemps?.nozzleRangeMax,
+    nozzleRangeMin: hasMin ? min : storedTemps?.nozzleRangeMin,
+    nozzleRangeMax: hasMax ? max : storedTemps?.nozzleRangeMax,
   };
 }

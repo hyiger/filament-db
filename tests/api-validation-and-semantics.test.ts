@@ -179,6 +179,21 @@ describe("PR A — API validation & semantics", () => {
       );
       expect(res.status).toBe(200);
     });
+
+    it("PUT $set operator partial min that inverts against the STORED max → 400 (Codex P2 r2 on #577)", async () => {
+      const created = await Filament.create({
+        name: "QA-SetInv", vendor: "x", type: "PLA",
+        temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 200 },
+      });
+      const { PUT } = await import("@/app/api/filaments/[id]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${created._id}`, {
+          $set: { "temperatures.nozzleRangeMin": 300 }, // stored max 200 → inverted
+        }, "PUT"),
+        { params: Promise.resolve({ id: String(created._id) }) },
+      );
+      expect(res.status).toBe(400);
+    });
   });
 
   // ─── #338: import endpoints 400 (not 500) on wrong content-type ────

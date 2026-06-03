@@ -255,23 +255,21 @@ export async function PUT(
     // cross-field min ≤ max relationship.
     //
     // Codex P2 on PR #577: validate the range that will ACTUALLY be persisted.
-    // A full `temperatures` object replaces the subdoc, but a dotted partial
-    // update (`{"temperatures.nozzleRangeMin": 300}`) merges into the stored
-    // doc — so a lone min can combine with a stored max into an inverted
-    // range that a body-only check would miss. Only fetch the stored doc for
-    // that dotted case (the common full-object path needs nothing extra).
-    let storedTemps: { nozzleRangeMin?: number | null; nozzleRangeMax?: number | null } | null | undefined;
+    // The update can carry the endpoints as a full `temperatures` object
+    // (replaces the subdoc), as dotted paths (`temperatures.nozzleRangeMin`),
+    // or wrapped in `$set` — and a dotted/partial update merges into the
+    // stored subdoc, so a lone min can combine with a stored max into an
+    // inverted range a body-only check would miss. Always fetch the stored
+    // endpoints (one indexed lookup on an edit) and validate the effective
+    // result; `effectiveNozzleRangeForUpdate` understands all the shapes.
+    const stored = await Filament.findOne({ _id: id, _deletedAt: null })
+      .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
+      .lean();
     if (
-      !(body.temperatures && typeof body.temperatures === "object") &&
-      (Object.prototype.hasOwnProperty.call(body, "temperatures.nozzleRangeMin") ||
-        Object.prototype.hasOwnProperty.call(body, "temperatures.nozzleRangeMax"))
+      isInvertedNozzleRange(
+        effectiveNozzleRangeForUpdate(body, stored?.temperatures),
+      )
     ) {
-      const stored = await Filament.findOne({ _id: id, _deletedAt: null })
-        .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
-        .lean();
-      storedTemps = stored?.temperatures;
-    }
-    if (isInvertedNozzleRange(effectiveNozzleRangeForUpdate(body, storedTemps))) {
       return errorResponse(
         "Nozzle range minimum temperature must be less than or equal to the maximum",
         400,

@@ -72,4 +72,23 @@ describe("effectiveNozzleRangeForUpdate (Codex P2 on #577)", () => {
     expect(effectiveNozzleRangeForUpdate({ name: "x" }, { nozzleRangeMin: 1, nozzleRangeMax: 2 })).toBe(null);
     expect(effectiveNozzleRangeForUpdate({ "temperatures.bed": 60 }, {})).toBe(null);
   });
+
+  it("reads a full temperatures object nested under $set (round 2)", () => {
+    const body = { $set: { temperatures: { nozzleRangeMin: 300, nozzleRangeMax: 200 } } };
+    expect(isInvertedNozzleRange(effectiveNozzleRangeForUpdate(body, null))).toBe(true);
+  });
+
+  it("merges a dotted $set endpoint with the stored other endpoint (round 2)", () => {
+    const body = { $set: { "temperatures.nozzleRangeMin": 300 } };
+    const eff = effectiveNozzleRangeForUpdate(body, { nozzleRangeMin: 180, nozzleRangeMax: 200 });
+    expect(eff).toEqual({ nozzleRangeMin: 300, nozzleRangeMax: 200 });
+    expect(isInvertedNozzleRange(eff)).toBe(true);
+  });
+
+  it("a valid $set dotted endpoint against the stored other endpoint is not inverted", () => {
+    const body = { $set: { "temperatures.nozzleRangeMax": 260 } };
+    const eff = effectiveNozzleRangeForUpdate(body, { nozzleRangeMin: 200, nozzleRangeMax: 220 });
+    expect(eff).toEqual({ nozzleRangeMin: 200, nozzleRangeMax: 260 });
+    expect(isInvertedNozzleRange(eff)).toBe(false);
+  });
 });
