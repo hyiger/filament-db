@@ -582,6 +582,7 @@
   "nfc.readDialog.bambuReadOnly": "Bambu Lab spool (read-only)",
   "nfc.status.noReader": "No NFC reader",
   "nfc.status.readyPlaceTag": "Ready — place tag",
+  "nfc.status.readyPlaceTagHint": "Place a tag on the reader to read it — the result opens anywhere in the app. A tag already resting on the reader may need to be lifted and placed again.",
   "nfc.status.tagDetected": "Tag detected",
   "nfc.status.tagDetectedWithUid": "Tag detected ({uid})",
   "nfc.status.tagLoaded": "Loaded: {name}",

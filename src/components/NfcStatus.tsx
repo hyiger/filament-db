@@ -41,6 +41,13 @@ export default function NfcStatus() {
 
   let dotColor: string;
   let label: string;
+  // Optional plain-language hint appended to the tooltip for states whose
+  // short pill label can read as over-promising. GH #575 item 7: "Ready —
+  // place tag" implies a tag resting on the reader will be picked up, but a
+  // read only fires on a fresh placement (the arrival edge) — detection of an
+  // already-resting tag is tracked separately in #572. The hint sets accurate
+  // expectations without bloating the space-constrained pill.
+  let hint: string | null = null;
 
   if (errorHint) {
     // Error takes precedence over reader/tag state — the user needs to
@@ -53,6 +60,7 @@ export default function NfcStatus() {
   } else if (!status.tagPresent) {
     dotColor = "bg-yellow-400";
     label = t("nfc.status.readyPlaceTag");
+    hint = t("nfc.status.readyPlaceTagHint");
   } else {
     dotColor = "bg-green-400";
     // `loadedTagName` is gated on the reader's tagPresent state in the
@@ -72,7 +80,9 @@ export default function NfcStatus() {
   // explains what to do.
   const tooltip = status.lastError
     ? `${label}\n\n${status.lastError.message}`
-    : label;
+    : hint
+      ? `${label}\n\n${hint}`
+      : label;
 
   // GH #451 follow-up (Codex P2 on PR #475): when an NFC scan has
   // landed but the dialog is currently dismissed (either auto-suppressed

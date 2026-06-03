@@ -582,6 +582,7 @@
   "nfc.readDialog.bambuReadOnly": "Bambu Lab Spule (schreibgeschützt)",
   "nfc.status.noReader": "Kein NFC-Leser",
   "nfc.status.readyPlaceTag": "Bereit — Tag auflegen",
+  "nfc.status.readyPlaceTagHint": "Lege einen Tag auf den Reader, um ihn zu lesen — das Ergebnis erscheint überall in der App. Liegt bereits ein Tag auf dem Reader, hebe ihn an und lege ihn erneut auf.",
   "nfc.status.tagDetected": "Tag erkannt",
   "nfc.status.tagDetectedWithUid": "Tag erkannt ({uid})",
   "nfc.status.tagLoaded": "Geladen: {name}",
