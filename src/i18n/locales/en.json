@@ -288,6 +288,7 @@
   "share.linkCopied": "Link copied to clipboard",
   "share.existingShares": "Your shared catalogs",
   "share.noShares": "You haven't published any catalogs yet.",
+  "share.view": "Open",
   "share.viewCount": "{count} views",
   "share.unpublish": "Unpublish",
   "share.unpublished": "Unpublished",
