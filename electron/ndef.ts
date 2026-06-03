@@ -250,6 +250,15 @@ export function parseNdefFromTag(raw: Uint8Array): Uint8Array {
 
   // Validate CC
   if (raw[0] !== 0xe1) {
+    // A blank / unformatted tag reads back all-zero memory, so its CC byte
+    // is 0x00. That isn't a wrong-format error the user needs to debug —
+    // it's the "write me to initialize" case (the write path at
+    // nfc-service.ts treats block0[0] === 0x00 as blank too). Throw a
+    // distinguishable message so the caller can surface the friendly
+    // empty-tag UI instead of a raw "Invalid CC magic byte" dump (#556).
+    if (raw[0] === 0x00) {
+      throw new Error("Blank or unformatted NFC tag (no NDEF data)");
+    }
     throw new Error(`Invalid CC magic byte: 0x${raw[0].toString(16)}`);
   }
 

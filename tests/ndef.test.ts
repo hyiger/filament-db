@@ -192,9 +192,21 @@ describe("parseNdefFromTag", () => {
     expect(result[2]).toBe(0xcc);
   });
 
-  it("throws on invalid CC magic byte", () => {
-    const data = new Uint8Array([0x00, 0x40, 0x28, 0x01, 0x03, 0x05, 0xd2, 0x00, 0x00]);
+  it("throws on invalid CC magic byte (wrong-format, non-blank tag)", () => {
+    // A non-zero, non-0xE1 first byte is a genuinely wrong-format tag the
+    // user should see surfaced — distinct from the blank-tag case below.
+    const data = new Uint8Array([0xab, 0x40, 0x28, 0x01, 0x03, 0x05, 0xd2, 0x00, 0x00]);
     expect(() => parseNdefFromTag(data)).toThrow("Invalid CC magic byte");
+  });
+
+  it("throws a distinguishable blank-tag error for an all-zero (unformatted) tag (#556)", () => {
+    // A blank/unformatted tag reads back all-zero memory (CC byte 0x00).
+    // It must NOT surface as a raw "Invalid CC magic byte" dump — the
+    // main-process auto-read routes this distinguishable message to the
+    // friendly empty-tag UI instead.
+    const data = new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+    expect(() => parseNdefFromTag(data)).toThrow("Blank or unformatted");
+    expect(() => parseNdefFromTag(data)).not.toThrow("Invalid CC magic byte");
   });
 
   it("throws on too-short data", () => {

@@ -1281,7 +1281,15 @@ async function initNfc(): Promise<void> {
             }
             // Blank/erased tags have no NDEF data — tell the renderer so it
             // can show an "empty tag" indication instead of silently ignoring.
-            if (err.message?.includes("No NDEF TLV") || err.message?.includes("No NDEF record")) {
+            // Covers an erased NDEF-formatted tag (No NDEF TLV/record) and a
+            // never-formatted blank tag whose all-zero memory has no CC byte
+            // (#556) — both are the friendly "write me to initialize" case,
+            // not a raw error worth surfacing.
+            if (
+              err.message?.includes("No NDEF TLV") ||
+              err.message?.includes("No NDEF record") ||
+              err.message?.includes("Blank or unformatted")
+            ) {
               mainWindow?.webContents.send("nfc-tag-detected", { empty: true });
               return;
             }
