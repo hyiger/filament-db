@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import CopyButton from "@/components/CopyButton";
@@ -103,7 +104,7 @@ export default function ShareManagementPage() {
   };
 
   const handleUnpublish = async (slug: string) => {
-    if (!(await confirm({ message: t("share.unpublishConfirm"), destructive: true, confirmLabel: t("common.delete") }))) return;
+    if (!(await confirm({ message: t("share.unpublishConfirm"), destructive: true, confirmLabel: t("share.unpublish") }))) return;
     const res = await fetch(`/api/share/${slug}`, { method: "DELETE" });
     if (!res.ok) {
       toast(t("share.unpublishError"), "error");
@@ -183,7 +184,12 @@ export default function ShareManagementPage() {
                       <p className="text-xs text-gray-500 mt-1">{c.description}</p>
                     )}
                     <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
-                      <code className="text-gray-600 dark:text-gray-300">{url}</code>
+                      <Link
+                        href={`/share/${c.slug}`}
+                        className="text-blue-600 hover:underline dark:text-blue-400"
+                      >
+                        <code>{url}</code>
+                      </Link>
                       <CopyButton value={url} />
                     </div>
                     <p className="text-xs text-gray-500 mt-1">
@@ -191,13 +197,21 @@ export default function ShareManagementPage() {
                       {formatDate(c.createdAt, locale)}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleUnpublish(c.slug)}
-                    className="text-red-500 hover:text-red-700 text-sm"
-                  >
-                    {t("share.unpublish")}
-                  </button>
+                  <div className="flex flex-col items-end gap-2 shrink-0">
+                    <Link
+                      href={`/share/${c.slug}`}
+                      className="text-blue-600 hover:underline dark:text-blue-400 text-sm"
+                    >
+                      {t("share.view")}
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => handleUnpublish(c.slug)}
+                      className="text-red-500 hover:text-red-700 text-sm"
+                    >
+                      {t("share.unpublish")}
+                    </button>
+                  </div>
                 </li>
               );
             })}
