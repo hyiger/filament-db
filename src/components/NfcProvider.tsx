@@ -162,7 +162,7 @@ export function isTypingTarget(
 }
 
 export default function NfcProvider({ children }: { children: ReactNode }) {
-  const { isElectron, status, writing, error: writeError, writeTag } = useNfc();
+  const { isElectron, status, writing, error: writeError, writeTag: rawWriteTag } = useNfc();
   const [tagReadResult, setTagReadResult] = useState<NfcTagReadResult | null>(null);
   // The dialog and the "current scan" state used to be one flag —
   // dismissing the dialog cleared tagReadResult and the status pill
@@ -187,31 +187,41 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
   // right on top of the write. Suppress the auto-open during the write and
   // for a short window after, so the user sees the write flow through. The
   // pill still updates, and notifyTagWritten flips it to the just-written
-  // filament, so no information is lost. `writingRef` mirrors the latest
-  // `writing` value for the read handler's closure (which is created once,
-  // keyed on isElectron) without re-subscribing on every write.
-  const writingRef = useRef(writing);
-  const prevWritingRef = useRef(writing);
+  // filament, so no information is lost.
+  //
+  // `writingRef` is set SYNCHRONOUSLY in the wrapped writeTag below — not
+  // derived from the `writing` state via an effect. useNfc.writeTag only
+  // enqueues `writing=true`, so an effect-driven ref would lag a render; an
+  // nfc-tag-detected event arriving in that gap would snapshot a stale
+  // `false` and still auto-open the modal (Codex P2 on PR #580).
+  const writingRef = useRef(false);
   const suppressReadModalUntilRef = useRef(0);
-  // Codex P2 on PR #580: the modal-suppression decision must be captured when
-  // the raw NFC event ARRIVES, not when createScanMatchHandler commits — the
-  // commit happens after an async /api/filaments/match round-trip, so a slow
-  // match could let the post-write read-back commit after the suppression
-  // window expired and re-pop the modal. This ref holds the decision snapshot
-  // taken synchronously on each raw event.
+  // Codex P2 on PR #580 (round 1): the modal-suppression decision must be
+  // captured when the raw NFC event ARRIVES, not when createScanMatchHandler
+  // commits — the commit happens after an async /api/filaments/match
+  // round-trip, so a slow match could let the post-write read-back commit
+  // after the suppression window expired and re-pop the modal. This ref holds
+  // the decision snapshot taken synchronously on each raw event.
   const eventTimeSuppressedRef = useRef(false);
-  useEffect(() => {
-    writingRef.current = writing;
-    if (writing && !prevWritingRef.current) {
-      // Write started — close any read modal the background scan opened.
-      setDialogOpen(false);
-    } else if (!writing && prevWritingRef.current) {
-      // Write finished — cover the main process's post-write read-back so it
-      // refreshes the pill without re-popping the read modal.
-      suppressReadModalUntilRef.current = Date.now() + 5000;
-    }
-    prevWritingRef.current = writing;
-  }, [writing]);
+
+  // Wrap useNfc's writeTag so the write-in-progress flag flips synchronously,
+  // before any scan event can be observed, and the post-write suppression
+  // window is armed on completion.
+  const writeTag = useCallback(
+    async (payload: Uint8Array, productUrl?: string) => {
+      writingRef.current = true;
+      setDialogOpen(false); // hide any read modal the background scan opened
+      try {
+        await rawWriteTag(payload, productUrl);
+      } finally {
+        // Cover the main process's ~2s post-write read-back so it refreshes
+        // the pill without re-popping the read modal.
+        suppressReadModalUntilRef.current = Date.now() + 5000;
+        writingRef.current = false;
+      }
+    },
+    [rawWriteTag],
+  );
 
   // Clear the pill name as soon as the tag is lifted. We do NOT clear
   // tagReadResult here on purpose — the dialog may still be open and
