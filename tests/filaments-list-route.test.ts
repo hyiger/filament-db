@@ -331,6 +331,82 @@ describe("GET /api/filaments — projection to FilamentSummary", () => {
     expect(withoutTds.tdsUrl).toBeNull();
   });
 
+  it("resolves inherited scalars on a variant search-result row even when the parent is filtered out (#553)", async () => {
+    // A name search returns only the matching variant; its parent doesn't
+    // match the regex and is dropped by `$match`. The list page used to
+    // merge inherited nozzle/bed/cost/density/spool weights client-side
+    // from the parent row, so when the parent wasn't in the result set the
+    // variant rendered `—` for those columns. The aggregation now resolves
+    // them server-side via the `_parent` lookup, which runs against the
+    // full collection regardless of the search filter.
+    const Filament = (await import("@/models/Filament")).default;
+    const parent = await Filament.create({
+      name: "Galaxy PLA",
+      vendor: "Test",
+      type: "PLA",
+      temperatures: { nozzle: 215, bed: 60 },
+      cost: 25,
+      density: 1.24,
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+    });
+    await Filament.create({
+      name: "Galaxy PLA Red",
+      vendor: "Test",
+      type: "PLA",
+      parentId: parent._id,
+      color: "#ef4444",
+      // no own temperatures/cost/density/weights — must inherit from parent
+    });
+
+    // Search for the variant by name — the parent ("Galaxy PLA") does NOT
+    // match "Red", so it's excluded from the result set.
+    const res = await listFilaments(
+      new NextRequest("http://localhost/api/filaments?search=Red"),
+    );
+    const body = await res.json();
+    const variant = body.find((f: { name: string }) => f.name === "Galaxy PLA Red");
+    const parentRow = body.find((f: { name: string }) => f.name === "Galaxy PLA");
+
+    expect(parentRow).toBeUndefined(); // parent filtered out by the search
+    expect(variant).toBeDefined();
+    expect(variant.temperatures.nozzle).toBe(215);
+    expect(variant.temperatures.bed).toBe(60);
+    expect(variant.cost).toBe(25);
+    expect(variant.density).toBe(1.24);
+    expect(variant.spoolWeight).toBe(200);
+    expect(variant.netFilamentWeight).toBe(1000);
+  });
+
+  it("a variant's own scalar values still win over the parent's (#553)", async () => {
+    const Filament = (await import("@/models/Filament")).default;
+    const parent = await Filament.create({
+      name: "Override Galaxy",
+      vendor: "Test",
+      type: "PLA",
+      temperatures: { nozzle: 215, bed: 60 },
+      cost: 25,
+    });
+    await Filament.create({
+      name: "Override Galaxy Blue",
+      vendor: "Test",
+      type: "PLA",
+      parentId: parent._id,
+      color: "#3b82f6",
+      temperatures: { nozzle: 230, bed: 70 },
+      cost: 40,
+    });
+
+    const res = await listFilaments(
+      new NextRequest("http://localhost/api/filaments?search=Blue"),
+    );
+    const body = await res.json();
+    const variant = body.find((f: { name: string }) => f.name === "Override Galaxy Blue");
+    expect(variant.temperatures.nozzle).toBe(230);
+    expect(variant.temperatures.bed).toBe(70);
+    expect(variant.cost).toBe(40);
+  });
+
   it("preserves type/vendor filters across the projection", async () => {
     await seed();
     const res = await listFilaments(
