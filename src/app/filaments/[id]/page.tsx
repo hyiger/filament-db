@@ -515,6 +515,15 @@ function FilamentDetail() {
     }
   };
 
+  // Re-pull printers so every spool card's *derived* AMS-slot assignment
+  // (read off amsSlots[].spoolId, not stored on the spool) reflects the
+  // latest server state. Used after any write that the server may have
+  // reconciled slots for — slot assign/clear and spool retire (#558).
+  const refreshPrinters = async () => {
+    const pr = await fetch("/api/printers");
+    if (pr.ok) setPrinters(await pr.json());
+  };
+
   const handleUpdateSpool = async (
     spoolId: string,
     data: {
@@ -561,6 +570,13 @@ function FilamentDetail() {
       if (res.ok) {
         const updated = await res.json();
         setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
+        // #558: retiring a loaded spool clears it from its printer AMS slot
+        // server-side (the PUT handler calls assignSpoolToSlot(..., null)).
+        // The card's slot text is derived from `printers`, so refresh it or
+        // the stale "Printer slot: <printer> · <slot>" lingers until reload.
+        if (data.retired === true) {
+          await refreshPrinters();
+        }
         toast(t("detail.spool.updated"));
       } else {
         toast(t("detail.spool.updateFailed"), "error");
@@ -585,8 +601,7 @@ function FilamentDetail() {
         body: target ? JSON.stringify(target) : undefined,
       });
       if (res.ok) {
-        const pr = await fetch("/api/printers");
-        if (pr.ok) setPrinters(await pr.json());
+        await refreshPrinters();
         toast(t(target ? "detail.spool.slotAssigned" : "detail.spool.slotCleared"));
       } else {
         toast(t(target ? "detail.spool.slotAssignFailed" : "detail.spool.slotClearFailed"), "error");
