@@ -74,6 +74,14 @@ export async function DELETE(
     await dbConnect();
     const { id } = await params;
 
+    // Load the target up front: we need its name to match against the
+    // free-text `bedTypeTemps[].bedType` keys below, and a clean 404 when
+    // it's already gone.
+    const bedType = await BedType.findOne({ _id: id, _deletedAt: null }).lean();
+    if (!bedType) {
+      return errorResponse("Not found", 404);
+    }
+
     // Prevent deleting a bed type that is referenced by any filament calibration
     const referencingCount = await Filament.countDocuments({
       _deletedAt: null,
@@ -103,12 +111,32 @@ export async function DELETE(
       );
     }
 
-    const bedType = await BedType.findOneAndUpdate(
+    // GH #557: filaments also name a bed surface by NAME via the free-text
+    // `bedTypeTemps[].bedType` key — a slicer surface string that is
+    // deliberately NOT a BedType ObjectId ref (see the docblock in
+    // src/models/Filament.ts). Without this guard, deleting a catalog bed
+    // type whose name a filament's per-surface temperature table still uses
+    // silently removes a selectable surface that existing filament data
+    // depends on, leaving the user unable to re-pick it. Match by name to
+    // mirror the calibration/printer guards above and the nozzle/location
+    // delete guards elsewhere.
+    const bedTempCount = await Filament.countDocuments({
+      _deletedAt: null,
+      "bedTypeTemps.bedType": bedType.name,
+    });
+    if (bedTempCount > 0) {
+      return errorResponse(
+        `Cannot delete this bed type — ${bedTempCount} filament${bedTempCount !== 1 ? "s" : ""} reference${bedTempCount === 1 ? "s" : ""} "${bedType.name}" in per-bed-type temperatures. Remove it from those filaments first.`,
+        400,
+      );
+    }
+
+    const deleted = await BedType.findOneAndUpdate(
       { _id: id, _deletedAt: null },
       { _deletedAt: new Date() },
       { returnDocument: "after" }
     ).lean();
-    if (!bedType) {
+    if (!deleted) {
       return errorResponse("Not found", 404);
     }
     return NextResponse.json({ message: "Deleted" });

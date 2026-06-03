@@ -217,6 +217,59 @@ describe("/api/bed-types", () => {
       expect(res.status).toBe(200);
     });
 
+    it("refuses if an active filament names it in bedTypeTemps (#557)", async () => {
+      // `bedTypeTemps[].bedType` is a free-text slicer surface key, not a
+      // BedType ObjectId ref — but deleting a catalog bed type whose name a
+      // filament's per-surface temperature table still uses would silently
+      // remove a selectable surface that existing data depends on. The
+      // guard matches by name.
+      const bed = await BedType.create({ name: "Textured PEI", material: "PEI" });
+      await Filament.create({
+        name: "PETG",
+        vendor: "T",
+        type: "PETG",
+        bedTypeTemps: [{ bedType: "Textured PEI", temperature: 80 }],
+      });
+
+      const res = await deleteBedType(
+        new NextRequest(`http://localhost/api/bed-types/${bed._id}`, { method: "DELETE" }),
+        { params: Promise.resolve({ id: String(bed._id) }) },
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/per-bed-type temperatures/i);
+      // The bed type was not soft-deleted.
+      const after = await BedType.findById(bed._id);
+      expect(after._deletedAt).toBeNull();
+    });
+
+    it("ignores soft-deleted filaments and unrelated surface names in the bedTypeTemps check (#557)", async () => {
+      const bed = await BedType.create({ name: "Smooth PEI", material: "PEI" });
+      // Soft-deleted filament that names it — must not block.
+      await Filament.create({
+        name: "Trashed PETG",
+        vendor: "T",
+        type: "PETG",
+        bedTypeTemps: [{ bedType: "Smooth PEI", temperature: 70 }],
+        _deletedAt: new Date(),
+      });
+      // Active filament that names a DIFFERENT surface — must not block.
+      await Filament.create({
+        name: "Other PETG",
+        vendor: "T",
+        type: "PETG",
+        bedTypeTemps: [{ bedType: "Glass", temperature: 70 }],
+      });
+
+      const res = await deleteBedType(
+        new NextRequest(`http://localhost/api/bed-types/${bed._id}`, { method: "DELETE" }),
+        { params: Promise.resolve({ id: String(bed._id) }) },
+      );
+      expect(res.status).toBe(200);
+      const after = await BedType.findById(bed._id);
+      expect(after._deletedAt).not.toBeNull();
+    });
+
     it("soft-deletes a bed type with no references", async () => {
       const bed = await BedType.create({ name: "Standalone", material: "Glass" });
       const res = await deleteBedType(

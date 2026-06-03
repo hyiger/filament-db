@@ -2719,7 +2719,7 @@
             }
           },
           "400": {
-            "description": "Bed type is still referenced",
+            "description": "Bed type is still referenced by a filament calibration, a printer's installed bed types, or a filament's per-bed-type temperatures",
             "content": {
               "application/json": {
                 "schema": {
