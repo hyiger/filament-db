@@ -330,27 +330,41 @@ export default function Home() {
     };
     for (const f of inventoryFilaments) {
       if (isLowStock(f)) counts.lowStock++;
-      if ((f.spools?.length ?? 0) > 0) counts.hasSpools++;
       if (!f.hasCalibrations) counts.noCalibration++;
     }
+    // #552: "Has spools" is a presence check, not an inventory aggregate.
+    // A parent is excluded from `inventoryFilaments` because its gram/spool
+    // totals live on its variants — but a parent can still carry its OWN
+    // spool, and that roll is real. Count every filament with its own
+    // spool, parents included, so the chip badge matches the rows the
+    // filter renders (see the matching source switch in `visibleFilaments`).
+    counts.hasSpools = filaments.filter(
+      (f) => (f.spools?.length ?? 0) > 0,
+    ).length;
     return counts;
-  }, [inventoryFilaments]);
+  }, [filaments, inventoryFilaments]);
 
   const visibleFilaments = useMemo(() => {
     // The "all" view keeps parents in the dataset so the list renders
-    // them as grouping headers above their color variants. Every other
-    // filter resolves against `inventoryFilaments` instead — otherwise
-    // the chip badge (derived from `inventoryFilaments`, see
+    // them as grouping headers above their color variants.
+    if (quickFilter === "all") return filaments;
+    // #552: "Has spools" resolves against the full list (parents
+    // included) because a parent carrying its own spool genuinely has
+    // one — see the matching note in `quickFilterCounts`. Dropping it
+    // here is what made the filter return no rows for a parent whose
+    // only spool sat on the parent itself.
+    if (quickFilter === "hasSpools") {
+      return filaments.filter((f) => (f.spools?.length ?? 0) > 0);
+    }
+    // Every other filter resolves against `inventoryFilaments` instead —
+    // otherwise the chip badge (derived from `inventoryFilaments`, see
     // `quickFilterCounts` above) disagrees with the rendered row count
     // whenever a parent happens to match the filter criterion.
-    // `noCalibration` is the obvious case: a parent without
-    // calibrations would otherwise appear in the list even though the
-    // badge excluded it from the count. Codex round-1 P2 on PR #356.
-    const source = quickFilter === "all" ? filaments : inventoryFilaments;
-    if (quickFilter === "all") return source;
-    return source.filter((f) => {
+    // `noCalibration` is the obvious case: a parent without calibrations
+    // would otherwise appear in the list even though the badge excluded
+    // it from the count. Codex round-1 P2 on PR #356.
+    return inventoryFilaments.filter((f) => {
       if (quickFilter === "lowStock") return isLowStock(f);
-      if (quickFilter === "hasSpools") return (f.spools?.length ?? 0) > 0;
       if (quickFilter === "noCalibration") return !f.hasCalibrations;
       return true;
     });
