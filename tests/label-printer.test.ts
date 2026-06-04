@@ -106,6 +106,18 @@ d("listLabelPrinters (CUPS)", () => {
     expect(devices.some((x) => x.path.startsWith("socket://"))).toBe(false);
   });
 
+  it("restricts lpinfo to the usb backend so slow network discovery can't time out the IPC", async () => {
+    // Bare `lpinfo -v` also runs snmp/dnssd backends that probe the LAN and
+    // can block ~15s, blowing the list-devices IPC timeout. We only parse
+    // usb:// lines, so the call must scope to the usb scheme. (Regression
+    // guard for the 15s list-devices hang.)
+    h.state.execImpl = (cmd) => (cmd === "lpinfo" ? { stdout: `direct ${BROTHER_URI}\n` } : { stdout: "" });
+    await listLabelPrinters();
+    const lpinfo = h.state.execCalls.find((c) => c.cmd === "lpinfo");
+    expect(lpinfo).toBeTruthy();
+    expect(lpinfo!.args).toEqual(expect.arrayContaining(["--include-schemes", "usb"]));
+  });
+
   it("surfaces the managed queue as its underlying usb device (and dedups lpinfo)", async () => {
     h.state.execImpl = (cmd, args) => {
       if (cmd === "lpstat" && args[0] === "-v") {

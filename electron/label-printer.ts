@@ -131,8 +131,13 @@ async function listCupsPrinters(): Promise<LabelPrinterDevice[]> {
 
   // 2. Available USB printer devices not already installed as a queue.
   //    `lpinfo -v` lines look like: "direct usb://Brother/PT-P710BT?serial=…".
+  //    `--include-schemes usb` restricts it to the USB backend: a bare
+  //    `lpinfo -v` also runs the network backends (snmp/dnssd), which probe
+  //    the LAN and can block ~10-15s — enough to blow the IPC timeout (the
+  //    list-devices handler hung at 15s, GH follow-up). We only parse usb://
+  //    lines anyway, so this is both faster (~0.1s) and strictly correct.
   try {
-    const stdout = await runCupsTool("lpinfo", ["-v"]);
+    const stdout = await runCupsTool("lpinfo", ["--include-schemes", "usb", "-v"]);
     for (const line of stdout.split("\n")) {
       const m = line.trim().match(/^\w+\s+(usb:\/\/\S+)$/);
       if (!m) continue;
