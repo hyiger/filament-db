@@ -113,6 +113,7 @@ export default function SettingsPage() {
   const [formatting, setFormatting] = useState(false);
   const [formatResult, setFormatResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [showFormatConfirm, setShowFormatConfirm] = useState(false);
+  const [settingReadOnly, setSettingReadOnly] = useState(false);
 
   // Load config
   useEffect(() => {
@@ -184,6 +185,31 @@ export default function SettingsPage() {
       setFormatResult({ ok: false, message });
     } finally {
       setFormatting(false);
+    }
+  };
+
+  // GH #583: toggle the soft read-only flag on the tag (reversible — CC byte
+  // write-access bits; cleared by Erase or by "Make Writable").
+  const handleSetReadOnly = async (readOnly: boolean) => {
+    setSettingReadOnly(true);
+    setFormatResult(null);
+    try {
+      if (!window.electronAPI?.nfcSetReadOnly) {
+        throw new Error("NFC read-only not available — restart the app to load updated NFC support");
+      }
+      await window.electronAPI.nfcSetReadOnly(readOnly);
+      setFormatResult({
+        ok: true,
+        message: t(readOnly ? "settings.nfcReadOnlySet" : "settings.nfcWritableSet"),
+      });
+    } catch (err: unknown) {
+      const raw = err instanceof Error ? err.message : String(err);
+      let message = raw;
+      if (raw.includes("BAMBU_READ_ONLY")) message = t("settings.nfcReadOnlyBambu");
+      else if (raw.includes("TAG_NOT_FORMATTED")) message = t("settings.nfcReadOnlyNotFormatted");
+      setFormatResult({ ok: false, message });
+    } finally {
+      setSettingReadOnly(false);
     }
   };
 
@@ -922,6 +948,35 @@ export default function SettingsPage() {
               </div>
             </div>
           )}
+
+          {/* GH #583: soft read-only toggle. Reversible — "Make Writable" or
+              Erase clears it. Honored by the Write NFC flow on the filament
+              detail page. */}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => handleSetReadOnly(true)}
+              disabled={settingReadOnly || formatting || !nfcStatus.tagPresent}
+              className="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white rounded text-sm hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+              </svg>
+              {settingReadOnly ? t("settings.nfcReadOnlyWorking") : t("settings.nfcSetReadOnly")}
+            </button>
+            <button
+              onClick={() => handleSetReadOnly(false)}
+              disabled={settingReadOnly || formatting || !nfcStatus.tagPresent}
+              className="px-3 py-1.5 text-gray-600 dark:text-gray-300 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 10.5V6.75a4.5 4.5 0 1 1 9 0v3.75M3.75 21.75h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H3.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+              </svg>
+              {t("settings.nfcMakeWritable")}
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+            {t("settings.nfcReadOnlyHint")}
+          </p>
 
           {formatResult && (
             <div className={`mt-3 text-sm px-3 py-2 rounded ${

@@ -1020,6 +1020,18 @@ ipcMain.handle("nfc-format-tag", async (event) => {
   return { success: true };
 });
 
+// GH #583: set/clear the soft read-only flag on an OpenPrintTag (reversible —
+// CC byte write-access bits, cleared by Erase or by setReadOnly(false)).
+ipcMain.handle("nfc-set-readonly", async (event, readOnly: unknown) => {
+  assertTrustedSender(event, "nfc-set-readonly");
+  if (!nfcService) throw new Error("NFC not initialized");
+  if (typeof readOnly !== "boolean") {
+    throw new Error("nfc-set-readonly: readOnly must be a boolean");
+  }
+  await withIpcTimeout(() => nfcService!.setReadOnly(readOnly), "nfc-set-readonly");
+  return { success: true };
+});
+
 // ── Label printer (Brother PT-P710BT) ──
 // Transport-only; the byte stream is built in the renderer via
 // src/lib/labelEncoder.ts + labelBitmap.ts. Main owns serialport

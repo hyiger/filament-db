@@ -363,7 +363,7 @@ function FilamentDetail() {
   // Returns true if the caller should proceed with the write.
   const ensureTagWritable = useCallback(
     async ({ confirmOverwrite = false }: { confirmOverwrite?: boolean } = {}): Promise<boolean> => {
-      type ProbedTag = { tagSource?: string; materialName?: string; brandName?: string; spoolUid?: string };
+      type ProbedTag = { tagSource?: string; materialName?: string; brandName?: string; spoolUid?: string; readOnly?: boolean };
       let existing: ProbedTag | null | undefined;
       // The tag carries a valid NDEF message but no OpenPrintTag record (e.g.
       // a URL/text/contact tag) — it's NOT blank, just not ours.
@@ -393,6 +393,14 @@ function FilamentDetail() {
       // Bambu Lab tags are read-only — refuse on every write path.
       if (existing?.tagSource === "bambu") {
         toast(t("detail.nfc.bambuReadOnly"), "error");
+        return false;
+      }
+
+      // GH #583: honor a soft read-only OpenPrintTag — refuse the write and
+      // point the user at Erase / Make Writable. (Bambu is handled above with
+      // its own message since it can't be made writable.)
+      if (existing?.readOnly) {
+        toast(t("detail.nfc.readOnlyRefuse"), "error");
         return false;
       }
 

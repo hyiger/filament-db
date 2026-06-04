@@ -76,6 +76,10 @@ export interface DecodedOpenPrintTag {
   aux?: Record<string, unknown>;
   // Tag source identification
   tagSource?: "openprinttag" | "bambu";
+  /** GH #583: soft read-only state. For OpenPrintTags this reflects the
+   *  NFC-Forum Type 5 CC byte write-access bits (reversible via Erase /
+   *  "Make Writable"); Bambu tags are always read-only. */
+  readOnly?: boolean;
   // Bambu-specific fields
   productionDate?: string;   // "YYYY_MM_DD_HH_MM"
   filamentLength?: number;   // meters

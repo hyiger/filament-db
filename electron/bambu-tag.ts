@@ -196,6 +196,8 @@ export function bambuToDecodedTag(bambu: BambuTagData): DecodedOpenPrintTag {
     meta: {},
     main: {},
     tagSource: "bambu",
+    // Bambu tags are MIFARE Classic, RSA-signed and inherently read-only.
+    readOnly: true,
     brandName: "Bambu Lab",
     materialName,
     materialType,

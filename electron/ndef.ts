@@ -234,6 +234,38 @@ export function wrapNdefForTag(
   return tagMemory;
 }
 
+// ── Read-only (soft lock) via the NFC-Forum Type 5 CC byte ──────────
+//
+// GH #583: a "read-only" tag here is a REVERSIBLE soft lock, not a permanent
+// hardware lock. The NFC-Forum Type 5 Capability Container byte 1 encodes the
+// access conditions; the low two bits (b1 b0) are the write-access condition:
+//   00b = write granted (read/write)   →  byte1 = 0x40 (the value formatTag /
+//                                          wrapNdefForTag write by default)
+//   11b = write not granted (read-only) →  byte1 = 0x43
+// The read-access bits (b3 b2) are left untouched, so a read-only tag still
+// reads fine in every slicer/reader. The app honors this bit on write/format
+// (refuses to overwrite) and Erase rewrites a fresh 0x40 CC, clearing it — so
+// the lock is always escapable. Other tools that ignore the CC could still
+// write; this is a guard against accidental overwrites, not tamper-proofing.
+
+/** The two CC-byte-1 bits that carry the write-access condition. */
+const CC_WRITE_ACCESS_MASK = 0x03;
+
+/** True if the NFC-Forum Type 5 CC byte 1 marks the tag write-protected. */
+export function isCcByteReadOnly(ccByte1: number): boolean {
+  return (ccByte1 & CC_WRITE_ACCESS_MASK) === CC_WRITE_ACCESS_MASK;
+}
+
+/**
+ * Return a new CC byte 1 with the write-access condition set to read-only
+ * (`readOnly = true`) or read/write (`readOnly = false`). All other bits
+ * (version, read-access) are preserved. Result is masked to a byte.
+ */
+export function setCcByteReadOnly(ccByte1: number, readOnly: boolean): number {
+  const base = ccByte1 & 0xff;
+  return (readOnly ? base | CC_WRITE_ACCESS_MASK : base & ~CC_WRITE_ACCESS_MASK) & 0xff;
+}
+
 // ── NDEF parsing (for reading from tag) ─────────────────────────────
 
 /**

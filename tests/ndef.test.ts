@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { wrapNdefForTag, parseNdefFromTag } from "../electron/ndef";
+import { wrapNdefForTag, parseNdefFromTag, isCcByteReadOnly, setCcByteReadOnly } from "../electron/ndef";
 
 const MIME_TYPE = "application/vnd.openprinttag";
 
@@ -381,5 +381,60 @@ describe("parseNdefFromTag", () => {
     expect(result[0]).toBe(0x42);
     expect(result[299]).toBe(0x99);
     expect(result.length).toBe(300);
+  });
+});
+
+describe("CC byte read-only helpers (GH #583)", () => {
+  describe("isCcByteReadOnly", () => {
+    it("treats the default 0x40 read/write CC byte as writable", () => {
+      // 0x40 = version 1.0, read/write — what wrapNdefForTag/formatTag emit.
+      expect(isCcByteReadOnly(0x40)).toBe(false);
+    });
+
+    it("treats 0x43 (write-access bits set) as read-only", () => {
+      expect(isCcByteReadOnly(0x43)).toBe(true);
+    });
+
+    it("treats a blank 0x00 CC byte as writable (not read-only)", () => {
+      expect(isCcByteReadOnly(0x00)).toBe(false);
+    });
+
+    it("only inspects the low two write-access bits", () => {
+      // Read-access bits (0x0C) set but write bits clear → still writable.
+      expect(isCcByteReadOnly(0x4c)).toBe(false);
+      // Both write bits must be set; a single bit (0x01/0x02) is not read-only.
+      expect(isCcByteReadOnly(0x41)).toBe(false);
+      expect(isCcByteReadOnly(0x42)).toBe(false);
+    });
+  });
+
+  describe("setCcByteReadOnly", () => {
+    it("sets the write-access bits when locking, preserving other bits", () => {
+      expect(setCcByteReadOnly(0x40, true)).toBe(0x43);
+    });
+
+    it("clears the write-access bits when unlocking, preserving other bits", () => {
+      expect(setCcByteReadOnly(0x43, false)).toBe(0x40);
+    });
+
+    it("is idempotent and round-trips", () => {
+      const locked = setCcByteReadOnly(0x40, true);
+      expect(setCcByteReadOnly(locked, true)).toBe(locked); // already locked
+      const unlocked = setCcByteReadOnly(locked, false);
+      expect(unlocked).toBe(0x40);
+      expect(isCcByteReadOnly(unlocked)).toBe(false);
+      expect(isCcByteReadOnly(locked)).toBe(true);
+    });
+
+    it("preserves unrelated bits (e.g. read-access / version nibble)", () => {
+      // 0x4c → lock → 0x4f (write bits set), unlock → 0x4c again.
+      expect(setCcByteReadOnly(0x4c, true)).toBe(0x4f);
+      expect(setCcByteReadOnly(0x4f, false)).toBe(0x4c);
+    });
+
+    it("masks the result to a single byte", () => {
+      expect(setCcByteReadOnly(0x40, true)).toBeLessThanOrEqual(0xff);
+      expect(setCcByteReadOnly(0xff, false)).toBe(0xfc);
+    });
   });
 });

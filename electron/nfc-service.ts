@@ -13,7 +13,7 @@
 
 import { EventEmitter } from "events";
 import pcsclite from "@pokusew/pcsclite";
-import { wrapNdefForTag, parseNdefFromTag } from "./ndef";
+import { wrapNdefForTag, parseNdefFromTag, isCcByteReadOnly, setCcByteReadOnly } from "./ndef";
 import { decodeOpenPrintTagBinary, type DecodedOpenPrintTag } from "../src/lib/openprinttag-decode";
 import { deriveBambuKeys, parseBambuBlocks, bambuToDecodedTag } from "./bambu-tag";
 import {
@@ -596,7 +596,11 @@ export class NfcService extends EventEmitter {
     }
 
     const cborPayload = parseNdefFromTag(allData);
-    return decodeOpenPrintTagBinary(cborPayload);
+    const decoded = decodeOpenPrintTagBinary(cborPayload);
+    // GH #583: surface the soft read-only state (CC byte 1 write-access bits)
+    // so the renderer can show a lock badge and the write probe can refuse it.
+    decoded.readOnly = isCcByteReadOnly(block0[1]);
+    return decoded;
   }
 
   /**
@@ -644,6 +648,16 @@ export class NfcService extends EventEmitter {
         throw new Error(
           "Tag refuses NFC-Forum write (block 0 is neither 0xE1/0xE2 CC nor blank 0x00). " +
             "This looks like a non-NDEF formatted tag — remove and replace with a blank or NDEF-formatted tag.",
+        );
+      }
+      // GH #583: honor the soft read-only flag (CC byte 1 write-access bits).
+      // Defense-in-depth — the renderer probe also refuses, but enforce here so
+      // a locked tag can't be overwritten even if a caller skips the probe.
+      // Erase (formatTag) deliberately does NOT check this — it's the escape
+      // hatch that clears the lock.
+      if (isCcByteReadOnly(block0[1])) {
+        throw new Error(
+          "TAG_READ_ONLY: This tag is marked read-only. Erase it, or make it writable in Settings, before writing.",
         );
       }
       const mlen = sanitizeMlen(block0[2]);
@@ -760,6 +774,48 @@ export class NfcService extends EventEmitter {
           percent: Math.round(((i + 1) / numBlocks) * 100),
         });
       }
+    });
+  }
+
+  /**
+   * GH #583: set (or clear) the soft read-only flag on an OpenPrintTag by
+   * flipping the NFC-Forum Type 5 CC byte-1 write-access bits and rewriting
+   * block 0. Reversible — `setReadOnly(false)` clears it without touching the
+   * tag's data, and Erase clears it too. A Bambu tag is already read-only and
+   * a blank/foreign tag has no CC to lock, so both are refused with a typed
+   * message the renderer maps to friendly copy.
+   */
+  async setReadOnly(readOnly: boolean): Promise<void> {
+    // Bambu tags are MIFARE Classic, RSA-signed and inherently read-only —
+    // there's no NFC-Forum CC to toggle. Detect first (own connection, like
+    // formatTag) so we give a clear message instead of a raw ISO 15693 error.
+    let bambu = false;
+    try {
+      bambu = await this.withConnection((protocol) => this.isBambuTag(protocol));
+    } catch {
+      bambu = false;
+    }
+    if (bambu) {
+      throw new Error("BAMBU_READ_ONLY: Bambu Lab tags are already read-only.");
+    }
+
+    return this.withConnection(async (protocol) => {
+      const block0 = await this.readBlock(protocol, 0);
+      // Only a formatted NFC-Forum tag (0xE1/0xE2 CC magic) has a write-access
+      // bit to flip. A blank or foreign tag has nothing to lock.
+      if (block0[0] !== 0xe1 && block0[0] !== 0xe2) {
+        throw new Error(
+          "TAG_NOT_FORMATTED: This tag has no OpenPrintTag data to lock — write a filament to it first.",
+        );
+      }
+      const newByte1 = setCcByteReadOnly(block0[1], readOnly);
+      if (newByte1 === block0[1]) {
+        return; // already in the requested state — no write needed
+      }
+      // Rewrite block 0 with only the access bit changed; preserve magic, MLEN
+      // and the read-multiple-blocks byte.
+      const cc = Buffer.from([block0[0], newByte1, block0[2], block0[3]]);
+      await this.writeBlock(protocol, 0, cc);
     });
   }
 
