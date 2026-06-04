@@ -3,12 +3,9 @@
  *
  * Renders a label bitmap (QR code + filament name) and emits the Brother
  * raster command byte stream to a sink. The sink is either a file (default
- * — for use with print-label-sim.ts) or a serial-port device path (when
- * the real printer is paired and you're ready to send it for real).
- *
- * The code path is identical for both sinks — only the destination
- * changes. So once the simulator round-trip looks right, the Tuesday
- * "plug in the real printer" step is just `--device /dev/tty.PT-P710BT-...`.
+ * — for use with print-label-sim.ts) or a real printer via the OS print
+ * system (`--printer`), which reuses the Electron app's transport
+ * (electron/label-printer.ts → CUPS `lp -o raw` / Windows spooler; GH #588).
  *
  * USAGE
  *   # Default: render and write the byte stream to /tmp/label.bin, plus a
@@ -21,9 +18,10 @@
  *   npx tsx scripts/print-label.ts --name "ABS" --qr 2acc21072a \
  *     --out ./out/short.bin
  *
- *   # Tuesday — when the real printer arrives:
+ *   # Print for real — pass a CUPS queue name or a usb:// device URI
+ *   # (from `lpinfo -v`), or a Windows printer name:
  *   npx tsx scripts/print-label.ts --name "ABS" --qr 2acc21072a \
- *     --device /dev/tty.PT-P710BT-XXXX-Serialport
+ *     --printer "usb://Brother/PT-P710BT?serial=000M5G671606"
  *
  * PROTOCOL REFERENCE
  *   Brother PT-E550W/P750W/P710BT Raster Command Reference (PDF):
@@ -55,7 +53,10 @@ interface Args {
   name: string;
   qr: string;
   out?: string;
-  device?: string;
+  /** OS print target: a CUPS queue name or a `usb://…` device URI (macOS/
+   *  Linux), or a Windows printer name. Routes through the same OS-print
+   *  backend the Electron app uses (electron/label-printer.ts). */
+  printer?: string;
   preview?: string;
   tapeWidthMm: number; // currently only 24 is supported end-to-end
   autoCut: boolean;
@@ -73,13 +74,14 @@ function parseArgs(argv: string[]): Args {
       case "--name": out.name = next(); break;
       case "--qr": out.qr = next(); break;
       case "--out": out.out = next(); break;
-      case "--device": out.device = next(); break;
+      // --device kept as a back-compat alias for --printer.
+      case "--printer": case "--device": out.printer = next(); break;
       case "--preview": out.preview = next(); break;
       case "--tape": out.tapeWidthMm = parseInt(next(), 10); break;
       case "--no-cut": out.autoCut = false; break;
       case "-h": case "--help":
         console.log(
-          "Usage: tsx scripts/print-label.ts --name <text> --qr <payload> [--out <file>|--device <path>] [--preview <png>]",
+          "Usage: tsx scripts/print-label.ts --name <text> --qr <payload> [--out <file>|--printer <queue|usb://uri>] [--preview <png>]",
         );
         process.exit(0);
         break;
@@ -89,8 +91,8 @@ function parseArgs(argv: string[]): Args {
   }
   if (!out.name) throw new Error("--name is required");
   if (!out.qr) throw new Error("--qr is required");
-  if (out.out && out.device) throw new Error("Use --out OR --device, not both");
-  if (!out.out && !out.device) out.out = "/tmp/label.bin";
+  if (out.out && out.printer) throw new Error("Use --out OR --printer, not both");
+  if (!out.out && !out.printer) out.out = "/tmp/label.bin";
   if (out.tapeWidthMm !== 24) {
     throw new Error(`Only 24mm tape supported in spike (got ${out.tapeWidthMm}mm)`);
   }
@@ -287,36 +289,15 @@ async function writeToFile(bytes: Buffer, path: string) {
   console.log(`wrote ${bytes.length} bytes → ${path}`);
 }
 
-async function writeToDevice(bytes: Buffer, devicePath: string) {
-  // We don't import `serialport` at the top of the file because it's not
-  // installed in the spike's dependency set yet — only needed Tuesday.
-  // Dynamic import gives a clear error if absent rather than blowing up
-  // every simulator-only run.
-  let SerialPortModule;
-  try {
-    SerialPortModule = await import("serialport");
-  } catch {
-    throw new Error(
-      "`serialport` is not installed. Run `npm install --save-dev serialport` " +
-        "before using --device.",
-    );
-  }
-  const port = new SerialPortModule.SerialPort({
-    path: devicePath,
-    baudRate: 9600, // SPP/RFCOMM ignores baud rate but the API requires it
-  });
-  await new Promise<void>((resolve, reject) => {
-    port.on("open", () => resolve());
-    port.on("error", reject);
-  });
-  await new Promise<void>((resolve, reject) =>
-    port.write(bytes, (err) => (err ? reject(err) : resolve())),
-  );
-  await new Promise<void>((resolve, reject) =>
-    port.drain((err) => (err ? reject(err) : resolve())),
-  );
-  await new Promise<void>((resolve) => port.close(() => resolve()));
-  console.log(`wrote ${bytes.length} bytes → ${devicePath}`);
+async function writeToPrinter(bytes: Buffer, target: string) {
+  // Route through the same OS-print backend the Electron app uses (GH #588)
+  // — CUPS `lp -o raw` (macOS/Linux) or the Windows spooler — so the CLI and
+  // the app share one transport. The target is a CUPS queue name, a `usb://…`
+  // device URI, or a Windows printer name. Dynamic import keeps simulator-only
+  // runs (`--out`) from loading the transport at all.
+  const { printLabel } = await import("../electron/label-printer");
+  await printLabel(target, new Uint8Array(bytes));
+  console.log(`sent ${bytes.length} bytes → ${target}`);
 }
 
 /* ---------- main ------------------------------------------------------ */
@@ -356,8 +337,8 @@ async function main() {
     .toFile(previewPath);
   console.log(`preview PNG → ${previewPath}`);
 
-  if (args.device) {
-    await writeToDevice(bytes, args.device);
+  if (args.printer) {
+    await writeToPrinter(bytes, args.printer);
   } else {
     await writeToFile(bytes, args.out!);
   }
