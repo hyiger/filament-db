@@ -11,6 +11,7 @@ import { useTheme, type ThemePreference } from "@/components/ThemeProvider";
 import { useIsElectron } from "@/hooks/useIsElectron";
 import { useNfcContext } from "@/components/NfcProvider";
 import LabelPrinterSettings from "@/components/LabelPrinterSettings";
+import LabelFormatEditor from "@/components/LabelFormatEditor";
 
 export default function SettingsPage() {
   const { t, locale, setLocale } = useTranslation();
@@ -1077,9 +1078,12 @@ export default function SettingsPage() {
       </div>
 
       {/* Brother PT-P710BT label printer device picker. Self-gates on
-          isElectron so it disappears entirely in web mode. */}
+          isElectron so it disappears entirely in web mode. The label format
+          editor (#592) is NOT gated — the layout also applies to the web
+          .bin-download path, so web users can configure it too. */}
       <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
         <LabelPrinterSettings />
+        <LabelFormatEditor />
       </div>
 
       <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">

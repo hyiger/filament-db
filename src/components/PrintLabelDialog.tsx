@@ -10,6 +10,8 @@ import {
 } from "@/lib/labelBitmap";
 import { encodeLabel, packGrayscaleBitmap } from "@/lib/labelEncoder";
 import { isLoopbackUrl } from "@/lib/loopbackHost";
+import { useLabelFormat } from "@/hooks/useLabelFormat";
+import type { LabelFilament } from "@/lib/labelFormat";
 
 /**
  * Print-label dialog for the filament detail page.
@@ -27,9 +29,13 @@ import { isLoopbackUrl } from "@/lib/loopbackHost";
  *   - **Web (no Electron)**: downloads the encoded .bin file. Useful
  *     for "I want to inspect what would be sent" + a forward-compat
  *     escape hatch for non-Electron deployments.
- *   - **Electron**: sends the bytes over IPC to the serial-port
- *     writer in the main process (electron/label-printer.ts), which
- *     opens the OS-paired SPP device and writes the byte stream.
+ *   - **Electron**: sends the bytes over IPC to the print transport in the
+ *     main process (electron/label-printer.ts), which hands them to the OS
+ *     print system over USB (CUPS `lp -o raw` / Windows spooler). (GH #588)
+ *
+ * The label layout (QR placement, text fields, font, orientation, invert)
+ * comes from the global LabelFormat (Settings → Label format); this dialog
+ * only chooses the QR *payload* (instanceId vs URL). (GH #592)
  */
 
 const LAST_QR_MODE_KEY = "filamentdb.printLabel.qrMode";
@@ -43,6 +49,10 @@ export interface PrintLabelDialogProps {
     _id: string;
     name: string;
     instanceId?: string | null;
+    // GH #592: fields the configurable label layout can display.
+    vendor?: string | null;
+    type?: string | null;
+    colorName?: string | null;
   };
 }
 
@@ -54,6 +64,18 @@ export default function PrintLabelDialog({
   const { t } = useTranslation();
   const { toast } = useToast();
   const isElectron = useIsElectron();
+  const { format } = useLabelFormat();
+
+  // The subset of fields the configurable label layout can render.
+  const labelFilament: LabelFilament = useMemo(
+    () => ({
+      name: filament.name,
+      vendor: filament.vendor,
+      type: filament.type,
+      colorName: filament.colorName,
+    }),
+    [filament.name, filament.vendor, filament.type, filament.colorName],
+  );
 
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -199,8 +221,9 @@ export default function PrintLabelDialog({
     let cancelled = false;
     setPreview({ status: "rendering" });
     renderLabelPreviewDataUrl({
-      filamentName: filament.name,
+      filament: labelFilament,
       qrPayload,
+      format,
     })
       .then(({ dataUrl }) => {
         if (!cancelled) setPreview({ status: "ready", dataUrl });
@@ -216,7 +239,7 @@ export default function PrintLabelDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, qrPayload, filament.name]);
+  }, [open, qrPayload, labelFilament, format]);
 
   /* --- print / download handler ---
    *
@@ -234,8 +257,9 @@ export default function PrintLabelDialog({
     setPrinting(true);
     try {
       const { grayscale, rasterLines } = await renderLabelBitmap({
-        filamentName: filament.name,
+        filament: labelFilament,
         qrPayload,
+        format,
       });
       const packed = packGrayscaleBitmap(grayscale, rasterLines);
       const bytes = encodeLabel({
@@ -287,7 +311,7 @@ export default function PrintLabelDialog({
     } finally {
       setPrinting(false);
     }
-  }, [filament.name, qrPayload, isElectron, toast, t, onClose]);
+  }, [labelFilament, format, qrPayload, isElectron, toast, t, onClose, filament.name]);
 
   /* --- escape + outside click --- */
   useEffect(() => {

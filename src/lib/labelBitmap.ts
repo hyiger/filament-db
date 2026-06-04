@@ -2,65 +2,82 @@
  * Browser-safe label bitmap renderer for the Brother PT-P710BT pipeline.
  *
  * Companion to src/lib/labelEncoder.ts. The encoder is wire-format
- * serialization; this module is pixel composition. It takes a filament
- * name + QR payload and returns the row-major grayscale buffer ready
- * to feed to `packGrayscaleBitmap()` and then `encodeLabel()`.
+ * serialization; this module is pixel composition. It takes a filament + a
+ * QR payload + a LabelFormat (src/lib/labelFormat.ts) and returns the
+ * row-major grayscale buffer ready to feed `packGrayscaleBitmap()` then
+ * `encodeLabel()`, or a preview data URL.
  *
- * No Node deps — uses HTMLCanvasElement, OffscreenCanvas when available,
- * and the `qrcode` npm package's browser entry. Same code runs in the
- * renderer (PrintLabelDialog live preview + print payload) and in the
- * eventual Storybook/test harness.
- *
- * The CLI at scripts/print-label.ts uses sharp instead
- * because Node can't use HTMLCanvas without a polyfill; both paths
- * produce the same wire output because they share the encoder.
+ * No Node deps — uses HTMLCanvasElement and the `qrcode` npm browser entry.
+ * The CLI at scripts/print-label.ts uses sharp instead; both share the
+ * encoder.
  *
  * GEOMETRY (24mm tape, 180 dpi)
  *   - Print head: 128 dots tall (PRINT_HEAD_DOTS in labelEncoder.ts).
- *   - Source canvas is composed as length × 128 (human-reading
- *     orientation) and then rotated 90° clockwise so each output row
- *     is one raster line the printer fires.
+ *   - The label content is composed length × 128 (human-reading
+ *     orientation), then rotated 90° clockwise so each output row is one
+ *     raster line. The raster-line order is then REVERSED — feeding lines
+ *     in rotate-order prints the label mirrored along its length (#587,
+ *     hardware-verified).
+ *
+ * FORMATTING (GH #592)
+ *   The QR placement (left/right/off), the stacked text lines, font
+ *   family/size, text orientation, and invert (white-on-black) all come
+ *   from the LabelFormat. The text composition itself lives in the pure,
+ *   unit-tested `composeLabelLines()`.
  */
 
 import QRCode from "qrcode";
 import { PRINT_HEAD_DOTS } from "./labelEncoder";
+import {
+  composeLabelLines,
+  FONT_STACKS,
+  FONT_SIZE_DOTS,
+  type LabelFilament,
+  type LabelFormat,
+} from "./labelFormat";
 
-/** Horizontal padding (in dots, ≈ 2mm at 180 dpi) at each end of the
- *  printable area. Keeps the QR / text off the literal edge. */
+/** Horizontal padding (dots, ≈2mm) at each end of the printable area. */
 const HORIZONTAL_PADDING_DOTS = 14;
-
 /** Vertical padding above/below content inside the 128-dot print band. */
 const VERTICAL_PADDING_DOTS = 6;
-
-/** Gap between QR and the text band, in dots. */
+/** Gap between the QR and the text band, in dots. */
 const QR_TEXT_GAP_DOTS = 12;
-
-/** Largest QR pixel size that fits the print band with vertical padding.
- *  PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS = 116. */
-const MAX_QR_DOTS = PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS;
-
-/** QR specification requires a 4-module quiet zone (the all-white
- *  border) around the data for reliable scanning. We render the QR
- *  with `margin: 4` so the qrcode library includes it, and include
- *  it in the fit calculation. (Codex P2 round 5 on PR #487.) */
+/** Largest QR pixel size that fits the print band with vertical padding. */
+const MAX_QR_DOTS = PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS; // 116
+/** QR spec requires a 4-module quiet zone for reliable scanning. */
 const QR_QUIET_ZONE_MODULES = 4;
+/** Line leading multiplier (rendered line box height / font px). */
+const LINE_LEADING = 1.18;
 
-/**
- * Render the QR at the largest module-pixel scale that fits the print
- * band, accounting for the spec-required 4-module quiet zone on each
- * side. The naive `scale: 3` for any payload >16 chars would overflow
- * once the URL pushes the QR past v10 (≈57 modules → 171 px at scale 3,
- * clipped by the 128-dot head). Probe at scale=1 with margin=4 first
- * to discover total width (modules + 8 quiet-zone), then pick
- * `floor(MAX_QR_DOTS / total)` as the largest fitting scale. Throws
- * if even scale=1 doesn't fit (the payload is genuinely too long for
- * a 24mm tape label). (Codex P2 rounds 4 + 5 on PR #487.)
- */
-async function renderQrForTape(
+export interface RenderLabelOpts {
+  filament: LabelFilament;
+  /** QR payload (instanceId or URL). Ignored when format.qr.enabled is false. */
+  qrPayload: string;
+  format: LabelFormat;
+  /** Defaults to 'M'. */
+  qrErrorCorrection?: "L" | "M" | "Q" | "H";
+}
+
+export interface RenderedLabel {
+  /** Row-major grayscale buffer, one byte per dot (0 black / 255 white).
+   *  Length = rasterLines × PRINT_HEAD_DOTS. */
+  grayscale: Uint8Array;
+  rasterLines: number;
+}
+
+function assertDom() {
+  if (typeof document === "undefined") {
+    throw new Error("label rendering requires a DOM canvas; call it from the renderer.");
+  }
+}
+
+/** Render the QR at the largest module scale fitting `maxDots` (incl. the
+ *  4-module quiet zone). Throws if it doesn't fit even at scale 1. */
+async function renderQr(
   payload: string,
   errorCorrection: "L" | "M" | "Q" | "H",
+  maxDots: number,
 ): Promise<HTMLCanvasElement> {
-  // scale=1 with margin=4 → output width = modules + 2 × 4 = modules + 8.
   const probe = document.createElement("canvas");
   await QRCode.toCanvas(probe, payload, {
     errorCorrectionLevel: errorCorrection,
@@ -69,90 +86,123 @@ async function renderQrForTape(
     color: { dark: "#000000", light: "#FFFFFF" },
   });
   const widthWithQuietZone = probe.width;
-  if (widthWithQuietZone > MAX_QR_DOTS) {
+  if (widthWithQuietZone > maxDots) {
     const modules = widthWithQuietZone - 2 * QR_QUIET_ZONE_MODULES;
     throw new Error(
-      `QR payload is too long for 24mm tape — would render at ${widthWithQuietZone} ` +
-        `dots tall including the required 4-module quiet zone (QR data: ${modules} modules), ` +
-        `but the print band is only ${MAX_QR_DOTS} dots after padding. ` +
-        `Use a shorter payload (the instance ID mode is always safe) or print to a wider tape.`,
+      `QR payload is too long for 24mm tape — needs ${widthWithQuietZone} dots ` +
+        `(incl. the 4-module quiet zone; ${modules} QR modules) but only ${maxDots} fit. ` +
+        `Use a shorter payload (the instance ID mode is always safe).`,
     );
   }
-  const scale = Math.floor(MAX_QR_DOTS / widthWithQuietZone);
-  const finalCanvas = document.createElement("canvas");
-  await QRCode.toCanvas(finalCanvas, payload, {
+  const scale = Math.floor(maxDots / widthWithQuietZone);
+  const canvas = document.createElement("canvas");
+  await QRCode.toCanvas(canvas, payload, {
     errorCorrectionLevel: errorCorrection,
     margin: QR_QUIET_ZONE_MODULES,
     scale,
     color: { dark: "#000000", light: "#FFFFFF" },
   });
-  return finalCanvas;
-}
-
-export interface RenderLabelOpts {
-  filamentName: string;
-  qrPayload: string;
-  /** Defaults to 'M' — the practical sweet spot for label use: robust
-   *  against tape scuffs without bloating short payloads. */
-  qrErrorCorrection?: "L" | "M" | "Q" | "H";
-}
-
-export interface RenderedLabel {
-  /** Row-major grayscale buffer, one byte per dot. Length = rasterLines
-   *  × PRINT_HEAD_DOTS. Ready for packGrayscaleBitmap(). */
-  grayscale: Uint8Array;
-  /** Number of raster lines = label length in dots (180 dpi → 70 dots
-   *  ≈ 1cm). */
-  rasterLines: number;
+  return canvas;
 }
 
 /**
- * Render a single-tape label to a 1-byte-per-dot grayscale buffer.
- *
- * Browser-only — needs DOM canvas. The renderer composes everything in
- * human-reading orientation (length × 128), then rotates 90° to produce
- * the raster-line-major output the printer expects.
+ * Render the (possibly multi-line) text block to its own canvas with black
+ * text on a transparent background. Auto-fits the font so the block fits the
+ * supplied limits:
+ *   - `maxCross` bounds the stacked-line direction (the 128-dot tape width
+ *     for horizontal text; the line-length for vertical).
+ * Returns null when there are no lines.
  */
-export async function renderLabelBitmap(
-  opts: RenderLabelOpts,
-): Promise<RenderedLabel> {
-  if (typeof document === "undefined") {
-    throw new Error(
-      "renderLabelBitmap requires a DOM canvas; call it from the renderer.",
-    );
+function renderTextBlock(
+  lines: string[],
+  fontStack: string,
+  baseFontPx: number,
+  orientation: LabelFormat["orientation"],
+): HTMLCanvasElement | null {
+  if (lines.length === 0) return null;
+  const measure = document.createElement("canvas").getContext("2d");
+  if (!measure) throw new Error("Canvas 2D context unavailable");
+
+  // Available cross dimension (perpendicular to reading direction) is always
+  // the 128-dot print band minus padding. For horizontal text the N stacked
+  // lines share it; for vertical text each line's WIDTH must fit it.
+  const band = PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS;
+
+  let fontPx = baseFontPx;
+  if (orientation === "horizontal") {
+    // N lines stacked vertically must fit the band.
+    const maxLineBox = band / lines.length;
+    fontPx = Math.min(fontPx, Math.floor(maxLineBox / LINE_LEADING));
+  } else {
+    // Vertical: each line reads across the tape, so the WIDEST line's text
+    // width must fit the band. Measure at base px, scale down to fit.
+    measure.font = `bold ${baseFontPx}px ${fontStack}`;
+    const widest = Math.max(1, ...lines.map((l) => measure.measureText(l).width));
+    if (widest > band) fontPx = Math.max(8, Math.floor((baseFontPx * band) / widest));
+  }
+  fontPx = Math.max(8, fontPx);
+
+  const font = `bold ${fontPx}px ${fontStack}`;
+  measure.font = font;
+  const lineBox = Math.ceil(fontPx * LINE_LEADING);
+  const textWidth = Math.max(1, Math.ceil(Math.max(...lines.map((l) => measure.measureText(l).width))));
+  const blockWidth = textWidth;
+  const blockHeight = lineBox * lines.length;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = blockWidth;
+  canvas.height = blockHeight;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D context unavailable");
+  ctx.font = font;
+  ctx.fillStyle = "#000000";
+  ctx.textBaseline = "middle";
+  ctx.textAlign = "left";
+  lines.forEach((line, i) => {
+    ctx.fillText(line, 0, i * lineBox + lineBox / 2);
+  });
+  return canvas;
+}
+
+/**
+ * Compose the full label (QR + text) into a length × 128 canvas in
+ * human-reading orientation. Shared by the bitmap and preview paths so they
+ * can never drift. Background + text colors honor `invert`; the QR is always
+ * drawn dark-on-light (an inverted QR won't scan).
+ */
+async function composeLabelCanvas(opts: RenderLabelOpts): Promise<HTMLCanvasElement> {
+  assertDom();
+  const { filament, qrPayload, format } = opts;
+  const ec = opts.qrErrorCorrection ?? "M";
+
+  const qrCanvas =
+    format.qr.enabled && qrPayload ? await renderQr(qrPayload, ec, MAX_QR_DOTS) : null;
+  const qrDots = qrCanvas ? qrCanvas.width : 0;
+
+  const lines = composeLabelLines(filament, format);
+  const baseFontPx = Math.floor(FONT_SIZE_DOTS[format.font.size] / LINE_LEADING);
+  const textBlock = renderTextBlock(lines, FONT_STACKS[format.font.family], baseFontPx, format.orientation);
+
+  // The text occupies blockW × blockH; after a 90° rotation (vertical mode)
+  // its footprint on the label swaps to blockH × blockW.
+  let textFootW = 0;
+  let textFootH = 0;
+  if (textBlock) {
+    if (format.orientation === "horizontal") {
+      textFootW = textBlock.width;
+      textFootH = textBlock.height;
+    } else {
+      textFootW = textBlock.height;
+      textFootH = textBlock.width;
+    }
   }
 
-  /* --- QR --- */
-  // Helper picks the largest scale that fits the print band and throws
-  // on payloads too long even at scale=1.
-  const qrCanvas = await renderQrForTape(
-    opts.qrPayload,
-    opts.qrErrorCorrection ?? "M",
+  // Label length = padding + [QR + gap] + textFootW + padding.
+  const qrSlot = qrCanvas ? qrDots + QR_TEXT_GAP_DOTS : 0;
+  const labelWidthDots = Math.max(
+    qrDots + 2 * HORIZONTAL_PADDING_DOTS, // never narrower than the QR + padding
+    HORIZONTAL_PADDING_DOTS + qrSlot + textFootW + HORIZONTAL_PADDING_DOTS,
   );
-  const qrDots = qrCanvas.width;
-
-  /* --- text --- */
-  // Measure first so we know the label length before allocating the
-  // main canvas. Use a sacrificial canvas at the printer's pixel
-  // density to keep the metrics honest.
-  const textHeight = Math.min(56, PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS);
-  // ~24px CSS → ~32 dots at 180 dpi (the same heuristic the spike
-  // script uses). Bold sans renders crisply at this scale after
-  // threshold.
-  const fontPx = Math.floor(textHeight * 0.72);
-  const fontSpec = `bold ${fontPx}px Helvetica, Arial, sans-serif`;
-  const measureCtx = document.createElement("canvas").getContext("2d");
-  if (!measureCtx) throw new Error("Canvas 2D context unavailable");
-  measureCtx.font = fontSpec;
-  const textWidth = Math.ceil(measureCtx.measureText(opts.filamentName).width);
-
-  /* --- compose --- */
-  const labelWidthDots =
-    HORIZONTAL_PADDING_DOTS +
-    qrDots +
-    QR_TEXT_GAP_DOTS +
-    textWidth +
-    HORIZONTAL_PADDING_DOTS;
 
   const canvas = document.createElement("canvas");
   canvas.width = labelWidthDots;
@@ -160,31 +210,73 @@ export async function renderLabelBitmap(
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("Canvas 2D context unavailable");
 
-  // White background.
-  ctx.fillStyle = "#FFFFFF";
+  // Background.
+  ctx.fillStyle = format.invert ? "#000000" : "#FFFFFF";
   ctx.fillRect(0, 0, labelWidthDots, PRINT_HEAD_DOTS);
 
-  // QR at left, vertically centred.
-  const qrTop = Math.floor((PRINT_HEAD_DOTS - qrDots) / 2);
-  ctx.drawImage(qrCanvas, HORIZONTAL_PADDING_DOTS, qrTop);
+  // QR — on its own white tile (so it scans even on an inverted label),
+  // placed left or right, vertically centered.
+  let textLeft = HORIZONTAL_PADDING_DOTS;
+  if (qrCanvas) {
+    const qrTop = Math.floor((PRINT_HEAD_DOTS - qrDots) / 2);
+    const qrLeft =
+      format.qr.placement === "left"
+        ? HORIZONTAL_PADDING_DOTS
+        : labelWidthDots - HORIZONTAL_PADDING_DOTS - qrDots;
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(qrLeft, qrTop, qrDots, qrDots);
+    ctx.drawImage(qrCanvas, qrLeft, qrTop);
+    if (format.qr.placement === "left") textLeft = HORIZONTAL_PADDING_DOTS + qrSlot;
+  }
 
-  // Text band to the right of QR, vertically centred via textBaseline.
-  ctx.font = fontSpec;
-  ctx.fillStyle = "#000000";
-  ctx.textBaseline = "middle";
-  ctx.fillText(
-    opts.filamentName,
-    HORIZONTAL_PADDING_DOTS + qrDots + QR_TEXT_GAP_DOTS,
-    Math.floor(PRINT_HEAD_DOTS / 2),
-  );
+  // Text — recolor the black-on-transparent block to the text color, then
+  // composite (rotated 90° for vertical), centered in the remaining space.
+  if (textBlock) {
+    const colored = recolor(textBlock, format.invert ? "#FFFFFF" : "#000000");
+    const regionLeft = format.qr.placement === "right" ? HORIZONTAL_PADDING_DOTS : textLeft;
+    const regionWidth = Math.max(textFootW, labelWidthDots - regionLeft - HORIZONTAL_PADDING_DOTS - (format.qr.placement === "right" ? qrSlot : 0));
+    const cx = regionLeft + Math.floor((regionWidth - textFootW) / 2);
+    const cy = Math.floor((PRINT_HEAD_DOTS - textFootH) / 2);
+    if (format.orientation === "horizontal") {
+      ctx.drawImage(colored, cx, cy);
+    } else {
+      // Rotate 90° CW about the footprint's top-left.
+      ctx.save();
+      ctx.translate(cx + textFootW, cy);
+      ctx.rotate(Math.PI / 2);
+      ctx.drawImage(colored, 0, 0);
+      ctx.restore();
+    }
+  }
 
-  /* --- rotate + threshold ---
-   *
-   * Rotate 90° clockwise so each row of the output is one raster line
-   * the printer fires. We do this via a second canvas because <canvas>
-   * doesn't have a "rotate the whole bitmap" primitive — we transform
-   * before drawing the source.
-   */
+  return canvas;
+}
+
+/** Return a copy of a black-on-transparent text canvas recolored to `color`. */
+function recolor(src: HTMLCanvasElement, color: string): HTMLCanvasElement {
+  if (color === "#000000") return src;
+  const out = document.createElement("canvas");
+  out.width = src.width;
+  out.height = src.height;
+  const ctx = out.getContext("2d");
+  if (!ctx) throw new Error("Canvas 2D context unavailable");
+  ctx.drawImage(src, 0, 0);
+  // Keep the text alpha, swap the color.
+  ctx.globalCompositeOperation = "source-in";
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, out.width, out.height);
+  return out;
+}
+
+/**
+ * Render a label to a 1-byte-per-dot grayscale buffer ready for the encoder.
+ * Browser-only.
+ */
+export async function renderLabelBitmap(opts: RenderLabelOpts): Promise<RenderedLabel> {
+  const composed = await composeLabelCanvas(opts);
+  const labelWidthDots = composed.width;
+
+  // Rotate 90° CW so each output row is one raster line.
   const rotated = document.createElement("canvas");
   rotated.width = PRINT_HEAD_DOTS;
   rotated.height = labelWidthDots;
@@ -194,30 +286,19 @@ export async function renderLabelBitmap(
   rctx.fillRect(0, 0, PRINT_HEAD_DOTS, labelWidthDots);
   rctx.translate(PRINT_HEAD_DOTS, 0);
   rctx.rotate(Math.PI / 2);
-  rctx.drawImage(canvas, 0, 0);
+  rctx.drawImage(composed, 0, 0);
 
-  // Threshold to pure black/white. Reading raw pixel data + processing
-  // in JS is fast at this size (a typical label is ~40k pixels) and
-  // sidesteps anti-aliasing artifacts that would survive into the
-  // printer as random dot noise.
   const img = rctx.getImageData(0, 0, PRINT_HEAD_DOTS, labelWidthDots);
-  const grayscale = new Uint8Array(labelWidthDots * PRINT_HEAD_DOTS);
+  const rasterLines = labelWidthDots;
+  const grayscale = new Uint8Array(rasterLines * PRINT_HEAD_DOTS);
   for (let i = 0, j = 0; i < img.data.length; i += 4, j++) {
-    // Standard luminance: 0.299 R + 0.587 G + 0.114 B. After threshold
-    // every pixel is either 0 (black) or 255 (white).
-    const lum =
-      img.data[i] * 0.299 + img.data[i + 1] * 0.587 + img.data[i + 2] * 0.114;
+    const lum = img.data[i] * 0.299 + img.data[i + 1] * 0.587 + img.data[i + 2] * 0.114;
     grayscale[j] = lum < 128 ? 0 : 255;
   }
 
-  // HARDWARE FIX (#587): feeding the raster lines in the rotate-90-CW order
-  // prints the label MIRRORED along its length — verified on a real
-  // PT-P710BT (text read backwards, QR reversed). The printer's physical
-  // feed direction is opposite our raster-line order, so reverse the line
-  // order. Only the order the lines feed changes (each line's content is
-  // untouched), which reflects the label along its length and un-mirrors it.
-  // Same fix as scripts/print-label.ts.
-  const rasterLines = labelWidthDots;
+  // HARDWARE FIX (#587): reverse the raster-line order — feeding lines in the
+  // rotate order prints the label mirrored along its length. See the module
+  // header + scripts/print-label.ts.
   const reversed = new Uint8Array(grayscale.length);
   for (let r = 0; r < rasterLines; r++) {
     reversed.set(
@@ -225,71 +306,20 @@ export async function renderLabelBitmap(
       (rasterLines - 1 - r) * PRINT_HEAD_DOTS,
     );
   }
-
   return { grayscale: reversed, rasterLines };
 }
 
 /**
- * Render a label preview suitable for showing the user before they
- * print. Returns a *human-readable-orientation* PNG data URL (length ×
- * 128) — i.e. the rotated source canvas before the 90° spin into
- * raster-line orientation. The exact same pixels that will hit the
- * printer, just shown in the orientation a human reads them.
+ * Render a human-readable preview (length × 128) — the exact pixels that will
+ * print, shown the way a person reads them (before the 90° raster spin).
  */
 export async function renderLabelPreviewDataUrl(
   opts: RenderLabelOpts,
 ): Promise<{ dataUrl: string; widthDots: number; heightDots: number }> {
-  // Composition is identical to renderLabelBitmap above, minus the
-  // rotation step. Duplicates a small amount of code but the alternative
-  // (rotating twice — once to print orientation, once back for preview)
-  // is the kind of cleverness that introduces bugs.
-  if (typeof document === "undefined") {
-    throw new Error(
-      "renderLabelPreviewDataUrl requires a DOM canvas; call it from the renderer.",
-    );
-  }
-
-  const qrCanvas = await renderQrForTape(
-    opts.qrPayload,
-    opts.qrErrorCorrection ?? "M",
-  );
-  const qrDots = qrCanvas.width;
-
-  const textHeight = Math.min(56, PRINT_HEAD_DOTS - 2 * VERTICAL_PADDING_DOTS);
-  const fontPx = Math.floor(textHeight * 0.72);
-  const fontSpec = `bold ${fontPx}px Helvetica, Arial, sans-serif`;
-  const measureCtx = document.createElement("canvas").getContext("2d");
-  if (!measureCtx) throw new Error("Canvas 2D context unavailable");
-  measureCtx.font = fontSpec;
-  const textWidth = Math.ceil(measureCtx.measureText(opts.filamentName).width);
-  const labelWidthDots =
-    HORIZONTAL_PADDING_DOTS +
-    qrDots +
-    QR_TEXT_GAP_DOTS +
-    textWidth +
-    HORIZONTAL_PADDING_DOTS;
-
-  const canvas = document.createElement("canvas");
-  canvas.width = labelWidthDots;
-  canvas.height = PRINT_HEAD_DOTS;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas 2D context unavailable");
-  ctx.fillStyle = "#FFFFFF";
-  ctx.fillRect(0, 0, labelWidthDots, PRINT_HEAD_DOTS);
-  const qrTop = Math.floor((PRINT_HEAD_DOTS - qrDots) / 2);
-  ctx.drawImage(qrCanvas, HORIZONTAL_PADDING_DOTS, qrTop);
-  ctx.font = fontSpec;
-  ctx.fillStyle = "#000000";
-  ctx.textBaseline = "middle";
-  ctx.fillText(
-    opts.filamentName,
-    HORIZONTAL_PADDING_DOTS + qrDots + QR_TEXT_GAP_DOTS,
-    Math.floor(PRINT_HEAD_DOTS / 2),
-  );
-
+  const composed = await composeLabelCanvas(opts);
   return {
-    dataUrl: canvas.toDataURL("image/png"),
-    widthDots: labelWidthDots,
-    heightDots: PRINT_HEAD_DOTS,
+    dataUrl: composed.toDataURL("image/png"),
+    widthDots: composed.width,
+    heightDots: composed.height,
   };
 }

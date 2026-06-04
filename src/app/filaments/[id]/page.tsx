@@ -1844,6 +1844,9 @@ function FilamentDetail() {
           _id: filament._id,
           name: filament.name,
           instanceId: filament.instanceId ?? null,
+          vendor: filament.vendor ?? null,
+          type: filament.type ?? null,
+          colorName: filament.colorName ?? null,
         }}
       />
     </main>

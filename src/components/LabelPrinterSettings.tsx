@@ -7,6 +7,8 @@ import { useIsElectron } from "@/hooks/useIsElectron";
 import type { LabelPrinterDevice } from "@/types/electron";
 import { renderLabelBitmap } from "@/lib/labelBitmap";
 import { encodeLabel, packGrayscaleBitmap } from "@/lib/labelEncoder";
+import { useLabelFormat } from "@/hooks/useLabelFormat";
+import { SAMPLE_FILAMENT } from "@/lib/labelFormat";
 
 /**
  * Settings panel for the Brother PT-P710BT label printer. Electron
@@ -32,6 +34,7 @@ export default function LabelPrinterSettings() {
   const { t } = useTranslation();
   const { toast } = useToast();
   const isElectron = useIsElectron();
+  const { format } = useLabelFormat();
 
   type State =
     | { status: "loading" }
@@ -167,11 +170,13 @@ export default function LabelPrinterSettings() {
     if (!window.electronAPI?.labelPrinterPrint) return;
     setTesting(true);
     try {
-      // A short canonical label that exercises every part of the
-      // pipeline (QR + text + cutter) without wasting much tape.
+      // A canonical label using the SAMPLE filament + the user's saved
+      // format, so the test print exercises their actual layout (QR + text +
+      // cutter) without wasting much tape.
       const { grayscale, rasterLines } = await renderLabelBitmap({
-        filamentName: "Filament DB ✓",
+        filament: SAMPLE_FILAMENT,
         qrPayload: "filament-db-test",
+        format,
       });
       const packed = packGrayscaleBitmap(grayscale, rasterLines);
       const bytes = encodeLabel({
@@ -191,7 +196,7 @@ export default function LabelPrinterSettings() {
     } finally {
       setTesting(false);
     }
-  }, [t, toast]);
+  }, [t, toast, format]);
 
   if (!isElectron) return null;
 
