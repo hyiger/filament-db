@@ -88,7 +88,7 @@ npm run electron:build
 This runs five steps:
 1. `npm run build` -- builds Next.js in standalone mode
 2. `npm run electron:fixlinks` -- resolves symlinks in the standalone output and copies it with static assets
-3. `npm run electron:rebuild` -- rebuilds the native modules for Electron's Node.js ABI: `@pokusew/pcsclite` (PC/SC, for NFC) and `@serialport/bindings-cpp` (for the Brother label printer)
+3. `npm run electron:rebuild` -- rebuilds the native module for Electron's Node.js ABI: `@pokusew/pcsclite` (PC/SC, for NFC). The Brother label printer no longer needs a native module (since v1.34.9 it prints through the OS print system over USB, not `serialport`)
 4. `npm run electron:compile` -- bundles Electron TypeScript with esbuild
 5. `npm run electron:pack` -- packages everything with electron-builder
 

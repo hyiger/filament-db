@@ -439,38 +439,46 @@ Each filament has a unique instance identifier (5-byte hex string, e.g. `2acc210
 
 ## Label Printer (Desktop App Only) *(v1.34)*
 
-Print a 24mm-tape spool label directly from the filament detail page to a **Brother PT-P710BT** (P-touch CUBE) over Bluetooth. The label carries a QR code and the filament name. Two QR payload modes you can pick per print:
+Print a 24mm-tape spool label directly from the filament detail page to a **Brother PT-P710BT** (P-touch CUBE). The label carries a QR code (optional) and configurable text. Two QR payload modes you can pick per print:
 
 - **Spool instance ID** — the 5-byte hex identifier (e.g. `2acc21072a`). Compact, dense QR; re-scans into the match endpoint and matches what an NFC tag carries.
 - **Deep-link URL** — a full URL to the filament's detail page (e.g. `https://your-instance.lan/filaments/<id>`). Scanned by any phone opens the page directly — no app required.
 
 Your last choice is remembered as the default for the next print.
 
+> **Connect over USB, not Bluetooth.** Brother's Bluetooth on the PT-P710BT is iOS/Android only; on the desktop the printer connects over **USB**, where it appears as a standard USB printer. Use a USB-C **data** cable (not a charge-only cable). The app prints through your operating system's print system — CUPS on macOS/Linux, the print spooler on Windows. *(Reworked in v1.34.9; earlier builds used an unsupported, flaky Bluetooth-serial path.)*
+
 ### One-time setup
 
-1. **Pair the printer in the OS first**: hold the printer's power button until the Bluetooth LED is solid blue, then add it via System Settings → Bluetooth (PIN is usually empty or `0000`). The printer ships from Brother with iOS/Android in mind, but desktop OSes (macOS / Windows / Linux) pair it as a Bluetooth Classic serial-port device.
-2. **Open the desktop app → Settings → Label Printer**. Click **Refresh** to scan paired serial ports. The PT-P710BT shows up with a green **PT-Touch** badge. Select it.
+1. **Connect the printer via USB** and power it on. On macOS/Linux it's reachable through CUPS automatically; on Windows, install it as a normal printer if your OS prompts.
+2. **Open the desktop app → Settings → Label Printer**. Click **Refresh** to list printers. The PT-P710BT shows up with a green **PT-Touch** badge (on macOS/Linux it appears as a `usb://Brother/PT-P710BT…` device). Select it.
 3. **(Optional) Public URL for QR-mode labels**: if you want to print labels with deep-link URLs that scan correctly from your phone, also set the **Public base URL** field. URL mode in the desktop app needs a non-localhost address because the renderer's `window.location.origin` is `http://localhost:3456` — unscannable from any other device. Examples: `https://filament-db.lan`, `https://my-instance.example.com`. Loopback addresses, query strings, and URL fragments are rejected with a descriptive error. Leave blank to disable URL mode in the desktop app — the instance-ID mode still works without it.
-4. **Test print**: click **Test print** to send a short canonical label. Confirm the QR scans and the text is crisp before you start printing real labels.
+4. **Test print**: click **Test print** to send a short label using your saved format. Confirm the QR scans and the text is crisp before you start printing real labels.
+
+### Customizing the label
+
+**Settings → Label format** controls what every label looks like, with a live preview rendered against a sample filament:
+
+- **QR code** — place it on the **left**, **right**, or turn it **off** for a text-only label.
+- **Text fields** — choose a preset (*Name only*, *Vendor + Type*, *Vendor over Type*, *Type + Color*) or toggle individual fields (name, vendor, type, color). Multiple fields stack as separate lines (e.g. vendor over type).
+- **Font** — Sans, Serif, Monospace, or Condensed, plus a size (the renderer auto-fits the print head).
+- **Orientation** — horizontal or vertical text.
+- **Invert** — white text on a black background. The QR stays dark-on-light on its own tile so it still scans.
+
+The format is **global** — it applies to every label you print (and to the web `.bin` download). The print dialog still lets you choose the QR *payload* (instance ID vs URL) per print. There's intentionally no "remaining amount" field: a printed value goes stale the moment it prints, so scan the QR for the live number instead.
 
 ### Printing labels
 
-From any filament's detail page → **Export ▾** → **Print label**. The dialog renders a live preview at the printer's native dot density (pixelated CSS so what you see is what prints). Toggle between instance ID / deep link, then click **Print**.
+From any filament's detail page → **Export ▾** → **Print label**. The dialog renders a live preview at the printer's native dot density (pixelated CSS so what you see is what prints) using your saved format. Choose the QR payload (instance ID / deep link), then click **Print**.
 
 If you're running in the **web app instead of Electron**, the Print button downloads a `.bin` file containing the encoded byte stream — useful for inspection. Decode it locally with `npm run label:sim --in <file>` to see what would have printed.
 
-### What gets printed
-
-- **QR code** on the left, sized at the largest module-scale that fits the 116-dot print band (after the spec-required 4-module quiet zone). For payloads too long to fit even at scale 1, the dialog refuses to print rather than silently clipping.
-- **Filament name** on the right in bold Helvetica/Arial, scaled to the 56-dot text band height.
-- Label length is auto: short names + small QR ≈ 35mm; long names + URL QR ≈ 95mm.
-
 ### Troubleshooting
 
-- **"No serial ports detected"** in Settings → Label Printer: pair the PT-P710BT in System Settings → Bluetooth first, then click **Refresh**.
-- **"Print stalled — no progress in 25000ms"**: power-cycle the printer and try again. The transport closes the serial port on a stall, so retries don't hit a "port busy" error.
-- **macOS first-print prompt**: macOS 15+ may ask for permission to open a Bluetooth-backed serial port the first time. Approve in System Settings → Privacy & Security if it doesn't surface automatically.
-- **Brother says PT-P710BT Bluetooth is "mobile only"** — this app's desktop path uses the printer's standard Bluetooth Serial Port Profile and is community-validated. A future firmware update could in theory change the protocol; pin a known-working firmware if you depend on it heavily.
+- **No printer listed** in Settings → Label Printer: make sure the printer is connected with a USB **data** cable (charge-only cables power the printer but won't enumerate it) and powered on, then click **Refresh**. On Linux you may need to add the printer in your system print settings first.
+- **Upgrading from a pre-v1.34.9 build**: if you'd previously selected a Bluetooth/serial device, re-select your printer in Settings → Label Printer. The app detects the old serial-style setting and asks you to pick again rather than failing cryptically.
+- **Label prints mirrored** (text backwards, QR reversed): fixed in v1.34.9 — update to the latest version.
+- **Nothing printed even though it "succeeded"**: the PT-P710BT auto-powers-off when idle. Wake it (press its power button), confirm tape is loaded, and print again.
 
 ---
 

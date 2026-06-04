@@ -456,38 +456,46 @@ Jedes Filament hat eine eindeutige Instance-ID (5-Byte-Hex-String, z. B. `2acc21
 
 ## Etikettendrucker (nur Desktop-App) *(v1.34)*
 
-Drucke ein Spulen-Etikett (24-mm-Band) direkt von der Filament-Detailseite auf einen **Brother PT-P710BT** (P-touch CUBE) über Bluetooth. Das Etikett enthält einen QR-Code und den Filamentnamen. Zwei QR-Modi, die du pro Druck wählen kannst:
+Drucke ein Spulen-Etikett (24-mm-Band) direkt von der Filament-Detailseite auf einen **Brother PT-P710BT** (P-touch CUBE). Das Etikett enthält einen (optionalen) QR-Code und konfigurierbaren Text. Zwei QR-Modi, die du pro Druck wählen kannst:
 
 - **Spulen-Instanz-ID** — die 5-Byte-Hex-ID (z. B. `2acc21072a`). Kompakter, dichter QR; lässt sich erneut über den Match-Endpunkt einlesen und entspricht dem, was auf einem NFC-Tag steht.
 - **Deep-Link-URL** — eine vollständige URL zur Filament-Detailseite (z. B. `https://meine-instanz.lan/filaments/<id>`). Beim Scannen mit einem beliebigen Smartphone öffnet sich die Seite direkt — keine App nötig.
 
 Deine letzte Auswahl wird als Standard für den nächsten Druck gemerkt.
 
+> **Per USB verbinden, nicht per Bluetooth.** Das Bluetooth des PT-P710BT ist nur für iOS/Android; am Desktop verbindet sich der Drucker per **USB** und erscheint als gewöhnlicher USB-Drucker. Verwende ein USB-C-**Datenkabel** (kein reines Ladekabel). Die App druckt über das Drucksystem deines Betriebssystems — CUPS unter macOS/Linux, den Druckspooler unter Windows. *(Überarbeitet in v1.34.9; frühere Builds nutzten einen nicht unterstützten, instabilen Bluetooth-Serial-Pfad.)*
+
 ### Einmalige Einrichtung
 
-1. **Drucker zuerst im Betriebssystem koppeln**: Halte die Power-Taste des Druckers gedrückt, bis die Bluetooth-LED dauerhaft blau leuchtet. Füge ihn dann über Systemeinstellungen → Bluetooth hinzu (PIN ist meist leer oder `0000`). Brother liefert den PT-P710BT zwar mit Fokus auf iOS/Android aus, Desktop-Betriebssysteme (macOS / Windows / Linux) koppeln ihn aber als Bluetooth-Classic-Serial-Port-Gerät.
-2. **Desktop-App öffnen → Einstellungen → Etikettendrucker**. Klicke auf **Aktualisieren**, um gekoppelte serielle Ports zu scannen. Der PT-P710BT erscheint mit einem grünen **PT-Touch**-Badge. Wähle ihn aus.
+1. **Drucker per USB verbinden** und einschalten. Unter macOS/Linux ist er automatisch über CUPS erreichbar; unter Windows als normalen Drucker installieren, falls das Betriebssystem dazu auffordert.
+2. **Desktop-App öffnen → Einstellungen → Etikettendrucker**. Klicke auf **Aktualisieren**, um Drucker aufzulisten. Der PT-P710BT erscheint mit einem grünen **PT-Touch**-Badge (unter macOS/Linux als `usb://Brother/PT-P710BT…`-Gerät). Wähle ihn aus.
 3. **(Optional) Öffentliche URL für QR-Modus-Etiketten**: Wenn du Etiketten mit Deep-Link-URLs drucken willst, die auch vom Smartphone aus scanbar sind, setze zusätzlich das Feld **Öffentliche Basis-URL**. Der URL-Modus in der Desktop-App benötigt eine Nicht-Localhost-Adresse, weil `window.location.origin` im Renderer `http://localhost:3456` ist — von einem anderen Gerät aus nicht erreichbar. Beispiele: `https://filament-db.lan`, `https://meine-instanz.example.com`. Loopback-Adressen, Query-Strings und URL-Fragmente werden mit einer beschreibenden Fehlermeldung abgelehnt. Lass das Feld leer, um den URL-Modus in der Desktop-App zu deaktivieren — der Instanz-ID-Modus funktioniert auch ohne diese Einstellung.
-4. **Test-Druck**: Klicke auf **Test-Etikett drucken**, um ein kurzes Standard-Etikett zu senden. Bestätige, dass der QR scanbar und der Text gestochen scharf ist, bevor du echte Etiketten druckst.
+4. **Test-Druck**: Klicke auf **Test-Etikett drucken**, um ein kurzes Etikett mit deinem gespeicherten Format zu senden. Bestätige, dass der QR scanbar und der Text gestochen scharf ist, bevor du echte Etiketten druckst.
+
+### Etikett anpassen
+
+Unter **Einstellungen → Etikettenformat** legst du fest, wie jedes Etikett aussieht — mit einer Live-Vorschau anhand eines Beispiel-Filaments:
+
+- **QR-Code** — **links**, **rechts** oder **aus** (für ein reines Text-Etikett).
+- **Textfelder** — wähle eine Vorlage (*Nur Name*, *Hersteller + Typ*, *Hersteller über Typ*, *Typ + Farbe*) oder schalte einzelne Felder (Name, Hersteller, Typ, Farbe) ein/aus. Mehrere Felder werden als getrennte Zeilen gestapelt (z. B. Hersteller über Typ).
+- **Schriftart** — Serifenlos, Serif, Monospace oder Schmal, plus eine Größe (der Renderer passt sie an den Druckkopf an).
+- **Ausrichtung** — horizontaler oder vertikaler Text.
+- **Invertieren** — weißer Text auf schwarzem Hintergrund. Der QR bleibt dunkel auf hell auf seiner eigenen Kachel, damit er weiterhin scanbar ist.
+
+Das Format ist **global** — es gilt für jedes gedruckte Etikett (und den Web-`.bin`-Download). Der Druckdialog lässt dich weiterhin pro Druck den QR-*Payload* wählen (Instanz-ID vs. URL). Es gibt bewusst kein „Restmenge"-Feld: ein gedruckter Wert ist sofort veraltet — scanne stattdessen den QR für den Live-Wert.
 
 ### Etiketten drucken
 
-Auf einer beliebigen Filament-Detailseite → **Export ▾** → **Etikett drucken**. Der Dialog rendert eine Live-Vorschau in nativer Druckauflösung (pixelated CSS, damit du siehst was gedruckt wird). Wähle zwischen Instanz-ID / Deep-Link, dann klicke auf **Drucken**.
+Auf einer beliebigen Filament-Detailseite → **Export ▾** → **Etikett drucken**. Der Dialog rendert eine Live-Vorschau in nativer Druckauflösung (pixelated CSS, damit du siehst was gedruckt wird) mit deinem gespeicherten Format. Wähle den QR-Payload (Instanz-ID / Deep-Link), dann klicke auf **Drucken**.
 
 Wenn du die Web-App statt Electron nutzt, lädt der Drucken-Button stattdessen eine `.bin`-Datei mit dem kodierten Byte-Stream herunter — nützlich zur Inspektion. Lokal mit `npm run label:sim --in <Datei>` decodieren, um zu sehen was gedruckt worden wäre.
 
-### Was gedruckt wird
-
-- **QR-Code** links, mit der größten Modul-Skala, die in das 116-Dot-Druckband passt (nach der spec-vorgegebenen 4-Modul-Quiet-Zone). Bei Payloads, die selbst auf Skala 1 nicht passen, verweigert der Dialog den Druck statt still abzuschneiden.
-- **Filamentname** rechts in fettem Helvetica/Arial, skaliert auf die 56-Dot-Text-Bandhöhe.
-- Etikettenlänge ist auto: kurze Namen + kleiner QR ≈ 35 mm; lange Namen + URL-QR ≈ 95 mm.
-
 ### Fehlerbehebung
 
-- **„Keine seriellen Ports gefunden"** in Einstellungen → Etikettendrucker: Den PT-P710BT zuerst über Systemeinstellungen → Bluetooth koppeln, dann auf **Aktualisieren** klicken.
-- **„Druck stockt — kein Fortschritt in 25000ms"**: Drucker aus- und einschalten und erneut versuchen. Der Transport schließt den seriellen Port bei einem Stall, sodass Wiederholungen nicht auf einen „Port belegt"-Fehler stoßen.
-- **macOS-Erstdruck-Hinweis**: macOS 15+ fragt eventuell beim ersten Mal nach Berechtigung, einen Bluetooth-basierten seriellen Port zu öffnen. In Systemeinstellungen → Datenschutz & Sicherheit bestätigen, falls die Abfrage nicht automatisch erscheint.
-- **Brother sagt, der PT-P710BT-Bluetooth sei „nur mobil"** — der Desktop-Pfad dieser App nutzt das Standard-Bluetooth-Serial-Port-Profile des Druckers und ist Community-validiert. Ein zukünftiges Firmware-Update könnte das Protokoll theoretisch ändern; eine bekannt funktionierende Firmware-Version festhalten, falls man stark auf das Feature angewiesen ist.
+- **Kein Drucker aufgelistet** in Einstellungen → Etikettendrucker: Stelle sicher, dass der Drucker mit einem USB-**Datenkabel** verbunden (reine Ladekabel versorgen den Drucker, melden ihn aber nicht an) und eingeschaltet ist, dann auf **Aktualisieren** klicken. Unter Linux musst du den Drucker eventuell zuerst in den Systemeinstellungen für Drucker hinzufügen.
+- **Upgrade von einem Build vor v1.34.9**: Wenn du zuvor ein Bluetooth-/Serial-Gerät ausgewählt hattest, wähle deinen Drucker in Einstellungen → Etikettendrucker erneut aus. Die App erkennt die alte Serial-Einstellung und bittet dich um eine neue Auswahl, statt kryptisch fehlzuschlagen.
+- **Etikett wird gespiegelt gedruckt** (Text rückwärts, QR seitenverkehrt): in v1.34.9 behoben — auf die neueste Version aktualisieren.
+- **Nichts gedruckt, obwohl es „erfolgreich" war**: Der PT-P710BT schaltet sich im Leerlauf automatisch ab. Wecke ihn (Power-Taste drücken), prüfe das Band und drucke erneut.
 
 ---
 

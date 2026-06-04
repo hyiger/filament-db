@@ -84,6 +84,22 @@ From any filament's detail page:
 3. The app encodes the filament data as OpenPrintTag CBOR, wraps it in an NDEF message, and writes it block-by-block
 4. The button shows progress and success/failure feedback
 
+**Before overwriting, the app checks the tag** (v1.34.8 / #583):
+
+- If the tag **already holds data**, you get a confirmation prompt naming what's on it before it's overwritten.
+- A **Bambu Lab** tag (read-only) is refused with a friendly message rather than a raw write error.
+- A tag you've marked **read-only** (see below) is refused — erase it or make it writable first.
+- A genuinely **blank** tag is written straight through.
+
+### Read-only (soft lock) *(v1.34.8 / #583)*
+
+You can mark an OpenPrintTag **read-only** so the app won't accidentally overwrite a finished spool's tag. From **Settings → NFC Tools**, with a tag on the reader:
+
+- **Set Read-Only** — locks the tag. "Write NFC" then refuses it.
+- **Make Writable** — clears the lock.
+
+This is a *reversible* soft lock (it flips the NFC-Forum CC write-access bits, not a permanent hardware lock), so **Erase** also clears it. Bambu tags always report as read-only (they're RSA-signed). The read dialog shows a lock badge for a read-only tag.
+
 ### Erasing / Formatting Tags
 
 From the **Settings** page (Electron only):
@@ -94,7 +110,7 @@ From the **Settings** page (Electron only):
 4. The app writes a blank NFC Forum Type 5 header (CC bytes) to block 0, a terminator to block 1, and zeroes all remaining user memory blocks
 5. A success or error message appears when complete
 
-If you remove the tag before confirming, the confirmation prompt automatically dismisses.
+If you remove the tag before confirming, the confirmation prompt automatically dismisses. Erasing a **Bambu Lab** tag is refused with a clear "read-only" message (these tags are RSA-signed and can't be erased).
 
 ### OpenPrintTag Binary Export
 

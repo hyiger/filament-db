@@ -86,6 +86,22 @@ Von der Detailseite eines beliebigen Filaments:
 3. Die App codiert die Filamentdaten als OpenPrintTag-CBOR, verpackt sie in eine NDEF-Nachricht und schreibt sie blockweise
 4. Der Button zeigt Fortschritt und Erfolg/Fehler an
 
+**Vor dem Überschreiben prüft die App den Tag** (v1.34.8 / #583):
+
+- Enthält der Tag **bereits Daten**, erscheint eine Bestätigung, die benennt was darauf ist, bevor er überschrieben wird.
+- Ein **Bambu-Lab**-Tag (schreibgeschützt) wird mit einer freundlichen Meldung abgelehnt statt mit einem rohen Schreibfehler.
+- Ein von dir **schreibgeschützt** markierter Tag (siehe unten) wird abgelehnt — lösche ihn oder mache ihn zuerst beschreibbar.
+- Ein wirklich **leerer** Tag wird direkt beschrieben.
+
+### Schreibschutz (umkehrbar) *(v1.34.8 / #583)*
+
+Du kannst einen OpenPrintTag **schreibgeschützt** markieren, damit die App den Tag einer fertigen Spule nicht versehentlich überschreibt. Unter **Einstellungen → NFC-Tools**, mit einem Tag auf dem Reader:
+
+- **Schreibschutz aktivieren** — sperrt den Tag. „NFC schreiben" verweigert ihn dann.
+- **Beschreibbar machen** — hebt die Sperre auf.
+
+Das ist eine *umkehrbare* Soft-Sperre (sie kippt die Schreibzugriffs-Bits des NFC-Forum-CC, keine permanente Hardware-Sperre), daher hebt auch **Löschen** sie auf. Bambu-Tags melden sich immer als schreibgeschützt (sie sind RSA-signiert). Der Lesedialog zeigt für einen schreibgeschützten Tag ein Schloss-Badge.
+
 ### Tags löschen / formatieren
 
 Über die Seite **Einstellungen** (nur Electron):
@@ -96,7 +112,7 @@ Von der Detailseite eines beliebigen Filaments:
 4. Die App schreibt einen leeren NFC-Forum-Type-5-Header (CC-Bytes) in Block 0, einen Terminator in Block 1 und nullt alle übrigen Nutzerblöcke
 5. Nach Abschluss erscheint eine Erfolgs- oder Fehlermeldung
 
-Wenn du den Tag entfernst, bevor du bestätigst, schließt sich die Bestätigung automatisch.
+Wenn du den Tag entfernst, bevor du bestätigst, schließt sich die Bestätigung automatisch. Das Löschen eines **Bambu-Lab**-Tags wird mit einer klaren „schreibgeschützt"-Meldung abgelehnt (diese Tags sind RSA-signiert und können nicht gelöscht werden).
 
 ### OpenPrintTag-Binärexport
 
