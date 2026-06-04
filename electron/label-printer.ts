@@ -24,7 +24,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, unlink } from "node:fs/promises";
+import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -282,11 +282,15 @@ async function ensureManagedQueue(uri: string): Promise<void> {
 }
 
 async function printWindows(printerName: string, bytes: Uint8Array): Promise<void> {
-  // The spooler RAW datatype needs the bytes as a file; pass it + the
-  // printer name to a P/Invoke script that calls winspool WritePrinter.
-  const stamp = `${process.pid}-${bytes.length}`;
-  const dataPath = join(tmpdir(), `fdb-label-${stamp}.bin`);
-  const scriptPath = join(tmpdir(), `fdb-label-${stamp}.ps1`);
+  // The spooler RAW datatype needs the bytes as a file; pass it + the printer
+  // name to a P/Invoke script that calls winspool WritePrinter. Use a unique
+  // per-call temp dir (mkdtemp) so concurrent prints — e.g. a print + a test
+  // print, or two windows — can't collide on the same path, overwrite each
+  // other's .bin mid-job, or delete a file the other is still reading.
+  // (Codex P2 on PR #589.)
+  const dir = await mkdtemp(join(tmpdir(), "fdb-label-"));
+  const dataPath = join(dir, "label.bin");
+  const scriptPath = join(dir, "print.ps1");
   await writeFile(dataPath, Buffer.from(bytes));
   await writeFile(scriptPath, WINDOWS_RAW_PRINT_PS1, "utf8");
   try {
@@ -301,8 +305,7 @@ async function printWindows(printerName: string, bytes: Uint8Array): Promise<voi
       { timeout: EXEC_TIMEOUT_MS },
     );
   } finally {
-    await unlink(dataPath).catch(() => {});
-    await unlink(scriptPath).catch(() => {});
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
 
