@@ -350,6 +350,36 @@ function FilamentDetail() {
 
   const handleNfcWrite = async () => {
     if (!filament) return;
+
+    // GH #583: probe the tag before overwriting it.
+    //  • a Bambu Lab tag is read-only → refuse with a friendly message
+    //    (writing would fail with a raw MIFARE error otherwise)
+    //  • a tag that already holds filament data → confirm before clobbering
+    //  • a blank/unformatted tag (read throws) → write straight through
+    try {
+      const existing = (await window.electronAPI?.nfcReadTag?.()) as
+        | { tagSource?: string; materialName?: string; brandName?: string }
+        | null
+        | undefined;
+      if (existing) {
+        if (existing.tagSource === "bambu") {
+          toast(t("detail.nfc.bambuReadOnly"), "error");
+          return;
+        }
+        const ok = await confirm({
+          title: t("detail.nfc.overwriteTitle"),
+          message: t("detail.nfc.overwriteConfirm", {
+            name: existing.materialName || existing.brandName || t("detail.nfc.overwriteUnknown"),
+          }),
+          confirmLabel: t("detail.nfc.overwriteConfirmBtn"),
+          destructive: true,
+        });
+        if (!ok) return;
+      }
+    } catch {
+      // read threw → blank / unformatted tag, safe to write directly
+    }
+
     setNfcWriteSuccess(null);
     try {
       // Compute actual remaining weight from the most recent scale reading

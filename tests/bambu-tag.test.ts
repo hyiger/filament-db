@@ -114,13 +114,18 @@ describe("Bambu Tag Decoder", () => {
       expect(data.minHotendTemp).toBe(190);
     });
 
-    it("parses tray UID from block 9", () => {
+    it("decodes tray UID from block 9 as uppercase hex (GH #583)", () => {
+      // Real Bambu tags carry a 16-byte BINARY tray UID in block 9, not an
+      // ASCII string — decoding it as ASCII surfaced garbled characters in
+      // the "Instance ID" field. Use a binary fixture to pin the hex decode.
       const blocks = makeBlocks();
-      blocks[9] = Buffer.alloc(16);
-      blocks[9]!.write("TRAY12345678", 0, "ascii");
+      blocks[9] = Buffer.from([
+        0x04, 0xe1, 0x5c, 0xa2, 0x7f, 0x00, 0x91, 0x3b,
+        0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04,
+      ]);
 
       const data = parseBambuBlocks(blocks);
-      expect(data.trayUid).toBe("TRAY12345678");
+      expect(data.trayUid).toBe("04E15CA27F00913BDEADBEEF01020304");
     });
 
     it("parses spool width from block 10", () => {
@@ -320,7 +325,9 @@ describe("Bambu Tag Decoder", () => {
       expect(result.weightGrams).toBe(1000);
       expect(result.diameter).toBeCloseTo(1.75, 2);
       expect(result.dryingTemperature).toBe(55);
-      expect(result.spoolUid).toBe("TRAY00ABC");
+      // GH #583: block 9 (tray UID) is decoded as uppercase hex, not ASCII.
+      // "TRAY00ABC" → 54 52 41 59 30 30 41 42 43 + 7 zero-pad bytes.
+      expect(result.spoolUid).toBe("54524159303041424300000000000000");
       expect(result.materialAbbreviation).toBe("A50-K0");
     });
 

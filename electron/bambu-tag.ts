@@ -115,8 +115,13 @@ export function parseBambuBlocks(blocks: (Buffer | undefined)[]): BambuTagData {
   const maxHotendTemp = b6.readUInt16LE(8);
   const minHotendTemp = b6.readUInt16LE(10);
 
-  // Block 9: Tray UID (16 bytes)
-  const trayUid = readString(block(9), 0, 16);
+  // Block 9: Tray UID (16 bytes).
+  // GH #583: this is 16 raw BINARY bytes, not an ASCII string. Decoding it
+  // as ASCII (the old behaviour) surfaced unprintable/garbled characters in
+  // the "Instance ID" field of the read dialog. Render it as uppercase hex
+  // — a stable, copyable identifier, matching how the community Bambu RFID
+  // tooling displays the tray UID.
+  const trayUid = block(9).toString("hex").toUpperCase();
 
   // Block 10: pad (0-3) + Spool Width uint16 LE (4-5, ÷100 for mm)
   const b10 = block(10);

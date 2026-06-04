@@ -548,6 +548,26 @@ export class NfcService extends EventEmitter {
     return bambuToDecodedTag(bambuData);
   }
 
+  /**
+   * Probe whether the tag in the field is a Bambu Lab MIFARE Classic tag.
+   * Attempts the UID-derived Key-A auth on sector 0 (the first step of
+   * {@link readBambuTag}); success means the tag answered the Bambu key
+   * derivation, so it's a Bambu tag. Bambu tags are RSA-signed and
+   * read-only, so erase/format must refuse them with a friendly message
+   * rather than failing on the raw ISO 15693 `readBlock(0)` (GH #583).
+   */
+  private async isBambuTag(protocol: number): Promise<boolean> {
+    try {
+      const uid = await this.getUID(protocol);
+      const keys = deriveBambuKeys(uid);
+      await this.loadMifareKey(protocol, 0, keys[0]);
+      await this.authenticateMifareBlock(protocol, 0, 0x60, 0); // Key A, sector 0
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   // ── High-level operations ───────────────────────────────────────
 
   /** Read an OpenPrintTag (NFC-V / ISO 15693) tag. */
@@ -670,6 +690,24 @@ export class NfcService extends EventEmitter {
   }
 
   async formatTag(): Promise<void> {
+    // GH #583: a Bambu Lab tag is MIFARE Classic (ISO 14443) and read-only
+    // (RSA-signed). The ISO 15693 `readBlock(0)` below would fail on it with
+    // a raw "Read block 0 failed: SW=6a81" — opaque to the user. Detect it
+    // first (mirroring readTag's dispatch) and surface a friendly read-only
+    // message. Run the probe in its OWN connection so a failed MIFARE auth
+    // doesn't leave the reader in a stale state for the 15693 format below.
+    let bambu = false;
+    try {
+      bambu = await this.withConnection((protocol) => this.isBambuTag(protocol));
+    } catch {
+      bambu = false;
+    }
+    if (bambu) {
+      throw new Error(
+        "BAMBU_READ_ONLY: Bambu Lab tags are RSA-signed and read-only — they cannot be erased.",
+      );
+    }
+
     return this.withConnection(async (protocol) => {
       // Read block 0 to get memory size from the CC. GH #301: the raw
       // MLEN byte is sanitized before it's trusted for numBlocks OR

@@ -175,7 +175,12 @@ export default function SettingsPage() {
       notifyTagErased();
       setFormatResult({ ok: true, message: t("settings.nfcEraseSuccess") });
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
+      const raw = err instanceof Error ? err.message : String(err);
+      // GH #583: a Bambu Lab tag is read-only — surface a friendly message
+      // instead of the raw "Read block 0 failed: SW=6a81" the format throws.
+      const message = raw.includes("BAMBU_READ_ONLY")
+        ? t("settings.nfcEraseBambuReadOnly")
+        : raw;
       setFormatResult({ ok: false, message });
     } finally {
       setFormatting(false);
@@ -880,23 +885,10 @@ export default function SettingsPage() {
             {t("settings.nfcToolsDesc")}
           </p>
 
-          <div className="flex items-center gap-3 mb-4">
-            <span className={`inline-block w-2.5 h-2.5 rounded-full ${
-              nfcStatus.tagPresent
-                ? "bg-green-500"
-                : nfcStatus.readerConnected
-                  ? "bg-yellow-500"
-                  : "bg-gray-600"
-            }`} />
-            <span className="text-sm text-gray-500 dark:text-gray-400">
-              {nfcStatus.tagPresent
-                ? t("settings.nfcTagDetected", { uid: nfcStatus.tagUid ? nfcStatus.tagUid.slice(-8).toUpperCase() : "" })
-                : nfcStatus.readerConnected
-                  ? t("settings.nfcReaderReady")
-                  : t("settings.nfcNoReader")}
-            </span>
-          </div>
-
+          {/* GH #583: the reader/tag status indicator that used to live here
+              is redundant with the global NFC pill in the app header
+              (NfcStatus), so it was removed. The Erase button's disabled
+              state below still gates on nfcStatus.tagPresent. */}
           {!showFormatConfirmVisible ? (
             <button
               onClick={() => { setShowFormatConfirm(true); setFormatResult(null); }}
