@@ -11,7 +11,7 @@ import {
 import { encodeLabel, packGrayscaleBitmap } from "@/lib/labelEncoder";
 import { isLoopbackUrl } from "@/lib/loopbackHost";
 import { useLabelFormat } from "@/hooks/useLabelFormat";
-import type { LabelFilament } from "@/lib/labelFormat";
+import { composeLabelLines, type LabelFilament } from "@/lib/labelFormat";
 
 /**
  * Print-label dialog for the filament detail page.
@@ -196,10 +196,16 @@ export default function PrintLabelDialog({
 
   const qrPayload = fallbackQrMode === "instanceId" ? filament.instanceId ?? "" : deepLinkUrl;
 
-  // GH #592: a QR payload is only required when the saved format actually
-  // shows a QR. With "QR off" the label is text-only, so it can preview +
-  // print with an empty payload (Codex P2 on PR #593).
-  const needsPayload = format.qr.enabled;
+  // GH #592: a label is printable when it has SOMETHING on it — a QR (format
+  // enables it AND a payload resolved) or at least one non-empty text line.
+  // This both unblocks "QR off" text-only labels (Codex P2) and blocks a
+  // blank label when QR is off and every selected field is empty (Codex P3).
+  const hasQr = format.qr.enabled && !!qrPayload;
+  const hasText = useMemo(
+    () => composeLabelLines(labelFilament, format).length > 0,
+    [labelFilament, format],
+  );
+  const canPrint = hasQr || hasText;
 
   /* --- live preview --- */
   // Combined state for the preview keeps the effect down to a single
@@ -214,7 +220,7 @@ export default function PrintLabelDialog({
   const [preview, setPreview] = useState<PreviewState>({ status: "idle" });
 
   useEffect(() => {
-    if (!open || (needsPayload && !qrPayload)) {
+    if (!open || !canPrint) {
       // Intentional synchronous state reset when the dialog closes or
       // the payload becomes empty — the effect is the right driver here
       // because the outputs depend on `open` / `qrPayload`. Matches the
@@ -244,7 +250,7 @@ export default function PrintLabelDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, qrPayload, needsPayload, labelFilament, format]);
+  }, [open, qrPayload, canPrint, labelFilament, format]);
 
   /* --- print / download handler ---
    *
@@ -511,7 +517,7 @@ export default function PrintLabelDialog({
           <button
             type="button"
             onClick={handlePrint}
-            disabled={printing || (needsPayload && !qrPayload) || preview.status !== "ready"}
+            disabled={printing || !canPrint || preview.status !== "ready"}
             className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {printing ? t("printLabel.printing") : t("printLabel.print")}
