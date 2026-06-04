@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import {
   LabelFormat,
   DEFAULT_LABEL_FORMAT,
@@ -10,6 +10,12 @@ import {
 /**
  * useLabelFormat — the global label-formatting config (GH #592).
  *
+ * Backed by a module-level store via useSyncExternalStore so every mounted
+ * instance shares live state: editing the format in LabelFormatEditor is
+ * immediately visible to LabelPrinterSettings' test print and to the
+ * PrintLabelDialog on the same page, not just after a remount (Codex P3 on
+ * PR #593).
+ *
  * Persistence mirrors useCurrency: electron-store (via the generic
  * getConfig/saveConfig bridge) is the source of truth on desktop; a
  * localStorage copy serves SSR / web-mode users (the web `.bin` download
@@ -18,6 +24,10 @@ import {
  */
 
 const STORAGE_KEY = "filamentdb-label-format";
+
+let store: LabelFormat | null = null;
+let hydrated = false; // electron-store hydration runs once per session
+const listeners = new Set<() => void>();
 
 function readInitial(): LabelFormat {
   if (typeof window === "undefined") return DEFAULT_LABEL_FORMAT;
@@ -30,11 +40,56 @@ function readInitial(): LabelFormat {
   return DEFAULT_LABEL_FORMAT;
 }
 
-export function useLabelFormat() {
-  const [format, setFormatState] = useState<LabelFormat>(readInitial);
+function getSnapshot(): LabelFormat {
+  if (store === null) store = readInitial();
+  return store;
+}
 
-  // Hydrate from electron-store on desktop (overrides the localStorage seed).
+function getServerSnapshot(): LabelFormat {
+  return DEFAULT_LABEL_FORMAT;
+}
+
+function subscribe(cb: () => void): () => void {
+  listeners.add(cb);
+  return () => {
+    listeners.delete(cb);
+  };
+}
+
+function emit() {
+  for (const l of listeners) l();
+}
+
+function persist(fmt: LabelFormat) {
+  const json = JSON.stringify(fmt);
+  const api = typeof window !== "undefined" ? window.electronAPI : undefined;
+  if (api?.saveConfig) {
+    api.saveConfig({ labelFormat: json } as Record<string, string>).catch(() => {});
+  } else {
+    try {
+      localStorage.setItem(STORAGE_KEY, json);
+    } catch {
+      // ignore — quota / disabled storage
+    }
+  }
+}
+
+/** Update the global format: normalize, persist, and notify all instances. */
+export function setLabelFormat(next: LabelFormat) {
+  store = normalizeLabelFormat(next);
+  persist(store);
+  emit();
+}
+
+export function useLabelFormat() {
+  const format = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+
+  // One-time electron-store hydration (overrides the localStorage seed on
+  // desktop). Module-scoped so it runs once regardless of how many instances
+  // mount; the emit() updates every subscriber.
   useEffect(() => {
+    if (hydrated) return;
+    hydrated = true;
     const api = window.electronAPI;
     if (!api?.getConfig) return;
     api
@@ -43,31 +98,15 @@ export function useLabelFormat() {
         const c = cfg as Record<string, unknown>;
         if (typeof c.labelFormat === "string") {
           try {
-            setFormatState(normalizeLabelFormat(JSON.parse(c.labelFormat)));
+            store = normalizeLabelFormat(JSON.parse(c.labelFormat));
+            emit();
           } catch {
             /* corrupt stored value → keep current */
           }
         }
       })
       .catch(() => {});
-    // Mount-only hydration.
   }, []);
 
-  const setFormat = useCallback((next: LabelFormat) => {
-    const norm = normalizeLabelFormat(next);
-    setFormatState(norm);
-    const json = JSON.stringify(norm);
-    const api = window.electronAPI;
-    if (api?.saveConfig) {
-      api.saveConfig({ labelFormat: json } as Record<string, string>).catch(() => {});
-    } else {
-      try {
-        localStorage.setItem(STORAGE_KEY, json);
-      } catch {
-        // ignore — quota / disabled storage
-      }
-    }
-  }, []);
-
-  return { format, setFormat };
+  return { format, setFormat: setLabelFormat };
 }

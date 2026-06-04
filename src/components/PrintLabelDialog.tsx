@@ -196,6 +196,11 @@ export default function PrintLabelDialog({
 
   const qrPayload = fallbackQrMode === "instanceId" ? filament.instanceId ?? "" : deepLinkUrl;
 
+  // GH #592: a QR payload is only required when the saved format actually
+  // shows a QR. With "QR off" the label is text-only, so it can preview +
+  // print with an empty payload (Codex P2 on PR #593).
+  const needsPayload = format.qr.enabled;
+
   /* --- live preview --- */
   // Combined state for the preview keeps the effect down to a single
   // setState call (per the project's react-hooks/set-state-in-effect
@@ -209,7 +214,7 @@ export default function PrintLabelDialog({
   const [preview, setPreview] = useState<PreviewState>({ status: "idle" });
 
   useEffect(() => {
-    if (!open || !qrPayload) {
+    if (!open || (needsPayload && !qrPayload)) {
       // Intentional synchronous state reset when the dialog closes or
       // the payload becomes empty — the effect is the right driver here
       // because the outputs depend on `open` / `qrPayload`. Matches the
@@ -239,7 +244,7 @@ export default function PrintLabelDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, qrPayload, labelFilament, format]);
+  }, [open, qrPayload, needsPayload, labelFilament, format]);
 
   /* --- print / download handler ---
    *
@@ -506,7 +511,7 @@ export default function PrintLabelDialog({
           <button
             type="button"
             onClick={handlePrint}
-            disabled={printing || !qrPayload || preview.status !== "ready"}
+            disabled={printing || (needsPayload && !qrPayload) || preview.status !== "ready"}
             className="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {printing ? t("printLabel.printing") : t("printLabel.print")}
