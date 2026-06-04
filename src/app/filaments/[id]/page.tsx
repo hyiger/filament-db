@@ -348,37 +348,51 @@ function FilamentDetail() {
     }
   };
 
+  // GH #583: probe the tag before any write entry point clobbers it. Shared
+  // by the explicit "Write NFC" button and the "Update NFC" weight path so a
+  // Bambu (read-only) tag is refused consistently — Codex P2 on PR #584.
+  //  • Bambu Lab tag → read-only, refuse with a friendly toast (writing would
+  //    otherwise fail with a raw MIFARE error)
+  //  • non-blank tag + confirmOverwrite → confirm before clobbering existing data
+  //  • blank/unformatted tag (read throws) → allow, write straight through
+  // Returns true if the caller should proceed with the write.
+  const ensureTagWritable = useCallback(
+    async ({ confirmOverwrite = false }: { confirmOverwrite?: boolean } = {}): Promise<boolean> => {
+      try {
+        const existing = (await window.electronAPI?.nfcReadTag?.()) as
+          | { tagSource?: string; materialName?: string; brandName?: string }
+          | null
+          | undefined;
+        if (existing) {
+          if (existing.tagSource === "bambu") {
+            toast(t("detail.nfc.bambuReadOnly"), "error");
+            return false;
+          }
+          if (confirmOverwrite) {
+            const ok = await confirm({
+              title: t("detail.nfc.overwriteTitle"),
+              message: t("detail.nfc.overwriteConfirm", {
+                name: existing.materialName || existing.brandName || t("detail.nfc.overwriteUnknown"),
+              }),
+              confirmLabel: t("detail.nfc.overwriteConfirmBtn"),
+              destructive: true,
+            });
+            if (!ok) return false;
+          }
+        }
+      } catch {
+        // read threw → blank / unformatted tag, safe to write directly
+      }
+      return true;
+    },
+    [toast, t, confirm],
+  );
+
   const handleNfcWrite = async () => {
     if (!filament) return;
 
-    // GH #583: probe the tag before overwriting it.
-    //  • a Bambu Lab tag is read-only → refuse with a friendly message
-    //    (writing would fail with a raw MIFARE error otherwise)
-    //  • a tag that already holds filament data → confirm before clobbering
-    //  • a blank/unformatted tag (read throws) → write straight through
-    try {
-      const existing = (await window.electronAPI?.nfcReadTag?.()) as
-        | { tagSource?: string; materialName?: string; brandName?: string }
-        | null
-        | undefined;
-      if (existing) {
-        if (existing.tagSource === "bambu") {
-          toast(t("detail.nfc.bambuReadOnly"), "error");
-          return;
-        }
-        const ok = await confirm({
-          title: t("detail.nfc.overwriteTitle"),
-          message: t("detail.nfc.overwriteConfirm", {
-            name: existing.materialName || existing.brandName || t("detail.nfc.overwriteUnknown"),
-          }),
-          confirmLabel: t("detail.nfc.overwriteConfirmBtn"),
-          destructive: true,
-        });
-        if (!ok) return;
-      }
-    } catch {
-      // read threw → blank / unformatted tag, safe to write directly
-    }
+    // Explicit Write button → confirm before overwriting a tag that holds data.
+    if (!(await ensureTagWritable({ confirmOverwrite: true }))) return;
 
     setNfcWriteSuccess(null);
     try {
@@ -441,6 +455,10 @@ function FilamentDetail() {
 
   const handleNfcWeightUpdate = useCallback(async (scaleWeight: number) => {
     if (!filament || filament.spoolWeight == null) return;
+    // Bambu (read-only) tags can't be written — refuse with the friendly
+    // message here too (no overwrite confirm: a weight update is a deliberate
+    // re-write of this filament's own tag). Codex P2 on PR #584.
+    if (!(await ensureTagWritable())) return;
     const actualRemaining = Math.max(0, scaleWeight - filament.spoolWeight);
     setNfcWriteSuccess(null);
     try {
@@ -495,7 +513,7 @@ function FilamentDetail() {
       if (nfcWriteTimerRef.current) clearTimeout(nfcWriteTimerRef.current);
       nfcWriteTimerRef.current = setTimeout(() => setNfcWriteSuccess(null), 5000);
     }
-  }, [filament, writeTag, notifyTagWritten, toast, t]);
+  }, [filament, writeTag, notifyTagWritten, toast, t, ensureTagWritable]);
 
   const handleWeightUpdate = async () => {
     if (!filament) return;
