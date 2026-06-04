@@ -1,247 +1,177 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 /**
- * GH #526 — transport-layer tests for electron/label-printer.ts.
+ * GH #588 — transport-layer tests for electron/label-printer.ts.
  *
- * The Brother PT-P710BT transport (printLabel) wraps `serialport` with a
- * stall watchdog and a single settleWithCleanup() path that must close the
- * port before rejecting on every failure mode. None of that had coverage —
- * the file is outside the enforced coverage scope (electron/ is excluded),
- * so CI gave no signal on a regression in the cleanup invariants the code's
- * own comments call out as Codex rounds 4–6 on PR #487.
- *
- * `serialport` is mocked with a controllable fake so each test drives a
- * specific open/write/drain/close/error sequence. The fake records close()
- * calls so we can assert the "always close before reject" invariant.
+ * The label printer now talks to the OS print system instead of serialport:
+ * on macOS/Linux it shells out to CUPS (`lpstat`/`lpinfo` to list, `lp -o raw`
+ * to print, auto-managing a hidden raw queue for `usb://` devices); on Windows
+ * it drives the spooler via PowerShell. These tests mock `node:child_process`
+ * and exercise the CUPS path (the test runner is darwin/linux). The Windows
+ * branch is gated on `process.platform === "win32"` and isn't covered here —
+ * it needs a real Windows host.
  */
 
-// vi.mock is hoisted; share mutable state with the factory via vi.hoisted.
 const h = vi.hoisted(() => {
-  type FakeCfg = {
-    constructorError?: Error;
-    openError?: Error;
-    openHangs?: boolean; // open() never calls its cb (simulates a hung RFCOMM open)
-    writeError?: Error;
-    writeHangs?: boolean; // write() never calls its cb (so an async error event can win)
-    drainError?: Error;
-    closeError?: Error;
+  const state = {
+    execCalls: [] as { cmd: string; args: string[] }[],
+    // Map a command invocation to its result.
+    execImpl: (() => ({ stdout: "" })) as (cmd: string, args: string[]) => { stdout?: string; stderr?: string; error?: Error },
+    spawnCalls: [] as { cmd: string; args: string[] }[],
+    spawn: { exitCode: 0 as number | null, stderr: "", written: null as Buffer | null, errorOnSpawn: null as Error | null },
   };
-  const state: {
-    cfg: FakeCfg;
-    instances: FakeInstance[];
-  } = { cfg: {}, instances: [] };
-
-  interface FakeInstance {
-    path: string;
-    isOpen: boolean;
-    written: Buffer | null;
-    closeCalls: number;
-    errorHandler: ((err: Error) => void) | null;
-    pendingOpenCb: ((err: Error | null) => void) | null;
-    open: (cb: (err: Error | null) => void) => void;
-    write: (buf: Buffer, cb: (err?: Error | null) => void) => void;
-    drain: (cb: (err?: Error | null) => void) => void;
-    close: (cb?: (err?: Error | null) => void) => void;
-    on: (event: string, handler: (err: Error) => void) => void;
-    emitError: (err: Error) => void;
-    /** Fire a previously-hung open() callback (for the post-timeout late-open test). */
-    resolveOpen: () => void;
-  }
-
-  return { state, _typeMarker: undefined as unknown as FakeInstance };
+  return { state };
 });
 
-vi.mock("serialport", () => {
-  class SerialPort {
-    path: string;
-    isOpen = false;
-    written: Buffer | null = null;
-    closeCalls = 0;
-    errorHandler: ((err: Error) => void) | null = null;
-    pendingOpenCb: ((err: Error | null) => void) | null = null;
+vi.mock("node:child_process", () => {
+  // Give the mock the same util.promisify.custom shape the real execFile has,
+  // so `promisify(execFile)` resolves to { stdout, stderr } (not just stdout).
+  const execFile = (() => {}) as unknown as {
+    (...a: unknown[]): unknown;
+    [k: symbol]: unknown;
+  };
+  execFile[Symbol.for("nodejs.util.promisify.custom")] = (cmd: string, args: string[]) => {
+    h.state.execCalls.push({ cmd, args });
+    const res = h.state.execImpl(cmd, args);
+    if (res.error) return Promise.reject(Object.assign(res.error, { stderr: res.stderr ?? "" }));
+    return Promise.resolve({ stdout: res.stdout ?? "", stderr: res.stderr ?? "" });
+  };
 
-    // The real SerialPort accepts an optional open callback as a 2nd arg, but
-    // with autoOpen:false it is never invoked, so the fake omits it entirely
-    // (JS ignores the extra constructor arg the transport still passes). A
-    // "constructor error" therefore surfaces as a synchronous throw below.
-    constructor(opts: { path: string; baudRate: number; autoOpen: boolean }) {
-      this.path = opts.path;
-      h.state.instances.push(this as unknown as never);
-      // With autoOpen:false the real SerialPort does NOT forward the
-      // constructor callback (it's only wired to the implicit open when
-      // autoOpen is on) — a bad path/options THROWS synchronously instead.
-      // So a "constructor error" must surface as a synchronous throw, which
-      // is exactly what the transport's try/catch around `new SerialPort`
-      // is there to catch. Calling cb here would exercise a code path the
-      // real dependency never takes (Codex P3 on PR #543).
-      if (h.state.cfg.constructorError) {
-        throw h.state.cfg.constructorError;
-      }
-      // autoOpen:false → the callback is never invoked on success either.
-    }
+  const spawn = (cmd: string, args: string[]) => {
+    h.state.spawnCalls.push({ cmd, args });
+    const listeners: Record<string, ((...a: unknown[]) => void)[]> = {};
+    const fire = (ev: string, ...a: unknown[]) => (listeners[ev] ?? []).forEach((fn) => fn(...a));
+    const child = {
+      stdin: {
+        on: () => {},
+        end: (buf: Buffer) => {
+          h.state.spawn.written = buf;
+          // Resolve on the next microtask, after close/error handlers are wired.
+          queueMicrotask(() => {
+            if (h.state.spawn.errorOnSpawn) fire("error", h.state.spawn.errorOnSpawn);
+            else fire("close", h.state.spawn.exitCode);
+          });
+        },
+      },
+      stderr: {
+        on: (ev: string, fn: (d: Buffer) => void) => {
+          if (ev === "data" && h.state.spawn.stderr) fn(Buffer.from(h.state.spawn.stderr));
+        },
+      },
+      on: (ev: string, fn: (...a: unknown[]) => void) => { (listeners[ev] ??= []).push(fn); },
+      kill: () => {},
+    };
+    return child;
+  };
 
-    open(cb: (err: Error | null) => void) {
-      if (h.state.cfg.openHangs) {
-        this.pendingOpenCb = cb; // never call — caller's watchdog must fire
-        return;
-      }
-      if (h.state.cfg.openError) {
-        cb(h.state.cfg.openError);
-        return;
-      }
-      this.isOpen = true;
-      cb(null);
-    }
-
-    /** Fire a hung open() callback after the fact (success). */
-    resolveOpen() {
-      if (this.pendingOpenCb) {
-        this.isOpen = true;
-        const cb = this.pendingOpenCb;
-        this.pendingOpenCb = null;
-        cb(null);
-      }
-    }
-
-    write(buf: Buffer, cb: (err?: Error | null) => void) {
-      this.written = buf;
-      if (h.state.cfg.writeHangs) return; // never call cb — let an error event race in
-      cb(h.state.cfg.writeError ?? null);
-    }
-
-    drain(cb: (err?: Error | null) => void) {
-      cb(h.state.cfg.drainError ?? null);
-    }
-
-    close(cb?: (err?: Error | null) => void) {
-      this.isOpen = false;
-      this.closeCalls++;
-      cb?.(h.state.cfg.closeError ?? null);
-    }
-
-    on(event: string, handler: (err: Error) => void) {
-      if (event === "error") this.errorHandler = handler;
-    }
-
-    emitError(err: Error) {
-      this.errorHandler?.(err);
-    }
-
-    static list = async () => [];
-  }
-  return { SerialPort };
+  return { execFile, spawn };
 });
 
-import { printLabel } from "../electron/label-printer";
+import { listLabelPrinters, printLabel } from "../electron/label-printer";
 
 const BYTES = new Uint8Array([0x1b, 0x40, 0x41, 0x42]);
+const BROTHER_URI = "usb://Brother/PT-P710BT?serial=000M5G671606";
 
 beforeEach(() => {
-  h.state.cfg = {};
-  h.state.instances = [];
-  vi.useRealTimers();
+  h.state.execCalls = [];
+  h.state.spawnCalls = [];
+  h.state.execImpl = () => ({ stdout: "" });
+  h.state.spawn = { exitCode: 0, stderr: "", written: null, errorOnSpawn: null };
 });
 
-function lastInstance() {
-  return h.state.instances[h.state.instances.length - 1] as unknown as {
-    isOpen: boolean;
-    written: Buffer | null;
-    closeCalls: number;
-    emitError: (err: Error) => void;
-    resolveOpen: () => void;
-  };
-}
+// Skip on Windows — that branch uses a different (PowerShell) transport.
+const cups = process.platform !== "win32";
+const d = cups ? describe : describe.skip;
 
-describe("printLabel — happy path", () => {
-  it("opens, writes the bytes, drains, closes, and resolves", async () => {
-    await expect(printLabel("/dev/tty.fake", BYTES)).resolves.toBeUndefined();
-    const inst = lastInstance();
-    expect(inst.written).toEqual(Buffer.from(BYTES));
-    expect(inst.closeCalls).toBe(1);
-    expect(inst.isOpen).toBe(false);
-  });
-});
-
-describe("printLabel — failure routing through settleWithCleanup", () => {
-  it("rejects on a constructor error (no port to close)", async () => {
-    h.state.cfg.constructorError = new Error("bad device path");
-    await expect(printLabel("/dev/nope", BYTES)).rejects.toThrow("bad device path");
-  });
-
-  it("rejects on an open() error", async () => {
-    h.state.cfg.openError = new Error("port busy");
-    await expect(printLabel("/dev/tty.fake", BYTES)).rejects.toThrow("port busy");
-    // open() failed → never opened → nothing to close.
-    expect(lastInstance().closeCalls).toBe(0);
+d("listLabelPrinters (CUPS)", () => {
+  it("surfaces installed queues and available usb devices, badging PT printers", async () => {
+    h.state.execImpl = (cmd, args) => {
+      if (cmd === "lpstat" && args[0] === "-v") {
+        return { stdout: "device for HP_DeskJet: ipp://hp.local/\n" };
+      }
+      if (cmd === "lpinfo") {
+        return { stdout: `direct ${BROTHER_URI}\nnetwork socket://10.0.0.5\n` };
+      }
+      return { stdout: "" };
+    };
+    const devices = await listLabelPrinters();
+    const brother = devices.find((x) => x.path === BROTHER_URI);
+    const hp = devices.find((x) => x.path === "HP_DeskJet");
+    expect(brother).toBeTruthy();
+    expect(brother!.looksLikePrinter).toBe(true);
+    expect(brother!.friendlyName).toMatch(/Brother PT-P710BT.*USB/);
+    expect(hp).toBeTruthy();
+    expect(hp!.looksLikePrinter).toBe(false);
+    // socket:// is not a usb device → not listed.
+    expect(devices.some((x) => x.path.startsWith("socket://"))).toBe(false);
   });
 
-  it("routes a write() failure through cleanup — closes the open port before rejecting", async () => {
-    h.state.cfg.writeError = new Error("write EIO");
-    await expect(printLabel("/dev/tty.fake", BYTES)).rejects.toThrow("write EIO");
-    expect(lastInstance().closeCalls).toBe(1);
-  });
-
-  it("routes a drain() failure through cleanup — closes before rejecting", async () => {
-    h.state.cfg.drainError = new Error("drain stalled");
-    await expect(printLabel("/dev/tty.fake", BYTES)).rejects.toThrow("drain stalled");
-    expect(lastInstance().closeCalls).toBe(1);
-  });
-
-  it("routes a post-open async error event through cleanup", async () => {
-    // Make write() hang so the async 'error' event wins the race. We
-    // Make write() hang so it never resolves the happy path; then fire
-    // the port's async 'error' event (BT drop / USB unplug). The error
-    // handler registered post-open must route through settleWithCleanup,
-    // closing the open port and rejecting with the error.
-    h.state.cfg.writeHangs = true;
-    const promise = printLabel("/dev/tty.fake", BYTES);
-    const assertion = expect(promise).rejects.toThrow("bluetooth dropped");
-    await Promise.resolve(); // let open→write wiring settle
-    lastInstance().emitError(new Error("bluetooth dropped"));
-    await assertion;
-    expect(lastInstance().closeCalls).toBe(1);
+  it("surfaces the managed queue as its underlying usb device (and dedups lpinfo)", async () => {
+    h.state.execImpl = (cmd, args) => {
+      if (cmd === "lpstat" && args[0] === "-v") {
+        return { stdout: `device for FilamentDB_Label: ${BROTHER_URI}\n` };
+      }
+      if (cmd === "lpinfo") {
+        return { stdout: `direct ${BROTHER_URI}\n` };
+      }
+      return { stdout: "" };
+    };
+    const devices = await listLabelPrinters();
+    // Exactly one entry for the Brother — the managed queue resolves to the
+    // device uri, and the identical lpinfo line is deduped away.
+    const brotherEntries = devices.filter((x) => x.path === BROTHER_URI);
+    expect(brotherEntries).toHaveLength(1);
+    // The managed queue name itself is never exposed as a target.
+    expect(devices.some((x) => x.path === "FilamentDB_Label")).toBe(false);
   });
 });
 
-describe("printLabel — watchdog + idempotent settle", () => {
-  it("fires the stall watchdog when open() hangs and rejects without leaking a port", async () => {
-    vi.useFakeTimers();
-    h.state.cfg.openHangs = true;
-    const promise = printLabel("/dev/tty.fake", BYTES);
-    // Attach the rejection handler BEFORE advancing timers so the
-    // timer-driven reject isn't momentarily unhandled.
-    const assertion = expect(promise).rejects.toThrow(/stalled/i);
-    // open() is hung; advance past the 25s PRINT_TIMEOUT_MS.
-    await vi.advanceTimersByTimeAsync(25_001);
-    await assertion;
-    // open() never completed → isOpen false → nothing leaked / no close.
-    expect(lastInstance().isOpen).toBe(false);
+d("printLabel (CUPS)", () => {
+  it("prints to an installed queue directly with `lp -o raw` (no lpadmin)", async () => {
+    await expect(printLabel("HP_DeskJet", BYTES)).resolves.toBeUndefined();
+    const lp = h.state.spawnCalls.find((c) => c.cmd === "lp");
+    expect(lp!.args).toEqual(["-d", "HP_DeskJet", "-o", "raw"]);
+    expect(h.state.spawn.written).toEqual(Buffer.from(BYTES));
+    expect(h.state.execCalls.some((c) => c.cmd === "lpadmin")).toBe(false);
   });
 
-  it("closes a port whose open() callback arrives AFTER the watchdog already rejected", async () => {
-    vi.useFakeTimers();
-    h.state.cfg.openHangs = true;
-    const promise = printLabel("/dev/tty.fake", BYTES);
-    const assertion = expect(promise).rejects.toThrow(/stalled/i);
-    await vi.advanceTimersByTimeAsync(25_001);
-    await assertion;
-    // Now the hung open() finally resolves successfully — the late
-    // callback must best-effort close the acquired handle so the next
-    // print doesn't see "port busy".
-    lastInstance().resolveOpen();
-    expect(lastInstance().closeCalls).toBe(1);
-    expect(lastInstance().isOpen).toBe(false);
+  it("creates the managed raw queue for a usb:// device, then prints to it", async () => {
+    h.state.execImpl = (cmd, args) => {
+      // queue doesn't exist yet → lpstat -v <queue> errors
+      if (cmd === "lpstat" && args.includes("FilamentDB_Label")) {
+        return { error: new Error("lpstat: unknown printer") };
+      }
+      return { stdout: "" };
+    };
+    await expect(printLabel(BROTHER_URI, BYTES)).resolves.toBeUndefined();
+    const lpadmin = h.state.execCalls.find((c) => c.cmd === "lpadmin");
+    expect(lpadmin).toBeTruthy();
+    expect(lpadmin!.args).toEqual(
+      expect.arrayContaining(["-p", "FilamentDB_Label", "-v", BROTHER_URI, "-E"]),
+    );
+    const lp = h.state.spawnCalls.find((c) => c.cmd === "lp");
+    expect(lp!.args).toEqual(["-d", "FilamentDB_Label", "-o", "raw"]);
   });
 
-  it("settles only once — a second failure after settle is a no-op", async () => {
-    // write fails (first settle → reject). Then emit a late error event;
-    // it must not double-settle or double-close.
-    h.state.cfg.writeError = new Error("first failure");
-    const promise = printLabel("/dev/tty.fake", BYTES);
-    await expect(promise).rejects.toThrow("first failure");
-    const before = lastInstance().closeCalls;
-    lastInstance().emitError(new Error("late noise"));
-    // No additional close, no unhandled rejection.
-    expect(lastInstance().closeCalls).toBe(before);
+  it("does NOT recreate the managed queue when it's already bound to the device", async () => {
+    h.state.execImpl = (cmd, args) => {
+      if (cmd === "lpstat" && args.includes("FilamentDB_Label")) {
+        return { stdout: `device for FilamentDB_Label: ${BROTHER_URI}\n` };
+      }
+      return { stdout: "" };
+    };
+    await expect(printLabel(BROTHER_URI, BYTES)).resolves.toBeUndefined();
+    expect(h.state.execCalls.some((c) => c.cmd === "lpadmin")).toBe(false);
+  });
+
+  it("rejects with lp's stderr when the print job fails", async () => {
+    h.state.spawn.exitCode = 1;
+    h.state.spawn.stderr = "lp: Error - The printer is not responding.";
+    await expect(printLabel("HP_DeskJet", BYTES)).rejects.toThrow(/not responding/);
+  });
+
+  it("rejects when lp can't be spawned", async () => {
+    h.state.spawn.errorOnSpawn = new Error("spawn lp ENOENT");
+    await expect(printLabel("HP_DeskJet", BYTES)).rejects.toThrow(/ENOENT/);
   });
 });

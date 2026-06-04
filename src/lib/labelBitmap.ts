@@ -210,7 +210,23 @@ export async function renderLabelBitmap(
     grayscale[j] = lum < 128 ? 0 : 255;
   }
 
-  return { grayscale, rasterLines: labelWidthDots };
+  // HARDWARE FIX (#587): feeding the raster lines in the rotate-90-CW order
+  // prints the label MIRRORED along its length — verified on a real
+  // PT-P710BT (text read backwards, QR reversed). The printer's physical
+  // feed direction is opposite our raster-line order, so reverse the line
+  // order. Only the order the lines feed changes (each line's content is
+  // untouched), which reflects the label along its length and un-mirrors it.
+  // Same fix as scripts/print-label.ts.
+  const rasterLines = labelWidthDots;
+  const reversed = new Uint8Array(grayscale.length);
+  for (let r = 0; r < rasterLines; r++) {
+    reversed.set(
+      grayscale.subarray(r * PRINT_HEAD_DOTS, (r + 1) * PRINT_HEAD_DOTS),
+      (rasterLines - 1 - r) * PRINT_HEAD_DOTS,
+    );
+  }
+
+  return { grayscale: reversed, rasterLines };
 }
 
 /**

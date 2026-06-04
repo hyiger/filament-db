@@ -1,204 +1,349 @@
 /**
  * Brother PT-P710BT label-printer transport for the Electron main
- * process.
+ * process — OS print-system backend (GH #588).
  *
- * The printer pairs with the OS as a Bluetooth Classic SPP/RFCOMM
- * device. After pairing, the OS surfaces it as a serial-port path:
- *   - macOS:   /dev/tty.PT-P710BT-XXXX-Serialport
- *   - Linux:   /dev/rfcomm0 (after `rfcomm bind`)
- *   - Windows: COM3+ (auto-assigned outgoing port)
+ * The PT-P710BT's Bluetooth is iOS/Android only per Brother; on the
+ * desktop it connects over USB as a USB **printer-class** device, NOT a
+ * serial port. So this transport hands the raster byte stream to the
+ * platform print stack, which owns the USB device and its driver:
  *
- * Using `serialport` lets us pretend the printer is a plain UART and
- * avoids per-OS Bluetooth APIs. The bind/pairing flow stays in System
- * Settings; this module only opens an already-paired device path,
- * writes the byte stream, drains, and closes.
+ *   - macOS / Linux → CUPS. We `lp -o raw` to a print queue. The printer
+ *     usually isn't an installed *queue* (Brother's own app talks to the
+ *     device directly), so when the user selects a raw `usb://…` device we
+ *     auto-manage a hidden raw queue (`FilamentDB_Label`) bound to it.
+ *   - Windows → the print spooler. We send the `RAW` datatype to the
+ *     installed printer via the Win32 `WritePrinter` API (driven from a
+ *     short PowerShell P/Invoke script).
  *
- * The byte stream itself is produced by `src/lib/labelEncoder.ts` —
- * this file is transport only.
+ * The byte stream itself is produced by `src/lib/labelEncoder.ts` — this
+ * file is transport only.
+ *
+ * Replaces the previous `serialport` transport, which could only reach
+ * the (unsupported, flaky) Bluetooth-SPP node and never the USB device.
  */
 
-import { SerialPort } from "serialport";
+import { execFile, spawn } from "node:child_process";
+import { promisify } from "node:util";
+import { writeFile, unlink } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-/** Heuristic match for "this serial port looks like a PT-P710BT". OS
- *  Bluetooth stacks differ on the exact path/manufacturer fields they
- *  expose, so we sweep across friendly name, path, and manufacturer
- *  with a single regex. */
-const PT_P710BT_PATTERN = /pt-?p710bt|p-?touch/i;
+const execFileP = promisify(execFile);
+
+/** Heuristic match for "this printer/device is a PT-series label printer". */
+const PRINTER_PATTERN = /pt-?p710bt|p-?touch|brother/i;
+
+/** Name of the hidden raw CUPS queue we manage for raw `usb://` devices
+ *  that aren't already installed as a queue. CUPS queue names allow only
+ *  letters, digits and underscores. */
+const MANAGED_QUEUE = "FilamentDB_Label";
+
+/** Per-subprocess timeout. Listing and a single 24mm label both complete
+ *  well under this; the IPC handler wraps the whole print in its own 30s
+ *  timeout on top. */
+const EXEC_TIMEOUT_MS = 15_000;
+
+/** On Linux a GUI app's PATH often omits /usr/sbin where lpadmin/lpinfo
+ *  live, so we try the bare name first then the sbin path. */
+const SBIN = "/usr/sbin";
 
 export interface LabelPrinterDevice {
-  /** OS-assigned device path to pass to `printLabel`. */
+  /** Opaque print target: a CUPS queue name, a `usb://…` device URI, or a
+   *  Windows printer name. Passed back to {@link printLabel}. */
   path: string;
-  /** Human-readable name for the picker dropdown. Falls back to `path`
-   *  when the OS doesn't surface a friendly name. */
+  /** Human-readable name for the picker dropdown. */
   friendlyName: string;
-  /** True when our heuristic thinks this is a PT-series printer. The
-   *  picker UI uses this to pre-select the obvious choice; the user
-   *  can still manually pick any port. */
+  /** True when the target matches a PT-series printer — the picker badges
+   *  / pre-selects the obvious choice. */
   looksLikePrinter: boolean;
 }
 
+function isCups(): boolean {
+  return process.platform === "darwin" || process.platform === "linux";
+}
+
 /**
- * List every serial port the OS has paired/exposed. Doesn't filter —
- * the picker UI presents all of them and badges the ones whose
- * friendly name/path matches a PT-series printer.
- *
- * Returns [] if `SerialPort.list()` throws (driver missing, permission
- * denied, etc.) — the picker shows an empty state with a tip about
- * pairing in System Settings.
+ * List the printers/devices the OS print system can reach. Never throws —
+ * returns [] on any failure so the picker shows its empty state.
  */
 export async function listLabelPrinters(): Promise<LabelPrinterDevice[]> {
   try {
-    const ports = await SerialPort.list();
-    return ports.map((p) => {
-      const friendly =
-        // serialport surfaces different fields per OS — try the most
-        // likely candidates in priority order.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (p as any).friendlyName ||
-        (p as { manufacturer?: string }).manufacturer ||
-        p.path;
-      const haystack = `${friendly} ${p.path} ${p.manufacturer ?? ""}`;
-      return {
-        path: p.path,
-        friendlyName: friendly,
-        looksLikePrinter: PT_P710BT_PATTERN.test(haystack),
-      };
-    });
+    if (process.platform === "win32") return await listWindowsPrinters();
+    if (isCups()) return await listCupsPrinters();
+    return [];
   } catch (err) {
-    console.error("[label-printer] SerialPort.list failed:", err);
+    console.error("[label-printer] list failed:", err);
     return [];
   }
 }
 
+/** Run a CUPS admin/info tool, falling back to /usr/sbin when it isn't on PATH. */
+async function runCupsTool(tool: string, args: string[]): Promise<string> {
+  try {
+    const { stdout } = await execFileP(tool, args, { timeout: EXEC_TIMEOUT_MS });
+    return stdout;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === "ENOENT") {
+      const { stdout } = await execFileP(join(SBIN, tool), args, { timeout: EXEC_TIMEOUT_MS });
+      return stdout;
+    }
+    throw err;
+  }
+}
+
+async function listCupsPrinters(): Promise<LabelPrinterDevice[]> {
+  const devices: LabelPrinterDevice[] = [];
+  const seenUris = new Set<string>();
+
+  // 1. Installed queues (excluding our own managed one). `lpstat -v` lines
+  //    look like: "device for NAME: usb://Brother/PT-P710BT?serial=…".
+  try {
+    const stdout = await runCupsTool("lpstat", ["-v"]);
+    for (const line of stdout.split("\n")) {
+      const m = line.match(/^device for (.+?):\s*(.+)$/);
+      if (!m) continue;
+      const name = m[1].trim();
+      const uri = m[2].trim();
+      seenUris.add(uri);
+      if (name === MANAGED_QUEUE) {
+        // Our own managed queue is an implementation detail — surface it as
+        // the underlying USB *device* (path = the uri), so selecting it and
+        // printing both route through ensureManagedQueue idempotently. Without
+        // this the device would vanish from the picker once the queue exists
+        // (its uri is in seenUris, so the lpinfo pass below dedups it away).
+        devices.push({
+          path: uri,
+          friendlyName: prettifyUsbUri(uri),
+          looksLikePrinter: PRINTER_PATTERN.test(uri),
+        });
+        continue;
+      }
+      devices.push({
+        path: name,
+        friendlyName: name,
+        looksLikePrinter: PRINTER_PATTERN.test(`${name} ${uri}`),
+      });
+    }
+  } catch {
+    /* no installed queues / lpstat unavailable — fall through to lpinfo */
+  }
+
+  // 2. Available USB printer devices not already installed as a queue.
+  //    `lpinfo -v` lines look like: "direct usb://Brother/PT-P710BT?serial=…".
+  try {
+    const stdout = await runCupsTool("lpinfo", ["-v"]);
+    for (const line of stdout.split("\n")) {
+      const m = line.trim().match(/^\w+\s+(usb:\/\/\S+)$/);
+      if (!m) continue;
+      const uri = m[1].trim();
+      if (seenUris.has(uri)) continue;
+      seenUris.add(uri);
+      devices.push({
+        path: uri,
+        friendlyName: prettifyUsbUri(uri),
+        looksLikePrinter: PRINTER_PATTERN.test(uri),
+      });
+    }
+  } catch {
+    /* lpinfo may need elevated privileges on some Linux distros — the
+       installed-queue list above still works; skip silently. */
+  }
+
+  return devices;
+}
+
+/** "usb://Brother/PT-P710BT?serial=000M…" → "Brother PT-P710BT (USB)". */
+function prettifyUsbUri(uri: string): string {
+  try {
+    const path = uri.replace(/^usb:\/\//i, "").split("?")[0];
+    const parts = path.split("/").filter(Boolean).map(decodeURIComponent);
+    return parts.length ? `${parts.join(" ")} (USB)` : uri;
+  } catch {
+    return uri;
+  }
+}
+
+async function listWindowsPrinters(): Promise<LabelPrinterDevice[]> {
+  // ConvertTo-Json yields a single object for one printer and an array for
+  // many; @(...) forces an array so the shape is predictable.
+  const script =
+    "@(Get-Printer | Select-Object Name) | ConvertTo-Json -Compress";
+  const { stdout } = await execFileP(
+    "powershell",
+    ["-NoProfile", "-NonInteractive", "-Command", script],
+    { timeout: EXEC_TIMEOUT_MS },
+  );
+  const text = stdout.trim();
+  if (!text) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return [];
+  }
+  const rows = Array.isArray(parsed) ? parsed : [parsed];
+  return rows
+    .map((r) => (r && typeof r === "object" ? (r as { Name?: string }).Name : undefined))
+    .filter((n): n is string => typeof n === "string" && n.length > 0)
+    .map((name) => ({
+      path: name,
+      friendlyName: name,
+      looksLikePrinter: PRINTER_PATTERN.test(name),
+    }));
+}
+
 /**
- * Open the given serial-port path, write the byte stream, drain, and
- * close. Rejects with a descriptive Error on any step; the IPC handler
- * surfaces the message to the renderer for a toast.
- *
- * SPP/RFCOMM ignores the baud rate but the serialport API requires
- * one; 9600 is the conventional placeholder.
+ * Send the raster byte stream to the selected print target. Rejects with a
+ * descriptive Error on failure; the IPC handler surfaces it to the renderer.
  */
-/** Hard ceiling on a single print operation. Bluetooth Classic SPP
- *  writes for a typical 24mm label complete in ≤5s; 25s leaves ample
- *  headroom for a long-label slow-flush case and stays inside the IPC
- *  timeout (30s in electron/main.ts) so the transport's own cleanup
- *  fires before the IPC race rejects. The Codex round 5 catch (PR #487)
- *  was that the IPC timeout alone doesn't close the port — the
- *  underlying operation keeps running on a stalled SerialPort handle
- *  and the next print sees "port busy". This timer is the in-transport
- *  cleanup that fixes that. */
-const PRINT_TIMEOUT_MS = 25_000;
+export async function printLabel(target: string, bytes: Uint8Array): Promise<void> {
+  if (process.platform === "win32") return printWindows(target, bytes);
+  if (isCups()) return printCups(target, bytes);
+  throw new Error(`Label printing is not supported on platform "${process.platform}".`);
+}
 
-export function printLabel(
-  devicePath: string,
-  bytes: Uint8Array,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
+async function printCups(target: string, bytes: Uint8Array): Promise<void> {
+  // A target containing a scheme ("usb://…") is a raw device → route it
+  // through our managed raw queue. Otherwise it's an installed queue name.
+  let queue = target;
+  if (/^[a-z]+:\/\//i.test(target)) {
+    await ensureManagedQueue(target);
+    queue = MANAGED_QUEUE;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    // `-o raw` tells CUPS to send the file to the printer unfiltered, so the
+    // Brother raster stream reaches the print head verbatim regardless of
+    // any driver attached to the queue.
+    const child = spawn("lp", ["-d", queue, "-o", "raw"], {
+      stdio: ["pipe", "ignore", "pipe"],
+    });
+    let stderr = "";
     let settled = false;
-    let port: SerialPort | null = null;
-
-    // Always route any failure through cleanup: close the port (if
-    // open) before rejecting so a Bluetooth drop / write failure /
-    // drain failure / stall doesn't leave the OS handle open and
-    // block the next print attempt as "port busy". (Codex P2 rounds
-    // 4-6 on PR #487.)
-    const settleWithCleanup = (err: Error | null) => {
+    const done = (err?: Error) => {
       if (settled) return;
       settled = true;
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-        timeoutHandle = null;
-      }
-      const p = port;
-      if (p && p.isOpen) {
-        p.close((closeErr) => {
-          // Prefer the original error if there was one — closeErr on
-          // an already-broken port is just noise.
-          if (err) reject(err);
-          else if (closeErr) reject(closeErr);
-          else resolve();
-        });
-      } else {
-        if (err) reject(err);
-        else resolve();
-      }
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve();
     };
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      done(new Error(`lp timed out after ${EXEC_TIMEOUT_MS}ms — power-cycle the printer and try again.`));
+    }, EXEC_TIMEOUT_MS);
 
-    // Arm the stall watchdog BEFORE calling .open() so a stalled
-    // RFCOMM driver in the open phase also gets caught. Round 5 only
-    // armed it inside the open callback, which round 6 caught as a
-    // gap — open() itself can hang forever on a flaky Bluetooth
-    // stack. (Codex P2 round 6 on PR #487.)
-    let timeoutHandle: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-      settleWithCleanup(
-        new Error(
-          `Print stalled — no progress in ${PRINT_TIMEOUT_MS}ms. ` +
-            `Power-cycle the printer and try again.`,
-        ),
-      );
-    }, PRINT_TIMEOUT_MS);
-
-    try {
-      port = new SerialPort(
-        {
-          path: devicePath,
-          baudRate: 9600,
-          autoOpen: false,
-        },
-        (err) => {
-          // SerialPort's constructor takes an optional open callback, but
-          // with autoOpen:false it is NOT forwarded — the callback is only
-          // wired to the implicit open when autoOpen is on. A bad path /
-          // options THROWS synchronously and is caught by the try/catch
-          // below instead. This handler is therefore defensive only (it
-          // won't fire under autoOpen:false); the real constructor-error
-          // path is the catch block. Kept as belt-and-braces in case a
-          // future serialport version changes the contract.
-          if (err) settleWithCleanup(err);
-        },
-      );
-    } catch (err) {
-      settleWithCleanup(err instanceof Error ? err : new Error(String(err)));
-      return;
-    }
-    if (!port) return; // settleWithCleanup already called
-
-    const p = port;
-    p.open((openErr) => {
-      // Belt and braces: if the timer already fired while open() was
-      // hung, this callback can still arrive later. If we're already
-      // settled, the only cleanup left is to close any handle that
-      // open() did eventually acquire so it doesn't leak.
-      if (settled) {
-        if (!openErr && p.isOpen) {
-          p.close(() => {
-            /* best-effort; the caller already saw the timeout error */
-          });
-        }
-        return;
-      }
-      if (openErr) {
-        // open() failure — settle through the same path for consistency.
-        settleWithCleanup(openErr);
-        return;
-      }
-      // Surface any post-open error (USB disconnect, BT drop, etc.)
-      // through the cleanup path so a stale handle can't linger.
-      p.on("error", (err) => settleWithCleanup(err));
-      p.write(Buffer.from(bytes), (writeErr) => {
-        if (writeErr) {
-          settleWithCleanup(writeErr);
-          return;
-        }
-        p.drain((drainErr) => {
-          if (drainErr) {
-            settleWithCleanup(drainErr);
-            return;
-          }
-          // Happy path — close + resolve.
-          settleWithCleanup(null);
-        });
-      });
+    child.stderr?.on("data", (d) => { stderr += d.toString(); });
+    child.on("error", (e) => done(e instanceof Error ? e : new Error(String(e))));
+    child.on("close", (code) => {
+      if (code === 0) done();
+      else done(new Error(`lp exited with code ${code}${stderr.trim() ? `: ${stderr.trim()}` : ""}`));
     });
+    // If lp dies before consuming stdin, the write EPIPEs — swallow it so the
+    // real exit-code error wins.
+    child.stdin?.on("error", () => {});
+    child.stdin?.end(Buffer.from(bytes));
   });
 }
+
+/**
+ * Ensure the hidden raw queue exists and points at `uri`. Idempotent —
+ * a no-op when it's already bound correctly.
+ */
+async function ensureManagedQueue(uri: string): Promise<void> {
+  let current: string | null = null;
+  try {
+    const stdout = await runCupsTool("lpstat", ["-v", MANAGED_QUEUE]);
+    const m = stdout.match(/^device for .+?:\s*(.+)$/m);
+    current = m ? m[1].trim() : null;
+  } catch {
+    current = null; // queue doesn't exist yet
+  }
+  if (current === uri) return;
+
+  // No `-m <model>` → CUPS creates a *raw* queue (no PPD), which is exactly
+  // what we want: the raster bytes pass straight through.
+  const args = [
+    "-p", MANAGED_QUEUE,
+    "-v", uri,
+    "-E",
+    "-D", "Filament DB Label Printer",
+    "-o", "printer-is-shared=false",
+  ];
+  try {
+    await runCupsTool("lpadmin", args);
+  } catch (err) {
+    throw new Error(
+      `Could not set up the print queue for ${prettifyUsbUri(uri)}. ` +
+        `On Linux you may need to add the printer in your system print settings first. ` +
+        `(${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+}
+
+async function printWindows(printerName: string, bytes: Uint8Array): Promise<void> {
+  // The spooler RAW datatype needs the bytes as a file; pass it + the
+  // printer name to a P/Invoke script that calls winspool WritePrinter.
+  const stamp = `${process.pid}-${bytes.length}`;
+  const dataPath = join(tmpdir(), `fdb-label-${stamp}.bin`);
+  const scriptPath = join(tmpdir(), `fdb-label-${stamp}.ps1`);
+  await writeFile(dataPath, Buffer.from(bytes));
+  await writeFile(scriptPath, WINDOWS_RAW_PRINT_PS1, "utf8");
+  try {
+    await execFileP(
+      "powershell",
+      [
+        "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        "-File", scriptPath,
+        "-PrinterName", printerName,
+        "-FilePath", dataPath,
+      ],
+      { timeout: EXEC_TIMEOUT_MS },
+    );
+  } finally {
+    await unlink(dataPath).catch(() => {});
+    await unlink(scriptPath).catch(() => {});
+  }
+}
+
+/** PowerShell that sends a file's bytes to a printer with the spooler RAW
+ *  datatype via winspool.drv WritePrinter — the Windows equivalent of
+ *  `lp -o raw`. Bypasses the driver's rendering so the Brother raster
+ *  stream reaches the print head verbatim. */
+const WINDOWS_RAW_PRINT_PS1 = `param([Parameter(Mandatory=$true)][string]$PrinterName,
+      [Parameter(Mandatory=$true)][string]$FilePath)
+$ErrorActionPreference = "Stop"
+$code = @"
+using System;
+using System.Runtime.InteropServices;
+public static class FdbRawPrinter {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+  public struct DOCINFO { public string pDocName; public string pOutputFile; public string pDataType; }
+  [DllImport("winspool.drv", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool OpenPrinter(string src, out IntPtr h, IntPtr pd);
+  [DllImport("winspool.drv", SetLastError=true)] public static extern bool ClosePrinter(IntPtr h);
+  [DllImport("winspool.drv", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool StartDocPrinter(IntPtr h, int level, ref DOCINFO di);
+  [DllImport("winspool.drv", SetLastError=true)] public static extern bool EndDocPrinter(IntPtr h);
+  [DllImport("winspool.drv", SetLastError=true)] public static extern bool StartPagePrinter(IntPtr h);
+  [DllImport("winspool.drv", SetLastError=true)] public static extern bool EndPagePrinter(IntPtr h);
+  [DllImport("winspool.drv", SetLastError=true)] public static extern bool WritePrinter(IntPtr h, byte[] buf, int count, out int written);
+  public static void Print(string printer, byte[] data) {
+    IntPtr h;
+    if (!OpenPrinter(printer, out h, IntPtr.Zero)) throw new Exception("OpenPrinter failed (" + Marshal.GetLastWin32Error() + ")");
+    try {
+      DOCINFO di = new DOCINFO(); di.pDocName = "Filament DB Label"; di.pDataType = "RAW";
+      if (!StartDocPrinter(h, 1, ref di)) throw new Exception("StartDocPrinter failed (" + Marshal.GetLastWin32Error() + ")");
+      try {
+        if (!StartPagePrinter(h)) throw new Exception("StartPagePrinter failed (" + Marshal.GetLastWin32Error() + ")");
+        int written;
+        if (!WritePrinter(h, data, data.Length, out written)) throw new Exception("WritePrinter failed (" + Marshal.GetLastWin32Error() + ")");
+        if (written != data.Length) throw new Exception("WritePrinter wrote " + written + " of " + data.Length + " bytes");
+        EndPagePrinter(h);
+      } finally { EndDocPrinter(h); }
+    } finally { ClosePrinter(h); }
+  }
+}
+"@
+Add-Type -TypeDefinition $code -Language CSharp
+$bytes = [System.IO.File]::ReadAllBytes($FilePath)
+[FdbRawPrinter]::Print($PrinterName, $bytes)
+`;

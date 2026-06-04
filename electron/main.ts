@@ -1034,8 +1034,9 @@ ipcMain.handle("nfc-set-readonly", async (event, readOnly: unknown) => {
 
 // ── Label printer (Brother PT-P710BT) ──
 // Transport-only; the byte stream is built in the renderer via
-// src/lib/labelEncoder.ts + labelBitmap.ts. Main owns serialport
-// because the renderer can't open native handles.
+// src/lib/labelEncoder.ts + labelBitmap.ts. Main owns the print transport
+// (the OS print system — CUPS / Windows spooler) because the renderer
+// can't shell out or open the USB printer device. (GH #588)
 
 ipcMain.handle("label-printer-list-devices", async (event) => {
   assertTrustedSender(event, "label-printer-list-devices");
@@ -1133,7 +1134,7 @@ ipcMain.handle("label-printer-set-public-url", (event, url: string | null) => {
 ipcMain.handle("label-printer-print", async (event, bytes: number[]) => {
   assertTrustedSender(event, "label-printer-print");
   // Validate the payload from the renderer up front — bad inputs here
-  // would otherwise hang inside SerialPort.write.
+  // would otherwise be handed straight to the OS print transport.
   if (!Array.isArray(bytes) || bytes.length === 0) {
     throw new Error("bytes must be a non-empty array");
   }
@@ -1163,19 +1164,19 @@ ipcMain.handle("label-printer-print", async (event, bytes: number[]) => {
       throw new Error("bytes must contain only integers in [0, 255]");
     }
   }
-  const devicePath = (store as Store<Record<string, unknown>>).get(
+  const target = (store as Store<Record<string, unknown>>).get(
     "labelPrinterDevicePath",
     null,
   ) as string | null;
-  if (!devicePath) {
+  if (!target) {
     throw new Error(
-      "No label printer device path configured. Open Settings → Label Printer.",
+      "No label printer selected. Open Settings → Label Printer.",
     );
   }
   await withIpcTimeout(
-    () => printLabelToDevice(devicePath, new Uint8Array(bytes)),
+    () => printLabelToDevice(target, new Uint8Array(bytes)),
     "label-printer-print",
-    30_000, // give long labels + slow Bluetooth a generous window
+    30_000, // give long labels + a slow spooler a generous window
   );
   return { ok: true };
 });

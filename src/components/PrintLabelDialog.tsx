@@ -221,8 +221,9 @@ export default function PrintLabelDialog({
   /* --- print / download handler ---
    *
    * Electron path: render bitmap → encode → send bytes over IPC to the
-   * serial-port writer in the main process. The renderer never touches
-   * `serialport` directly (native module, can't run in Chromium).
+   * print transport in the main process, which hands them to the OS print
+   * system (CUPS `lp -o raw` / Windows spooler RAW). The renderer never
+   * shells out or opens the USB device directly. (GH #588)
    *
    * Web path: render → encode → download .bin file so the simulator
    * script can decode it. Useful for development without a printer and

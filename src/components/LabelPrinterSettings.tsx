@@ -10,18 +10,19 @@ import { encodeLabel, packGrayscaleBitmap } from "@/lib/labelEncoder";
 
 /**
  * Settings panel for the Brother PT-P710BT label printer. Electron
- * only — the device picker calls into the main process's serialport
- * module, which has no browser counterpart.
+ * only — the picker calls into the main process's print transport
+ * (the OS print system), which has no browser counterpart. (GH #588)
  *
  * Flow:
- *   1. User pairs the printer in System Settings → Bluetooth (PIN
- *      "0000" or no PIN depending on firmware).
- *   2. This panel lists every serial port the OS exposes, badging the
- *      ones whose name/manufacturer matches a PT-series printer.
- *   3. User picks one; we persist the device path in electron-store
- *      via IPC. The PrintLabelDialog reads that path before every print.
- *   4. "Test print" sends a small known-good label so the user
- *      verifies pairing + tape feed before the real workflow.
+ *   1. User connects the printer via USB. On the desktop the PT-P710BT
+ *      is a USB printer-class device (its Bluetooth is mobile-only).
+ *   2. This panel lists the printers the OS print system can reach
+ *      (CUPS queues + available usb:// devices on macOS/Linux; installed
+ *      printers on Windows), badging the ones that look like a PT printer.
+ *   3. User picks one; we persist the print target in electron-store via
+ *      IPC. The PrintLabelDialog reads it before every print.
+ *   4. "Test print" sends a small known-good label so the user verifies
+ *      the connection + tape feed before the real workflow.
  *
  * Renders nothing in web mode (the hook returns false) so this can
  * sit unconditionally in the settings page.

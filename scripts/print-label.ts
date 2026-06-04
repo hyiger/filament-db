@@ -253,7 +253,20 @@ async function renderLabelBitmap(args: Args): Promise<{
     );
   }
 
-  return { raster: rotated.data, rasterLines, cols };
+  // HARDWARE FIX (#587): emitting raster lines in the rotate-90-CW order
+  // prints the label MIRRORED along its length — verified on a real
+  // PT-P710BT, where the QR came out unscannable and the text read
+  // backwards. The printer's physical feed direction is opposite our
+  // raster-line order, so reverse the line order. (The QR/text content
+  // within each line is untouched; only the order the lines feed changes,
+  // which reflects the physical label along its length and un-mirrors it.)
+  // Mirror of the same fix in src/lib/labelBitmap.ts.
+  const raster = Buffer.alloc(rotated.data.length);
+  for (let r = 0; r < rasterLines; r++) {
+    rotated.data.copy(raster, (rasterLines - 1 - r) * cols, r * cols, (r + 1) * cols);
+  }
+
+  return { raster, rasterLines, cols };
 }
 
 function escapeXml(s: string): string {

@@ -33,22 +33,12 @@ files:
   - package.json
   - node_modules/nfc-pcsc/**/*
   - node_modules/@pokusew/pcsclite/**/*
-  # serialport + its native binding for the Brother PT-P710BT label
-  # printer (electron/label-printer.ts). @serialport/bindings-cpp ships
-  # prebuilds for every Electron-supported platform; electron-rebuild
-  # confirms or rebuilds the matching .node before packaging.
-  #
-  # node-gyp-build is the RUNTIME loader for the .node binary — without
-  # it `require("serialport")` throws "Cannot find module 'node-gyp-build'"
-  # in the packaged app. node-addon-api ships only build-time headers but
-  # include it defensively since it's tiny. debug is serialport's logging
-  # dependency (already a transitive of many other modules, but include
-  # explicitly so the @serialport scope's require resolves). (Codex P2
-  # round 9 on PR #487.)
-  - node_modules/serialport/**/*
-  - node_modules/@serialport/**/*
-  - node_modules/node-gyp-build/**/*
-  - node_modules/node-addon-api/**/*
+  # debug + ms: small logging deps pulled in transitively by bundled
+  # native / DB modules; included explicitly so their requires resolve in
+  # the packaged app. (GH #588: the Brother PT-P710BT label printer no
+  # longer uses serialport — it prints through the OS print system via
+  # electron/label-printer.ts, so serialport + its native binding loaders
+  # were dropped from the bundle.)
   - node_modules/debug/**/*
   - node_modules/ms/**/*
   - node_modules/mongodb/**/*
