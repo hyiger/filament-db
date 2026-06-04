@@ -800,14 +800,34 @@ export class NfcService extends EventEmitter {
     }
 
     return this.withConnection(async (protocol) => {
-      const block0 = await this.readBlock(protocol, 0);
-      // Only a formatted NFC-Forum tag (0xE1/0xE2 CC magic) has a write-access
-      // bit to flip. A blank or foreign tag has nothing to lock.
-      if (block0[0] !== 0xe1 && block0[0] !== 0xe2) {
-        throw new Error(
-          "TAG_NOT_FORMATTED: This tag has no OpenPrintTag data to lock — write a filament to it first.",
-        );
+      // Codex P2 on PR #585: a bare CC-magic check (0xE1/0xE2) isn't enough —
+      // a foreign NFC-Forum Type 5 tag (a URL/contact tag with a 0xE1 CC) would
+      // pass it and we'd flip ITS write-access bits, marking an unrelated tag
+      // read-only. Fully parse the tag and confirm it carries an OpenPrintTag
+      // record before touching block 0; only OpenPrintTags are ours to lock.
+      try {
+        await this.readOpenPrintTag(protocol);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Definitive "this isn't an OpenPrintTag" signals from ndef.ts → tell
+        // the user to write a filament first. Transient/connection errors
+        // bubble up unchanged so a flaky read isn't mislabelled.
+        const notOpt = [
+          "Blank or unformatted",
+          "No NDEF",
+          "Invalid CC magic",
+          "Tag data too short",
+          "truncated",
+        ].some((s) => msg.includes(s));
+        if (notOpt) {
+          throw new Error(
+            "TAG_NOT_FORMATTED: This tag has no OpenPrintTag data to lock — write a filament to it first.",
+          );
+        }
+        throw err;
       }
+
+      const block0 = await this.readBlock(protocol, 0);
       const newByte1 = setCcByteReadOnly(block0[1], readOnly);
       if (newByte1 === block0[1]) {
         return; // already in the requested state — no write needed
