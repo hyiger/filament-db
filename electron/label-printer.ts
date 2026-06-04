@@ -194,10 +194,27 @@ async function listWindowsPrinters(): Promise<LabelPrinterDevice[]> {
 }
 
 /**
+ * A print target left over from the pre-#588 serialport transport: a macOS
+ * `/dev/tty.*` / `/dev/cu.*` path, a Linux `/dev/rfcomm*`, or a Windows `COMn`.
+ * None are valid OS print targets now — and a `/dev/...` path would otherwise
+ * be mistaken for a CUPS queue name (which can't even contain `/`) and fail
+ * obscurely. Detect them so we can prompt the user to reselect. (Codex P2 #589)
+ */
+function isLegacySerialTarget(target: string): boolean {
+  return /^\/dev\//.test(target) || /^COM\d+$/i.test(target);
+}
+
+/**
  * Send the raster byte stream to the selected print target. Rejects with a
  * descriptive Error on failure; the IPC handler surfaces it to the renderer.
  */
 export async function printLabel(target: string, bytes: Uint8Array): Promise<void> {
+  if (isLegacySerialTarget(target)) {
+    throw new Error(
+      `"${target}" is a serial-port setting from an older version that printed over Bluetooth. ` +
+        `The PT-P710BT now prints over USB — open Settings → Label Printer and select your printer again.`,
+    );
+  }
   if (process.platform === "win32") return printWindows(target, bytes);
   if (isCups()) return printCups(target, bytes);
   throw new Error(`Label printing is not supported on platform "${process.platform}".`);

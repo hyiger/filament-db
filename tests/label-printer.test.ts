@@ -175,3 +175,18 @@ d("printLabel (CUPS)", () => {
     await expect(printLabel("HP_DeskJet", BYTES)).rejects.toThrow(/ENOENT/);
   });
 });
+
+describe("printLabel — legacy serial targets (GH #589)", () => {
+  // A stored target from the pre-#588 serialport transport must NOT be treated
+  // as a CUPS queue name (it would fail obscurely); prompt a reselect instead.
+  it.each([
+    "/dev/tty.PT-P710BT-1606-Serialport",
+    "/dev/cu.PT-P710BT1606",
+    "/dev/rfcomm0",
+    "COM3",
+  ])("rejects %s with a reselect message and never spawns lp", async (target) => {
+    await expect(printLabel(target, BYTES)).rejects.toThrow(/select your printer again/i);
+    expect(h.state.spawnCalls.some((c) => c.cmd === "lp")).toBe(false);
+    expect(h.state.execCalls.some((c) => c.cmd === "lpadmin")).toBe(false);
+  });
+});
