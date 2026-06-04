@@ -363,16 +363,14 @@ function FilamentDetail() {
   // Returns true if the caller should proceed with the write.
   const ensureTagWritable = useCallback(
     async ({ confirmOverwrite = false }: { confirmOverwrite?: boolean } = {}): Promise<boolean> => {
-      let existing: { tagSource?: string; materialName?: string; brandName?: string } | null | undefined;
+      type ProbedTag = { tagSource?: string; materialName?: string; brandName?: string; spoolUid?: string };
+      let existing: ProbedTag | null | undefined;
       // The tag carries a valid NDEF message but no OpenPrintTag record (e.g.
       // a URL/text/contact tag) — it's NOT blank, just not ours.
       let foreignNdef = false;
 
       try {
-        existing = (await window.electronAPI?.nfcReadTag?.()) as
-          | { tagSource?: string; materialName?: string; brandName?: string }
-          | null
-          | undefined;
+        existing = (await window.electronAPI?.nfcReadTag?.()) as ProbedTag | null | undefined;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // Only a GENUINELY blank/erased tag (no NDEF data at all) bypasses the
@@ -400,17 +398,32 @@ function FilamentDetail() {
 
       // The tag already holds data (our OpenPrintTag, or a foreign NDEF tag).
       if (existing || foreignNdef) {
-        if (!confirmOverwrite) {
-          // Weight-update path targets THIS filament's own tag. Allow when an
-          // OpenPrintTag is present; fail closed on an unexpected foreign tag.
-          if (foreignNdef) {
-            toast(t("detail.nfc.probeFailed"), "error");
-            return false;
-          }
+        // Does this decoded OpenPrintTag belong to the CURRENT filament? Match
+        // on instance id (most precise) or name+vendor. Only the weight-update
+        // path (confirmOverwrite=false) trusts this to skip the prompt.
+        const norm = (s?: string | null) => (s ?? "").trim().toLowerCase();
+        const tagInstance = norm(existing?.spoolUid);
+        const sameInstance = tagInstance !== "" && tagInstance === norm(filament?.instanceId);
+        const sameNameVendor =
+          norm(existing?.materialName) !== "" &&
+          norm(existing?.materialName) === norm(filament?.name) &&
+          norm(existing?.brandName) === norm(filament?.vendor);
+        const isOwnTag = !foreignNdef && !!existing && (sameInstance || sameNameVendor);
+
+        // Weight-update path silently re-writes THIS filament's own tag (the
+        // common case). Any OTHER tag must not be clobbered silently (Codex P2
+        // round 5 on PR #584): a foreign NDEF tag fails closed; a different
+        // filament's OpenPrintTag falls through to the confirm below.
+        if (!confirmOverwrite && isOwnTag) {
           return true;
         }
-        // Explicit Write path → confirm before clobbering. A foreign NDEF tag
-        // has no name to show, so fall back to the generic label.
+        if (foreignNdef && !confirmOverwrite) {
+          toast(t("detail.nfc.probeFailed"), "error");
+          return false;
+        }
+
+        // Confirm before clobbering. A foreign NDEF tag has no name to show, so
+        // fall back to the generic label.
         const name = existing?.materialName || existing?.brandName || t("detail.nfc.overwriteUnknown");
         return confirm({
           title: t("detail.nfc.overwriteTitle"),
@@ -423,7 +436,7 @@ function FilamentDetail() {
       // Blank/unformatted tag → write straight through.
       return true;
     },
-    [toast, t, confirm],
+    [toast, t, confirm, filament],
   );
 
   const handleNfcWrite = async () => {
