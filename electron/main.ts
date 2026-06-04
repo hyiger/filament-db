@@ -725,6 +725,7 @@ ipcMain.handle("get-config", (event) => {
     currency: store.get("currency") as string,
     customCurrencies: store.get("customCurrencies") as string,
     locale: store.get("locale") as string,
+    labelFormat: store.get("labelFormat") as string,
   };
 });
 
@@ -751,6 +752,7 @@ ipcMain.handle("save-config", async (event, config: {
   currency?: string;
   customCurrencies?: string;
   locale?: string;
+  labelFormat?: string;
 }) => {
   assertTrustedSender(event, "save-config");
 
@@ -787,6 +789,11 @@ ipcMain.handle("save-config", async (event, config: {
   }
   if (config.locale !== undefined) {
     store.set("locale", config.locale);
+  }
+  // GH #592: the label format (a cosmetic pref like currency/locale; does
+  // not affect the DB connection so it never triggers a server restart).
+  if (config.labelFormat !== undefined) {
+    store.set("labelFormat", config.labelFormat);
   }
 
   // Legacy: if only mongodbUri is sent (old atlas-only flow)
