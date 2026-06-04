@@ -922,6 +922,7 @@
   "detail.nfc.overwriteConfirmBtn": "Überschreiben",
   "detail.nfc.overwriteUnknown": "ein vorhandenes Filament",
   "detail.nfc.bambuReadOnly": "Dies ist ein Bambu-Lab-Tag — er ist schreibgeschützt und kann nicht überschrieben werden.",
+  "detail.nfc.probeFailed": "Der Tag konnte vor dem Schreiben nicht geprüft werden. Legen Sie den Tag erneut auf und versuchen Sie es noch einmal.",
   "detail.spool.added": "Spule hinzugefügt",
   "detail.spool.addFailed": "Spule konnte nicht hinzugefügt werden",
   "detail.spool.emptyHint": "Noch keine Spulen — füge eine hinzu, um Restgewicht, Trockenzyklen und Verbrauch zu verfolgen.",

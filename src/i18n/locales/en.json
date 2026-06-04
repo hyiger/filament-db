@@ -922,6 +922,7 @@
   "detail.nfc.overwriteConfirmBtn": "Overwrite",
   "detail.nfc.overwriteUnknown": "an existing filament",
   "detail.nfc.bambuReadOnly": "This is a Bambu Lab tag — it's read-only and can't be overwritten.",
+  "detail.nfc.probeFailed": "Couldn't read the tag to check it before writing. Reseat the tag and try again.",
   "detail.spool.added": "Spool added",
   "detail.spool.addFailed": "Failed to add spool",
   "detail.spool.emptyHint": "No spools yet — add one to start tracking remaining weight, dry cycles, and usage.",

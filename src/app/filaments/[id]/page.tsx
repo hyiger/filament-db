@@ -354,34 +354,49 @@ function FilamentDetail() {
   //  • Bambu Lab tag → read-only, refuse with a friendly toast (writing would
   //    otherwise fail with a raw MIFARE error)
   //  • non-blank tag + confirmOverwrite → confirm before clobbering existing data
-  //  • blank/unformatted tag (read throws) → allow, write straight through
+  //  • genuinely blank/unformatted tag (read throws a known blank signal) →
+  //    allow, write straight through
+  //  • unknown read error (transient PC/SC, decode failure on a non-blank tag)
+  //    → fail CLOSED: don't silently overwrite a tag we couldn't read
+  //    (Codex P2 on PR #584). Mirrors the blank-tag signals raised in
+  //    electron/ndef.ts + the auto-read classifier in electron/main.ts.
   // Returns true if the caller should proceed with the write.
   const ensureTagWritable = useCallback(
     async ({ confirmOverwrite = false }: { confirmOverwrite?: boolean } = {}): Promise<boolean> => {
+      let existing: { tagSource?: string; materialName?: string; brandName?: string } | null | undefined;
       try {
-        const existing = (await window.electronAPI?.nfcReadTag?.()) as
+        existing = (await window.electronAPI?.nfcReadTag?.()) as
           | { tagSource?: string; materialName?: string; brandName?: string }
           | null
           | undefined;
-        if (existing) {
-          if (existing.tagSource === "bambu") {
-            toast(t("detail.nfc.bambuReadOnly"), "error");
-            return false;
-          }
-          if (confirmOverwrite) {
-            const ok = await confirm({
-              title: t("detail.nfc.overwriteTitle"),
-              message: t("detail.nfc.overwriteConfirm", {
-                name: existing.materialName || existing.brandName || t("detail.nfc.overwriteUnknown"),
-              }),
-              confirmLabel: t("detail.nfc.overwriteConfirmBtn"),
-              destructive: true,
-            });
-            if (!ok) return false;
-          }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        const isBlank =
+          msg.includes("Blank or unformatted") ||
+          msg.includes("No NDEF TLV") ||
+          msg.includes("No NDEF record");
+        if (isBlank) return true; // blank/erased tag → safe to write directly
+        // Unknown/transient read error → fail closed so we don't clobber a
+        // tag we couldn't verify. The user can reseat and retry.
+        toast(t("detail.nfc.probeFailed"), "error");
+        return false;
+      }
+      if (existing) {
+        if (existing.tagSource === "bambu") {
+          toast(t("detail.nfc.bambuReadOnly"), "error");
+          return false;
         }
-      } catch {
-        // read threw → blank / unformatted tag, safe to write directly
+        if (confirmOverwrite) {
+          const ok = await confirm({
+            title: t("detail.nfc.overwriteTitle"),
+            message: t("detail.nfc.overwriteConfirm", {
+              name: existing.materialName || existing.brandName || t("detail.nfc.overwriteUnknown"),
+            }),
+            confirmLabel: t("detail.nfc.overwriteConfirmBtn"),
+            destructive: true,
+          });
+          if (!ok) return false;
+        }
       }
       return true;
     },
