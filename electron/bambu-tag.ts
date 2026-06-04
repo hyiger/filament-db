@@ -121,7 +121,15 @@ export function parseBambuBlocks(blocks: (Buffer | undefined)[]): BambuTagData {
   // the "Instance ID" field of the read dialog. Render it as uppercase hex
   // — a stable, copyable identifier, matching how the community Bambu RFID
   // tooling displays the tray UID.
-  const trayUid = block(9).toString("hex").toUpperCase();
+  //
+  // Codex P2 on PR #584: a missing block or a failed per-block MIFARE read
+  // is normalised to an all-zero buffer (here and in readBambuTag). The old
+  // null-trimmed ASCII path turned that into "" (→ omitted downstream via
+  // `trayUid || undefined`); naive hex would turn it into a real-looking
+  // "0000…0000" and persist a bogus Instance ID. Treat an all-zero block as
+  // empty so a partial/malformed read omits the UID rather than inventing one.
+  const b9 = block(9);
+  const trayUid = b9.every((byte) => byte === 0) ? "" : b9.toString("hex").toUpperCase();
 
   // Block 10: pad (0-3) + Spool Width uint16 LE (4-5, ÷100 for mm)
   const b10 = block(10);

@@ -128,6 +128,16 @@ describe("Bambu Tag Decoder", () => {
       expect(data.trayUid).toBe("04E15CA27F00913BDEADBEEF01020304");
     });
 
+    it("treats an all-zero block 9 as an empty tray UID (Codex P2 / GH #583)", () => {
+      // A missing block or a failed per-block MIFARE read normalises to an
+      // all-zero buffer; it must omit the UID, not surface "0000…0000".
+      const blocks = makeBlocks(); // block 9 is already a zero-filled buffer
+      const data = parseBambuBlocks(blocks);
+      expect(data.trayUid).toBe("");
+      // And the decoded tag omits spoolUid entirely (trayUid || undefined).
+      expect(bambuToDecodedTag(data).spoolUid).toBeUndefined();
+    });
+
     it("parses spool width from block 10", () => {
       const blocks = makeBlocks();
       blocks[10] = Buffer.alloc(16);
