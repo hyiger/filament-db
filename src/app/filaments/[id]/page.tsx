@@ -165,6 +165,13 @@ function FilamentDetail() {
   // resolved filament directly.
   const [printLabelOpen, setPrintLabelOpen] = useState(false);
 
+  // GH #595: when arrived via a spool deep-link QR (`?spool=<id>`), scroll to
+  // and briefly highlight that spool. Read from window.location (not
+  // useSearchParams) to avoid forcing a Suspense boundary on this page; the
+  // highlight is a progressive enhancement that only runs client-side.
+  const [highlightSpoolId, setHighlightSpoolId] = useState<string | null>(null);
+  const deepLinkHandledRef = useRef(false);
+
   // "Sync from Bambu Studio" file input + in-flight flag. Pinned to this
   // filament's id (POST /api/filaments/{id}/bambustudio) so the user is
   // updating exactly the record they're looking at, regardless of the
@@ -260,6 +267,24 @@ function FilamentDetail() {
       .catch((err) => { if (err.name !== "AbortError") setFetchError("connectionFailed"); });
     return () => controller.abort();
   }, [params.id]);
+
+  // GH #595: spool deep-link — once the filament (with its spools) has loaded,
+  // if `?spool=<id>` is in the URL and matches a spool, scroll to it and
+  // highlight it briefly. The ref makes this fire once (not on every later
+  // spool edit that re-sets `filament`).
+  useEffect(() => {
+    if (deepLinkHandledRef.current || !filament || typeof window === "undefined") return;
+    deepLinkHandledRef.current = true;
+    const spoolId = new URLSearchParams(window.location.search).get("spool");
+    if (!spoolId || !filament.spools?.some((s) => String(s._id) === spoolId)) return;
+    // Wait a frame so the SpoolCard element is in the DOM, then scroll/flag.
+    const raf = requestAnimationFrame(() => {
+      document.getElementById(`spool-${spoolId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightSpoolId(spoolId);
+    });
+    const clear = setTimeout(() => setHighlightSpoolId(null), 2600);
+    return () => { cancelAnimationFrame(raf); clearTimeout(clear); };
+  }, [filament]);
 
   // Load locations once so the spool cards can show a picker without each
   // spool re-fetching. Small list — OK to keep in state.
@@ -1363,6 +1388,7 @@ function FilamentDetail() {
                     onNfcWeightUpdate={(scaleWeight) => handleNfcWeightUpdate(scaleWeight)}
                     nfcAvailable={isElectron && nfcStatus.tagPresent}
                     nfcWriting={nfcWriting}
+                    highlight={highlightSpoolId === String(spool._id)}
                   />
                 ))}
                 {addSpoolForm.open ? (
@@ -1847,6 +1873,11 @@ function FilamentDetail() {
           vendor: filament.vendor ?? null,
           type: filament.type ?? null,
           colorName: filament.colorName ?? null,
+          // GH #595: pass spools so the URL-mode QR can deep-link to one.
+          spools: (filament.spools ?? []).map((s) => ({
+            _id: String(s._id),
+            label: s.label ?? null,
+          })),
         }}
       />
     </main>
@@ -1885,6 +1916,8 @@ interface SpoolCardProps {
   onNfcWeightUpdate?: (scaleWeight: number) => void;
   nfcAvailable?: boolean;
   nfcWriting?: boolean;
+  /** GH #595: briefly ring this card when reached via a `?spool=` deep link. */
+  highlight?: boolean;
 }
 
 function SpoolCard({
@@ -1904,6 +1937,7 @@ function SpoolCard({
   onNfcWeightUpdate,
   nfcAvailable,
   nfcWriting,
+  highlight,
 }: SpoolCardProps) {
   const { t, locale } = useTranslation();
   const [weightInput, setWeightInput] = useState("");
@@ -1965,7 +1999,14 @@ function SpoolCard({
   };
 
   return (
-    <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
+    <div
+      id={`spool-${String(spool._id)}`}
+      className={`border rounded-lg p-3 transition-shadow scroll-mt-20 ${
+        highlight
+          ? "border-blue-500 ring-2 ring-blue-400 dark:ring-blue-500"
+          : "border-gray-200 dark:border-gray-700"
+      }`}
+    >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           {editingLabel ? (
