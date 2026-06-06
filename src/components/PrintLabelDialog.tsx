@@ -81,16 +81,19 @@ export default function PrintLabelDialog({
     [filament.name, filament.vendor, filament.type, filament.colorName],
   );
 
-  // GH #595: which spool the URL-mode QR deep-links to. Default to the first
-  // spool when there are any; the picker (shown only for >1 spool) lets the
-  // user choose a spool or "no specific spool".
+  // GH #595: which spool the URL-mode QR deep-links to. `spoolChoice` is the
+  // *raw* control state: null = no explicit choice yet (fall back to the first
+  // spool), "" = the user explicitly picked "filament only", otherwise a spool
+  // id. Deriving the default from the live `spools` (rather than a once-run
+  // initializer) keeps the single-spool case linked even when the spool is
+  // added after the dialog mounts, and self-heals a stale/removed id — Codex P2.
   const spools = useMemo(() => filament.spools ?? [], [filament.spools]);
-  const [selectedSpoolId, setSelectedSpoolId] = useState<string | null>(
-    () => spools[0]?._id ?? null,
-  );
-  // A previously-selected spool that's no longer present (filament changed)
-  // resolves to "no specific spool" rather than a dangling id.
-  const effectiveSpoolId = spools.some((s) => s._id === selectedSpoolId) ? selectedSpoolId : null;
+  const [spoolChoice, setSpoolChoice] = useState<string | null>(null);
+  const effectiveSpoolId = useMemo(() => {
+    if (spoolChoice === "") return null; // explicit "filament only"
+    if (spoolChoice && spools.some((s) => s._id === spoolChoice)) return spoolChoice;
+    return spools[0]?._id ?? null; // default to the first spool (or none if there are none)
+  }, [spoolChoice, spools]);
 
   const dialogRef = useRef<HTMLDivElement>(null);
 
@@ -477,7 +480,7 @@ export default function PrintLabelDialog({
               <select
                 id="label-spool"
                 value={effectiveSpoolId ?? ""}
-                onChange={(e) => setSelectedSpoolId(e.target.value || null)}
+                onChange={(e) => setSpoolChoice(e.target.value)}
                 className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="">{t("printLabel.spool.none")}</option>
