@@ -458,8 +458,8 @@ Jedes Filament hat eine eindeutige Instance-ID (5-Byte-Hex-String, z. B. `2acc21
 
 Drucke ein Spulen-Etikett (24-mm-Band) direkt von der Filament-Detailseite auf einen **Brother PT-P710BT** (P-touch CUBE). Das Etikett enthält einen (optionalen) QR-Code und konfigurierbaren Text. Zwei QR-Modi, die du pro Druck wählen kannst:
 
-- **Spulen-Instanz-ID** — die 5-Byte-Hex-ID (z. B. `2acc21072a`). Kompakter, dichter QR; lässt sich erneut über den Match-Endpunkt einlesen und entspricht dem, was auf einem NFC-Tag steht.
-- **Deep-Link-URL** — eine vollständige URL zur Filament-Detailseite (z. B. `https://meine-instanz.lan/filaments/<id>`). Beim Scannen mit einem beliebigen Smartphone öffnet sich die Seite direkt — keine App nötig.
+- **Filament-Instanz-ID** — die 5-Byte-Hex-ID des Filaments (z. B. `2acc21072a`). Das ist ein Wert auf **Filament-Ebene** (einer pro Filament — *nicht* pro Spule) und entspricht dem, was auf einem NFC-Tag steht. Er wird vom NFC-Reader in der App und von der Slicer-Integration erkannt; eine Handykamera zeigt nur den rohen Hex-Text, mit dem sich nichts anfangen lässt. Nutze diesen Modus für das NFC-/Slicer-Ökosystem, nicht zum Scannen mit dem Handy.
+- **Deep-Link-URL** — eine vollständige URL zur Filament-Detailseite (z. B. `https://meine-instanz.lan/filaments/<id>`). Beim Scannen mit **einem beliebigen Smartphone** öffnet sich die Seite direkt — keine App nötig. Das ist die per Handy scanbare Option. Bei einem Filament mit **mehreren Spulen** erscheint eine Spulenauswahl, sodass der QR eine bestimmte Spule ansteuern kann (`…/filaments/<id>?spool=<spoolId>`); beim Scannen öffnet sich das Filament mit hervorgehobener Spule. *(Spulen-Targeting, v1.35.)*
 
 Deine letzte Auswahl wird als Standard für den nächsten Druck gemerkt.
 
@@ -482,11 +482,11 @@ Unter **Einstellungen → Etikettenformat** legst du fest, wie jedes Etikett aus
 - **Ausrichtung** — horizontaler oder vertikaler Text.
 - **Invertieren** — weißer Text auf schwarzem Hintergrund. Der QR bleibt dunkel auf hell auf seiner eigenen Kachel, damit er weiterhin scanbar ist.
 
-Das Format ist **global** — es gilt für jedes gedruckte Etikett (und den Web-`.bin`-Download). Der Druckdialog lässt dich weiterhin pro Druck den QR-*Payload* wählen (Instanz-ID vs. URL). Es gibt bewusst kein „Restmenge"-Feld: ein gedruckter Wert ist sofort veraltet — scanne stattdessen den QR für den Live-Wert.
+Das Format ist **global** — es gilt für jedes gedruckte Etikett (und den Web-`.bin`-Download). Der Druckdialog lässt dich weiterhin pro Druck den QR-*Payload* wählen (Filament-Instanz-ID vs. Deep-Link-URL). Es gibt bewusst kein „Restmenge"-Feld: ein gedruckter Wert ist sofort veraltet — scanne stattdessen den QR für den Live-Wert.
 
 ### Etiketten drucken
 
-Auf einer beliebigen Filament-Detailseite → **Export ▾** → **Etikett drucken**. Der Dialog rendert eine Live-Vorschau in nativer Druckauflösung (pixelated CSS, damit du siehst was gedruckt wird) mit deinem gespeicherten Format. Wähle den QR-Payload (Instanz-ID / Deep-Link), dann klicke auf **Drucken**.
+Auf einer beliebigen Filament-Detailseite → **Export ▾** → **Etikett drucken**. Der Dialog rendert eine Live-Vorschau in nativer Druckauflösung (pixelated CSS, damit du siehst was gedruckt wird) mit deinem gespeicherten Format. Wähle den QR-Payload (Filament-Instanz-ID / Deep-Link) — und bei einem Filament mit mehreren Spulen im Deep-Link-Modus, auf welche Spule der QR zeigt —, dann klicke auf **Drucken**.
 
 Wenn du die Web-App statt Electron nutzt, lädt der Drucken-Button stattdessen eine `.bin`-Datei mit dem kodierten Byte-Stream herunter — nützlich zur Inspektion. Lokal mit `npm run label:sim --in <Datei>` decodieren, um zu sehen was gedruckt worden wäre.
 

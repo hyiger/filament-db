@@ -441,8 +441,8 @@ Each filament has a unique instance identifier (5-byte hex string, e.g. `2acc210
 
 Print a 24mm-tape spool label directly from the filament detail page to a **Brother PT-P710BT** (P-touch CUBE). The label carries a QR code (optional) and configurable text. Two QR payload modes you can pick per print:
 
-- **Spool instance ID** — the 5-byte hex identifier (e.g. `2acc21072a`). Compact, dense QR; re-scans into the match endpoint and matches what an NFC tag carries.
-- **Deep-link URL** — a full URL to the filament's detail page (e.g. `https://your-instance.lan/filaments/<id>`). Scanned by any phone opens the page directly — no app required.
+- **Filament instance ID** — the filament's 5-byte hex identifier (e.g. `2acc21072a`). This is a **filament-level** value (one per filament — *not* per spool) and matches what an NFC tag carries. It's resolved by the in-app NFC reader and the slicer integration; a phone camera just shows the raw hex with nothing to act on, so use this for the NFC/slicer ecosystem rather than phone scanning.
+- **Deep-link URL** — a full URL to the filament's detail page (e.g. `https://your-instance.lan/filaments/<id>`). Scanned by **any phone** it opens the page directly — no app required. This is the phone-scannable option. For a filament with **multiple spools**, a spool picker appears so the QR can target a specific spool (`…/filaments/<id>?spool=<spoolId>`); scanning it opens the filament with that spool highlighted. *(Spool targeting, v1.35.)*
 
 Your last choice is remembered as the default for the next print.
 
@@ -465,11 +465,11 @@ Your last choice is remembered as the default for the next print.
 - **Orientation** — horizontal or vertical text.
 - **Invert** — white text on a black background. The QR stays dark-on-light on its own tile so it still scans.
 
-The format is **global** — it applies to every label you print (and to the web `.bin` download). The print dialog still lets you choose the QR *payload* (instance ID vs URL) per print. There's intentionally no "remaining amount" field: a printed value goes stale the moment it prints, so scan the QR for the live number instead.
+The format is **global** — it applies to every label you print (and to the web `.bin` download). The print dialog still lets you choose the QR *payload* (filament instance ID vs deep-link URL) per print. There's intentionally no "remaining amount" field: a printed value goes stale the moment it prints, so scan the QR for the live number instead.
 
 ### Printing labels
 
-From any filament's detail page → **Export ▾** → **Print label**. The dialog renders a live preview at the printer's native dot density (pixelated CSS so what you see is what prints) using your saved format. Choose the QR payload (instance ID / deep link), then click **Print**.
+From any filament's detail page → **Export ▾** → **Print label**. The dialog renders a live preview at the printer's native dot density (pixelated CSS so what you see is what prints) using your saved format. Choose the QR payload (filament instance ID / deep link) — and, for a multi-spool filament in deep-link mode, which spool the QR points to — then click **Print**.
 
 If you're running in the **web app instead of Electron**, the Print button downloads a `.bin` file containing the encoded byte stream — useful for inspection. Decode it locally with `npm run label:sim --in <file>` to see what would have printed.
 
