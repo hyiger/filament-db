@@ -926,7 +926,11 @@ function FilamentDetail() {
           finish={finish}
           size={40}
           className="border-2"
-          ariaLabel={isParent ? "Color group" : `Color swatch: ${filament.color}`}
+          // Parents: let FilamentSwatch compute the richer "Color group:
+          // #… / #…" label from the composite colors so screen-reader users
+          // get the same color info sighted users see (Codex P3 #600). It
+          // still falls back to "Color group" when no colors are known.
+          ariaLabel={isParent ? undefined : `Color swatch: ${filament.color}`}
         />
         <div className="min-w-0">
           <h1 className="text-2xl font-bold">{filament.name}</h1>
