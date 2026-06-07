@@ -361,6 +361,94 @@ type: PLA`;
     expect(m).not.toBeNull();
     expect(m!.brandName).toBe("unknown-brand");
   });
+
+  // GH #604: real OPT YAMLs put secondary colors in a list under the
+  // `secondary_colors:` (plural) key and tag the gradient arrangement
+  // as `gradual_color_change`, not the spec-doc `gradient`. Pre-fix the
+  // parser only read the keyed `secondary_color_0..4` slots and only
+  // knew about the `gradient` tag string, so every multicolor OPT
+  // import landed as a single grey filament with no arrangement.
+  it("parses the secondary_colors list shape and gradual_color_change tag (GH #604)", () => {
+    // Verbatim shape from
+    // openprinttag-database/main-pr/data/materials/amolen/amolen-pla-silk-shiny-gradient-black-shiny-red-gold.yaml
+    // — primary_color absent, three secondaries under a YAML list, gradient
+    // declared via `gradual_color_change`.
+    const yaml = `uuid: ccf32809-fbef-527a-8487-ccb75ceafab6
+slug: amolen-pla-silk-shiny-gradient-black-shiny-red-gold
+brand:
+  slug: amolen
+name: PLA Silk Shiny Gradient Black & Shiny Red Gold
+class: FFF
+type: PLA
+abbreviation: PLA
+secondary_colors:
+- color_rgba: '#000000ff'
+- color_rgba: '#98282fff'
+- color_rgba: '#ddb95dff'
+tags:
+- silk
+- gradual_color_change
+- industrially_compostable
+properties:
+  density: 1.28`;
+
+    const m = parseMaterialYaml(yaml, new Map([["amolen", { name: "Amolen" }]]));
+    expect(m).not.toBeNull();
+    // No primary color → null. allColors() will fall through to secondaries.
+    expect(m!.color).toBeNull();
+    // Three secondaries in the right order, alpha byte stripped.
+    expect(m!.secondaryColors).toEqual(["#000000", "#98282f", "#ddb95d"]);
+    // Raw tags pass through unchanged; mapToFilamentPayload does the
+    // alias resolution to optTag numbers.
+    expect(m!.tags).toEqual(["silk", "gradual_color_change", "industrially_compostable"]);
+  });
+
+  it("caps secondary_colors at 5 entries (spec keys 20-24)", () => {
+    const yaml = `uuid: abc
+slug: too-many-colors
+brand:
+  slug: amolen
+name: Rainbow Plus
+class: FFF
+type: PLA
+secondary_colors:
+- color_rgba: '#ff0000ff'
+- color_rgba: '#00ff00ff'
+- color_rgba: '#0000ffff'
+- color_rgba: '#ffff00ff'
+- color_rgba: '#ff00ffff'
+- color_rgba: '#00ffffff'
+- color_rgba: '#ffffffff'`;
+    const m = parseMaterialYaml(yaml, new Map([["amolen", { name: "Amolen" }]]));
+    expect(m).not.toBeNull();
+    expect(m!.secondaryColors).toHaveLength(5);
+    expect(m!.secondaryColors).toEqual([
+      "#ff0000",
+      "#00ff00",
+      "#0000ff",
+      "#ffff00",
+      "#ff00ff",
+    ]);
+  });
+
+  it("still parses the legacy keyed secondary_color_0..4 shape", () => {
+    // Belt-and-braces — if an older spec snapshot or a future schema
+    // tidy-up keys the slots individually, we still get the colors.
+    const yaml = `uuid: def
+slug: legacy-keyed
+brand:
+  slug: amolen
+name: Legacy Keyed
+class: FFF
+type: PLA
+secondary_color_0:
+  color_rgba: '#aa0000ff'
+secondary_color_1:
+  color_rgba: '#00aa00ff'`;
+    const m = parseMaterialYaml(yaml, new Map([["amolen", { name: "Amolen" }]]));
+    expect(m).not.toBeNull();
+    expect(m!.secondaryColors).toEqual(["#aa0000", "#00aa00"]);
+  });
 });
 
 describe("mapToFilamentPayload", () => {
@@ -449,6 +537,92 @@ describe("mapToFilamentPayload", () => {
 
     const payload = mapToFilamentPayload(material);
     expect(payload.color).toBe("#808080");
+  });
+
+  // GH #604: the OPT YAML uses `gradual_color_change` for the gradient
+  // arrangement. The pre-fix TAG_STRING_TO_OPT only knew `gradient`,
+  // so the resolved optTags array didn't include 27 (GRADIENT) and the
+  // imported filament rendered as a solid swatch even when secondary
+  // colors were populated.
+  it("aliases gradual_color_change to OPT_TAG.GRADIENT (#604)", () => {
+    const material = {
+      slug: "test-gradient",
+      uuid: "test-uuid",
+      brandSlug: "amolen",
+      brandName: "Amolen",
+      name: "Gradient",
+      type: "PLA",
+      abbreviation: "PLA",
+      color: null,
+      secondaryColors: ["#000000", "#98282f", "#ddb95d"],
+      density: 1.28,
+      nozzleTempMin: null,
+      nozzleTempMax: null,
+      bedTempMin: null,
+      bedTempMax: null,
+      chamberTemp: null,
+      preheatTemp: null,
+      dryingTemp: null,
+      dryingTime: null,
+      hardnessShoreD: null,
+      transmissionDistance: null,
+      tags: ["silk", "gradual_color_change", "industrially_compostable"],
+      photoUrl: null,
+      productUrl: null,
+      completenessScore: 4,
+      completenessTier: "partial" as const,
+    };
+
+    const payload = mapToFilamentPayload(material);
+    const optTags = payload.optTags as number[];
+    // SILK = 17, GRADIENT = 27, BIODEGRADABLE = 12 (industrially_compostable
+    // alias). The order in the array isn't asserted — `deriveArrangement`
+    // looks them up by `includes`.
+    expect(optTags).toContain(17);
+    expect(optTags).toContain(27);
+    expect(optTags).toContain(12);
+    // And the multi-color slots survive into the payload — null primary
+    // (no `#808080` phantom) so allColors() falls through to the
+    // secondary list at render time.
+    expect(payload.color).toBeNull();
+    expect(payload.secondaryColors).toEqual(["#000000", "#98282f", "#ddb95d"]);
+  });
+
+  it("aliases coextruded to OPT_TAG.DUAL_COLOR so the arrangement renders (#604)", () => {
+    const material = {
+      slug: "test-coextruded",
+      uuid: "test-uuid",
+      brandSlug: "amolen",
+      brandName: "Amolen",
+      name: "Dual",
+      type: "PLA",
+      abbreviation: "PLA",
+      color: null,
+      secondaryColors: ["#000000", "#ffffff"],
+      density: null,
+      nozzleTempMin: null,
+      nozzleTempMax: null,
+      bedTempMin: null,
+      bedTempMax: null,
+      chamberTemp: null,
+      preheatTemp: null,
+      dryingTemp: null,
+      dryingTime: null,
+      hardnessShoreD: null,
+      transmissionDistance: null,
+      tags: ["coextruded"],
+      photoUrl: null,
+      productUrl: null,
+      completenessScore: 1,
+      completenessTier: "stub" as const,
+    };
+
+    const payload = mapToFilamentPayload(material);
+    const optTags = payload.optTags as number[];
+    // DUAL_COLOR = 28 — deriveArrangement collapses DUAL/TRIPLE into
+    // "coextruded", so the slot count being 2 vs 3 doesn't change the
+    // rendered arrangement.
+    expect(optTags).toContain(28);
   });
 
   it("maps abrasive tag to optTags", () => {

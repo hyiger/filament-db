@@ -130,8 +130,22 @@ const TAG_STRING_TO_OPT: Record<string, string> = {
   color_changing: "COLOR_CHANGING",
   fuzzy: "FUZZY",
   gradient: "GRADIENT",
+  // GH #604: real-world OPT YAMLs use `gradual_color_change` for the
+  // gradient arrangement. Without this alias the parser drops the tag,
+  // optTags doesn't get OPT_TAG.GRADIENT (27), and `deriveArrangement`
+  // returns "solid" — so the imported filament renders as a flat
+  // single-color swatch instead of a gradient even when its
+  // secondary_colors list is fully populated.
+  gradual_color_change: "GRADIENT",
   dual_color: "DUAL_COLOR",
   triple_color: "TRIPLE_COLOR",
+  // GH #604: the same canonical-vs-real-world divergence as gradient
+  // applies to the coextruded arrangement — the spec docs use
+  // `dual_color`/`triple_color` but real OPT YAMLs use the more
+  // descriptive `coextruded` tag. Map it to DUAL_COLOR by default;
+  // `deriveArrangement` collapses both DUAL/TRIPLE into "coextruded"
+  // anyway, so the slot count is already implicit in secondaryColors.
+  coextruded: "DUAL_COLOR",
   hygroscopic: "HYGROSCOPIC",
   anti_static: "ANTI_STATIC",
   esd_safe: "ESD_SAFE",
@@ -243,21 +257,50 @@ export function parseMaterialYaml(
     const brand = brandMap.get(brandSlug);
     const props = (raw.properties || {}) as Record<string, unknown>;
     const primaryColor = raw.primary_color as Record<string, unknown> | undefined;
-    // GH #477: parse secondary_color_0..4 in slot order (spec keys 20–24).
-    // Each is a `{ color_rgba: "AABBCCDD" }` object on the raw material;
-    // rgbaToHex drops the alpha to match our `#RRGGBB`-only model.
-    const SECONDARY_KEYS = [
-      "secondary_color_0",
-      "secondary_color_1",
-      "secondary_color_2",
-      "secondary_color_3",
-      "secondary_color_4",
-    ];
+    // GH #477 / GH #604: secondary colors can arrive in two shapes.
+    //
+    //   1. Modern OPT db (real-world data, e.g. amolen-*-multicolor-* YAMLs):
+    //      a flat list under `secondary_colors:` (plural), each entry
+    //      `{ color_rgba: "RRGGBBAA" }`.
+    //   2. Spec-aligned keyed slots `secondary_color_0..4:` (singular),
+    //      each entry `{ color_rgba: "RRGGBBAA" }`. Spec keys 20–24.
+    //
+    // The pre-#604 parser only read shape (2), so every multi-color
+    // OPT-imported filament came in with secondaryColors = [], the
+    // primary fell back to "#808080", and the filament rendered as a
+    // single grey swatch with no arrangement.
+    //
+    // Read shape (1) first because that's what the actual OPT database
+    // emits; fall through to (2) so we stay forward-compatible if a
+    // future schema cleanup keys the slots individually. In either case
+    // rgbaToHex drops the alpha byte (we model RGB only) and we cap at
+    // 5 entries to match the spec.
     const secondaryColors: string[] = [];
-    for (const key of SECONDARY_KEYS) {
-      const slot = raw[key] as Record<string, unknown> | undefined;
-      const hex = rgbaToHex(slot?.color_rgba as string | undefined);
-      if (hex) secondaryColors.push(hex);
+    const SECONDARY_CAP = 5;
+    const secondaryList = raw.secondary_colors;
+    if (Array.isArray(secondaryList)) {
+      for (const entry of secondaryList.slice(0, SECONDARY_CAP)) {
+        const hex = rgbaToHex(
+          (entry as Record<string, unknown> | null | undefined)?.color_rgba as
+            | string
+            | undefined,
+        );
+        if (hex) secondaryColors.push(hex);
+      }
+    }
+    if (secondaryColors.length === 0) {
+      const SECONDARY_KEYS = [
+        "secondary_color_0",
+        "secondary_color_1",
+        "secondary_color_2",
+        "secondary_color_3",
+        "secondary_color_4",
+      ];
+      for (const key of SECONDARY_KEYS) {
+        const slot = raw[key] as Record<string, unknown> | undefined;
+        const hex = rgbaToHex(slot?.color_rgba as string | undefined);
+        if (hex) secondaryColors.push(hex);
+      }
     }
     const photos = raw.photos as Array<Record<string, unknown>> | undefined;
 
