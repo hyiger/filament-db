@@ -255,7 +255,7 @@ Die Startseite zeigt alle Filamente in einer sortierbaren Tabelle.
 
 ### Eltern-/Varianten-Gruppierung
 
-Wenn du Farbvarianten hast, zeigen Elternfilamente ein Count-Badge (z. B. „5 Farben"). Klicke den Pfeil zum Erweitern und sieh die Variantenzeilen mit eigenen Swatches und Namen. Erneuter Klick klappt zusammen.
+Wenn du Farbvarianten hast, zeigen Elternfilamente ein Count-Badge (z. B. „5 Farben"). Der Swatch des Elternfilaments ist eine Zusammensetzung der Gruppenfarben — die eigene Farbe plus die jeder Variante, als gleich breite Segmente (oder eine einfarbige Füllung, wenn die ganze Gruppe einfarbig ist); ein Elternfilament ohne bekannte Farben fällt auf ein neutrales Schraffurmuster zurück. Klicke den Pfeil zum Erweitern und sieh die Variantenzeilen mit eigenen Swatches und Namen. Erneuter Klick klappt zusammen.
 
 ---
 

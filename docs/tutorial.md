@@ -253,7 +253,7 @@ The home page shows all filaments in a sortable table.
 
 ### Parent/Variant Grouping
 
-If you have color variants, parent filaments show a count badge (e.g. "5 colors"). Click the expand arrow to reveal variant rows, each showing their own color swatch and name. Click again to collapse.
+If you have color variants, parent filaments show a count badge (e.g. "5 colors"). The parent's own swatch is a composite of the group's colors — its own color plus each variant's, as equal-width segments (or a solid fill when the whole group is one color); a parent with no known colors falls back to a neutral cross-hatch. Click the expand arrow to reveal variant rows, each showing their own color swatch and name. Click again to collapse.
 
 ---
 

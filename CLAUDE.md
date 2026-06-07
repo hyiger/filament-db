@@ -47,7 +47,7 @@ scripts/            CLI tools (read-nfc-tag, seed import, backfill-all-fields, b
 - **Path alias**: `@/` maps to `src/`
 - **tsconfig excludes**: `node_modules`, `electron/`, `scripts/` (scripts use native modules unavailable in CI)
 - **Standalone output**: Next.js builds in standalone mode for Electron bundling
-- **Dark mode**: Use `dark:` Tailwind variants on all UI — app supports both light and dark themes
+- **Dark mode**: Use `dark:` Tailwind variants on all UI — app supports both light and dark themes. Native controls (the `<select>` option popup, scrollbars, date/color pickers) follow the CSS `color-scheme` property, set to `dark` on `html.dark` in `src/app/globals.css` (GH #598). Without it the OS draws those controls light even in dark mode — e.g. a dropdown's option list renders white with light text. `dark:` classes only style the closed control, not the OS-drawn popup; `color-scheme` covers the rest.
 - **Electron config**: electron-store for desktop persistence (connection mode, AI keys, currency); localStorage fallback in web mode
 - **IPC pattern**: `ipcMain.handle()` in `electron/main.ts`, exposed via `contextBridge` in `electron/preload.ts`, typed in `src/types/electron.d.ts`
 - **OpenPrintTag**: CBOR encoder in `src/lib/openprinttag.ts`, NDEF wrapping in `electron/ndef.ts`. CBOR aux_region_offset must point to valid CBOR within the NDEF payload (Prusa app requirement)
