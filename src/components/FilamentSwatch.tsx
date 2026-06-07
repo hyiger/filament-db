@@ -92,13 +92,22 @@ export default function FilamentSwatch({
   };
 
   // Parents render a composite of the group's actual colors (GH #597):
-  // the parent's own color first, then each variant's. Only when we have
-  // no valid colors at all do we fall back to the neutral cross-hatch.
+  // the parent's own color first, then each variant's. We only do this when
+  // the caller actually supplied the variants' colors — otherwise (e.g. the
+  // FilamentForm parent picker, or the filtered flat-row path, which set
+  // isParent from hasVariants without colors) we keep the neutral cross-hatch
+  // so the "this is a color group" cue isn't lost (Codex P2 #600, round 3).
   if (isParent) {
+    // Gate on the variants contributing ≥1 valid color — "group colors
+    // known". Without that, the parent's own color alone would render a plain
+    // solid swatch indistinguishable from a regular filament.
+    const knownVariantColors = parentSwatchColors(variantColors);
     // Parent's own color + its secondaryColors first (covers a coextruded
-    // parent whose primary is null), then the variants' colors which the
-    // callers flatten to include each variant's secondaryColors too.
-    const groupColors = parentSwatchColors([color, ...secondaryColors, ...variantColors]);
+    // parent whose primary is null), then the variants' colors.
+    const groupColors =
+      knownVariantColors.length > 0
+        ? parentSwatchColors([color, ...secondaryColors, ...knownVariantColors])
+        : [];
     if (groupColors.length > 0) {
       const label = ariaLabel ?? `Color group: ${groupColors.join(" / ")}`;
       const groupStyle: CSSProperties =
