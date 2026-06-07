@@ -190,45 +190,61 @@ export default function FilamentSwatch({
       ? `${title ?? baseColor} · ${finish}`
       : title;
 
-  // Transparent / translucent: real alpha over a checkered backdrop.
-  // Falls back to a neutral light grey if we couldn't parse the hex
-  // (callers do their own sanity checks; this is belt-and-braces).
+  // Transparent / translucent: actual color as the base + a diagonal
+  // cross-hatch overlay as the "see-through" cue. The earlier treatment
+  // (real alpha over a light-grey checker) washed dark colors into
+  // mid-grey — a translucent smoky-black PVB rendered as the same
+  // neutral gray as the parent "color group" swatch (user feedback,
+  // 2026-06). The hatch overlay keeps the see-through reading while
+  // letting the underlying color stay recognisable.
+  //
+  // Hatch line color is picked from the base color's luminance so the
+  // pattern reads on both dark (white-ish hatch) and light (dark-grey
+  // hatch) fills. Translucent uses a denser/heavier hatch; transparent
+  // uses a sparser/lighter one so the two finishes stay visually
+  // distinct (translucent reads more "milky", transparent more "airy").
+  //
+  // Falls back to the prior checker treatment if we couldn't parse the
+  // hex — that path is unreachable in practice (every caller validates)
+  // but keeps belt-and-braces behaviour on bad input.
   if ((finish === "transparent" || finish === "translucent") && rgb) {
-    const alpha = finish === "transparent" ? 0.25 : 0.55;
-    const fillRgba = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${alpha})`;
+    const isDark = relativeLuminance(rgb) < 0.5;
+    // Line colors:
+    //   dark fill → light hatch (whiteish)
+    //   light fill → dark hatch (slate-grey)
+    // Translucent has higher opacity → reads as a denser milky texture.
+    // Transparent is half that opacity + slightly thinner repeat →
+    // reads as a lighter, more see-through texture.
+    const hatchOpacity = finish === "translucent" ? 0.55 : 0.3;
+    const lineRgba = isDark
+      ? `rgba(255, 255, 255, ${hatchOpacity})`
+      : `rgba(31, 41, 55, ${hatchOpacity})`;
+    // Translucent: 2px line every 6px, both diagonals (denser cross-hatch).
+    // Transparent: 1px line every 7px, both diagonals (sparser).
+    const lineWidth = finish === "translucent" ? 2 : 1;
+    const gap = finish === "translucent" ? 6 : 7;
     return (
       <div
         className={`rounded-full border border-gray-400 dark:border-gray-500 flex-shrink-0 relative overflow-hidden ${className}`}
-        style={dimensionStyle}
+        style={{ ...dimensionStyle, backgroundColor: baseColor }}
         title={finalTitle}
         aria-label={finalLabel}
         role="img"
         data-finish={finish}
       >
-        {/* Checker backdrop — the universal "this is see-through" signal. */}
+        {/* Diagonal cross-hatch overlay — the see-through cue, riding
+            on top of the filament's actual color rather than replacing
+            it with a wash. Mirrors the parent "color group" hatch
+            geometry so the visual vocabulary is consistent. */}
         <div
           aria-hidden="true"
           style={{
             position: "absolute",
             inset: 0,
-            backgroundColor: "#f3f4f6",
             backgroundImage: [
-              "linear-gradient(45deg, #cbd5e1 25%, transparent 25%)",
-              "linear-gradient(-45deg, #cbd5e1 25%, transparent 25%)",
-              "linear-gradient(45deg, transparent 75%, #cbd5e1 75%)",
-              "linear-gradient(-45deg, transparent 75%, #cbd5e1 75%)",
+              `repeating-linear-gradient(45deg, ${lineRgba} 0 ${lineWidth}px, transparent ${lineWidth}px ${gap}px)`,
+              `repeating-linear-gradient(-45deg, ${lineRgba} 0 ${lineWidth}px, transparent ${lineWidth}px ${gap}px)`,
             ].join(", "),
-            backgroundSize: "6px 6px",
-            backgroundPosition: "0 0, 0 3px, 3px -3px, -3px 0",
-          }}
-        />
-        {/* Tinted alpha overlay — the filament's actual color, washed. */}
-        <div
-          aria-hidden="true"
-          style={{
-            position: "absolute",
-            inset: 0,
-            backgroundColor: fillRgba,
           }}
         />
       </div>
