@@ -919,7 +919,10 @@ function FilamentDetail() {
           secondaryColors={filament.secondaryColors}
           arrangement={arrangement}
           isParent={isParent}
-          variantColors={filament._variants?.map((v) => v.color)}
+          variantColors={filament._variants?.flatMap((v) => [
+            v.color,
+            ...(v.secondaryColors ?? []),
+          ])}
           finish={finish}
           size={40}
           className="border-2"

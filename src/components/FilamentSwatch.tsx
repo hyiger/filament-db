@@ -95,7 +95,10 @@ export default function FilamentSwatch({
   // the parent's own color first, then each variant's. Only when we have
   // no valid colors at all do we fall back to the neutral cross-hatch.
   if (isParent) {
-    const groupColors = parentSwatchColors(color, variantColors);
+    // Parent's own color + its secondaryColors first (covers a coextruded
+    // parent whose primary is null), then the variants' colors which the
+    // callers flatten to include each variant's secondaryColors too.
+    const groupColors = parentSwatchColors([color, ...secondaryColors, ...variantColors]);
     if (groupColors.length > 0) {
       const label = ariaLabel ?? `Color group: ${groupColors.join(" / ")}`;
       const groupStyle: CSSProperties =

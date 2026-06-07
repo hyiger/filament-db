@@ -168,21 +168,31 @@ describe("isMultiColor", () => {
 });
 
 describe("parentSwatchColors (GH #597)", () => {
-  it("puts the parent's own color first, then variant colors", () => {
-    expect(parentSwatchColors("#0000FF", ["#000000", "#FF0000"])).toEqual([
+  it("keeps the given order (caller puts parent colors first, then variants)", () => {
+    expect(parentSwatchColors(["#0000FF", "#000000", "#FF0000"])).toEqual([
       "#0000FF",
       "#000000",
       "#FF0000",
     ]);
   });
 
-  it("works with no parent color (pure grouping parent)", () => {
-    expect(parentSwatchColors(null, ["#000000", "#FFFFFF"])).toEqual(["#000000", "#FFFFFF"]);
-    expect(parentSwatchColors(undefined, ["#abc"])).toEqual(["#abc"]);
+  it("works with a null leading primary (pure grouping / coextruded parent)", () => {
+    expect(parentSwatchColors([null, "#000000", "#FFFFFF"])).toEqual(["#000000", "#FFFFFF"]);
+    expect(parentSwatchColors([undefined, "#abc"])).toEqual(["#abc"]);
+  });
+
+  it("flattens secondary colors of a coextruded member (Codex P2 #600)", () => {
+    // A coextruded parent: color=null, secondaries red/green; plus a solid
+    // black variant. Caller passes [color, ...parentSecondaries, ...variant].
+    expect(parentSwatchColors([null, "#FF0000", "#00FF00", "#000000"])).toEqual([
+      "#FF0000",
+      "#00FF00",
+      "#000000",
+    ]);
   });
 
   it("dedupes case-insensitively, keeping the first occurrence's casing", () => {
-    expect(parentSwatchColors("#FF0000", ["#ff0000", "#00FF00"])).toEqual([
+    expect(parentSwatchColors(["#FF0000", "#ff0000", "#00FF00"])).toEqual([
       "#FF0000",
       "#00FF00",
     ]);
@@ -190,16 +200,16 @@ describe("parentSwatchColors (GH #597)", () => {
 
   it("drops null / empty / non-hex / wrong-length entries", () => {
     expect(
-      parentSwatchColors("#00FF00", [null, "", "   ", "blue", "#12", "#1234567", "#GGG"]),
+      parentSwatchColors(["#00FF00", null, "", "   ", "blue", "#12", "#1234567", "#GGG"]),
     ).toEqual(["#00FF00"]);
   });
 
   it("accepts both #rgb and #rrggbb and trims whitespace", () => {
-    expect(parentSwatchColors("  #abc  ", ["  #aabbcc  "])).toEqual(["#abc", "#aabbcc"]);
+    expect(parentSwatchColors(["  #abc  ", "  #aabbcc  "])).toEqual(["#abc", "#aabbcc"]);
   });
 
   it("returns [] when nothing valid is known (caller falls back to cross-hatch)", () => {
-    expect(parentSwatchColors(null, [])).toEqual([]);
-    expect(parentSwatchColors("", [null, "nope"])).toEqual([]);
+    expect(parentSwatchColors([])).toEqual([]);
+    expect(parentSwatchColors([null, "nope", ""])).toEqual([]);
   });
 });

@@ -151,10 +151,16 @@ export function allColors(
 
 /**
  * GH #597: the ordered, deduped list of hex colors a parent-of-variants
- * swatch should display — the parent's own color first (when set), then
- * each variant's color. Replaces the old neutral cross-hatch with a
+ * swatch should display. Replaces the old neutral cross-hatch with a
  * composite of the group's actual colors so a parent reads as "these are
  * the colors in this group" instead of an opaque pattern.
+ *
+ * Takes a single ordered list of candidate colors — the caller is
+ * responsible for ordering (typically the parent's own color +
+ * secondaryColors first, then each variant's color + secondaryColors).
+ * Passing every color source (not just the primary `color`) matters for
+ * coextruded / gradient members whose primary is `null` and whose colors
+ * live entirely in `secondaryColors` — Codex P2 on PR #600.
  *
  * - Only valid `#rgb` / `#rrggbb` strings survive (null/empty/garbage dropped).
  * - Dedupe is case-insensitive, keeping the first occurrence's casing.
@@ -162,13 +168,12 @@ export function allColors(
  *   to the legacy cross-hatch.
  */
 export function parentSwatchColors(
-  parentColor: string | null | undefined,
-  variantColors: ReadonlyArray<string | null | undefined>,
+  colors: ReadonlyArray<string | null | undefined>,
 ): string[] {
   const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const raw of [parentColor, ...variantColors]) {
+  for (const raw of colors) {
     if (typeof raw !== "string") continue;
     const c = raw.trim();
     if (!HEX.test(c)) continue;
