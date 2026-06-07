@@ -798,6 +798,7 @@ export default function Home() {
               <FilamentSwatch
                 color={f.color}
                 isParent
+                variantColors={group.variants.map((v) => v.color)}
                 size={24}
                 title={f.color ?? undefined}
               />

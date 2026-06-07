@@ -919,10 +919,11 @@ function FilamentDetail() {
           secondaryColors={filament.secondaryColors}
           arrangement={arrangement}
           isParent={isParent}
+          variantColors={filament._variants?.map((v) => v.color)}
           finish={finish}
           size={40}
           className="border-2"
-          ariaLabel={isParent ? "Multi-color parent" : `Color swatch: ${filament.color}`}
+          ariaLabel={isParent ? "Color group" : `Color swatch: ${filament.color}`}
         />
         <div className="min-w-0">
           <h1 className="text-2xl font-bold">{filament.name}</h1>

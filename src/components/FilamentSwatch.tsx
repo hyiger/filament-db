@@ -3,7 +3,7 @@
 import type { CSSProperties } from "react";
 import type { Finish } from "@/lib/filamentFinish";
 import type { ColorArrangement } from "@/lib/filamentColors";
-import { allColors } from "@/lib/filamentColors";
+import { allColors, parentSwatchColors } from "@/lib/filamentColors";
 
 interface FilamentSwatchProps {
   /** Primary hex color string; ignored when `isParent` is true. May be
@@ -35,6 +35,15 @@ interface FilamentSwatchProps {
    * detail-page response.
    */
   isParent?: boolean;
+  /**
+   * GH #597: the colors of this parent's variants (and the parent's own
+   * color rides in via `color`). When `isParent` is true and at least one
+   * valid color is known, the swatch renders a composite of the group's
+   * colors instead of the neutral cross-hatch — so a parent shows the
+   * actual colors it groups. Falls back to the cross-hatch when empty /
+   * omitted. Ignored when `isParent` is false.
+   */
+  variantColors?: ReadonlyArray<string | null | undefined>;
   /**
    * Visual finish derived from the filament's optTags. Drives a texture
    * treatment on top of the color: matte = flat fill, silk = sheen
@@ -70,6 +79,7 @@ export default function FilamentSwatch({
   secondaryColors = [],
   arrangement = "solid",
   isParent = false,
+  variantColors = [],
   finish = null,
   size = 20,
   className = "",
@@ -81,9 +91,43 @@ export default function FilamentSwatch({
     height: `${size}px`,
   };
 
-  // Parents always render hatched, regardless of color/finish.
+  // Parents render a composite of the group's actual colors (GH #597):
+  // the parent's own color first, then each variant's. Only when we have
+  // no valid colors at all do we fall back to the neutral cross-hatch.
   if (isParent) {
-    const finalLabel = ariaLabel ?? "Multi-color parent";
+    const groupColors = parentSwatchColors(color, variantColors);
+    if (groupColors.length > 0) {
+      const label = ariaLabel ?? `Color group: ${groupColors.join(" / ")}`;
+      const groupStyle: CSSProperties =
+        groupColors.length === 1
+          ? { ...dimensionStyle, backgroundColor: groupColors[0] }
+          : {
+              ...dimensionStyle,
+              // Equal-width segments with hard stops — same construction as
+              // the coextruded multi-color swatch below, so a parent group
+              // and a coextruded filament read consistently.
+              backgroundImage: `linear-gradient(to right, ${groupColors
+                .map((c, i) => {
+                  const start = ((i / groupColors.length) * 100).toFixed(2);
+                  const end = (((i + 1) / groupColors.length) * 100).toFixed(2);
+                  return `${c} ${start}%, ${c} ${end}%`;
+                })
+                .join(", ")})`,
+            };
+      return (
+        <div
+          className={`rounded-full border border-gray-300 dark:border-gray-600 flex-shrink-0 ${className}`}
+          style={groupStyle}
+          title={title ?? label}
+          aria-label={label}
+          role="img"
+          data-parent="true"
+          {...(groupColors.length > 1 ? { "data-multicolor": "true" } : {})}
+        />
+      );
+    }
+    // No colors known — keep the legacy neutral cross-hatch.
+    const finalLabel = ariaLabel ?? "Color group";
     const hatchStyle: CSSProperties = {
       ...dimensionStyle,
       backgroundColor: "#e5e7eb",
@@ -96,9 +140,10 @@ export default function FilamentSwatch({
       <div
         className={`rounded-full border border-gray-400 dark:border-gray-500 flex-shrink-0 dark:bg-gray-700 ${className}`}
         style={hatchStyle}
-        title="Multi-color parent"
+        title="Color group"
         aria-label={finalLabel}
         role="img"
+        data-parent="true"
         data-multicolor="true"
       />
     );

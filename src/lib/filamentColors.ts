@@ -150,6 +150,37 @@ export function allColors(
 }
 
 /**
+ * GH #597: the ordered, deduped list of hex colors a parent-of-variants
+ * swatch should display — the parent's own color first (when set), then
+ * each variant's color. Replaces the old neutral cross-hatch with a
+ * composite of the group's actual colors so a parent reads as "these are
+ * the colors in this group" instead of an opaque pattern.
+ *
+ * - Only valid `#rgb` / `#rrggbb` strings survive (null/empty/garbage dropped).
+ * - Dedupe is case-insensitive, keeping the first occurrence's casing.
+ * - Returns `[]` when nothing valid is known; the swatch then falls back
+ *   to the legacy cross-hatch.
+ */
+export function parentSwatchColors(
+  parentColor: string | null | undefined,
+  variantColors: ReadonlyArray<string | null | undefined>,
+): string[] {
+  const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of [parentColor, ...variantColors]) {
+    if (typeof raw !== "string") continue;
+    const c = raw.trim();
+    if (!HEX.test(c)) continue;
+    const key = c.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(c);
+  }
+  return out;
+}
+
+/**
  * True if the filament should render as multi-color (i.e. it has at
  * least one secondary color OR an arrangement tag is set). Useful for
  * gating "the slicer export will drop secondaries" notices and the
