@@ -10,6 +10,13 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
+  /* Tell the browser to render native UI (the `<select>` option popup,
+   * scrollbars, date/color pickers, form-control text) in light mode by
+   * default; `html.dark` flips it to dark. Without this, class-based dark
+   * mode leaves the OS-drawn `<option>` list white with light text —
+   * unreadable (GH #598). The `.dark` rule below is more specific, so it
+   * wins when the dark class is present. */
+  color-scheme: light;
   --background: #ffffff;
   --foreground: #171717;
   /* Height of the persistent global AppHeader (rendered by app/layout.tsx).
@@ -27,6 +34,9 @@
 }
 
 html.dark {
+  /* Native controls (select option lists, scrollbars, pickers) follow the
+   * dark theme — fixes the white-popup-with-light-text dropdown (GH #598). */
+  color-scheme: dark;
   --background: #0a0a0a;
   --foreground: #ededed;
 }
