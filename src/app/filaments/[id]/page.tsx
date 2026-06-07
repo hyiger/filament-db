@@ -664,6 +664,13 @@ function FilamentDetail() {
       locationId?: string | null;
       photoDataUrl?: string | null;
       retired?: boolean;
+      // GH #601: provenance fields. The PUT handler (and the validator
+      // in src/lib/validateSpoolBody.ts) already accepts these — the type
+      // here just needs to surface them so the SpoolCard's
+      // onUpdateMeta callback can route through this single helper.
+      lotNumber?: string | null;
+      purchaseDate?: string | null;
+      openedDate?: string | null;
     },
   ) => {
     if (!filament) return;
@@ -1392,6 +1399,7 @@ function FilamentDetail() {
                     onToggleRetire={(retired) => handleUpdateSpool(spool._id, { retired })}
                     onLogDryCycle={(entry) => handleLogDryCycle(spool._id, entry)}
                     onLogUsage={(entry) => handleLogUsage(spool._id, entry)}
+                    onUpdateMeta={(patch) => handleUpdateSpool(spool._id, patch)}
                     onRemove={() => handleRemoveSpool(spool._id)}
                     onNfcWeightUpdate={(scaleWeight) => handleNfcWeightUpdate(scaleWeight)}
                     nfcAvailable={isElectron && nfcStatus.tagPresent}
@@ -1906,6 +1914,13 @@ interface SpoolCardProps {
     locationId?: string | null;
     photoDataUrl?: string | null;
     retired?: boolean;
+    // GH #601: provenance fields. The list-summary projection drops these
+    // (they're on the full filament fetch the detail page uses), so they
+    // come in as ISO strings from the JSON serializer. May be undefined
+    // if the spool subdoc predates the field.
+    lotNumber?: string | null;
+    purchaseDate?: string | null;
+    openedDate?: string | null;
     dryCycles?: { date: string | Date; tempC: number | null; durationMin: number | null; notes: string }[];
     usageHistory?: { grams: number; jobLabel: string; date: string | Date; source: string }[];
   };
@@ -1920,6 +1935,19 @@ interface SpoolCardProps {
   onToggleRetire: (retired: boolean) => void;
   onLogDryCycle: (entry: { tempC?: number | null; durationMin?: number | null; notes?: string }) => void;
   onLogUsage: (entry: { grams: number; jobLabel?: string }) => void;
+  /**
+   * GH #601: provenance fields (lotNumber, purchaseDate, openedDate). All
+   * three already round-trip through the spool subdoc schema, the
+   * validator, the REST PUT handler, and the CSV import/export, but the
+   * UI never exposed them. One callback for the group so the user can
+   * save a partial patch (e.g. set the purchase date without touching
+   * the lot field).
+   */
+  onUpdateMeta: (patch: {
+    lotNumber?: string | null;
+    purchaseDate?: string | null;
+    openedDate?: string | null;
+  }) => void;
   onRemove: () => void;
   onNfcWeightUpdate?: (scaleWeight: number) => void;
   nfcAvailable?: boolean;
@@ -1941,6 +1969,7 @@ function SpoolCard({
   onToggleRetire,
   onLogDryCycle,
   onLogUsage,
+  onUpdateMeta,
   onRemove,
   onNfcWeightUpdate,
   nfcAvailable,
@@ -1957,6 +1986,17 @@ function SpoolCard({
   const [dryDuration, setDryDuration] = useState("");
   const [usageGrams, setUsageGrams] = useState("");
   const [usageLabel, setUsageLabel] = useState("");
+  // GH #601: provenance edits. ISO-string fields are sliced to YYYY-MM-DD
+  // for the native <input type="date">; null/undefined collapse to "".
+  // Reseeded from props in the patch handler below so a sibling-spool
+  // update doesn't reset half-typed text the way it would for label
+  // (GH #263 has the parallel pattern).
+  const isoToDateInput = (v?: string | null) =>
+    v ? new Date(v).toISOString().slice(0, 10) : "";
+  const [lotInput, setLotInput] = useState(spool.lotNumber ?? "");
+  const [purchaseInput, setPurchaseInput] = useState(isoToDateInput(spool.purchaseDate));
+  const [openedInput, setOpenedInput] = useState(isoToDateInput(spool.openedDate));
+  const [savingMeta, setSavingMeta] = useState(false);
   const photoInputRef = useRef<HTMLInputElement>(null);
 
   const remaining = computeRemaining(filament, spool.totalWeight);
@@ -2258,6 +2298,85 @@ function SpoolCard({
                 className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400"
               >
                 {spool.photoDataUrl ? t("detail.spool.replacePhoto") : t("detail.spool.uploadPhoto")}
+              </button>
+            </div>
+          </div>
+
+          {/* GH #601: provenance — purchase + opened dates + lot/batch */}
+          <div>
+            <p className="text-xs text-gray-500 mb-1">{t("detail.spool.provenance")}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <label className="flex flex-col gap-0.5">
+                <span className="text-xs text-gray-400">{t("detail.spool.lotNumber")}</span>
+                <input
+                  type="text"
+                  value={lotInput}
+                  onChange={(e) => setLotInput(e.target.value)}
+                  placeholder={t("detail.spool.lotNumberPlaceholder")}
+                  aria-label={t("detail.spool.lotNumber")}
+                  className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+                />
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-xs text-gray-400">{t("detail.spool.purchaseDate")}</span>
+                <input
+                  type="date"
+                  value={purchaseInput}
+                  onChange={(e) => setPurchaseInput(e.target.value)}
+                  aria-label={t("detail.spool.purchaseDate")}
+                  className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+                />
+              </label>
+              <label className="flex flex-col gap-0.5">
+                <span className="text-xs text-gray-400">{t("detail.spool.openedDate")}</span>
+                <input
+                  type="date"
+                  value={openedInput}
+                  onChange={(e) => setOpenedInput(e.target.value)}
+                  aria-label={t("detail.spool.openedDate")}
+                  className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+                />
+              </label>
+            </div>
+            <div className="flex items-center justify-end mt-2">
+              <button
+                type="button"
+                // Only send fields that actually differ from the current
+                // server values — a partial patch is what the PUT handler
+                // expects, so an untouched openedDate shouldn't be wiped
+                // just because the user only edited the lot number.
+                disabled={
+                  savingMeta ||
+                  (lotInput === (spool.lotNumber ?? "") &&
+                   purchaseInput === isoToDateInput(spool.purchaseDate) &&
+                   openedInput === isoToDateInput(spool.openedDate))
+                }
+                onClick={async () => {
+                  const patch: { lotNumber?: string | null; purchaseDate?: string | null; openedDate?: string | null } = {};
+                  const lotTrimmed = lotInput.trim();
+                  const currentLot = spool.lotNumber ?? "";
+                  if (lotTrimmed !== currentLot) {
+                    patch.lotNumber = lotTrimmed === "" ? null : lotTrimmed;
+                  }
+                  const currentPurchase = isoToDateInput(spool.purchaseDate);
+                  if (purchaseInput !== currentPurchase) {
+                    patch.purchaseDate = purchaseInput === "" ? null : purchaseInput;
+                  }
+                  const currentOpened = isoToDateInput(spool.openedDate);
+                  if (openedInput !== currentOpened) {
+                    patch.openedDate = openedInput === "" ? null : openedInput;
+                  }
+                  if (Object.keys(patch).length === 0) return;
+                  setSavingMeta(true);
+                  try {
+                    await onUpdateMeta(patch);
+                  } finally {
+                    setSavingMeta(false);
+                  }
+                }}
+                className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400"
+              >
+                {t("detail.spool.saveProvenance")}
               </button>
             </div>
           </div>
