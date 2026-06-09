@@ -183,6 +183,16 @@ export interface IFilament extends Document {
   inherits: string | null;
   parentId: mongoose.Types.ObjectId | null;
   settings: Record<string, string | null>;
+  /**
+   * GH #607: provenance for the OpenPrintTag re-sync feature — a flat map of
+   * the OPT-offered value per managed field (dot-free keys, e.g.
+   * `temperatures_nozzle`) captured at import / last sync. Stored OUTSIDE
+   * the `settings` scalar bag on purpose: settings entries are rendered
+   * directly as React children in the detail page's settings table and ride
+   * verbatim into slicer exports, neither of which tolerates a structured
+   * object (Codex P2 on PR #612).
+   */
+  openprinttagSnapshot: Record<string, unknown> | null;
   _deletedAt: Date | null;
   /**
    * Trash-tombstone flag for "delete forever". When true, the document is a
@@ -391,6 +401,10 @@ const FilamentSchema = new Schema<IFilament>(
     inherits: { type: String, default: null },
     parentId: { type: Schema.Types.ObjectId, ref: "Filament", default: null, index: true },
     settings: { type: Schema.Types.Mixed, default: {} },
+    // GH #607: OpenPrintTag re-sync provenance (see the IFilament docblock).
+    // Kept out of `settings` so it never renders in the scalar settings
+    // table or leaks into slicer exports.
+    openprinttagSnapshot: { type: Schema.Types.Mixed, default: null },
     _deletedAt: { type: Date, default: null },
     _purged: { type: Boolean, default: false, index: true },
   },

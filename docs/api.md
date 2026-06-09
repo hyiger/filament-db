@@ -357,7 +357,7 @@ Applies the user-accepted subset of OpenPrintTag updates to a linked filament. S
 { "fields": ["density", "temperatures.nozzle"] }
 ```
 
-Only field keys from the managed set are accepted — an unknown key returns 400 rather than being silently dropped. The provenance snapshot (`settings.openprinttag_snapshot`) is refreshed to the full current OpenPrintTag offer on every sync, regardless of which fields were applied, so a later check can still tell "OpenPrintTag changed it" from "you changed it" for the fields you declined.
+Only field keys from the managed set are accepted — an unknown key returns 400 rather than being silently dropped. The provenance snapshot (`openprinttagSnapshot`) is refreshed to the full current OpenPrintTag offer on every sync, regardless of which fields were applied, so a later check can still tell "OpenPrintTag changed it" from "you changed it" for the fields you declined.
 
 Responses:
 - `{ "applied": ["density", "temperatures.nozzle"], "filament": { … } }` — the fields written + the fresh document.

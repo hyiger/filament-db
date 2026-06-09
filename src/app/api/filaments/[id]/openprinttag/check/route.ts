@@ -52,7 +52,7 @@ export async function GET(
     }
 
     const payload = mapToFilamentPayload(material);
-    const snapshot = settings.openprinttag_snapshot as Record<string, unknown> | undefined;
+    const snapshot = filament.openprinttagSnapshot as Record<string, unknown> | undefined;
     const changes = diffOptFields(
       filament as unknown as Record<string, unknown>,
       payload,

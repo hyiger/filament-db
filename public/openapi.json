@@ -737,7 +737,7 @@
       "post": {
         "tags": ["Filaments"],
         "summary": "Apply OpenPrintTag updates",
-        "description": "Applies the user-accepted subset of OpenPrintTag updates to a linked filament. Same-origin guarded. Only managed field keys are accepted (unknown keys → 400). Refreshes settings.openprinttag_snapshot to the full current OPT offer so a later check can distinguish upstream changes from local edits on declined fields.",
+        "description": "Applies the user-accepted subset of OpenPrintTag updates to a linked filament. Same-origin guarded. Only managed field keys are accepted (unknown keys → 400). Refreshes openprinttagSnapshot to the full current OPT offer so a later check can distinguish upstream changes from local edits on declined fields.",
         "parameters": [{ "$ref": "#/components/parameters/FilamentId" }],
         "requestBody": {
           "required": true,

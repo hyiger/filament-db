@@ -85,8 +85,11 @@ export async function POST(request: NextRequest) {
         // "the user edited it locally" without a manual sync-first dance.
         const optSnapshot = buildOptSnapshot(payload);
         // Seed it on the create path too (the update path uses
-        // optUpdateFields below).
-        (payload.settings as Record<string, unknown>).openprinttag_snapshot = optSnapshot;
+        // optUpdateFields below). Top-level field, NOT inside `settings` —
+        // settings entries render directly in the detail-page table and ride
+        // into slicer exports, neither of which tolerates an object value
+        // (Codex P2 on PR #612).
+        payload.openprinttagSnapshot = optSnapshot;
 
         // The unique index is on { name } where _deletedAt is null, so we
         // must query by name alone to avoid a duplicate-key error when the
@@ -104,7 +107,7 @@ export async function POST(request: NextRequest) {
             (payload.settings as Record<string, string>).openprinttag_slug,
           // GH #607: refresh the provenance snapshot on every (re-)import so
           // an existing row's snapshot stays current with the upstream offer.
-          "settings.openprinttag_snapshot": optSnapshot,
+          openprinttagSnapshot: optSnapshot,
         };
 
         // Build conditional updates: only set fields that are currently null.

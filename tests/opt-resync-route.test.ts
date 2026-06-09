@@ -94,7 +94,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
 
   // ── import writes the provenance snapshot (GH #607) ──────────────────
 
-  it("import: stamps settings.openprinttag_snapshot so provenance exists day one", async () => {
+  it("import: stamps openprinttagSnapshot so provenance exists day one", async () => {
     const req = new NextRequest("http://localhost:3456/api/openprinttag/import", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -105,7 +105,9 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
 
     const f = await Filament.findOne({ name: "Prusament PLA Galaxy Black" }).lean();
     expect(f).toBeTruthy();
-    const snap = f.settings.openprinttag_snapshot;
+    // GH #607 (Codex P2): provenance lives OUTSIDE the settings bag.
+    expect(f.settings.openprinttag_snapshot).toBeUndefined();
+    const snap = f.openprinttagSnapshot;
     expect(snap).toBeTruthy();
     expect(snap.density).toBe(1.24);
     expect(snap.temperatures_nozzle).toBe(225);
@@ -124,7 +126,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
       type: "PLA",
       settings: { openprinttag_slug: "prusament-pla-galaxy-black", openprinttag_uuid: "x" },
     });
-    expect(pre.settings.openprinttag_snapshot).toBeUndefined();
+    expect(pre.openprinttagSnapshot).toBeFalsy();
 
     const req = new NextRequest("http://localhost:3456/api/openprinttag/import", {
       method: "POST",
@@ -136,8 +138,8 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect((await res.json()).updated).toBe(1);
 
     const f = await Filament.findById(pre._id).lean();
-    expect(f.settings.openprinttag_snapshot).toBeTruthy();
-    expect(f.settings.openprinttag_snapshot.temperatures_nozzle).toBe(225);
+    expect(f.openprinttagSnapshot).toBeTruthy();
+    expect(f.openprinttagSnapshot.temperatures_nozzle).toBe(225);
   });
 
   // ── check ────────────────────────────────────────────────────────────
@@ -174,10 +176,8 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
       temperatures: { nozzle: 215, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
       shoreHardnessD: 81,
       transmissionDistance: 0.2,
-      settings: {
-        openprinttag_slug: "prusament-pla-galaxy-black",
-        openprinttag_snapshot: { temperatures_nozzle: 220 },
-      },
+      settings: { openprinttag_slug: "prusament-pla-galaxy-black" },
+      openprinttagSnapshot: { temperatures_nozzle: 220 },
     });
     const res = await checkGET({} as NextRequest, params(String(f._id)));
     const body = await res.json();
@@ -238,8 +238,8 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(fresh.temperatures.nozzle).toBe(215);
     // Snapshot refreshed to the full OPT offer (so the declined nozzle stays
     // a conflict on the next check rather than vanishing).
-    expect(fresh.settings.openprinttag_snapshot.temperatures_nozzle).toBe(225);
-    expect(fresh.settings.openprinttag_snapshot.density).toBe(1.24);
+    expect(fresh.openprinttagSnapshot.temperatures_nozzle).toBe(225);
+    expect(fresh.openprinttagSnapshot.density).toBe(1.24);
   });
 
   it("sync: rejects an unknown field with 400", async () => {

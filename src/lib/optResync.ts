@@ -16,7 +16,7 @@
  *
  * Provenance model (the crux — see #607): the import / last-sync captures a
  * snapshot of the OPT-offered value for each managed field under
- * `settings.openprinttag_snapshot`. On a re-check we classify each differing
+ * `openprinttagSnapshot`. On a re-check we classify each differing
  * field:
  *   - current is null (or the gray `#808080` color sentinel)  → `adopt`
  *       (gap-fill — the field was never set locally).
@@ -146,7 +146,7 @@ function hasIncoming(v: OptValue): boolean {
 /**
  * Build the provenance snapshot from a mapped OPT payload — the OPT-offered
  * value for every managed field that OPT actually carries, keyed by the
- * dot-free snapshot key. Written to `settings.openprinttag_snapshot` on
+ * dot-free snapshot key. Written to `openprinttagSnapshot` on
  * import and on each sync so future re-checks can tell "OPT changed it" from
  * "the user changed it".
  */

@@ -1882,7 +1882,18 @@ function FilamentDetail() {
                   .map(([key, value]) => (
                     <tr key={key} className="border-b border-gray-200 dark:border-gray-800">
                       <td className="py-1 pr-4 text-gray-500 whitespace-nowrap">{key}</td>
-                      <td className="py-1 break-all">{value ?? <span className="text-gray-400">nil</span>}</td>
+                      {/* `settings` is a Mixed bag — coerce any non-scalar
+                          value to JSON so a structured entry can never crash
+                          the render as a raw React child (Codex P2 #612). */}
+                      <td className="py-1 break-all">
+                        {value == null ? (
+                          <span className="text-gray-400">nil</span>
+                        ) : typeof value === "object" ? (
+                          JSON.stringify(value)
+                        ) : (
+                          value
+                        )}
+                      </td>
                     </tr>
                   ))}
               </tbody>

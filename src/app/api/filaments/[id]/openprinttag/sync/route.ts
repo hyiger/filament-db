@@ -21,7 +21,7 @@ import { assertSameOriginRequest } from "@/lib/requestGuard";
  *
  * Only fields in OPT_MANAGED_FIELD_KEYS are honoured — an arbitrary path
  * can't be `$set` through this route. The provenance snapshot
- * (`settings.openprinttag_snapshot`) is refreshed to the FULL current OPT
+ * (`openprinttagSnapshot`) is refreshed to the FULL current OPT
  * offer on every sync, regardless of which fields were applied, so a later
  * check can still tell "OPT changed it" from "the user changed it" for the
  * fields that were declined.
@@ -97,7 +97,7 @@ export async function POST(
 
     const $set: Record<string, unknown> = {
       ...update,
-      "settings.openprinttag_snapshot": snapshot,
+      openprinttagSnapshot: snapshot,
     };
 
     const updated = await Filament.findByIdAndUpdate(
