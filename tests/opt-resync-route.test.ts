@@ -60,15 +60,24 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
   let checkGET: typeof import("@/app/api/filaments/[id]/openprinttag/check/route").GET;
   let syncPOST: typeof import("@/app/api/filaments/[id]/openprinttag/sync/route").POST;
   let importPOST: typeof import("@/app/api/openprinttag/import/route").POST;
+  let detailGET: typeof import("@/app/api/filaments/[id]/route").GET;
 
   beforeEach(async () => {
     const filMod = await import("@/models/Filament");
     if (!mongoose.models.Filament) mongoose.model("Filament", filMod.default.schema);
     Filament = mongoose.models.Filament;
+    // The detail GET route .populate()s these — register so it doesn't 500.
+    for (const name of ["Nozzle", "Printer", "BedType"]) {
+      if (!mongoose.models[name]) {
+        const mod = await import(`@/models/${name}`);
+        mongoose.model(name, mod.default.schema);
+      }
+    }
 
     checkGET = (await import("@/app/api/filaments/[id]/openprinttag/check/route")).GET;
     syncPOST = (await import("@/app/api/filaments/[id]/openprinttag/sync/route")).POST;
     importPOST = (await import("@/app/api/openprinttag/import/route")).POST;
+    detailGET = (await import("@/app/api/filaments/[id]/route")).GET;
 
     dbMock.mockReset();
     dbMock.mockResolvedValue({
@@ -140,6 +149,38 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     const f = await Filament.findById(pre._id).lean();
     expect(f.openprinttagSnapshot).toBeTruthy();
     expect(f.openprinttagSnapshot.temperatures_nozzle).toBe(225);
+  });
+
+  // ── detail _hasOwnOptLink (button gating, Codex P2 r4) ───────────────
+
+  it("detail: _hasOwnOptLink true for the linked root, false for an inheriting variant", async () => {
+    const parent = await Filament.create({
+      name: "OPT Parent PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      settings: { openprinttag_slug: "prusament-pla-galaxy-black" },
+    });
+    const variant = await Filament.create({
+      name: "OPT Parent PLA — Red",
+      vendor: "Prusament",
+      type: "PLA",
+      parentId: parent._id,
+      // No own slug — but resolveFilament will merge the parent's settings
+      // into the resolved response, so the gate must use _hasOwnOptLink.
+    });
+
+    const reqUrl = (id: string) => new NextRequest(`http://localhost:3456/api/filaments/${id}`);
+
+    const rootRes = await detailGET(reqUrl(String(parent._id)), params(String(parent._id)));
+    const rootBody = await rootRes.json();
+    expect(rootBody._hasOwnOptLink).toBe(true);
+
+    const varRes = await detailGET(reqUrl(String(variant._id)), params(String(variant._id)));
+    const varBody = await varRes.json();
+    // The resolved settings DO carry the inherited slug …
+    expect(varBody.settings.openprinttag_slug).toBe("prusament-pla-galaxy-black");
+    // … but the variant has no OWN link, so the button must stay hidden.
+    expect(varBody._hasOwnOptLink).toBe(false);
   });
 
   // ── check ────────────────────────────────────────────────────────────

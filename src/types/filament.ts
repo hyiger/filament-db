@@ -141,6 +141,11 @@ export interface FilamentDetail {
    * render an "Up to <parent>" link without a second request; the raw
    * GET (used by the edit form) attaches the full parent doc instead. */
   _parent?: { _id: string; name: string };
+  /** GH #607: true when THIS row carries its own `openprinttag_slug`
+   *  (computed server-side from the raw doc, before settings inheritance).
+   *  Gates the "Check for updates" button so an inherited slug on a variant
+   *  doesn't show a dead action. */
+  _hasOwnOptLink?: boolean;
 }
 
 /** Lightweight filament summary (used on list/dashboard page) */

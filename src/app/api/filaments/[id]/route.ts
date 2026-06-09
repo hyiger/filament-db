@@ -139,15 +139,25 @@ export async function GET(
           : parentSecondaryColors,
     }));
 
+    // GH #607 (Codex P2 r4): whether THIS row carries its own OpenPrintTag
+    // link, computed from the RAW doc before resolveFilament shallow-merges
+    // the parent's `settings`. A variant inherits the parent's
+    // `openprinttag_slug` in the resolved view, which would otherwise show a
+    // dead "Check for updates" button (the check/sync routes read the raw
+    // child row, which has no slug). The UI gates the button on this flag.
+    const rawSlug = (filament.settings as Record<string, unknown> | undefined)?.openprinttag_slug;
+    const _hasOwnOptLink = typeof rawSlug === "string" && rawSlug !== "";
+
     if (parentSummary) {
       return NextResponse.json({
         ...resolved,
         _variants: variants,
         _parent: parentSummary,
+        _hasOwnOptLink,
       });
     }
 
-    return NextResponse.json({ ...resolved, _variants: variants });
+    return NextResponse.json({ ...resolved, _variants: variants, _hasOwnOptLink });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to fetch filament");
   }

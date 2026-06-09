@@ -1177,11 +1177,13 @@ function FilamentDetail() {
               )}
             </div>
           </details>
-          {/* GH #607: only shown when this filament was imported from the
-              OpenPrintTag community DB (carries the slug). Opens the
-              check-for-updates dialog. */}
-          {typeof filament.settings?.openprinttag_slug === "string" &&
-            filament.settings.openprinttag_slug !== "" && (
+          {/* GH #607: only shown when THIS filament carries its own
+              OpenPrintTag link (`_hasOwnOptLink`, computed server-side from
+              the raw row). A variant inherits the parent's slug through
+              resolveFilament's settings merge, so gating on the resolved
+              `settings.openprinttag_slug` would show a dead button on every
+              variant (Codex P2 r4). Opens the check-for-updates dialog. */}
+          {filament._hasOwnOptLink && (
               <button
                 type="button"
                 onClick={() => setResyncOpen(true)}
