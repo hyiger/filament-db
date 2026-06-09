@@ -78,13 +78,22 @@ describe("buildOptSnapshot", () => {
     expect(snap.shoreHardnessD).toBe(81);
   });
 
-  it("includes secondaryColors + optTags when populated", () => {
+  it("includes secondaryColors + optTags when populated, preserving numeric tags", () => {
     const snap = buildOptSnapshot(
       payload({ color: null, secondaryColors: ["#000000", "#98282f"], optTags: [17, 27] }),
     );
     expect(snap.secondaryColors).toEqual(["#000000", "#98282f"]);
-    expect(snap.optTags).toEqual(["17", "27"]); // normalized to strings
-    expect(snap).not.toHaveProperty("color"); // null primary omitted
+    // GH #607 (Codex P2): tags stay numbers so a sync writes the [Number]
+    // schema, not strings.
+    expect(snap.optTags).toEqual([17, 27]);
+    // A coextruded material's null primary isn't recorded (null = no offer);
+    // valuesEqual treats null ≈ [] so the diff still compares correctly.
+    expect(snap).not.toHaveProperty("color");
+  });
+
+  it("records the gray sentinel color as absent (not a real offer)", () => {
+    const snap = buildOptSnapshot(payload({ color: "#808080" }));
+    expect(snap).not.toHaveProperty("color");
   });
 });
 
@@ -155,6 +164,82 @@ describe("diffOptFields", () => {
     const stored = { color: "#3d3e3d", density: 1.24, temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 }, shoreHardnessD: 81, transmissionDistance: 0.2, dryingTemperature: 55 };
     const changes = diffOptFields(stored, payload({ dryingTemperature: null }), null);
     expect(changes.find((c) => c.field === "dryingTemperature")).toBeUndefined();
+  });
+
+  it("surfaces an explicit upstream clear: single-color → coextruded (GH #607 Codex P2)", () => {
+    // Local is single-color (#3d3e3d, no secondaries). OPT changed the
+    // material to coextruded: primary null + secondaries populated. Both the
+    // primary clear AND the new secondaries must show.
+    const stored = {
+      color: "#3d3e3d",
+      secondaryColors: [],
+      density: 1.24,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    };
+    const changes = diffOptFields(
+      stored,
+      payload({ color: null, secondaryColors: ["#000000", "#98282f"] }),
+      null,
+    );
+    const color = changes.find((c) => c.field === "color");
+    expect(color).toBeDefined();
+    expect(color!.current).toBe("#3d3e3d");
+    expect(color!.incoming).toBeNull(); // the clear is offered
+    expect(color!.kind).toBe("conflict"); // user had a real color, no snapshot
+
+    const sec = changes.find((c) => c.field === "secondaryColors");
+    expect(sec).toBeDefined();
+    expect(sec!.kind).toBe("adopt"); // local secondaries were empty → gap-fill
+    expect(sec!.incoming).toEqual(["#000000", "#98282f"]);
+  });
+
+  it("surfaces an upstream clear of secondaryColors / optTags", () => {
+    const stored = {
+      color: "#3d3e3d",
+      secondaryColors: ["#000000", "#98282f"],
+      optTags: [17, 27],
+      density: 1.24,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    };
+    // OPT dropped both arrays (back to a plain single color).
+    const changes = diffOptFields(
+      stored,
+      payload({ color: "#3d3e3d", secondaryColors: [], optTags: [] }),
+      null,
+    );
+    expect(changes.find((c) => c.field === "secondaryColors")?.incoming).toEqual([]);
+    expect(changes.find((c) => c.field === "optTags")?.incoming).toEqual([]);
+  });
+
+  it("never offers to push the gray sentinel onto a user's real color", () => {
+    const stored = {
+      color: "#ff0000",
+      density: 1.24,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    };
+    // OPT has no real color → mapToFilamentPayload emits the #808080 sentinel.
+    const changes = diffOptFields(stored, payload({ color: "#808080" }), null);
+    expect(changes.find((c) => c.field === "color")).toBeUndefined();
+  });
+
+  it("does NOT offer to clear a non-clearable field OPT simply lacks", () => {
+    // OPT material has no density (null incoming). Local density 1.5 must be
+    // left alone — a sparse upstream entry shouldn't wipe good local data.
+    const stored = {
+      color: "#3d3e3d",
+      density: 1.5,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    };
+    const changes = diffOptFields(stored, payload({ density: null }), null);
+    expect(changes.find((c) => c.field === "density")).toBeUndefined();
   });
 
   it("diffs secondaryColors order-sensitively", () => {

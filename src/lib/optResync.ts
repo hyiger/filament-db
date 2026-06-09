@@ -76,6 +76,25 @@ export const OPT_MANAGED_FIELDS: ReadonlyArray<{ field: string; labelKey: string
 
 const COLOR_SENTINEL = "#808080";
 
+/**
+ * GH #607 (Codex P2): fields where an explicit null / empty-array from
+ * OpenPrintTag is a REAL, syncable value rather than "OPT carries nothing
+ * here". For these the diff must surface a clear:
+ *   - `color: null` — the material went coextruded (primary dropped, the
+ *     colors live in secondaryColors). `mapToFilamentPayload` only emits a
+ *     null primary in that case, so a null color is always deliberate.
+ *   - `secondaryColors: []` / `optTags: []` — the material lost its
+ *     secondaries / tags.
+ * For every OTHER managed field a null incoming means "OPT has no data"
+ * (e.g. a sparse material with no density) — we must NOT offer to wipe the
+ * user's local value, so those stay skipped.
+ */
+const OPT_CLEARABLE_FIELDS: ReadonlySet<string> = new Set([
+  "color",
+  "secondaryColors",
+  "optTags",
+]);
+
 /** Snapshot keys can't contain dots (Mongo nesting). `temperatures.nozzle`
  *  → `temperatures_nozzle`. The snapshot is always written as one whole
  *  object so this sanitisation only matters for lookups. */
@@ -94,13 +113,21 @@ function getPath(obj: Record<string, unknown> | null | undefined, path: string):
     cur = (cur as Record<string, unknown>)[seg];
   }
   if (cur == null) return null;
-  if (Array.isArray(cur)) return cur.map((x) => String(x)) as string[];
+  // Preserve element types (numbers stay numbers) — a shallow copy avoids
+  // mutating the source. Stringifying here would write string tags into the
+  // `optTags: [Number]` schema on sync.
+  if (Array.isArray(cur)) return [...cur] as string[];
   if (typeof cur === "number" || typeof cur === "string") return cur;
   return null;
 }
 
-/** Order-sensitive structural equality for OptValues. */
+/** Order-sensitive structural equality for OptValues. `null` and `[]` both
+ *  mean "nothing" and compare equal — so a field a user never set (null) and
+ *  one OPT doesn't offer ([]) aren't surfaced as a spurious change. */
 function valuesEqual(a: OptValue, b: OptValue): boolean {
+  const aEmpty = a == null || (Array.isArray(a) && a.length === 0);
+  const bEmpty = b == null || (Array.isArray(b) && b.length === 0);
+  if (aEmpty && bEmpty) return true;
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
     if (a.length !== b.length) return false;
@@ -127,6 +154,13 @@ export function buildOptSnapshot(payload: Record<string, unknown>): Record<strin
   const snap: Record<string, OptValue> = {};
   for (const { field } of OPT_MANAGED_FIELDS) {
     const v = getPath(payload, field);
+    // The gray sentinel is "OPT has no real color" — not a value worth
+    // recording as the upstream offer.
+    if (field === "color" && v === COLOR_SENTINEL) continue;
+    // Only record actual values. A null/empty offer doesn't need a snapshot
+    // entry: `valuesEqual` treats null ≈ [] so a later diff still compares
+    // correctly, and the diff itself (not the snapshot) is what surfaces an
+    // explicit upstream clear.
     if (!hasIncoming(v)) continue;
     snap[optSnapshotKey(field)] = v;
   }
@@ -140,7 +174,10 @@ function classify(
   isColor: boolean,
 ): OptChangeKind {
   const sentinel = isColor && current === COLOR_SENTINEL;
-  if (current == null || sentinel) return "adopt";
+  // A null OR empty-array local value is "the user never set this" — a
+  // gap-fill, safe to adopt (covers OPT newly providing secondaries/tags).
+  const empty = current == null || (Array.isArray(current) && current.length === 0);
+  if (empty || sentinel) return "adopt";
   if (hasSnapshotEntry) {
     return valuesEqual(current, snapshotVal ?? null) ? "adopt" : "conflict";
   }
@@ -161,7 +198,15 @@ export function diffOptFields(
   const changes: OptFieldChange[] = [];
   for (const { field, labelKey, isColor } of OPT_MANAGED_FIELDS) {
     const incoming = getPath(payload, field);
-    if (!hasIncoming(incoming)) continue;
+    // The gray sentinel is "OPT has no real color" — never offer to push it
+    // onto the user's filament.
+    if (isColor && incoming === COLOR_SENTINEL) continue;
+    // For a non-clearable field, a null/empty incoming means OPT carries no
+    // value — skip (don't offer to wipe local data). For clearable fields
+    // (color/secondaryColors/optTags) an explicit null/[] IS the update, so
+    // fall through and let valuesEqual decide whether it's a real change
+    // (GH #607, Codex P2 — explicit upstream clears must surface).
+    if (!hasIncoming(incoming) && !OPT_CLEARABLE_FIELDS.has(field)) continue;
     const current = getPath(filament, field);
     if (valuesEqual(current, incoming)) continue;
     const snapKey = optSnapshotKey(field);
