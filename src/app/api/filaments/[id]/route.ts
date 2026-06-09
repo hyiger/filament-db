@@ -484,13 +484,15 @@ export async function POST(
       ownCalibrations.length > 0 || !calParent ? filament : calParent;
     const compatTarget =
       ownCompatNozzles.length > 0 || !calParent ? filament : calParent;
-    // GH #265 (Codex P1): when the calibration belongs on the PARENT
-    // (an inheriting variant), we record just the nozzle + fields here
-    // and apply them with an atomic per-entry write after the main
-    // update — never a read-modify-write of the parent's whole
-    // `calibrations` array, which would lose a concurrent sibling's
-    // write.
-    let parentCalibrationWrite:
+    // GH #265 (Codex P1) / GH #618: the matched calibration entry is
+    // recorded here and applied with an atomic per-entry write after the
+    // main update — never a read-modify-write of the whole `calibrations`
+    // array, which would lose a concurrent sync's entry for a different
+    // nozzle. #265 fixed the parent-targeted case (an inheriting variant
+    // syncing its parent); #618 extends the same construction to the
+    // own-calibrations case, which used to fold a whole-array $set into
+    // the main update.
+    let calibrationWrite:
       | { nozzleId: string; fields: Record<string, number | null> }
       | null = null;
 
@@ -546,31 +548,18 @@ export async function POST(
           const matchingNozzle = await Nozzle.findOne(nozzleQuery).lean();
 
           if (matchingNozzle) {
-            const nozzleId = String(matchingNozzle._id);
-            // GH #265: write to whichever document owns this filament's
-            // effective calibrations.
-            if (String(calTarget._id) === String(filament._id)) {
-              // The filament itself owns calibrations (standalone, or a
-              // variant that overrides them) — fold the change into this
-              // request's own single $set on this document.
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const calibrations = [...((calTarget.calibrations as any[]) || [])];
-              const idx = calibrations.findIndex(
-                (cal) => String(cal.nozzle) === nozzleId && !cal.printer,
-              );
-              if (idx >= 0) {
-                Object.assign(calibrations[idx], calFields);
-              } else {
-                calibrations.push({ nozzle: nozzleId, printer: null, ...calFields });
-              }
-              update.calibrations = calibrations;
-            } else {
-              // An inheriting variant — the calibration belongs on the
-              // parent. Defer to an atomic per-entry write (below) so a
-              // concurrent sibling sync of the same parent can't be
-              // clobbered by a whole-array overwrite.
-              parentCalibrationWrite = { nozzleId, fields: calFields };
-            }
+            // GH #265: the entry lands on whichever document owns this
+            // filament's effective calibrations (`calTarget` — the
+            // filament itself for a standalone or an overriding variant,
+            // the parent for an inheriting variant). GH #618: BOTH cases
+            // defer to the atomic per-entry write below — the own-document
+            // case used to spread `[...calTarget.calibrations]` into the
+            // main $set, a read-modify-write that dropped a concurrent
+            // sync's entry for a different nozzle.
+            calibrationWrite = {
+              nozzleId: String(matchingNozzle._id),
+              fields: calFields,
+            };
           }
         }
       }
@@ -597,15 +586,34 @@ export async function POST(
     }
     update.settings = merge.settings;
 
-    await Filament.findByIdAndUpdate(filament._id, { $set: update });
+    // GH #618: `runValidators` so the numeric range validators (#337)
+    // actually fire on a PrusaSlicer sync — without it a config like
+    // `filament_cost = -3` parses clean and persists a negative cost the
+    // regular PUT would have rejected. `context: "query"` matches the
+    // Bambu sync route (Codex P2 on #387); the shared helper maps a
+    // ValidationError to a JSON 400 rather than a generic 500.
+    try {
+      await Filament.findByIdAndUpdate(
+        filament._id,
+        { $set: update },
+        { runValidators: true, context: "query" },
+      );
+    } catch (validationErr) {
+      return errorResponseFromCaught(
+        validationErr,
+        "PrusaSlicer config contained invalid values",
+      );
+    }
 
-    // GH #265 (Codex P1): persist an inheriting variant's calibration
-    // change on its parent with an ATOMIC per-entry write — never a
-    // read-modify-write of the parent's whole `calibrations` array, so
-    // two variants syncing the same parent concurrently can't drop each
-    // other's entries.
-    if (parentCalibrationWrite) {
-      const { nozzleId, fields } = parentCalibrationWrite;
+    // GH #265 (Codex P1) / GH #618: persist the calibration change on its
+    // owning document (`calTarget` — the filament itself or, for an
+    // inheriting variant, its parent) with an ATOMIC per-entry write —
+    // never a read-modify-write of the whole `calibrations` array, so two
+    // syncs hitting the same document concurrently (two variants syncing
+    // one parent, or two nozzle contexts syncing one filament) can't drop
+    // each other's entries.
+    if (calibrationWrite) {
+      const { nozzleId, fields } = calibrationWrite;
       const setEntry: Record<string, number | null> = {};
       for (const [k, v] of Object.entries(fields)) {
         setEntry[`calibrations.$.${k}`] = v;
