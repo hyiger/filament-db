@@ -690,6 +690,103 @@
         }
       }
     },
+    "/api/filaments/{id}/openprinttag/check": {
+      "get": {
+        "tags": ["Filaments"],
+        "summary": "Check for OpenPrintTag updates",
+        "description": "Compares an OpenPrintTag-linked filament (one carrying settings.openprinttag_slug) against the current upstream material and returns a field-level changelist. Read-only. `changes[].kind` is `adopt` (field unset / gray sentinel / unchanged from what OPT last wrote — safe) or `conflict` (locally edited away from OPT — surfaced, not auto-applied). Only color, secondaryColors, density, the OPT-carried temperatures, drying temp/time, Shore D, transmission distance and tags are compared; identity fields and diameter are never re-synced.",
+        "parameters": [{ "$ref": "#/components/parameters/FilamentId" }],
+        "responses": {
+          "200": {
+            "description": "Linkage status and changelist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "linked": { "type": "boolean" },
+                    "found": { "type": "boolean", "description": "false when the slug is gone upstream" },
+                    "slug": { "type": "string" },
+                    "materialName": { "type": "string" },
+                    "changes": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "field": { "type": "string" },
+                          "labelKey": { "type": "string" },
+                          "current": {},
+                          "incoming": {},
+                          "kind": { "type": "string", "enum": ["adopt", "conflict"] }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Filament not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
+    "/api/filaments/{id}/openprinttag/sync": {
+      "post": {
+        "tags": ["Filaments"],
+        "summary": "Apply OpenPrintTag updates",
+        "description": "Applies the user-accepted subset of OpenPrintTag updates to a linked filament. Same-origin guarded. Only managed field keys are accepted (unknown keys → 400). Refreshes settings.openprinttag_snapshot to the full current OPT offer so a later check can distinguish upstream changes from local edits on declined fields.",
+        "parameters": [{ "$ref": "#/components/parameters/FilamentId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["fields"],
+                "properties": {
+                  "fields": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Managed field keys to adopt, e.g. \"density\", \"temperatures.nozzle\"."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Fields applied + fresh document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "applied": { "type": "array", "items": { "type": "string" } },
+                    "filament": { "$ref": "#/components/schemas/Filament" }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed body, unknown field, or filament not OpenPrintTag-linked",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "403": {
+            "description": "Cross-origin request rejected",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          },
+          "404": {
+            "description": "Filament or upstream material not found",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+          }
+        }
+      }
+    },
     "/api/filaments/{id}/calibration": {
       "get": {
         "tags": [

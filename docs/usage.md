@@ -519,6 +519,19 @@ Click any material row to expand a detail panel with three columns:
    - **New materials** are created with all available fields
    - **Existing materials** are updated conservatively -- only null/empty fields are filled, preserving your existing calibration data
 
+### Checking for Community Updates *(v1.35)*
+
+The OpenPrintTag database is revised over time as the community adds data. A filament you imported keeps a link back to its source material, so you can pull later improvements without re-importing the whole catalog.
+
+On the detail page of any OpenPrintTag-imported filament, a teal **"Check for updates"** button appears next to **Edit**. Click it to compare your filament against the current upstream material. The dialog lists every field that differs:
+
+- **Safe changes** (a field you never filled in, or one still matching what OpenPrintTag last provided) are **pre-checked** -- they're ready to adopt.
+- **Edited fields** -- where your local value differs from what OpenPrintTag last provided -- are marked **"edited"** and left **unchecked**, so applying updates won't quietly overwrite a value you set yourself. You can still tick one to take the OpenPrintTag value.
+
+Tick the changes you want and click **"Apply"**. Only identity stays put -- name, vendor, and type are never changed by a sync, and neither is diameter. Your spools, calibrations, and usage history are untouched.
+
+If the dialog says the filament is **up to date**, there's nothing new upstream. If it says the material is **no longer in the database**, the entry was renamed or removed on the OpenPrintTag side.
+
 ---
 
 ## PrusaSlicer Integration

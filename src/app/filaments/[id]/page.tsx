@@ -11,6 +11,7 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { useCurrency } from "@/hooks/useCurrency";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import PrintLabelDialog from "@/components/PrintLabelDialog";
+import OptResyncDialog from "@/components/OptResyncDialog";
 import CopyButton from "@/components/CopyButton";
 import FilamentSwatch from "@/components/FilamentSwatch";
 import FinishChip from "@/components/FinishChip";
@@ -69,6 +70,8 @@ function FilamentDetail() {
   const router = useRouter();
   const [filament, setFilament] = useState<Filament | null>(null);
   const [showAllSettings, setShowAllSettings] = useState(false);
+  // GH #607: "Check for OpenPrintTag updates" dialog.
+  const [resyncOpen, setResyncOpen] = useState(false);
   /**
    * Both `previewOpenFor` and `embedCheck` are keyed to the tdsUrl they
    * apply to. Navigating between filaments (same route, different params)
@@ -266,6 +269,13 @@ function FilamentDetail() {
       .then((data) => { if (data) setFilament(data); })
       .catch((err) => { if (err.name !== "AbortError") setFetchError("connectionFailed"); });
     return () => controller.abort();
+  }, [params.id]);
+
+  // GH #607: re-pull the filament after an OpenPrintTag re-sync applied
+  // changes, so the detail view reflects the adopted values.
+  const refetchFilament = useCallback(async () => {
+    const r = await fetch(`/api/filaments/${params.id}`);
+    if (r.ok) setFilament(await r.json());
   }, [params.id]);
 
   // GH #595: spool deep-link — once the filament (with its spools) has loaded,
@@ -1167,6 +1177,23 @@ function FilamentDetail() {
               )}
             </div>
           </details>
+          {/* GH #607: only shown when this filament was imported from the
+              OpenPrintTag community DB (carries the slug). Opens the
+              check-for-updates dialog. */}
+          {typeof filament.settings?.openprinttag_slug === "string" &&
+            filament.settings.openprinttag_slug !== "" && (
+              <button
+                type="button"
+                onClick={() => setResyncOpen(true)}
+                className="px-4 py-2 bg-teal-600 text-white rounded hover:bg-teal-700 text-sm inline-flex items-center gap-1.5"
+                title={t("resync.button.title")}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                {t("resync.button")}
+              </button>
+            )}
           <Link
             href={`/filaments/${filament._id}/edit`}
             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
@@ -1896,6 +1923,13 @@ function FilamentDetail() {
           })),
         }}
       />
+      {resyncOpen && (
+        <OptResyncDialog
+          filamentId={String(filament._id)}
+          onApplied={refetchFilament}
+          onClose={() => setResyncOpen(false)}
+        />
+      )}
     </main>
   );
 }

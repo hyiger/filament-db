@@ -5,6 +5,7 @@ import {
   fetchOpenPrintTagDatabase,
   mapToFilamentPayload,
 } from "@/lib/openprinttagBrowser";
+import { buildOptSnapshot } from "@/lib/optResync";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
 
@@ -78,6 +79,15 @@ export async function POST(request: NextRequest) {
         const name = payload.name as string;
         const vendor = payload.vendor as string;
 
+        // GH #607: capture the OPT-offered value for every managed field at
+        // import time. This provenance snapshot lets a later "check for
+        // updates" (the re-sync feature) tell "OPT changed it upstream" from
+        // "the user edited it locally" without a manual sync-first dance.
+        const optSnapshot = buildOptSnapshot(payload);
+        // Seed it on the create path too (the update path uses
+        // optUpdateFields below).
+        (payload.settings as Record<string, unknown>).openprinttag_snapshot = optSnapshot;
+
         // The unique index is on { name } where _deletedAt is null, so we
         // must query by name alone to avoid a duplicate-key error when the
         // same name exists under a different vendor.
@@ -92,6 +102,9 @@ export async function POST(request: NextRequest) {
             (payload.settings as Record<string, string>).openprinttag_uuid,
           "settings.openprinttag_slug":
             (payload.settings as Record<string, string>).openprinttag_slug,
+          // GH #607: refresh the provenance snapshot on every (re-)import so
+          // an existing row's snapshot stays current with the upstream offer.
+          "settings.openprinttag_snapshot": optSnapshot,
         };
 
         // Build conditional updates: only set fields that are currently null.
