@@ -254,6 +254,35 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect((await res.json()).error).toContain("name");
   });
 
+  it("sync: refuses to clear a field OPT doesn't offer (sparse-data guard, Codex P2 r3)", async () => {
+    // Upstream material has no density. A stale/crafted POST of
+    // fields:["density"] must NOT wipe the user's local density — diffOptFields
+    // never offered it, so the sync route rejects it.
+    dbMock.mockResolvedValueOnce({
+      brands: [],
+      materials: [{ ...UPSTREAM_MATERIAL, density: null }],
+      cachedAt: new Date(0).toISOString(),
+      totalFFF: 1,
+      totalSLA: 0,
+    });
+    const f = await Filament.create({
+      name: "Sparse PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#3d3e3d",
+      density: 1.42, // user's value
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+      settings: { openprinttag_slug: "prusament-pla-galaxy-black" },
+    });
+    const res = await syncPOST(syncReq(String(f._id), ["density"]), params(String(f._id)));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain("density");
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.density).toBe(1.42); // untouched
+  });
+
   it("sync: 400 when the filament is not OPT-linked", async () => {
     const f = await Filament.create({ name: "Unlinked", vendor: "X", type: "PLA" });
     const res = await syncPOST(syncReq(String(f._id), ["density"]), params(String(f._id)));

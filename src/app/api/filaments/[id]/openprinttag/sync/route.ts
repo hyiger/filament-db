@@ -8,6 +8,7 @@ import {
 import {
   buildOptSnapshot,
   buildOptSyncUpdate,
+  diffOptFields,
   OPT_MANAGED_FIELD_KEYS,
 } from "@/lib/optResync";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
@@ -19,17 +20,25 @@ import { assertSameOriginRequest } from "@/lib/requestGuard";
  * filament. Body: `{ fields: string[] }` — the field keys (from the check
  * endpoint's changelist) the user chose to adopt.
  *
- * Only fields in OPT_MANAGED_FIELD_KEYS are honoured — an arbitrary path
- * can't be `$set` through this route. The provenance snapshot
- * (`openprinttagSnapshot`) is refreshed to the FULL current OPT
- * offer on every sync, regardless of which fields were applied, so a later
- * check can still tell "OPT changed it" from "the user changed it" for the
- * fields that were declined.
+ * Two guards on what can be written:
+ *   1. Only keys in OPT_MANAGED_FIELD_KEYS are honoured — an arbitrary path
+ *      can't be `$set` through this route.
+ *   2. Each requested field must actually appear in the live `diffOptFields`
+ *      changelist — so a stale / hand-crafted POST can't push a value OPT
+ *      isn't offering (e.g. wiping local `density` when the upstream
+ *      material has `density: null`). Sparse OPT data must never clear good
+ *      local data (Codex P2, round 3).
+ *
+ * The provenance snapshot (`openprinttagSnapshot`) is refreshed to the FULL
+ * current OPT offer on every sync, regardless of which fields were applied,
+ * so a later check can still tell "OPT changed it" from "the user changed
+ * it" for the fields that were declined.
  *
  * Responses:
- *   { error: "not linked" } 400      — no openprinttag_slug on the row
- *   { error: "Material not found" }  — 404, slug gone upstream
- *   { applied: string[], filament }  — fields actually written + fresh doc
+ *   { error: "not linked" } 400         — no openprinttag_slug on the row
+ *   { error: "No current … update" } 400 — a requested field isn't offered
+ *   { error: "Material not found" } 404 — slug gone upstream
+ *   { applied: string[], filament }     — fields actually written + fresh doc
  */
 export async function POST(
   request: NextRequest,
@@ -92,6 +101,32 @@ export async function POST(
     }
 
     const payload = mapToFilamentPayload(material);
+
+    // GH #607 (Codex P2, round 3): validate each requested field against the
+    // SAME diff the check endpoint computes — don't blindly turn the current
+    // payload into a $set. `buildOptSyncUpdate` alone would let a stale or
+    // hand-crafted POST of e.g. `fields: ["density"]` wipe the user's local
+    // density when the upstream material has `density: null`, because OPT
+    // offers nothing there. `diffOptFields` intentionally skips that case
+    // (sparse OPT data must never clear good local data), so only fields
+    // that actually appear in the changelist may be applied.
+    const snapshotForDiff = filament.openprinttagSnapshot as Record<string, unknown> | undefined;
+    const offered = new Set(
+      diffOptFields(filament as unknown as Record<string, unknown>, payload, snapshotForDiff).map(
+        (c) => c.field,
+      ),
+    );
+    const notOffered = fields.filter((f) => !offered.has(f));
+    if (notOffered.length > 0) {
+      return NextResponse.json(
+        {
+          error: `No current OpenPrintTag update for field(s): ${notOffered.join(", ")}`,
+          detail: "These fields are unchanged or not offered upstream. Re-run the check and try again.",
+        },
+        { status: 400 },
+      );
+    }
+
     const update = buildOptSyncUpdate(fields, payload);
     const snapshot = buildOptSnapshot(payload);
 

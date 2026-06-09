@@ -773,7 +773,7 @@
             }
           },
           "400": {
-            "description": "Malformed body, unknown field, or filament not OpenPrintTag-linked",
+            "description": "Malformed body, unknown field, a field OpenPrintTag isn't currently offering, or filament not OpenPrintTag-linked",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
           },
           "403": {

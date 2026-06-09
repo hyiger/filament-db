@@ -361,7 +361,7 @@ Only field keys from the managed set are accepted — an unknown key returns 400
 
 Responses:
 - `{ "applied": ["density", "temperatures.nozzle"], "filament": { … } }` — the fields written + the fresh document.
-- `400` — malformed body, an unknown field, or the filament is not OpenPrintTag-linked.
+- `400` — malformed body, an unknown field, a field OpenPrintTag isn't currently offering (re-run the check), or the filament is not OpenPrintTag-linked.
 - `404` — the slug is no longer in the OpenPrintTag database.
 
 ### POST /api/filaments/:id/spools
