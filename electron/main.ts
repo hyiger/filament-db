@@ -1238,6 +1238,26 @@ function isSmartCardServiceRunning(timeoutMs = 5000): Promise<boolean> {
 }
 
 /**
+ * GH #609: on Linux, @pokusew/pcsclite's synchronous `pcsclite()` call
+ * establishes a PC/SC context that blocks/spins the main thread when the
+ * pcscd daemon isn't running — the same event-loop wedge as the Windows
+ * SCardSvr case (GH #176). With the event loop stuck right after the window
+ * is shown, the renderer never presents: on Wayland no window appears at all,
+ * on X11 the WM maps a blank "Not Responding" frame. pcscd exposes a Unix
+ * socket while running, so its absence is a fast, non-blocking signal that NFC
+ * init would hang — skip it in that case. Honours PCSCLITE_CSOCK_NAME for
+ * non-default socket locations.
+ */
+function isPcscdRunning(): boolean {
+  const custom = process.env.PCSCLITE_CSOCK_NAME;
+  if (custom) return fs.existsSync(custom);
+  return (
+    fs.existsSync("/run/pcscd/pcscd.comm") ||
+    fs.existsSync("/var/run/pcscd/pcscd.comm")
+  );
+}
+
+/**
  * Initialize the NFC service. Deferred until the main window is visible
  * (wired to the window's "show" event) — `new NfcService()` calls
  * `pcsclite()`, whose native constructor runs a synchronous
@@ -1254,13 +1274,17 @@ async function initNfc(): Promise<void> {
   if (nfcInitStarted) return;
   nfcInitStarted = true;
 
-  // Skipped on Windows when SCardSvr is stopped — pcsclite()'s sync
-  // SCardEstablishContext blocks the main thread there (GH #176). On
-  // Linux/Mac the probe is a no-op and the service is attempted as before.
+  // Skipped when the platform's smart-card service isn't available, because
+  // pcsclite()'s synchronous SCardEstablishContext blocks/spins the main
+  // thread there: Windows when SCardSvr is stopped (GH #176), and Linux when
+  // pcscd isn't running (GH #609 — the blank / "Not Responding" window). macOS
+  // uses CryptoTokenKit and has no equivalent wedge, so it's attempted as before.
   const skipNfcReason =
     process.platform === "win32" && !(await isSmartCardServiceRunning())
       ? "Smart Card service (SCardSvr) is not running on this Windows host"
-      : null;
+      : process.platform === "linux" && !isPcscdRunning()
+        ? "pcscd (PC/SC smart-card daemon) is not running on this Linux host"
+        : null;
   if (skipNfcReason) {
     diag(`skipping NFC init: ${skipNfcReason}`);
     return;
