@@ -166,7 +166,12 @@ export async function findInvalidSlotSpoolRef(
     if (!mongoose.isValidObjectId(spoolId)) {
       return `Slot ${slotLabel}: spoolId is not a valid id`;
     }
-    const spoolKey = String(spoolId);
+    // Canonicalize before the duplicate check (Codex P2 round 2 on #646):
+    // ObjectId hex is case-insensitive and Mongoose casts e.g. lowercase
+    // and uppercase forms to the SAME id, but `String(spoolId)` preserves
+    // the original casing — so two slots with the same id in different
+    // case would slip past a raw-string Set. Normalize to canonical hex.
+    const spoolKey = new mongoose.Types.ObjectId(String(spoolId)).toHexString();
     if (seenSpoolIds.has(spoolKey)) {
       return `Slot ${slotLabel}: the same spool cannot occupy more than one slot`;
     }

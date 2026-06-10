@@ -435,6 +435,27 @@ describe("/api/printers", () => {
       expect(await Printer.countDocuments({ name: "AMS Printer" })).toBe(0);
     });
 
+    // Codex P2 round 2 on #646: ObjectId hex is case-insensitive and
+    // Mongoose casts both casings to the same spool, so the duplicate
+    // check must normalize before comparing — a raw-string Set would miss
+    // the same id sent lowercase in one slot and uppercase in another.
+    it("rejects the same spool in two slots even when the id casing differs", async () => {
+      const spoolId = await makeSpool();
+      const res = await createPrinter(
+        jsonReq(
+          "http://localhost/api/printers",
+          printerBody([
+            { slotName: "Slot 1", spoolId },
+            { slotName: "Slot 2", spoolId: spoolId.toUpperCase() },
+          ]),
+        ),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/more than one slot/i);
+      expect(await Printer.countDocuments({ name: "AMS Printer" })).toBe(0);
+    });
+
     it("POST and PUT accept null/empty spoolId slots", async () => {
       const postRes = await createPrinter(
         jsonReq(
