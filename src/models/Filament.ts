@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import mongoose, { Schema, Document, Model } from "mongoose";
+import { isEncodableOptTag } from "@/lib/openprinttag";
 
 /** Generate a random 5-byte hex instance ID (10 hex chars), matching Prusament's format. */
 function generateInstanceId(): string {
@@ -35,19 +36,20 @@ function isValidColor(v: unknown): boolean {
 }
 
 /** GH #634: optTags entries are CBOR unsigned ints on the wire — a
- * negative entry makes the encoder throw and a fractional one would
- * silently encode a different tag id. Sanitize on assignment rather than
- * with a rejecting validator: a hard validator would block ANY later
- * `save()` on a legacy doc that already carries a bad tag — including the
- * print-history and manual-spool-usage paths, which load a Filament,
- * mutate `spools`/`usageHistory`, and call `save()` without touching
- * optTags (Codex P2 on PR #650). A setter drops invalid entries whenever
- * the array is actually written (API edits, NFC prefill) while leaving an
- * unrelated save untouched; the encoder also filters defensively, so a
- * legacy value already in the DB can never reach the wire. */
+ * negative entry makes the encoder throw, a fractional one would silently
+ * encode a different tag id, and a value above 2^32-1 truncates to its low
+ * 32 bits in the encoder's `>>>` arithmetic (Codex P2 on PR #650).
+ * Sanitize on assignment rather than with a rejecting validator: a hard
+ * validator would block ANY later `save()` on a legacy doc that already
+ * carries a bad tag — including the print-history and manual-spool-usage
+ * paths, which load a Filament, mutate `spools`/`usageHistory`, and call
+ * `save()` without touching optTags. A setter drops invalid entries
+ * whenever the array is actually written (API edits, NFC prefill) while
+ * leaving an unrelated save untouched. `isEncodableOptTag` is shared with
+ * the encoder so the schema and the wire agree on what's kept. */
 function sanitizeOptTags(arr: unknown): number[] {
   if (!Array.isArray(arr)) return [];
-  return arr.filter((t) => Number.isInteger(t) && t >= 0);
+  return arr.filter(isEncodableOptTag);
 }
 
 export interface IDryCycle {

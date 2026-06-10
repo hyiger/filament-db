@@ -206,6 +206,23 @@ function clampUint(value: number, max: number): number {
 }
 
 /** Encode a CBOR unsigned integer (major type 0) and push bytes to `buf`. */
+/**
+ * Largest value `encodeCBORUint` serializes correctly. Its 4-byte branch
+ * uses `value >>> 24` etc., so anything above 2^32-1 is truncated to its
+ * low 32 bits — a silently different value on the wire (GH #650).
+ */
+export const MAX_CBOR_UINT = 0xffffffff;
+
+/**
+ * True when an optTag can be encoded faithfully: a non-negative integer
+ * within the CBOR-uint range the encoder actually supports. Shared with
+ * the Filament schema's optTags setter so the schema and the wire agree
+ * on which tags are kept vs dropped.
+ */
+export function isEncodableOptTag(t: unknown): t is number {
+  return typeof t === "number" && Number.isInteger(t) && t >= 0 && t <= MAX_CBOR_UINT;
+}
+
 export function encodeCBORUint(buf: number[], value: number): void {
   if (value < 0) throw new RangeError("CBOR unsigned int must be >= 0");
   if (value < 24) {
@@ -752,8 +769,11 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   // stored negative tag used to make encodeCBORUint throw RangeError
   // (500-ing the .bin export and failing NFC writes), and rounding a
   // fractional tag would silently change its meaning to a different tag id.
+  // The upper bound matches encodeCBORUint's 4-byte branch, which uses
+  // `>>> 24` arithmetic and silently truncates values above 2^32-1 to
+  // their low 32 bits — a different tag id on the wire (Codex P2 on #650).
   const tagSet = new Set<number>(
-    (input.optTags ?? []).filter((t) => Number.isInteger(t) && t >= 0),
+    (input.optTags ?? []).filter(isEncodableOptTag),
   );
   if (input.abrasive) tagSet.add(OPT_TAG.ABRASIVE);
   if (input.soluble) tagSet.add(OPT_TAG.WATER_SOLUBLE);

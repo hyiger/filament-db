@@ -935,11 +935,13 @@ describe("Filament Model — v1.11 spool fields", () => {
 
     // Invalid entries are dropped on assignment, valid ones survive — the
     // setter sanitizes rather than rejecting, so a write never fails.
+    // Includes a value above the encoder's 2^32-1 ceiling (#650), which
+    // would otherwise truncate to a different tag id on the wire.
     const mixed = await Filament.create({
       name: "Tags Mixed",
       vendor: "Test",
       type: "PLA",
-      optTags: [-1, 1.5, 4, 16],
+      optTags: [-1, 1.5, 2 ** 32 + 16, 4, 16],
     });
     expect(mixed.optTags).toEqual([4, 16]);
   });

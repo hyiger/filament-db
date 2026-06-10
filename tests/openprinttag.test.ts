@@ -999,6 +999,25 @@ describe("generateOpenPrintTagBinary", () => {
     expect(findCBORKey(bytes, OPT_KEY.TAGS)).toBe(-1);
   });
 
+  // GH #650: a value above the encoder's 2^32-1 uint ceiling would be
+  // truncated to its low 32 bits (e.g. 2^32+16 → 16) and silently encode
+  // a *different* tag. It must be skipped, not wrapped.
+  it("skips optTags above the CBOR uint32 ceiling instead of truncating (GH #650)", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      optTags: [2 ** 32 + 16, 4],
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+    const keyIdx = findCBORKey(bytes, OPT_KEY.TAGS);
+    expect(keyIdx).not.toBe(-1);
+    const arrStart = keyIdx + 2;
+    // Only the valid tag (4) survives — the oversized one is dropped, NOT
+    // truncated to 16 (which would have produced an array of 2).
+    expect(bytes[arrStart]).toBe(0x81); // array of 1
+    expect(bytes[arrStart + 1]).toBe(4);
+  });
+
   it("rounds fractional drying temperature and time (GH #634)", () => {
     const input: OpenPrintTagInput = {
       ...minimalInput,
