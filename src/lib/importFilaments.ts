@@ -188,6 +188,10 @@ function parseNum(val: unknown): number | null {
 const UNSANITIZE_FIELDS = new Set<keyof ImportRow>([
   "name",
   "vendor",
+  // `type` is a required free-text field the exporter also prefixes, so a
+  // type like `+PLA` / `-CF` would re-import as `'+PLA` / `'-CF` and corrupt
+  // the row without this (Codex P2 on PR #649).
+  "type",
   "colorName",
   "spoolType",
   "parentName",

@@ -725,16 +725,19 @@ describe("upsertImportRows — Parent column (GH #379)", () => {
  * duplicate.
  */
 describe("rowToImport — formula-prefix strip (GH #627)", () => {
-  it("strips the guard apostrophe from name/vendor/colorName/spoolType/parentName", () => {
+  it("strips the guard apostrophe from name/vendor/type/colorName/spoolType/parentName", () => {
     const mapping = mapHeaders([
       "Name", "Vendor", "Type", "Color Name", "Spool Type", "Parent",
     ]);
     const row = rowToImport(
-      ["'+95A TPU", "'@home Filaments", "TPU", "'=Galaxy", "'-cardboard", "'+95A Base"],
+      ["'+95A TPU", "'@home Filaments", "'+PLA", "'=Galaxy", "'-cardboard", "'+95A Base"],
       mapping,
     );
     expect(row.name).toBe("+95A TPU");
     expect(row.vendor).toBe("@home Filaments");
+    // GH #649: `type` is a required free-text field the exporter prefixes —
+    // without unsanitizing it, `+PLA` would re-import as `'+PLA`.
+    expect(row.type).toBe("+PLA");
     expect(row.colorName).toBe("=Galaxy");
     expect(row.spoolType).toBe("-cardboard");
     expect(row.parentName).toBe("+95A Base");
