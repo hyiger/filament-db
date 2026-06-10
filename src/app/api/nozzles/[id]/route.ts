@@ -122,9 +122,14 @@ export async function DELETE(
     await dbConnect();
     const { id } = await params;
 
-    // Prevent deleting a nozzle that is referenced by any filament
+    // Prevent deleting a nozzle that is referenced by any filament.
+    //
+    // GH #629: trashed filaments count too — a filament in the trash can be
+    // restored, which would resurrect a dangling nozzle ref if the nozzle
+    // were deleted in the meantime. Only `_purged` tombstones are gone
+    // forever and don't block.
     const referencingCount = await Filament.countDocuments({
-      _deletedAt: null,
+      _purged: { $ne: true },
       $or: [
         { compatibleNozzles: id },
         { "calibrations.nozzle": id },
@@ -132,12 +137,16 @@ export async function DELETE(
     });
     if (referencingCount > 0) {
       return errorResponse(
-        `Cannot delete this nozzle — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}. Remove it from those filaments first.`,
+        `Cannot delete this nozzle — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}, possibly including filaments in the trash. Remove it from those filaments (or permanently delete the trashed ones) first.`,
         400,
       );
     }
 
-    // Prevent deleting a nozzle that is installed on any printer
+    // Prevent deleting a nozzle that is installed on any printer.
+    // Deliberately keeps the `_deletedAt: null` term (unlike the filament
+    // guard above): printers have no trash/restore loop, so a soft-deleted
+    // printer's refs can never resurrect — and counting them would block
+    // the delete with no way for the user to clear the reference.
     const printerCount = await Printer.countDocuments({
       _deletedAt: null,
       installedNozzles: id,

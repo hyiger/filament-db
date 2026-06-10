@@ -141,7 +141,17 @@ export async function GET(request: NextRequest) {
                 $expr: {
                   $and: [
                     { $eq: ["$parentId", "$$fid"] },
-                    { $eq: ["$_deletedAt", null] },
+                    // GH #625: `{ $eq: ["$_deletedAt", null] }` is FALSE
+                    // when the field is missing entirely — in aggregation,
+                    // missing is its own BSON type and `$eq` does NOT
+                    // collapse it into null (the v1.32.2 quirk; see
+                    // /api/spools/by-location for the same pattern).
+                    // Legacy variants created before the soft-delete field
+                    // existed (pre-v1.15) and never re-saved lack
+                    // `_deletedAt` entirely, so without the `$ifNull` wrap
+                    // their parent reported hasVariants:false and lost the
+                    // composite parent swatch (#597 / #605 reports).
+                    { $eq: [{ $ifNull: ["$_deletedAt", null] }, null] },
                   ],
                 },
               },

@@ -12,11 +12,21 @@
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FilamentDoc = Record<string, any>;
 
-/** Fields that are always variant-specific and never inherited */
-const VARIANT_ONLY_FIELDS = ["_id", "name", "color", "colorName", "parentId", "spools", "createdAt", "updatedAt", "__v", "instanceId", "syncId", "_deletedAt", "totalWeight"];
+/**
+ * Fields that are always variant-specific and never inherited.
+ *
+ * GH #633: `_purged` and `openprinttagSnapshot` are bookkeeping fields
+ * (sync tombstone / OPT re-sync provenance) — they describe THIS document,
+ * never the parent, so a resolved variant must carry its own values.
+ * Exported (along with INHERITABLE_FIELDS) so the schema-drift guard in
+ * tests/resolveFilament.test.ts can diff the allowlists against the
+ * Filament schema's top-level paths — a new schema field that lands in
+ * neither list would otherwise silently vanish from every resolved variant.
+ */
+export const VARIANT_ONLY_FIELDS = ["_id", "name", "color", "colorName", "parentId", "spools", "createdAt", "updatedAt", "__v", "instanceId", "syncId", "_deletedAt", "_purged", "totalWeight", "openprinttagSnapshot"];
 
 /** Numeric/string fields that can be inherited from parent */
-const INHERITABLE_FIELDS = [
+export const INHERITABLE_FIELDS = [
   "vendor",
   "type",
   "cost",
@@ -25,6 +35,9 @@ const INHERITABLE_FIELDS = [
   "maxVolumetricSpeed",
   "spoolWeight",
   "netFilamentWeight",
+  // GH #633: matches the cost/density posture — a variant without its own
+  // low-stock threshold uses the parent's.
+  "lowStockThreshold",
   "dryingTemperature",
   "dryingTime",
   "transmissionDistance",

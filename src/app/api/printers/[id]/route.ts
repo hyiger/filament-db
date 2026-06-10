@@ -167,14 +167,19 @@ export async function DELETE(
     await dbConnect();
     const { id } = await params;
 
-    // Prevent deleting a printer referenced by filament calibrations
+    // Prevent deleting a printer referenced by filament calibrations.
+    //
+    // GH #629: trashed filaments count too — a filament in the trash can be
+    // restored, which would resurrect a dangling calibration printer ref if
+    // the printer were deleted in the meantime. Only `_purged` tombstones
+    // are gone forever and don't block.
     const referencingCount = await Filament.countDocuments({
-      _deletedAt: null,
+      _purged: { $ne: true },
       "calibrations.printer": id,
     });
     if (referencingCount > 0) {
       return errorResponse(
-        `Cannot delete this printer — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}. Remove its calibrations from those filaments first.`,
+        `Cannot delete this printer — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}, possibly including filaments in the trash. Remove its calibrations from those filaments (or permanently delete the trashed ones) first.`,
         400,
       );
     }

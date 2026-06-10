@@ -80,13 +80,18 @@ export async function DELETE(
 
     // Prevent deleting a location that is referenced by any spool. Users
     // should reassign spools to another location (or null) first.
+    //
+    // GH #629: trashed filaments count too — a filament in the trash can be
+    // restored, which would resurrect a dangling locationId ref if the
+    // location were deleted in the meantime. Only `_purged` tombstones are
+    // gone forever and don't block.
     const referencingCount = await Filament.countDocuments({
-      _deletedAt: null,
+      _purged: { $ne: true },
       "spools.locationId": id,
     });
     if (referencingCount > 0) {
       return errorResponse(
-        `Cannot delete this location — it is referenced by spools in ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}. Reassign those spools to another location first.`,
+        `Cannot delete this location — it is referenced by spools in ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}, possibly including filaments in the trash. Reassign those spools to another location (or permanently delete the trashed filaments) first.`,
         400,
       );
     }
