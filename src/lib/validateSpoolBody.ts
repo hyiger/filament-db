@@ -92,6 +92,45 @@ export function isValidIsoDateString(s: string): boolean {
   return true;
 }
 
+/**
+ * Validate a single spool `photoDataUrl` value. A 5MB hard cap is a safety
+ * net — the UI compresses to ~200KB. The MIME allow-list is intentionally
+ * narrow (raster formats only): `image/svg+xml` permits inline <script>
+ * tags that would execute if the URL were ever rendered in a context that
+ * doesn't treat it as an image (e.g. copied into an <object>), so we
+ * reject it even though the current UI only uses <img>.
+ *
+ * Extracted from `validateSpoolBody` (GH #626) so the embedded-spool write
+ * paths (`POST /api/filaments`, `POST /api/filaments/import-atlas`) can
+ * enforce the same rules as the dedicated spool routes without duplicating
+ * the regex. `undefined` passes through as `undefined` (field absent);
+ * empty string normalises to `null` to match validateSpoolBody.
+ */
+export function validateSpoolPhotoDataUrl(
+  value: unknown,
+):
+  | { ok: true; value: string | null | undefined }
+  | { ok: false; error: string } {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (value === null) return { ok: true, value: null };
+  if (typeof value !== "string") {
+    return { ok: false, error: "photoDataUrl must be a string or null" };
+  }
+  if (value.length > 5 * 1024 * 1024) {
+    return { ok: false, error: "photoDataUrl exceeds 5MB limit" };
+  }
+  if (
+    value !== "" &&
+    !/^data:image\/(jpeg|jpg|png|gif|webp|avif|heic|heif);base64,/i.test(value)
+  ) {
+    return {
+      ok: false,
+      error: "photoDataUrl must be a JPEG/PNG/GIF/WebP/AVIF/HEIC/HEIF image data URL",
+    };
+  }
+  return { ok: true, value: value === "" ? null : value };
+}
+
 export function validateSpoolBody(
   body: unknown,
   opts: ValidateOpts = {},
@@ -173,30 +212,15 @@ export function validateSpoolBody(
     }
   }
 
-  // photoDataUrl: data URL string or null. A 5MB hard cap is a safety net —
-  // the UI compresses to ~200KB. The MIME allow-list is intentionally
-  // narrow (raster formats only): `image/svg+xml` permits inline <script>
-  // tags that would execute if the URL were ever rendered in a context
-  // that doesn't treat it as an image (e.g. copied into an <object>), so
-  // we reject it here even though the current UI only uses <img>.
+  // photoDataUrl: data URL string or null — MIME allow-list + 5MB cap.
+  // The actual rules live in `validateSpoolPhotoDataUrl` above (shared
+  // with the embedded-spool write paths since GH #626).
   if (b.photoDataUrl !== undefined) {
-    if (b.photoDataUrl === null) {
-      result.photoDataUrl = null;
-    } else if (typeof b.photoDataUrl === "string") {
-      if (b.photoDataUrl.length > 5 * 1024 * 1024) {
-        return { ok: false, error: "photoDataUrl exceeds 5MB limit" };
-      }
-      if (b.photoDataUrl !== "" &&
-          !/^data:image\/(jpeg|jpg|png|gif|webp|avif|heic|heif);base64,/i.test(b.photoDataUrl)) {
-        return {
-          ok: false,
-          error: "photoDataUrl must be a JPEG/PNG/GIF/WebP/AVIF/HEIC/HEIF image data URL",
-        };
-      }
-      result.photoDataUrl = b.photoDataUrl === "" ? null : b.photoDataUrl;
-    } else {
-      return { ok: false, error: "photoDataUrl must be a string or null" };
+    const photo = validateSpoolPhotoDataUrl(b.photoDataUrl);
+    if (!photo.ok) {
+      return { ok: false, error: photo.error };
     }
+    result.photoDataUrl = photo.value as string | null;
   }
 
   // retired: boolean

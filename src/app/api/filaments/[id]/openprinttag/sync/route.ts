@@ -135,11 +135,22 @@ export async function POST(
       openprinttagSnapshot: snapshot,
     };
 
-    const updated = await Filament.findByIdAndUpdate(
-      filament._id,
+    // GH #629: re-filter `_deletedAt: null` on the final write so a
+    // concurrent soft-delete between the findOne above and this update
+    // doesn't quietly mutate a tombstoned row — the same race the Bambu
+    // per-id sync closed (Codex P2 on PR #387 round 6). 404 when the row
+    // was trashed in the window.
+    const updated = await Filament.findOneAndUpdate(
+      { _id: filament._id, _deletedAt: null },
       { $set },
       { returnDocument: "after", runValidators: true, context: "query" },
     ).lean();
+    if (!updated) {
+      return NextResponse.json(
+        { error: "Filament was deleted before the sync could complete" },
+        { status: 404 },
+      );
+    }
 
     return NextResponse.json({
       applied: Object.keys(update),

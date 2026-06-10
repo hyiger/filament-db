@@ -355,6 +355,42 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(res.status).toBe(400);
   });
 
+  it("sync: 404s instead of mutating a row soft-deleted mid-request (#629)", async () => {
+    // The final write must re-filter `_deletedAt: null` — a soft-delete
+    // landing between the route's initial findOne and its findOneAndUpdate
+    // used to quietly mutate the tombstoned row (the same race the Bambu
+    // per-id sync closed). The mocked upstream fetch runs exactly in that
+    // window, so performing the soft-delete inside it recreates the race
+    // deterministically.
+    const f = await Filament.create({
+      name: "Race PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#808080",
+      density: null,
+      settings: { openprinttag_slug: "prusament-pla-galaxy-black" },
+    });
+    dbMock.mockImplementationOnce(async () => {
+      await Filament.updateOne({ _id: f._id }, { _deletedAt: new Date() });
+      return {
+        brands: [],
+        materials: [UPSTREAM_MATERIAL],
+        cachedAt: new Date(0).toISOString(),
+        totalFFF: 1,
+        totalSLA: 0,
+      };
+    });
+
+    const res = await syncPOST(syncReq(String(f._id), ["density"]), params(String(f._id)));
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toMatch(/deleted/i);
+
+    // The tombstoned row was NOT mutated — no density, no snapshot refresh.
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.density).toBeNull();
+    expect(fresh.openprinttagSnapshot).toBeFalsy();
+  });
+
   it("sync: rejects a cross-origin (CSRF) request before mutating", async () => {
     const f = await Filament.create({
       name: "CSRF PLA",

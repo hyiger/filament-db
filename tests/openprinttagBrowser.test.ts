@@ -237,6 +237,21 @@ describe("rgbaToHex", () => {
   it("returns null for invalid length", () => {
     expect(rgbaToHex("#abc")).toBeNull();
   });
+
+  // GH #632: length alone used to be the only check — "zzzzzzzz"
+  // slipped through as "#zzzzzz" and persisted an invalid color via
+  // the OPT import's validator-skipping update path.
+  it("returns null for non-hex characters at a valid length", () => {
+    expect(rgbaToHex("zzzzzzzz")).toBeNull();
+    expect(rgbaToHex("#zzzzzz")).toBeNull();
+    expect(rgbaToHex("#ea5e1agg")).toBeNull();
+    expect(rgbaToHex("#ea5e1g")).toBeNull();
+  });
+
+  it("returns null for 7-char hex (neither RGB nor RGBA)", () => {
+    expect(rgbaToHex("#ea5e1af")).toBeNull();
+    expect(rgbaToHex("ea5e1af")).toBeNull();
+  });
 });
 
 describe("parseBrandYaml", () => {

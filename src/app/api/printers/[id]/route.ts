@@ -6,7 +6,7 @@ import Nozzle from "@/models/Nozzle";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { findNozzleConflicts } from "@/lib/nozzleConflicts";
-import { clearSpoolsFromOtherPrinters } from "@/lib/spoolSlots";
+import { clearSpoolsFromOtherPrinters, findInvalidSlotSpoolRef } from "@/lib/spoolSlots";
 import BedType from "@/models/BedType";
 
 export async function GET(
@@ -111,6 +111,16 @@ export async function PUT(
       }
     }
 
+    // GH #631: see parallel comment in the POST handler — amsSlots[].spoolId
+    // must pass the same active-filament + non-retired checks the dedicated
+    // assignment route enforces, or this PUT is the bypass.
+    if ("amsSlots" in body) {
+      const slotError = await findInvalidSlotSpoolRef(Filament, body.amsSlots);
+      if (slotError) {
+        return errorResponse(slotError, 400);
+      }
+    }
+
     // GH #424: explicit allowlist so a future schema field doesn't
     // silently become client-writable. Matches the Filament PUT
     // pattern.
@@ -167,14 +177,19 @@ export async function DELETE(
     await dbConnect();
     const { id } = await params;
 
-    // Prevent deleting a printer referenced by filament calibrations
+    // Prevent deleting a printer referenced by filament calibrations.
+    //
+    // GH #629: trashed filaments count too — a filament in the trash can be
+    // restored, which would resurrect a dangling calibration printer ref if
+    // the printer were deleted in the meantime. Only `_purged` tombstones
+    // are gone forever and don't block.
     const referencingCount = await Filament.countDocuments({
-      _deletedAt: null,
+      _purged: { $ne: true },
       "calibrations.printer": id,
     });
     if (referencingCount > 0) {
       return errorResponse(
-        `Cannot delete this printer — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}. Remove its calibrations from those filaments first.`,
+        `Cannot delete this printer — it is referenced by ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}, possibly including filaments in the trash. Remove its calibrations from those filaments (or permanently delete the trashed ones) first.`,
         400,
       );
     }

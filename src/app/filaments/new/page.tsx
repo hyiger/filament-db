@@ -661,7 +661,7 @@ function NewFilamentContent() {
                       value={prusamentInput}
                       onChange={(e) => setPrusamentInput(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handlePrusament(); } }}
-                      placeholder="e.g. 4a7b3c... or full URL"
+                      placeholder={t("new.prusament.inputPlaceholder")}
                       className="flex-1 px-2.5 py-1.5 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-900 dark:text-gray-100 outline-none placeholder-gray-400 dark:placeholder-gray-500"
                       autoFocus
                     />
@@ -903,8 +903,12 @@ function NewFilamentContent() {
 }
 
 export default function NewFilament() {
+  // GH #638: the Suspense fallback was hardcoded English. The provider
+  // mounts above this component (ClientProviders in the root layout), so
+  // t() is available here.
+  const { t } = useTranslation();
   return (
-    <Suspense fallback={<p className="p-8 text-gray-500">Loading&hellip;</p>}>
+    <Suspense fallback={<p className="p-8 text-gray-500">{t("common.loading")}</p>}>
       <NewFilamentContent />
     </Suspense>
   );

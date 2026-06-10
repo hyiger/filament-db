@@ -6,6 +6,7 @@ import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { validateSpoolPhotoDataUrl } from "@/lib/validateSpoolBody";
 import {
   isInvertedNozzleRange,
   effectiveNozzleRangeForUpdate,
@@ -141,7 +142,17 @@ export async function GET(request: NextRequest) {
                 $expr: {
                   $and: [
                     { $eq: ["$parentId", "$$fid"] },
-                    { $eq: ["$_deletedAt", null] },
+                    // GH #625: `{ $eq: ["$_deletedAt", null] }` is FALSE
+                    // when the field is missing entirely — in aggregation,
+                    // missing is its own BSON type and `$eq` does NOT
+                    // collapse it into null (the v1.32.2 quirk; see
+                    // /api/spools/by-location for the same pattern).
+                    // Legacy variants created before the soft-delete field
+                    // existed (pre-v1.15) and never re-saved lack
+                    // `_deletedAt` entirely, so without the `$ifNull` wrap
+                    // their parent reported hasVariants:false and lost the
+                    // composite parent swatch (#597 / #605 reports).
+                    { $eq: [{ $ifNull: ["$_deletedAt", null] }, null] },
                   ],
                 },
               },
@@ -315,6 +326,13 @@ export async function POST(request: NextRequest) {
   delete body.__v;
   delete body.instanceId;
   delete body.syncId;
+  // GH #619: the OpenPrintTag provenance snapshot is server-owned — it
+  // records what upstream last offered for every OPT-managed field and is
+  // what decides adopt-vs-conflict in diffOptFields (src/lib/optResync.ts).
+  // A client-supplied snapshot could forge `snapshot === current` and flip
+  // user-edited fields to silently auto-adopt on the next re-sync. Only the
+  // OPT import/sync routes may write it.
+  delete body.openprinttagSnapshot;
 
   // GH #431: the PUT handler explicitly strips `body.spools` to prevent a
   // bulk rewrite of a spool's `usageHistory` ledger. The POST handler
@@ -336,6 +354,19 @@ export async function POST(request: NextRequest) {
       photoDataUrl: s?.photoDataUrl,
       retired: s?.retired,
     }));
+    // GH #626: the dedicated spool routes validate photoDataUrl through
+    // validateSpoolBody (raster-only MIME allow-list + 5MB cap — SVG is
+    // rejected because inline <script> can execute in some rendering
+    // contexts). The #431 allowlist above keeps the field but didn't
+    // validate its content, so an embedded spool on filament create was
+    // a bypass. Enforce the same rules here.
+    for (let i = 0; i < body.spools.length; i++) {
+      const photo = validateSpoolPhotoDataUrl(body.spools[i].photoDataUrl);
+      if (!photo.ok) {
+        return errorResponse(`spools[${i}]: ${photo.error}`, 400);
+      }
+      body.spools[i].photoDataUrl = photo.value;
+    }
   }
 
   // If an initial totalWeight is provided, auto-create a spool entry

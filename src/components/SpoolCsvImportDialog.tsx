@@ -241,7 +241,7 @@ export default function SpoolCsvImportDialog({ onClose, onImported }: Props) {
                         : "text-red-700 dark:text-red-400"
                     }`}
                   >
-                    <span className="w-12 font-mono">row {r.row}</span>
+                    <span className="w-12 font-mono">{t("csv.import.rowLabel", { row: r.row })}</span>
                     <span className="flex-1 truncate">
                       {r.ok ? `✓ ${r.filament}` : `✕ ${r.error}`}
                     </span>

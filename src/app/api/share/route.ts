@@ -66,6 +66,19 @@ export async function POST(request: NextRequest) {
   if (body.filamentIds.length > 500) {
     return errorResponse("filamentIds may contain at most 500 entries", 400);
   }
+  // GH #630: a non-ObjectId entry would throw a CastError inside the `$in`
+  // query below, and the catch maps that to a hardcoded 500. Bad input is
+  // the client's fault: validate up front and 400 (same hex-24 pattern as
+  // the import-atlas / snapshot routes).
+  const invalidIds = (body.filamentIds as unknown[]).filter(
+    (id) => typeof id !== "string" || !/^[a-f0-9]{24}$/i.test(id),
+  );
+  if (invalidIds.length > 0) {
+    return errorResponse(
+      `Invalid filament ID(s): ${invalidIds.map(String).join(", ")}`,
+      400,
+    );
+  }
 
   try {
     await dbConnect();

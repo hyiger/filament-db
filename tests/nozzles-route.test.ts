@@ -267,6 +267,69 @@ describe("/api/nozzles", () => {
       expect(body.error).toMatch(/installed/i);
     });
 
+    it("refuses if only a TRASHED filament references it (#629)", async () => {
+      // A trashed filament can be restored, which would resurrect a
+      // dangling nozzle ref if the nozzle were deleted in the meantime —
+      // so trashed referrers block the delete too.
+      const noz = await Nozzle.create({ name: "0.4", diameter: 0.4, type: "Brass" });
+      await Filament.create({
+        name: "Trashed PLA",
+        vendor: "T",
+        type: "PLA",
+        calibrations: [{ nozzle: noz._id }],
+        _deletedAt: new Date(),
+      });
+
+      const res = await deleteNozzle(
+        new NextRequest(`http://localhost/api/nozzles/${noz._id}`, { method: "DELETE" }),
+        { params: Promise.resolve({ id: String(noz._id) }) },
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/trash/i);
+      const after = await Nozzle.findById(noz._id);
+      expect(after._deletedAt).toBeNull();
+    });
+
+    it("ignores _purged filament tombstones when checking refs (#629)", async () => {
+      // Purged rows are gone forever — they must NOT block the delete.
+      const noz = await Nozzle.create({ name: "0.4", diameter: 0.4, type: "Brass" });
+      await Filament.create({
+        name: "Purged PLA",
+        vendor: "T",
+        type: "PLA",
+        compatibleNozzles: [noz._id],
+        _deletedAt: new Date(),
+        _purged: true,
+      });
+
+      const res = await deleteNozzle(
+        new NextRequest(`http://localhost/api/nozzles/${noz._id}`, { method: "DELETE" }),
+        { params: Promise.resolve({ id: String(noz._id) }) },
+      );
+      expect(res.status).toBe(200);
+    });
+
+    it("ignores soft-deleted printers when checking installed refs (#629)", async () => {
+      // Printers have no trash/restore loop — a soft-deleted printer's
+      // refs can never resurrect, and counting them would block the delete
+      // with no way for the user to clear the reference.
+      const noz = await Nozzle.create({ name: "0.4", diameter: 0.4, type: "Brass" });
+      await Printer.create({
+        name: "Deleted Printer",
+        manufacturer: "X",
+        printerModel: "A",
+        installedNozzles: [noz._id],
+        _deletedAt: new Date(),
+      });
+
+      const res = await deleteNozzle(
+        new NextRequest(`http://localhost/api/nozzles/${noz._id}`, { method: "DELETE" }),
+        { params: Promise.resolve({ id: String(noz._id) }) },
+      );
+      expect(res.status).toBe(200);
+    });
+
     it("soft-deletes a nozzle that nothing references", async () => {
       const noz = await Nozzle.create({ name: "0.6", diameter: 0.6, type: "Brass" });
       const res = await deleteNozzle(

@@ -211,6 +211,51 @@ describe("GET /api/filaments — projection to FilamentSummary", () => {
     expect(find("Lone Standalone").hasVariants).toBe(false);
   });
 
+  it("counts a legacy variant with NO _deletedAt field at all toward hasVariants (#625)", async () => {
+    // Pre-v1.15 docs created before the soft-delete field existed (and
+    // never re-saved) lack `_deletedAt` entirely. In aggregation,
+    // `{ $eq: ["$_deletedAt", null] }` is FALSE for a missing field —
+    // missing is its own BSON type and `$eq` does NOT collapse it into
+    // null (the v1.32.2 quirk). The probe must wrap in `$ifNull`, or a
+    // long-time user's parent reports hasVariants:false and the list page
+    // loses the composite parent swatch (the likely root cause of the
+    // #597 / #605 cross-hatch reports) even though find()-based routes
+    // (whose query semantics DO match missing) treat the same variant as
+    // active.
+    const Filament = (await import("@/models/Filament")).default;
+    const parent = await Filament.create({
+      name: "Legacy Parent",
+      vendor: "Test",
+      type: "PLA",
+    });
+    const legacyVariant = await Filament.create({
+      name: "Legacy Variant",
+      vendor: "Test",
+      type: "PLA",
+      parentId: parent._id,
+      color: "#112233",
+    });
+    // Strip the schema-defaulted field at the collection level to recreate
+    // the genuine pre-v1.15 document shape (create() always materialises
+    // the default, so a raw $unset is the only way to get "missing").
+    await Filament.collection.updateOne(
+      { _id: legacyVariant._id },
+      { $unset: { _deletedAt: "" } },
+    );
+    const raw = await Filament.collection.findOne({ _id: legacyVariant._id });
+    expect(raw).not.toHaveProperty("_deletedAt"); // precondition: truly missing
+
+    const res = await listFilaments(
+      new NextRequest("http://localhost/api/filaments"),
+    );
+    const body = await res.json();
+    const find = (name: string) => body.find((f: { name: string }) => f.name === name);
+
+    expect(find("Legacy Parent").hasVariants).toBe(true); // <-- the bug fix
+    // The legacy variant itself still lists as an active row.
+    expect(find("Legacy Variant")).toBeDefined();
+  });
+
   it("does not include the full calibrations array (only the boolean)", async () => {
     await seed();
     const res = await listFilaments(

@@ -155,7 +155,11 @@ describe("/api/bed-types", () => {
       expect(body.error).toMatch(/referenced by/i);
     });
 
-    it("ignores soft-deleted filaments when checking refs", async () => {
+    it("refuses if a TRASHED filament's calibration still references it (#629)", async () => {
+      // Inverts the pre-#629 behavior: a trashed filament can be restored,
+      // which would resurrect a dangling calibration bedType ref if the
+      // bed type were deleted in the meantime — so trashed referrers block
+      // the delete too.
       const bed = await BedType.create({ name: "Smooth PEI", material: "PEI" });
       const noz = await Nozzle.create({ name: "0.4", diameter: 0.4, type: "Brass" });
       await Filament.create({
@@ -164,6 +168,30 @@ describe("/api/bed-types", () => {
         type: "PLA",
         calibrations: [{ nozzle: noz._id, bedType: bed._id }],
         _deletedAt: new Date(),
+      });
+
+      const res = await deleteBedType(
+        new NextRequest(`http://localhost/api/bed-types/${bed._id}`, { method: "DELETE" }),
+        { params: Promise.resolve({ id: String(bed._id) }) },
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/trash/i);
+      const after = await BedType.findById(bed._id);
+      expect(after._deletedAt).toBeNull();
+    });
+
+    it("ignores _purged filament tombstones when checking refs (#629)", async () => {
+      // Purged rows are gone forever — they must NOT block the delete.
+      const bed = await BedType.create({ name: "Smooth PEI", material: "PEI" });
+      const noz = await Nozzle.create({ name: "0.4", diameter: 0.4, type: "Brass" });
+      await Filament.create({
+        name: "Purged PLA",
+        vendor: "T",
+        type: "PLA",
+        calibrations: [{ nozzle: noz._id, bedType: bed._id }],
+        _deletedAt: new Date(),
+        _purged: true,
       });
 
       const res = await deleteBedType(
@@ -243,15 +271,40 @@ describe("/api/bed-types", () => {
       expect(after._deletedAt).toBeNull();
     });
 
-    it("ignores soft-deleted filaments and unrelated surface names in the bedTypeTemps check (#557)", async () => {
+    it("refuses if a TRASHED filament names it in bedTypeTemps (#557 / #629)", async () => {
+      // Inverts the pre-#629 behavior: restore would resurrect the
+      // dependency on the deleted surface, so trashed filaments count in
+      // the bedTypeTemps name check too.
       const bed = await BedType.create({ name: "Smooth PEI", material: "PEI" });
-      // Soft-deleted filament that names it — must not block.
       await Filament.create({
         name: "Trashed PETG",
         vendor: "T",
         type: "PETG",
         bedTypeTemps: [{ bedType: "Smooth PEI", temperature: 70 }],
         _deletedAt: new Date(),
+      });
+
+      const res = await deleteBedType(
+        new NextRequest(`http://localhost/api/bed-types/${bed._id}`, { method: "DELETE" }),
+        { params: Promise.resolve({ id: String(bed._id) }) },
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/per-bed-type temperatures/i);
+      const after = await BedType.findById(bed._id);
+      expect(after._deletedAt).toBeNull();
+    });
+
+    it("ignores _purged filaments and unrelated surface names in the bedTypeTemps check (#557 / #629)", async () => {
+      const bed = await BedType.create({ name: "Smooth PEI", material: "PEI" });
+      // Purged filament that names it — gone forever, must not block.
+      await Filament.create({
+        name: "Purged PETG",
+        vendor: "T",
+        type: "PETG",
+        bedTypeTemps: [{ bedType: "Smooth PEI", temperature: 70 }],
+        _deletedAt: new Date(),
+        _purged: true,
       });
       // Active filament that names a DIFFERENT surface — must not block.
       await Filament.create({

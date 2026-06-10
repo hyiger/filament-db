@@ -126,6 +126,74 @@ export async function assignSpoolToSlot(
 }
 
 /**
+ * GH #631 — validate every non-null `amsSlots[].spoolId` in a printer
+ * create/update body before it is written verbatim.
+ *
+ * The dedicated assignment route (PUT /api/spools/[spoolId]/assignment)
+ * verifies the spool exists on an active filament and rejects retired
+ * spools — "enforced here too so a direct API call can't bypass it". The
+ * printer POST/PUT *was* such a bypass: `update.amsSlots = body.amsSlots`
+ * let a retired or nonexistent spoolId land in a slot. This mirrors the
+ * assignment route's checks for each slot.
+ *
+ * Returns an error message naming the offending slot, or null when every
+ * slot ref is valid. Non-array input (legacy bodies without amsSlots, or
+ * an explicit null) passes through — the schema handles shape errors.
+ */
+export async function findInvalidSlotSpoolRef(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: Model<any>,
+  amsSlots: unknown,
+): Promise<string | null> {
+  if (!Array.isArray(amsSlots)) return null;
+  // GH #631 (Codex P2 on #646): a spool occupies at most one slot. The
+  // per-slot checks below validate each occurrence independently, so the
+  // SAME spoolId in two slots of one payload would pass — and the route's
+  // follow-up `clearSpoolsFromOtherPrinters` deliberately excludes the
+  // current printer, so it wouldn't self-heal. Reject the duplicate here.
+  const seenSpoolIds = new Set<string>();
+  for (let i = 0; i < amsSlots.length; i++) {
+    const slot = amsSlots[i] as
+      | { slotName?: unknown; spoolId?: unknown }
+      | null
+      | undefined;
+    const spoolId = slot?.spoolId;
+    if (spoolId == null) continue; // empty slot — nothing to validate
+    const slotLabel =
+      typeof slot?.slotName === "string" && slot.slotName
+        ? `"${slot.slotName}"`
+        : `#${i + 1}`;
+    if (!mongoose.isValidObjectId(spoolId)) {
+      return `Slot ${slotLabel}: spoolId is not a valid id`;
+    }
+    // Canonicalize before the duplicate check (Codex P2 round 2 on #646):
+    // ObjectId hex is case-insensitive and Mongoose casts e.g. lowercase
+    // and uppercase forms to the SAME id, but `String(spoolId)` preserves
+    // the original casing — so two slots with the same id in different
+    // case would slip past a raw-string Set. Normalize to canonical hex.
+    const spoolKey = new mongoose.Types.ObjectId(String(spoolId)).toHexString();
+    if (seenSpoolIds.has(spoolKey)) {
+      return `Slot ${slotLabel}: the same spool cannot occupy more than one slot`;
+    }
+    seenSpoolIds.add(spoolKey);
+    // Same lookup as the assignment route: the spool must exist on an
+    // active filament, and the positional projection surfaces the matched
+    // subdocument so the retired flag can be checked too.
+    const filament = (await FilamentModel.findOne(
+      { _deletedAt: null, "spools._id": spoolId },
+      { "spools.$": 1 },
+    ).lean()) as { spools?: { retired?: boolean }[] } | null;
+    if (!filament) {
+      return `Slot ${slotLabel}: spool not found`;
+    }
+    if (filament.spools?.[0]?.retired) {
+      return `Slot ${slotLabel}: retired spools cannot be assigned to a printer slot`;
+    }
+  }
+  return null;
+}
+
+/**
  * Clear every spool in `spoolIds` out of every printer's slots EXCEPT
  * `exceptPrinterId`. Called after a printer is saved through PrinterForm —
  * which can independently set `amsSlots[].spoolId` — so the one-slot
