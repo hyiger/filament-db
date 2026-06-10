@@ -671,7 +671,7 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
       </fieldset>
 
       {nozzlesFetchError && (
-        <div className="px-3 py-2 bg-yellow-900/30 border border-yellow-800 rounded text-sm text-yellow-300">
+        <div className="px-3 py-2 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded text-sm text-yellow-700 dark:text-yellow-300">
           {t("printers.form.nozzlesLoadError")}
         </div>
       )}
@@ -722,7 +722,7 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
       )}
 
       {bedTypesFetchError && (
-        <div className="px-3 py-2 bg-yellow-900/30 border border-yellow-800 rounded text-sm text-yellow-300">
+        <div className="px-3 py-2 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded text-sm text-yellow-700 dark:text-yellow-300">
           {t("printers.form.bedTypesLoadError")}
         </div>
       )}
