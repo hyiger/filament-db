@@ -18,12 +18,18 @@ type FilamentDoc = Record<string, any>;
  * GH #633: `_purged` and `openprinttagSnapshot` are bookkeeping fields
  * (sync tombstone / OPT re-sync provenance) — they describe THIS document,
  * never the parent, so a resolved variant must carry its own values.
+ * `lowStockThreshold` is variant-only too: it's an inventory setting read
+ * raw (no parent fallback) by the `/api/filaments` list aggregation and
+ * the dashboard low-stock loop, so inheriting it here would make a
+ * variant's detail/export view disagree with its list badge + dashboard
+ * card (Codex P2 on PR #648). Keeping it variant-only still fixes the
+ * original silent-drop bug — it's now in an allowlist rather than neither.
  * Exported (along with INHERITABLE_FIELDS) so the schema-drift guard in
  * tests/resolveFilament.test.ts can diff the allowlists against the
  * Filament schema's top-level paths — a new schema field that lands in
  * neither list would otherwise silently vanish from every resolved variant.
  */
-export const VARIANT_ONLY_FIELDS = ["_id", "name", "color", "colorName", "parentId", "spools", "createdAt", "updatedAt", "__v", "instanceId", "syncId", "_deletedAt", "_purged", "totalWeight", "openprinttagSnapshot"];
+export const VARIANT_ONLY_FIELDS = ["_id", "name", "color", "colorName", "parentId", "spools", "createdAt", "updatedAt", "__v", "instanceId", "syncId", "_deletedAt", "_purged", "totalWeight", "openprinttagSnapshot", "lowStockThreshold"];
 
 /** Numeric/string fields that can be inherited from parent */
 export const INHERITABLE_FIELDS = [
@@ -35,9 +41,6 @@ export const INHERITABLE_FIELDS = [
   "maxVolumetricSpeed",
   "spoolWeight",
   "netFilamentWeight",
-  // GH #633: matches the cost/density posture — a variant without its own
-  // low-stock threshold uses the parent's.
-  "lowStockThreshold",
   "dryingTemperature",
   "dryingTime",
   "transmissionDistance",

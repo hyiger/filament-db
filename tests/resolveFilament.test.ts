@@ -355,19 +355,24 @@ describe("resolveFilament", () => {
 
   // --- GH #633: fields the allowlists used to silently drop ---
 
-  it("inherits lowStockThreshold from parent when variant has none (#633)", () => {
+  // lowStockThreshold is variant-only, NOT inherited (Codex P2 on PR #648):
+  // the list aggregation + dashboard read it raw with no parent fallback, so
+  // inheriting it in resolveFilament would make the variant's detail/export
+  // view disagree with its list badge. It must still be PRESERVED (the #633
+  // bug was the field silently vanishing because it was in neither allowlist).
+  it("preserves the variant's own lowStockThreshold, never inheriting (#633, #648)", () => {
+    const parent = makeParent({ lowStockThreshold: 250 });
+    const variant = makeVariant({ lowStockThreshold: 100 });
+    const result = resolveFilament(variant, parent);
+    expect(result.lowStockThreshold).toBe(100);
+    expect(result._inherited).not.toContain("lowStockThreshold");
+  });
+
+  it("does not fall back to the parent's lowStockThreshold (#648)", () => {
     const parent = makeParent({ lowStockThreshold: 250 });
     const variant = makeVariant({ lowStockThreshold: null });
     const result = resolveFilament(variant, parent);
-    expect(result.lowStockThreshold).toBe(250);
-    expect(result._inherited).toContain("lowStockThreshold");
-  });
-
-  it("variant can override lowStockThreshold — including with 0 (#633)", () => {
-    const parent = makeParent({ lowStockThreshold: 250 });
-    const variant = makeVariant({ lowStockThreshold: 0 });
-    const result = resolveFilament(variant, parent);
-    expect(result.lowStockThreshold).toBe(0);
+    expect(result.lowStockThreshold).toBeNull();
     expect(result._inherited).not.toContain("lowStockThreshold");
   });
 
