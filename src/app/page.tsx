@@ -135,7 +135,7 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
               <div
                 className="w-6 h-6 rounded-full border border-gray-400 dark:border-gray-600"
                 style={{ backgroundColor: color }}
-                aria-label={`Color swatch: ${color}`}
+                aria-label={t("swatch.colorSwatch", { color })}
               />
               {count > 1 && (
                 <span className="absolute -top-1.5 -right-1.5 bg-gray-700 text-white text-[9px] w-3.5 h-3.5 rounded-full flex items-center justify-center leading-none">
