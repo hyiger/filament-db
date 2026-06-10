@@ -70,7 +70,7 @@ function isKnownCode(code: string, custom: CustomCurrency[]): boolean {
   return BUILTIN_CODES.includes(code) || custom.some((c) => c.code === code);
 }
 
-function readInitialCustom(): CustomCurrency[] {
+function readStoredCustom(): CustomCurrency[] {
   if (typeof window === "undefined") return [];
   try {
     return parseCustomCurrencies(localStorage.getItem(CUSTOM_STORAGE_KEY), BUILTIN_CODES);
@@ -79,7 +79,7 @@ function readInitialCustom(): CustomCurrency[] {
   }
 }
 
-function readInitialCurrency(custom: CustomCurrency[]): string {
+function readStoredCurrency(custom: CustomCurrency[]): string {
   if (typeof window === "undefined") return DEFAULT_CURRENCY;
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -97,16 +97,27 @@ function readInitialCurrency(custom: CustomCurrency[]): string {
  *   - Selected code:   electron-store key "currency"            / localStorage "filamentdb-currency"
  *   - Custom list:     electron-store key "customCurrencies"    / localStorage "filamentdb-custom-currencies"
  * Electron is the source of truth for the desktop app; the localStorage
- * read on init is only there so the SSR-rendered first paint doesn't flash
- * the default before the IPC round-trip completes.
+ * values seed web-mode users via the post-mount sync effect below.
  */
 export function useCurrency() {
-  const [customCurrencies, setCustomCurrenciesState] = useState<CustomCurrency[]>(
-    readInitialCustom,
-  );
-  const [currency, setCurrencyState] = useState<string>(() =>
-    readInitialCurrency(customCurrencies),
-  );
+  const [customCurrencies, setCustomCurrenciesState] = useState<CustomCurrency[]>([]);
+  const [currency, setCurrencyState] = useState<string>(DEFAULT_CURRENCY);
+
+  // GH #639: seed from localStorage on mount instead of in the useState
+  // initializers. Those run during hydration, so a stored non-default
+  // currency made the client's first render disagree with the SSR HTML
+  // (USD) — a React 19 hydration mismatch + full client re-render on
+  // every page load for a non-default web user. Same pattern as
+  // CollapsibleSection / TranslationProvider: default during SSR, one
+  // post-hydration sync render. The electron-store hydration effect below
+  // resolves asynchronously after this, so on desktop it still wins.
+  useEffect(() => {
+    const custom = readStoredCustom();
+    const saved = readStoredCurrency(custom);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- post-hydration sync from localStorage
+    if (custom.length > 0) setCustomCurrenciesState(custom);
+    if (saved !== DEFAULT_CURRENCY) setCurrencyState(saved);
+  }, []);
 
   // Hydrate from electron-store when running inside the desktop shell. The
   // localStorage values are still useful for SSR / web-mode users.
@@ -136,19 +147,18 @@ export function useCurrency() {
         if (saved) {
           // Validate against the just-resolved list so an electron-side
           // entry that still exists in `c.customCurrencies` is accepted
-          // even on the first render after mount. Falling back to the
-          // closure's `customCurrencies` is correct only when electron
-          // didn't override (resolvedList === null).
-          const validateAgainst = resolvedList ?? customCurrencies;
+          // even on the first render after mount. When electron didn't
+          // override (resolvedList === null), fall back to a fresh
+          // localStorage read — NOT the closure's `customCurrencies`,
+          // which is always the first-render `[]` since GH #639 moved
+          // the localStorage seed out of the useState initializer.
+          const validateAgainst = resolvedList ?? readStoredCustom();
           if (isKnownCode(saved, validateAgainst)) {
             setCurrencyState(saved);
           }
         }
       })
       .catch(() => {});
-    // Mount-only hydration; we deliberately do not re-run when the
-    // localStorage-initialised customCurrencies value churns.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const persistCurrency = useCallback((code: string) => {
