@@ -832,15 +832,31 @@ describe("splitInheritedImportSet (GH #628)", () => {
     expect(unset).toEqual(["cost"]);
   });
 
-  it("never $unsets schema-required fields (vendor/type) even when stale", () => {
+  it("never $unsets schema-required fields (vendor/type), and writes them through when stale (GH #649)", () => {
+    // Required fields can't be unset (validation) and never inherit at read
+    // time — resolveFilament always uses the variant's own value. So when
+    // the incoming (new parent) value differs from the variant's stale
+    // stored value, it must be $set, not skipped (Codex P2 on #649: a
+    // parent+variant import where the parent's vendor/type changed used to
+    // leave the variant showing the old value).
     const variant = { vendor: "OldVendor", type: "PETG" };
     const { set, unset } = splitInheritedImportSet(
       { name: "V", vendor: "Acme", type: "PLA" },
       variant,
       parent,
     );
-    // vendor/type match the parent → skipped from $set; but required
-    // fields are left in place rather than $unset (validation would fail).
+    expect(set).toEqual({ name: "V", vendor: "Acme", type: "PLA" });
+    expect(unset).toEqual([]);
+  });
+
+  it("does not re-write a required field that already matches (GH #649)", () => {
+    // incoming == parent == variant's own value → nothing to do, no $set.
+    const variant = { vendor: "Acme", type: "PLA" };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", vendor: "Acme", type: "PLA" },
+      variant,
+      parent,
+    );
     expect(set).toEqual({ name: "V" });
     expect(unset).toEqual([]);
   });

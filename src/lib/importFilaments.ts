@@ -358,11 +358,18 @@ export function splitInheritedImportSet(
       const parentVal = parent[key];
       const variantVal = variant[key];
       if (incoming != null && parentVal === incoming) {
-        if (
-          !IMPORT_REQUIRED_FIELDS.has(key) &&
-          hasLocalValue(variantVal) &&
-          variantVal !== incoming
-        ) {
+        if (IMPORT_REQUIRED_FIELDS.has(key)) {
+          // Required fields (vendor/type) are never null on a variant and
+          // never inherit at read time — resolveFilament always uses the
+          // variant's own value — so they can't be unset to "track the
+          // parent". When incoming == parent but the stored value is stale
+          // (e.g. a parent+variant import where the parent's vendor/type
+          // changed), still write the new value through; otherwise the
+          // variant keeps a stale required value (Codex P2 on #649).
+          if (variantVal !== incoming) set[key] = incoming;
+          continue;
+        }
+        if (hasLocalValue(variantVal) && variantVal !== incoming) {
           unset.push(key);
         }
         continue;
