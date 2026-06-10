@@ -865,6 +865,112 @@ describe("Filament Model — v1.11 spool fields", () => {
     await Filament.updateOne({ _id: f._id }, { $set: { tdsUrl: null } });
   });
 
+  it("rejects invalid color / secondaryColors on update queries (not just create)", async () => {
+    // GH #632: the GH #503 hex validators only ran on save()/create() —
+    // bare update queries (the OPT import's conditional-set path) could
+    // persist a malformed hex. Pre-update hooks now mirror the tdsUrl
+    // treatment across the three Mongoose update entry points.
+    const f = await Filament.create({
+      name: "Color Update Test",
+      vendor: "Test",
+      type: "PLA",
+      color: "#112233",
+      secondaryColors: ["#445566"],
+    });
+
+    await expect(
+      Filament.updateOne({ _id: f._id }, { $set: { color: "#zzzzzz" } }),
+    ).rejects.toThrow(/color/);
+
+    await expect(
+      Filament.findOneAndUpdate({ _id: f._id }, { $set: { color: "not-a-color" } }),
+    ).rejects.toThrow(/color/);
+
+    await expect(
+      Filament.updateMany({}, { $set: { color: "#12345" } }),
+    ).rejects.toThrow(/color/);
+
+    await expect(
+      Filament.updateOne({ _id: f._id }, { $set: { secondaryColors: ["#GGGGGG"] } }),
+    ).rejects.toThrow(/secondaryColors/);
+
+    await expect(
+      Filament.findOneAndUpdate(
+        { _id: f._id },
+        {
+          $set: {
+            secondaryColors: ["#111111", "#222222", "#333333", "#444444", "#555555", "#666666"],
+          },
+        },
+      ),
+    ).rejects.toThrow(/secondaryColors/);
+
+    // Original values untouched after the rejected updates
+    const reread = await Filament.findById(f._id).lean();
+    expect(reread!.color).toBe("#112233");
+    expect(reread!.secondaryColors).toEqual(["#445566"]);
+
+    // Valid hex updates still pass; null primary (coextruded) and an
+    // empty secondaryColors array are legitimate writes
+    await Filament.updateOne({ _id: f._id }, { $set: { color: "#AaBbCc" } });
+    expect((await Filament.findById(f._id).lean())!.color).toBe("#AaBbCc");
+    await Filament.updateOne(
+      { _id: f._id },
+      { $set: { color: null, secondaryColors: ["#111111", "#222222"] } },
+    );
+    const coex = await Filament.findById(f._id).lean();
+    expect(coex!.color).toBeNull();
+    expect(coex!.secondaryColors).toEqual(["#111111", "#222222"]);
+    await Filament.updateOne({ _id: f._id }, { $set: { secondaryColors: [] } });
+  });
+
+  it("rejects negative and fractional optTags entries (GH #634)", async () => {
+    const ok = await Filament.create({
+      name: "Tags OK",
+      vendor: "Test",
+      type: "PLA",
+      optTags: [4, 16, 71],
+    });
+    expect(ok.optTags).toEqual([4, 16, 71]);
+
+    await expect(
+      Filament.create({
+        name: "Tags Negative",
+        vendor: "Test",
+        type: "PLA",
+        optTags: [-1],
+      }),
+    ).rejects.toThrow(/optTags/);
+
+    await expect(
+      Filament.create({
+        name: "Tags Fractional",
+        vendor: "Test",
+        type: "PLA",
+        optTags: [1.5],
+      }),
+    ).rejects.toThrow(/optTags/);
+  });
+
+  it("caps dryingTime at 10080 minutes (GH #634)", async () => {
+    const ok = await Filament.create({
+      name: "Drying OK",
+      vendor: "Test",
+      type: "PLA",
+      dryingTime: 600,
+    });
+    expect(ok.dryingTime).toBe(600);
+
+    await expect(
+      Filament.create({
+        name: "Drying Too Long",
+        vendor: "Test",
+        type: "PLA",
+        dryingTime: 2 ** 32,
+      }),
+    ).rejects.toThrow(/dryingTime/);
+  });
+
   it("stores lowStockThreshold and rejects negatives", async () => {
     const filament = await Filament.create({
       name: "Low Stock",

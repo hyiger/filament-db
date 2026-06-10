@@ -23,6 +23,24 @@ function isValidTdsUrl(v: string | null | undefined): boolean {
   }
 }
 
+/** GH #503 / #632: the one hex shape we store for colors. Shared by the
+ * schema validators on `color` / `secondaryColors` AND the pre-update
+ * hooks below (bare update queries skip schema validators). */
+const HEX_COLOR_RE = /^#[0-9A-Fa-f]{6}$/;
+
+/** `color` is nullable per the OpenPrintTag spec (coextruded materials
+ * have a null primary); anything non-null must be `#RRGGBB`. */
+function isValidColor(v: unknown): boolean {
+  return v == null || (typeof v === "string" && HEX_COLOR_RE.test(v));
+}
+
+/** GH #634: optTags entries are CBOR unsigned ints on the wire — a
+ * negative entry makes the encoder throw and a fractional one would
+ * silently encode a different tag id. Reject both at the schema edge. */
+function isValidOptTagArray(arr: unknown): boolean {
+  return Array.isArray(arr) && arr.every((t) => Number.isInteger(t) && t >= 0);
+}
+
 export interface IDryCycle {
   _id?: mongoose.Types.ObjectId;
   date: Date;
@@ -243,8 +261,7 @@ const FilamentSchema = new Schema<IFilament>(
       type: String,
       default: "#808080",
       validate: {
-        validator: (v: string | null | undefined) =>
-          v == null || (typeof v === "string" && /^#[0-9A-Fa-f]{6}$/.test(v)),
+        validator: isValidColor,
         message: "color must be a #RRGGBB hex string or null",
       },
     },
@@ -262,7 +279,7 @@ const FilamentSchema = new Schema<IFilament>(
         },
         {
           validator: (arr: string[]) =>
-            arr.every((c) => typeof c === "string" && /^#[0-9A-Fa-f]{6}$/.test(c)),
+            arr.every((c) => typeof c === "string" && HEX_COLOR_RE.test(c)),
           message: "Each secondaryColors entry must be a #RRGGBB hex string",
         },
       ],
@@ -378,7 +395,12 @@ const FilamentSchema = new Schema<IFilament>(
     totalWeight: { type: Number, default: null, min: 0 },
     lowStockThreshold: { type: Number, default: null, min: 0 },
     dryingTemperature: { type: Number, default: null, min: 0, max: 300 },
-    dryingTime: { type: Number, default: null, min: 0 },
+    // GH #634: cap drying time at one week of minutes. The OpenPrintTag
+    // encoder writes this as a CBOR uint — without an upper bound,
+    // values ≥ 2^32 wrap in the encoder's `>>>` arithmetic. 10080 (7
+    // days) is far beyond any real drying cycle and mirrors the
+    // temperature fields' "sane domain max" posture (GH #337).
+    dryingTime: { type: Number, default: null, min: 0, max: [10080, "dryingTime must be <= 10080 minutes (7 days)"] },
     transmissionDistance: { type: Number, default: null, min: 0 },
     glassTempTransition: { type: Number, default: null, min: -50, max: 500 },
     heatDeflectionTemp: { type: Number, default: null, min: -50, max: 500 },
@@ -389,7 +411,18 @@ const FilamentSchema = new Schema<IFilament>(
     minPrintSpeed: { type: Number, default: null, min: 0 },
     maxPrintSpeed: { type: Number, default: null, min: 0 },
     spoolType: { type: String, default: null },
-    optTags: { type: [Number], default: [] },
+    // GH #634: optTags ride the OpenPrintTag `tags` enum_array as CBOR
+    // unsigned ints. A stored negative entry made `encodeCBORUint` throw
+    // (500-ing the .bin export and failing NFC writes); a fractional one
+    // would truncate into a *different* tag id. Validate at the edge.
+    optTags: {
+      type: [Number],
+      default: [],
+      validate: {
+        validator: isValidOptTagArray,
+        message: "optTags entries must be non-negative integers",
+      },
+    },
     tdsUrl: {
       type: String,
       default: null,
@@ -473,6 +506,41 @@ function validateTdsUrlInUpdate(this: mongoose.Query<unknown, unknown>) {
 FilamentSchema.pre("updateOne", validateTdsUrlInUpdate);
 FilamentSchema.pre("updateMany", validateTdsUrlInUpdate);
 FilamentSchema.pre("findOneAndUpdate", validateTdsUrlInUpdate);
+
+// GH #632: same treatment for the GH #503 hex validators on color /
+// secondaryColors. Bare update queries (the OPT import's conditional-set
+// path was a live bypass; sync/backfill tooling is another) skip schema
+// validators, so a malformed hex could persist and then break downstream
+// consumers (parseHexColor returns null → NFC writes silently drop the
+// color; swatches render garbage). Mirrors validateTdsUrlInUpdate:
+// covers both the top-level (replacement-style) and `$set` shapes.
+// `null` color stays valid — coextruded materials have a null primary.
+function validateColorsInUpdate(this: mongoose.Query<unknown, unknown>) {
+  const update = this.getUpdate() as Record<string, unknown> | null;
+  if (!update) return;
+  const $set = (update.$set ?? {}) as Record<string, unknown>;
+  for (const candidate of [update.color, $set.color]) {
+    if (candidate === undefined) continue;
+    if (!isValidColor(candidate)) {
+      throw new Error("color must be a #RRGGBB hex string or null");
+    }
+  }
+  for (const candidate of [update.secondaryColors, $set.secondaryColors]) {
+    if (candidate === undefined) continue;
+    if (!Array.isArray(candidate)) {
+      throw new Error("secondaryColors must be an array of #RRGGBB hex strings");
+    }
+    if (candidate.length > 5) {
+      throw new Error("secondaryColors may not exceed 5 entries (OpenPrintTag spec limit)");
+    }
+    if (!candidate.every((c) => typeof c === "string" && HEX_COLOR_RE.test(c))) {
+      throw new Error("Each secondaryColors entry must be a #RRGGBB hex string");
+    }
+  }
+}
+FilamentSchema.pre("updateOne", validateColorsInUpdate);
+FilamentSchema.pre("updateMany", validateColorsInUpdate);
+FilamentSchema.pre("findOneAndUpdate", validateColorsInUpdate);
 
 const Filament: Model<IFilament> =
   mongoose.models.Filament || mongoose.model<IFilament>("Filament", FilamentSchema);
