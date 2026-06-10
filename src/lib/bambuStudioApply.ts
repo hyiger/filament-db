@@ -226,7 +226,6 @@ export function buildStructuredUpdate(
   setIfNotInherited("density", parsed.density);
   setIfNotInherited("cost", parsed.cost);
   setIfNotInherited("maxVolumetricSpeed", parsed.maxVolumetricSpeed);
-  if (parsed.notes != null) u.notes = parsed.notes; // not inheritable
   setIfNotInherited("shrinkageXY", parsed.shrinkageXY);
   setIfNotInherited("shrinkageZ", parsed.shrinkageZ);
 
