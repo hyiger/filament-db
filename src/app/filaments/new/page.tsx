@@ -319,22 +319,28 @@ function NewFilamentContent() {
 
     const formData = new FormData();
     formData.append("file", file);
-    const res = await fetch("/api/filaments/parse-ini", {
-      method: "POST",
-      body: formData,
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      toast(body?.error || t("new.toast.iniParseFailed"), "error");
-      return;
-    }
-    const { filaments } = await res.json();
-    if (filaments.length === 1) {
-      // Single profile — populate directly
-      guardPopulate(() => applyIniFilament(filaments[0]));
-    } else {
-      // Multiple profiles — show picker
-      setIniFilaments(filaments);
+    // GH #640: a dropped connection used to reject silently — no toast,
+    // unhandled rejection. Same toast as the non-2xx path.
+    try {
+      const res = await fetch("/api/filaments/parse-ini", {
+        method: "POST",
+        body: formData,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast(body?.error || t("new.toast.iniParseFailed"), "error");
+        return;
+      }
+      const { filaments } = await res.json();
+      if (filaments.length === 1) {
+        // Single profile — populate directly
+        guardPopulate(() => applyIniFilament(filaments[0]));
+      } else {
+        // Multiple profiles — show picker
+        setIniFilaments(filaments);
+      }
+    } catch {
+      toast(t("new.toast.iniParseFailed"), "error");
     }
   };
 
@@ -552,12 +558,19 @@ function NewFilamentContent() {
   };
 
   const handleCloneFetch = async (id: string) => {
-    const res = await fetch(`/api/filaments/${id}`);
-    if (!res.ok) {
+    // GH #640: network failure used to reject silently with no toast.
+    let filament;
+    try {
+      const res = await fetch(`/api/filaments/${id}`);
+      if (!res.ok) {
+        toast(t("new.toast.loadFailed"), "error");
+        return;
+      }
+      filament = await res.json();
+    } catch {
       toast(t("new.toast.loadFailed"), "error");
       return;
     }
-    const filament = await res.json();
     // See the cloneId useEffect above for why we whitelist instead of spread.
     const parentId = filament.parentId || filament._id;
     setInitialData({

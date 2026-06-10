@@ -48,11 +48,18 @@ permissions:
 jobs:
   bump:
     runs-on: ubuntu-latest
+    env:
+      # GH #636: never interpolate the raw workflow input into shell text —
+      # `${{ }}` substitution happens BEFORE bash parses the script, so
+      # metacharacters in the input would execute (even inside the semver
+      # validation below). Reference "$VERSION" instead; the env assignment
+      # passes the value as data, not script text.
+      VERSION: ${{ github.event.inputs.version }}
     steps:
       - name: Validate version format
         run: |
-          if ! [[ "${{ github.event.inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
-            echo "::error::Version '${{ github.event.inputs.version }}' is not semver (X.Y.Z or X.Y.Z-prerelease). Aborting."
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "::error::Version '$VERSION' is not semver (X.Y.Z or X.Y.Z-prerelease). Aborting."
             exit 1
           fi
 
@@ -95,13 +102,13 @@ jobs:
 
       - name: Check version isn't already used
         run: |
-          if git rev-parse "v${{ github.event.inputs.version }}" >/dev/null 2>&1; then
-            echo "::error::Tag v${{ github.event.inputs.version }} already exists. Pick a higher version."
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "::error::Tag v$VERSION already exists. Pick a higher version."
             exit 1
           fi
           CURRENT=$(node -p "require('./package.json').version")
-          if [ "$CURRENT" = "${{ github.event.inputs.version }}" ]; then
-            echo "::error::package.json is already at ${{ github.event.inputs.version }}. Pick a higher version."
+          if [ "$CURRENT" = "$VERSION" ]; then
+            echo "::error::package.json is already at $VERSION. Pick a higher version."
             exit 1
           fi
 
@@ -113,7 +120,7 @@ jobs:
       - name: Create bump branch
         id: branch
         run: |
-          BRANCH="bump/v${{ github.event.inputs.version }}"
+          BRANCH="bump/v$VERSION"
           git checkout -b "$BRANCH"
           echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
 
@@ -122,7 +129,7 @@ jobs:
           node -e "
             const fs = require('fs');
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = '${{ github.event.inputs.version }}';
+            pkg.version = process.env.VERSION;
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
           "
 
@@ -139,14 +146,14 @@ jobs:
           node -e "
             const fs = require('fs');
             const api = JSON.parse(fs.readFileSync('public/openapi.json', 'utf8'));
-            api.info.version = '${{ github.event.inputs.version }}';
+            api.info.version = process.env.VERSION;
             fs.writeFileSync('public/openapi.json', JSON.stringify(api, null, 2) + '\n');
           "
 
       - name: Commit
         run: |
           git add package.json package-lock.json public/openapi.json
-          git commit -m "Bump version to ${{ github.event.inputs.version }}"
+          git commit -m "Bump version to $VERSION"
 
       - name: Push branch
         run: git push -u origin "${{ steps.branch.outputs.name }}"
@@ -159,10 +166,10 @@ jobs:
           GH_TOKEN: ${{ secrets.RELEASE_BUMP_TOKEN }}
         run: |
           PR_URL=$(gh pr create \
-            --title "Bump version to ${{ github.event.inputs.version }}" \
+            --title "Bump version to $VERSION" \
             --body "Automated version bump produced by the Release Bump workflow.
 
-          Updates package.json, package-lock.json, and public/openapi.json to **${{ github.event.inputs.version }}**.
+          Updates package.json, package-lock.json, and public/openapi.json to **$VERSION**.
 
           Auto-merge is enabled — this will land as soon as CI passes.
 
@@ -170,8 +177,8 @@ jobs:
           \`\`\`bash
           git checkout main
           git pull
-          git tag v${{ github.event.inputs.version }}
-          git push origin v${{ github.event.inputs.version }}
+          git tag v$VERSION
+          git push origin v$VERSION
           \`\`\`
           The tag push triggers the existing \`release.yml\` build matrix.")
           echo "url=$PR_URL" >> "$GITHUB_OUTPUT"
@@ -186,7 +193,7 @@ jobs:
         run: |
           cat >> "$GITHUB_STEP_SUMMARY" <<EOF
           ## Bump PR opened
-          - **Version**: \`${{ github.event.inputs.version }}\`
+          - **Version**: \`$VERSION\`
           - **Branch**: \`${{ steps.branch.outputs.name }}\`
           - **PR**: ${{ steps.pr.outputs.url }}
           - **Auto-merge**: enabled (squash) — will land when CI passes
@@ -194,7 +201,7 @@ jobs:
           ## After the PR merges
           \`\`\`bash
           git checkout main && git pull
-          git tag v${{ github.event.inputs.version }}
-          git push origin v${{ github.event.inputs.version }}
+          git tag v$VERSION
+          git push origin v$VERSION
           \`\`\`
           EOF

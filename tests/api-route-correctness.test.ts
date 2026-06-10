@@ -411,4 +411,215 @@ describe("API route correctness", () => {
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/settings/i);
   });
+
+  // ── #618: slicer sync writes run validators + atomic calibration ────
+
+  describe("#618 — slicer per-id sync validation and atomic calibration writes", () => {
+    it("prusaslicer sync rejects a negative filament_cost with 400 and persists nothing", async () => {
+      const f = await Filament.create({
+        name: "Cost Host",
+        vendor: "T",
+        type: "PLA",
+        cost: 25,
+      });
+
+      const res = await slicerSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}`, {
+          config: { filament_cost: "-3" },
+        }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      // Pre-fix: the write skipped the #337 validators, returned 200, and
+      // cost: -3 persisted. The schema's min:0 must reject it as a 400.
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/cost/i);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.cost).toBe(25);
+    });
+
+    it("orcaslicer sync rejects a non-numeric cost with 400, not 500", async () => {
+      const f = await Filament.create({
+        name: "Orca Type Host",
+        vendor: "T",
+        type: "PLA",
+        cost: 10,
+      });
+
+      const res = await orcaSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}/orcaslicer`, { cost: "abc" }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      // Pre-fix: "abc" rode into $set verbatim → CastError → generic 500.
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/cost/i);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.cost).toBe(10);
+    });
+
+    it("orcaslicer sync rejects a negative cost via the schema validators", async () => {
+      const f = await Filament.create({
+        name: "Orca Negative Host",
+        vendor: "T",
+        type: "PLA",
+        cost: 10,
+      });
+
+      const res = await orcaSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}/orcaslicer`, { cost: -3 }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      // Pre-fix: the write skipped runValidators and -3 persisted silently.
+      expect(res.status).toBe(400);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.cost).toBe(10);
+    });
+
+    it("orcaslicer sync rejects an inverted nozzle range with 400", async () => {
+      const f = await Filament.create({
+        name: "Orca Range Host",
+        vendor: "T",
+        type: "PLA",
+      });
+
+      const res = await orcaSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}/orcaslicer`, {
+          temperatures: { nozzleRangeMin: 300, nozzleRangeMax: 200 },
+        }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/minimum.*maximum/i);
+    });
+
+    it("orcaslicer sync rejects a lone min that inverts against the STORED max", async () => {
+      // The sync merges incoming temps into the stored subdoc, so a body
+      // carrying only nozzleRangeMin must be checked against the stored max.
+      const f = await Filament.create({
+        name: "Orca Stored-Max Host",
+        vendor: "T",
+        type: "PLA",
+        temperatures: { nozzleRangeMax: 200 },
+      });
+
+      const res = await orcaSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}/orcaslicer`, {
+          temperatures: { nozzleRangeMin: 300 },
+        }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("orcaslicer sync rejects a lone min that inverts against an INHERITED parent max", async () => {
+      // A variant inherits any endpoint it leaves null from its parent
+      // (resolveFilament: own ?? parent), so own min 300 + parent max 200
+      // is an inverted effective range even though the body looks partial.
+      const parent = await Filament.create({
+        name: "Orca Range Parent",
+        vendor: "T",
+        type: "PLA",
+        temperatures: { nozzleRangeMax: 200 },
+      });
+      const variant = await Filament.create({
+        name: "Orca Range Variant",
+        vendor: "T",
+        type: "PLA",
+        color: "#111111",
+        parentId: parent._id,
+      });
+
+      const res = await orcaSync(
+        jsonReq(`http://localhost/api/filaments/${variant._id}/orcaslicer`, {
+          temperatures: { nozzleRangeMin: 300 },
+        }),
+        { params: Promise.resolve({ id: String(variant._id) }) },
+      );
+      expect(res.status).toBe(400);
+    });
+
+    it("orcaslicer sync still applies valid values (numeric-string coercion included)", async () => {
+      const f = await Filament.create({
+        name: "Orca Happy Host",
+        vendor: "T",
+        type: "PLA",
+        temperatures: { bed: 60 },
+      });
+
+      const res = await orcaSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}/orcaslicer`, {
+          cost: "12.5",
+          temperatures: { nozzle: 215 },
+        }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.cost).toBe(12.5);
+      expect(fresh.temperatures.nozzle).toBe(215);
+      // The merge preserves stored temps the sync didn't touch.
+      expect(fresh.temperatures.bed).toBe(60);
+    });
+
+    it("sequential calibration syncs for different nozzles both persist (atomic per-entry writes)", async () => {
+      const n04 = await Nozzle.create({
+        name: "0.4 Brass",
+        diameter: 0.4,
+        type: "brass",
+      });
+      const n06 = await Nozzle.create({
+        name: "0.6 Brass",
+        diameter: 0.6,
+        type: "brass",
+      });
+      const f = await Filament.create({
+        name: "Cal Host",
+        vendor: "T",
+        type: "PLA",
+        compatibleNozzles: [n04._id, n06._id],
+      });
+
+      // First sync calibrates the 0.4 nozzle...
+      let res = await slicerSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}?nozzle_diameter=0.4`, {
+          config: { extrusion_multiplier: "1.05" },
+        }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+
+      // ...the second calibrates the 0.6 — it must APPEND ($push), not
+      // replace the array.
+      res = await slicerSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}?nozzle_diameter=0.6`, {
+          config: { extrusion_multiplier: "0.95" },
+        }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+
+      // A re-sync of the 0.4 nozzle updates its entry IN PLACE via the
+      // $elemMatch-filtered positional $set — no duplicate entry.
+      res = await slicerSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}?nozzle_diameter=0.4`, {
+          config: { extrusion_multiplier: "1.1", pressure_advance: "0.045" },
+        }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.calibrations).toHaveLength(2);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cal04 = fresh.calibrations.find((c: any) => String(c.nozzle) === String(n04._id));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cal06 = fresh.calibrations.find((c: any) => String(c.nozzle) === String(n06._id));
+      expect(cal04.extrusionMultiplier).toBe(1.1);
+      expect(cal04.pressureAdvance).toBe(0.045);
+      expect(cal06.extrusionMultiplier).toBe(0.95);
+    });
+  });
 });
