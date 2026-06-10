@@ -67,7 +67,7 @@ vi.mock("node:child_process", () => {
   return { execFile, spawn };
 });
 
-import { listLabelPrinters, printLabel } from "../electron/label-printer";
+import { listLabelPrinters, printLabel, windowsPowershellPath } from "../electron/label-printer";
 
 const BYTES = new Uint8Array([0x1b, 0x40, 0x41, 0x42]);
 const BROTHER_URI = "usb://Brother/PT-P710BT?serial=000M5G671606";
@@ -185,6 +185,70 @@ d("printLabel (CUPS)", () => {
   it("rejects when lp can't be spawned", async () => {
     h.state.spawn.errorOnSpawn = new Error("spawn lp ENOENT");
     await expect(printLabel("HP_DeskJet", BYTES)).rejects.toThrow(/ENOENT/);
+  });
+});
+
+d("printLabel — non-usb scheme targets (GH #623)", () => {
+  // Only `usb://` device URIs are valid raw-device targets — it's the one
+  // scheme listLabelPrinters surfaces. Any other scheme must be refused
+  // instead of being forwarded to `lpadmin -v` (which would bind the
+  // managed queue to an attacker-chosen device URI).
+  it.each([
+    "ipp://attacker.example/printers/q",
+    "file:///etc/passwd",
+    "socket://10.0.0.5",
+  ])("rejects %s and never reaches lpadmin or lp", async (target) => {
+    await expect(printLabel(target, BYTES)).rejects.toThrow(/only usb:\/\/ devices/i);
+    expect(h.state.spawnCalls.some((c) => c.cmd === "lp")).toBe(false);
+    expect(h.state.execCalls.some((c) => c.cmd === "lpadmin")).toBe(false);
+  });
+});
+
+describe("windowsPowershellPath (GH #623)", () => {
+  // Windows' CreateProcess resolves a bare executable name from the app /
+  // current directory BEFORE System32, so the transport must invoke
+  // powershell.exe by absolute path (same hardening as the sc.exe probe in
+  // electron/main.ts). Built with win32.join, so the expected string is
+  // identical on any test host.
+  it("anchors to %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", () => {
+    vi.stubEnv("SystemRoot", "D:\\WinNT");
+    try {
+      expect(windowsPowershellPath()).toBe(
+        "D:\\WinNT\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("defaults to C:\\Windows when SystemRoot is unset", () => {
+    const prev = process.env.SystemRoot;
+    delete process.env.SystemRoot;
+    try {
+      expect(windowsPowershellPath()).toBe(
+        "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      );
+    } finally {
+      if (prev !== undefined) process.env.SystemRoot = prev;
+    }
+  });
+
+  it("listLabelPrinters invokes powershell by absolute path, not bare name", async () => {
+    // Force the Windows branch — execFile is mocked, so nothing is spawned.
+    const desc = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...desc, value: "win32" });
+    try {
+      h.state.execImpl = () => ({ stdout: '[{"Name":"Brother PT-P710BT"}]' });
+      const devices = await listLabelPrinters();
+      expect(devices).toEqual([
+        { path: "Brother PT-P710BT", friendlyName: "Brother PT-P710BT", looksLikePrinter: true },
+      ]);
+      expect(h.state.execCalls).toHaveLength(1);
+      expect(h.state.execCalls[0].cmd).toBe(windowsPowershellPath());
+      expect(h.state.execCalls[0].cmd).toMatch(/powershell\.exe$/);
+    } finally {
+      Object.defineProperty(process, "platform", desc);
+    }
   });
 });
 

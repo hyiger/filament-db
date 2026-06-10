@@ -26,7 +26,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { writeFile, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 const execFileP = promisify(execFile);
 
@@ -44,8 +44,31 @@ const MANAGED_QUEUE = "FilamentDB_Label";
 const EXEC_TIMEOUT_MS = 15_000;
 
 /** On Linux a GUI app's PATH often omits /usr/sbin where lpadmin/lpinfo
- *  live, so we try the bare name first then the sbin path. */
+ *  live, so we try the bare name first then the sbin path. (The CUPS tools
+ *  stay bare names on purpose: Unix execvp never searches the cwd, and
+ *  their install paths vary across distros — see windowsPowershellPath()
+ *  for why Windows gets the opposite treatment.) */
 const SBIN = "/usr/sbin";
+
+/**
+ * Absolute path to powershell.exe (GH #623). Windows' CreateProcess
+ * resolves a bare executable name from the application's own directory
+ * and the current directory BEFORE System32, so a `powershell.exe`
+ * planted next to a portable/unpacked run would be picked up first and
+ * turn these calls into an arbitrary-code-execution sink. Anchor to an
+ * absolute path — the exact pattern the sc.exe probe in electron/main.ts
+ * uses. Exported for the unit test; built with win32.join so the path is
+ * identical regardless of the host the test runs on.
+ */
+export function windowsPowershellPath(): string {
+  return win32.join(
+    process.env.SystemRoot || "C:\\Windows",
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+}
 
 export interface LabelPrinterDevice {
   /** Opaque print target: a CUPS queue name, a `usb://…` device URI, or a
@@ -175,7 +198,7 @@ async function listWindowsPrinters(): Promise<LabelPrinterDevice[]> {
   const script =
     "@(Get-Printer | Select-Object Name) | ConvertTo-Json -Compress";
   const { stdout } = await execFileP(
-    "powershell",
+    windowsPowershellPath(),
     ["-NoProfile", "-NonInteractive", "-Command", script],
     { timeout: EXEC_TIMEOUT_MS },
   );
@@ -226,12 +249,20 @@ export async function printLabel(target: string, bytes: Uint8Array): Promise<voi
 }
 
 async function printCups(target: string, bytes: Uint8Array): Promise<void> {
-  // A target containing a scheme ("usb://…") is a raw device → route it
-  // through our managed raw queue. Otherwise it's an installed queue name.
+  // A `usb://…` target is a raw device → route it through our managed raw
+  // queue. Otherwise it's an installed queue name. Only the usb scheme is
+  // accepted — it's the only scheme listLabelPrinters ever surfaces — so a
+  // stored target with any other scheme (ipp://, file://, …) is refused
+  // instead of being forwarded verbatim to `lpadmin -v` (GH #623).
   let queue = target;
-  if (/^[a-z]+:\/\//i.test(target)) {
+  if (/^usb:\/\//i.test(target)) {
     await ensureManagedQueue(target);
     queue = MANAGED_QUEUE;
+  } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target)) {
+    throw new Error(
+      `Unsupported print target "${target}" — only usb:// devices and installed ` +
+        `print queues are supported. Open Settings → Label Printer and select your printer again.`,
+    );
   }
 
   await new Promise<void>((resolve, reject) => {
@@ -317,7 +348,7 @@ async function printWindows(printerName: string, bytes: Uint8Array): Promise<voi
   await writeFile(scriptPath, WINDOWS_RAW_PRINT_PS1, "utf8");
   try {
     await execFileP(
-      "powershell",
+      windowsPowershellPath(),
       [
         "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
         "-File", scriptPath,
