@@ -182,7 +182,16 @@ export async function POST(request: NextRequest) {
             conditionalSet.shoreHardnessD = conditionalDefaults.shoreHardnessD;
 
           if (Object.keys(conditionalSet).length > 0) {
-            await Filament.findByIdAndUpdate(row._id, { $set: conditionalSet });
+            // GH #632: runValidators so the GH #503 hex validators on
+            // color/secondaryColors (and the numeric range validators)
+            // fire on this update path too — bare findByIdAndUpdate
+            // skips schema validators, which let a malformed color_rgba
+            // from a community YAML persist an invalid hex on re-import.
+            await Filament.findByIdAndUpdate(
+              row._id,
+              { $set: conditionalSet },
+              { runValidators: true, context: "query" },
+            );
           }
         };
 

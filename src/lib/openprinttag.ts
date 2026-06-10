@@ -194,7 +194,35 @@ function clampTemp(value: number): number {
   return Math.max(0, Math.round(value));
 }
 
+/**
+ * Clamp a value to an integer within [0, max] before CBOR encoding
+ * (GH #634). Same posture as clampTemp, plus an upper bound for fields
+ * with a hard domain ceiling (Shore hardness 0–100, drying temperature,
+ * drying time) — without it, a stored out-of-range value mis-encodes
+ * (fractional) or wraps in the encoder's `>>>` arithmetic (≥ 2^32).
+ */
+function clampUint(value: number, max: number): number {
+  return Math.min(max, Math.max(0, Math.round(value)));
+}
+
 /** Encode a CBOR unsigned integer (major type 0) and push bytes to `buf`. */
+/**
+ * Largest value `encodeCBORUint` serializes correctly. Its 4-byte branch
+ * uses `value >>> 24` etc., so anything above 2^32-1 is truncated to its
+ * low 32 bits — a silently different value on the wire (GH #650).
+ */
+export const MAX_CBOR_UINT = 0xffffffff;
+
+/**
+ * True when an optTag can be encoded faithfully: a non-negative integer
+ * within the CBOR-uint range the encoder actually supports. Shared with
+ * the Filament schema's optTags setter so the schema and the wire agree
+ * on which tags are kept vs dropped.
+ */
+export function isEncodableOptTag(t: unknown): t is number {
+  return typeof t === "number" && Number.isInteger(t) && t >= 0 && t <= MAX_CBOR_UINT;
+}
+
 export function encodeCBORUint(buf: number[], value: number): void {
   if (value < 0) throw new RangeError("CBOR unsigned int must be >= 0");
   if (value < 24) {
@@ -366,7 +394,9 @@ export function encodeCBORKey(buf: number[], key: number): void {
  * Returns null if the string cannot be parsed.
  */
 export function parseHexColor(hex: string): number[] | null {
-  const m = hex.match(/^#?([0-9a-f]{6,8})$/i);
+  // GH #634: exactly 6 or 8 hex digits — the old `{6,8}` also matched a
+  // 7-char string and silently ignored the dangling 7th character.
+  const m = hex.match(/^#?([0-9a-f]{6}(?:[0-9a-f]{2})?)$/i);
   if (!m) return null;
   const h = m[1];
   const r = parseInt(h.slice(0, 2), 16);
@@ -665,15 +695,17 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   }
 
   // shore_hardness_a (Shore A, integer 0-100)
+  // GH #634: round + cap to the 0–100 Shore scale — a fractional or
+  // out-of-range stored value must not mis-encode or throw.
   if (input.shoreHardnessA != null && input.shoreHardnessA > 0) {
     encodeCBORKey(buf, OPT_KEY.SHORE_HARDNESS_A);
-    encodeCBORUint(buf, input.shoreHardnessA);
+    encodeCBORUint(buf, clampUint(input.shoreHardnessA, 100));
   }
 
   // shore_hardness_d (Shore D, integer 0-100)
   if (input.shoreHardnessD != null && input.shoreHardnessD > 0) {
     encodeCBORKey(buf, OPT_KEY.SHORE_HARDNESS_D);
-    encodeCBORUint(buf, input.shoreHardnessD);
+    encodeCBORUint(buf, clampUint(input.shoreHardnessD, 100));
   }
 
   // Temperatures – all type: int, unit: °C.
@@ -684,9 +716,14 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   // before it reaches the encoder so a bad input can't crash the whole
   // NFC-write path.
   if (input.nozzleTemp != null) {
-    // Use nozzle temp as max, derive min as temp - 20
-    const maxTemp = clampTemp(input.nozzleTemp);
-    const minTemp = clampTemp((input.nozzleTempFirstLayer ?? maxTemp) - 20);
+    // Use nozzle temp as max, derive min as temp - 20.
+    // GH #634: a first-layer temp ≥ nozzle+20 made the derived min exceed
+    // the max — order the pair with Math.min/Math.max exactly like the
+    // bed temps below, and derive preheat from the effective min.
+    const nozzleMax = clampTemp(input.nozzleTemp);
+    const derivedMin = clampTemp((input.nozzleTempFirstLayer ?? nozzleMax) - 20);
+    const minTemp = Math.min(derivedMin, nozzleMax);
+    const maxTemp = Math.max(derivedMin, nozzleMax);
     const preheatTemp = clampTemp(minTemp - 20);
 
     encodeCBORKey(buf, OPT_KEY.MIN_PRINT_TEMPERATURE);
@@ -727,8 +764,17 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   }
 
   // tags – enum_array of material property tags
-  // Merge boolean convenience flags with explicit optTags array (deduplicated)
-  const tagSet = new Set<number>(input.optTags ?? []);
+  // Merge boolean convenience flags with explicit optTags array (deduplicated).
+  // GH #634: SKIP invalid entries rather than throwing or rounding — a
+  // stored negative tag used to make encodeCBORUint throw RangeError
+  // (500-ing the .bin export and failing NFC writes), and rounding a
+  // fractional tag would silently change its meaning to a different tag id.
+  // The upper bound matches encodeCBORUint's 4-byte branch, which uses
+  // `>>> 24` arithmetic and silently truncates values above 2^32-1 to
+  // their low 32 bits — a different tag id on the wire (Codex P2 on #650).
+  const tagSet = new Set<number>(
+    (input.optTags ?? []).filter(isEncodableOptTag),
+  );
   if (input.abrasive) tagSet.add(OPT_TAG.ABRASIVE);
   if (input.soluble) tagSet.add(OPT_TAG.WATER_SOLUBLE);
   if (tagSet.size > 0) {
@@ -749,15 +795,19 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   }
 
   // drying_temperature (°C, int)
+  // GH #634: round + cap (schema max is 300 °C) so fractional or
+  // out-of-range stored values can't mis-encode.
   if (input.dryingTemperature != null && input.dryingTemperature > 0) {
     encodeCBORKey(buf, OPT_KEY.DRYING_TEMPERATURE);
-    encodeCBORUint(buf, input.dryingTemperature);
+    encodeCBORUint(buf, clampUint(input.dryingTemperature, 300));
   }
 
   // drying_time (minutes, int)
+  // GH #634: cap at 10080 minutes (7 days, matching the schema max) —
+  // values ≥ 2^32 would otherwise wrap in encodeCBORUint's `>>>` math.
   if (input.dryingTime != null && input.dryingTime > 0) {
     encodeCBORKey(buf, OPT_KEY.DRYING_TIME);
-    encodeCBORUint(buf, input.dryingTime);
+    encodeCBORUint(buf, clampUint(input.dryingTime, 10080));
   }
 
   // brand_specific_instance_id – unique spool/instance identifier (string, max 16 chars)
