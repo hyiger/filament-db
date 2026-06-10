@@ -310,9 +310,24 @@ function MaterialRow({
           onClick={(e) => e.stopPropagation()}
           className="rounded border-gray-300 dark:border-gray-600 flex-shrink-0"
         />
+        {/* GH #637 (#2): the expand/collapse target was a plain <div
+            onClick>, so keyboard/SR users could tick the checkbox but never
+            open MaterialDetail. role="button" + tabIndex + Enter/Space make
+            it keyboard-operable; aria-expanded reports the disclosure
+            state. The checkbox sits outside this element (and stops
+            propagation), so toggling selection still doesn't expand. */}
         <div
+          role="button"
+          tabIndex={0}
+          aria-expanded={isExpanded}
           className="flex items-center gap-3 flex-1 min-w-0"
           onClick={() => setExpanded(isExpanded ? null : m.slug)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setExpanded(isExpanded ? null : m.slug);
+            }
+          }}
         >
           <ColorSwatch color={m.color} />
           <div className="flex-1 min-w-0">

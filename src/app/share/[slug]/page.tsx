@@ -340,8 +340,8 @@ export default function SharedCatalogPage() {
               <span className="block font-medium truncate">{f.name}</span>
               <span className="block text-xs text-gray-500">
                 {f.vendor} · {f.type}
-                {f.temperatures?.nozzle ? ` · ${f.temperatures.nozzle}°C nozzle` : ""}
-                {f.temperatures?.bed ? ` · ${f.temperatures.bed}°C bed` : ""}
+                {f.temperatures?.nozzle ? ` · ${t("share.nozzleSuffix", { temp: f.temperatures.nozzle })}` : ""}
+                {f.temperatures?.bed ? ` · ${t("share.bedSuffix", { temp: f.temperatures.bed })}` : ""}
               </span>
             </label>
           </li>

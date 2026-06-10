@@ -45,8 +45,12 @@ interface CompareFilament {
 }
 
 export default function ComparePage() {
+  // GH #638: the Suspense fallback was hardcoded English. The provider
+  // mounts above this component (ClientProviders in the root layout), so
+  // t() is available here.
+  const { t } = useTranslation();
   return (
-    <Suspense fallback={<main id="main-content" className="p-8"><p className="text-gray-500">Loading…</p></main>}>
+    <Suspense fallback={<main id="main-content" className="p-8"><p className="text-gray-500">{t("common.loading")}</p></main>}>
       <ComparePageInner />
     </Suspense>
   );

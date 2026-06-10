@@ -4,6 +4,7 @@ import type { CSSProperties } from "react";
 import type { Finish } from "@/lib/filamentFinish";
 import type { ColorArrangement } from "@/lib/filamentColors";
 import { allColors, parentSwatchColors } from "@/lib/filamentColors";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 interface FilamentSwatchProps {
   /** Primary hex color string; ignored when `isParent` is true. May be
@@ -86,6 +87,11 @@ export default function FilamentSwatch({
   title,
   ariaLabel,
 }: FilamentSwatchProps) {
+  // GH #638: the fallback labels were hardcoded English, so German SR
+  // users heard "Color swatch: …" — translate through the shared catalog
+  // (the context carries an en-based default, so the component still
+  // works when rendered outside the provider).
+  const { t } = useTranslation();
   const dimensionStyle: CSSProperties = {
     width: `${size}px`,
     height: `${size}px`,
@@ -109,7 +115,9 @@ export default function FilamentSwatch({
         ? parentSwatchColors([color, ...secondaryColors, ...knownVariantColors])
         : [];
     if (groupColors.length > 0) {
-      const label = ariaLabel ?? `Color group: ${groupColors.join(" / ")}`;
+      const label =
+        ariaLabel ??
+        t("swatch.colorGroupColors", { colors: groupColors.join(" / ") });
       const groupStyle: CSSProperties =
         groupColors.length === 1
           ? { ...dimensionStyle, backgroundColor: groupColors[0] }
@@ -139,7 +147,7 @@ export default function FilamentSwatch({
       );
     }
     // No colors known — keep the legacy neutral cross-hatch.
-    const finalLabel = ariaLabel ?? "Color group";
+    const finalLabel = ariaLabel ?? t("swatch.colorGroup");
     const hatchStyle: CSSProperties = {
       ...dimensionStyle,
       backgroundColor: "#e5e7eb",
@@ -152,7 +160,7 @@ export default function FilamentSwatch({
       <div
         className={`rounded-full border border-gray-400 dark:border-gray-500 flex-shrink-0 dark:bg-gray-700 ${className}`}
         style={hatchStyle}
-        title="Color group"
+        title={title ?? t("swatch.colorGroup")}
         aria-label={finalLabel}
         role="img"
         data-parent="true"
@@ -178,12 +186,19 @@ export default function FilamentSwatch({
   // describe the arrangement + every color, not just the (possibly
   // null) primary. e.g. "Coextruded: #FF0000 / #00FF00 / #0000FF".
   const multiColorDescription = isMultiColorMode
-    ? `${arrangement === "coextruded" ? "Coextruded" : "Gradient"}: ${colorList.join(" / ")}`
+    ? t(
+        arrangement === "coextruded"
+          ? "swatch.coextrudedColors"
+          : "swatch.gradientColors",
+        { colors: colorList.join(" / ") },
+      )
     : null;
   const finalLabel =
     ariaLabel ??
     multiColorDescription ??
-    (finish ? `${title ?? baseColor} (${finish})` : title ?? `Color swatch: ${baseColor}`);
+    (finish
+      ? `${title ?? baseColor} (${finish})`
+      : title ?? t("swatch.colorSwatch", { color: baseColor }));
   const finalTitle = multiColorDescription
     ? `${multiColorDescription}${finish ? ` · ${finish}` : ""}`
     : finish

@@ -961,7 +961,7 @@ function FilamentDetail() {
           // #… / #…" label from the composite colors so screen-reader users
           // get the same color info sighted users see (Codex P3 #600). It
           // still falls back to "Color group" when no colors are known.
-          ariaLabel={isParent ? undefined : `Color swatch: ${filament.color}`}
+          ariaLabel={isParent ? undefined : t("swatch.colorSwatch", { color: filament.color ?? "#808080" })}
         />
         <div className="min-w-0">
           <h1 className="text-2xl font-bold">{filament.name}</h1>
@@ -1271,7 +1271,7 @@ function FilamentDetail() {
                     arrangement={deriveArrangement(v.optTags)}
                     finish={vFinish}
                     size={20}
-                    ariaLabel={`Color swatch: ${v.color}`}
+                    ariaLabel={t("swatch.colorSwatch", { color: v.color ?? "#808080" })}
                   />
                   <span className="text-sm">{v.name}</span>
                   {vFinish && <FinishChip finish={vFinish} />}
@@ -2327,7 +2327,7 @@ function SpoolCard({
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={spool.photoDataUrl}
-                    alt="Spool"
+                    alt={t("detail.spool.photoAlt")}
                     className="w-24 h-24 object-cover rounded border border-gray-300 dark:border-gray-700"
                   />
                   <button
