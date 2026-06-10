@@ -135,8 +135,8 @@ export default function PrintersPage() {
       </div>
 
       {selected.size > 0 && (
-        <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-950/30 border border-red-800 rounded-lg">
-          <span className="text-sm text-red-300">{t("printers.selected", { count: selected.size })}</span>
+        <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg">
+          <span className="text-sm text-red-600 dark:text-red-300">{t("printers.selected", { count: selected.size })}</span>
           <button
             onClick={handleBulkDelete}
             disabled={bulkDeleting}
@@ -146,7 +146,7 @@ export default function PrintersPage() {
           </button>
           <button
             onClick={() => setSelected(new Set())}
-            className="text-sm text-gray-400 hover:text-gray-200"
+            className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
           >
             {t("printers.clear")}
           </button>
@@ -189,7 +189,7 @@ export default function PrintersPage() {
               {printers.map((p) => (
                 <tr
                   key={p._id}
-                  className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(p._id) ? "bg-red-950/20" : ""}`}
+                  className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(p._id) ? "bg-red-50 dark:bg-red-950/20" : ""}`}
                 >
                   <td className="py-2 px-2">
                     <input

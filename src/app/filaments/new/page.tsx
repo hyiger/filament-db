@@ -653,8 +653,8 @@ function NewFilamentContent() {
                 {t("new.prusamentQr")}
               </button>
               {prusamentOpen && (
-                <div className="absolute z-50 mt-1 w-80 bg-gray-800 border border-gray-600 rounded-lg shadow-lg p-3">
-                  <label className="text-xs text-gray-400 block mb-1.5">{t("new.prusament.inputLabel")}</label>
+                <div className="absolute z-50 mt-1 w-80 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg p-3">
+                  <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1.5">{t("new.prusament.inputLabel")}</label>
                   <div className="flex gap-2">
                     <input
                       type="text"
@@ -662,7 +662,7 @@ function NewFilamentContent() {
                       onChange={(e) => setPrusamentInput(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handlePrusament(); } }}
                       placeholder="e.g. 4a7b3c... or full URL"
-                      className="flex-1 px-2.5 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-gray-100 outline-none placeholder-gray-500"
+                      className="flex-1 px-2.5 py-1.5 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-900 dark:text-gray-100 outline-none placeholder-gray-400 dark:placeholder-gray-500"
                       autoFocus
                     />
                     <button
@@ -691,8 +691,8 @@ function NewFilamentContent() {
                 {t("new.importFromTds")}
               </button>
               {tdsOpen && (
-                <div className="absolute z-50 mt-1 w-96 bg-gray-800 border border-gray-600 rounded-lg shadow-lg p-3">
-                  <label className="text-xs text-gray-400 block mb-1.5">{t("new.tds.urlLabel")}</label>
+                <div className="absolute z-50 mt-1 w-96 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg p-3">
+                  <label className="text-xs text-gray-500 dark:text-gray-400 block mb-1.5">{t("new.tds.urlLabel")}</label>
                   <div className="flex gap-2">
                     <input
                       type="text"
@@ -700,7 +700,7 @@ function NewFilamentContent() {
                       onChange={(e) => setTdsUrl(e.target.value)}
                       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleTds(); } }}
                       placeholder="https://example.com/filament-tds.pdf"
-                      className="flex-1 px-2.5 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-gray-100 outline-none placeholder-gray-500"
+                      className="flex-1 px-2.5 py-1.5 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-900 dark:text-gray-100 outline-none placeholder-gray-400 dark:placeholder-gray-500"
                       autoFocus
                     />
                     <button
@@ -713,9 +713,9 @@ function NewFilamentContent() {
                     </button>
                   </div>
                   <div className="flex items-center gap-2 mt-2">
-                    <div className="flex-1 border-t border-gray-700" />
-                    <span className="text-xs text-gray-600">{t("new.tds.or")}</span>
-                    <div className="flex-1 border-t border-gray-700" />
+                    <div className="flex-1 border-t border-gray-200 dark:border-gray-700" />
+                    <span className="text-xs text-gray-400 dark:text-gray-600">{t("new.tds.or")}</span>
+                    <div className="flex-1 border-t border-gray-200 dark:border-gray-700" />
                   </div>
                   <input
                     ref={tdsFileRef}
@@ -728,7 +728,7 @@ function NewFilamentContent() {
                     type="button"
                     onClick={() => tdsFileRef.current?.click()}
                     disabled={tdsLoading}
-                    className="mt-2 w-full px-3 py-1.5 text-sm bg-gray-700 text-gray-300 rounded hover:bg-gray-600 disabled:opacity-50 inline-flex items-center justify-center gap-1.5"
+                    className="mt-2 w-full px-3 py-1.5 text-sm bg-gray-200 text-gray-700 hover:bg-gray-300 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600 rounded disabled:opacity-50 inline-flex items-center justify-center gap-1.5"
                   >
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
@@ -738,7 +738,7 @@ function NewFilamentContent() {
                   <p className="text-xs text-gray-500 mt-2">
                     {t("new.tds.aiDescription")}
                     {" "}
-                    <Link href="/settings" className="text-blue-400 hover:text-blue-300 underline" onClick={guardLink("/settings")}>
+                    <Link href="/settings" className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 underline" onClick={guardLink("/settings")}>
                       {t("new.tds.configureApiKey")}
                     </Link>
                   </p>
@@ -778,9 +778,9 @@ function NewFilamentContent() {
                 {t("new.cloneExisting")}
               </button>
               {cloneOpen && (
-                <div className="absolute z-50 mt-1 w-80 bg-gray-800 border border-gray-600 rounded-lg shadow-lg">
+                <div className="absolute z-50 mt-1 w-80 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-lg">
                   <input
-                    className="w-full px-3 py-2 bg-transparent border-b border-gray-600 text-sm text-gray-100 outline-none placeholder-gray-500"
+                    className="w-full px-3 py-2 bg-transparent border-b border-gray-200 dark:border-gray-600 text-sm text-gray-900 dark:text-gray-100 outline-none placeholder-gray-400 dark:placeholder-gray-500"
                     placeholder={t("new.clone.searchPlaceholder")}
                     value={cloneSearch}
                     onChange={(e) => { setCloneSearch(e.target.value); setCloneHighlight(-1); }}
@@ -808,7 +808,7 @@ function NewFilamentContent() {
                         id={`clone-opt-${i}`}
                         role="option"
                         aria-selected={i === cloneHighlight}
-                        className={`px-3 py-2 cursor-pointer text-gray-100 hover:bg-gray-700 flex items-center gap-2 text-sm ${i === cloneHighlight ? "bg-gray-600" : ""}`}
+                        className={`px-3 py-2 cursor-pointer text-gray-900 dark:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2 text-sm ${i === cloneHighlight ? "bg-gray-200 dark:bg-gray-600" : ""}`}
                         onMouseDown={(e) => {
                           e.preventDefault();
                           handleClone(f._id);
@@ -819,7 +819,7 @@ function NewFilamentContent() {
                           style={{ backgroundColor: f.color }}
                         />
                         <span className="flex-1 truncate">{f.name}</span>
-                        <span className="text-gray-400 text-xs flex-shrink-0">{f.vendor}</span>
+                        <span className="text-gray-500 dark:text-gray-400 text-xs flex-shrink-0">{f.vendor}</span>
                       </li>
                     ))}
                     {filteredClones.length === 0 && (
@@ -842,24 +842,24 @@ function NewFilamentContent() {
               role="dialog"
               aria-modal="true"
               aria-label={t("new.ini.selectProfile")}
-              className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl max-w-lg w-full mx-4 p-6 pointer-events-auto max-h-[80vh] flex flex-col"
+              className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg shadow-2xl max-w-lg w-full mx-4 p-6 pointer-events-auto max-h-[80vh] flex flex-col"
             >
-              <h2 className="text-lg font-bold text-white mb-1">{t("new.ini.selectProfile")}</h2>
-              <p className="text-sm text-gray-400 mb-4">{t("new.ini.profileCount", { count: iniFilaments.length })}</p>
+              <h2 className="text-lg font-bold text-gray-900 dark:text-white mb-1">{t("new.ini.selectProfile")}</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">{t("new.ini.profileCount", { count: iniFilaments.length })}</p>
               <ul className="overflow-y-auto flex-1 space-y-1">
                 {iniFilaments.map((f, i) => (
                   <li key={i}>
                     <button
                       type="button"
-                      className="w-full text-left px-3 py-2 rounded hover:bg-gray-800 flex items-center gap-2 text-sm"
+                      className="w-full text-left px-3 py-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center gap-2 text-sm"
                       onClick={() => guardPopulate(() => applyIniFilament(f))}
                     >
                       <div
                         className="w-4 h-4 rounded-full border border-gray-500 flex-shrink-0"
                         style={{ backgroundColor: (f.color as string) || "#808080" }}
                       />
-                      <span className="text-white flex-1 truncate">{f.name as string}</span>
-                      <span className="text-gray-400 text-xs">{f.vendor as string} · {f.type as string}</span>
+                      <span className="text-gray-900 dark:text-white flex-1 truncate">{f.name as string}</span>
+                      <span className="text-gray-500 dark:text-gray-400 text-xs">{f.vendor as string} · {f.type as string}</span>
                     </button>
                   </li>
                 ))}
@@ -868,7 +868,7 @@ function NewFilamentContent() {
                 <button
                   type="button"
                   onClick={() => setIniFilaments(null)}
-                  className="px-4 py-2 text-sm text-gray-300 hover:text-white border border-gray-600 rounded hover:border-gray-500"
+                  className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
                 >
                   {t("common.cancel")}
                 </button>
