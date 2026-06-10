@@ -178,7 +178,7 @@ export default function NozzlesPage() {
               {nozzles.map((n) => (
                 <tr
                   key={n._id}
-                  className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(n._id) ? "bg-red-950/20" : ""}`}
+                  className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(n._id) ? "bg-red-50 dark:bg-red-950/20" : ""}`}
                 >
                   <td className="py-2 px-2">
                     <input

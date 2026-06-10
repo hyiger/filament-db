@@ -119,13 +119,13 @@ export default function SetupPage() {
             {/* Atlas (Cloud) */}
             <button
               onClick={() => changeMode("atlas")}
-              className="w-full text-left p-4 border border-gray-600 rounded-lg hover:border-blue-500 hover:bg-blue-500/5 transition-colors"
+              className="w-full text-left p-4 border border-gray-300 dark:border-gray-600 rounded-lg hover:border-blue-500 hover:bg-blue-500/5 transition-colors"
             >
               <div className="flex items-start gap-3">
                 <div className="text-2xl mt-0.5">&#9729;</div>
                 <div>
                   <div className="font-semibold text-gray-900 dark:text-white">{t("setup.atlasTitle")}</div>
-                  <p className="text-sm text-gray-400 mt-1">
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                     {t("setup.atlasDesc")}
                   </p>
                 </div>
@@ -136,13 +136,13 @@ export default function SetupPage() {
             {isElectron && (
               <button
                 onClick={() => changeMode("hybrid")}
-                className="w-full text-left p-4 border border-gray-600 rounded-lg hover:border-purple-500 hover:bg-purple-500/5 transition-colors"
+                className="w-full text-left p-4 border border-gray-300 dark:border-gray-600 rounded-lg hover:border-purple-500 hover:bg-purple-500/5 transition-colors"
               >
                 <div className="flex items-start gap-3">
                   <div className="text-2xl mt-0.5">&#8644;</div>
                   <div>
                     <div className="font-semibold text-gray-900 dark:text-white">{t("setup.hybridTitle")}</div>
-                    <p className="text-sm text-gray-400 mt-1">
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                       {t("setup.hybridDesc")} <span className="text-gray-500">{t("setup.recommended")}</span>
                     </p>
                   </div>
@@ -154,13 +154,13 @@ export default function SetupPage() {
             {isElectron && (
               <button
                 onClick={() => changeMode("offline")}
-                className="w-full text-left p-4 border border-gray-600 rounded-lg hover:border-green-500 hover:bg-green-500/5 transition-colors"
+                className="w-full text-left p-4 border border-gray-300 dark:border-gray-600 rounded-lg hover:border-green-500 hover:bg-green-500/5 transition-colors"
               >
                 <div className="flex items-start gap-3">
                   <div className="text-2xl mt-0.5">&#128190;</div>
                   <div>
                     <div className="font-semibold text-gray-900 dark:text-white">{t("setup.offlineTitle")}</div>
-                    <p className="text-sm text-gray-400 mt-1">
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                       {t("setup.offlineDesc")}
                     </p>
                   </div>
@@ -202,7 +202,7 @@ export default function SetupPage() {
           </div>
 
           {error && (
-            <div className="p-3 bg-red-900/30 border border-red-800 rounded text-sm text-red-300 mb-4">
+            <div className="p-3 bg-red-100 dark:bg-red-900/30 border border-red-300 dark:border-red-800 rounded text-sm text-red-700 dark:text-red-300 mb-4">
               {error}
             </div>
           )}
@@ -210,7 +210,7 @@ export default function SetupPage() {
           <div className="flex gap-3">
             <button
               onClick={() => changeMode("")}
-              className="flex-1 px-4 py-2 text-sm text-gray-300 hover:text-white border border-gray-600 rounded hover:border-gray-500"
+              className="flex-1 px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
             >
               {t("common.back")}
             </button>
@@ -241,7 +241,7 @@ export default function SetupPage() {
         </div>
 
         {mode === "hybrid" && (
-          <div className="p-3 bg-purple-900/20 border border-purple-800 rounded-lg mb-4 text-xs text-purple-300">
+          <div className="p-3 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg mb-4 text-xs text-purple-700 dark:text-purple-300">
             <strong>{t("setup.hybridModeLabel")}</strong> {t("setup.hybridModeExplanation")}
           </div>
         )}
@@ -251,7 +251,7 @@ export default function SetupPage() {
           // form (dbConnect reads from process.env at boot). Set the
           // user's expectation up front: this is a connection-test
           // form, not a save-and-configure form.
-          <div className="p-3 bg-amber-900/20 border border-amber-800 rounded-lg mb-4 text-xs text-amber-200">
+          <div className="p-3 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg mb-4 text-xs text-amber-700 dark:text-amber-200">
             <strong>{t("setup.webTestOnlyLabel")}</strong> {t("setup.webTestOnlyExplanation")}
           </div>
         )}
@@ -312,7 +312,7 @@ export default function SetupPage() {
             <button
               type="button"
               onClick={() => { changeMode(""); setError(""); setSuccess(""); }}
-              className="px-4 py-2 text-sm text-gray-300 hover:text-white border border-gray-600 rounded hover:border-gray-500"
+              className="px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white border border-gray-300 dark:border-gray-600 rounded hover:border-gray-400 dark:hover:border-gray-500"
             >
               {t("common.back")}
             </button>
