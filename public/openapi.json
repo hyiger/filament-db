@@ -3,7 +3,7 @@
   "info": {
     "title": "Filament DB API",
     "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports.",
-    "version": "1.36.0",
+    "version": "1.36.1",
     "license": {
       "name": "MIT"
     }
