@@ -56,9 +56,17 @@ export default function ShareManagementPage() {
     return () => ac.abort();
   }, []);
 
+  // GH #640: never throws — a failed refresh keeps the existing list in
+  // place (same silent posture as the mount fetch above), so the
+  // publish/unpublish handlers' catch blocks can't mis-report a mutation
+  // that already succeeded as failed.
   const refreshCatalogs = async () => {
-    const res = await fetch("/api/share");
-    if (res.ok) setCatalogs(await res.json());
+    try {
+      const res = await fetch("/api/share");
+      if (res.ok) setCatalogs(await res.json());
+    } catch {
+      // keep the current (stale) list
+    }
   };
 
   const toggleFilament = (id: string) => {
@@ -98,6 +106,10 @@ export default function ShareManagementPage() {
       const url = `${window.location.origin}/share/${body.slug}`;
       navigator.clipboard?.writeText(url).catch(() => {});
       toast(t("share.linkCopied"));
+    } catch {
+      // GH #640: try/finally without a catch left a dropped connection
+      // silent — the button just un-disabled with no feedback.
+      toast(t("share.publishError"), "error");
     } finally {
       setPublishing(false);
     }
@@ -105,8 +117,14 @@ export default function ShareManagementPage() {
 
   const handleUnpublish = async (slug: string) => {
     if (!(await confirm({ message: t("share.unpublishConfirm"), destructive: true, confirmLabel: t("share.unpublish") }))) return;
-    const res = await fetch(`/api/share/${slug}`, { method: "DELETE" });
-    if (!res.ok) {
+    // GH #640: same silent-network-failure gap as handlePublish.
+    try {
+      const res = await fetch(`/api/share/${slug}`, { method: "DELETE" });
+      if (!res.ok) {
+        toast(t("share.unpublishError"), "error");
+        return;
+      }
+    } catch {
       toast(t("share.unpublishError"), "error");
       return;
     }
