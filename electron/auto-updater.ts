@@ -75,7 +75,13 @@ export function initAutoUpdater(win: BrowserWindow) {
   // "No handler registered". In dev, the mutating handlers short-circuit
   // with a "dev-mode" error instead of touching the real updater, which
   // electron-updater refuses to run when app.isPackaged is false.
-  ipcMain.handle("update-get-status", () => currentState);
+  // GH #623: read-only, but gated like its siblings (#434) — the state
+  // carries version/release-notes/error text, and an open getter was an
+  // undocumented asymmetry vs. the trusted-sender posture everywhere else.
+  ipcMain.handle("update-get-status", (event) => {
+    assertTrustedSender(event, "update-get-status");
+    return currentState;
+  });
 
   // GH #434: update-check and update-download were gated only on
   // `app.isPackaged`. In a release build a sub-frame could drive
