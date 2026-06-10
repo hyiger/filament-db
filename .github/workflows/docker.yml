@@ -10,8 +10,36 @@ permissions:
   packages: write
 
 jobs:
+  # GH #641: docker.yml is triggered by the same `v*` tag as release.yml,
+  # but used to go straight checkout → buildx → push with no gate — a tag
+  # cut on a broken commit published a broken `latest` image even while
+  # every release.yml leg failed. Mirror release.yml's lint + test steps
+  # so the image only publishes from a green commit.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install PC/SC development headers (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Run tests
+        run: npm test
+
   docker:
     runs-on: ubuntu-latest
+    needs: test
 
     steps:
       - uses: actions/checkout@v4
