@@ -600,8 +600,12 @@ export class SyncService extends EventEmitter {
       return [];
     } finally {
       this.syncing = false;
-      await local.close();
-      await remote.close();
+      // GH #623: close the two clients independently. The earlier
+      // sequential `await local.close(); await remote.close();` meant a
+      // rejected local close skipped the remote close entirely, leaking
+      // the Atlas client/pool once per failed cycle — unbounded over a
+      // long session on the 5-minute sync interval.
+      await Promise.allSettled([local.close(), remote.close()]);
     }
   }
 
