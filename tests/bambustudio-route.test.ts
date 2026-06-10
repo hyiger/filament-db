@@ -110,6 +110,27 @@ describe("Bambu Studio importer routes", () => {
       expect(stored.temperatures.bed).toBe(65);
     });
 
+    it("preserves filament_notes in the settings bag through import (GH #620)", async () => {
+      // The Filament model has no top-level `notes` field — pre-fix the
+      // importer extracted filament_notes as a structured field, Mongoose
+      // strict mode silently stripped it, and the key was also excluded
+      // from the settings bag: the value was destroyed. It must land in
+      // `settings.filament_notes` so re-export emits it verbatim.
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        multipartReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({ filament_notes: ["Dried 6h @ 55C before printing"] }),
+        ),
+      );
+      expect(res.status).toBe(200);
+
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      expect(stored.settings.filament_notes).toBe("Dried 6h @ 55C before printing");
+      // No phantom top-level field should appear either.
+      expect(stored.notes).toBeUndefined();
+    });
+
     it("requires filament_type AND filament_vendor on create", async () => {
       const { POST } = await import("@/app/api/filaments/bambustudio/route");
       const noType = await POST(

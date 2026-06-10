@@ -9,6 +9,11 @@ import {
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
+import {
+  isInvertedNozzleRange,
+  effectiveNozzleRangeForUpdate,
+  inheritNozzleRangeFromParent,
+} from "@/lib/temperatureRange";
 
 /**
  * Top-level body keys that map to structured Filament DB fields.
@@ -25,6 +30,36 @@ const STRUCTURED_KEYS = new Set([
   "maxVolumetricSpeed",
   "temperatures",
 ]);
+
+/** Top-level numeric structured fields — must arrive as finite numbers. */
+const NUMERIC_FIELDS = ["density", "cost", "diameter", "maxVolumetricSpeed"] as const;
+
+/** Numeric temperature sub-fields accepted from the sync body. */
+const TEMP_FIELDS = [
+  "nozzle",
+  "nozzleFirstLayer",
+  "bed",
+  "bedFirstLayer",
+  "nozzleRangeMin",
+  "nozzleRangeMax",
+] as const;
+
+/**
+ * GH #618: coerce a numeric body value the way Mongoose casts Number
+ * schema paths — accept finite numbers and finite numeric strings,
+ * reject everything else. Returns the coerced number, or undefined when
+ * the value isn't usable (the caller 400s naming the field). Pre-fix, a
+ * body like `cost: "abc"` rode into `$set` verbatim and surfaced as a
+ * CastError-500, and objects/Infinity slipped through the same way.
+ */
+function coerceFiniteNumber(v: unknown): number | undefined {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return undefined;
+}
 
 /**
  * GET /api/filaments/{id}/orcaslicer
@@ -119,23 +154,63 @@ export async function POST(
     if (body.type != null) update.type = body.type;
     if (body.vendor != null) update.vendor = body.vendor;
     if (body.color != null) update.color = body.color;
-    if (body.density != null) update.density = body.density;
-    if (body.cost != null) update.cost = body.cost;
-    if (body.diameter != null) update.diameter = body.diameter;
-    if (body.maxVolumetricSpeed != null) update.maxVolumetricSpeed = body.maxVolumetricSpeed;
 
-    // Temperatures
+    // GH #618: numeric fields must coerce to finite numbers (numeric
+    // strings are accepted, matching the cast Mongoose applies on save).
+    // Anything else is a client error — pre-fix `cost: "abc"` threw a
+    // CastError that surfaced as a generic 500.
+    for (const field of NUMERIC_FIELDS) {
+      const v = body[field];
+      if (v == null) continue;
+      const n = coerceFiniteNumber(v);
+      if (n === undefined) {
+        return errorResponse(`${field} must be a finite number`, 400);
+      }
+      update[field] = n;
+    }
+
+    // Temperatures — same finite-number coercion per sub-field (GH #618).
+    let touchesNozzleRange = false;
     if (body.temperatures && typeof body.temperatures === "object") {
       const src = body.temperatures as Record<string, unknown>;
       const temps: Record<string, unknown> = {};
-      if (src.nozzle != null) temps.nozzle = src.nozzle;
-      if (src.nozzleFirstLayer != null) temps.nozzleFirstLayer = src.nozzleFirstLayer;
-      if (src.bed != null) temps.bed = src.bed;
-      if (src.bedFirstLayer != null) temps.bedFirstLayer = src.bedFirstLayer;
-      if (src.nozzleRangeMin != null) temps.nozzleRangeMin = src.nozzleRangeMin;
-      if (src.nozzleRangeMax != null) temps.nozzleRangeMax = src.nozzleRangeMax;
+      for (const field of TEMP_FIELDS) {
+        const v = src[field];
+        if (v == null) continue;
+        const n = coerceFiniteNumber(v);
+        if (n === undefined) {
+          return errorResponse(`temperatures.${field} must be a finite number`, 400);
+        }
+        temps[field] = n;
+      }
+      touchesNozzleRange = "nozzleRangeMin" in temps || "nozzleRangeMax" in temps;
       if (Object.keys(temps).length > 0) {
         update.temperatures = { ...filament.temperatures, ...temps };
+      }
+    }
+
+    // #574 / GH #618: reject an inverted nozzle range (min > max) the same
+    // way the regular PUT does — the per-field 0–600 validators can't catch
+    // the cross-field relationship. `update.temperatures` is a full replace
+    // built from stored + incoming, so it IS the effective own range; only
+    // validate when the sync actually touches an endpoint, so pre-existing
+    // bad data can't 400 an unrelated sync. A variant inherits any endpoint
+    // it leaves null from its parent (resolveFilament: own ?? parent), so
+    // resolve the parent's endpoints in before checking (#577).
+    if (touchesNozzleRange) {
+      const own = effectiveNozzleRangeForUpdate(update, filament.temperatures);
+      let effRange = own;
+      if (filament.parentId) {
+        const parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
+          .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
+          .lean();
+        effRange = inheritNozzleRangeFromParent(own, parent?.temperatures);
+      }
+      if (isInvertedNozzleRange(effRange)) {
+        return errorResponse(
+          "Nozzle range minimum temperature must be less than or equal to the maximum",
+          400,
+        );
       }
     }
 
@@ -155,7 +230,22 @@ export async function POST(
       update.settings = merge.settings;
     }
 
-    await Filament.updateOne({ _id: filament._id }, { $set: update });
+    // GH #618: `runValidators` so the #337 numeric range validators fire
+    // on an OrcaSlicer sync (negative cost/density, out-of-range temps) —
+    // `context: "query"` matches the Bambu sync route (Codex P2 on #387).
+    // The shared helper maps a ValidationError to a JSON 400.
+    try {
+      await Filament.updateOne(
+        { _id: filament._id },
+        { $set: update },
+        { runValidators: true, context: "query" },
+      );
+    } catch (validationErr) {
+      return errorResponseFromCaught(
+        validationErr,
+        "OrcaSlicer profile contained invalid values",
+      );
+    }
 
     return NextResponse.json({
       success: true,
