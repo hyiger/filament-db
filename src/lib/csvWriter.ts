@@ -20,6 +20,21 @@
 const FORMULA_TRIGGERS = ["=", "+", "-", "@", "\t", "\r"];
 
 /**
+ * Apply the formula-injection guard to a bare string: a leading character
+ * in FORMULA_TRIGGERS gets the `'` "treat as text" prefix; everything
+ * else passes through untouched. Shared by `csvCell` (CSV exports) and
+ * the XLSX export route (GH #627 item 5) so both spreadsheet formats
+ * neutralize formula-leading cells from the SAME trigger list — the
+ * XLSX side previously skipped the guard entirely.
+ */
+export function sanitizeFormulaPrefix(value: string): string {
+  if (value.length > 0 && FORMULA_TRIGGERS.includes(value[0])) {
+    return "'" + value;
+  }
+  return value;
+}
+
+/**
  * Convert a CSV cell value into its safe, properly-escaped string form.
  *
  *  - `null` / `undefined` → empty string
@@ -43,11 +58,16 @@ export function csvCell(value: string | number | boolean | null | undefined): st
 
   // Formula-injection guard. Numbers and booleans don't need this — only
   // strings, which are the only fields a user can populate freely.
-  if (typeof value === "string" && str.length > 0 && FORMULA_TRIGGERS.includes(str[0])) {
-    str = "'" + str;
+  if (typeof value === "string") {
+    str = sanitizeFormulaPrefix(str);
   }
 
-  if (str.includes(",") || str.includes('"') || str.includes("\n")) {
+  // GH #627 item 4: `\r` must trigger quoting too (RFC 4180). A bare CR
+  // mid-string emitted unquoted is treated as a row terminator by
+  // parseCsv (and by spec-compliant readers), splitting the row on
+  // round-trip. Leading CR was already neutralized by the formula guard
+  // above, but a CR in the middle of a cell slipped through unquoted.
+  if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
     return `"${str.replace(/"/g, '""')}"`;
   }
   return str;

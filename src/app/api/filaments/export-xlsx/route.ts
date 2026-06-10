@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { getExportRows, EXPORT_COLUMNS } from "@/lib/exportFilaments";
+import { sanitizeFormulaPrefix } from "@/lib/csvWriter";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 
 export async function GET() {
@@ -35,7 +36,13 @@ export async function GET() {
       const dataRow = sheet.addRow(
         EXPORT_COLUMNS.reduce(
           (acc, c) => {
-            acc[c.key] = row[c.key];
+            const value = row[c.key];
+            // GH #627 item 5: apply the same formula-injection prefix the
+            // CSV export applies (csvCell). ExcelJS stores these as
+            // shared-string cells (not auto-evaluated), so this is
+            // defense-in-depth + consistency — and the importer's
+            // unsanitizeCsvCell strips the prefix on round-trip.
+            acc[c.key] = typeof value === "string" ? sanitizeFormulaPrefix(value) : value;
             return acc;
           },
           {} as Record<string, unknown>,

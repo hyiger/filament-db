@@ -220,4 +220,66 @@ filament_vendor = New
       expect(text).not.toMatch(/Trashed CSV/);
     });
   });
+
+  describe("import row caps (GH #627)", () => {
+    it("rejects a CSV with more than 10,000 data rows with 400", async () => {
+      const header = "Name,Vendor,Type";
+      const rows = Array.from({ length: 10_001 }, (_, i) => `Cap F${i},V,PLA`);
+      const file = new File([[header, ...rows].join("\n")], "big.csv", {
+        type: "text/csv",
+      });
+      const res = await importCsv(
+        multipartReq("http://localhost/api/filaments/import-csv", file),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/Import too large/);
+      expect(body.error).toMatch(/10000/);
+      // Nothing was imported.
+      expect(await Filament.countDocuments({ name: /^Cap F/ })).toBe(0);
+    });
+
+    it("rejects an XLSX with more than 10,000 data rows with 400", async () => {
+      const { POST: importXlsx } = await import("@/app/api/filaments/import-xlsx/route");
+      const ExcelJS = (await import("exceljs")).default;
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet("Filaments");
+      sheet.addRow(["Name", "Vendor", "Type"]);
+      for (let i = 0; i < 10_001; i++) {
+        sheet.addRow([`Cap X${i}`, "V", "PLA"]);
+      }
+      const buffer = await workbook.xlsx.writeBuffer();
+      const file = new File([buffer], "big.xlsx", {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      const res = await importXlsx(
+        multipartReq("http://localhost/api/filaments/import-xlsx", file),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/Import too large/);
+      expect(await Filament.countDocuments({ name: /^Cap X/ })).toBe(0);
+    }, 30_000);
+
+    it("rejects an import-atlas request with more than 1,000 filament IDs with 400 (before any network)", async () => {
+      const { POST: importAtlas } = await import("@/app/api/filaments/import-atlas/route");
+      const ids = Array.from({ length: 1_001 }, (_, i) =>
+        i.toString(16).padStart(24, "0"),
+      );
+      const req = new NextRequest("http://localhost/api/filaments/import-atlas", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // The cap is checked before the SSRF guard / remote connect, so
+        // this hostname is never resolved.
+        body: JSON.stringify({
+          uri: "mongodb+srv://cluster.example.com/db",
+          filamentIds: ids,
+        }),
+      });
+      const res = await importAtlas(req);
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/Too many filament IDs/);
+    });
+  });
 });

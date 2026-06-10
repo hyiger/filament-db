@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
+import { unsanitizeCsvCell } from "@/lib/csvWriter";
 
 export interface ImportRow {
   name?: string;
@@ -168,6 +169,30 @@ function parseNum(val: unknown): number | null {
   return isNaN(n) ? null : n;
 }
 
+/**
+ * GH #627 item 3: free-text string fields whose exported form may carry the
+ * formula-injection guard apostrophe (`csvCell` prefixes `'` to cells
+ * starting with `=`, `+`, `-`, `@`, tab, CR — and since GH #627 item 5 the
+ * XLSX export applies the same prefix). These get run through
+ * `unsanitizeCsvCell` on import so a filament named `+95A TPU` exports as
+ * `'+95A TPU` and re-imports as `+95A TPU` — pre-fix the apostrophe
+ * persisted verbatim, the name no longer matched the existing row, and the
+ * import created a corrupted duplicate. Mirrors what `/api/spools/import`
+ * has done since the Codex P2 follow-up to PR #144.
+ *
+ * Deliberately NOT applied to `color` / `secondaryColors` / `tdsUrl` /
+ * `instanceId` — those are format-validated fields that can never start
+ * with a trigger character, so a genuine leading apostrophe (if a user
+ * somehow stored one) survives untouched.
+ */
+const UNSANITIZE_FIELDS = new Set<keyof ImportRow>([
+  "name",
+  "vendor",
+  "colorName",
+  "spoolType",
+  "parentName",
+]);
+
 export function mapHeaders(headers: string[]): (keyof ImportRow | null)[] {
   return headers.map((h) => {
     const key = HEADER_MAP[h.trim().toLowerCase()];
@@ -186,8 +211,13 @@ export function rowToImport(
     const val = values[i];
     if (NUM_FIELDS.has(key)) {
       (row as Record<string, unknown>)[key] = parseNum(val);
+    } else if (val == null || val === "") {
+      (row as Record<string, unknown>)[key] = null;
     } else {
-      (row as Record<string, unknown>)[key] = val == null || val === "" ? null : String(val);
+      const str = String(val);
+      (row as Record<string, unknown>)[key] = UNSANITIZE_FIELDS.has(key)
+        ? unsanitizeCsvCell(str)
+        : str;
     }
   }
   return row;
@@ -205,6 +235,144 @@ export interface ImportResult {
   updated: number;
   skipped: number;
   skippedRows: SkippedRow[];
+}
+
+/**
+ * GH #628: scalar fields the CSV/XLSX import can write that participate in
+ * variant→parent inheritance (the intersection of `INHERITABLE_FIELDS` in
+ * `src/lib/resolveFilament.ts` with the columns the importer maps).
+ * `temperatures.*` dot-keys and the `secondaryColors` array are handled
+ * separately in `splitInheritedImportSet` below.
+ */
+const IMPORT_INHERITABLE_SCALARS = new Set<string>([
+  "vendor",
+  "type",
+  "cost",
+  "density",
+  "diameter",
+  "maxVolumetricSpeed",
+  "spoolWeight",
+  "netFilamentWeight",
+  "dryingTemperature",
+  "dryingTime",
+  "transmissionDistance",
+  "glassTempTransition",
+  "heatDeflectionTemp",
+  "shoreHardnessA",
+  "shoreHardnessD",
+  "minPrintSpeed",
+  "maxPrintSpeed",
+  "spoolType",
+  "tdsUrl",
+]);
+
+/** Required by the Filament schema — never `$unset` on a variant (the
+ *  write would fail validation). Same rule as `REQUIRED_FIELDS` in
+ *  `src/lib/bambuStudioApply.ts` (Codex P2 on PR #473 round 3). */
+const IMPORT_REQUIRED_FIELDS = new Set<string>(["vendor", "type"]);
+
+/** Loosely-typed filament doc — same posture as resolveFilament. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type LeanFilament = Record<string, any>;
+
+/**
+ * GH #628: the CSV/XLSX export flattens variants through `resolveFilament`
+ * (correct for export — every row stands alone), but re-importing that
+ * flattened row onto an EXISTING variant used to `$set` every value,
+ * pinning inherited fields as local overrides and severing the GH #106
+ * live-inheritance link — parent edits silently stopped propagating.
+ *
+ * This helper splits the prepared `$set` body for a variant row following
+ * the same semantics as `setIfNotInherited` in
+ * `src/lib/bambuStudioApply.ts` (GH #403 / #473):
+ *
+ *   - incoming value equals the parent's value → SKIP the $set so the
+ *     variant keeps inheriting dynamically at read time;
+ *   - …and if the variant currently carries a local override that DIFFERS
+ *     from the incoming value, emit an `$unset` so inheritance resumes
+ *     (a stale divergence the import just reconciled) — except for
+ *     schema-required fields, which are left in place;
+ *   - incoming value differs from the parent → $set normally (a genuine
+ *     variant override).
+ *
+ * Array + nested handling:
+ *   - `temperatures.*` dot-keys compare against the parent's same subfield
+ *     (resolveFilament inherits each temp independently via `??`).
+ *   - `secondaryColors` inherits as a WHOLE array (resolveFilament treats
+ *     an empty array as "inherit"), so it's skipped only when the incoming
+ *     array matches the parent's array exactly (order-sensitive — order is
+ *     meaningful for multi-color rendering).
+ *   - The variant-local empty-string rule mirrors resolveFilament:67-72 —
+ *     a variant value of `""` counts as "missing" (already inheriting), so
+ *     it never triggers an $unset.
+ *
+ * Pure + exported for unit tests.
+ */
+export function splitInheritedImportSet(
+  setBody: Record<string, unknown>,
+  variant: LeanFilament,
+  parent: LeanFilament,
+): { set: Record<string, unknown>; unset: string[] } {
+  const set: Record<string, unknown> = {};
+  const unset: string[] = [];
+
+  const hasLocalValue = (v: unknown): boolean => v != null && v !== "";
+
+  for (const [key, incoming] of Object.entries(setBody)) {
+    if (key.startsWith("temperatures.")) {
+      const sub = key.slice("temperatures.".length);
+      const parentVal = parent.temperatures?.[sub] ?? null;
+      const variantVal = variant.temperatures?.[sub] ?? null;
+      if (incoming != null && parentVal === incoming) {
+        if (variantVal != null && variantVal !== incoming) unset.push(key);
+        continue;
+      }
+      set[key] = incoming;
+      continue;
+    }
+
+    if (key === "secondaryColors" && Array.isArray(incoming)) {
+      const parentArr: unknown[] = Array.isArray(parent.secondaryColors)
+        ? parent.secondaryColors
+        : [];
+      const variantArr: unknown[] = Array.isArray(variant.secondaryColors)
+        ? variant.secondaryColors
+        : [];
+      const equalsArr = (a: unknown[], b: unknown[]) =>
+        a.length === b.length && a.every((v, i) => v === b[i]);
+      if (incoming.length > 0 && equalsArr(incoming, parentArr)) {
+        if (variantArr.length > 0 && !equalsArr(variantArr, incoming)) {
+          unset.push(key);
+        }
+        continue;
+      }
+      set[key] = incoming;
+      continue;
+    }
+
+    if (IMPORT_INHERITABLE_SCALARS.has(key)) {
+      const parentVal = parent[key];
+      const variantVal = variant[key];
+      if (incoming != null && parentVal === incoming) {
+        if (
+          !IMPORT_REQUIRED_FIELDS.has(key) &&
+          hasLocalValue(variantVal) &&
+          variantVal !== incoming
+        ) {
+          unset.push(key);
+        }
+        continue;
+      }
+      set[key] = incoming;
+      continue;
+    }
+
+    // Variant-only / non-inheritable fields (name, color, colorName,
+    // instanceId, …) always write through.
+    set[key] = incoming;
+  }
+
+  return { set, unset };
 }
 
 export async function upsertImportRows(
@@ -232,8 +400,20 @@ export async function upsertImportRows(
     }
   }
 
+  // GH #628: the projection includes the inheritable fields (scalars +
+  // temperatures + secondaryColors) so the variant-update path can compare
+  // incoming values against the variant's current local values without a
+  // second fetch. Heavy subdocuments (spools — photoDataUrl can be MBs)
+  // stay excluded.
+  const INHERITANCE_PROJECTION =
+    "_id name parentId _deletedAt vendor type cost density diameter " +
+    "maxVolumetricSpeed spoolWeight netFilamentWeight dryingTemperature " +
+    "dryingTime transmissionDistance glassTempTransition heatDeflectionTemp " +
+    "shoreHardnessA shoreHardnessD minPrintSpeed maxPrintSpeed spoolType " +
+    "tdsUrl temperatures secondaryColors";
+
   const allExisting = await Filament.find({ name: { $in: [...namesToLoad] } })
-    .select("_id name parentId _deletedAt")
+    .select(INHERITANCE_PROJECTION)
     .lean();
 
   // The same map carries existing rows AND filaments created earlier in
@@ -243,6 +423,11 @@ export async function upsertImportRows(
   type IndexEntry = {
     _id: mongoose.Types.ObjectId;
     parentId: mongoose.Types.ObjectId | null;
+    /** GH #628: the projected lean doc, when this entry came from the
+     *  batch-load (in-batch created/resurrected entries omit it — the
+     *  inherited-field skip then falls back to plain $set, which only
+     *  matters for the degenerate duplicate-name-in-one-file case). */
+    doc?: LeanFilament;
   };
   const activeByName = new Map<string, IndexEntry>();
   const deletedByName = new Map<string, IndexEntry>();
@@ -250,12 +435,32 @@ export async function upsertImportRows(
     const entry: IndexEntry = {
       _id: doc._id,
       parentId: doc.parentId ?? null,
+      doc,
     };
     if (doc._deletedAt == null) {
       activeByName.set(doc.name, entry);
     } else if (!deletedByName.has(doc.name)) {
       deletedByName.set(doc.name, entry);
     }
+  }
+
+  // GH #628: batch-load the PARENT docs of every existing active variant
+  // we might update. A variant's parent is referenced by id and may not
+  // appear in the import file at all, so the name-keyed load above can't
+  // be relied on to have it.
+  const parentIdsToLoad = new Set<string>();
+  for (const entry of activeByName.values()) {
+    if (entry.parentId) parentIdsToLoad.add(String(entry.parentId));
+  }
+  const parentById = new Map<string, LeanFilament>();
+  if (parentIdsToLoad.size > 0) {
+    const parentDocs = await Filament.find({
+      _id: { $in: [...parentIdsToLoad] },
+      _deletedAt: null,
+    })
+      .select(INHERITANCE_PROJECTION)
+      .lean();
+    for (const p of parentDocs) parentById.set(String(p._id), p);
   }
 
   // GH #379 (Codex P2 follow-up): share one trim between the two-pass
@@ -427,16 +632,34 @@ export async function upsertImportRows(
       // sub-fields that weren't in the import
       const updateDoc = { ...doc };
       delete updateDoc.temperatures;
-      const $set: Record<string, unknown> = { ...updateDoc };
+      let $set: Record<string, unknown> = { ...updateDoc };
       for (const [tempKey, tempVal] of Object.entries(temps)) {
         $set[`temperatures.${tempKey}`] = tempVal;
       }
+      // GH #628: when the target is a VARIANT, the export flattened its
+      // inherited values through resolveFilament — blindly $set-ing them
+      // back would pin every inherited field as a local override and
+      // sever GH #106 live inheritance. Skip fields whose incoming value
+      // matches the parent (and $unset stale diverging overrides) so the
+      // variant keeps tracking parent edits after a round-trip.
+      const update: Record<string, unknown> = {};
+      const parentDoc = existing.parentId
+        ? parentById.get(String(existing.parentId))
+        : undefined;
+      if (parentDoc && existing.doc) {
+        const split = splitInheritedImportSet($set, existing.doc, parentDoc);
+        $set = split.set;
+        if (split.unset.length > 0) {
+          update.$unset = Object.fromEntries(split.unset.map((k) => [k, ""]));
+        }
+      }
+      update.$set = $set;
       // GH #276: runValidators so a CSV updating an existing filament
       // (e.g. `cost = -50`) can't bypass the schema validators — the
       // sibling resurrect path below was already hardened the same way.
       await Filament.updateOne(
         { _id: existing._id },
-        { $set },
+        update,
         { runValidators: true, context: "query" },
       );
       updated++;
@@ -491,6 +714,42 @@ export async function upsertImportRows(
     }
   }
 
+  // GH #627 item 2: per-row error isolation. Any error escaping a row's
+  // create/update — an E11000 from the partial-unique `instanceId` index
+  // (realistic trigger: re-importing an export after renaming a filament,
+  // so the name misses but the carried Instance ID collides), a
+  // ValidationError the pre-write guards didn't cover, a transient driver
+  // error — used to abort the WHOLE batch with a bare 500 and no report
+  // of the rows already committed. Route it into skippedRows instead,
+  // with a named reason for duplicate-key errors (mirrors the spool
+  // importer's GH #370 per-row posture).
+  function importErrorReason(err: unknown): string {
+    if (
+      typeof err === "object" &&
+      err !== null &&
+      (err as { code?: unknown }).code === 11000
+    ) {
+      const keyValue = (err as { keyValue?: Record<string, unknown> }).keyValue;
+      const field = keyValue ? Object.keys(keyValue)[0] : "field";
+      const value = keyValue ? Object.values(keyValue)[0] : "unknown";
+      return `Duplicate ${field}: "${value}" already exists`;
+    }
+    return err instanceof Error ? err.message : String(err);
+  }
+
+  async function processRowSafe(rowIdx: number): Promise<void> {
+    try {
+      await processRow(rowIdx);
+    } catch (err) {
+      skippedRows.push({
+        row: rowIdx + 2,
+        name: rows[rowIdx].name,
+        reason: importErrorReason(err),
+      });
+      skipped++;
+    }
+  }
+
   // GH #379: two-pass driver. Rows without a Parent column run first so
   // any new top-level filaments are present in `activeByName` by the time
   // pass-2 (variant rows) tries to resolve them. Use the same trimmed
@@ -499,10 +758,10 @@ export async function upsertImportRows(
   // sorted at the end to preserve original-row order even though we
   // visited rows out of order.
   for (let i = 0; i < rows.length; i++) {
-    if (!trimmedParentName(rows[i])) await processRow(i);
+    if (!trimmedParentName(rows[i])) await processRowSafe(i);
   }
   for (let i = 0; i < rows.length; i++) {
-    if (trimmedParentName(rows[i])) await processRow(i);
+    if (trimmedParentName(rows[i])) await processRowSafe(i);
   }
   skippedRows.sort((a, b) => a.row - b.row);
 

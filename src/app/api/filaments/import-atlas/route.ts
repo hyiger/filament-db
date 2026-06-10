@@ -47,6 +47,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Connection string is required" }, { status: 400 });
   }
 
+  // GH #627 item 1: cap the per-request id count — every sibling bulk
+  // endpoint enforces one (openprinttag/import: 500, share: 500,
+  // print-history: 100) but this one looped an unbounded id list through
+  // sequential findOne/updateOne/create round-trips. Checked BEFORE the
+  // SSRF guard / remote connect so an oversized request never touches
+  // the network.
+  const MAX_IMPORT_IDS = 1_000;
+  if (Array.isArray(body.filamentIds) && body.filamentIds.length > MAX_IMPORT_IDS) {
+    return NextResponse.json(
+      { error: `Too many filament IDs (max ${MAX_IMPORT_IDS})` },
+      { status: 400 },
+    );
+  }
+
   // GH #254: SSRF guard — without this, a request body with
   // `uri: "mongodb://10.0.0.5:27017"` turns the server into an
   // internal-network port scanner. Importing from a remote Atlas

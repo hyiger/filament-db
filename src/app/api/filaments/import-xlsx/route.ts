@@ -35,6 +35,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // GH #627 item 1: cap the row count — mirrors the INI importer's
+    // GH #297 cap and the CSV importer's identical guard. Checked on the
+    // sheet's physical rowCount BEFORE the per-cell read loop so an
+    // enormous sheet is rejected without iterating it.
+    const MAX_IMPORT_ROWS = 10_000;
+    if (sheet.rowCount - 1 > MAX_IMPORT_ROWS) {
+      return errorResponse(
+        `Import too large: ${sheet.rowCount - 1} rows exceeds the ${MAX_IMPORT_ROWS} limit.`,
+        400,
+      );
+    }
+
     // Read header row
     const headerRow = sheet.getRow(1);
     const headers: string[] = [];

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { csvCell, isFormulaCandidate, unsanitizeCsvCell } from "@/lib/csvWriter";
+import { csvCell, isFormulaCandidate, sanitizeFormulaPrefix, unsanitizeCsvCell } from "@/lib/csvWriter";
 
 /**
  * Codex P2 on PR #141 — without sanitisation, an attacker who controls
@@ -42,7 +42,10 @@ describe("csvCell — formula injection neutralisation", () => {
     expect(csvCell("-1+2")).toBe("'-1+2");
     expect(csvCell("@SUM(A1)")).toBe("'@SUM(A1)");
     expect(csvCell("\tinject")).toBe("'\tinject");
-    expect(csvCell("\rinject")).toBe("'\rinject");
+    // GH #627: a CR triggers the formula prefix AND quoting — parseCsv
+    // treats a bare CR as a row terminator, so an unquoted leading-CR
+    // cell split the row on round-trip (RFC 4180 requires quoting CR).
+    expect(csvCell("\rinject")).toBe('"\'\rinject"');
   });
 
   it("still escapes the prefixed value when it also contains a comma", () => {
@@ -131,5 +134,47 @@ describe("isFormulaCandidate", () => {
     expect(isFormulaCandidate(undefined)).toBe(false);
     expect(isFormulaCandidate(42)).toBe(false);
     expect(isFormulaCandidate(true)).toBe(false);
+  });
+});
+
+describe("csvCell — bare CR quoting (GH #627 item 4)", () => {
+  it("quotes a string containing a mid-string carriage return", () => {
+    // RFC 4180 requires quoting CR. Pre-fix a lone CR was emitted
+    // unquoted and parseCsv treats bare CR as a row terminator,
+    // splitting the row on round-trip.
+    expect(csvCell("line one\rline two")).toBe('"line one\rline two"');
+  });
+
+  it("quotes CRLF the same way it quotes LF", () => {
+    expect(csvCell("a\r\nb")).toBe('"a\r\nb"');
+  });
+
+  it("a LEADING CR gets the formula prefix and is then quoted", () => {
+    // Leading CR is both a formula trigger (gets the apostrophe) and a
+    // quoting trigger (the CR is still in the string).
+    expect(csvCell("\rfoo")).toBe('"\'\rfoo"');
+  });
+});
+
+describe("sanitizeFormulaPrefix (GH #627 item 5 — shared with XLSX export)", () => {
+  it("prefixes formula-leading strings with an apostrophe", () => {
+    expect(sanitizeFormulaPrefix("=A1")).toBe("'=A1");
+    expect(sanitizeFormulaPrefix("+95A TPU")).toBe("'+95A TPU");
+    expect(sanitizeFormulaPrefix("-foo")).toBe("'-foo");
+    expect(sanitizeFormulaPrefix("@home PLA")).toBe("'@home PLA");
+    expect(sanitizeFormulaPrefix("\tx")).toBe("'\tx");
+    expect(sanitizeFormulaPrefix("\rx")).toBe("'\rx");
+  });
+
+  it("passes benign strings and empties through untouched", () => {
+    expect(sanitizeFormulaPrefix("Generic PLA")).toBe("Generic PLA");
+    expect(sanitizeFormulaPrefix("")).toBe("");
+    expect(sanitizeFormulaPrefix("95A TPU+")).toBe("95A TPU+");
+  });
+
+  it("round-trips through unsanitizeCsvCell", () => {
+    expect(unsanitizeCsvCell(sanitizeFormulaPrefix("+95A TPU"))).toBe("+95A TPU");
+    expect(unsanitizeCsvCell(sanitizeFormulaPrefix("@home PLA"))).toBe("@home PLA");
+    expect(unsanitizeCsvCell(sanitizeFormulaPrefix("Generic PLA"))).toBe("Generic PLA");
   });
 });

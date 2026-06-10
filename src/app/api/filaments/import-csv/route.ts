@@ -69,6 +69,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // GH #627 item 1: cap the row count — mirrors the INI importer's
+    // GH #297 cap (and parseCsv's maxRows, which this local parser
+    // bypasses). Without it a large CSV drives unbounded sequential
+    // findOneAndUpdate/create round-trips in upsertImportRows.
+    const MAX_IMPORT_ROWS = 10_000;
+    if (lines.length - 1 > MAX_IMPORT_ROWS) {
+      return errorResponse(
+        `Import too large: ${lines.length - 1} rows exceeds the ${MAX_IMPORT_ROWS} limit.`,
+        400,
+      );
+    }
+
     const headers = parseCsvLine(lines[0]);
     const mapping = mapHeaders(headers);
 

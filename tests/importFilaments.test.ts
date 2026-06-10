@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { mapHeaders, rowToImport, upsertImportRows } from "@/lib/importFilaments";
+import { mapHeaders, rowToImport, splitInheritedImportSet, upsertImportRows } from "@/lib/importFilaments";
 
 describe("mapHeaders", () => {
   it("maps standard export headers", () => {
@@ -714,5 +714,334 @@ describe("upsertImportRows — Parent column (GH #379)", () => {
         "#FF0000", "#00FF00", "#0000FF",
       ]);
     });
+  });
+});
+
+/**
+ * GH #627 item 3: the export side prefixes formula-leading cells with `'`
+ * (csvCell / sanitizeFormulaPrefix); the importer must strip that prefix
+ * from free-text string fields so an exported `'+95A TPU` re-imports as
+ * `+95A TPU` and matches the existing row instead of creating a corrupted
+ * duplicate.
+ */
+describe("rowToImport — formula-prefix strip (GH #627)", () => {
+  it("strips the guard apostrophe from name/vendor/colorName/spoolType/parentName", () => {
+    const mapping = mapHeaders([
+      "Name", "Vendor", "Type", "Color Name", "Spool Type", "Parent",
+    ]);
+    const row = rowToImport(
+      ["'+95A TPU", "'@home Filaments", "TPU", "'=Galaxy", "'-cardboard", "'+95A Base"],
+      mapping,
+    );
+    expect(row.name).toBe("+95A TPU");
+    expect(row.vendor).toBe("@home Filaments");
+    expect(row.colorName).toBe("=Galaxy");
+    expect(row.spoolType).toBe("-cardboard");
+    expect(row.parentName).toBe("+95A Base");
+  });
+
+  it("leaves genuine leading apostrophes alone when the next char is benign", () => {
+    const mapping = mapHeaders(["Name", "Vendor", "Type"]);
+    const row = rowToImport(["'70s Blue PLA", "Vendor", "PLA"], mapping);
+    expect(row.name).toBe("'70s Blue PLA");
+  });
+});
+
+/**
+ * GH #628 — pure-helper coverage for the variant-update inheritance split.
+ * Semantics follow `setIfNotInherited` in src/lib/bambuStudioApply.ts
+ * (GH #403 / #473): incoming == parent → skip (keep inheriting); stale
+ * diverging local override → $unset; incoming != parent → $set.
+ */
+describe("splitInheritedImportSet (GH #628)", () => {
+  const parent = {
+    vendor: "Acme",
+    type: "PLA",
+    cost: 25,
+    density: 1.24,
+    spoolType: "cardboard",
+    temperatures: { nozzle: 215, bed: 60 },
+    secondaryColors: ["#FF0000", "#00FF00"],
+  };
+
+  it("skips $set for scalar fields whose incoming value matches the parent", () => {
+    const variant = { cost: null, density: null };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", cost: 25, density: 1.24 },
+      variant,
+      parent,
+    );
+    expect(set).toEqual({ name: "V" });
+    expect(unset).toEqual([]);
+  });
+
+  it("$sets a genuine variant override that differs from the parent", () => {
+    const variant = { cost: null };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", cost: 30 },
+      variant,
+      parent,
+    );
+    expect(set).toEqual({ name: "V", cost: 30 });
+    expect(unset).toEqual([]);
+  });
+
+  it("$unsets a stale local override the import reconciled back to the parent value", () => {
+    // variant pinned cost=30, parent says 25, import says 25 → the
+    // variant returns to inheriting.
+    const variant = { cost: 30 };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", cost: 25 },
+      variant,
+      parent,
+    );
+    expect(set).toEqual({ name: "V" });
+    expect(unset).toEqual(["cost"]);
+  });
+
+  it("never $unsets schema-required fields (vendor/type) even when stale", () => {
+    const variant = { vendor: "OldVendor", type: "PETG" };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", vendor: "Acme", type: "PLA" },
+      variant,
+      parent,
+    );
+    // vendor/type match the parent → skipped from $set; but required
+    // fields are left in place rather than $unset (validation would fail).
+    expect(set).toEqual({ name: "V" });
+    expect(unset).toEqual([]);
+  });
+
+  it("handles temperatures.* dot-keys per subfield", () => {
+    const variant = { temperatures: { nozzle: 230, bed: null } };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", "temperatures.nozzle": 215, "temperatures.bed": 60 },
+      variant,
+      parent,
+    );
+    // nozzle: incoming matches parent, variant diverged at 230 → unset.
+    // bed: incoming matches parent, variant has no local value → skip.
+    expect(set).toEqual({ name: "V" });
+    expect(unset).toEqual(["temperatures.nozzle"]);
+  });
+
+  it("treats an empty-string local value as 'already inheriting' (resolveFilament rule)", () => {
+    const variant = { spoolType: "" };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", spoolType: "cardboard" },
+      variant,
+      parent,
+    );
+    expect(set).toEqual({ name: "V" });
+    expect(unset).toEqual([]);
+  });
+
+  it("skips secondaryColors when the incoming array equals the parent's (whole-array inheritance)", () => {
+    const variant = { secondaryColors: [] };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", secondaryColors: ["#FF0000", "#00FF00"] },
+      variant,
+      parent,
+    );
+    expect(set).toEqual({ name: "V" });
+    expect(unset).toEqual([]);
+  });
+
+  it("$sets secondaryColors when the incoming array differs from the parent's", () => {
+    const variant = { secondaryColors: [] };
+    const { set } = splitInheritedImportSet(
+      { name: "V", secondaryColors: ["#0000FF"] },
+      variant,
+      parent,
+    );
+    expect(set.secondaryColors).toEqual(["#0000FF"]);
+  });
+
+  it("passes variant-only fields (color, colorName, instanceId) straight through", () => {
+    const variant = {};
+    const { set } = splitInheritedImportSet(
+      { name: "V", color: "#FF0000", colorName: "Red", instanceId: "abc123" },
+      variant,
+      parent,
+    );
+    expect(set).toEqual({
+      name: "V",
+      color: "#FF0000",
+      colorName: "Red",
+      instanceId: "abc123",
+    });
+  });
+
+  it("passes incoming nulls through (null on a variant means 'inherit' anyway)", () => {
+    const variant = { cost: 30 };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", cost: null },
+      variant,
+      parent,
+    );
+    expect(set).toEqual({ name: "V", cost: null });
+    expect(unset).toEqual([]);
+  });
+});
+
+/**
+ * GH #627 item 2: a row whose write throws (the realistic trigger: the
+ * create path carries an exported Instance ID that collides with the
+ * partial-unique instanceId index after the user renamed the filament)
+ * must land in skippedRows instead of aborting the whole batch.
+ */
+describe("upsertImportRows — per-row error isolation (GH #627)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+    await Filament.syncIndexes();
+  });
+
+  it("routes a duplicate-key create into skippedRows with a named reason and keeps processing", async () => {
+    await Filament.create({
+      name: "Original Name PLA",
+      vendor: "Acme",
+      type: "PLA",
+      instanceId: "aabbccdd11",
+    });
+
+    const result = await upsertImportRows([
+      // Renamed-filament re-import: the name misses, the carried
+      // Instance ID collides → E11000 on create.
+      { name: "Renamed PLA", vendor: "Acme", type: "PLA", instanceId: "aabbccdd11" },
+      // A healthy row after the failing one must still import.
+      { name: "Healthy PETG", vendor: "Acme", type: "PETG" },
+    ]);
+
+    expect(result.created).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(result.skippedRows).toHaveLength(1);
+    expect(result.skippedRows[0].name).toBe("Renamed PLA");
+    expect(result.skippedRows[0].reason).toMatch(/Duplicate instanceId/);
+    expect(result.skippedRows[0].reason).toMatch(/aabbccdd11/);
+
+    expect(await Filament.findOne({ name: "Healthy PETG" })).toBeTruthy();
+    expect(await Filament.findOne({ name: "Renamed PLA" })).toBeNull();
+  });
+});
+
+/**
+ * GH #628 — end-to-end round-trip: export flattens a variant through
+ * resolveFilament, re-importing the flattened row onto the EXISTING
+ * variant must NOT pin the inherited values as local overrides. The
+ * variant keeps tracking parent edits after the round-trip.
+ */
+describe("upsertImportRows — variant round-trip preserves inheritance (GH #628)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+  });
+
+  /** Re-import the current export rows the way the XLSX route does:
+   *  header mapping + rowToImport over raw values. */
+  async function reimportCurrentExport() {
+    const { getExportRows, EXPORT_COLUMNS } = await import("@/lib/exportFilaments");
+    const exportRows = await getExportRows();
+    const mapping = mapHeaders(EXPORT_COLUMNS.map((c) => c.header));
+    return upsertImportRows(
+      exportRows.map((r) => rowToImport(EXPORT_COLUMNS.map((c) => r[c.key]), mapping)),
+    );
+  }
+
+  it("does not pin inherited values onto the variant on re-import", async () => {
+    const parent = await Filament.create({
+      name: "Universal PLA",
+      vendor: "Acme",
+      type: "PLA",
+      cost: 25,
+      density: 1.24,
+      dryingTemperature: 55,
+      temperatures: { nozzle: 215, bed: 60 },
+    });
+    await Filament.create({
+      name: "Universal PLA — Red",
+      vendor: "Acme",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+      // cost/density/dryingTemperature/temps left unset → inherited live
+    });
+
+    const result = await reimportCurrentExport();
+    expect(result.updated).toBe(2);
+    expect(result.skipped).toBe(0);
+
+    const variant = await Filament.findOne({ name: "Universal PLA — Red" }).lean();
+    // The export wrote the parent-resolved values (25 / 1.24 / 215 …);
+    // the import must have skipped $set-ing them back onto the variant.
+    expect(variant.cost).toBeNull();
+    expect(variant.density).toBeNull();
+    expect(variant.dryingTemperature).toBeNull();
+    expect(variant.temperatures?.nozzle ?? null).toBeNull();
+    expect(variant.temperatures?.bed ?? null).toBeNull();
+
+    // …and parent edits still propagate (the GH #106 live link survives).
+    await Filament.updateOne({ _id: parent._id }, { $set: { cost: 30 } });
+    const { resolveFilament } = await import("@/lib/resolveFilament");
+    const freshParent = await Filament.findById(parent._id).lean();
+    const resolved = resolveFilament(variant, freshParent);
+    expect(resolved.cost).toBe(30);
+  });
+
+  it("keeps a genuine variant override that differs from the parent", async () => {
+    const parent = await Filament.create({
+      name: "Universal PETG",
+      vendor: "Acme",
+      type: "PETG",
+      cost: 20,
+      temperatures: { nozzle: 240 },
+    });
+    await Filament.create({
+      name: "Universal PETG — Black",
+      vendor: "Acme",
+      type: "PETG",
+      color: "#000000",
+      parentId: parent._id,
+      temperatures: { nozzle: 250 }, // real local override
+    });
+
+    await reimportCurrentExport();
+
+    const variant = await Filament.findOne({ name: "Universal PETG — Black" }).lean();
+    expect(variant.temperatures.nozzle).toBe(250); // override survives
+    expect(variant.cost).toBeNull(); // inherited stays inherited
+  });
+
+  it("clears a stale override the import reconciled back to the parent value", async () => {
+    const parent = await Filament.create({
+      name: "Universal ASA",
+      vendor: "Acme",
+      type: "ASA",
+      cost: 35,
+    });
+    const variant = await Filament.create({
+      name: "Universal ASA — White",
+      vendor: "Acme",
+      type: "ASA",
+      color: "#FFFFFF",
+      parentId: parent._id,
+      cost: 40, // stale divergence
+    });
+
+    // Import the flattened row with cost equal to the PARENT value —
+    // the user reconciled the divergence in the spreadsheet.
+    const mapping = mapHeaders(["Name", "Vendor", "Type", "Cost", "Parent"]);
+    const result = await upsertImportRows([
+      rowToImport(["Universal ASA — White", "Acme", "ASA", 35, "Universal ASA"], mapping),
+    ]);
+    expect(result.updated).toBe(1);
+
+    const updated = await Filament.findById(variant._id).lean();
+    // $unset → the field is gone/null and inheritance resumes.
+    expect(updated.cost == null).toBe(true);
   });
 });
