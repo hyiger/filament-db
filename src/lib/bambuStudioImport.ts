@@ -71,12 +71,17 @@ const STRUCTURED_KEYS = new Set<string>([
   "filament_density",
   "filament_cost",
   "filament_max_volumetric_speed",
-  "filament_notes",
   // `filament_soluble` deliberately NOT here — the Filament model has no
   // `soluble` column, so even if the parser extracted it Mongoose strict
   // mode would silently drop the value on the update. Letting it fall
   // through to the settings bag preserves the round-trip exactly the way
   // we handle other model-less Bambu keys (Codex P1 on PR #387 round 2).
+  // `filament_notes` is NOT here either, for the same reason (GH #620):
+  // the model has no top-level `notes` column (the form stores notes in
+  // the settings bag as `filament_notes`), so listing it as structured
+  // destroyed the value — strict mode stripped the write AND the key was
+  // excluded from the settings bag. Riding the bag keeps it lossless and
+  // makes imported notes show up in the form's Notes field.
   "filament_shrink",
   "filament_shrinkage_compensation_z",
   // temperatures
@@ -202,7 +207,6 @@ export interface ParsedFilament {
   density?: number;
   cost?: number;
   maxVolumetricSpeed?: number;
-  notes?: string;
   shrinkageXY?: number;
   shrinkageZ?: number;
   temperatures: ParsedTemperatures;
@@ -268,7 +272,6 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     density: num(json.filament_density),
     cost: num(json.filament_cost),
     maxVolumetricSpeed: num(json.filament_max_volumetric_speed),
-    notes: unwrap(json.filament_notes),
     temperatures: {
       nozzle: num(json.nozzle_temperature),
       nozzleFirstLayer: num(json.nozzle_temperature_initial_layer),

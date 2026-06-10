@@ -67,9 +67,17 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     if (!mongoose.models.Filament) mongoose.model("Filament", filMod.default.schema);
     Filament = mongoose.models.Filament;
     // The detail GET route .populate()s these — register so it doesn't 500.
-    for (const name of ["Nozzle", "Printer", "BedType"]) {
+    // Static imports — `await import(`@/models/${name}`)` triggers a Vite
+    // dynamic-import warning ("file extension must be included in the static
+    // part"); a static lookup table keeps each import string fully literal
+    // (same pattern as tests/compare-route.test.ts).
+    const referenced = [
+      ["Nozzle", await import("@/models/Nozzle")],
+      ["Printer", await import("@/models/Printer")],
+      ["BedType", await import("@/models/BedType")],
+    ] as const;
+    for (const [name, mod] of referenced) {
       if (!mongoose.models[name]) {
-        const mod = await import(`@/models/${name}`);
         mongoose.model(name, mod.default.schema);
       }
     }
