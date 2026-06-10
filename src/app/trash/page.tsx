@@ -80,6 +80,10 @@ export default function TrashPage() {
       }
       toast(t("trash.restored", { name: item.name }));
       fetchTrash();
+    } catch {
+      // GH #640: try/finally without a catch left a dropped connection
+      // silent (and an unhandled rejection in the console).
+      toast(t("trash.restoreError"), "error");
     } finally {
       markBusy(item._id, false);
     }
@@ -99,6 +103,9 @@ export default function TrashPage() {
       }
       toast(t("trash.permanentDeleted", { name: item.name }));
       fetchTrash();
+    } catch {
+      // GH #640: same silent-network-failure gap as handleRestore.
+      toast(t("trash.permanentError"), "error");
     } finally {
       markBusy(item._id, false);
     }
@@ -118,19 +125,32 @@ export default function TrashPage() {
       return 0;
     });
     for (const item of ordered) {
-      const res = await fetch(`/api/filaments/${item._id}?permanent=true`, {
-        method: "DELETE",
-      });
-      if (res.ok) {
-        ok++;
-      } else {
-        const body = await res.json().catch(() => null);
-        errors.push(body?.error || item.name);
+      // GH #640: a network failure mid-loop used to throw out of the
+      // handler, silently abandoning the remaining items with no toast
+      // and no refresh. Record the failure and keep going.
+      try {
+        const res = await fetch(`/api/filaments/${item._id}?permanent=true`, {
+          method: "DELETE",
+        });
+        if (res.ok) {
+          ok++;
+        } else {
+          const body = await res.json().catch(() => null);
+          errors.push(body?.error || item.name);
+        }
+      } catch {
+        errors.push(item.name);
       }
     }
     toast(t("trash.emptyDone", { count: ok }));
     if (errors.length > 0) {
-      toast(errors.slice(0, 3).join("; "), "error");
+      toast(
+        t("trash.bulkFailures", {
+          count: errors.length,
+          names: errors.slice(0, 3).join("; "),
+        }),
+        "error",
+      );
     }
     fetchTrash();
   };
@@ -172,19 +192,31 @@ export default function TrashPage() {
       return 0;
     });
     for (const item of ordered) {
-      const res = await fetch(`/api/filaments/${item._id}/restore`, {
-        method: "POST",
-      });
-      if (res.ok) {
-        ok++;
-      } else {
-        const body = await res.json().catch(() => null);
-        errors.push(body?.error || item.name);
+      // GH #640: same per-item isolation as handleEmptyTrash — one
+      // dropped request must not silently abandon the rest of the batch.
+      try {
+        const res = await fetch(`/api/filaments/${item._id}/restore`, {
+          method: "POST",
+        });
+        if (res.ok) {
+          ok++;
+        } else {
+          const body = await res.json().catch(() => null);
+          errors.push(body?.error || item.name);
+        }
+      } catch {
+        errors.push(item.name);
       }
     }
     toast(t("trash.restoreAllDone", { count: ok }));
     if (errors.length > 0) {
-      toast(errors.slice(0, 3).join("; "), "error");
+      toast(
+        t("trash.bulkFailures", {
+          count: errors.length,
+          names: errors.slice(0, 3).join("; "),
+        }),
+        "error",
+      );
     }
     fetchTrash();
   };
