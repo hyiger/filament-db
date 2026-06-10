@@ -6,7 +6,7 @@ import {
   mapToFilamentPayload,
 } from "@/lib/openprinttagBrowser";
 import { diffOptFields } from "@/lib/optResync";
-import { resolveFilament } from "@/lib/resolveFilament";
+import { resolveEffectiveFilament } from "@/lib/resolveEffectiveFilament";
 
 /**
  * GET /api/filaments/{id}/openprinttag/check  (GH #607, Phase 1)
@@ -58,25 +58,15 @@ export async function GET(
     // raw doc. A field a variant leaves unset to inherit from its parent
     // reads as null on the raw doc, so diffOptFields would classify it as an
     // empty local value and offer it as a spurious "adopt" gap-fill — even
-    // though the resolved (inherited) value already matches OPT. Resolve the
-    // same way the `.bin` route does (openprinttag/route.ts). The slug and
-    // snapshot still come from the raw doc: `settings` isn't carried through
-    // resolveFilament, and `openprinttagSnapshot` is variant-only (so it
-    // survives resolution unchanged either way). Root filaments have no
+    // though the resolved (inherited) value already matches OPT. The sibling
+    // `sync` route resolves the same way so the two stay in lockstep. The
+    // slug and snapshot still come from the raw doc: `settings` isn't carried
+    // through resolveFilament, and `openprinttagSnapshot` is variant-only (so
+    // it survives resolution unchanged either way). Root filaments have no
     // parentId, so they diff exactly as before.
-    let effective: Record<string, unknown> = filament as unknown as Record<string, unknown>;
-    if (filament.parentId) {
-      const parent = await Filament.findOne({
-        _id: filament.parentId,
-        _deletedAt: null,
-      }).lean();
-      if (parent) {
-        effective = resolveFilament(
-          filament as unknown as Parameters<typeof resolveFilament>[0],
-          parent as unknown as Parameters<typeof resolveFilament>[1],
-        ) as unknown as Record<string, unknown>;
-      }
-    }
+    const effective = await resolveEffectiveFilament(
+      filament as unknown as Record<string, unknown>,
+    );
 
     const snapshot = filament.openprinttagSnapshot as Record<string, unknown> | undefined;
     const changes = diffOptFields(effective, payload, snapshot);

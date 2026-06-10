@@ -394,6 +394,40 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(fresh.density).toBe(1.42); // untouched
   });
 
+  it("sync: validates against the resolved view so check/sync agree on a variant (GH #607)", async () => {
+    // A variant inherits optTags from its parent and OPT clears them upstream.
+    // check offers the clear (resolved optTags ≠ []); sync must accept the
+    // same field. Pre-fix sync diffed the RAW variant (own optTags already
+    // []), so it rejected the field as "not offered" — making the changelist
+    // unapplyable. (The write itself is a no-op for an inherited array — the
+    // variant re-inherits — but the two routes must at least agree.)
+    const parent = await Filament.create({
+      name: "Tag Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      optTags: [16],
+    });
+    const variant = await Filament.create({
+      name: "Tag Variant",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#3d3e3d",
+      parentId: parent._id,
+      // optTags unset → inherits [16]
+      settings: { openprinttag_slug: "prusament-pla-galaxy-black" },
+    });
+    // check surfaces the optTags change against the resolved (inherited) value.
+    const checkRes = await checkGET({} as NextRequest, params(String(variant._id)));
+    const checkBody = await checkRes.json();
+    expect(
+      checkBody.changes.some((c: { field: string }) => c.field === "optTags"),
+    ).toBe(true);
+    // sync must ACCEPT it (200), not reject with "No current update".
+    const syncRes = await syncPOST(syncReq(String(variant._id), ["optTags"]), params(String(variant._id)));
+    expect(syncRes.status).toBe(200);
+    expect((await syncRes.json()).applied).toContain("optTags");
+  });
+
   it("sync: 400 when the filament is not OPT-linked", async () => {
     const f = await Filament.create({ name: "Unlinked", vendor: "X", type: "PLA" });
     const res = await syncPOST(syncReq(String(f._id), ["density"]), params(String(f._id)));
