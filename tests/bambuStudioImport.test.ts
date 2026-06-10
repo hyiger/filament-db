@@ -98,6 +98,40 @@ describe("parseBambuStudioProfile", () => {
     expect(parseBambuStudioProfile({ name: ["X"] }).filament.settings.filament_soluble).toBeUndefined();
   });
 
+  it("passes filament_notes through the settings bag and round-trips it (GH #620)", () => {
+    // The Filament model has no top-level `notes` column (the form stores
+    // notes as `settings.filament_notes`), so the key must ride the
+    // settings passthrough bag like `filament_soluble`. Pre-fix it was
+    // listed in STRUCTURED_KEYS — excluded from the bag AND silently
+    // stripped by Mongoose strict mode on the applier's `u.notes` write,
+    // destroying the value entirely.
+    const { filament } = parseBambuStudioProfile({
+      name: ["Noted PLA"],
+      filament_notes: ["Dried 6h @ 55C. Prints best with 0.2mm layers."],
+    });
+    expect(filament.settings.filament_notes).toBe(
+      "Dried 6h @ 55C. Prints best with 0.2mm layers.",
+    );
+
+    // Round-trip: a doc carrying the settings-bag key re-exports the key
+    // verbatim, and a second parse lands it back in the settings bag.
+    const [exported] = generateOrcaSlicerProfiles([
+      {
+        name: "Noted PLA",
+        type: "PLA",
+        vendor: "QA Labs",
+        settings: filament.settings,
+      },
+    ]);
+    expect(exported.filament_notes).toEqual([
+      "Dried 6h @ 55C. Prints best with 0.2mm layers.",
+    ]);
+    const reparsed = parseBambuStudioProfile(exported);
+    expect(reparsed.filament.settings.filament_notes).toBe(
+      "Dried 6h @ 55C. Prints best with 0.2mm layers.",
+    );
+  });
+
   it("extracts calibration hints when present and flags hasAnyHint", () => {
     const { calibrationHints } = parseBambuStudioProfile({
       name: ["X"],

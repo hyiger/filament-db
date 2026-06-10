@@ -31,7 +31,7 @@ function isValidLocale(value: unknown): value is Locale {
   return typeof value === "string" && LOCALES.some((l) => l.code === value);
 }
 
-function getInitialLocale(): Locale {
+function readStoredLocale(): Locale {
   if (typeof window === "undefined") return DEFAULT_LOCALE;
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -45,9 +45,25 @@ function getInitialLocale(): Locale {
 }
 
 export function TranslationProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(getInitialLocale);
+  const [locale, setLocaleState] = useState<Locale>(DEFAULT_LOCALE);
 
-  // In Electron, electron-store is the source of truth — override localStorage value
+  // GH #639: read the persisted locale on mount instead of in a lazy
+  // useState initializer. localStorage is undefined during SSR, so the
+  // initializer made the server render `en` while the first client render
+  // produced the stored locale — a React 19 hydration mismatch (console
+  // error + full client re-render) on every page load for a non-default
+  // web user. Mirrors the CollapsibleSection pattern: default during SSR,
+  // one post-hydration sync render; the brief default-locale flash on web
+  // is the accepted trade-off.
+  useEffect(() => {
+    const stored = readStoredLocale();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- post-hydration sync from localStorage
+    if (stored !== DEFAULT_LOCALE) setLocaleState(stored);
+  }, []);
+
+  // In Electron, electron-store is the source of truth — override the
+  // localStorage value (this async IPC read resolves after the synchronous
+  // localStorage sync above, so it always wins).
   useEffect(() => {
     const api = window.electronAPI;
     if (api?.getConfig) {
