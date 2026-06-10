@@ -31,6 +31,21 @@ export function sanitizeFormulaPrefix(value: string): string {
   if (value.length > 0 && FORMULA_TRIGGERS.includes(value[0])) {
     return "'" + value;
   }
+  // GH #649 (Codex P3): a value that GENUINELY starts with `'` + a trigger
+  // (e.g. a filament literally named `'+95A`) is exported unguarded by the
+  // clause above (its first char isn't a trigger), yet `unsanitizeCsvCell`
+  // would strip that real apostrophe on import — corrupting the name.
+  // Double the apostrophe here so the unguard can restore exactly one,
+  // keeping the round trip lossless. A genuine `'70s` (apostrophe + benign
+  // char) is still left alone — only the ambiguous `'`+trigger shape needs
+  // disambiguating.
+  if (
+    value.length >= 2 &&
+    value[0] === "'" &&
+    FORMULA_TRIGGERS.includes(value[1])
+  ) {
+    return "'" + value;
+  }
   return value;
 }
 
@@ -95,6 +110,12 @@ export function isFormulaCandidate(value: unknown): boolean {
  * pattern that `csvCell` produces. A value that genuinely starts with `'`
  * followed by a non-trigger character (e.g. `'70s blue`) is left alone.
  *
+ * GH #649 (Codex P3): `sanitizeFormulaPrefix` doubles the apostrophe for a
+ * value that genuinely begins with `'` + a trigger, so the `''` + trigger
+ * shape unwinds by one here too — `'+95A` (guarded `+95A`) → `+95A`,
+ * `''+95A` (guarded genuine `'+95A`) → `'+95A`. Both strip exactly one
+ * leading apostrophe; `'70s` (apostrophe + benign) is untouched.
+ *
  * Codex P2 follow-up to PR #144: without this, exporting then re-
  * importing a row whose filament name / vendor / location starts with
  * a trigger char would either fail to match an existing filament (the
@@ -102,12 +123,17 @@ export function isFormulaCandidate(value: unknown): boolean {
  * verbatim into the document.
  */
 export function unsanitizeCsvCell(value: string): string {
-  if (
-    value.length >= 2 &&
-    value[0] === "'" &&
-    FORMULA_TRIGGERS.includes(value[1])
-  ) {
-    return value.slice(1);
+  if (value.length >= 2 && value[0] === "'") {
+    // `'` + trigger → guarded trigger value, strip one.
+    if (FORMULA_TRIGGERS.includes(value[1])) return value.slice(1);
+    // `''` + trigger → guarded genuine apostrophe value, strip one.
+    if (
+      value.length >= 3 &&
+      value[1] === "'" &&
+      FORMULA_TRIGGERS.includes(value[2])
+    ) {
+      return value.slice(1);
+    }
   }
   return value;
 }

@@ -115,6 +115,22 @@ describe("unsanitizeCsvCell — inverse of csvCell's formula guard", () => {
     expect(unsanitizeCsvCell(csvCell("-1"))).toBe("-1");
     expect(unsanitizeCsvCell(csvCell("@SUM"))).toBe("@SUM");
   });
+
+  // GH #649 (Codex P3): a value that GENUINELY begins with `'` + a trigger
+  // must survive the export/import round trip — the guard doubles the
+  // apostrophe (`'+95A` → `''+95A`) and the unguard strips exactly one,
+  // so the real leading apostrophe is preserved rather than eaten.
+  it("round-trips genuine apostrophe + trigger values without losing the apostrophe", () => {
+    for (const original of ["'+95A TPU", "'=custom", "'-CF", "'@home"]) {
+      expect(sanitizeFormulaPrefix(original)).toBe("'" + original);
+      expect(unsanitizeCsvCell(csvCell(original))).toBe(original);
+    }
+  });
+
+  it("still leaves a genuine apostrophe + benign char untouched on round trip", () => {
+    expect(sanitizeFormulaPrefix("'70s Blue")).toBe("'70s Blue");
+    expect(unsanitizeCsvCell(csvCell("'70s Blue"))).toBe("'70s Blue");
+  });
 });
 
 describe("isFormulaCandidate", () => {
