@@ -867,7 +867,16 @@ function SpoolEditRow({
           // app (SpoolCard label edit).
           <button
             type="button"
-            onClick={() => setEditingWeight(true)}
+            onClick={() => {
+              // GH #640: reseed the draft from the current row value on
+              // open. The row survives fetchInventory() refreshes (stable
+              // key), so the once-seeded useState value goes stale when
+              // the weight changed server-side — opening then saving
+              // would write the old weight back. Mirrors the GH #263
+              // SpoolCard label-edit fix.
+              setWeightDraft(row.totalWeight?.toString() ?? "");
+              setEditingWeight(true);
+            }}
             className="inline-flex items-center gap-1 border-b border-dashed border-gray-400 dark:border-gray-600 hover:text-blue-600 hover:border-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 transition-colors"
             aria-label={t("inventory.updateWeight")}
             title={t("inventory.updateWeight")}
