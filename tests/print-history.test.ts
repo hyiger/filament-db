@@ -636,6 +636,203 @@ describe("print-history DELETE (undo)", () => {
     // No clamp: refund 50 onto 0 → 50.
     expect(after.spools[0].totalWeight).toBe(50);
   });
+
+  // ─── GH #621: retry after a partial failure must not double-refund ───
+
+  it("retry after a mid-loop save failure refunds each filament exactly once (GH #621)", async () => {
+    // The bug: the refund loop saves per filament and the _deletedAt
+    // tombstone only lands after the loop. If filament B's save throws
+    // (VersionError → the route's 409 "Please retry"), filament A is
+    // already refunded with its usageHistory entry removed while the job
+    // is still active — and the advertised retry used to refund A AGAIN.
+    // netFilamentWeight is deliberately unset on A so the gross-capacity
+    // clamp can't mask the double-refund.
+    const a = await Filament.create({
+      name: "Partial Fail A",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      // netFilamentWeight intentionally unset → no clamp ceiling
+      spools: [{ label: "", totalWeight: 1000 }],
+    });
+    const b = await Filament.create({
+      name: "Partial Fail B",
+      vendor: "Test",
+      type: "PETG",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ label: "", totalWeight: 800 }],
+    });
+
+    const postRes = await postPrintHistory(
+      new NextRequest("http://localhost/api/print-history", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jobLabel: "two-filament job",
+          source: "manual",
+          usage: [
+            { filamentId: String(a._id), grams: 50 },
+            { filamentId: String(b._id), grams: 25 },
+          ],
+        }),
+      }),
+    );
+    expect(postRes.status).toBe(201);
+    const job = await postRes.json();
+    expect((await Filament.findById(a._id)).spools[0].totalWeight).toBe(950);
+    expect((await Filament.findById(b._id)).spools[0].totalWeight).toBe(775);
+
+    // Make the SECOND filament.save() inside the DELETE loop throw a
+    // VersionError (a concurrent edit landing mid-loop — exactly what
+    // OCC raises in production). Same prototype-patch technique as
+    // tests/print-history-concurrency.test.ts: the route holds its own
+    // static model reference, so a spy on the test-side class wouldn't
+    // see the route's calls.
+    const proto = mongoose.Model.prototype as unknown as {
+      save: () => Promise<unknown>;
+    };
+    const originalSave = proto.save;
+    let saveCalls = 0;
+    proto.save = async function () {
+      saveCalls++;
+      if (saveCalls === 2) {
+        throw new mongoose.Error.VersionError(
+          this as unknown as mongoose.Document,
+          0,
+          ["spools"],
+        );
+      }
+      return originalSave.apply(this);
+    };
+
+    let firstDel;
+    try {
+      firstDel = await deletePrintHistory(delReq(job._id), {
+        params: Promise.resolve({ id: job._id }),
+      });
+    } finally {
+      proto.save = originalSave;
+    }
+    expect(firstDel.status).toBe(409);
+
+    // Partial state after the failure: A refunded + entry removed, B
+    // untouched, job still active (no tombstone).
+    const aMid = await Filament.findById(a._id);
+    expect(aMid.spools[0].totalWeight).toBe(1000);
+    expect(aMid.spools[0].usageHistory).toHaveLength(0);
+    const bMid = await Filament.findById(b._id);
+    expect(bMid.spools[0].totalWeight).toBe(775);
+    expect(bMid.spools[0].usageHistory).toHaveLength(1);
+    expect((await PrintHistory.findById(job._id))._deletedAt).toBeNull();
+
+    // The advertised retry. Must finish the job: refund B, tombstone the
+    // entry — and NOT refund A a second time.
+    const retry = await deletePrintHistory(delReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(retry.status).toBe(200);
+
+    const aAfter = await Filament.findById(a._id);
+    // Pre-#621 this was 1050 (refund applied twice, unbounded — no clamp).
+    expect(aAfter.spools[0].totalWeight).toBe(1000);
+    const bAfter = await Filament.findById(b._id);
+    expect(bAfter.spools[0].totalWeight).toBe(800);
+    expect(bAfter.spools[0].usageHistory).toHaveLength(0);
+
+    const tombstone = await PrintHistory.findById(job._id);
+    expect(tombstone._deletedAt).toBeInstanceOf(Date);
+  });
+
+  it("refunds every usage row when a job carries multiple rows against the same spool", async () => {
+    // POST allows several usage rows for the same filament; without an
+    // explicit spoolId they all resolve to the same spool, each pushing
+    // its own usageHistory entry under the shared jobId. The #621 fix
+    // consumes exactly ONE entry per usage row (preferring the
+    // jobId+grams match) — a remove-all-jobId-matches sweep would leave
+    // the second row with nothing to remove and skip its refund.
+    const f = await Filament.create({
+      name: "Two Rows One Spool",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ label: "", totalWeight: 1000 }],
+    });
+    const postRes = await postPrintHistory(
+      new NextRequest("http://localhost/api/print-history", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          jobLabel: "two-part job",
+          source: "manual",
+          usage: [
+            { filamentId: String(f._id), grams: 50 },
+            { filamentId: String(f._id), grams: 30 },
+          ],
+        }),
+      }),
+    );
+    expect(postRes.status).toBe(201);
+    const job = await postRes.json();
+    const afterPost = await Filament.findById(f._id);
+    expect(afterPost.spools[0].totalWeight).toBe(920);
+    expect(afterPost.spools[0].usageHistory).toHaveLength(2);
+
+    const delRes = await deletePrintHistory(delReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(delRes.status).toBe(200);
+
+    const refunded = await Filament.findById(f._id);
+    // Both rows refunded: 920 + 50 + 30 = 1000.
+    expect(refunded.spools[0].totalWeight).toBe(1000);
+    expect(refunded.spools[0].usageHistory).toHaveLength(0);
+  });
+
+  it("does not refund a usage row whose spool has no matching usageHistory entry (GH #621)", async () => {
+    // Same fixture as "does not remove a manual entry even when fallback
+    // runs", now pinning the WEIGHT: the only entry on the spool is a
+    // manual log the source-restricted fallback refuses to touch, so
+    // nothing is removed — and, new in #621, nothing is refunded either.
+    // Pre-#621 the route refunded the 150g anyway, drifting the spool
+    // weight out of sync with the surviving manual ledger entry (and
+    // doing so again on every repeat of the same delete-shaped call).
+    const startedAt = new Date("2026-04-30T12:00:00Z");
+    const f = await Filament.create({
+      name: "No Entry No Refund",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [
+        {
+          label: "",
+          totalWeight: 850,
+          usageHistory: [
+            { grams: 150, jobLabel: "manual-only", date: startedAt, source: "manual", jobId: null },
+          ],
+        },
+      ],
+    });
+    const orphan = await PrintHistory.create({
+      jobLabel: "ghost",
+      usage: [{ filamentId: f._id, spoolId: f.spools[0]._id, grams: 150 }],
+      startedAt,
+      source: "manual",
+    });
+
+    const delRes = await deletePrintHistory(delReq(String(orphan._id)), {
+      params: Promise.resolve({ id: String(orphan._id) }),
+    });
+    expect(delRes.status).toBe(200);
+
+    const fresh = await Filament.findById(f._id);
+    // Weight unchanged — no entry was removed, so no refund applies.
+    expect(fresh.spools[0].totalWeight).toBe(850);
+    expect(fresh.spools[0].usageHistory).toHaveLength(1);
+    expect(fresh.spools[0].usageHistory[0].source).toBe("manual");
+  });
 });
 
 describe("analytics GET — double-counting regression", () => {
