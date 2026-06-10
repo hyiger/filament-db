@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { NozzleConflictError, type NozzleConflict } from "@/lib/nozzleConflicts";
 
@@ -127,7 +127,16 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
   const [bedTypesFetchError, setBedTypesFetchError] = useState(false);
   const [filamentOptions, setFilamentOptions] = useState<FilamentOption[]>([]);
   const [saving, setSaving] = useState(false);
-  const [dirty, setDirty] = useState(false);
+  // GH #640 (mirrors the GH #286 FilamentForm fix): derive dirtiness by
+  // comparing a snapshot of the editable form state against the last
+  // clean baseline, instead of one-way latching a boolean on every edit.
+  // The latch meant reverting a change still triggered the
+  // unsaved-changes prompt on navigation; the snapshot comparison is
+  // two-way. The baseline is seeded with the initial snapshot via the
+  // lazy useState initializer and re-pointed after a successful save.
+  const dirtySnapshot = useMemo(() => JSON.stringify(form), [form]);
+  const [dirtyBaseline, setDirtyBaseline] = useState(dirtySnapshot);
+  const dirty = dirtySnapshot !== dirtyBaseline;
   const savedRef = useRef(false);
   // GH #232 — when the parent's onSubmit throws NozzleConflictError, we
   // store the conflicts here to open the resolution modal. `null` means
@@ -208,7 +217,6 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
 
   const updateForm = (updates: Partial<PrinterFormData>) => {
     setForm((f) => ({ ...f, ...updates }));
-    setDirty(true);
   };
 
   const toggleNozzle = (id: string) => {
@@ -218,7 +226,6 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
         ? f.installedNozzles.filter((n) => n !== id)
         : [...f.installedNozzles, id],
     }));
-    setDirty(true);
   };
 
   const toggleBedType = (id: string) => {
@@ -228,7 +235,6 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
         ? f.installedBedTypes.filter((b) => b !== id)
         : [...f.installedBedTypes, id],
     }));
-    setDirty(true);
   };
 
   const addSlot = () => {
@@ -294,7 +300,8 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
     try {
       await onSubmit(buildSubmitPayload());
       savedRef.current = true;
-      setDirty(false);
+      // GH #640: re-baseline so the just-saved state counts as clean.
+      setDirtyBaseline(JSON.stringify(form));
     } catch (err) {
       // GH #232 — a 409 nozzle conflict thrown by the parent's onSubmit
       // routes to the resolution modal instead of the generic
@@ -407,7 +414,12 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
       try {
         await onSubmit(buildSubmitPayload(resolvedInstalled));
         savedRef.current = true;
-        setDirty(false);
+        // GH #640: re-baseline against the form as just saved. The
+        // setForm above hasn't re-rendered this closure, so merge the
+        // resolved nozzle ids in rather than snapshotting stale `form`.
+        setDirtyBaseline(
+          JSON.stringify({ ...form, installedNozzles: resolvedInstalled }),
+        );
       } catch (err) {
         // If the retry also returns a conflict (e.g. a third printer
         // claimed the nozzle between the first 409 and now), surface
