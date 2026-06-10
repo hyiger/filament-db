@@ -413,6 +413,28 @@ describe("/api/printers", () => {
       expect(String(fresh.amsSlots[0].spoolId)).toBe(spoolId);
     });
 
+    // Codex P2 on #646: the same active spool in two slots of one printer
+    // payload would pass per-slot validation, and clearSpoolsFromOtherPrinters
+    // excludes the current printer so it wouldn't self-heal — violating the
+    // one-spool-one-slot invariant.
+    it("POST rejects the same spool in two slots of one printer with 400", async () => {
+      const spoolId = await makeSpool();
+      const res = await createPrinter(
+        jsonReq(
+          "http://localhost/api/printers",
+          printerBody([
+            { slotName: "Slot 1", spoolId },
+            { slotName: "Slot 2", spoolId },
+          ]),
+        ),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/more than one slot/i);
+      expect(body.error).toMatch(/Slot "Slot 2"/);
+      expect(await Printer.countDocuments({ name: "AMS Printer" })).toBe(0);
+    });
+
     it("POST and PUT accept null/empty spoolId slots", async () => {
       const postRes = await createPrinter(
         jsonReq(

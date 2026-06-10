@@ -146,6 +146,12 @@ export async function findInvalidSlotSpoolRef(
   amsSlots: unknown,
 ): Promise<string | null> {
   if (!Array.isArray(amsSlots)) return null;
+  // GH #631 (Codex P2 on #646): a spool occupies at most one slot. The
+  // per-slot checks below validate each occurrence independently, so the
+  // SAME spoolId in two slots of one payload would pass — and the route's
+  // follow-up `clearSpoolsFromOtherPrinters` deliberately excludes the
+  // current printer, so it wouldn't self-heal. Reject the duplicate here.
+  const seenSpoolIds = new Set<string>();
   for (let i = 0; i < amsSlots.length; i++) {
     const slot = amsSlots[i] as
       | { slotName?: unknown; spoolId?: unknown }
@@ -160,6 +166,11 @@ export async function findInvalidSlotSpoolRef(
     if (!mongoose.isValidObjectId(spoolId)) {
       return `Slot ${slotLabel}: spoolId is not a valid id`;
     }
+    const spoolKey = String(spoolId);
+    if (seenSpoolIds.has(spoolKey)) {
+      return `Slot ${slotLabel}: the same spool cannot occupy more than one slot`;
+    }
+    seenSpoolIds.add(spoolKey);
     // Same lookup as the assignment route: the spool must exist on an
     // active filament, and the positional projection surfaces the matched
     // subdocument so the retired flag can be checked too.
