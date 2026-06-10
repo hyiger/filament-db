@@ -159,6 +159,11 @@ export async function PUT(
  * This handles the "print failed, undo this entry" case from issue #92. The
  * refund is best-effort: if a spool has since been deleted we log the refund
  * loss but still remove the history entry.
+ *
+ * GH #621: each usage row's refund is conditioned on its matching
+ * usageHistory entry actually being removed in this pass, so a retry after a
+ * mid-loop failure (the 409 path) can't refund an already-refunded spool a
+ * second time. See the comment block inside the refund loop.
  */
 export async function DELETE(
   request: NextRequest,
@@ -211,6 +216,58 @@ export async function DELETE(
         ? filament.spools.find((s) => String(s._id) === String(u.spoolId))
         : null;
       if (!spool) continue;
+
+      // GH #621: locate the usageHistory entry this usage row pays back
+      // BEFORE touching any weight, and refund only when an entry is
+      // actually removed. The refund used to be unconditional and the
+      // tombstone only lands after the loop — so a mid-loop failure (e.g.
+      // a VersionError mapped to the 409 "Please retry" below) left
+      // earlier filaments refunded with their entries removed while the
+      // job stayed `_deletedAt: null`, and the advertised retry refunded
+      // them AGAIN (unbounded when netFilamentWeight is null, since the
+      // gross clamp only applies when capacity is known). Keying the
+      // refund to entry removal makes each iteration idempotent: on
+      // retry the entry is already gone → nothing removed → no second
+      // refund.
+      //
+      // Match preference, exactly ONE entry consumed per usage row:
+      //   1. jobId + grams. A job can carry multiple usage rows against
+      //      the same spool (POST pushes one usageHistory entry per row,
+      //      all sharing this jobId), so each row must consume its own
+      //      entry — sweeping every jobId match at once would leave the
+      //      later rows with nothing to remove and skip their refunds.
+      //   2. jobId alone (grams drifted; jobId is still unambiguous).
+      //   3. Legacy (grams, startedAt) for entries written before the
+      //      v1.12.x audit that don't carry a jobId — but only when the
+      //      entry has source "job" or "slicer", which restricts the
+      //      candidate set to print-history-driven rows and avoids
+      //      accidentally clobbering a manual usage log that happens to
+      //      share both fields. First match only, as before.
+      const history = spool.usageHistory || [];
+      const matchesJob = (h: (typeof history)[number]) =>
+        Boolean(h.jobId) && String(h.jobId) === String(entry._id);
+      let removeIdx = history.findIndex((h) => matchesJob(h) && h.grams === u.grams);
+      if (removeIdx === -1) {
+        removeIdx = history.findIndex((h) => matchesJob(h));
+      }
+      if (removeIdx === -1) {
+        removeIdx = history.findIndex(
+          (h) =>
+            !h.jobId &&
+            (h.source === "job" || h.source === "slicer") &&
+            h.grams === u.grams &&
+            h.date.getTime() === entry.startedAt.getTime(),
+        );
+      }
+      // No matching entry → this row's debit is no longer (or was never)
+      // represented on the spool: either a prior partial pass already
+      // removed it and refunded the weight, or the spool never carried
+      // it. Either way there is nothing to undo — refunding here is
+      // exactly the double-refund #621 describes.
+      if (removeIdx === -1) continue;
+
+      spool.usageHistory = history.filter((_, idx) => idx !== removeIdx);
+
       // Refund weight. GH #228 + Codex P1 review on PR #229: clamp at
       // the spool's **gross** full-weight ceiling. `spool.totalWeight`
       // is what the user reads off the scale — filament + empty spool —
@@ -254,34 +311,6 @@ export async function DELETE(
           spool.totalWeight = refunded;
         }
       }
-      // Remove the matching usageHistory entry by jobId. Older entries
-      // written before the v1.12.x audit don't carry a jobId; for those
-      // we fall back to the legacy (grams, startedAt) match — but only
-      // when the entry has source "job" or "slicer", which restricts
-      // the candidate set to print-history-driven rows and avoids
-      // accidentally clobbering a manual usage log that happens to
-      // share both fields.
-      spool.usageHistory = (spool.usageHistory || []).filter(
-        (h, idx, arr) => {
-          // New world: jobId match is unambiguous.
-          if (h.jobId && String(h.jobId) === String(entry._id)) return false;
-
-          // Legacy fallback (entries created before jobId existed).
-          if (h.jobId) return true;
-          if (h.source !== "job" && h.source !== "slicer") return true;
-          if (h.grams !== u.grams) return true;
-          if (h.date.getTime() !== entry.startedAt.getTime()) return true;
-          // Remove only the first matching legacy entry per usage row.
-          const firstMatch = arr.findIndex(
-            (x) =>
-              !x.jobId &&
-              (x.source === "job" || x.source === "slicer") &&
-              x.grams === u.grams &&
-              x.date.getTime() === entry.startedAt.getTime(),
-          );
-          return idx !== firstMatch;
-        },
-      );
       await filament.save();
     }
 

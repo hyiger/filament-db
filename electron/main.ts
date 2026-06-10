@@ -906,7 +906,12 @@ ipcMain.handle("test-connection", async (event, uri: string) => {
 // assertTrustedSender and a constrained payload allowlist.
 
 // Sync
-ipcMain.handle("get-sync-status", () => {
+// GH #623: read-only, but gate on the trusted sender anyway — the sync
+// status carries the last error text (which can name the Atlas DB), and
+// leaving the getter open was an undocumented asymmetry vs. every other
+// handler's "contain XSS to the renderer" posture.
+ipcMain.handle("get-sync-status", (event) => {
+  assertTrustedSender(event, "get-sync-status");
   return syncService?.getStatus() ?? {
     state: "idle",
     lastSyncAt: null,
@@ -959,7 +964,10 @@ ipcMain.handle("check-atlas-connectivity", async (event) => {
 });
 
 // NFC IPC handlers
-ipcMain.handle("nfc-get-status", () => {
+// GH #623: read-only, but the status discloses the reader name + tagUid —
+// same trusted-sender gate as the read/write/format handlers.
+ipcMain.handle("nfc-get-status", (event) => {
+  assertTrustedSender(event, "nfc-get-status");
   return nfcService?.getStatus() ?? {
     readerConnected: false,
     readerName: null,
@@ -1070,6 +1078,20 @@ ipcMain.handle("label-printer-set-device-path", (event, devicePath: string | nul
   if (devicePath == null) {
     (store as Store<Record<string, unknown>>).delete("labelPrinterDevicePath");
   } else {
+    // GH #623: only accept the shapes listLabelPrinters ever surfaces —
+    // a `usb://…` device URI (the one scheme the CUPS lister emits) or an
+    // installed queue / Windows printer name. Anything else (ipp://,
+    // file://, a path with slashes) could otherwise be persisted by a
+    // compromised renderer and later handed to `lpadmin -v` by printCups,
+    // binding the managed queue to an attacker-chosen device URI.
+    const isUsbUri = /^usb:\/\//i.test(devicePath);
+    const isQueueName =
+      !devicePath.includes("/") && !/^[a-z][a-z0-9+.-]*:\/\//i.test(devicePath);
+    if (!isUsbUri && !isQueueName) {
+      throw new Error(
+        "devicePath must be a usb:// device URI or an installed printer/queue name",
+      );
+    }
     (store as Store<Record<string, unknown>>).set("labelPrinterDevicePath", devicePath);
   }
   return { ok: true };

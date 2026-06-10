@@ -232,6 +232,7 @@
   "trash.restoreAll": "Restore all ({count})",
   "trash.restoreAllConfirm": "Restore all {count} filament(s) from the trash?",
   "trash.restoreAllDone": "Restored {count} filament(s)",
+  "trash.bulkFailures": "{count} failed: {names}",
   "trash.deletedAt": "deleted {date} {time}",
   "trash.variantBadge": "variant",
   "nav.openMenu": "Open navigation menu",

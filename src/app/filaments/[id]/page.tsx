@@ -272,10 +272,16 @@ function FilamentDetail() {
   }, [params.id]);
 
   // GH #607: re-pull the filament after an OpenPrintTag re-sync applied
-  // changes, so the detail view reflects the adopted values.
+  // changes, so the detail view reflects the adopted values. GH #640:
+  // never throws — a failed refresh keeps the current data rather than
+  // surfacing an unhandled rejection from fire-and-forget callers.
   const refetchFilament = useCallback(async () => {
-    const r = await fetch(`/api/filaments/${params.id}`);
-    if (r.ok) setFilament(await r.json());
+    try {
+      const r = await fetch(`/api/filaments/${params.id}`);
+      if (r.ok) setFilament(await r.json());
+    } catch {
+      // keep the current (stale) filament
+    }
   }, [params.id]);
 
   // GH #595: spool deep-link — once the filament (with its spools) has loaded,
@@ -661,9 +667,17 @@ function FilamentDetail() {
   // (read off amsSlots[].spoolId, not stored on the spool) reflects the
   // latest server state. Used after any write that the server may have
   // reconciled slots for — slot assign/clear and spool retire (#558).
+  // GH #640: never throws — the write that triggered the refresh already
+  // succeeded, so a failed refresh keeps the (possibly stale) printers
+  // list rather than letting the callers' catch blocks mis-report the
+  // whole operation as failed. Same silent posture as the mount fetch.
   const refreshPrinters = async () => {
-    const pr = await fetch("/api/printers");
-    if (pr.ok) setPrinters(await pr.json());
+    try {
+      const pr = await fetch("/api/printers");
+      if (pr.ok) setPrinters(await pr.json());
+    } catch {
+      // keep the current (stale) printers list
+    }
   };
 
   const handleUpdateSpool = async (
@@ -1910,11 +1924,12 @@ function FilamentDetail() {
           targetFilamentId={filament?._id}
           onImported={(message) => {
             toast(message, "success");
-            // Refresh filament data
-            fetch(`/api/filaments/${params.id}`)
-              .then((r) => r.json())
-              .then((data) => setFilament(data))
-              .catch(() => {});
+            // Refresh filament data. GH #640: the previous inline chain
+            // had no `r.ok` gate, so a non-2xx response wrote the error
+            // JSON into `filament` state and the next render crashed
+            // dereferencing filament.temperatures.nozzle. refetchFilament
+            // gates on ok and swallows network errors.
+            refetchFilament();
             setShowPrusamentImport(false);
           }}
         />

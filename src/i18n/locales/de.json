@@ -232,6 +232,7 @@
   "trash.restoreAll": "Alle wiederherstellen ({count})",
   "trash.restoreAllConfirm": "Alle {count} Filamente aus dem Papierkorb wiederherstellen?",
   "trash.restoreAllDone": "{count} Filament(e) wiederhergestellt",
+  "trash.bulkFailures": "{count} fehlgeschlagen: {names}",
   "trash.deletedAt": "gelöscht {date} {time}",
   "trash.variantBadge": "Variante",
   "nav.openMenu": "Navigationsmenü öffnen",

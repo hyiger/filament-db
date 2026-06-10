@@ -662,7 +662,7 @@ export default function Home() {
   const renderRow = (f: Filament, isVariant = false) => (
     <tr
       key={f._id}
-      className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${isVariant ? "bg-gray-50/50 dark:bg-gray-950/50" : ""} ${selected.has(f._id) ? "bg-red-900/25" : ""}`}
+      className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${isVariant ? "bg-gray-50/50 dark:bg-gray-950/50" : ""} ${selected.has(f._id) ? "bg-red-50 dark:bg-red-900/25" : ""}`}
     >
       <td className="py-2 px-2">
         <input
@@ -765,7 +765,7 @@ export default function Home() {
       <>
         <tr
           key={f._id}
-          className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(f._id) ? "bg-red-900/25" : ""}`}
+          className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(f._id) ? "bg-red-50 dark:bg-red-900/25" : ""}`}
         >
           <td className="py-2 px-2">
             <input
@@ -963,24 +963,24 @@ export default function Home() {
               </svg>
             </button>
             {showImportExport && (
-              <div className="absolute right-0 top-full mt-1 w-52 bg-gray-800 border border-gray-600 rounded-lg shadow-xl z-50 py-1">
+              <div className="absolute right-0 top-full mt-1 w-52 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-600 rounded-lg shadow-xl z-50 py-1">
                 <button
                   onClick={() => { setShowImportExport(false); setShowPrusamentImport(true); }}
-                  className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                 >
                   <span className="w-2 h-2 rounded-full bg-orange-500" />
                   {t("filaments.import.prusamentQR")}
                 </button>
                 <button
                   onClick={() => { setShowImportExport(false); setShowAtlasImport(true); }}
-                  className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                 >
                   <span className="w-2 h-2 rounded-full bg-purple-500" />
                   {t("filaments.import.fromAtlas")}
                 </button>
                 <a
                   href="/openprinttag"
-                  className="block px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  className="block px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                   onClick={() => setShowImportExport(false)}
                 >
                   <span className="w-2 h-2 rounded-full bg-teal-500" />
@@ -988,7 +988,7 @@ export default function Home() {
                 </a>
                 <button
                   onClick={() => { setShowImportExport(false); setShowSpoolCsvImport(true); }}
-                  className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                 >
                   <span className="w-2 h-2 rounded-full bg-blue-500" />
                   {t("filaments.import.spoolCsv")}
@@ -996,19 +996,19 @@ export default function Home() {
                 <button
                   onClick={() => { setShowImportExport(false); fileInputRef.current?.click(); }}
                   disabled={importing}
-                  className="w-full text-left px-4 py-2.5 text-sm text-gray-200 hover:bg-gray-700 disabled:opacity-50 flex items-center gap-2"
+                  className="w-full text-left px-4 py-2.5 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 disabled:opacity-50 flex items-center gap-2"
                 >
                   <span className="w-2 h-2 rounded-full bg-amber-500" />
                   {importing ? t("filaments.import.importing") : t("filaments.import.file")}
                 </button>
-                <div className="border-t border-gray-600 my-1" />
+                <div className="border-t border-gray-200 dark:border-gray-600 my-1" />
                 <div className="px-4 py-1">
                   <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t("filaments.export")}</span>
                 </div>
                 {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
                 <a
                   href="/api/filaments/export"
-                  className="block px-4 py-2 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                   onClick={() => setShowImportExport(false)}
                 >
                   <span className="w-2 h-2 rounded-full bg-green-500" />
@@ -1017,7 +1017,7 @@ export default function Home() {
                 {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
                 <a
                   href="/api/filaments/export-csv"
-                  className="block px-4 py-2 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                   onClick={() => setShowImportExport(false)}
                 >
                   <span className="w-2 h-2 rounded-full bg-green-500" />
@@ -1026,19 +1026,19 @@ export default function Home() {
                 {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
                 <a
                   href="/api/filaments/export-xlsx"
-                  className="block px-4 py-2 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                   onClick={() => setShowImportExport(false)}
                 >
                   <span className="w-2 h-2 rounded-full bg-green-500" />
                   {t("filaments.export.xlsx")}
                 </a>
-                <div className="border-t border-gray-600 my-1" />
+                <div className="border-t border-gray-200 dark:border-gray-600 my-1" />
                 <div className="px-4 py-1">
                   <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t("spools.export")}</span>
                 </div>
                 <a
                   href="/api/spools/export-csv"
-                  className="block px-4 py-2 text-sm text-gray-200 hover:bg-gray-700 flex items-center gap-2"
+                  className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
                   onClick={() => setShowImportExport(false)}
                 >
                   <span className="w-2 h-2 rounded-full bg-green-500" />
@@ -1104,8 +1104,8 @@ export default function Home() {
         // text to red-100 with font-medium, and the Clear button to
         // gray-200 hover-white so all three elements meet WCAG-AA contrast
         // on dark mode.
-        <div className="mb-4 flex items-center gap-3 px-3 py-2.5 bg-red-900/50 border border-red-700 rounded-lg">
-          <span className="text-sm font-medium text-red-100">{t("filaments.bulk.selected", { count: visibleSelectedCount })}</span>
+        <div className="mb-4 flex items-center gap-3 px-3 py-2.5 bg-red-50 dark:bg-red-900/50 border border-red-200 dark:border-red-700 rounded-lg">
+          <span className="text-sm font-medium text-red-700 dark:text-red-100">{t("filaments.bulk.selected", { count: visibleSelectedCount })}</span>
           <button
             onClick={handleBulkDelete}
             disabled={bulkDeleting}
@@ -1121,21 +1121,21 @@ export default function Home() {
             // GH #525.2: let the user stop a long bulk delete partway.
             <button
               onClick={() => { bulkAbortRef.current = true; }}
-              className="text-sm text-gray-200 hover:text-white"
+              className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-200 dark:hover:text-white"
             >
               {t("filaments.bulk.stop")}
             </button>
           ) : (
             <button
               onClick={() => setSelected(new Set())}
-              className="text-sm text-gray-200 hover:text-white"
+              className="text-sm text-gray-600 hover:text-gray-900 dark:text-gray-200 dark:hover:text-white"
             >
               {t("common.clear")}
             </button>
           )}
-          <span className="ml-auto text-xs text-red-200">
+          <span className="ml-auto text-xs text-red-600 dark:text-red-200">
             {t("filaments.bulk.deleteHint")}{" "}
-            <Link href="/trash" className="underline hover:text-white">
+            <Link href="/trash" className="underline hover:text-red-800 dark:hover:text-white">
               {t("filaments.bulk.openTrash")}
             </Link>
           </span>

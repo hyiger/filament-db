@@ -173,7 +173,7 @@ export default function BedTypesPage() {
               {bedTypes.map((b) => (
                 <tr
                   key={b._id}
-                  className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(b._id) ? "bg-red-950/20" : ""}`}
+                  className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${selected.has(b._id) ? "bg-red-50 dark:bg-red-950/20" : ""}`}
                 >
                   <td className="py-2 px-2">
                     <input

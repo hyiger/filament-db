@@ -40,7 +40,6 @@ describe("buildStructuredUpdate", () => {
           density: 1.24,
           cost: 24.99,
           maxVolumetricSpeed: 12,
-          notes: "test",
           shrinkageXY: 1.5,
           shrinkageZ: 1.0,
         }),
@@ -53,7 +52,6 @@ describe("buildStructuredUpdate", () => {
       expect(update.density).toBe(1.24);
       expect(update.cost).toBe(24.99);
       expect(update.maxVolumetricSpeed).toBe(12);
-      expect(update.notes).toBe("test");
       expect(update.shrinkageXY).toBe(1.5);
       expect(update.shrinkageZ).toBe(1.0);
       expect(unset).toEqual([]);
