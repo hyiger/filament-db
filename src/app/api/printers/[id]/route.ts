@@ -6,7 +6,7 @@ import Nozzle from "@/models/Nozzle";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { findNozzleConflicts } from "@/lib/nozzleConflicts";
-import { clearSpoolsFromOtherPrinters } from "@/lib/spoolSlots";
+import { clearSpoolsFromOtherPrinters, findInvalidSlotSpoolRef } from "@/lib/spoolSlots";
 import BedType from "@/models/BedType";
 
 export async function GET(
@@ -108,6 +108,16 @@ export async function PUT(
       });
       if (activeBedCount !== body.installedBedTypes.length) {
         return errorResponse("One or more selected bed types no longer exist.", 400);
+      }
+    }
+
+    // GH #631: see parallel comment in the POST handler — amsSlots[].spoolId
+    // must pass the same active-filament + non-retired checks the dedicated
+    // assignment route enforces, or this PUT is the bypass.
+    if ("amsSlots" in body) {
+      const slotError = await findInvalidSlotSpoolRef(Filament, body.amsSlots);
+      if (slotError) {
+        return errorResponse(slotError, 400);
       }
     }
 

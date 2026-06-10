@@ -197,6 +197,13 @@ export async function PUT(
     delete body.__v;
     delete body.instanceId;
     delete body.syncId;
+    // GH #619: server-owned OPT provenance — see the parallel strip in the
+    // POST handler. The edit form fetches `?raw=true` and receives this
+    // field, so an innocent client echo-back would rewrite provenance; a
+    // malicious body could forge `snapshot === current` to flip a user-
+    // edited field from `conflict` to pre-checked `adopt` in the re-sync
+    // dialog. Only the OPT import/sync routes may write it.
+    delete body.openprinttagSnapshot;
     // Server-side response-only fields that clients may echo back (e.g. the
     // edit page fetches with ?raw=true and receives _parent / _variants /
     // _inherited). Strip so they don't become persisted document fields.

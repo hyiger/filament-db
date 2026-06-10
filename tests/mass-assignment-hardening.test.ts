@@ -2,11 +2,13 @@ import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { PUT, DELETE } from "@/app/api/filaments/[id]/route";
+import { POST as createFilament } from "@/app/api/filaments/route";
 
 /**
  * Security batch B — mass-assignment / data-integrity hardening.
  *   #260 — PUT /api/filaments/{id} must not write the `spools` array.
  *   #261 — deleting a filament must clear its spools from printer slots.
+ *   #619 — POST/PUT must not write the server-owned `openprinttagSnapshot`.
  */
 describe("mass-assignment & data-integrity hardening", () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -133,5 +135,56 @@ describe("mass-assignment & data-integrity hardening", () => {
 
     const freshPrinter = await Printer.findById(printer._id);
     expect(freshPrinter.amsSlots[0].spoolId).toBeNull();
+  });
+
+  // ── #619: openprinttagSnapshot is server-owned OPT provenance ────────
+
+  it("#619 — PUT /api/filaments/{id} ignores openprinttagSnapshot in the body", async () => {
+    const f = await Filament.create({
+      name: "OPT Provenance PLA",
+      vendor: "T",
+      type: "PLA",
+      openprinttagSnapshot: { color: "#112233", density: 1.24 },
+    });
+
+    const res = await PUT(
+      jsonReq(
+        `http://localhost/api/filaments/${f._id}`,
+        {
+          name: "OPT Provenance PLA",
+          vendor: "T",
+          type: "PLA",
+          // Attempt to forge the provenance store so user-edited fields
+          // would classify as `adopt` (pre-checked) on the next re-sync.
+          openprinttagSnapshot: { color: "#FFFFFF", density: 9.99 },
+        },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.openprinttagSnapshot).toEqual({ color: "#112233", density: 1.24 });
+  });
+
+  it("#619 — POST /api/filaments ignores openprinttagSnapshot in the body", async () => {
+    const res = await createFilament(
+      jsonReq(
+        "http://localhost/api/filaments",
+        {
+          name: "Forged Snapshot PLA",
+          vendor: "T",
+          type: "PLA",
+          openprinttagSnapshot: { color: "#000000" },
+        },
+        "POST",
+      ),
+    );
+    expect(res.status).toBe(201);
+    const body = await res.json();
+
+    const fresh = await Filament.findById(body._id);
+    expect(fresh.openprinttagSnapshot).toBeNull();
   });
 });

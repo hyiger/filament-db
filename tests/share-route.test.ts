@@ -148,6 +148,33 @@ describe("/api/share", () => {
       expect(res.status).toBe(404);
     });
 
+    it("returns 400 (not 500) when a filamentIds entry is not an ObjectId (#630)", async () => {
+      // Pre-fix: the raw string was cast inside the `$in` query, the
+      // CastError fell into the catch, and the caller saw a 500
+      // "Failed to publish shared catalog".
+      const { filament } = await makeFilamentWithRefs();
+      const res = await createShare(
+        postReq({
+          title: "Bad ids",
+          filamentIds: [String(filament._id), "zzz"],
+        }),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/invalid filament id/i);
+      expect(body.error).toMatch(/zzz/);
+    });
+
+    it("returns 400 when a filamentIds entry is not a string (#630)", async () => {
+      const res = await createShare(
+        postReq({
+          title: "Non-string id",
+          filamentIds: [{ $ne: null }],
+        }),
+      );
+      expect(res.status).toBe(400);
+    });
+
     it("strips spool inventory + PII fields from the published payload", async () => {
       // Regression: previously the full Filament.find().lean() result was
       // stored in payload, exposing lot numbers, purchase/open dates,

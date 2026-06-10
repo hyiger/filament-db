@@ -173,6 +173,26 @@ describe("GET /api/print-history", () => {
     expect(body.some((e: { _id: string }) => e._id === String(all[0]._id))).toBe(false);
   });
 
+  it("returns 400 (not 500) on a malformed ?filamentId (#630)", async () => {
+    const res = await listPrintHistory(reqUrl("?filamentId=zzz"));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/filamentId/);
+  });
+
+  it("returns 400 (not 500) on a malformed ?printerId (#630)", async () => {
+    const res = await listPrintHistory(reqUrl("?printerId=not-an-objectid"));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/printerId/);
+  });
+
+  it("still accepts well-formed ObjectId filters after the #630 guard", async () => {
+    const { filamentA } = await seed();
+    const res = await listPrintHistory(reqUrl(`?filamentId=${filamentA._id}`));
+    expect(res.status).toBe(200);
+  });
+
   it("populates printerId.name and usage.filamentId fields", async () => {
     await seed();
     const res = await listPrintHistory(reqUrl(""));

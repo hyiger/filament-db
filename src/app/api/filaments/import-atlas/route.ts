@@ -4,6 +4,7 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { assertSafeMongoUri } from "@/lib/mongoUriGuard";
+import { validateSpoolPhotoDataUrl } from "@/lib/validateSpoolBody";
 
 /**
  * GH #255: explicit ALLOW-LIST of filament fields that may be copied
@@ -122,7 +123,20 @@ export async function POST(request: NextRequest) {
         filamentData.calibrations = [];
         if (Array.isArray(filamentData.spools)) {
           for (const s of filamentData.spools) {
-            if (s && typeof s === "object") (s as Record<string, unknown>).locationId = null;
+            if (s && typeof s === "object") {
+              const spool = s as Record<string, unknown>;
+              spool.locationId = null;
+              // GH #626: the remote document is attacker-controllable, and
+              // spool photos here bypassed the MIME allow-list + 5MB cap
+              // that the dedicated spool routes enforce via
+              // validateSpoolBody (SVG is rejected because inline <script>
+              // can execute in some rendering contexts). Sanitize rather
+              // than reject — same posture as the ref force-emptying above,
+              // and a legacy oversized photo in the user's own Atlas DB
+              // shouldn't abort the whole import.
+              const photo = validateSpoolPhotoDataUrl(spool.photoDataUrl);
+              spool.photoDataUrl = photo.ok ? (photo.value ?? null) : null;
+            }
           }
         }
 

@@ -383,7 +383,16 @@ describe("spool ↔ printer-slot assignment (GH #242)", () => {
 
   describe("printer-write reconciliation", () => {
     it("saving a printer with a spool clears that spool from other printers", async () => {
-      const spoolId = new mongoose.Types.ObjectId();
+      // GH #631: the printer PUT now validates that amsSlots[].spoolId
+      // references a real, active, non-retired spool — a fabricated id
+      // would be rejected with 400, so back the slot with a real spool.
+      const fil = await Filament.create({
+        name: "Reconciliation PLA",
+        vendor: "V",
+        type: "PLA",
+        spools: [{ label: "S" }],
+      });
+      const spoolId = fil.spools[0]._id;
       const a = await Printer.create({
         name: "A",
         manufacturer: "X",

@@ -23,6 +23,18 @@ export async function GET(request: NextRequest) {
     const limitRaw = parseInt(searchParams.get("limit") ?? "100", 10);
     const limit = Math.min(Math.max(Number.isFinite(limitRaw) ? limitRaw : 100, 1), 1000);
 
+    // GH #630: these params are cast into ObjectId fields by the query
+    // below — a malformed value throws a CastError that the catch maps to
+    // a hardcoded 500. Bad input is the client's fault: validate up front
+    // and 400 (same hex-24 pattern as the import-atlas / snapshot routes).
+    const OID_RE = /^[a-f0-9]{24}$/i;
+    if (filamentId && !OID_RE.test(filamentId)) {
+      return errorResponse("filamentId must be a valid id", 400);
+    }
+    if (printerId && !OID_RE.test(printerId)) {
+      return errorResponse("printerId must be a valid id", 400);
+    }
+
     const filter: Record<string, unknown> = { _deletedAt: null };
     if (filamentId) filter["usage.filamentId"] = filamentId;
     if (printerId) filter.printerId = printerId;
