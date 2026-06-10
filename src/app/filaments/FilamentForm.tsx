@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
+import { Fragment, useState, useEffect, useMemo, useRef } from "react";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import CollapsibleSection, { expandAndScrollToSection } from "@/components/CollapsibleSection";
@@ -1464,9 +1464,15 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                   const showHeader = s.source !== lastSource;
                   lastSource = s.source;
                   return (
-                    <span key={`${s.source}-${s.name}-${s.hex}`}>
+                    // GH #637 (#3): was a <span> wrapping the <li>s — a
+                    // <span> is an invalid <ul> child (and put the <li>s
+                    // outside the list's content model), so AT could fail
+                    // to enumerate the options. A keyed Fragment keeps the
+                    // <li>s as direct <ul> children.
+                    <Fragment key={`${s.source}-${s.name}-${s.hex}`}>
                       {showHeader && (
                         <li
+                          role="presentation"
                           aria-hidden="true"
                           className="px-3 py-1 text-[10px] uppercase tracking-wide text-gray-400 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700"
                         >
@@ -1498,7 +1504,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                         <span className="flex-1 truncate">{s.name}</span>
                         <span className="text-xs font-mono text-gray-400">{s.hex.toUpperCase()}</span>
                       </li>
-                    </span>
+                    </Fragment>
                   );
                 })}
               </ul>
@@ -2836,9 +2842,30 @@ function MultiColorEditor({
     return newTag != null ? [...stripped, newTag] : stripped;
   };
 
+  // GH #637: stable row keys. `form.secondaryColors` is a plain string[]
+  // shared with the parent form's prefill/submit paths, so rows carry no
+  // natural id — a parallel uid list gives each slot the stable key that
+  // bedTypeTemps/presets/amsSlots rows carry as `_uid` (see the makeUid
+  // docblock for why index keys jump focus on mid-list deletes). The
+  // add/remove handlers keep `uids` in lockstep with the array; a render-
+  // time length reconcile covers external resizes (NFC/clone prefill) via
+  // React's "adjust state during render" pattern — keeps existing rows'
+  // uids, only the appended/trimmed tail changes.
+  const [uids, setUids] = useState<string[]>(() =>
+    form.secondaryColors.map(() => makeUid()),
+  );
+  if (uids.length !== form.secondaryColors.length) {
+    setUids((prev) => {
+      const next = prev.slice(0, form.secondaryColors.length);
+      while (next.length < form.secondaryColors.length) next.push(makeUid());
+      return next;
+    });
+  }
+
   const addColor = () => {
     if (form.secondaryColors.length >= 5) return; // spec cap
     const nextSecondaries = [...form.secondaryColors, "#808080"];
+    setUids((prev) => [...prev, makeUid()]);
     setForm({
       ...form,
       secondaryColors: nextSecondaries,
@@ -2847,6 +2874,10 @@ function MultiColorEditor({
   };
 
   const removeColor = (idx: number) => {
+    // Drop the removed row's uid (not the last one) so the rows after it
+    // keep their keys — and the focus-sensitive hex inputs keep their DOM
+    // nodes — across a mid-list delete.
+    setUids((prev) => prev.filter((_, i) => i !== idx));
     const nextSecondaries = form.secondaryColors.filter((_, i) => i !== idx);
     setForm({
       ...form,
@@ -2945,7 +2976,7 @@ function MultiColorEditor({
           ) : (
             <ul className="space-y-1.5">
               {form.secondaryColors.map((c, i) => (
-                <li key={i} className="flex gap-2 items-center">
+                <li key={uids[i] ?? i} className="flex gap-2 items-center">
                   <span className="text-xs text-gray-500 w-6 text-right select-none">
                     #{i + 2}
                   </span>

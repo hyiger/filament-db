@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeAll } from "vitest";
-import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
+import {
+  resolveFilament,
+  hasVariants,
+  VARIANT_ONLY_FIELDS,
+  INHERITABLE_FIELDS,
+} from "@/lib/resolveFilament";
 
 const makeParent = (overrides = {}) => ({
   _id: "parent-id",
@@ -348,6 +353,55 @@ describe("resolveFilament", () => {
     expect(result.totalWeight).toBe(800);
   });
 
+  // --- GH #633: fields the allowlists used to silently drop ---
+
+  // lowStockThreshold is variant-only, NOT inherited (Codex P2 on PR #648):
+  // the list aggregation + dashboard read it raw with no parent fallback, so
+  // inheriting it in resolveFilament would make the variant's detail/export
+  // view disagree with its list badge. It must still be PRESERVED (the #633
+  // bug was the field silently vanishing because it was in neither allowlist).
+  it("preserves the variant's own lowStockThreshold, never inheriting (#633, #648)", () => {
+    const parent = makeParent({ lowStockThreshold: 250 });
+    const variant = makeVariant({ lowStockThreshold: 100 });
+    const result = resolveFilament(variant, parent);
+    expect(result.lowStockThreshold).toBe(100);
+    expect(result._inherited).not.toContain("lowStockThreshold");
+  });
+
+  it("does not fall back to the parent's lowStockThreshold (#648)", () => {
+    const parent = makeParent({ lowStockThreshold: 250 });
+    const variant = makeVariant({ lowStockThreshold: null });
+    const result = resolveFilament(variant, parent);
+    expect(result.lowStockThreshold).toBeNull();
+    expect(result._inherited).not.toContain("lowStockThreshold");
+  });
+
+  it("copies openprinttagSnapshot from variant (never inherited) (#633)", () => {
+    // OPT re-sync provenance describes THIS document's last-seen upstream
+    // offer — inheriting the parent's snapshot would misclassify every
+    // diff on the variant as "OPT-owned".
+    const parent = makeParent({ openprinttagSnapshot: { density: 1.24 } });
+    const variant = makeVariant({ openprinttagSnapshot: { density: 1.3 } });
+    const result = resolveFilament(variant, parent);
+    expect(result.openprinttagSnapshot).toEqual({ density: 1.3 });
+    expect(result._inherited).not.toContain("openprinttagSnapshot");
+  });
+
+  it("does not inherit openprinttagSnapshot when variant has none (#633)", () => {
+    const parent = makeParent({ openprinttagSnapshot: { density: 1.24 } });
+    const variant = makeVariant({ openprinttagSnapshot: null });
+    const result = resolveFilament(variant, parent);
+    expect(result.openprinttagSnapshot).toBeNull();
+    expect(result._inherited).not.toContain("openprinttagSnapshot");
+  });
+
+  it("copies _purged from variant (never inherited) (#633)", () => {
+    const parent = makeParent({ _purged: true });
+    const variant = makeVariant({ _purged: false });
+    const result = resolveFilament(variant, parent);
+    expect(result._purged).toBe(false);
+  });
+
   // --- GH #106: empty array on a variant inherits from parent ---
   //
   // Previously a variant's empty array (e.g. calibrations: []) was treated
@@ -486,5 +540,97 @@ describe("hasVariants", () => {
       _deletedAt: new Date(),
     });
     expect(await hasVariants(Filament, parent._id.toString())).toBe(false);
+  });
+});
+
+/**
+ * GH #633 drift guard: resolveFilament rebuilds the resolved object from
+ * scratch, so any Filament schema field that is in neither allowlist nor
+ * the specially-handled merge logic silently vanishes from every resolved
+ * variant (that's exactly how lowStockThreshold, openprinttagSnapshot, and
+ * _purged got lost). This invariant diffs the schema's top-level paths
+ * against the union so the NEXT added field fails loudly here instead.
+ *
+ * Style mirrors tests/i18n-key-coverage.test.ts: derive the ground truth
+ * from the source of record (the Mongoose schema), assert set equality,
+ * and make the failure message say exactly what to do.
+ */
+describe("resolveFilament allowlist ↔ Filament schema drift guard (#633)", () => {
+  /**
+   * Fields resolveFilament handles with dedicated merge logic (nested
+   * temperature resolution, array-fallback inheritance, settings shallow
+   * merge) rather than via the two allowlists. If you remove a field's
+   * special handling, move it into an allowlist — and vice versa.
+   */
+  const SPECIALLY_HANDLED_FIELDS = [
+    "temperatures",     // nested per-key own ?? parent ?? null resolution
+    "compatibleNozzles", // array-fallback inheritance
+    "optTags",           // array-fallback inheritance
+    "secondaryColors",   // array-fallback inheritance (#477)
+    "bedTypeTemps",      // array-fallback inheritance
+    "calibrations",      // array-fallback inheritance
+    "presets",           // array-fallback inheritance
+    "settings",          // shallow merge, variant overrides parent
+  ];
+
+  async function schemaTopLevelPaths(): Promise<Set<string>> {
+    const Filament = (await import("@/models/Filament")).default;
+    // Nested paths register dotted (`temperatures.nozzle`) — collapse to
+    // the root segment, which is the granularity the allowlists work at.
+    return new Set(
+      Object.keys(Filament.schema.paths).map((p) => p.split(".")[0]),
+    );
+  }
+
+  it("every top-level Filament schema path is covered by exactly one resolveFilament bucket", async () => {
+    const schemaFields = await schemaTopLevelPaths();
+    const union = new Set([
+      ...VARIANT_ONLY_FIELDS,
+      ...INHERITABLE_FIELDS,
+      ...SPECIALLY_HANDLED_FIELDS,
+    ]);
+
+    const uncovered = [...schemaFields].filter((f) => !union.has(f));
+    expect(
+      uncovered,
+      `Filament schema field(s) [${uncovered.join(", ")}] are in neither ` +
+        `VARIANT_ONLY_FIELDS nor INHERITABLE_FIELDS (src/lib/resolveFilament.ts) ` +
+        `nor this test's SPECIALLY_HANDLED_FIELDS list. resolveFilament will ` +
+        `silently DROP them from every resolved variant — add each field to ` +
+        `the bucket matching its semantics (inheritable scalar, ` +
+        `variant-only bookkeeping, or dedicated merge logic + this list).`,
+    ).toEqual([]);
+  });
+
+  it("the allowlists carry no stale fields that no longer exist on the schema", async () => {
+    const schemaFields = await schemaTopLevelPaths();
+    const allListed = [
+      ...VARIANT_ONLY_FIELDS,
+      ...INHERITABLE_FIELDS,
+      ...SPECIALLY_HANDLED_FIELDS,
+    ];
+
+    const stale = allListed.filter((f) => !schemaFields.has(f));
+    expect(
+      stale,
+      `Field(s) [${stale.join(", ")}] appear in a resolveFilament allowlist ` +
+        `(or this test's SPECIALLY_HANDLED_FIELDS) but are not Filament ` +
+        `schema paths — remove the stale entries so the lists keep matching ` +
+        `the schema.`,
+    ).toEqual([]);
+  });
+
+  it("no field appears in more than one bucket", () => {
+    const allListed = [
+      ...VARIANT_ONLY_FIELDS,
+      ...INHERITABLE_FIELDS,
+      ...SPECIALLY_HANDLED_FIELDS,
+    ];
+    const dupes = allListed.filter((f, i) => allListed.indexOf(f) !== i);
+    expect(
+      dupes,
+      `Field(s) [${dupes.join(", ")}] appear in more than one resolveFilament ` +
+        `bucket — each field must have exactly one resolution rule.`,
+    ).toEqual([]);
   });
 });

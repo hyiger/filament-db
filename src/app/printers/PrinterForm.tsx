@@ -150,6 +150,86 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
   const [conflictChoices, setConflictChoices] = useState<Record<string, "clone" | "move">>({});
   const [resolvingConflicts, setResolvingConflicts] = useState(false);
   const [conflictError, setConflictError] = useState<string | null>(null);
+  const conflictDialogRef = useRef<HTMLDivElement>(null);
+  const conflictModalOpen = pendingConflicts !== null;
+
+  // GH #637 (#1): focus capture/restore + initial focus + Tab loop for the
+  // nozzle-conflict modal, mirroring SpoolCsvImportDialog's GH #522.1 fix.
+  // Pre-fix the modal declared role="dialog" aria-modal="true" but keyboard
+  // users could Tab past the backdrop into the underlying form (still
+  // focusable, still actionable) and Escape did nothing — the same
+  // aria-modal contract break #522.1 fixed for SpoolCsvImportDialog. Two
+  // effects — one for capture/restore + initial-focus + Tab trap (keyed on
+  // the open boolean so a retry-conflict reopen re-captures), one for
+  // Escape (keyed on resolvingConflicts so Escape is inert mid-resolution,
+  // matching the disabled Cancel button).
+  useEffect(() => {
+    if (!conflictModalOpen) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const collectFocusable = (): HTMLElement[] => {
+      if (!conflictDialogRef.current) return [];
+      return Array.from(
+        conflictDialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter(
+        (el) =>
+          !el.hasAttribute("inert") &&
+          !el.hasAttribute("hidden") &&
+          // offsetParent is null for display:none elements (and their
+          // descendants) — the cheapest visibility check.
+          el.offsetParent !== null,
+      );
+    };
+
+    // Initial focus on the first visible focusable (or the dialog
+    // container itself as a fallback).
+    const focusableOnOpen = collectFocusable();
+    (focusableOnOpen[0] ?? conflictDialogRef.current)?.focus();
+
+    const handleKeydown = (e: KeyboardEvent) => {
+      if (e.key !== "Tab" || !conflictDialogRef.current) return;
+      const focusable = collectFocusable();
+      if (focusable.length === 0) return;
+      const firstEl = focusable[0];
+      const lastEl = focusable[focusable.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      // Focus escaped the modal (e.g. after a click on the backdrop) —
+      // yank it back to the first focusable.
+      if (active && !conflictDialogRef.current.contains(active)) {
+        e.preventDefault();
+        firstEl.focus();
+        return;
+      }
+      if (e.shiftKey && active === firstEl) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && active === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeydown);
+    return () => {
+      document.removeEventListener("keydown", handleKeydown);
+      previouslyFocused?.focus?.();
+    };
+  }, [conflictModalOpen]);
+
+  useEffect(() => {
+    if (!conflictModalOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      // The Cancel button is disabled while resolution is in flight —
+      // Escape matches that.
+      if (resolvingConflicts) return;
+      e.preventDefault();
+      setPendingConflicts(null);
+      setConflictError(null);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [conflictModalOpen, resolvingConflicts]);
 
   // Warn on unsaved changes when navigating away
   useEffect(() => {
@@ -782,7 +862,10 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
           aria-labelledby="nozzle-conflict-title"
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
         >
-          <div className="w-full max-w-lg bg-white dark:bg-gray-900 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 p-5 space-y-4">
+          <div
+            ref={conflictDialogRef}
+            className="w-full max-w-lg bg-white dark:bg-gray-900 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 p-5 space-y-4"
+          >
             <h2
               id="nozzle-conflict-title"
               className="text-lg font-semibold text-gray-900 dark:text-gray-100"

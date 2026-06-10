@@ -211,9 +211,11 @@ export function rgbaToHex(rgba: string | undefined | null): string | null {
   if (!rgba) return null;
   // Strip alpha channel if present (e.g., #ea5e1aff → #ea5e1a)
   const hex = rgba.replace(/^#/, "");
-  if (hex.length === 8) return `#${hex.slice(0, 6)}`;
-  if (hex.length === 6) return `#${hex}`;
-  return null;
+  // GH #632: require a real hex charset, not just the right length —
+  // "zzzzzzzz" used to slip through as "#zzzzzz" and persist an invalid
+  // color on the OPT import's update path (which skipped validators).
+  if (!/^[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(hex)) return null;
+  return `#${hex.slice(0, 6)}`;
 }
 
 // ── YAML parsing ───────────────────────────────────────────────────────

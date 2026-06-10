@@ -203,20 +203,51 @@ describe("/api/printers", () => {
       expect(body.error).toMatch(/referenced by/i);
     });
 
-    it("ignores soft-deleted filament calibrations when checking refs", async () => {
+    it("refuses if a TRASHED filament's calibration still references it (#629)", async () => {
+      // Inverts the pre-#629 behavior: a trashed filament can be restored,
+      // which would resurrect a dangling calibration printer ref if the
+      // printer were deleted in the meantime — so trashed referrers block
+      // the delete too.
       const printer = await Printer.create({
         name: "Mk4",
         manufacturer: "Prusa",
         printerModel: "Mk4",
       });
       const noz = await Nozzle.create({ name: "0.4", diameter: 0.4, type: "Brass" });
-      // Calibration belongs to a soft-deleted filament — should NOT block
       await Filament.create({
         name: "Trashed PLA",
         vendor: "T",
         type: "PLA",
         calibrations: [{ nozzle: noz._id, printer: printer._id }],
         _deletedAt: new Date(),
+      });
+
+      const res = await deletePrinter(
+        new NextRequest(`http://localhost/api/printers/${printer._id}`, { method: "DELETE" }),
+        { params: Promise.resolve({ id: String(printer._id) }) },
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/trash/i);
+      const after = await Printer.findById(printer._id);
+      expect(after._deletedAt).toBeNull();
+    });
+
+    it("ignores _purged filament tombstones when checking refs (#629)", async () => {
+      // Purged rows are gone forever — they must NOT block the delete.
+      const printer = await Printer.create({
+        name: "Mk4",
+        manufacturer: "Prusa",
+        printerModel: "Mk4",
+      });
+      const noz = await Nozzle.create({ name: "0.4", diameter: 0.4, type: "Brass" });
+      await Filament.create({
+        name: "Purged PLA",
+        vendor: "T",
+        type: "PLA",
+        calibrations: [{ nozzle: noz._id, printer: printer._id }],
+        _deletedAt: new Date(),
+        _purged: true,
       });
 
       const res = await deletePrinter(

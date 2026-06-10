@@ -311,6 +311,13 @@ describe("parseHexColor", () => {
     expect(parseHexColor("#FFF")).toBeNull();
   });
 
+  // GH #634: the old `{6,8}` quantifier also matched a 7-char string and
+  // silently ignored the dangling 7th character.
+  it("rejects 7-char hex (neither RGB nor RGBA)", () => {
+    expect(parseHexColor("#FF80001")).toBeNull();
+    expect(parseHexColor("FF80001")).toBeNull();
+  });
+
   it("returns null for empty string", () => {
     expect(parseHexColor("")).toBeNull();
   });
@@ -962,6 +969,135 @@ describe("generateOpenPrintTagBinary", () => {
     expect(bytes[arrStart + 2]).toBe(16);
     expect(bytes[arrStart + 3]).toBe(0x18); // 71 >= 24
     expect(bytes[arrStart + 4]).toBe(71);
+  });
+
+  // GH #634: a stored negative tag used to make encodeCBORUint throw
+  // RangeError (500-ing the .bin export); a fractional tag would coerce
+  // into a *different* tag id. Both are skipped — never rounded.
+  it("skips negative and fractional optTags instead of throwing (GH #634)", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      optTags: [-1, 1.5, 16],
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+    const keyIdx = findCBORKey(bytes, OPT_KEY.TAGS);
+    expect(keyIdx).not.toBe(-1);
+    const arrStart = keyIdx + 2;
+    // Only the valid tag (16 = matte) survives
+    expect(bytes[arrStart]).toBe(0x81); // array of 1
+    expect(bytes[arrStart + 1]).toBe(16);
+  });
+
+  it("omits the tags key entirely when every optTag is invalid", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      optTags: [-5, 2.5],
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+    expect(findCBORKey(bytes, OPT_KEY.TAGS)).toBe(-1);
+  });
+
+  // GH #650: a value above the encoder's 2^32-1 uint ceiling would be
+  // truncated to its low 32 bits (e.g. 2^32+16 → 16) and silently encode
+  // a *different* tag. It must be skipped, not wrapped.
+  it("skips optTags above the CBOR uint32 ceiling instead of truncating (GH #650)", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      optTags: [2 ** 32 + 16, 4],
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+    const keyIdx = findCBORKey(bytes, OPT_KEY.TAGS);
+    expect(keyIdx).not.toBe(-1);
+    const arrStart = keyIdx + 2;
+    // Only the valid tag (4) survives — the oversized one is dropped, NOT
+    // truncated to 16 (which would have produced an array of 2).
+    expect(bytes[arrStart]).toBe(0x81); // array of 1
+    expect(bytes[arrStart + 1]).toBe(4);
+  });
+
+  it("rounds fractional drying temperature and time (GH #634)", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      dryingTemperature: 54.5,
+      dryingTime: 359.6,
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+
+    const tempIdx = findCBORKey(bytes, OPT_KEY.DRYING_TEMPERATURE);
+    expect(tempIdx).not.toBe(-1);
+    expect(bytes[tempIdx + 2]).toBe(0x18); // uint8 follows
+    expect(bytes[tempIdx + 3]).toBe(55); // Math.round(54.5)
+
+    const timeIdx = findCBORKey(bytes, OPT_KEY.DRYING_TIME);
+    expect(timeIdx).not.toBe(-1);
+    expect(bytes[timeIdx + 2]).toBe(0x19); // uint16 follows
+    expect(bytes[timeIdx + 3]).toBe(0x01); // 360 = 0x0168
+    expect(bytes[timeIdx + 4]).toBe(0x68);
+  });
+
+  it("caps oversized dryingTime instead of wrapping past 2^32 (GH #634)", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      dryingTime: 2 ** 32 + 5,
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+    const timeIdx = findCBORKey(bytes, OPT_KEY.DRYING_TIME);
+    expect(timeIdx).not.toBe(-1);
+    // Capped at 10080 minutes (7 days) = 0x2760
+    expect(bytes[timeIdx + 2]).toBe(0x19); // uint16 follows
+    expect(bytes[timeIdx + 3]).toBe(0x27);
+    expect(bytes[timeIdx + 4]).toBe(0x60);
+  });
+
+  it("rounds fractional shore hardness and caps at 100 (GH #634)", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      shoreHardnessA: 95.6,
+      shoreHardnessD: 150,
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+
+    const aIdx = findCBORKey(bytes, OPT_KEY.SHORE_HARDNESS_A);
+    expect(aIdx).not.toBe(-1);
+    expect(bytes[aIdx + 2]).toBe(0x18);
+    expect(bytes[aIdx + 3]).toBe(96); // Math.round(95.6)
+
+    const dIdx = findCBORKey(bytes, OPT_KEY.SHORE_HARDNESS_D);
+    expect(dIdx).not.toBe(-1);
+    expect(bytes[dIdx + 2]).toBe(0x18);
+    expect(bytes[dIdx + 3]).toBe(100); // capped to the Shore scale
+  });
+
+  it("orders min <= max print temps when first-layer >= nozzle+20 (GH #634)", () => {
+    const input: OpenPrintTagInput = {
+      ...minimalInput,
+      nozzleTemp: 230,
+      nozzleTempFirstLayer: 260, // derived min would be 240 > max 230
+    };
+    const result = generateOpenPrintTagBinary(input);
+    const bytes = Array.from(result);
+
+    const minIdx = findCBORKey(bytes, OPT_KEY.MIN_PRINT_TEMPERATURE);
+    const maxIdx = findCBORKey(bytes, OPT_KEY.MAX_PRINT_TEMPERATURE);
+    expect(minIdx).not.toBe(-1);
+    expect(maxIdx).not.toBe(-1);
+    // Mirrors the bed-temp Math.min/Math.max guard: min 230, max 240
+    expect(bytes[minIdx + 2]).toBe(0x18);
+    expect(bytes[minIdx + 3]).toBe(230);
+    expect(bytes[maxIdx + 2]).toBe(0x18);
+    expect(bytes[maxIdx + 3]).toBe(240);
+
+    // Preheat derives from the effective min: 230 - 20 = 210
+    const preheatIdx = findCBORKey(bytes, OPT_KEY.PREHEAT_TEMPERATURE);
+    expect(preheatIdx).not.toBe(-1);
+    expect(bytes[preheatIdx + 2]).toBe(0x18);
+    expect(bytes[preheatIdx + 3]).toBe(210);
   });
 
   it("appends auxiliary region with consumed_weight", () => {

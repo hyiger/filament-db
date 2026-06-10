@@ -283,5 +283,49 @@ describe("/api/locations", () => {
       const fresh = await Location.findById(loc._id);
       expect(fresh._deletedAt).toBeNull();
     });
+
+    it("refuses to delete a location referenced only by a TRASHED filament's spool (#629)", async () => {
+      // A trashed filament can be restored — deleting the location while
+      // the filament sits in the trash would resurrect a dangling
+      // locationId ref on restore (populate silently drops it and
+      // /api/spools/by-location renders a nameless group).
+      const loc = await Location.create({ name: "Trash-referenced", kind: "shelf" });
+      await Filament.create({
+        name: "Trashed With Location",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ label: "", totalWeight: 500, locationId: loc._id }],
+        _deletedAt: new Date(),
+      });
+      const res = await deleteLocation(
+        jsonReq(`http://localhost/api/locations/${loc._id}`),
+        { params: Promise.resolve({ id: String(loc._id) }) },
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/trash/i);
+
+      const fresh = await Location.findById(loc._id);
+      expect(fresh._deletedAt).toBeNull();
+    });
+
+    it("ignores _purged filament tombstones when checking refs (#629)", async () => {
+      // Purged rows are gone forever (kept only so the sync engine doesn't
+      // resurrect them) — they must NOT block the delete.
+      const loc = await Location.create({ name: "Purged-referenced", kind: "shelf" });
+      await Filament.create({
+        name: "Purged With Location",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ label: "", totalWeight: 500, locationId: loc._id }],
+        _deletedAt: new Date(),
+        _purged: true,
+      });
+      const res = await deleteLocation(
+        jsonReq(`http://localhost/api/locations/${loc._id}`),
+        { params: Promise.resolve({ id: String(loc._id) }) },
+      );
+      expect(res.status).toBe(200);
+    });
   });
 });
