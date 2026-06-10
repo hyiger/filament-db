@@ -261,6 +261,68 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(body.changes).toEqual([]);
   });
 
+  it("check: respects values inherited from the parent (no spurious adopt) (GH #607)", async () => {
+    // The parent carries the OPT-matching values; the variant leaves them
+    // unset to inherit. Pre-fix the diff read the variant's raw (null) fields
+    // and offered density/temps/etc. as spurious "adopt" gap-fills — the diff
+    // must run against the RESOLVED (variant→parent) values instead.
+    const parent = await Filament.create({
+      name: "Galaxy Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      density: 1.24,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    });
+    const variant = await Filament.create({
+      name: "Galaxy Variant",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#3d3e3d", // color is variant-only (never inherited)
+      parentId: parent._id,
+      density: null, // inherits 1.24
+      // temperatures / shoreHardnessD / transmissionDistance left unset → inherit
+      settings: { openprinttag_slug: "prusament-pla-galaxy-black" },
+    });
+    const res = await checkGET({} as NextRequest, params(String(variant._id)));
+    const body = await res.json();
+    expect(body.linked).toBe(true);
+    expect(body.found).toBe(true);
+    // Everything matches via the parent → nothing to offer.
+    expect(body.changes).toEqual([]);
+  });
+
+  it("check: still surfaces a genuine upstream change on an inherited field (GH #607)", async () => {
+    // The fix must not over-suppress: when the inherited value differs from
+    // what OPT now offers, the change is still surfaced (here density: the
+    // variant inherits 1.20 but OPT offers 1.24).
+    const parent = await Filament.create({
+      name: "Stale Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      density: 1.2,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    });
+    const variant = await Filament.create({
+      name: "Stale Variant",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#3d3e3d",
+      parentId: parent._id,
+      density: null, // inherits the parent's stale 1.20
+      settings: { openprinttag_slug: "prusament-pla-galaxy-black" },
+    });
+    const res = await checkGET({} as NextRequest, params(String(variant._id)));
+    const body = await res.json();
+    const density = body.changes.find((c: { field: string }) => c.field === "density");
+    expect(density).toBeDefined();
+    expect(density.current).toBe(1.2); // the RESOLVED (inherited) value, not null
+    expect(density.incoming).toBe(1.24);
+  });
+
   // ── sync ─────────────────────────────────────────────────────────────
 
   it("sync: applies only the selected fields and refreshes the snapshot", async () => {
