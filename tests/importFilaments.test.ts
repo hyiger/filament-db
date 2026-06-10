@@ -151,6 +151,36 @@ describe("upsertImportRows", () => {
     expect(updated!.cost).toBe(29.99);
   });
 
+  // GH #649 (Codex P2): a parent + an existing variant in the same import,
+  // where the parent's value changes. Pass 1 bumps the parent; pass 2 must
+  // compare the variant's incoming (flattened-export) value against the
+  // NEW parent value, not the stale one loaded before processing — else
+  // the inherited value is written as a local override and the variant
+  // stops tracking the parent (severing GH #106 inheritance).
+  it("refreshes parent values between passes so a changed parent doesn't pin the variant (GH #649)", async () => {
+    const parent = await Filament.create({
+      name: "Galaxy", vendor: "Acme", type: "PLA", cost: 20,
+    });
+    const variant = await Filament.create({
+      name: "Galaxy Black", vendor: "Acme", type: "PLA",
+      parentId: parent._id, cost: null, // inherits the parent's cost
+    });
+
+    // Parent row bumps cost 20 → 30; the variant row's flattened cost (what
+    // an export emits) equals the NEW parent value because it inherits.
+    const result = await upsertImportRows([
+      { name: "Galaxy", vendor: "Acme", type: "PLA", cost: 30 },
+      { name: "Galaxy Black", vendor: "Acme", type: "PLA", parentName: "Galaxy", cost: 30 },
+    ]);
+    expect(result.updated).toBe(2);
+
+    const p = await Filament.findById(parent._id);
+    const v = await Filament.findById(variant._id);
+    expect(p!.cost).toBe(30);
+    // Variant kept inheriting — cost was NOT pinned as a local override.
+    expect(v!.cost == null).toBe(true);
+  });
+
   it("does NOT reset color/diameter on existing filaments when those columns are absent (GH #183)", async () => {
     // Seed a filament with explicit non-default color + diameter.
     const seeded = await Filament.create({

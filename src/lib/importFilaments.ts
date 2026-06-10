@@ -452,20 +452,37 @@ export async function upsertImportRows(
   // we might update. A variant's parent is referenced by id and may not
   // appear in the import file at all, so the name-keyed load above can't
   // be relied on to have it.
-  const parentIdsToLoad = new Set<string>();
-  for (const entry of activeByName.values()) {
-    if (entry.parentId) parentIdsToLoad.add(String(entry.parentId));
-  }
+  //
+  // GH #649 (Codex P2): load this AFTER pass 1, not before. The two-pass
+  // driver below runs every parent/standalone row in pass 1 and every
+  // variant row in pass 2, and `parentById` is read ONLY in pass 2 (a
+  // pass-1 row has no parentId, so the inheritance split is skipped). If
+  // a parent row updated its own value in pass 1, a fresh load here lets
+  // pass 2 compare the variant's incoming value against the NEW parent
+  // value — so a bulk restore that changes the parent doesn't get written
+  // as a local override on the variant (severing GH #106 inheritance).
+  // Recomputing the id set after pass 1 also picks up parents that were
+  // resurrected into `activeByName` during pass 1.
   const parentById = new Map<string, LeanFilament>();
-  if (parentIdsToLoad.size > 0) {
+  async function loadParentDocs() {
+    parentById.clear();
+    const ids = new Set<string>();
+    for (const entry of activeByName.values()) {
+      if (entry.parentId) ids.add(String(entry.parentId));
+    }
+    if (ids.size === 0) return;
     const parentDocs = await Filament.find({
-      _id: { $in: [...parentIdsToLoad] },
+      _id: { $in: [...ids] },
       _deletedAt: null,
     })
       .select(INHERITANCE_PROJECTION)
       .lean();
     for (const p of parentDocs) parentById.set(String(p._id), p);
   }
+  // Initial load covers pass-1 variant updates: an existing variant whose
+  // import row omits the Parent column is routed to pass 1 and still needs
+  // its parent for the inheritance split. Pass 2 gets a fresh reload below.
+  await loadParentDocs();
 
   // GH #379 (Codex P2 follow-up): share one trim between the two-pass
   // router and processRow. If routing used raw `row.parentName` while
@@ -764,6 +781,9 @@ export async function upsertImportRows(
   for (let i = 0; i < rows.length; i++) {
     if (!trimmedParentName(rows[i])) await processRowSafe(i);
   }
+  // GH #649 (Codex P2): refresh parent values written during pass 1 before
+  // the variant rows compare against them in pass 2.
+  await loadParentDocs();
   for (let i = 0; i < rows.length; i++) {
     if (trimmedParentName(rows[i])) await processRowSafe(i);
   }
