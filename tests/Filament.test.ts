@@ -924,7 +924,7 @@ describe("Filament Model — v1.11 spool fields", () => {
     await Filament.updateOne({ _id: f._id }, { $set: { secondaryColors: [] } });
   });
 
-  it("rejects negative and fractional optTags entries (GH #634)", async () => {
+  it("sanitizes negative and fractional optTags entries on write (GH #634)", async () => {
     const ok = await Filament.create({
       name: "Tags OK",
       vendor: "Test",
@@ -933,23 +933,37 @@ describe("Filament Model — v1.11 spool fields", () => {
     });
     expect(ok.optTags).toEqual([4, 16, 71]);
 
-    await expect(
-      Filament.create({
-        name: "Tags Negative",
-        vendor: "Test",
-        type: "PLA",
-        optTags: [-1],
-      }),
-    ).rejects.toThrow(/optTags/);
+    // Invalid entries are dropped on assignment, valid ones survive — the
+    // setter sanitizes rather than rejecting, so a write never fails.
+    const mixed = await Filament.create({
+      name: "Tags Mixed",
+      vendor: "Test",
+      type: "PLA",
+      optTags: [-1, 1.5, 4, 16],
+    });
+    expect(mixed.optTags).toEqual([4, 16]);
+  });
 
-    await expect(
-      Filament.create({
-        name: "Tags Fractional",
-        vendor: "Test",
-        type: "PLA",
-        optTags: [1.5],
-      }),
-    ).rejects.toThrow(/optTags/);
+  // Codex P2 on PR #650: a rejecting validator would block ANY save() on a
+  // legacy doc that already carries a bad optTags value — even when the
+  // save only mutates spools/usageHistory. The setter approach must let
+  // such a save through (and clean the bad value on the next optTags write).
+  it("lets a doc with a legacy bad optTags value save unrelated changes (GH #634, #650)", async () => {
+    const f = await Filament.create({
+      name: "Legacy Tags",
+      vendor: "Test",
+      type: "PLA",
+    });
+    // Plant a bad value directly, bypassing the setter (mirrors legacy data
+    // written before the sanitizer existed).
+    await Filament.collection.updateOne(
+      { _id: f._id },
+      { $set: { optTags: [-1, 2.5] } },
+    );
+
+    const reloaded = await Filament.findById(f._id);
+    reloaded!.spools.push({ totalWeight: 1000 });
+    await expect(reloaded!.save()).resolves.toBeTruthy();
   });
 
   it("caps dryingTime at 10080 minutes (GH #634)", async () => {

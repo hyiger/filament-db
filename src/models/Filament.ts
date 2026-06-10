@@ -36,9 +36,18 @@ function isValidColor(v: unknown): boolean {
 
 /** GH #634: optTags entries are CBOR unsigned ints on the wire — a
  * negative entry makes the encoder throw and a fractional one would
- * silently encode a different tag id. Reject both at the schema edge. */
-function isValidOptTagArray(arr: unknown): boolean {
-  return Array.isArray(arr) && arr.every((t) => Number.isInteger(t) && t >= 0);
+ * silently encode a different tag id. Sanitize on assignment rather than
+ * with a rejecting validator: a hard validator would block ANY later
+ * `save()` on a legacy doc that already carries a bad tag — including the
+ * print-history and manual-spool-usage paths, which load a Filament,
+ * mutate `spools`/`usageHistory`, and call `save()` without touching
+ * optTags (Codex P2 on PR #650). A setter drops invalid entries whenever
+ * the array is actually written (API edits, NFC prefill) while leaving an
+ * unrelated save untouched; the encoder also filters defensively, so a
+ * legacy value already in the DB can never reach the wire. */
+function sanitizeOptTags(arr: unknown): number[] {
+  if (!Array.isArray(arr)) return [];
+  return arr.filter((t) => Number.isInteger(t) && t >= 0);
 }
 
 export interface IDryCycle {
@@ -418,10 +427,7 @@ const FilamentSchema = new Schema<IFilament>(
     optTags: {
       type: [Number],
       default: [],
-      validate: {
-        validator: isValidOptTagArray,
-        message: "optTags entries must be non-negative integers",
-      },
+      set: sanitizeOptTags,
     },
     tdsUrl: {
       type: String,
