@@ -54,10 +54,15 @@ describe("resolveReferenceChapter", () => {
     expect(chOf("PETGCF")).toBe("ch7"); // no hyphen
   });
 
-  it("strips a leading 'r' (recycled)", () => {
+  it("strips a leading 'r' (recycled), including heuristic-only remainders", () => {
     expect(chOf("rPLA")).toBe("ch6");
     expect(chOf("rPETG")).toBe("ch7");
     expect(chOf("rPET")).toBe("ch9");
+    // recycled forms that only the heuristics (not exact map) cover:
+    expect(chOf("rTPU 95A")).toBe("ch16");
+    expect(chOf("rNylon 6")).toBe("ch13");
+    expect(chOf("rPA6T")).toBe("ch14");
+    expect(chOf("rPET-CF")).toBe("ch9");
   });
 
   it("resolves synonyms", () => {

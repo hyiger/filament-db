@@ -110,21 +110,25 @@ function stripReinforcement(key: string): string {
   return key.replace(/-?(?:CF|GF)\d*$/, "");
 }
 
+const tryKey = (k: string): ReferenceChapter | null =>
+  TYPE_MAP[k] ? REFERENCE_CHAPTERS[TYPE_MAP[k]] : null;
+
 /**
  * Resolve a filament type to its reference chapter, or `null` when none maps
  * (the panel then hides). Order: exact → reinforcement-stripped exact →
- * leading-"R" (recycled) stripped exact → `PA<n>` aliphatic-nylon rule.
+ * leading-"R" (recycled, recursed through the full resolver so the heuristics
+ * below also apply) → Shore-suffix elastomer → semi-aromatic / aliphatic nylon.
  * Deliberately NO blind prefix scan — it would mismap niche types that merely
  * share an initial (PCL≠PC, PVB≠PVA, PEI≠PE).
  */
 export function resolveReferenceChapter(
   type: string | null | undefined,
 ): ReferenceChapter | null {
-  const key = normalizeTypeKey(type);
-  if (!key) return null;
+  return resolveNormalizedKey(normalizeTypeKey(type));
+}
 
-  const tryKey = (k: string): ReferenceChapter | null =>
-    TYPE_MAP[k] ? REFERENCE_CHAPTERS[TYPE_MAP[k]] : null;
+function resolveNormalizedKey(key: string): ReferenceChapter | null {
+  if (!key) return null;
 
   // 1. exact
   let hit = tryKey(key);
@@ -137,9 +141,12 @@ export function resolveReferenceChapter(
     if (hit) return hit;
   }
 
-  // 3. drop a leading "R" (recycled), e.g. rPLA → PLA, retry both forms
-  if (key.startsWith("R")) {
-    hit = tryKey(key.slice(1)) ?? tryKey(stripReinforcement(key.slice(1)));
+  // 3. drop a leading "R" (recycled) and re-resolve the remainder through the
+  //    WHOLE resolver — so rPLA → PLA (exact) AND rTPU 95A / rNylon 6 / rPA6T
+  //    (heuristic-only) resolve the same as their non-recycled forms. Each hop
+  //    shortens the key, so it terminates.
+  if (key.length > 1 && key.startsWith("R")) {
+    hit = resolveNormalizedKey(key.slice(1));
     if (hit) return hit;
   }
 
