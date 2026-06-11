@@ -91,10 +91,13 @@ const TYPE_MAP: Record<string, string> = {
   PHA: "ch21", PCL: "ch21", PVB: "ch21",
 };
 
-/** Uppercase, drop whitespace and the cosmetic `/`, `+` separators. */
+/** Uppercase, drop whitespace and the cosmetic `-`, `/`, `+` separators, so
+ *  "PA 6" → "PA6", "PLA/PHA" → "PLAPHA", "PLA+" → "PLA", and blend/compound
+ *  spellings collapse: "PC-ABS" → "PCABS", "PET-CF" → "PETCF" (reinforcement
+ *  stripping still recognizes the hyphen-free form). */
 export function normalizeTypeKey(type: string | null | undefined): string {
   if (!type) return "";
-  return type.toUpperCase().replace(/[\s/+]+/g, "");
+  return type.toUpperCase().replace(/[-\s/+]+/g, "");
 }
 
 /**
@@ -140,9 +143,20 @@ export function resolveReferenceChapter(
     if (hit) return hit;
   }
 
-  // 4. aliphatic-nylon subtypes: PA6 / PA66 / PA12 / PA612 / PA1010 → ch13.
-  //    Guarded to a digit after "PA" so PAEK / PAHT / PPA never match here.
-  if (/^PA\d/.test(base)) return REFERENCE_CHAPTERS.ch13;
+  // 4. elastomers carry a Shore-hardness suffix far more often than not
+  //    ("TPU 95A", "TPU98A", "TPU 64D", "TPE 85A") → ch16. Guarded to the
+  //    elastomer prefixes so it can't swallow digits from other types.
+  if (/^(?:TPU|TPE|TPC)\d{2,3}[AD]$/.test(base)) return REFERENCE_CHAPTERS.ch16;
+
+  // 5. semi-aromatic ("T"-grade) nylons — PA6T / PA9T / PA10T / PA4T — are
+  //    high-temp partially-aromatic polyamides covered by the PPA chapter, NOT
+  //    the aliphatic one. Must precede the broad PA<n> rule below.
+  if (/^PA\d+T/.test(base)) return REFERENCE_CHAPTERS.ch14;
+
+  // 6. aliphatic-nylon subtypes: PA6 / PA66 / PA12 / PA612 / PA1010 (and the
+  //    "Nylon 6" / "Nylon12" spellings) → ch13. PA guarded to a digit after
+  //    "PA" so PAEK / PAHT / PPA never match here.
+  if (/^PA\d/.test(base) || /^NYLON\d/.test(base)) return REFERENCE_CHAPTERS.ch13;
 
   return null;
 }

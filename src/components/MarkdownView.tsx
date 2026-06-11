@@ -44,6 +44,10 @@ const components: Components = {
     <pre className="bg-gray-100 dark:bg-gray-900 rounded p-3 overflow-x-auto text-xs my-3">{children}</pre>
   ),
   a: ({ href, children }) => {
+    // Intentionally http(s)-only: safeHttpUrl is stricter than rehype-sanitize's
+    // default href allow-list (which also permits mailto:/irc:/xmpp:). The
+    // reference's links are all http(s) wiki URLs; anything else degrades to
+    // plain text rather than rendering a non-http scheme.
     const safe = safeHttpUrl(href);
     if (!safe) return <span>{children}</span>;
     return (

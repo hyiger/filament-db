@@ -3,13 +3,16 @@
  *
  * Source: "FDM Polymers — A Technical Reference" (github.com/hyiger/filament-db wiki).
  * © hyiger · Licensed CC BY-NC-ND 4.0. Bundled verbatim with attribution.
- * Refreshed from the wiki on every release build (see release.yml / docker.yml).
+ *
+ * This snapshot is committed so the feature renders everywhere. release.yml
+ * re-runs the fetch to refresh it before building the desktop installers;
+ * Docker / web bundle this committed snapshot as-is.
  */
 
 export const REFERENCE_WIKI_SHA = "7b0cf11";
-export const REFERENCE_SYNCED_AT = "2026-06-11";
+export const REFERENCE_SYNCED_AT = "2026-06-09";
 
-/** Chapter ids present in the bundled content (empty in the committed stub).
+/** Chapter ids present in the bundled content (empty only in the --stub build).
  *  Lets the detail page gate the Technical Reference panel without importing
  *  the heavy content module. */
-export const REFERENCE_CHAPTER_IDS: ReadonlySet<string> = new Set(["ch1", "ch2", "ch3", "ch4", "ch5", "ch6", "ch7", "ch8", "ch9", "ch10", "ch11", "ch12", "ch13", "ch14", "ch15", "ch16", "ch17", "ch18", "ch19", "ch20", "ch21", "ch22", "ch23", "ch24", "ch25", "ch26", "ch27", "ch28"]);
+export const REFERENCE_CHAPTER_IDS: ReadonlySet<string> = new Set(["ch6", "ch7", "ch8", "ch9", "ch10", "ch11", "ch12", "ch13", "ch14", "ch15", "ch16", "ch17", "ch18", "ch19", "ch20", "ch21"]);

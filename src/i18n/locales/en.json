@@ -1065,7 +1065,7 @@
   "detail.techRef.loading": "Loading reference…",
   "detail.techRef.attribution": "From FDM Polymers — A Technical Reference · © hyiger · CC BY-NC-ND 4.0",
   "detail.techRef.viewWiki": "View on the wiki",
-  "detail.techRef.synced": "synced {sha}",
+  "detail.techRef.synced": "synced {sha} · {date}",
   "edit.title": "Edit Filament",
   "edit.backToDetail": "Back to detail",
   "edit.toast.updated": "Filament updated",

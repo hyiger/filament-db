@@ -13,6 +13,8 @@ describe("normalizeTypeKey", () => {
     expect(normalizeTypeKey("  PA 6 ")).toBe("PA6");
     expect(normalizeTypeKey("PLA/PHA")).toBe("PLAPHA");
     expect(normalizeTypeKey("PLA+")).toBe("PLA");
+    expect(normalizeTypeKey("PC-ABS")).toBe("PCABS");
+    expect(normalizeTypeKey("PET-CF")).toBe("PETCF");
     expect(normalizeTypeKey(null)).toBe("");
     expect(normalizeTypeKey(undefined)).toBe("");
     expect(normalizeTypeKey("")).toBe("");
@@ -70,7 +72,7 @@ describe("resolveReferenceChapter", () => {
     expect(chOf("PEBA")).toBe("ch16");
   });
 
-  it("maps PA<n> aliphatic-nylon subtypes to ch13", () => {
+  it("maps PA<n> aliphatic-nylon subtypes (and Nylon<n> spellings) to ch13", () => {
     expect(chOf("PA6")).toBe("ch13");
     expect(chOf("PA66")).toBe("ch13");
     expect(chOf("PA12")).toBe("ch13");
@@ -78,6 +80,35 @@ describe("resolveReferenceChapter", () => {
     expect(chOf("PA612")).toBe("ch13");
     expect(chOf("PA1010")).toBe("ch13");
     expect(chOf("PA 6")).toBe("ch13"); // whitespace
+    expect(chOf("Nylon 6")).toBe("ch13");
+    expect(chOf("Nylon12")).toBe("ch13");
+    expect(chOf("Nylon 66")).toBe("ch13");
+  });
+
+  it("routes semi-aromatic 'T'-grade nylons to the PPA chapter (ch14), not aliphatic", () => {
+    expect(chOf("PA6T")).toBe("ch14");
+    expect(chOf("PA9T")).toBe("ch14");
+    expect(chOf("PA10T")).toBe("ch14");
+    expect(chOf("PA6T-CF")).toBe("ch14"); // reinforcement-stripped first
+    // but plain numbered nylons stay aliphatic
+    expect(chOf("PA6")).toBe("ch13");
+    expect(chOf("PA66")).toBe("ch13");
+  });
+
+  it("resolves elastomers with a Shore-hardness suffix to ch16", () => {
+    expect(chOf("TPU 95A")).toBe("ch16");
+    expect(chOf("TPU98A")).toBe("ch16");
+    expect(chOf("TPU 64D")).toBe("ch16");
+    expect(chOf("TPE 85A")).toBe("ch16");
+    expect(chOf("TPC90A")).toBe("ch16");
+    expect(chOf("TPU")).toBe("ch16"); // bare still works
+  });
+
+  it("resolves hyphenated blend names (PC-ABS, PC-PTFE)", () => {
+    expect(chOf("PC-ABS")).toBe("ch15");
+    expect(chOf("PC/ABS")).toBe("ch15");
+    expect(chOf("PCABS")).toBe("ch15");
+    expect(chOf("PC-PTFE")).toBe("ch15");
   });
 
   it("does NOT mismap types that merely share an initial (exact-first)", () => {

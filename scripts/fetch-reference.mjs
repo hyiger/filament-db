@@ -41,8 +41,18 @@ const HEADER = `/**
  *
  * Source: "FDM Polymers — A Technical Reference" (github.com/hyiger/filament-db wiki).
  * © hyiger · Licensed CC BY-NC-ND 4.0. Bundled verbatim with attribution.
- * Refreshed from the wiki on every release build (see release.yml / docker.yml).
+ *
+ * This snapshot is committed so the feature renders everywhere. release.yml
+ * re-runs the fetch to refresh it before building the desktop installers;
+ * Docker / web bundle this committed snapshot as-is.
  */`;
+
+// Only the material chapters (6–21) are reachable from a filament type via
+// src/lib/referenceChapter.ts (REFERENCE_CHAPTERS). Foundations (1–5) and the
+// cross-cutting workflows (22–28) are never resolved to, so bundling them would
+// just bloat the lazy chunk — extract only the material range.
+const MATERIAL_MIN = 6;
+const MATERIAL_MAX = 21;
 
 /** Write both generated modules: the big content map + the tiny index. */
 function emit(sha, syncedAt, content) {
@@ -58,8 +68,8 @@ export const REFERENCE_WIKI_SHA = ${JSON.stringify(sha)};
 export const REFERENCE_SYNCED_AT = ${JSON.stringify(syncedAt)};
 
 /** Chapter id (e.g. "ch6") -> the chapter's markdown, sliced from the wiki.
- *  ~300 KB — imported ONLY by the lazily-loaded ReferenceChapterBody chunk so
- *  it never lands in the detail page's main bundle. */
+ *  Imported ONLY by the lazily-loaded ReferenceChapterBody chunk so it never
+ *  lands in the detail page's main bundle. */
 export const REFERENCE_CONTENT: Record<string, string> = {
 ${entries}
 };
@@ -73,7 +83,7 @@ ${entries}
 export const REFERENCE_WIKI_SHA = ${JSON.stringify(sha)};
 export const REFERENCE_SYNCED_AT = ${JSON.stringify(syncedAt)};
 
-/** Chapter ids present in the bundled content (empty in the committed stub).
+/** Chapter ids present in the bundled content (empty only in the --stub build).
  *  Lets the detail page gate the Technical Reference panel without importing
  *  the heavy content module. */
 export const REFERENCE_CHAPTER_IDS: ReadonlySet<string> = new Set([${ids.map((id) => JSON.stringify(id)).join(", ")}]);
@@ -114,8 +124,9 @@ function chaptersFromPage(raw) {
     const m = /^###\s+(\d+)\.\s/.exec(line);
     if (m) {
       flush();
-      curId = `ch${m[1]}`;
-      buf = [line];
+      const n = Number(m[1]);
+      curId = n >= MATERIAL_MIN && n <= MATERIAL_MAX ? `ch${n}` : null;
+      buf = curId ? [line] : [];
     } else if (curId) {
       buf.push(line);
     }
@@ -143,7 +154,10 @@ function main() {
 
     if (Object.keys(content).length === 0) throw new Error("No chapters extracted — wiki layout changed?");
 
-    const syncedAt = new Date().toISOString().slice(0, 10);
+    // Stamp the wiki commit's date (not wall-clock) so the generated module is a
+    // pure function of the source SHA — same wiki commit → byte-identical output,
+    // no daily churn, safe for a future drift check.
+    const syncedAt = execSync(`git -C "${tmp}" log -1 --format=%cs`, { encoding: "utf8" }).trim();
     const ids = emit(sha, syncedAt, content);
     console.log(`Wrote ${ids.length} chapters (${ids.join(", ")}) @ ${sha} -> ${path.relative(REPO, OUT)} + referenceIndex.ts`);
   } finally {

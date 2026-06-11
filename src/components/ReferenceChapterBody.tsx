@@ -2,7 +2,7 @@
 
 import MarkdownView from "@/components/MarkdownView";
 import { useTranslation } from "@/i18n/TranslationProvider";
-import { REFERENCE_CONTENT, REFERENCE_WIKI_SHA } from "@/content/referenceContent";
+import { REFERENCE_CONTENT, REFERENCE_WIKI_SHA, REFERENCE_SYNCED_AT } from "@/content/referenceContent";
 
 const WIKI_URL = "https://github.com/hyiger/filament-db/wiki/FDM-Polymers-Technical-Reference";
 
@@ -33,7 +33,7 @@ export default function ReferenceChapterBody({ chapterId }: { chapterId: string 
           {t("detail.techRef.viewWiki")}
         </a>
         {REFERENCE_WIKI_SHA
-          ? ` · ${t("detail.techRef.synced", { sha: REFERENCE_WIKI_SHA })}`
+          ? ` · ${t("detail.techRef.synced", { sha: REFERENCE_WIKI_SHA, date: REFERENCE_SYNCED_AT })}`
           : ""}
       </p>
     </div>
