@@ -2048,6 +2048,8 @@ function SpoolCard({
   const [dryDuration, setDryDuration] = useState("");
   const [usageGrams, setUsageGrams] = useState("");
   const [usageLabel, setUsageLabel] = useState("");
+  // #608: expandable view of the spool's logged usage entries.
+  const [showUsageHistory, setShowUsageHistory] = useState(false);
   // GH #601: provenance edits. ISO-string fields are sliced to YYYY-MM-DD
   // for the native <input type="date">; null/undefined collapse to "".
   // Reseeded from props in the patch handler below so a sibling-spool
@@ -2502,9 +2504,52 @@ function SpoolCard({
 
           {/* Log usage */}
           <div>
-            <p className="text-xs text-gray-500 mb-1">
-              {t("detail.spool.usageHistory", { count: spool.usageHistory?.length ?? 0 })}
-            </p>
+            {/* #608: the history line is a disclosure when there are entries —
+                expanding it lists each logged usage (date · grams · label ·
+                source) so the user can see the log, not just the count. */}
+            {(spool.usageHistory?.length ?? 0) > 0 ? (
+              <button
+                type="button"
+                onClick={() => setShowUsageHistory((s) => !s)}
+                aria-expanded={showUsageHistory}
+                className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 mb-1 flex items-center gap-1"
+              >
+                <span aria-hidden="true">{showUsageHistory ? "▾" : "▸"}</span>
+                {t("detail.spool.usageHistory", { count: spool.usageHistory?.length ?? 0 })}
+              </button>
+            ) : (
+              <p className="text-xs text-gray-500 mb-1">
+                {t("detail.spool.usageHistory", { count: 0 })}
+              </p>
+            )}
+            {showUsageHistory && (spool.usageHistory?.length ?? 0) > 0 && (
+              <ul className="mb-2 space-y-1 max-h-48 overflow-y-auto pr-1">
+                {[...(spool.usageHistory ?? [])]
+                  .sort(
+                    (a, b) =>
+                      new Date(b.date).getTime() - new Date(a.date).getTime(),
+                  )
+                  .map((u, i) => (
+                    <li
+                      key={i}
+                      className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 border-b border-gray-100 dark:border-gray-800 pb-1 last:border-0"
+                    >
+                      <span className="text-gray-400 dark:text-gray-500 w-20 shrink-0">
+                        {formatDate(u.date, locale)}
+                      </span>
+                      <span className="font-medium w-14 shrink-0 text-right">
+                        {u.grams}g
+                      </span>
+                      <span className="flex-1 min-w-0 truncate">
+                        {u.jobLabel || t("detail.spool.usageNoLabel")}
+                      </span>
+                      <span className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 shrink-0">
+                        {t(`detail.spool.usageSource.${u.source}`)}
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <input
                 type="number"
