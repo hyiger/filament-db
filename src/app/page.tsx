@@ -1111,12 +1111,12 @@ export default function Home() {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Escape") setSearch(""); }}
-          className="px-3 py-2 border border-gray-300 rounded text-sm bg-transparent"
+          className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
         />
         <select
           value={typeFilter}
           onChange={(e) => setTypeFilter(e.target.value)}
-          className="px-3 py-2 border border-gray-300 rounded text-sm bg-transparent"
+          className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
         >
           <option value="">{t("filaments.filter.allTypes")}</option>
           {types.map((tp) => (
@@ -1128,7 +1128,7 @@ export default function Home() {
         <select
           value={vendorFilter}
           onChange={(e) => setVendorFilter(e.target.value)}
-          className="px-3 py-2 border border-gray-300 rounded text-sm bg-transparent"
+          className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
         >
           <option value="">{t("filaments.filter.allVendors")}</option>
           {vendors.map((vn) => (
