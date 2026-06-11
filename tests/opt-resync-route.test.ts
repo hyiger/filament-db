@@ -394,13 +394,12 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(fresh.density).toBe(1.42); // untouched
   });
 
-  it("sync: validates against the resolved view so check/sync agree on a variant (GH #607)", async () => {
+  it("check/sync: suppress an unapplyable inherited-array clear on a variant (GH #607)", async () => {
     // A variant inherits optTags from its parent and OPT clears them upstream.
-    // check offers the clear (resolved optTags ≠ []); sync must accept the
-    // same field. Pre-fix sync diffed the RAW variant (own optTags already
-    // []), so it rejected the field as "not offered" — making the changelist
-    // unapplyable. (The write itself is a no-op for an inherited array — the
-    // variant re-inherits — but the two routes must at least agree.)
+    // The clear can't be applied to a variant — writing [] re-inherits the
+    // parent's array — so offering it would report a no-op "success" and
+    // re-surface on every check. Both routes must suppress it consistently:
+    // check omits it, sync rejects it.
     const parent = await Filament.create({
       name: "Tag Parent",
       vendor: "Prusament",
@@ -416,16 +415,42 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
       // optTags unset → inherits [16]
       settings: { openprinttag_slug: "prusament-pla-galaxy-black" },
     });
-    // check surfaces the optTags change against the resolved (inherited) value.
+    // check must NOT offer the optTags clear for the variant.
     const checkRes = await checkGET({} as NextRequest, params(String(variant._id)));
     const checkBody = await checkRes.json();
     expect(
       checkBody.changes.some((c: { field: string }) => c.field === "optTags"),
-    ).toBe(true);
-    // sync must ACCEPT it (200), not reject with "No current update".
+    ).toBe(false);
+    // sync must reject it (consistent with check), not report a no-op success.
     const syncRes = await syncPOST(syncReq(String(variant._id), ["optTags"]), params(String(variant._id)));
+    expect(syncRes.status).toBe(400);
+    expect((await syncRes.json()).error).toContain("optTags");
+  });
+
+  it("check/sync: a ROOT filament's array clear is still offered and applyable (GH #607)", async () => {
+    // The variant suppression must NOT over-reach: a root filament with its
+    // own optTags that OPT clears can really be cleared, so it stays offered.
+    const root = await Filament.create({
+      name: "Root Tags PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#3d3e3d",
+      density: 1.24,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+      optTags: [16], // OPT offers [] → a real clear
+      settings: { openprinttag_slug: "prusament-pla-galaxy-black" },
+    });
+    const checkRes = await checkGET({} as NextRequest, params(String(root._id)));
+    const checkBody = await checkRes.json();
+    expect(
+      checkBody.changes.some((c: { field: string }) => c.field === "optTags"),
+    ).toBe(true);
+    const syncRes = await syncPOST(syncReq(String(root._id), ["optTags"]), params(String(root._id)));
     expect(syncRes.status).toBe(200);
-    expect((await syncRes.json()).applied).toContain("optTags");
+    const fresh = await Filament.findById(root._id).lean();
+    expect(fresh.optTags).toEqual([]); // actually cleared
   });
 
   it("sync: 400 when the filament is not OPT-linked", async () => {

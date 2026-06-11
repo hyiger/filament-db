@@ -95,6 +95,20 @@ const OPT_CLEARABLE_FIELDS: ReadonlySet<string> = new Set([
   "optTags",
 ]);
 
+/**
+ * GH #607 (Codex P2): the ARRAY clearables. A variant can't clear an
+ * inherited array — `resolveFilament` treats an empty array as "inherit", so
+ * `$set`-ing `[]` onto the variant just re-inherits the parent's array. The
+ * effective value never reaches empty, so offering the clear would report a
+ * no-op "success" and re-surface on every check. `diffOptFields(isVariant)`
+ * suppresses these clears for variants. `color` is NOT here — it's a scalar
+ * and variant-only (never inherited), so clearing it to null works fine.
+ */
+const OPT_CLEARABLE_ARRAY_FIELDS: ReadonlySet<string> = new Set([
+  "secondaryColors",
+  "optTags",
+]);
+
 /** Snapshot keys can't contain dots (Mongo nesting). `temperatures.nozzle`
  *  → `temperatures_nozzle`. The snapshot is always written as one whole
  *  object so this sanitisation only matters for lookups. */
@@ -189,11 +203,18 @@ function classify(
  * through `mapToFilamentPayload`). Returns one entry per field that differs
  * AND that OPT actually offers a value for. Fields OPT doesn't carry, and
  * fields already equal to the upstream value, are omitted.
+ *
+ * `isVariant` — when the filament being diffed is a variant, suppress
+ * clearable-ARRAY clears (GH #607, Codex P2). A variant can't clear an
+ * inherited array (writing `[]` re-inherits the parent), so such a change is
+ * unapplyable; offering it would loop "success that does nothing" → re-offer.
+ * Pass the EFFECTIVE (resolved) filament for the values regardless.
  */
 export function diffOptFields(
   filament: Record<string, unknown>,
   payload: Record<string, unknown>,
   snapshot: Record<string, unknown> | null | undefined,
+  isVariant = false,
 ): OptFieldChange[] {
   const changes: OptFieldChange[] = [];
   for (const { field, labelKey, isColor } of OPT_MANAGED_FIELDS) {
@@ -207,6 +228,16 @@ export function diffOptFields(
     // fall through and let valuesEqual decide whether it's a real change
     // (GH #607, Codex P2 — explicit upstream clears must surface).
     if (!hasIncoming(incoming) && !OPT_CLEARABLE_FIELDS.has(field)) continue;
+    // GH #607 (Codex P2): but a variant can't clear an inherited array — the
+    // write would re-inherit the parent's array, so the clear never takes and
+    // re-appears every check. Suppress clearable-array clears for variants.
+    if (
+      isVariant &&
+      !hasIncoming(incoming) &&
+      OPT_CLEARABLE_ARRAY_FIELDS.has(field)
+    ) {
+      continue;
+    }
     const current = getPath(filament, field);
     if (valuesEqual(current, incoming)) continue;
     const snapKey = optSnapshotKey(field);

@@ -112,21 +112,20 @@ export async function POST(
     // (sparse OPT data must never clear good local data), so only fields
     // that actually appear in the changelist may be applied.
     // GH #607 follow-up: validate against the SAME effective (variant→parent)
-    // view the check route diffs. Without this, a clearable array a variant
-    // inherits (optTags / secondaryColors) that OPT clears upstream would be
-    // offered by check (resolved value ≠ []) but rejected here as "not
-    // offered" (the raw variant array is already []). Note: actually
-    // *applying* such a clear to a variant is a no-op at the write level —
-    // resolveFilament treats an empty array as "inherit", so the variant
-    // re-inherits the parent's array; that's the documented array-inheritance
-    // limitation, not something this route can resolve. The point here is
-    // only that check and sync agree on what's applyable.
+    // view the check route diffs, passing the same `isVariant` flag — so
+    // check and sync agree exactly on what's offered. (That includes
+    // suppressing clearable-array clears for a variant, which can't be
+    // applied: writing `[]` re-inherits the parent's array — see
+    // diffOptFields. Without the shared resolution + flag, an inherited
+    // field could be offered by one route and rejected by the other.)
     const snapshotForDiff = filament.openprinttagSnapshot as Record<string, unknown> | undefined;
     const effective = await resolveEffectiveFilament(
       filament as unknown as Record<string, unknown>,
     );
     const offered = new Set(
-      diffOptFields(effective, payload, snapshotForDiff).map((c) => c.field),
+      diffOptFields(effective, payload, snapshotForDiff, !!filament.parentId).map(
+        (c) => c.field,
+      ),
     );
     const notOffered = fields.filter((f) => !offered.has(f));
     if (notOffered.length > 0) {

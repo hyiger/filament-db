@@ -215,6 +215,32 @@ describe("diffOptFields", () => {
     expect(changes.find((c) => c.field === "optTags")?.incoming).toEqual([]);
   });
 
+  it("suppresses clearable-array clears when isVariant (GH #607 Codex P2)", () => {
+    // Same upstream clear, but for a VARIANT the resolved arrays come from the
+    // parent and can't be cleared by a $set ([] re-inherits). So secondaryColors
+    // / optTags clears must NOT be offered — while a scalar color clear and a
+    // genuine non-empty change still are.
+    const stored = {
+      color: "#3d3e3d",
+      secondaryColors: ["#000000", "#98282f"],
+      optTags: [17, 27],
+      density: 1.5, // a real upstream change (OPT offers 1.24) — still surfaced
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    };
+    const changes = diffOptFields(
+      stored,
+      payload({ color: "#3d3e3d", secondaryColors: [], optTags: [] }),
+      null,
+      true, // isVariant
+    );
+    expect(changes.find((c) => c.field === "secondaryColors")).toBeUndefined();
+    expect(changes.find((c) => c.field === "optTags")).toBeUndefined();
+    // a non-array, non-clear change is unaffected by the suppression.
+    expect(changes.find((c) => c.field === "density")?.incoming).toBe(1.24);
+  });
+
   it("never offers to push the gray sentinel onto a user's real color", () => {
     const stored = {
       color: "#ff0000",

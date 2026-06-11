@@ -69,7 +69,7 @@ export async function GET(
     );
 
     const snapshot = filament.openprinttagSnapshot as Record<string, unknown> | undefined;
-    const changes = diffOptFields(effective, payload, snapshot);
+    const changes = diffOptFields(effective, payload, snapshot, !!filament.parentId);
 
     return NextResponse.json({
       linked: true,
