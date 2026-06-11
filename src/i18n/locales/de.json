@@ -71,6 +71,7 @@
   "filaments.stats.totalWithVariants": "{count} Filament(e) · {total} inkl. Varianten",
   "filaments.stats.typeCount": "{count} Typ(en)",
   "filaments.stats.vendorCount": "{count} Hersteller",
+  "filaments.stats.spoolsLocations": "{spools} Spule(n) an {locations} Standort(en)",
   "filaments.stats.byType": "Nach Typ",
   "filaments.stats.byVendor": "Nach Hersteller",
   "filaments.stats.colors": "Farben ({count})",

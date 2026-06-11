@@ -167,6 +167,9 @@ export interface FilamentSummary {
     /** v1.11 — retired spools are excluded from inventory totals and list
      * weight bars, but the spool itself remains for historical reference. */
     retired?: boolean;
+    /** #616 — location reference, used only to count distinct spool
+     * locations for the home-page stat line. Null when unassigned. */
+    locationId?: string | null;
   }[];
   spoolWeight: number | null;
   netFilamentWeight: number | null;

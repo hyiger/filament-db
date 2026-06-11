@@ -71,6 +71,7 @@
   "filaments.stats.totalWithVariants": "{count} filament(s) · {total} incl. variants",
   "filaments.stats.typeCount": "{count} type(s)",
   "filaments.stats.vendorCount": "{count} vendor(s)",
+  "filaments.stats.spoolsLocations": "{spools} spool(s) in {locations} location(s)",
   "filaments.stats.byType": "By Type",
   "filaments.stats.byVendor": "By Vendor",
   "filaments.stats.colors": "Colors ({count})",

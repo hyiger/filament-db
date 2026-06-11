@@ -284,6 +284,9 @@ export async function GET(request: NextRequest) {
                 label: "$$s.label",
                 totalWeight: "$$s.totalWeight",
                 retired: "$$s.retired",
+                // #616: the home-page stat line counts distinct spool
+                // locations; the id is enough (no Location join needed).
+                locationId: "$$s.locationId",
               },
             },
           },

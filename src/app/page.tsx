@@ -330,6 +330,24 @@ export default function Home() {
     [inventoryFilaments],
   );
 
+  // #616: total active spools + distinct spool locations, for the headline
+  // stat line. Counts every non-retired spool across the fetched set —
+  // parents included, since a parent can carry its own roll (see the #552
+  // note on `hasSpools`). Retired spools are out of inventory, matching
+  // getSpoolCount. Only assigned locations count toward the location total.
+  const spoolStats = useMemo(() => {
+    let spools = 0;
+    const locations = new Set<string>();
+    for (const f of filaments) {
+      for (const s of f.spools ?? []) {
+        if (s.retired) continue;
+        spools++;
+        if (s.locationId) locations.add(String(s.locationId));
+      }
+    }
+    return { spools, locations: locations.size };
+  }, [filaments]);
+
   // Group filaments: parents with their variants, standalone filaments as-is
   // Client-side quick filter (low stock / has spools / missing calibrations).
   // Applied before grouping so a parent whose variants are filtered out is
@@ -934,6 +952,19 @@ export default function Home() {
           <span>{t("filaments.stats.typeCount", { count: filteredTypeCount })}</span>
           <span className="text-gray-600">·</span>
           <span>{t("filaments.stats.vendorCount", { count: filteredVendorCount })}</span>
+          {/* #616: surface spool + location totals at a glance, like the
+              Inventory page header. */}
+          {spoolStats.spools > 0 && (
+            <>
+              <span className="text-gray-600">·</span>
+              <span>
+                {t("filaments.stats.spoolsLocations", {
+                  spools: spoolStats.spools,
+                  locations: spoolStats.locations,
+                })}
+              </span>
+            </>
+          )}
         </button>
       )}
       {/* Statistics expansion — toggle lives on the stats text above; this
