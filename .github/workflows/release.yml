@@ -86,6 +86,14 @@ jobs:
       - name: Run tests
         run: npm test
 
+      # GH #614 — refresh the bundled FDM Polymers Technical Reference from the
+      # wiki (source of truth) so the release ships the latest content. The
+      # committed snapshot is the fallback: a transient wiki outage shouldn't
+      # block a release, so this is best-effort.
+      - name: Fetch technical reference content
+        continue-on-error: true
+        run: node scripts/fetch-reference.mjs
+
       - name: Build Next.js and compile Electron
         run: |
           npm run build

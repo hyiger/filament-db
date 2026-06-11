@@ -24,7 +24,8 @@
     "electron:fixlinks": "node -e \"const fs=require('fs'),path=require('path');function fix(d){fs.readdirSync(d,{withFileTypes:true}).forEach(e=>{const f=path.join(d,e.name);if(e.isSymbolicLink()){const t=fs.realpathSync(f);fs.rmSync(f);fs.cpSync(t,f,{recursive:true})}else if(e.isDirectory())fix(f)})}fix('.next/standalone');fs.cpSync('.next/standalone','standalone',{recursive:true});fs.cpSync('.next/static','standalone/.next/static',{recursive:true});fs.cpSync('public','standalone/public',{recursive:true})\"",
     "electron:pack": "electron-builder --config electron-builder.yml",
     "label:print": "tsx scripts/print-label.ts",
-    "label:sim": "tsx scripts/print-label-sim.ts"
+    "label:sim": "tsx scripts/print-label-sim.ts",
+    "fetch:reference": "node scripts/fetch-reference.mjs"
   },
   "dependencies": {
     "@pokusew/pcsclite": "^0.6.0",
@@ -37,7 +38,11 @@
     "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
+    "react-markdown": "^10.1.0",
     "react-window": "^2.2.7",
+    "rehype-raw": "^7.0.0",
+    "rehype-sanitize": "^6.0.0",
+    "remark-gfm": "^4.0.1",
     "swagger-ui-react": "^5.32.1",
     "tar": "^7.5.0",
     "undici": "^6.25.0",

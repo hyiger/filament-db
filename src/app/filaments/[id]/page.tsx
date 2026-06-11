@@ -12,6 +12,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import PrintLabelDialog from "@/components/PrintLabelDialog";
 import OptResyncDialog from "@/components/OptResyncDialog";
+import TechnicalReferencePanel from "@/components/TechnicalReferencePanel";
 import CopyButton from "@/components/CopyButton";
 import FilamentSwatch from "@/components/FilamentSwatch";
 import FinishChip from "@/components/FinishChip";
@@ -69,7 +70,6 @@ function FilamentDetail() {
   const params = useParams();
   const router = useRouter();
   const [filament, setFilament] = useState<Filament | null>(null);
-  const [showAllSettings, setShowAllSettings] = useState(false);
   // GH #607: "Check for OpenPrintTag updates" dialog.
   const [resyncOpen, setResyncOpen] = useState(false);
   /**
@@ -1881,42 +1881,10 @@ function FilamentDetail() {
         </p>
       )}
 
-      {filament.settings && Object.keys(filament.settings).length > 0 && (<div>
-        <button
-          onClick={() => setShowAllSettings(!showAllSettings)}
-          className="text-sm text-blue-600 hover:underline mb-3"
-        >
-          {showAllSettings ? t("detail.settings.hide") : t("detail.settings.show")} ({t("detail.settings.keyCount", { count: Object.keys(filament.settings).length })})
-        </button>
-
-        {showAllSettings && (
-          <div className="bg-gray-50 dark:bg-gray-900 rounded p-4 overflow-x-auto">
-            <table className="w-full text-xs font-mono">
-              <tbody>
-                {Object.entries(filament.settings)
-                  .sort(([a], [b]) => a.localeCompare(b))
-                  .map(([key, value]) => (
-                    <tr key={key} className="border-b border-gray-200 dark:border-gray-800">
-                      <td className="py-1 pr-4 text-gray-500 whitespace-nowrap">{key}</td>
-                      {/* `settings` is a Mixed bag — coerce any non-scalar
-                          value to JSON so a structured entry can never crash
-                          the render as a raw React child (Codex P2 #612). */}
-                      <td className="py-1 break-all">
-                        {value == null ? (
-                          <span className="text-gray-400">nil</span>
-                        ) : typeof value === "object" ? (
-                          JSON.stringify(value)
-                        ) : (
-                          value
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>)}
+      {/* GH #614: the chapter of the FDM Polymers Technical Reference relevant
+          to this filament's type — replaces the old raw "Show all PrusaSlicer
+          settings" dump. Self-hides when the type maps to no chapter. */}
+      <TechnicalReferencePanel type={filament.type} />
 
       {showPrusamentImport && (
         <PrusamentImportDialog
