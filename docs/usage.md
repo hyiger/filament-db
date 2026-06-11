@@ -22,7 +22,7 @@ Click any filament name in the table to see its full details:
 - Compatible nozzles and per-printer per-nozzle calibration values (EM, max vol speed, PA, retraction)
 - Technical Data Sheet -- click "View Technical Data Sheet" to open an inline preview, or "Open in new tab" for full-screen
 - Inheritance information (base profile reference)
-- All raw PrusaSlicer settings (click "Show all PrusaSlicer settings" to expand)
+- A **Technical reference** panel — the chapter of the FDM Polymers technical reference matching the filament's material type (self-hides when the type maps to no chapter)
 
 ## Adding a New Filament
 
@@ -381,7 +381,7 @@ The tracker aggregates stats across all spools, showing total remaining weight a
 
 ### Migrating from Single Weight
 
-If a filament has a `totalWeight` value but no spools array, a **"Migrate to spool tracking"** button converts the single weight into a spool entry.
+If a filament has a `totalWeight` value but no spools array, a **"Track multiple spools"** button converts the single weight into a spool entry.
 
 ### Spool Check (PrusaSlicer Integration)
 
@@ -409,7 +409,7 @@ This also works from a filament's detail page to add another spool of the same m
 
 ### Exporting
 
-Open the **Import/Export** dropdown on the home page and click **"Export CSV"** or **"Export XLSX"** to download all filaments in the chosen format. The export includes name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying temperature/time, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, and spool type.
+Open the **Import/Export** dropdown on the home page and click, under **Export**, **"CSV"** or **"Excel (XLSX)"** to download all filaments in the chosen format. The export includes name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying temperature/time, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, and spool type.
 
 XLSX exports include styled headers, color-coded cells, auto-filter, and a frozen header row.
 
@@ -552,9 +552,9 @@ PrusaSlicer Filament Edition can check after slicing whether the selected spool 
 
 Even without the fork, you can manually sync:
 
-- **Export**: Open the **Import/Export** dropdown on the home page and click **"Export INI"** to download all filaments as a PrusaSlicer-compatible config bundle
+- **Export**: Open the **Import/Export** dropdown on the home page and click, under **Export**, **"INI (PrusaSlicer)"** to download all filaments as a PrusaSlicer-compatible config bundle
 - **Import**: In PrusaSlicer, go to **File > Import > Import Config Bundle** to load the exported file
-- **Re-import**: Open the **Import/Export** dropdown and click **"Import INI"** to import a PrusaSlicer config bundle back into Filament DB
+- **Re-import**: Open the **Import/Export** dropdown and click **"Import File (INI / CSV / XLSX)"** to import a PrusaSlicer config bundle back into Filament DB
 
 ---
 
@@ -568,10 +568,10 @@ Go to **Settings** and click **"API Documentation"** to open the interactive Swa
 
 The **Dashboard** page at `/dashboard` is the home of your inventory at a glance:
 
-- **Totals** — filament count, spool count, grams on hand, total cost on hand
+- **Totals** — filament count, spool count, grams on hand, plus printer / nozzle / bed-type counts
 - **Low-stock warnings** — any filament whose aggregate remaining is under its per-filament `lowStockThreshold`. Clicking a row jumps to the filament detail.
 - **Needs drying** — spools whose most recent dry cycle is older than 30 days (configurable in settings later), grouped by filament type
-- **Quick links** — shortcut buttons to the filament list, analytics, locations, and share views
+- **Recent print history** — the most recently logged print jobs
 
 Low-stock thresholds are set per filament on the edit page under **Stock settings → Low-stock threshold (g)**. A filament with no threshold is never flagged.
 

@@ -14,7 +14,7 @@
 ## Option 1: Web / Desktop UI (recommended)
 
 1. Open Filament DB (desktop app or web at `http://localhost:3456`)
-2. Open the **Import/Export** dropdown on the home page and click **"Import INI"**
+2. Open the **Import/Export** dropdown on the home page and click **"Import File (INI / CSV / XLSX)"** (it routes by extension — an `.ini` is read as a PrusaSlicer config bundle)
 3. Select your PrusaSlicer config bundle `.ini` file
 4. Filaments are parsed and upserted into the database
 
@@ -183,7 +183,7 @@ You can restore a previously exported snapshot to import core app data: filament
 
 ## CSV / XLSX Export
 
-Open the **Import/Export** dropdown on the home page and click **"Export CSV"** or **"Export XLSX"** to download all filaments. Exports include name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying settings, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, spool type, and (as of v1.30.3) two columns surfacing the parent/variant relationship:
+Open the **Import/Export** dropdown on the home page and, under **Export**, click **"CSV"** or **"Excel (XLSX)"** to download all filaments. Exports include name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying settings, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, spool type, and (as of v1.30.3) two columns surfacing the parent/variant relationship:
 
 - **Parent** — name of the parent filament when this row is a variant; empty for roots and standalones.
 - **Variant Count** — number of variants this filament has (>0 only for parents with variants).
@@ -235,6 +235,6 @@ PrusaSlicer Filament Edition fetches base presets from `GET /api/filaments/prusa
 
 ## Exporting to PrusaSlicer INI
 
-Open the **Import/Export** dropdown on the home page and click **"Export INI"** to download all filaments as a PrusaSlicer-compatible INI file. This file contains all stored settings for each filament and can be imported back into PrusaSlicer via **File > Import > Import Config Bundle...**
+Open the **Import/Export** dropdown on the home page and, under **Export**, click **"INI (PrusaSlicer)"** to download all filaments as a PrusaSlicer-compatible INI file. This file contains all stored settings for each filament and can be imported back into PrusaSlicer via **File > Import > Import Config Bundle...**
 
 Each filament produces one `[filament:Name]` section. Calibration overrides are not included — they are applied dynamically via the calibration API.

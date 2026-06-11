@@ -113,7 +113,9 @@ Atlas was unreachable when the app started, so it automatically fell back to an 
 
 ## Desktop app: how to switch connection modes
 
-Run `window.electronAPI.resetConfig()` in the developer console (View > Toggle Developer Tools). This returns you to the setup wizard where you can choose a different mode.
+Open **Settings → Connection Mode**. Pick the mode you want (Atlas / Hybrid / Offline), fill in the connection string if the mode needs one, and click **Switch to …** (or **Connect & Switch**). The app reconnects in place — no wizard, no restart.
+
+If the app won't start far enough to reach Settings, fall back to the developer console: run `window.electronAPI.resetConfig()` (View > Toggle Developer Tools) to clear the saved config and return to the setup wizard.
 
 ## Sync error: "user is not allowed to do action [update]" / "lacks readWrite on …"
 

@@ -47,7 +47,7 @@ npm run dev                   # öffnet http://localhost:3456
 
 ## Schritt 2: Die App-Shell verstehen
 
-Eine permanente obere Leiste begleitet jede Seite, links mit dem App-Namen und Schnellzugriff auf **Filamente**, **Dashboard**, **Vergleich**, **Analyse**, **Teilen** und **Einstellungen**. Auf schmalen Bildschirmen (Mobil) klappen die Links zu einem Hamburger-Menü zusammen. Die aktive Seite ist hervorgehoben.
+Eine permanente obere Leiste begleitet jede Seite, links mit dem App-Namen und Schnellzugriff auf **Filamente**, **Dashboard**, **Bestand**, **Vergleich**, **Analyse**, **Teilen** und **Einstellungen**. Auf schmalen Bildschirmen (Mobil) klappen die Links zu einem Hamburger-Menü zusammen. Die aktive Seite ist hervorgehoben.
 
 Neben dem **Filament DB**-Titel auf der Startseite befindet sich eine kleine **Verbindungsstatus-Pille**, die deinen aktuellen Verbindungszustand auf einen Blick zeigt:
 
@@ -189,7 +189,7 @@ Wenn du einen Link auf das Technical Data Sheet eines Herstellers hast (PDF oder
 Wenn du bereits Profile in PrusaSlicer hast, importiere sie in Bulk statt jedes einzeln einzutippen.
 
 1. Gehe in PrusaSlicer zu **Datei > Export > Config Bundle exportieren** und speichere die `.ini`-Datei.
-2. Öffne auf der Filament-DB-Startseite das Dropdown **Importieren/Exportieren** und klicke auf **INI importieren**.
+2. Öffne auf der Filament-DB-Startseite das Dropdown **Importieren/Exportieren** und klicke auf **Datei importieren (INI / CSV / XLSX)** (leitet nach Dateierweiterung weiter — eine `.ini` wird als PrusaSlicer-Config-Bundle gelesen).
 3. Wähle die `.ini`-Datei.
 4. Ein Toast bestätigt: `42 Filamente importiert (38 neu, 4 aktualisiert)`.
 
@@ -267,7 +267,7 @@ Klicke einen Filamentnamen, um die Detailseite zu öffnen. Du siehst:
 - **Info-Karten** — Düsen-Temp, Bett-Temp, Kosten, Dichte, Durchmesser, Max. Volumetric Speed. Karten mit blauem Hintergrund und „(geerbt)"-Label zeigen Werte, die vom Eltern-Filament geerbt werden.
 - **Kalibrierungen** — Tabellen gruppiert nach Drucker (wenn mehrere Drucker Daten haben) mit Pro-Düse-Werten für EM, Max Vol Speed, PA, Retract Length, Retract Speed und Z Lift. Gibt es keine Kalibrierungen, werden kompatible Düsen als einfache Badges angezeigt.
 - **TDS-Vorschau** — klicke „Technical Data Sheet anzeigen" für eine eingebettete Vorschau oder „In neuem Tab öffnen" für Vollbild. Viele Hersteller-Seiten (Shopify, Wix usw.) verweigern das Einbetten in andere Seiten; für solche URLs zeigt das Vorschaufenster eine erläuternde Tafel mit einem **Datenblatt öffnen ↗**-Button statt einer leeren iframe.
-- **PrusaSlicer-Einstellungen** — klicke „Alle PrusaSlicer-Einstellungen anzeigen", um jedes Roh-Key-Value-Paar einzublenden.
+- **Technische Referenz** — ein ausklappbares Panel mit dem Kapitel der FDM-Polymer-Referenz, das zum Materialtyp dieses Filaments passt (PLA, PETG, PA, …). Es blendet sich aus, wenn der Typ keinem Kapitel entspricht.
 
 ### Navigation für Varianten
 
@@ -316,7 +316,7 @@ Um ein bestehendes eigenständiges Filament in eine Variante umzuwandeln:
 
 ## Schritt 11: Nach PrusaSlicer exportieren
 
-1. Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke auf **INI exportieren**.
+1. Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **INI (PrusaSlicer)**.
 2. Eine `.ini`-Datei wird heruntergeladen, die alle Filamente als `[filament:Name]`-Abschnitte enthält — ein Abschnitt pro Filament.
 3. Gehe in PrusaSlicer zu **Datei > Importieren > Config Bundle importieren** und wähle die Datei.
 
@@ -412,7 +412,7 @@ Wenn du den Tag entfernst, bevor du bestätigst, schließt sich die Bestätigung
 
 Falls du externe NFC-Tools bevorzugst:
 
-1. Klicke auf der Detailseite eines Filaments auf **OPT exportieren** (grüner Button).
+1. Öffne auf der Detailseite eines Filaments das Menü **Export ▾** und klicke auf **OPT exportieren**.
 2. Eine `.bin`-Datei wird heruntergeladen, die die NDEF-verpackte CBOR-Nutzlast enthält.
 3. Schreibe diese Datei mit deiner bevorzugten NFC-Software auf einen Tag.
 
@@ -459,7 +459,7 @@ Jedes Filament kann mehrere physische Spulen mit individuellen Gewichten verfolg
 4. Der Tracker aggregiert Statistiken über alle Spulen (Gesamtgewicht, berechnete Länge aus Dichte und Durchmesser).
 5. Jede Spule kann zusätzlich einer **Location** (Lagerort) und einem **Drucker-Slot** (AMS/MMU-Position, an der sie aktuell geladen ist — eine Spule belegt einen Slot zu einer Zeit) zugewiesen werden.
 
-Wenn ein Filament ein einzelnes `totalWeight`, aber noch keine Spulen hat, klicke auf **„In Spulen-Tracking migrieren"**, um es zu konvertieren.
+Wenn ein Filament ein einzelnes `totalWeight`, aber noch keine Spulen hat, klicke auf **„Mehrere Spulen verfolgen"**, um es zu konvertieren.
 
 Wenn du eine Spule aufbrauchst und ihr Restgewicht auf **0** setzt, fragt die App, ob sie im selben Schritt auch als **ausgemustert** markiert werden soll — das ist der kanonische „Ich habe diese Spule fertig"-Workflow. Beim Ausmustern bleibt die vollständige Historie (Daten, Trockenzyklen, Verbrauchslog) erhalten, sie wird aber aus den Inventarsummen ausgeschlossen, sodass deine Restgewichtsanzeigen sauber bleiben, ohne die Herkunft zu verlieren.
 
@@ -502,9 +502,9 @@ Wenn du [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer) nu
 
 Ohne den Fork synchronisierst du manuell:
 
-1. Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke auf **„INI exportieren"** für ein PrusaSlicer-kompatibles Config-Bundle
+1. Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **„INI (PrusaSlicer)"** für ein PrusaSlicer-kompatibles Config-Bundle
 2. Gehe in PrusaSlicer zu **Datei > Importieren > Config Bundle importieren** zum Laden
-3. Um aus PrusaSlicer zurückzuimportieren, exportiere ein Config-Bundle und nutze **Importieren/Exportieren > „INI importieren"** in Filament DB
+3. Um aus PrusaSlicer zurückzuimportieren, exportiere ein Config-Bundle und nutze **Importieren/Exportieren > „Datei importieren (INI / CSV / XLSX)"** in Filament DB
 
 ---
 
@@ -525,7 +525,7 @@ Beide Wege soft-löschen: das Filament wird mit einem `_deletedAt`-Zeitstempel m
 
 Bevor du zum Spulen-Tracker greifst, lohnt es sich zu beschreiben, wo deine physischen Spulen liegen:
 
-1. Navigiere zu **Locations** (obere Nav) → `/locations`
+1. Navigiere zu **Einstellungen → Locations** → `/locations`
 2. Klicke auf **+ Location hinzufügen**
 3. Gib einen Namen (z. B. `Drybox #1`), wähle eine **Art** (Regal / Drybox / Schrank / Drucker) und optional die Luftfeuchtigkeit
 4. Wiederhole für jeden physischen Container, den du verfolgen möchtest
@@ -596,14 +596,14 @@ Fehlende Locations werden automatisch angelegt, du musst sie nicht vorher anlege
 | Vorbefüllen via NFC / TDS / INI / Duplizieren | Filament hinzufügen > Vorbefüllen-Werkzeugleiste |
 | Aus TDS importieren | Filament hinzufügen > Aus TDS importieren |
 | AI-Provider konfigurieren | Einstellungen > AI-Funktionen |
-| Aus PrusaSlicer importieren | Startseite > Importieren/Exportieren > INI importieren |
+| Aus PrusaSlicer importieren | Startseite > Importieren/Exportieren > Datei importieren (INI / CSV / XLSX) |
 | Aus CSV/XLSX importieren | Startseite > Importieren/Exportieren > Datei importieren (INI / CSV / XLSX) — nach Erweiterung weitergeleitet |
 | Prusament-Spule importieren | Startseite > Importieren/Exportieren > Prusament QR |
 | Aus Atlas importieren | Startseite > Importieren/Exportieren > Aus Atlas importieren |
 | OpenPrintTag-DB durchsuchen | Startseite > Importieren/Exportieren > OpenPrintTag-DB durchsuchen |
 | Aus Snapshot wiederherstellen | Einstellungen > Sicherung & Wiederherstellen > Aus Snapshot wiederherstellen |
-| Nach PrusaSlicer exportieren | Startseite > Importieren/Exportieren > INI exportieren |
-| Nach CSV/XLSX exportieren | Startseite > Importieren/Exportieren > CSV exportieren / XLSX exportieren |
+| Nach PrusaSlicer exportieren | Startseite > Importieren/Exportieren > Export ▸ INI (PrusaSlicer) |
+| Nach CSV/XLSX exportieren | Startseite > Importieren/Exportieren > Export ▸ CSV / Excel (XLSX) |
 | Datenbank sichern | Einstellungen > Sicherung & Wiederherstellen > Snapshot herunterladen |
 | Filament-Details ansehen | Startseite > Filament-Namen klicken |
 | Filament bearbeiten | Detailseite > Bearbeiten |
@@ -613,7 +613,7 @@ Fehlende Locations werden automatisch angelegt, du musst sie nicht vorher anlege
 | API-Dokumentation öffnen | Einstellungen > API-Dokumentation (oder zu `/api-docs` navigieren) |
 | NFC-Tag schreiben | Detailseite > NFC schreiben (Desktop-App) |
 | NFC-Tag löschen | Einstellungen > NFC-Tools > Tag löschen (Desktop-App) |
-| NFC-Binärdatei exportieren | Detailseite > OPT exportieren |
+| NFC-Binärdatei exportieren | Detailseite > Export ▾ > OPT exportieren |
 | Spulen verfolgen | Detailseite > Spulen-Tracker > + Spule hinzufügen |
 | Spule einer Location zuweisen | Spulen-Detail > Location-Dropdown |
 | Spule einem Drucker-Slot zuweisen | Spulen-Detail > Drucker-Slot-Auswahl |

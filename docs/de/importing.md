@@ -16,7 +16,7 @@
 ## Option 1: Web-/Desktop-UI (empfohlen)
 
 1. Öffne Filament DB (Desktop-App oder im Web unter `http://localhost:3456`)
-2. Öffne das Dropdown **Importieren/Exportieren** auf der Startseite und klicke auf **„Import INI"**
+2. Öffne das Dropdown **Importieren/Exportieren** auf der Startseite und klicke auf **„Datei importieren (INI / CSV / XLSX)"** (leitet nach Dateierweiterung weiter — eine `.ini` wird als PrusaSlicer-Config-Bundle gelesen)
 3. Wähle deine PrusaSlicer-Config-Bundle-`.ini`-Datei
 4. Die Filamente werden geparst und in die Datenbank eingefügt bzw. aktualisiert
 
@@ -139,7 +139,7 @@ Du kannst einen zuvor exportierten Snapshot wiederherstellen, um die Kerndaten d
 
 ## CSV-/XLSX-Export
 
-Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke auf **„CSV exportieren"** oder **„XLSX exportieren"**, um alle Filamente herunterzuladen. Der Export enthält Name, Hersteller, Typ, Farbe, Farbname, Temperaturen (Düse, Bett, Erste Schicht, Bereiche, Standby), Kosten, Dichte, Gewichte, Instance-ID, Trockeneinstellungen, Transmission Distance, Glass Transition (Tg), Heat Deflection (HDT), Shore-Härte (A/D), Druckgeschwindigkeitsbereiche, Spool-Typ und (seit v1.30.3) zwei Spalten, die die Eltern-/Variantenbeziehung sichtbar machen:
+Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **„CSV"** oder **„Excel (XLSX)"**, um alle Filamente herunterzuladen. Der Export enthält Name, Hersteller, Typ, Farbe, Farbname, Temperaturen (Düse, Bett, Erste Schicht, Bereiche, Standby), Kosten, Dichte, Gewichte, Instance-ID, Trockeneinstellungen, Transmission Distance, Glass Transition (Tg), Heat Deflection (HDT), Shore-Härte (A/D), Druckgeschwindigkeitsbereiche, Spool-Typ und (seit v1.30.3) zwei Spalten, die die Eltern-/Variantenbeziehung sichtbar machen:
 
 - **Parent** — Name des Elternfilaments, wenn diese Zeile eine Variante ist; leer für Roots und eigenständige Filamente.
 - **Variant Count** — Anzahl der Varianten dieses Filaments (>0 nur für Eltern mit Varianten).
@@ -191,6 +191,6 @@ PrusaSlicer Filament Edition lädt die Basis-Presets beim Start aus `GET /api/fi
 
 ## Export nach PrusaSlicer INI
 
-Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke auf **„INI exportieren"**, um alle Filamente als PrusaSlicer-kompatible INI-Datei herunterzuladen. Die Datei enthält alle gespeicherten Einstellungen pro Filament und kann über **Datei > Importieren > Config Bundle importieren...** zurück in PrusaSlicer geladen werden.
+Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **„INI (PrusaSlicer)"**, um alle Filamente als PrusaSlicer-kompatible INI-Datei herunterzuladen. Die Datei enthält alle gespeicherten Einstellungen pro Filament und kann über **Datei > Importieren > Config Bundle importieren...** zurück in PrusaSlicer geladen werden.
 
 Jedes Filament erzeugt einen `[filament:Name]`-Abschnitt. Kalibrierungs-Overrides sind nicht enthalten — sie werden dynamisch über die Kalibrierungs-API angewandt.

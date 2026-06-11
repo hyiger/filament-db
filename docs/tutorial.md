@@ -45,7 +45,7 @@ npm run dev                   # opens http://localhost:3456
 
 ## Step 2: Understand the App Shell
 
-A persistent top bar runs along every page with the app name on the left and quick links to **Filaments**, **Dashboard**, **Compare**, **Analytics**, **Share**, and **Settings**. On narrow screens (phones) the links collapse into a hamburger menu. The active page is highlighted.
+A persistent top bar runs along every page with the app name on the left and quick links to **Filaments**, **Dashboard**, **Inventory**, **Compare**, **Analytics**, **Share**, and **Settings**. On narrow screens (phones) the links collapse into a hamburger menu. The active page is highlighted.
 
 Beside the **Filament DB** title on the home page is a small **connection status pill** that shows your current connection state at a glance:
 
@@ -187,7 +187,7 @@ If you have a link to a manufacturer's Technical Data Sheet (PDF or web page), t
 If you already have profiles in PrusaSlicer, bulk-import them instead of entering each one by hand.
 
 1. In PrusaSlicer, go to **File > Export > Export Config Bundle** and save the `.ini` file.
-2. On the Filament DB home page, open the **Import/Export** dropdown and click **Import INI**.
+2. On the Filament DB home page, open the **Import/Export** dropdown and click **Import File (INI / CSV / XLSX)** (it routes by extension — an `.ini` is read as a PrusaSlicer config bundle).
 3. Select the `.ini` file.
 4. A toast confirms how many filaments were imported: `Imported 42 filaments (38 new, 4 updated)`.
 
@@ -265,7 +265,7 @@ Click any filament name to open its detail page. You'll see:
 - **Info cards** -- nozzle temp, bed temp, cost, density, diameter, max volumetric speed. Cards with a blue background and "(inherited)" label show values inherited from a parent filament.
 - **Calibrations** -- tables grouped by printer (when multiple printers have data) showing per-nozzle values for EM, Max Vol Speed, PA, Retract Length, Retract Speed, and Z Lift. If no calibrations exist, compatible nozzles are shown as simple badges.
 - **TDS preview** -- click "View Technical Data Sheet" to open an inline preview, or "Open in new tab" for full-screen. Many vendor sites (Shopify, Wix, etc.) refuse to be embedded in another page; for those URLs the preview pane shows an explanatory panel with an **Open data sheet ↗** button instead of a blank iframe.
-- **PrusaSlicer settings** -- click "Show all PrusaSlicer settings" to expand every raw key-value pair.
+- **Technical reference** -- a collapsible panel rendering the chapter of the FDM Polymers technical reference that matches this filament's material type (PLA, PETG, PA, …). It self-hides when the type maps to no chapter.
 
 ### Variant navigation
 
@@ -314,7 +314,7 @@ To turn an existing standalone filament into a variant:
 
 ## Step 11: Export to PrusaSlicer
 
-1. On the home page, open the **Import/Export** dropdown and click **Export INI**.
+1. On the home page, open the **Import/Export** dropdown and, under **Export**, click **INI (PrusaSlicer)**.
 2. A `.ini` file downloads containing all your filaments as `[filament:Name]` sections — one section per filament.
 3. In PrusaSlicer, go to **File > Import > Import Config Bundle** and select the file.
 
@@ -410,7 +410,7 @@ If you remove the tag before confirming, the confirmation prompt closes automati
 
 If you prefer using external NFC tools:
 
-1. On any filament's detail page, click **Export OPT** (green button).
+1. On any filament's detail page, open the **Export ▾** menu and click **Export OPT**.
 2. A `.bin` file downloads containing the NDEF-wrapped CBOR payload.
 3. Write this file to a tag using your preferred NFC software.
 
@@ -425,7 +425,7 @@ If you chose **Hybrid** mode during setup, your data lives locally and syncs to 
 - The app syncs with Atlas every **5 minutes** when connected.
 - Changes made locally are pushed to Atlas; changes made remotely (e.g., from the web app or another device) are pulled down.
 - **Synced collections**: filaments (with embedded spools), nozzles, printers, locations, bedtypes, printhistories, sharedcatalogs.
-- The sync status pill next to "Filament DB" shows the current state — see [Step 2](#step-2-understand-the-connection-status-indicator).
+- The sync status pill next to "Filament DB" shows the current state — see [Step 2](#step-2-understand-the-app-shell).
 
 ### Working Offline
 
@@ -457,7 +457,7 @@ Each filament can track multiple physical spools with individual weights.
 4. The tracker aggregates stats across all spools (total weight, computed length from density and diameter).
 5. Each spool can also be assigned a **Location** (its storage home) and a **Printer slot** (the AMS/MMU position it is currently loaded in — a spool occupies one slot at a time).
 
-If a filament has a single `totalWeight` but no spools yet, click **"Migrate to spool tracking"** to convert it.
+If a filament has a single `totalWeight` but no spools yet, click **"Track multiple spools"** to convert it.
 
 When you finish a spool and set its remaining weight to **0**, the app prompts to also mark it **retired** in the same write — that's the canonical "I finished this spool" workflow. Retiring preserves the spool's full history (dates, dry cycles, usage log) but excludes it from inventory totals, so your remaining-weight numbers stay clean without losing provenance.
 
@@ -500,9 +500,9 @@ If you use [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer)
 
 Without the fork, sync manually:
 
-1. Open the **Import/Export** dropdown on the home page and click **"Export INI"** to download a PrusaSlicer-compatible config bundle
+1. Open the **Import/Export** dropdown on the home page and, under **Export**, click **"INI (PrusaSlicer)"** to download a PrusaSlicer-compatible config bundle
 2. In PrusaSlicer, go to **File > Import > Import Config Bundle** to load it
-3. To re-import from PrusaSlicer, export a config bundle and use **Import/Export > "Import INI"** in Filament DB
+3. To re-import from PrusaSlicer, export a config bundle and use **Import/Export > "Import File (INI / CSV / XLSX)"** in Filament DB
 
 ---
 
@@ -523,7 +523,7 @@ Both paths soft-delete: the filament is marked with a `_deletedAt` timestamp and
 
 Before you reach for the spool tracker, it's worth describing where your physical spools live:
 
-1. Navigate to **Locations** (top nav) → `/locations`
+1. Navigate to **Settings → Locations** → `/locations`
 2. Click **+ Add Location**
 3. Give it a name (e.g. `Drybox #1`), pick a **kind** (shelf / drybox / cabinet / printer), and optionally record the humidity
 4. Repeat for every physical container you want to track
@@ -594,14 +594,14 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 | Populate from NFC / TDS / INI / Duplicate | Add Filament > Populate from toolbar |
 | Import from TDS | Add Filament > Import from TDS |
 | Configure AI provider | Settings > AI Features |
-| Import from PrusaSlicer | Home > Import/Export > Import INI |
+| Import from PrusaSlicer | Home > Import/Export > Import File (INI / CSV / XLSX) |
 | Import from CSV/XLSX | Home > Import/Export > Import File (INI / CSV / XLSX) — routed by extension |
 | Import Prusament spool | Home > Import/Export > Prusament QR |
 | Import from Atlas | Home > Import/Export > Import from Atlas |
 | Browse OpenPrintTag DB | Home > Import/Export > Browse OpenPrintTag DB |
 | Restore from snapshot | Settings > Backup & Restore > Restore from Snapshot |
-| Export to PrusaSlicer | Home > Import/Export > Export INI |
-| Export to CSV/XLSX | Home > Import/Export > Export CSV / Export XLSX |
+| Export to PrusaSlicer | Home > Import/Export > Export ▸ INI (PrusaSlicer) |
+| Export to CSV/XLSX | Home > Import/Export > Export ▸ CSV / Excel (XLSX) |
 | Backup database | Settings > Backup & Restore > Download Snapshot |
 | View filament details | Home > click filament name |
 | Edit filament | Detail page > Edit |
@@ -611,7 +611,7 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 | Browse API docs | Settings > API Documentation (or navigate to `/api-docs`) |
 | Write NFC tag | Detail page > Write NFC (desktop app) |
 | Erase NFC tag | Settings > NFC Tools > Erase Tag (desktop app) |
-| Export NFC binary | Detail page > Export OPT |
+| Export NFC binary | Detail page > Export ▾ > Export OPT |
 | Track spools | Detail page > Spool Tracker > + Add Spool |
 | Assign spool to a location | Spool detail > Location dropdown |
 | Assign spool to a printer slot | Spool detail > Printer slot picker |

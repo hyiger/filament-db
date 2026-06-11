@@ -24,7 +24,7 @@ Klicke einen Filamentnamen in der Tabelle, um alle Details zu sehen:
 - Kompatible Düsen und Pro-Drucker-Pro-Düse-Kalibrierungswerte (EM, Max Vol Speed, PA, Retraction)
 - Technical Data Sheet — klicke „Technical Data Sheet anzeigen" für eine eingebettete Vorschau oder „In neuem Tab öffnen" für Vollbild
 - Vererbungsinformationen (Verweis auf Basisprofil)
-- Alle Roh-PrusaSlicer-Einstellungen (klicke „Alle PrusaSlicer-Einstellungen anzeigen", um auszuklappen)
+- Ein **Technische Referenz**-Panel — das Kapitel der FDM-Polymer-Referenz, das zum Materialtyp des Filaments passt (blendet sich aus, wenn der Typ keinem Kapitel entspricht)
 
 ## Neues Filament hinzufügen
 
@@ -383,7 +383,7 @@ Der Tracker aggregiert Statistiken über alle Spulen und zeigt Gesamt-Restgewich
 
 ### Aus Single-Gewicht migrieren
 
-Wenn ein Filament einen `totalWeight`-Wert, aber kein Spulen-Array hat, konvertiert ein **„In Spulen-Tracking migrieren"**-Button das einzelne Gewicht in einen Spulen-Eintrag.
+Wenn ein Filament einen `totalWeight`-Wert, aber kein Spulen-Array hat, konvertiert ein **„Mehrere Spulen verfolgen"**-Button das einzelne Gewicht in einen Spulen-Eintrag.
 
 ### Spool-Check (PrusaSlicer-Integration)
 
@@ -426,7 +426,7 @@ Alle Bearbeitungen laufen über denselben `PUT /api/filaments/{id}/spools/{spool
 
 ### Exportieren
 
-Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke auf **„CSV exportieren"** oder **„XLSX exportieren"**, um alle Filamente im gewählten Format herunterzuladen. Der Export enthält Name, Vendor, Typ, Farbe, Farbname, Temperaturen (Düse, Bett, Erste Schicht, Bereiche, Standby), Kosten, Dichte, Gewichte, Instance-ID, Trockentemperatur/-zeit, Transmission Distance, Glass Transition (Tg), Heat Deflection (HDT), Shore-Härte (A/D), Druckgeschwindigkeitsbereiche und Spool-Typ.
+Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **„CSV"** oder **„Excel (XLSX)"**, um alle Filamente im gewählten Format herunterzuladen. Der Export enthält Name, Vendor, Typ, Farbe, Farbname, Temperaturen (Düse, Bett, Erste Schicht, Bereiche, Standby), Kosten, Dichte, Gewichte, Instance-ID, Trockentemperatur/-zeit, Transmission Distance, Glass Transition (Tg), Heat Deflection (HDT), Shore-Härte (A/D), Druckgeschwindigkeitsbereiche und Spool-Typ.
 
 XLSX-Exporte enthalten gestaltete Kopfzeilen, farbcodierte Zellen, Auto-Filter und eine fixierte Kopfzeile.
 
@@ -556,9 +556,9 @@ PrusaSlicer Filament Edition kann nach dem Slicen prüfen, ob die gewählte Spul
 
 Auch ohne den Fork kannst du manuell synchronisieren:
 
-- **Export**: Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke auf **„INI exportieren"**, um alle Filamente als PrusaSlicer-kompatibles Config-Bundle herunterzuladen
+- **Export**: Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **„INI (PrusaSlicer)"**, um alle Filamente als PrusaSlicer-kompatibles Config-Bundle herunterzuladen
 - **Import**: Gehe in PrusaSlicer zu **Datei > Importieren > Config Bundle importieren**, um die exportierte Datei zu laden
-- **Re-Import**: Öffne das Dropdown **Importieren/Exportieren** und klicke auf **„INI importieren"**, um ein PrusaSlicer-Config-Bundle zurück in Filament DB zu importieren
+- **Re-Import**: Öffne das Dropdown **Importieren/Exportieren** und klicke auf **„Datei importieren (INI / CSV / XLSX)"**, um ein PrusaSlicer-Config-Bundle zurück in Filament DB zu importieren
 
 ---
 
@@ -572,10 +572,10 @@ Gehe zu **Einstellungen** und klicke auf **„API-Dokumentation"**, um die inter
 
 Die **Dashboard**-Seite unter `/dashboard` ist die Heimat deines Inventars auf einen Blick:
 
-- **Summen** — Filamentanzahl, Spulenanzahl, Gramm vorrätig, Gesamtkosten vorrätig
+- **Summen** — Filamentanzahl, Spulenanzahl, Gramm vorrätig sowie Drucker-/Düsen-/Betttyp-Anzahl
 - **Low-Stock-Warnungen** — jedes Filament, dessen aggregierter Rest unter seinem pro-Filament-`lowStockThreshold` liegt. Klicken einer Zeile springt zur Filament-Detailseite.
 - **Trocknen nötig** — Spulen, deren letzter Trockenzyklus älter als 30 Tage ist (später in den Einstellungen konfigurierbar), nach Filamenttyp gruppiert
-- **Schnelllinks** — Buttons zur Filamentliste, Analytics, Locations und Share-Ansichten
+- **Neueste Druckhistorie** — die zuletzt protokollierten Druckaufträge
 
 Low-Stock-Schwellen werden pro Filament auf der Bearbeitungsseite unter **Bestandseinstellungen → Low-Stock-Schwellwert (g)** gesetzt. Ein Filament ohne Schwellwert wird nie geflaggt.
 

@@ -115,7 +115,9 @@ Atlas war beim Start nicht erreichbar, daher ist die App automatisch auf eine ei
 
 ## Desktop-App: Verbindungsmodus wechseln
 
-Führe in der Entwicklerkonsole (View > Toggle Developer Tools) `window.electronAPI.resetConfig()` aus. Du landest wieder im Einrichtungs-Assistenten und kannst einen anderen Modus wählen.
+Öffne **Einstellungen → Verbindungsmodus**. Wähle den gewünschten Modus (Atlas / Hybrid / Offline), trage bei Bedarf die Verbindungszeichenfolge ein und klicke auf **Wechseln zu …** (oder **Verbinden & Wechseln**). Die App verbindet sich direkt neu — kein Assistent, kein Neustart.
+
+Falls die App nicht weit genug startet, um die Einstellungen zu erreichen, nutze als Notlösung die Entwicklerkonsole: Führe `window.electronAPI.resetConfig()` aus (View > Toggle Developer Tools), um die gespeicherte Konfiguration zu löschen und zum Einrichtungs-Assistenten zurückzukehren.
 
 ## Sync-Fehler: „user is not allowed to do action [update]" / „lacks readWrite on …"
 
