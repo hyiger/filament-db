@@ -333,15 +333,20 @@ export default function Home() {
   // #616: total active spools + distinct spool locations, for the headline
   // stat line. Counts every non-retired spool across the fetched set —
   // parents included, since a parent can carry its own roll (see the #552
-  // note on `hasSpools`). Retired spools are out of inventory, matching
-  // getSpoolCount. Only assigned locations count toward the location total.
+  // note on `hasSpools`). Only assigned locations count toward the location
+  // total.
   const spoolStats = useMemo(() => {
     let spools = 0;
     const locations = new Set<string>();
     for (const f of filaments) {
+      // getSpoolCount handles the legacy single-spool shape (empty spools[]
+      // but a top-level totalWeight) and excludes retired spools, matching
+      // the "Has spools" chip and the list helpers — a manual `f.spools`
+      // loop would undercount pre-migration rows (Codex P2 on #658). Those
+      // legacy rows have no spool subdocument, so they add no location.
+      spools += getSpoolCount(f);
       for (const s of f.spools ?? []) {
         if (s.retired) continue;
-        spools++;
         if (s.locationId) locations.add(String(s.locationId));
       }
     }
