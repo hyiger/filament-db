@@ -453,6 +453,37 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(fresh.optTags).toEqual([]); // actually cleared
   });
 
+  it("check/sync: a variant-OWNED array clear over an EMPTY parent stays offered (GH #607)", async () => {
+    // The suppression must distinguish inherited from variant-owned arrays:
+    // here the parent has no optTags and the variant owns [99], so clearing
+    // the variant's array DOES take ([] resolves to the empty parent) — the
+    // clear must stay offered and apply (Codex P2 round 4).
+    const parent = await Filament.create({
+      name: "Empty Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      // no optTags → empty
+    });
+    const variant = await Filament.create({
+      name: "Owned-Tags Variant",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#3d3e3d",
+      parentId: parent._id,
+      optTags: [99], // the variant's OWN override
+      settings: { openprinttag_slug: "prusament-pla-galaxy-black" },
+    });
+    const checkRes = await checkGET({} as NextRequest, params(String(variant._id)));
+    const checkBody = await checkRes.json();
+    expect(
+      checkBody.changes.some((c: { field: string }) => c.field === "optTags"),
+    ).toBe(true);
+    const syncRes = await syncPOST(syncReq(String(variant._id), ["optTags"]), params(String(variant._id)));
+    expect(syncRes.status).toBe(200);
+    const fresh = await Filament.findById(variant._id).lean();
+    expect(fresh.optTags).toEqual([]); // own override cleared → inherits empty parent
+  });
+
   it("sync: 400 when the filament is not OPT-linked", async () => {
     const f = await Filament.create({ name: "Unlinked", vendor: "X", type: "PLA" });
     const res = await syncPOST(syncReq(String(f._id), ["density"]), params(String(f._id)));

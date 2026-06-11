@@ -112,18 +112,17 @@ export async function POST(
     // (sparse OPT data must never clear good local data), so only fields
     // that actually appear in the changelist may be applied.
     // GH #607 follow-up: validate against the SAME effective (variant→parent)
-    // view the check route diffs, passing the same `isVariant` flag — so
-    // check and sync agree exactly on what's offered. (That includes
-    // suppressing clearable-array clears for a variant, which can't be
-    // applied: writing `[]` re-inherits the parent's array — see
-    // diffOptFields. Without the shared resolution + flag, an inherited
-    // field could be offered by one route and rejected by the other.)
+    // view the check route diffs, passing the same `parentEffective` — so
+    // check and sync agree exactly on what's offered (including suppressing an
+    // array clear that can't take on a variant; see diffOptFields). Without
+    // the shared resolution + parent values, an inherited field could be
+    // offered by one route and rejected by the other.
     const snapshotForDiff = filament.openprinttagSnapshot as Record<string, unknown> | undefined;
-    const effective = await resolveEffectiveFilament(
+    const { effective, parentEffective } = await resolveEffectiveFilament(
       filament as unknown as Record<string, unknown>,
     );
     const offered = new Set(
-      diffOptFields(effective, payload, snapshotForDiff, !!filament.parentId).map(
+      diffOptFields(effective, payload, snapshotForDiff, parentEffective).map(
         (c) => c.field,
       ),
     );

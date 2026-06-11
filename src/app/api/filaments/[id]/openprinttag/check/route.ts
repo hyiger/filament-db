@@ -64,12 +64,12 @@ export async function GET(
     // through resolveFilament, and `openprinttagSnapshot` is variant-only (so
     // it survives resolution unchanged either way). Root filaments have no
     // parentId, so they diff exactly as before.
-    const effective = await resolveEffectiveFilament(
+    const { effective, parentEffective } = await resolveEffectiveFilament(
       filament as unknown as Record<string, unknown>,
     );
 
     const snapshot = filament.openprinttagSnapshot as Record<string, unknown> | undefined;
-    const changes = diffOptFields(effective, payload, snapshot, !!filament.parentId);
+    const changes = diffOptFields(effective, payload, snapshot, parentEffective);
 
     return NextResponse.json({
       linked: true,

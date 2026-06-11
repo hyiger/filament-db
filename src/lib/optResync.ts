@@ -204,17 +204,21 @@ function classify(
  * AND that OPT actually offers a value for. Fields OPT doesn't carry, and
  * fields already equal to the upstream value, are omitted.
  *
- * `isVariant` — when the filament being diffed is a variant, suppress
- * clearable-ARRAY clears (GH #607, Codex P2). A variant can't clear an
- * inherited array (writing `[]` re-inherits the parent), so such a change is
- * unapplyable; offering it would loop "success that does nothing" → re-offer.
- * Pass the EFFECTIVE (resolved) filament for the values regardless.
+ * `parentEffective` — the resolved values of the filament's PARENT, or null
+ * for a root filament (GH #607, Codex P2). Used to suppress an UNAPPLYABLE
+ * array clear: clearing a variant's `secondaryColors`/`optTags` writes `[]`,
+ * which resolves back to the parent's array, so the clear only reaches empty
+ * when the parent's array is ALSO empty. When the parent's array is non-empty
+ * the clear can never take (it would re-offer every check), so it's dropped —
+ * but a variant that OWNS a non-empty array over an EMPTY parent keeps the
+ * (genuinely applyable) clear. Pass the EFFECTIVE (resolved) filament for the
+ * values regardless.
  */
 export function diffOptFields(
   filament: Record<string, unknown>,
   payload: Record<string, unknown>,
   snapshot: Record<string, unknown> | null | undefined,
-  isVariant = false,
+  parentEffective?: Record<string, unknown> | null,
 ): OptFieldChange[] {
   const changes: OptFieldChange[] = [];
   for (const { field, labelKey, isColor } of OPT_MANAGED_FIELDS) {
@@ -228,13 +232,18 @@ export function diffOptFields(
     // fall through and let valuesEqual decide whether it's a real change
     // (GH #607, Codex P2 — explicit upstream clears must surface).
     if (!hasIncoming(incoming) && !OPT_CLEARABLE_FIELDS.has(field)) continue;
-    // GH #607 (Codex P2): but a variant can't clear an inherited array — the
-    // write would re-inherit the parent's array, so the clear never takes and
-    // re-appears every check. Suppress clearable-array clears for variants.
+    // GH #607 (Codex P2): suppress an array clear that can't actually take.
+    // Clearing a variant's array writes `[]`, which resolves to the parent's
+    // array — so the clear only reaches empty when the parent's array is also
+    // empty. Drop the change when the parent's array is non-empty (covers an
+    // inherited array AND a variant-owned array over a non-empty parent); keep
+    // it when the parent is empty (a variant-owned array can really be cleared)
+    // and for roots (parentEffective is null).
     if (
-      isVariant &&
       !hasIncoming(incoming) &&
-      OPT_CLEARABLE_ARRAY_FIELDS.has(field)
+      OPT_CLEARABLE_ARRAY_FIELDS.has(field) &&
+      parentEffective &&
+      hasIncoming(getPath(parentEffective, field))
     ) {
       continue;
     }
