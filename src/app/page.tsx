@@ -333,24 +333,36 @@ export default function Home() {
   // #616: total active spools + distinct spool locations, for the headline
   // stat line. Counts every non-retired spool across the fetched set —
   // parents included, since a parent can carry its own roll (see the #552
-  // note on `hasSpools`). Only assigned locations count toward the location
-  // total.
+  // note on `hasSpools`).
   const spoolStats = useMemo(() => {
     let spools = 0;
     const locations = new Set<string>();
+    // Active spools with no location count as one synthetic "no location"
+    // bucket, exactly like the Inventory page's location total (it derives
+    // `locationCount` from `groups.length`, which includes that bucket).
+    // Without it, a shelf of unassigned spools reads "13 spool(s) in 0
+    // location(s)" — confusing, and out of step with /inventory (Codex P2
+    // on #658).
+    let hasUnlocated = false;
     for (const f of filaments) {
       // getSpoolCount handles the legacy single-spool shape (empty spools[]
       // but a top-level totalWeight) and excludes retired spools, matching
       // the "Has spools" chip and the list helpers — a manual `f.spools`
-      // loop would undercount pre-migration rows (Codex P2 on #658). Those
-      // legacy rows have no spool subdocument, so they add no location.
-      spools += getSpoolCount(f);
-      for (const s of f.spools ?? []) {
-        if (s.retired) continue;
-        if (s.locationId) locations.add(String(s.locationId));
+      // loop would undercount pre-migration rows (Codex P2 on #658).
+      const count = getSpoolCount(f);
+      spools += count;
+      if (f.spools && f.spools.length > 0) {
+        for (const s of f.spools) {
+          if (s.retired) continue;
+          if (s.locationId) locations.add(String(s.locationId));
+          else hasUnlocated = true;
+        }
+      } else if (count > 0) {
+        // Legacy single-spool row — no subdocument, so it's unassigned.
+        hasUnlocated = true;
       }
     }
-    return { spools, locations: locations.size };
+    return { spools, locations: locations.size + (hasUnlocated ? 1 : 0) };
   }, [filaments]);
 
   // Group filaments: parents with their variants, standalone filaments as-is
