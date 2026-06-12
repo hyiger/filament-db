@@ -153,6 +153,22 @@ describe("POST /api/nfc/decode", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects an empty Bambu blocks map rather than fabricating a tag (400)", async () => {
+    // Codex P2 (PR #690): {} used to parse into an all-zero array and return
+    // 200 with brandName "Bambu Lab" / black color — a failed read must 400.
+    const res = await decodeTag(decodeReq({ tagType: "bambu", blocks: {} }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("Could not decode tag");
+  });
+
+  it("rejects Bambu blocks carrying no identity blocks (only an unread sector)", async () => {
+    // A 16-byte block at an index the parser doesn't read for identity (e.g. a
+    // sector trailer) leaves filamentType/variant/detailed all empty.
+    const b3 = Buffer.alloc(16).toString("base64");
+    const res = await decodeTag(decodeReq({ tagType: "bambu", blocks: { "3": b3 } }));
+    expect(res.status).toBe(400);
+  });
+
   it("rejects a body whose declared Content-Length exceeds the cap (413)", async () => {
     const req = new NextRequest("http://localhost/api/nfc/decode", {
       method: "POST",

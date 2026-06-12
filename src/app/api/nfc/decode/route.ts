@@ -81,13 +81,30 @@ function decodeBambu(body: Record<string, unknown>): DecodedOpenPrintTag {
   }
   // Sparse array indexed by absolute MIFARE block number (0–63).
   const blockArray: (Buffer | undefined)[] = new Array(64).fill(undefined);
+  let populated = 0;
   for (const [key, value] of Object.entries(blocks as Record<string, unknown>)) {
     const n = Number(key);
     if (!Number.isInteger(n) || n < 0 || n > 63) continue;
     if (typeof value !== "string" || value.length === 0) continue;
     blockArray[n] = Buffer.from(value, "base64");
+    populated++;
   }
-  return bambuToDecodedTag(parseBambuBlocks(blockArray));
+  // An empty / all-invalid block map would otherwise parse into an all-zero
+  // array and yield a fabricated tag (brandName "Bambu Lab", black color, blank
+  // material) returned as a 200 success — so a failed phone read or malformed
+  // payload would masquerade as a decoded tag (Codex P2 on PR #690). Require at
+  // least one usable block.
+  if (populated === 0) {
+    throw new Error("bambu decode requires at least one readable MIFARE block");
+  }
+  const parsed = parseBambuBlocks(blockArray);
+  // Even with some blocks present, a dump carrying none of the identity blocks
+  // (variant/material id, filament type) has nothing we can match or create a
+  // filament from — treat it as an undecodable read rather than inventing a tag.
+  if (!parsed.filamentType && !parsed.materialVariantId && !parsed.detailedFilamentType) {
+    throw new Error("bambu blocks contained no readable filament identity (blocks 1/2/4)");
+  }
+  return bambuToDecodedTag(parsed);
 }
 
 export async function POST(request: NextRequest) {
