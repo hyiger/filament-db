@@ -884,6 +884,10 @@ export default function SettingsPage() {
                   await fetch("/api/tds", { method: "DELETE" });
                 }
                 setAiConfigured(false);
+                // Keep the visible provider selector in sync with what we just
+                // persisted (aiProvider: "gemini"); otherwise it keeps showing
+                // the old provider after the key is removed (#683).
+                setAiProvider("gemini");
                 setAiResult({ ok: true, message: t("settings.aiKeyRemoved") });
               }}
               className="px-4 py-2 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white rounded text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors"

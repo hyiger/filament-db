@@ -140,7 +140,6 @@ function FilamentDetail() {
   // Legacy single-spool inline weight update
   const [weightInput, setWeightInput] = useState("");
   const [weightSaving, setWeightSaving] = useState(false);
-  const weightRef = useRef<HTMLInputElement>(null);
 
   // GH #405 follow-up (Codex on PR #460): store the error TYPE rather
   // than the translated string. With `t` removed from the fetch
@@ -1372,7 +1371,6 @@ function FilamentDetail() {
                 <label htmlFor="filament-scale-weight" className="text-sm text-gray-500 flex-shrink-0">{t("detail.weight.updateScaleWeight")}:</label>
                 <input
                   id="filament-scale-weight"
-                  ref={weightRef}
                   type="number"
                   step="1"
                   min="0"
