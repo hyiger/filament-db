@@ -5,6 +5,8 @@ import fs from "fs";
 
 let mongod: MongoMemoryServer | null = null;
 let uri: string | null = null;
+/** In-flight start, so concurrent callers share one create() (#681). */
+let starting: Promise<string> | null = null;
 
 /**
  * Start an embedded local MongoDB instance.
@@ -12,7 +14,20 @@ let uri: string | null = null;
  */
 export async function startLocalMongo(): Promise<string> {
   if (mongod && uri) return uri;
+  // #681: `mongod` is only assigned AFTER MongoMemoryServer.create() resolves,
+  // so two overlapping callers (e.g. a hybrid resolveMongoUri racing the
+  // atlas-fallback path) would both pass the guard above and each spawn a
+  // mongod → port conflict + orphaned server. Share one in-flight start.
+  if (starting) return starting;
+  starting = doStartLocalMongo();
+  try {
+    return await starting;
+  } finally {
+    starting = null;
+  }
+}
 
+async function doStartLocalMongo(): Promise<string> {
   const dbPath = path.join(app.getPath("userData"), "mongodb-data");
   if (!fs.existsSync(dbPath)) {
     fs.mkdirSync(dbPath, { recursive: true });

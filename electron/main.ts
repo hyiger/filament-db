@@ -634,6 +634,18 @@ async function resolveMongoUri(): Promise<string | null> {
   if (mode === "atlas") {
     if (!atlasUri) return null;
 
+    // Switching to pure Atlas — stop any sync engine left over from a prior
+    // hybrid (or atlas-fallback) session. Without this the atlas-success path
+    // below returns without ever tearing down the old SyncService, so it keeps
+    // its 5-minute interval last-write-wins syncing a now-abandoned local
+    // mongod against Atlas — a timer leak and a data-integrity hazard (#672).
+    // The fallback path re-creates sync via initSyncService when Atlas is
+    // unreachable.
+    if (syncService) {
+      syncService.destroy();
+      syncService = null;
+    }
+
     // Test Atlas connectivity — fall back to local if unreachable
     try {
       const { MongoClient } = await import("mongodb");
