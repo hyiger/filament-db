@@ -125,7 +125,12 @@ jobs:
           $archName = switch ($machine) { 0x8664 {"x64"} 0xAA64 {"arm64"} default {"unknown:0x{0:X4}" -f $_} }
           Write-Host "pcsclite.node arch: $archName (machine=0x$('{0:X4}' -f $machine))"
           if ($archName -ne "arm64") { throw "pcsclite.node was rebuilt as $archName, expected arm64" }
-          npx electron-builder --config electron-builder.yml --arm64
+          # GH #586: --publish never so electron-builder can't upload this job's
+          # arch-less `latest.yml` (the Windows update channel) to the release
+          # in any draft-timing window. softprops still uploads the arm64
+          # installer below for manual download; the latest.yml is dropped
+          # before that upload (see the "Drop arm64 Windows latest.yml" step).
+          npx electron-builder --config electron-builder.yml --arm64 --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -159,6 +164,22 @@ jobs:
       - name: Remove blockmap files
         shell: bash
         run: rm -f dist-electron/*.blockmap
+
+      # GH #586: Windows update metadata is named `latest.yml` with NO arch
+      # suffix (unlike latest-mac.yml / latest-linux-arm64.yml), so the x64 and
+      # the arm64 Windows jobs each emit one and the later softprops upload
+      # wins on the release. An x64 user whose updater is served the arm64
+      # `latest.yml` auto-installs an arm64 build that can't run on x64 Windows
+      # → the "Problem with Shortcut / 'Filament DB.exe' has been changed or
+      # moved" error, intermittently (every other release, by CI upload-order
+      # luck). Keep x64 as the single Windows update channel by dropping the
+      # arm64 job's copy. x64 installers run on arm64 Windows via the OS x64
+      # emulation layer, so arm64 users still auto-update; the native arm64
+      # installer stays on the release for manual download.
+      - name: Drop arm64 Windows latest.yml so x64 stays the update channel (#586)
+        if: matrix.platform == 'win-arm64-cross'
+        shell: bash
+        run: rm -f dist-electron/latest.yml
 
       - name: Upload release artifacts
         uses: softprops/action-gh-release@v2
