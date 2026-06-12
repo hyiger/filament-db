@@ -639,10 +639,13 @@ describe("API route correctness", () => {
         getReq("http://localhost/api/filaments/ABS%20100%25/spool-check?weight=10"),
         { params: Promise.resolve({ id: "ABS 100%" }) },
       );
-      // Pre-fix: decodeURIComponent("ABS 100%") throws → caught → 500.
-      expect(res.status).not.toBe(500);
+      // Pre-fix: decodeURIComponent("ABS 100%") threw → caught → 500. The
+      // route must actually RESOLVE the filament (200 + its name echoed back),
+      // not merely avoid a 500 — so a regression to 404/400 also fails (Codex
+      // P3 on PR #685).
+      expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.filamentName ?? body.name ?? "ABS 100%").toBeDefined();
+      expect(body.filament).toBe("ABS 100%");
       expect(String(f._id)).toBeTruthy();
     });
 
