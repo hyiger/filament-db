@@ -111,6 +111,10 @@ describe("parseBambuStudioProfile", () => {
     // A single-element array still collapses to a scalar (the common case).
     const single = parseBambuStudioProfile({ name: ["Y"], compatible_printers: ["Only One 0.4 nozzle"] });
     expect(single.filament.settings.compatible_printers).toBe("Only One 0.4 nozzle");
+    // Empty positional slots are KEPT (not filtered) so per-extruder arrays
+    // don't shift to the wrong slot on re-export (Codex on #686).
+    const sparse = parseBambuStudioProfile({ name: ["Z"], filament_some_array: ["", "right-extruder-value"] });
+    expect(sparse.filament.settings.filament_some_array).toEqual(["", "right-extruder-value"]);
   });
 
   it("passes filament_notes through the settings bag and round-trips it (GH #620)", () => {

@@ -368,21 +368,15 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
   for (const [key, value] of Object.entries(json)) {
     if (STRUCTURED_KEYS.has(key)) continue;
     if (CALIBRATION_KEYS.has(key)) continue;
-    // Preserve genuinely multi-valued keys (e.g. compatible_printers) as an
-    // array so every element survives export → re-import; the exporter emits
-    // array-valued settings as multi-element. unwrap() would keep only the
-    // first element (#678). Single/empty values still collapse to a scalar.
+    // Preserve genuinely multi-valued keys (e.g. compatible_printers, or
+    // per-extruder arrays) with their FULL shape — every element, including
+    // empty positional slots — so the next export emits the same multi-element
+    // value and nothing shifts to the wrong slot. unwrap() would keep only the
+    // first element (#678); filtering empties would shift positions (Codex on
+    // #686). Single-element arrays still collapse to a scalar via unwrap below.
     if (Array.isArray(value) && value.length > 1) {
-      const arr = value.map(String).filter((v) => v !== "");
-      if (arr.length > 1) {
-        filament.settings[key] = arr;
-        continue;
-      }
-      if (arr.length === 1) {
-        filament.settings[key] = arr[0];
-        continue;
-      }
-      continue; // all elements empty
+      filament.settings[key] = value.map(String);
+      continue;
     }
     const s = unwrap(value);
     if (s == null) continue;
