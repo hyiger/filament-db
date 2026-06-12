@@ -39,8 +39,9 @@ export async function GET(
       );
     }
 
-    // Find filament by name or ObjectId
-    const decodedName = decodeURIComponent(id);
+    // Find filament by name or ObjectId. `params.id` is ALREADY URL-decoded —
+    // re-decoding throws URIError on a name with a literal `%` (#671).
+    const decodedName = id;
     let filament = await Filament.findOne({ name: decodedName, _deletedAt: null })
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")

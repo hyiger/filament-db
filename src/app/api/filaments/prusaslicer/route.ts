@@ -7,8 +7,11 @@ import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { generatePrusaSlicerBundle } from "@/lib/prusaSlicerBundle";
 import { parseIniFilaments } from "@/lib/parseIni";
-import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { isDuplicateKeyError, checkContentLength, errorResponse, MAX_UPLOAD_SIZE } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+
+/** 24-hex ObjectId, for validating user-supplied `?ids=` before a `$in`. */
+const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
 
 /**
  * GET /api/filaments/prusaslicer
@@ -38,7 +41,14 @@ export async function GET(request: NextRequest) {
     if (typeFilter) query.type = typeFilter;
     if (vendorFilter) query.vendor = vendorFilter;
     if (idsFilter) {
-      query._id = { $in: idsFilter.split(",").map((id) => id.trim()) };
+      // Validate each id is a real ObjectId before the $in — an invalid value
+      // would otherwise throw a Mongoose CastError and 500 (#677).
+      const ids = idsFilter.split(",").map((id) => id.trim()).filter(Boolean);
+      const bad = ids.filter((id) => !OBJECT_ID_RE.test(id));
+      if (bad.length > 0) {
+        return errorResponse(`Invalid filament ID(s): ${bad.join(", ")}`, 400);
+      }
+      query._id = { $in: ids };
     }
 
     const filaments = await Filament.find(query)
@@ -116,10 +126,19 @@ export async function POST(request: NextRequest) {
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
 
+  const sizeError = checkContentLength(request);
+  if (sizeError) return sizeError;
+
   try {
     await dbConnect();
 
     const body = await request.text();
+    // Byte length, not String.length (UTF-16 code units) — a non-ASCII UTF-8
+    // body can exceed 10 MB of bytes while staying under the char count when
+    // Content-Length was missing/wrong (Codex P2 on PR #685).
+    if (Buffer.byteLength(body, "utf8") > MAX_UPLOAD_SIZE) {
+      return errorResponse("Request body too large. Maximum is 10 MB.", 413);
+    }
     if (!body.trim()) {
       return NextResponse.json({ error: "Empty request body" }, { status: 400 });
     }

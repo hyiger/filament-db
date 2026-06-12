@@ -42,8 +42,9 @@ export async function GET(
       return errorResponse("weight must be a non-negative number", 400);
     }
 
-    // Find filament by name or ObjectId
-    const decodedName = decodeURIComponent(id);
+    // Find filament by name or ObjectId. `params.id` is ALREADY URL-decoded —
+    // re-decoding throws URIError on a name with a literal `%` (#671).
+    const decodedName = id;
     let filament = await Filament.findOne({ name: decodedName, _deletedAt: null }).lean();
     if (!filament && /^[a-f0-9]{24}$/i.test(id)) {
       filament = await Filament.findOne({ _id: id, _deletedAt: null }).lean();

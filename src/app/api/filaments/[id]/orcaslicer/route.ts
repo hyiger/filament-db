@@ -134,8 +134,10 @@ export async function POST(
     await dbConnect();
     const { id } = await params;
 
-    // Find filament by name or ObjectId
-    const decodedName = decodeURIComponent(id);
+    // Find filament by name or ObjectId. The App Router `params.id` is ALREADY
+    // URL-decoded — re-decoding throws URIError on a name with a literal `%`
+    // ("ABS 100%") and 500s the sync-back (#671; cf. resolveFilamentForExport).
+    const decodedName = id;
     let filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
     if (!filament && /^[a-f0-9]{24}$/i.test(id)) {
       filament = await Filament.findOne({ _id: id, _deletedAt: null });

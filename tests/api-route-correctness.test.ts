@@ -11,6 +11,8 @@ import { POST as postPrintHistory } from "@/app/api/print-history/route";
 import { POST as scanPublish } from "@/app/api/scan/publish/route";
 import { POST as slicerSync } from "@/app/api/filaments/[id]/route";
 import { POST as orcaSync } from "@/app/api/filaments/[id]/orcaslicer/route";
+import { GET as orcaBulkExport } from "@/app/api/filaments/orcaslicer/route";
+import { GET as prusaBulkExport } from "@/app/api/filaments/prusaslicer/route";
 
 /**
  * Code-review issues #265, #266, #267, #268, #269, #271, #272, #273,
@@ -620,6 +622,60 @@ describe("API route correctness", () => {
       expect(cal04.extrusionMultiplier).toBe(1.1);
       expect(cal04.pressureAdvance).toBe(0.045);
       expect(cal06.extrusionMultiplier).toBe(0.95);
+    });
+  });
+
+  // ── #671: route params are already URL-decoded — don't re-decode ──────
+
+  describe("#671 — a filament name with a literal '%' resolves (no double-decode)", () => {
+    it("spool-check GET resolves an 'ABS 100%' filament instead of 500ing", async () => {
+      const f = await Filament.create({
+        name: "ABS 100%",
+        vendor: "Acme",
+        type: "ABS",
+        totalWeight: 1000,
+      });
+      const res = await spoolCheck(
+        getReq("http://localhost/api/filaments/ABS%20100%25/spool-check?weight=10"),
+        { params: Promise.resolve({ id: "ABS 100%" }) },
+      );
+      // Pre-fix: decodeURIComponent("ABS 100%") threw → caught → 500. The
+      // route must actually RESOLVE the filament (200 + its name echoed back),
+      // not merely avoid a 500 — so a regression to 404/400 also fails (Codex
+      // P3 on PR #685).
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.filament).toBe("ABS 100%");
+      expect(String(f._id)).toBeTruthy();
+    });
+
+    it("orcaslicer POST sync-back does not 500 on a '%' name from the decode", async () => {
+      await Filament.create({ name: "PLA 50%off", vendor: "Acme", type: "PLA" });
+      const res = await orcaSync(
+        jsonReq("http://localhost/api/filaments/PLA%2050%25off/orcaslicer", {
+          filament_settings_id: "PLA 50%off",
+          name: "PLA 50%off",
+        }),
+        { params: Promise.resolve({ id: "PLA 50%off" }) },
+      );
+      expect(res.status).not.toBe(500);
+    });
+  });
+
+  // ── #677: bulk slicer export ?ids= with a non-ObjectId → 400 not 500 ──
+
+  describe("#677 — bulk slicer export rejects a non-ObjectId in ?ids= with 400", () => {
+    it("orcaslicer GET", async () => {
+      const res = await orcaBulkExport(
+        getReq("http://localhost/api/filaments/orcaslicer?ids=not-an-id"),
+      );
+      expect(res.status).toBe(400);
+    });
+    it("prusaslicer GET", async () => {
+      const res = await prusaBulkExport(
+        getReq("http://localhost/api/filaments/prusaslicer?ids=not-an-id"),
+      );
+      expect(res.status).toBe(400);
     });
   });
 });

@@ -419,9 +419,10 @@ export async function POST(
       return errorResponse("No config provided", 400);
     }
 
-    // Try to find by name first (PrusaSlicer sends URL-encoded name),
-    // then fall back to ObjectId
-    const decodedName = decodeURIComponent(id);
+    // Find by name first (slicers address filaments by name), then ObjectId.
+    // `params.id` is ALREADY URL-decoded — re-decoding throws URIError on a
+    // name with a literal `%` ("ABS 100%") and 500s the sync (#671).
+    const decodedName = id;
     let filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
     if (!filament && /^[a-f0-9]{24}$/i.test(id)) {
       filament = await Filament.findOne({ _id: id, _deletedAt: null });

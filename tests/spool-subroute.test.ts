@@ -120,6 +120,19 @@ describe("spool sub-routes", () => {
       );
       expect(res.status).toBe(404);
     });
+
+    it("rejects an unparseable date with a clean 400 (#675)", async () => {
+      const f = await seedFilament();
+      const sid = String(f.spools[0]._id);
+      const res = await postUsage(
+        postReq(
+          `http://localhost/api/filaments/${f._id}/spools/${sid}/usage`,
+          { grams: 10, date: "not-a-date" },
+        ),
+        { params: Promise.resolve({ id: String(f._id), spoolId: sid }) },
+      );
+      expect(res.status).toBe(400);
+    });
   });
 
   describe("POST .../spools/{spoolId}/dry-cycles", () => {
