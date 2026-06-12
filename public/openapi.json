@@ -3,7 +3,7 @@
   "info": {
     "title": "Filament DB API",
     "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports.",
-    "version": "1.38.3",
+    "version": "1.39.0",
     "license": {
       "name": "MIT"
     }
@@ -692,10 +692,16 @@
     },
     "/api/filaments/{id}/openprinttag/check": {
       "get": {
-        "tags": ["Filaments"],
+        "tags": [
+          "Filaments"
+        ],
         "summary": "Check for OpenPrintTag updates",
         "description": "Compares an OpenPrintTag-linked filament (one carrying settings.openprinttag_slug) against the current upstream material and returns a field-level changelist. Read-only. `changes[].kind` is `adopt` (field unset / gray sentinel / unchanged from what OPT last wrote — safe) or `conflict` (locally edited away from OPT — surfaced, not auto-applied). Only color, secondaryColors, density, the OPT-carried temperatures, drying temp/time, Shore D, transmission distance and tags are compared; identity fields and diameter are never re-synced.",
-        "parameters": [{ "$ref": "#/components/parameters/FilamentId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FilamentId"
+          }
+        ],
         "responses": {
           "200": {
             "description": "Linkage status and changelist",
@@ -704,20 +710,39 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "linked": { "type": "boolean" },
-                    "found": { "type": "boolean", "description": "false when the slug is gone upstream" },
-                    "slug": { "type": "string" },
-                    "materialName": { "type": "string" },
+                    "linked": {
+                      "type": "boolean"
+                    },
+                    "found": {
+                      "type": "boolean",
+                      "description": "false when the slug is gone upstream"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "materialName": {
+                      "type": "string"
+                    },
                     "changes": {
                       "type": "array",
                       "items": {
                         "type": "object",
                         "properties": {
-                          "field": { "type": "string" },
-                          "labelKey": { "type": "string" },
+                          "field": {
+                            "type": "string"
+                          },
+                          "labelKey": {
+                            "type": "string"
+                          },
                           "current": {},
                           "incoming": {},
-                          "kind": { "type": "string", "enum": ["adopt", "conflict"] }
+                          "kind": {
+                            "type": "string",
+                            "enum": [
+                              "adopt",
+                              "conflict"
+                            ]
+                          }
                         }
                       }
                     }
@@ -728,28 +753,44 @@
           },
           "404": {
             "description": "Filament not found",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
     },
     "/api/filaments/{id}/openprinttag/sync": {
       "post": {
-        "tags": ["Filaments"],
+        "tags": [
+          "Filaments"
+        ],
         "summary": "Apply OpenPrintTag updates",
         "description": "Applies the user-accepted subset of OpenPrintTag updates to a linked filament. Same-origin guarded. Only managed field keys are accepted (unknown keys → 400). Refreshes openprinttagSnapshot to the full current OPT offer so a later check can distinguish upstream changes from local edits on declined fields.",
-        "parameters": [{ "$ref": "#/components/parameters/FilamentId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FilamentId"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["fields"],
+                "required": [
+                  "fields"
+                ],
                 "properties": {
                   "fields": {
                     "type": "array",
-                    "items": { "type": "string" },
+                    "items": {
+                      "type": "string"
+                    },
                     "description": "Managed field keys to adopt, e.g. \"density\", \"temperatures.nozzle\"."
                   }
                 }
@@ -765,8 +806,15 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "applied": { "type": "array", "items": { "type": "string" } },
-                    "filament": { "$ref": "#/components/schemas/Filament" }
+                    "applied": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "filament": {
+                      "$ref": "#/components/schemas/Filament"
+                    }
                   }
                 }
               }
@@ -774,15 +822,33 @@
           },
           "400": {
             "description": "Malformed body, unknown field, a field OpenPrintTag isn't currently offering, or filament not OpenPrintTag-linked",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "403": {
             "description": "Cross-origin request rejected",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "404": {
             "description": "Filament or upstream material not found",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -5855,7 +5921,11 @@
             },
             "maxItems": 5,
             "description": "Up to 5 additional color slots in display order, mirroring OpenPrintTag's secondary_color_0..4 keys. Coextruded filaments leave the primary null and put all colors here; gradient filaments put their stops here in feed order. Slicer-bound exports (PrusaSlicer/OrcaSlicer/Bambu Studio) drop these silently — slicer presets are single-color and the UI surfaces a notice on the export menu.",
-            "example": ["#FF0000", "#00FF00", "#0000FF"]
+            "example": [
+              "#FF0000",
+              "#00FF00",
+              "#0000FF"
+            ]
           },
           "cost": {
             "type": "number",
@@ -6097,13 +6167,31 @@
                   "items": {
                     "type": "object",
                     "properties": {
-                      "_id": { "type": "string" },
-                      "date": { "type": "string", "format": "date-time" },
-                      "tempC": { "type": "number", "nullable": true, "minimum": 0, "maximum": 300 },
-                      "durationMin": { "type": "number", "nullable": true, "minimum": 0 },
-                      "notes": { "type": "string" }
+                      "_id": {
+                        "type": "string"
+                      },
+                      "date": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "tempC": {
+                        "type": "number",
+                        "nullable": true,
+                        "minimum": 0,
+                        "maximum": 300
+                      },
+                      "durationMin": {
+                        "type": "number",
+                        "nullable": true,
+                        "minimum": 0
+                      },
+                      "notes": {
+                        "type": "string"
+                      }
                     },
-                    "required": ["date"]
+                    "required": [
+                      "date"
+                    ]
                   }
                 },
                 "usageHistory": {
@@ -6112,13 +6200,29 @@
                   "items": {
                     "type": "object",
                     "properties": {
-                      "_id": { "type": "string" },
-                      "grams": { "type": "number", "minimum": 0, "description": "Grams consumed (always positive)" },
-                      "jobLabel": { "type": "string" },
-                      "date": { "type": "string", "format": "date-time" },
+                      "_id": {
+                        "type": "string"
+                      },
+                      "grams": {
+                        "type": "number",
+                        "minimum": 0,
+                        "description": "Grams consumed (always positive)"
+                      },
+                      "jobLabel": {
+                        "type": "string"
+                      },
+                      "date": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
                       "source": {
                         "type": "string",
-                        "enum": ["manual", "slicer", "job", "nfc"]
+                        "enum": [
+                          "manual",
+                          "slicer",
+                          "job",
+                          "nfc"
+                        ]
                       },
                       "jobId": {
                         "type": "string",
@@ -6126,7 +6230,10 @@
                         "description": "PrintHistory _id for job/slicer entries; null for manual/nfc"
                       }
                     },
-                    "required": ["grams", "date"]
+                    "required": [
+                      "grams",
+                      "date"
+                    ]
                   }
                 }
               }
@@ -6175,32 +6282,82 @@
         "type": "object",
         "description": "Lightweight projection returned by GET /api/filaments (the list view). A subset of Filament plus two computed booleans; spools[] and temperatures are reduced. NOT the full document — fetch GET /api/filaments/{id} for everything.",
         "properties": {
-          "_id": { "type": "string" },
-          "name": { "type": "string" },
-          "vendor": { "type": "string" },
-          "type": { "type": "string" },
-          "color": { "type": "string", "nullable": true },
+          "_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "vendor": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "color": {
+            "type": "string",
+            "nullable": true
+          },
           "secondaryColors": {
             "type": "array",
-            "items": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" },
+            "items": {
+              "type": "string",
+              "pattern": "^#[0-9A-Fa-f]{6}$"
+            },
             "maxItems": 5,
             "description": "Effective array — a variant with its own empty array inherits the parent's via resolveFilament's array-fallback rule."
           },
-          "cost": { "type": "number", "nullable": true },
-          "density": { "type": "number", "nullable": true },
-          "parentId": { "type": "string", "nullable": true },
-          "spoolWeight": { "type": "number", "nullable": true },
-          "netFilamentWeight": { "type": "number", "nullable": true },
-          "totalWeight": { "type": "number", "nullable": true },
-          "lowStockThreshold": { "type": "number", "nullable": true, "minimum": 0 },
-          "tdsUrl": { "type": "string", "nullable": true },
-          "optTags": { "type": "array", "items": { "type": "integer" } },
+          "cost": {
+            "type": "number",
+            "nullable": true
+          },
+          "density": {
+            "type": "number",
+            "nullable": true
+          },
+          "parentId": {
+            "type": "string",
+            "nullable": true
+          },
+          "spoolWeight": {
+            "type": "number",
+            "nullable": true
+          },
+          "netFilamentWeight": {
+            "type": "number",
+            "nullable": true
+          },
+          "totalWeight": {
+            "type": "number",
+            "nullable": true
+          },
+          "lowStockThreshold": {
+            "type": "number",
+            "nullable": true,
+            "minimum": 0
+          },
+          "tdsUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "optTags": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
           "temperatures": {
             "type": "object",
             "description": "Reduced to nozzle + bed only (first-layer + other fields dropped from the list projection).",
             "properties": {
-              "nozzle": { "type": "number", "nullable": true },
-              "bed": { "type": "number", "nullable": true }
+              "nozzle": {
+                "type": "number",
+                "nullable": true
+              },
+              "bed": {
+                "type": "number",
+                "nullable": true
+              }
             }
           },
           "hasCalibrations": {
@@ -6217,10 +6374,19 @@
             "items": {
               "type": "object",
               "properties": {
-                "_id": { "type": "string" },
-                "label": { "type": "string" },
-                "totalWeight": { "type": "number", "nullable": true },
-                "retired": { "type": "boolean" }
+                "_id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "totalWeight": {
+                  "type": "number",
+                  "nullable": true
+                },
+                "retired": {
+                  "type": "boolean"
+                }
               }
             }
           }
@@ -6579,17 +6745,30 @@
         "type": "object",
         "description": "Build volume in mm; any axis may be null (unspecified).",
         "properties": {
-          "x": { "type": "number", "nullable": true },
-          "y": { "type": "number", "nullable": true },
-          "z": { "type": "number", "nullable": true }
+          "x": {
+            "type": "number",
+            "nullable": true
+          },
+          "y": {
+            "type": "number",
+            "nullable": true
+          },
+          "z": {
+            "type": "number",
+            "nullable": true
+          }
         }
       },
       "AmsSlot": {
         "type": "object",
         "description": "One multi-material system slot. spoolId is intentionally ref-less (a spool is a subdocument of a Filament, not a top-level collection — see GH #280); it is also nulled on cross-side hybrid-sync remap.",
         "properties": {
-          "_id": { "type": "string" },
-          "slotName": { "type": "string" },
+          "_id": {
+            "type": "string"
+          },
+          "slotName": {
+            "type": "string"
+          },
           "filamentId": {
             "type": "string",
             "nullable": true,
@@ -6601,27 +6780,50 @@
             "description": "Currently-loaded spool subdocument id; null = no specific spool tracked"
           }
         },
-        "required": ["slotName"]
+        "required": [
+          "slotName"
+        ]
       },
       "BedType": {
         "type": "object",
         "description": "A bed/build-plate surface spec (v1.23). Shared catalog referenced by printers via installedBedTypes. DELETE is refused while any printer still references it.",
         "properties": {
-          "_id": { "type": "string" },
-          "name": { "type": "string", "example": "Textured PEI" },
-          "material": { "type": "string", "example": "PEI" },
-          "notes": { "type": "string" },
-          "syncId": { "type": "string", "nullable": true },
+          "_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string",
+            "example": "Textured PEI"
+          },
+          "material": {
+            "type": "string",
+            "example": "PEI"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "syncId": {
+            "type": "string",
+            "nullable": true
+          },
           "_deletedAt": {
             "type": "string",
             "format": "date-time",
             "nullable": true,
             "readOnly": true
           },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "updatedAt": { "type": "string", "format": "date-time" }
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         },
-        "required": ["name"]
+        "required": [
+          "name"
+        ]
       },
       "PrinterInput": {
         "type": "object",
