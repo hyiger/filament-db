@@ -530,8 +530,24 @@ export class NfcService extends EventEmitter {
       const firstBlock = sector * 4;
       const key = keys[sector];
 
+      // loadMifareKey loads a key into a reader slot — it's reader-level, not
+      // sector-specific, so a failure here is a real PCSC/hardware error that
+      // MUST surface, not be masked as a "damaged sector" (Codex on #687).
       await this.loadMifareKey(protocol, 0, key);
-      await this.authenticateMifareBlock(protocol, firstBlock, 0x60, 0); // Key A
+
+      try {
+        await this.authenticateMifareBlock(protocol, firstBlock, 0x60, 0); // Key A
+      } catch (err) {
+        // Sector-0 auth failing means this isn't a (readable) Bambu tag, so
+        // surface that. But a LATER sector's auth failing (damaged /
+        // partially-read tag) must not abort the whole read with a misleading
+        // OpenPrintTag error — zero-fill its blocks and keep going so
+        // parseBambuBlocks gets what it can (#680; mirrors the per-block read
+        // guard below).
+        if (sector === 0) throw err;
+        for (let i = 0; i < 3; i++) blocks[firstBlock + i] = Buffer.alloc(16);
+        continue;
+      }
 
       // Read 3 data blocks per sector (block 3 of each sector is the trailer)
       for (let i = 0; i < 3; i++) {
