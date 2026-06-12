@@ -151,18 +151,6 @@ const CALIBRATION_KEYS = new Set<string>([
 ]);
 
 /**
- * Passthrough settings keys that are GENUINELY multi-valued in Orca/Bambu
- * presets AND are not surfaced as scalars by the edit form. Only these keep
- * their full array shape (every element, including empty positional slots) so
- * the round-trip preserves them (#678/#686). Every OTHER key unwraps to a
- * scalar — form-facing keys like `start_filament_gcode` / `end_filament_gcode`
- * / `filament_notes` are String-cast + `.replace()`d by FilamentForm, so an
- * array there would throw "replace is not a function" on the edit page
- * (Codex r2 on #686).
- */
-const MULTI_VALUED_SETTING_KEYS = new Set<string>(["compatible_printers"]);
-
-/**
  * Resolve a Bambu/Orca JSON value (always a single-element array of
  * stringified values) to a scalar. Returns `undefined` for absent,
  * empty-array, or empty-string values so callers can use `??` chains.
@@ -223,11 +211,8 @@ export interface ParsedFilament {
   shrinkageZ?: number;
   temperatures: ParsedTemperatures;
   bedTypeTemps: ParsedBedTypeTemp[];
-  /** Unknown / round-trippable keys. Goes into `settings` on the model.
-   *  Genuinely multi-valued keys (e.g. `compatible_printers`) are kept as
-   *  arrays so they survive the export round-trip (the exporter already emits
-   *  array-valued settings as multi-element). */
-  settings: Record<string, string | string[]>;
+  /** Unknown / round-trippable keys. Goes into `settings` on the model. */
+  settings: Record<string, string>;
 }
 
 export interface CalibrationHints {
@@ -380,17 +365,13 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
   for (const [key, value] of Object.entries(json)) {
     if (STRUCTURED_KEYS.has(key)) continue;
     if (CALIBRATION_KEYS.has(key)) continue;
-    // Only the known multi-valued passthrough keys keep their FULL array shape
-    // (every element, including empty positional slots) so the next export
-    // emits the same multi-element value and nothing shifts slot — unwrap()
-    // would keep only the first element (#678); filtering empties would shift
-    // positions. Every other key (incl. form-facing scalars) unwraps to a
-    // scalar so the edit form's String-cast + `.replace()` can't hit an array
-    // (Codex r2 on #686). Single-element arrays still collapse via unwrap.
-    if (MULTI_VALUED_SETTING_KEYS.has(key) && Array.isArray(value) && value.length > 1) {
-      filament.settings[key] = value.map(String);
-      continue;
-    }
+    // NOTE (#678, deferred): unwrap() collapses a multi-element array to its
+    // first element, so a multi-printer `compatible_printers` loses the rest on
+    // a Bambu/Orca round-trip. A faithful fix can't just store the array here —
+    // the `settings` bag is shared by the PrusaSlicer exporter (which would
+    // comma-join an array into one invalid INI line) and the edit form (which
+    // String-casts + `.replace()`s several keys). Round-tripping multi-valued
+    // keys needs arch-aware serialization in each exporter; tracked on #678.
     const s = unwrap(value);
     if (s == null) continue;
     filament.settings[key] = s;

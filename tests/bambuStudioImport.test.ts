@@ -98,35 +98,18 @@ describe("parseBambuStudioProfile", () => {
     expect(parseBambuStudioProfile({ name: ["X"] }).filament.settings.filament_soluble).toBeUndefined();
   });
 
-  it("preserves a multi-element compatible_printers array in the settings bag (#678)", () => {
-    const printers = [
-      "Bambu Lab X1 Carbon 0.4 nozzle",
-      "Bambu Lab P1S 0.4 nozzle",
-      "Prusa MK4 0.4 nozzle",
-    ];
-    const { filament } = parseBambuStudioProfile({ name: ["X"], compatible_printers: printers });
-    // Pre-fix unwrap() kept only the first element → 2/3 printers lost on
-    // re-export. All three must survive.
-    expect(filament.settings.compatible_printers).toEqual(printers);
-    // A single-element array still collapses to a scalar (the common case).
-    const single = parseBambuStudioProfile({ name: ["Y"], compatible_printers: ["Only One 0.4 nozzle"] });
-    expect(single.filament.settings.compatible_printers).toBe("Only One 0.4 nozzle");
-    // Empty positional slots in an allowlisted multi-valued key are KEPT (not
-    // filtered) so positions don't shift on re-export (Codex on #686).
-    const sparse = parseBambuStudioProfile({ name: ["Z"], compatible_printers: ["", "Printer B 0.4 nozzle"] });
-    expect(sparse.filament.settings.compatible_printers).toEqual(["", "Printer B 0.4 nozzle"]);
-  });
-
-  it("keeps form-facing settings scalar even when they arrive as arrays (Codex r2 #686)", () => {
-    // FilamentForm String-casts + .replace()s these keys, so an array would
-    // throw on the edit page. They must NOT be preserved as arrays.
+  it("collapses a multi-element compatible_printers to its first element (#678 deferred)", () => {
+    // A faithful multi-printer round-trip can't store an array in the shared
+    // settings bag: the PrusaSlicer exporter would comma-join it into one
+    // invalid INI line, and the edit form String-casts + .replace()s several
+    // settings keys. So passthrough values stay scalar (unwrap → first element)
+    // and the multi-value round-trip is tracked on #678 as a larger,
+    // cross-exporter change.
     const { filament } = parseBambuStudioProfile({
       name: ["X"],
-      start_filament_gcode: ["G1 X0", "G1 Y0"],
-      filament_notes: ["line one", "line two"],
+      compatible_printers: ["Bambu X1 0.4 nozzle", "Prusa MK4 0.4 nozzle"],
     });
-    expect(typeof filament.settings.start_filament_gcode).toBe("string");
-    expect(typeof filament.settings.filament_notes).toBe("string");
+    expect(filament.settings.compatible_printers).toBe("Bambu X1 0.4 nozzle");
   });
 
   it("passes filament_notes through the settings bag and round-trips it (GH #620)", () => {
