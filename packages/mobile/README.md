@@ -59,6 +59,23 @@ npx eas build --profile development --platform ios   # one-time, per platform
 npx expo start --dev-client
 ```
 
+### Free Apple ID? Build QR-only (no NFC)
+
+iOS NFC needs the Core NFC "Tag Reading" entitlement, which a **free Apple ID
+can't provision** — a normal build will fail to sign. Set
+`EXPO_PUBLIC_ENABLE_NFC=0` to build a **QR-only** version: it omits the NFC
+config plugin/entitlement (so free-account signing works) and hides the
+"Scan NFC tag" button. Camera/QR scanning + spool updates work fully.
+
+```bash
+EXPO_PUBLIC_ENABLE_NFC=0 npx expo run:ios --device
+```
+
+When your paid Apple Developer account is active, just drop the flag and rebuild
+to turn NFC back on. The flag is read in both `app.config.ts` (build-time plugin
+gate) and `src/lib/features.ts` (runtime UI gate). Free provisioning certs also
+expire after ~7 days, so re-run the build weekly.
+
 Then in the app: open **Server connection**, enter your Filament DB address
 (e.g. `http://192.168.1.50:3456`) and, if the server sets `FILAMENTDB_API_KEY`,
 the API key. Scan away.

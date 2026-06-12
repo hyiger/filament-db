@@ -4,6 +4,7 @@ import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'rea
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ApiError, createApi } from '@/lib/api';
+import { NFC_ENABLED } from '@/lib/features';
 import { readOpenPrintTag } from '@/lib/nfc';
 import { useServerConfig } from '@/lib/serverConfig';
 
@@ -73,14 +74,16 @@ export default function ScanScreen() {
           <Text style={styles.bigButtonText}>Scan QR code</Text>
           <Text style={styles.bigButtonHint}>Filament DB label</Text>
         </Pressable>
-        <Pressable
-          style={[styles.bigButton, busy && styles.disabled]}
-          onPress={scanNfc}
-          disabled={busy}
-        >
-          <Text style={styles.bigButtonText}>{busy ? 'Scanning…' : 'Scan NFC tag'}</Text>
-          <Text style={styles.bigButtonHint}>OpenPrintTag</Text>
-        </Pressable>
+        {NFC_ENABLED && (
+          <Pressable
+            style={[styles.bigButton, busy && styles.disabled]}
+            onPress={scanNfc}
+            disabled={busy}
+          >
+            <Text style={styles.bigButtonText}>{busy ? 'Scanning…' : 'Scan NFC tag'}</Text>
+            <Text style={styles.bigButtonHint}>OpenPrintTag</Text>
+          </Pressable>
+        )}
       </View>
       <Link href="/settings" style={styles.footerLink}>
         Server: {baseUrl}

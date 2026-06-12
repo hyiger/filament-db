@@ -1,0 +1,72 @@
+import type { ExpoConfig } from 'expo/config';
+
+/**
+ * NFC is gated behind EXPO_PUBLIC_ENABLE_NFC so the app can be built on a free
+ * Apple ID, which cannot provision the Core NFC "Tag Reading" entitlement.
+ *
+ *   default / unset           → NFC enabled (the real product build)
+ *   EXPO_PUBLIC_ENABLE_NFC=0   → QR-only build, no NFC entitlement
+ *
+ * e.g. a free-account dev build:  EXPO_PUBLIC_ENABLE_NFC=0 npx expo run:ios
+ *
+ * The same EXPO_PUBLIC_ flag is read at runtime (src/lib/features.ts) to hide
+ * the NFC entry points, so a QR-only build looks intentional rather than broken.
+ */
+const nfcEnabled = process.env.EXPO_PUBLIC_ENABLE_NFC !== '0';
+
+const plugins: NonNullable<ExpoConfig['plugins']> = [
+  'expo-router',
+  [
+    'expo-splash-screen',
+    {
+      backgroundColor: '#208AEF',
+      android: { image: './assets/images/splash-icon.png', imageWidth: 76 },
+    },
+  ],
+  [
+    'expo-camera',
+    { cameraPermission: 'Filament DB uses the camera to scan QR codes on spool labels.' },
+  ],
+  'expo-secure-store',
+];
+
+if (nfcEnabled) {
+  plugins.push([
+    'react-native-nfc-manager',
+    {
+      nfcPermissionString:
+        'Filament DB reads NFC filament spool tags (OpenPrintTag) to look them up in your database.',
+      includeNdefEntitlement: true,
+    },
+  ]);
+}
+
+const config: ExpoConfig = {
+  name: 'Filament DB Scanner',
+  slug: 'filament-db-scanner',
+  version: '1.0.0',
+  orientation: 'portrait',
+  icon: './assets/images/icon.png',
+  scheme: 'filamentdb',
+  userInterfaceStyle: 'automatic',
+  ios: {
+    icon: './assets/expo.icon',
+    bundleIdentifier: 'com.filamentdb.scanner',
+    supportsTablet: true,
+  },
+  android: {
+    package: 'com.filamentdb.scanner',
+    adaptiveIcon: {
+      backgroundColor: '#E6F4FE',
+      foregroundImage: './assets/images/android-icon-foreground.png',
+      backgroundImage: './assets/images/android-icon-background.png',
+      monochromeImage: './assets/images/android-icon-monochrome.png',
+    },
+    predictiveBackGestureEnabled: false,
+  },
+  web: { output: 'static', favicon: './assets/images/favicon.png' },
+  plugins,
+  experiments: { typedRoutes: true, reactCompiler: true },
+};
+
+export default config;
