@@ -6,6 +6,10 @@ import "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { generateOrcaSlicerProfiles } from "@/lib/orcaSlicerBundle";
+import { errorResponse } from "@/lib/apiErrorHandler";
+
+/** 24-hex ObjectId, for validating user-supplied `?ids=` before a `$in`. */
+const OBJECT_ID_RE = /^[a-f0-9]{24}$/i;
 
 /**
  * GET /api/filaments/orcaslicer
@@ -35,7 +39,14 @@ export async function GET(request: NextRequest) {
     if (typeFilter) query.type = typeFilter;
     if (vendorFilter) query.vendor = vendorFilter;
     if (idsFilter) {
-      query._id = { $in: idsFilter.split(",").map((id) => id.trim()) };
+      // Validate each id is a real ObjectId before the $in — an invalid value
+      // would otherwise throw a Mongoose CastError and 500 (#677).
+      const ids = idsFilter.split(",").map((id) => id.trim()).filter(Boolean);
+      const bad = ids.filter((id) => !OBJECT_ID_RE.test(id));
+      if (bad.length > 0) {
+        return errorResponse(`Invalid filament ID(s): ${bad.join(", ")}`, 400);
+      }
+      query._id = { $in: ids };
     }
 
     const filaments = await Filament.find(query)

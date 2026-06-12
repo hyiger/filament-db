@@ -46,6 +46,12 @@ export async function POST(
   }
   const jobLabel = typeof body.jobLabel === "string" ? body.jobLabel : "";
   const date = body.date ? new Date(body.date) : new Date();
+  // Reject an unparseable date with a clean 400 rather than letting the
+  // Invalid Date reach the subdocument and surface as a raw Mongoose cast
+  // error (#675; matches the print-history POST date guard).
+  if (Number.isNaN(date.getTime())) {
+    return errorResponse("date is not a valid date", 400);
+  }
 
   try {
     await dbConnect();

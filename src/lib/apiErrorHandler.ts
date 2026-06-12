@@ -202,6 +202,29 @@ export function checkFileSize(file: File): NextResponse | null {
 }
 
 /**
+ * GH #676: cap a raw (non-multipart) request body via its Content-Length
+ * header BEFORE buffering it with `request.text()`/`.json()`, so a huge body
+ * can't drive unbounded memory use. Returns a 413 when the declared length
+ * exceeds the limit (default `MAX_UPLOAD_SIZE`), else null. A missing/lying
+ * Content-Length isn't caught here — callers that need a hard guarantee
+ * should additionally check the buffered length.
+ */
+export function checkContentLength(
+  request: Request,
+  max: number = MAX_UPLOAD_SIZE,
+): NextResponse | null {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > max) {
+    const sizeMB = (declared / (1024 * 1024)).toFixed(1);
+    return errorResponse(
+      `Request body too large (${sizeMB} MB). Maximum is ${(max / (1024 * 1024)).toFixed(0)} MB.`,
+      413,
+    );
+  }
+  return null;
+}
+
+/**
  * GH #338: short-circuit a route when the body isn't `multipart/form-data`,
  * before the downstream `await request.formData()` throws the runtime's
  * "Content-Type was not one of …" error — which the catch-all error
