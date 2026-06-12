@@ -211,8 +211,11 @@ export interface ParsedFilament {
   shrinkageZ?: number;
   temperatures: ParsedTemperatures;
   bedTypeTemps: ParsedBedTypeTemp[];
-  /** Unknown / round-trippable keys. Goes into `settings` on the model. */
-  settings: Record<string, string>;
+  /** Unknown / round-trippable keys. Goes into `settings` on the model.
+   *  Genuinely multi-valued keys (e.g. `compatible_printers`) are kept as
+   *  arrays so they survive the export round-trip (the exporter already emits
+   *  array-valued settings as multi-element). */
+  settings: Record<string, string | string[]>;
 }
 
 export interface CalibrationHints {
@@ -365,6 +368,22 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
   for (const [key, value] of Object.entries(json)) {
     if (STRUCTURED_KEYS.has(key)) continue;
     if (CALIBRATION_KEYS.has(key)) continue;
+    // Preserve genuinely multi-valued keys (e.g. compatible_printers) as an
+    // array so every element survives export → re-import; the exporter emits
+    // array-valued settings as multi-element. unwrap() would keep only the
+    // first element (#678). Single/empty values still collapse to a scalar.
+    if (Array.isArray(value) && value.length > 1) {
+      const arr = value.map(String).filter((v) => v !== "");
+      if (arr.length > 1) {
+        filament.settings[key] = arr;
+        continue;
+      }
+      if (arr.length === 1) {
+        filament.settings[key] = arr[0];
+        continue;
+      }
+      continue; // all elements empty
+    }
     const s = unwrap(value);
     if (s == null) continue;
     filament.settings[key] = s;

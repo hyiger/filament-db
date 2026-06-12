@@ -778,6 +778,15 @@ describe("rowToImport — formula-prefix strip (GH #627)", () => {
     const row = rowToImport(["'70s Blue PLA", "Vendor", "PLA"], mapping);
     expect(row.name).toBe("'70s Blue PLA");
   });
+
+  it("strips the guard apostrophe from instanceId (not strictly hex) (#679)", () => {
+    // A legacy/custom instanceId starting with a trigger char gets
+    // formula-prefixed on export; without unsanitizing it round-trips
+    // corrupted as `'-custom-id-123`.
+    const mapping = mapHeaders(["Name", "Vendor", "Type", "Instance ID"]);
+    const row = rowToImport(["PLA", "Acme", "PLA", "'-custom-id-123"], mapping);
+    expect(row.instanceId).toBe("-custom-id-123");
+  });
 });
 
 /**

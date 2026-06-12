@@ -142,6 +142,20 @@ describe("isPrivateIp — IPv6 block list", () => {
     expect(isPrivateIp("2001:4860:4860::8888")).toBe(false);
     expect(isPrivateIp("2606:4700:4700::1111")).toBe(false);
   });
+
+  it("range-checks NAT64 (64:ff9b::/96) embedded IPv4 (#673)", () => {
+    expect(isPrivateIp("64:ff9b::a9fe:a9fe")).toBe(true); // 169.254.169.254 metadata
+    expect(isPrivateIp("64:ff9b::7f00:1")).toBe(true);    // 127.0.0.1
+    expect(isPrivateIp("64:ff9b::0a00:1")).toBe(true);    // 10.0.0.1
+    expect(isPrivateIp("64:ff9b::808:808")).toBe(false);  // 8.8.8.8 public
+  });
+
+  it("range-checks 6to4 (2002::/16) embedded IPv4 (#673)", () => {
+    expect(isPrivateIp("2002:c0a8:0101::")).toBe(true);   // 192.168.1.1
+    expect(isPrivateIp("2002:a9fe:a9fe::")).toBe(true);   // 169.254.169.254 metadata
+    expect(isPrivateIp("2002:0a00:0001::")).toBe(true);   // 10.0.0.1
+    expect(isPrivateIp("2002:0808:0808::")).toBe(false);  // 8.8.8.8 public
+  });
 });
 
 describe("readBodyCapped — GH #258 response-size guard", () => {

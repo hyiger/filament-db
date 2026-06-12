@@ -98,6 +98,21 @@ describe("parseBambuStudioProfile", () => {
     expect(parseBambuStudioProfile({ name: ["X"] }).filament.settings.filament_soluble).toBeUndefined();
   });
 
+  it("preserves a multi-element compatible_printers array in the settings bag (#678)", () => {
+    const printers = [
+      "Bambu Lab X1 Carbon 0.4 nozzle",
+      "Bambu Lab P1S 0.4 nozzle",
+      "Prusa MK4 0.4 nozzle",
+    ];
+    const { filament } = parseBambuStudioProfile({ name: ["X"], compatible_printers: printers });
+    // Pre-fix unwrap() kept only the first element → 2/3 printers lost on
+    // re-export. All three must survive.
+    expect(filament.settings.compatible_printers).toEqual(printers);
+    // A single-element array still collapses to a scalar (the common case).
+    const single = parseBambuStudioProfile({ name: ["Y"], compatible_printers: ["Only One 0.4 nozzle"] });
+    expect(single.filament.settings.compatible_printers).toBe("Only One 0.4 nozzle");
+  });
+
   it("passes filament_notes through the settings bag and round-trips it (GH #620)", () => {
     // The Filament model has no top-level `notes` column (the form stores
     // notes as `settings.filament_notes`), so the key must ride the

@@ -110,6 +110,24 @@ export function isPrivateIp(ip: string): boolean {
     return isPrivateIpv4(v4);
   }
 
+  // NAT64 (64:ff9b::/96) carries an embedded IPv4 in the low 32 bits — a
+  // NAT64-wrapped metadata/private address (e.g. 64:ff9b::a9fe:a9fe →
+  // 169.254.169.254) must be range-checked, not treated as a public IPv6 (#673).
+  if (
+    groups[0] === 0x0064 && groups[1] === 0xff9b &&
+    groups[2] === 0 && groups[3] === 0 && groups[4] === 0 && groups[5] === 0
+  ) {
+    const v4 = `${groups[6] >> 8}.${groups[6] & 0xff}.${groups[7] >> 8}.${groups[7] & 0xff}`;
+    return isPrivateIpv4(v4);
+  }
+
+  // 6to4 (2002::/16) embeds the destination IPv4 in groups 1-2; block when that
+  // embedded address is private (e.g. 2002:c0a8:0101:: → 192.168.1.1) (#673).
+  if (groups[0] === 0x2002) {
+    const v4 = `${groups[1] >> 8}.${groups[1] & 0xff}.${groups[2] >> 8}.${groups[2] & 0xff}`;
+    return isPrivateIpv4(v4);
+  }
+
   const first = groups[0];
   if ((first & 0xffc0) === 0xfe80) return true; // fe80::/10 link-local
   if ((first & 0xfe00) === 0xfc00) return true; // fc00::/7 unique-local

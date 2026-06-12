@@ -59,6 +59,17 @@ async function resolveHostIps(host: string): Promise<string[]> {
 /**
  * Validate a user-supplied MongoDB connection string before it is passed
  * to a `MongoClient`. Throws an `Error` describing the rejection.
+ *
+ * #674 — best-effort by design. This resolves the host (or SRV targets) and
+ * rejects private/metadata IPs at validation time, but `MongoClient.connect()`
+ * performs its OWN independent DNS/SRV resolution at connect time, so a
+ * resolver that returns a public IP here and a private one microseconds later
+ * (DNS rebinding) is a residual TOCTOU. Pinning the validated IP into the URI
+ * isn't viable — it breaks `mongodb+srv` SRV resolution and TLS hostname
+ * verification (the cert is for the name, not the IP). The accepted primary
+ * controls are therefore: this guard as defence-in-depth, the
+ * `assertSameOriginRequest` CSRF guard on every caller (import-atlas / setup),
+ * and the fact that supplying a connection string is an explicit user action.
  */
 export async function assertSafeMongoUri(
   uri: string,

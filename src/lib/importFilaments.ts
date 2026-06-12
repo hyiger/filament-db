@@ -180,10 +180,10 @@ function parseNum(val: unknown): number | null {
  * import created a corrupted duplicate. Mirrors what `/api/spools/import`
  * has done since the Codex P2 follow-up to PR #144.
  *
- * Deliberately NOT applied to `color` / `secondaryColors` / `tdsUrl` /
- * `instanceId` — those are format-validated fields that can never start
- * with a trigger character, so a genuine leading apostrophe (if a user
- * somehow stored one) survives untouched.
+ * Deliberately NOT applied to `color` / `secondaryColors` / `tdsUrl` — those
+ * are format-validated (`#rrggbb`, http(s)://) and can never start with a
+ * trigger character, so a genuine leading apostrophe (if a user somehow stored
+ * one) survives untouched.
  */
 const UNSANITIZE_FIELDS = new Set<keyof ImportRow>([
   "name",
@@ -195,6 +195,11 @@ const UNSANITIZE_FIELDS = new Set<keyof ImportRow>([
   "colorName",
   "spoolType",
   "parentName",
+  // `instanceId` is NOT strictly hex-validated — legacy/custom IDs (e.g.
+  // `custom-id-123`, or one starting with `-`/`+`/`=`/`@`) get formula-prefixed
+  // on export, so it must be unstripped symmetrically or it round-trips
+  // corrupted as `'...` (#679).
+  "instanceId",
 ]);
 
 export function mapHeaders(headers: string[]): (keyof ImportRow | null)[] {
