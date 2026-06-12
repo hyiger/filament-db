@@ -154,7 +154,15 @@ export async function POST(request: NextRequest) {
 
   try {
     await dbConnect();
+    // An OpenPrintTag written by Filament DB carries the filament's instanceId
+    // in its spool_uid field (see GET /api/filaments/{id}/openprinttag, which
+    // sets spoolUid = filament.instanceId), so the decoded spoolUid is the
+    // strongest match signal for our own tags — matchFilament tries it first.
+    // For a Bambu tag (spoolUid = 32-char tray UID) or a community OpenPrintTag
+    // it won't collide with a 10-char FDB instanceId, so it harmlessly falls
+    // through to the name/vendor/type matching that mirrors scanMatchHandler.
     const { match, candidates } = await matchFilament({
+      instanceId: boundedField(decoded.spoolUid),
       name: boundedField(decoded.materialName),
       vendor: boundedField(decoded.brandName),
       type: boundedField(decoded.materialType),

@@ -83,6 +83,29 @@ describe("POST /api/nfc/decode", () => {
     expect(body.candidates).toEqual([]);
   });
 
+  it("matches by instanceId carried in the tag's spoolUid (FDB-written tag)", async () => {
+    // A Filament-DB-written OpenPrintTag stores the filament's instanceId in
+    // spool_uid. Even when the on-tag name differs from the DB row, the decode
+    // endpoint should resolve it by instanceId — the strongest signal.
+    await Filament.create({
+      name: "Renamed In DB",
+      vendor: "Prusament",
+      type: "PLA",
+      instanceId: "abc1230000",
+    });
+    const cbor = generateOpenPrintTagBinary({
+      materialName: "Old Tag Name",
+      brandName: "Prusament",
+      materialType: "PLA",
+      spoolUid: "abc1230000",
+    });
+    const res = await decodeTag(decodeReq({ tagType: "openprinttag", payload: b64(cbor) }));
+    const body = await res.json();
+    expect(body.match?.name).toBe("Renamed In DB");
+    expect(body.match?.instanceId).toBe("abc1230000");
+    expect(body.candidates).toEqual([]);
+  });
+
   it("returns candidates (no auto-match) on an ambiguous vendor+type", async () => {
     await Filament.create({ name: "Bambu PLA Black", vendor: "Bambu Lab", type: "PLA" });
     await Filament.create({ name: "Bambu PLA White", vendor: "Bambu Lab", type: "PLA" });
