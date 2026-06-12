@@ -151,6 +151,18 @@ const CALIBRATION_KEYS = new Set<string>([
 ]);
 
 /**
+ * Passthrough settings keys that are GENUINELY multi-valued in Orca/Bambu
+ * presets AND are not surfaced as scalars by the edit form. Only these keep
+ * their full array shape (every element, including empty positional slots) so
+ * the round-trip preserves them (#678/#686). Every OTHER key unwraps to a
+ * scalar — form-facing keys like `start_filament_gcode` / `end_filament_gcode`
+ * / `filament_notes` are String-cast + `.replace()`d by FilamentForm, so an
+ * array there would throw "replace is not a function" on the edit page
+ * (Codex r2 on #686).
+ */
+const MULTI_VALUED_SETTING_KEYS = new Set<string>(["compatible_printers"]);
+
+/**
  * Resolve a Bambu/Orca JSON value (always a single-element array of
  * stringified values) to a scalar. Returns `undefined` for absent,
  * empty-array, or empty-string values so callers can use `??` chains.
@@ -368,13 +380,14 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
   for (const [key, value] of Object.entries(json)) {
     if (STRUCTURED_KEYS.has(key)) continue;
     if (CALIBRATION_KEYS.has(key)) continue;
-    // Preserve genuinely multi-valued keys (e.g. compatible_printers, or
-    // per-extruder arrays) with their FULL shape — every element, including
-    // empty positional slots — so the next export emits the same multi-element
-    // value and nothing shifts to the wrong slot. unwrap() would keep only the
-    // first element (#678); filtering empties would shift positions (Codex on
-    // #686). Single-element arrays still collapse to a scalar via unwrap below.
-    if (Array.isArray(value) && value.length > 1) {
+    // Only the known multi-valued passthrough keys keep their FULL array shape
+    // (every element, including empty positional slots) so the next export
+    // emits the same multi-element value and nothing shifts slot — unwrap()
+    // would keep only the first element (#678); filtering empties would shift
+    // positions. Every other key (incl. form-facing scalars) unwraps to a
+    // scalar so the edit form's String-cast + `.replace()` can't hit an array
+    // (Codex r2 on #686). Single-element arrays still collapse via unwrap.
+    if (MULTI_VALUED_SETTING_KEYS.has(key) && Array.isArray(value) && value.length > 1) {
       filament.settings[key] = value.map(String);
       continue;
     }
