@@ -133,7 +133,10 @@ export async function POST(request: NextRequest) {
     await dbConnect();
 
     const body = await request.text();
-    if (body.length > MAX_UPLOAD_SIZE) {
+    // Byte length, not String.length (UTF-16 code units) — a non-ASCII UTF-8
+    // body can exceed 10 MB of bytes while staying under the char count when
+    // Content-Length was missing/wrong (Codex P2 on PR #685).
+    if (Buffer.byteLength(body, "utf8") > MAX_UPLOAD_SIZE) {
       return errorResponse("Request body too large. Maximum is 10 MB.", 413);
     }
     if (!body.trim()) {
