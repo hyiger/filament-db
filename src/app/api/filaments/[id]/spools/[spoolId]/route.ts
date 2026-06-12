@@ -30,6 +30,12 @@ export async function PUT(
     return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
+  // remainingWeight is a convenience input that resolves to an absolute
+  // totalWeight; accepting both in one request would be ambiguous.
+  if (validation.totalWeight !== undefined && validation.remainingWeight !== undefined) {
+    return errorResponse("Provide either totalWeight or remainingWeight, not both", 400);
+  }
+
   try {
     await dbConnect();
     const { id, spoolId } = await params;
@@ -44,8 +50,41 @@ export async function PUT(
       return errorResponse("Invalid filament or spool id", 400);
     }
 
+    // Convert a remainingWeight input to an absolute totalWeight by adding the
+    // spool's tare — the filament's own spoolWeight, inherited from the parent
+    // when a variant doesn't set its own. The 0g fallback (neither set, legacy
+    // data) matches the inventory aggregations in /api/locations and
+    // /api/spools/by-location so totals reconcile. remainingWeight === null
+    // clears the weight (totalWeight = null), mirroring totalWeight semantics.
+    let computedTotalWeight: number | null | undefined;
+    if (validation.remainingWeight !== undefined) {
+      const filamentDoc = await Filament.findOne(
+        { _id: id, _deletedAt: null, "spools._id": spoolId },
+        { spoolWeight: 1, parentId: 1 },
+      ).lean<{ spoolWeight: number | null; parentId: mongoose.Types.ObjectId | null } | null>();
+      if (!filamentDoc) {
+        return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
+      if (validation.remainingWeight === null) {
+        computedTotalWeight = null;
+      } else {
+        let tare = filamentDoc.spoolWeight;
+        if ((tare === null || tare === undefined) && filamentDoc.parentId) {
+          const parent = await Filament.findById(filamentDoc.parentId, {
+            spoolWeight: 1,
+          }).lean<{ spoolWeight: number | null } | null>();
+          tare = parent?.spoolWeight ?? null;
+        }
+        computedTotalWeight = validation.remainingWeight + (tare ?? 0);
+      }
+    }
+
     const update: Record<string, unknown> = {};
-    if (validation.totalWeight !== undefined) update["spools.$.totalWeight"] = validation.totalWeight;
+    if (computedTotalWeight !== undefined) {
+      update["spools.$.totalWeight"] = computedTotalWeight;
+    } else if (validation.totalWeight !== undefined) {
+      update["spools.$.totalWeight"] = validation.totalWeight;
+    }
     if (validation.label !== undefined) update["spools.$.label"] = validation.label;
     if (validation.locationId !== undefined) update["spools.$.locationId"] = validation.locationId;
     if (validation.photoDataUrl !== undefined) update["spools.$.photoDataUrl"] = validation.photoDataUrl;

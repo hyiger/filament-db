@@ -16,6 +16,15 @@ export type SpoolValidation =
       ok: true;
       label?: string;
       totalWeight?: number | null;
+      /**
+       * Virtual input: the REMAINING filament weight in grams (not a spool
+       * schema field). The spool PUT route converts it to `totalWeight` by
+       * adding the filament's (variant-inherited) tare, so a scanner client
+       * can write "grams left on the spool" without knowing the empty-spool
+       * weight or doing the math (GH: mobile-scanner Phase 0). Mutually
+       * exclusive with `totalWeight`.
+       */
+      remainingWeight?: number | null;
       lotNumber?: string | null;
       purchaseDate?: string | null;
       openedDate?: string | null;
@@ -165,6 +174,26 @@ export function validateSpoolBody(
     }
   } else if (!opts.partial) {
     result.totalWeight = null;
+  }
+
+  // remainingWeight: virtual input (grams of filament left). Same numeric
+  // rules as totalWeight; the route converts it to a totalWeight by adding the
+  // tare. Only meaningful on PUT — never defaulted on POST (a new spool's
+  // remaining is expressed via totalWeight or left null).
+  if (b.remainingWeight !== undefined) {
+    if (b.remainingWeight === null) {
+      result.remainingWeight = null;
+    } else if (
+      typeof b.remainingWeight === "number" &&
+      Number.isFinite(b.remainingWeight)
+    ) {
+      if (b.remainingWeight < 0) {
+        return { ok: false, error: "remainingWeight must be non-negative" };
+      }
+      result.remainingWeight = b.remainingWeight;
+    } else {
+      return { ok: false, error: "remainingWeight must be a finite number or null" };
+    }
   }
 
   // lotNumber: free-form string or null.

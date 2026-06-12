@@ -27,6 +27,20 @@ export async function POST(
     return NextResponse.json({ error: validation.error }, { status: 400 });
   }
 
+  // remainingWeight is a PUT-only convenience: resolving it to an absolute
+  // totalWeight needs the spool's tare, which only makes sense for an existing
+  // spool. Reject it loudly on create rather than silently dropping it (the
+  // create path writes totalWeight directly).
+  if ((body as Record<string, unknown>).remainingWeight !== undefined) {
+    return NextResponse.json(
+      {
+        error:
+          "remainingWeight is only supported when updating a spool (PUT); use totalWeight when creating one",
+      },
+      { status: 400 },
+    );
+  }
+
   // GH #203: validateSpoolBody (POST mode) defaults missing fields to
   // empty string / null, so an empty `{}` request previously created a
   // phantom spool with no label, no weight, no metadata. Require the

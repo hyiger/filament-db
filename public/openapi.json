@@ -1300,6 +1300,95 @@
         }
       }
     },
+    "/api/nfc/decode": {
+      "post": {
+        "tags": [
+          "NFC"
+        ],
+        "summary": "Decode raw NFC tag bytes and match against the database",
+        "description": "Decodes an OpenPrintTag (ISO 15693 / NFC-V, CBOR) or Bambu Lab (MIFARE Classic) tag from raw bytes a client read on the phone — the mobile scanner app's primary call — and attaches a confident DB match using the same priority order as /api/filaments/match. Decoding runs server-side so clients ship no decoder (the Bambu path needs Node crypto in particular). Read-only: performs no mutation and, like /api/filaments/match, is intentionally NOT behind the same-origin CSRF guard so cross-origin clients can reach it. When FILAMENTDB_API_KEY is set, every /api caller must present the bearer key.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "tagType"
+                ],
+                "properties": {
+                  "tagType": {
+                    "type": "string",
+                    "enum": [
+                      "openprinttag",
+                      "bambu"
+                    ],
+                    "description": "Which decoder to run."
+                  },
+                  "payload": {
+                    "type": "string",
+                    "format": "byte",
+                    "description": "OpenPrintTag only: base64 of the NDEF record payload (CBOR). Preferred — iOS Core NFC returns parsed NDEF records. Supply this OR tagMemory."
+                  },
+                  "tagMemory": {
+                    "type": "string",
+                    "format": "byte",
+                    "description": "OpenPrintTag only: base64 of raw tag memory; the server runs the NDEF parser to extract the CBOR payload. Supply this OR payload."
+                  },
+                  "blocks": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string",
+                      "format": "byte"
+                    },
+                    "description": "Bambu only: map of MIFARE block number (0–63, as a string key) → base64 of that 16-byte plaintext block."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Decoded tag plus any DB match",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "decoded": {
+                      "type": "object",
+                      "description": "DecodedOpenPrintTag — normalized tag fields (materialName, brandName, materialType, color, temperatures, weightGrams, etc.)."
+                    },
+                    "match": {
+                      "type": "object",
+                      "nullable": true,
+                      "description": "Confident DB match (a Filament), or null when there isn't one."
+                    },
+                    "candidates": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Filament"
+                      },
+                      "description": "Disambiguation candidates when the match is ambiguous."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid body, missing payload/blocks, or undecodable bytes"
+          },
+          "413": {
+            "description": "Request body exceeds the 64 KB cap"
+          },
+          "415": {
+            "description": "Unknown tagType"
+          }
+        }
+      }
+    },
     "/api/filaments/match": {
       "get": {
         "tags": [
@@ -2125,6 +2214,11 @@
                   "totalWeight": {
                     "type": "number",
                     "nullable": true
+                  },
+                  "remainingWeight": {
+                    "type": "number",
+                    "nullable": true,
+                    "description": "Convenience input (grams of filament left, not a stored field). The server converts it to an absolute totalWeight by adding the spool's tare — the filament's spoolWeight, inherited from the parent for a variant, 0 if unset. Mutually exclusive with totalWeight (sending both → 400). PUT only; rejected on the create POST."
                   },
                   "lotNumber": {
                     "type": "string",
