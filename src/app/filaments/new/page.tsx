@@ -39,6 +39,53 @@ function NewFilamentContent() {
   // INI picker state
   const [iniFilaments, setIniFilaments] = useState<Record<string, unknown>[] | null>(null);
   const iniFileRef = useRef<HTMLInputElement>(null);
+  const iniDialogRef = useRef<HTMLDivElement>(null);
+
+  // Declared up here (used by the focus-trap effect below + guardPopulate).
+  const [showPopulateDialog, setShowPopulateDialog] = useState(false);
+
+  // #682: focus-trap the INI profile picker like the app's other dialogs —
+  // move focus in on open, cycle Tab/Shift+Tab within it, Escape to close, and
+  // restore focus to the trigger on close. Suspended while the unsaved-changes
+  // confirmation is open (guardPopulate keeps the picker mounted underneath it)
+  // so the trap doesn't steal Tab back from that nested dialog (Codex on #688).
+  useEffect(() => {
+    if (!iniFilaments || showPopulateDialog) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const focusables = () =>
+      Array.from(
+        iniDialogRef.current?.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((el) => !el.hasAttribute("disabled"));
+    focusables()[0]?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setIniFilaments(null);
+        return;
+      }
+      if (e.key === "Tab") {
+        const f = focusables();
+        if (f.length === 0) return;
+        e.preventDefault();
+        const idx = f.indexOf(document.activeElement as HTMLElement);
+        const next = e.shiftKey
+          ? idx <= 0
+            ? f.length - 1
+            : idx - 1
+          : idx === f.length - 1
+            ? 0
+            : idx + 1;
+        f[next].focus();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      previouslyFocused?.focus?.();
+    };
+  }, [iniFilaments, showPopulateDialog]);
 
   // Prusament QR state
   const [prusamentInput, setPrusamentInput] = useState("");
@@ -74,7 +121,6 @@ function NewFilamentContent() {
       action();
     }
   };
-  const [showPopulateDialog, setShowPopulateDialog] = useState(false);
 
   const handleSubmit = async (data: Record<string, unknown>) => {
     const res = await fetch("/api/filaments", {
@@ -839,6 +885,7 @@ function NewFilamentContent() {
           <div className="fixed inset-0 z-50 bg-black/60" onClick={() => setIniFilaments(null)} />
           <div className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none">
             <div
+              ref={iniDialogRef}
               role="dialog"
               aria-modal="true"
               aria-label={t("new.ini.selectProfile")}
