@@ -18,6 +18,10 @@ const eslintConfig = defineConfig([
     "dist-electron/**",
     "electron-dist/**",
     "standalone/**",
+    // Self-contained sub-packages with their own toolchain/lint (e.g. the
+    // Expo mobile app) — linted from within packages/mobile, not by the
+    // web/Electron root config.
+    "packages/**",
   ]),
 ]);
 
