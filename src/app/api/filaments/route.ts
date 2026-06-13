@@ -7,6 +7,7 @@ import BedType from "@/models/BedType";
 import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { validateSpoolPhotoDataUrl } from "@/lib/validateSpoolBody";
+import { decodedTagToFilamentPayload } from "@/lib/decodedTagToFilament";
 import {
   isInvertedNozzleRange,
   effectiveNozzleRangeForUpdate,
@@ -315,6 +316,28 @@ export async function POST(request: NextRequest) {
     body = await request.json();
   } catch {
     return errorResponse("Invalid JSON in request body", 400);
+  }
+
+  // Create-from-decoded-tag (mobile Phase 2, plan §4.4): the scanner POSTs the
+  // tag exactly as POST /api/nfc/decode returned it (`tagData`) plus the user's
+  // confirmed edits (`overrides`). Map it to a filament payload server-side —
+  // the phone never reproduces this mapping (design rule #1) — then flow it
+  // through the normal create path below, so it inherits the same field
+  // stripping, ref validation, nozzle-range check, unique-name handling, and
+  // spool allowlist. `overrides` win over the tag (the user edits name / vendor
+  // / type on the confirm screen, which are required fields).
+  //
+  // Unlike the PUT handler ([id]/route.ts), this path deliberately needs no
+  // $-operator-key rejection: the merged body flows to Filament.create() — a
+  // document under schema strict mode, which silently drops unknown
+  // $-prefixed paths — not to findOneAndUpdate, so an `overrides` such as
+  // { "$set": … } can never act as an update operator.
+  if (body && typeof body === "object" && body.tagData && typeof body.tagData === "object") {
+    const overrides =
+      body.overrides && typeof body.overrides === "object" && !Array.isArray(body.overrides)
+        ? body.overrides
+        : {};
+    body = { ...decodedTagToFilamentPayload(body.tagData), ...overrides };
   }
 
   delete body._id;

@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ApiError, createApi } from '@/lib/api';
 import { NFC_ENABLED } from '@/lib/features';
 import { readOpenPrintTag } from '@/lib/nfc';
+import { setPendingScan } from '@/lib/pendingScan';
 import { useServerConfig } from '@/lib/serverConfig';
 import { useColors } from '@/lib/theme';
 
@@ -50,14 +51,23 @@ export default function ScanScreen() {
         router.push({ pathname: '/filament/[id]', params: { id: res.match._id } });
         return;
       }
+      // No exact match — offer to create a new filament from the decoded tag
+      // (Phase 2). The create screen consumes the handed-off scan and POSTs it
+      // back as tagData; the server does the field mapping.
       const name = `${res.decoded.brandName ?? ''} ${res.decoded.materialName ?? ''}`.trim();
-      Alert.alert(
-        'Tag decoded',
-        (name || 'Unknown filament') +
-          (res.candidates.length
-            ? `\n\n${res.candidates.length} possible match(es) in your database.`
-            : '\n\nNot in your database yet.'),
-      );
+      const detail = res.candidates.length
+        ? `${res.candidates.length} possible match(es) exist, but none is an exact match.`
+        : "This tag isn't in your database yet.";
+      Alert.alert(name || 'Tag decoded', `${detail}\n\nCreate a new filament from this tag?`, [
+        { text: 'Not now', style: 'cancel' },
+        {
+          text: 'Create filament',
+          onPress: () => {
+            setPendingScan(res.decoded);
+            router.push('/create-from-tag');
+          },
+        },
+      ]);
     } catch (e) {
       Alert.alert('Scan failed', e instanceof ApiError ? e.message : (e as Error).message);
     } finally {

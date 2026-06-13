@@ -1,4 +1,10 @@
-import type { Filament, Location, MatchResult, NfcDecodeResponse } from './types';
+import type {
+  DecodedOpenPrintTag,
+  Filament,
+  Location,
+  MatchResult,
+  NfcDecodeResponse,
+} from './types';
 
 /**
  * Thin typed client over the Filament DB REST API. The app does no business
@@ -84,6 +90,17 @@ export function createApi(cfg: ApiConfig) {
       request<NfcDecodeResponse>(cfg, '/api/nfc/decode', {
         method: 'POST',
         body: JSON.stringify(body),
+      }),
+    /**
+     * Create a filament from a decoded tag (mobile Phase 2). The server maps
+     * `tagData` (a DecodedOpenPrintTag from decodeNfc) into a filament payload;
+     * `overrides` (the user's confirmed name/vendor/type) win. The phone does
+     * no field mapping — design rule #1.
+     */
+    createFromTag: (tagData: DecodedOpenPrintTag, overrides: Record<string, unknown>) =>
+      request<Filament>(cfg, '/api/filaments', {
+        method: 'POST',
+        body: JSON.stringify({ tagData, overrides }),
       }),
     /** Update a spool — location and/or remaining weight (server converts). */
     updateSpool: (filamentId: string, spoolId: string, patch: Record<string, unknown>) =>

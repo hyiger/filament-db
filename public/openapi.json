@@ -148,7 +148,7 @@
           "Filaments"
         ],
         "summary": "Create filament",
-        "description": "Create a new filament profile. If parentId is provided, the filament becomes a color variant inheriting settings from its parent.",
+        "description": "Create a new filament profile. If parentId is provided, the filament becomes a color variant inheriting settings from its parent. Alternatively, send { tagData, overrides } where tagData is a DecodedOpenPrintTag from POST /api/nfc/decode: the server maps the decoded tag to a filament payload (mobile create-from-scan, plan §4.4), then overrides win over the mapped fields — the scanner uses this to set the user-edited name/vendor/type (which are required). Spool subdocuments are never fabricated on create.",
         "requestBody": {
           "required": true,
           "content": {

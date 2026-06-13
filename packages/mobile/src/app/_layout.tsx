@@ -16,6 +16,7 @@ export default function RootLayout() {
             options={{ title: 'Scan QR code', presentation: 'modal' }}
           />
           <Stack.Screen name="filament/[id]" options={{ title: 'Filament' }} />
+          <Stack.Screen name="create-from-tag" options={{ title: 'New filament' }} />
         </Stack>
       </ThemeProvider>
     </ServerConfigProvider>
