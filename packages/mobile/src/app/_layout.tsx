@@ -8,7 +8,10 @@ export default function RootLayout() {
   return (
     <ServerConfigProvider>
       <ThemeProvider value={scheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <Stack>
+        {/* Minimal back button (chevron only, no previous-title label): a long
+            title like "Filament DB Scanner" overflowed the nav bar's back-button
+            slot and tripped a UIKit auto-layout constraint warning on iOS. */}
+        <Stack screenOptions={{ headerBackButtonDisplayMode: 'minimal' }}>
           <Stack.Screen name="index" options={{ title: 'Filament DB Scanner' }} />
           <Stack.Screen name="settings" options={{ title: 'Server connection' }} />
           <Stack.Screen
