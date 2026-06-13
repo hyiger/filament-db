@@ -105,16 +105,12 @@ describe("decodedTagToFilamentPayload", () => {
     expect(p.shoreHardnessD).toBe(40);
   });
 
-  it("preserves the tag's spool_uid as the new filament's instanceId", () => {
-    expect(decodedTagToFilamentPayload(tag({ spoolUid: "0a1b2c3d4e" })).instanceId).toBe("0a1b2c3d4e");
-    expect(decodedTagToFilamentPayload(tag({ spoolUid: "  trimmed  " })).instanceId).toBe("trimmed");
-  });
-
-  it("omits instanceId when the tag has no usable spool_uid", () => {
+  it("never adopts the tag's spool_uid as instanceId (stays system-assigned)", () => {
+    // Adopting an unsigned tag's spool_uid would make instanceId client-writable
+    // (a forgeable scan-match target) and could 409 against the partial-unique
+    // index — so the mapper must not emit instanceId at all.
+    expect("instanceId" in decodedTagToFilamentPayload(tag({ spoolUid: "0a1b2c3d4e" }))).toBe(false);
     expect("instanceId" in decodedTagToFilamentPayload(tag())).toBe(false);
-    expect("instanceId" in decodedTagToFilamentPayload(tag({ spoolUid: "" }))).toBe(false);
-    // Over the 128-char bound → omitted rather than stored unbounded.
-    expect("instanceId" in decodedTagToFilamentPayload(tag({ spoolUid: "x".repeat(129) }))).toBe(false);
   });
 
   it("emits null for absent required identity fields (caller must override)", () => {

@@ -55,11 +55,11 @@ export default function ScanScreen() {
         router.push('/create-from-tag');
       };
 
-      // Only an instanceId match is confident enough to open directly — it's
-      // our own tag, or one create-from-scan preserved as the filament's
-      // instanceId. A weaker heuristic match (name / vendor+type) can be a
-      // different color of a filament you already own, so never treat it as
-      // "this exact tag is in the DB": offer to open it OR create the scan.
+      // Only an instanceId match is confident enough to open directly — the
+      // tag is one Filament DB wrote for this filament (its spool_uid is the
+      // filament's instanceId). A weaker heuristic match (name / vendor+type)
+      // can be a different color of a filament you already own, so never treat
+      // it as "this exact tag is in the DB": offer to open it OR create the scan.
       if (res.match?._id && res.matchedBy === 'instanceId') {
         router.push({ pathname: '/filament/[id]', params: { id: res.match._id } });
         return;

@@ -6404,7 +6404,7 @@
           "tagData": {
             "type": "object",
             "additionalProperties": true,
-            "description": "A DecodedOpenPrintTag exactly as POST /api/nfc/decode returns it in `decoded`. The server maps it via decodedTagToFilament; the tag's spool_uid becomes the new filament's instanceId so a re-scan exact-matches."
+            "description": "A DecodedOpenPrintTag exactly as POST /api/nfc/decode returns it in `decoded`. The server maps it via decodedTagToFilament. instanceId is NOT taken from the tag — it stays system-assigned (re-scans resolve via the decode route's heuristic match)."
           },
           "overrides": {
             "type": "object",

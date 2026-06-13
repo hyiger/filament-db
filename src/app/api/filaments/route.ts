@@ -331,25 +331,16 @@ export async function POST(request: NextRequest) {
   // $-operator-key rejection: the merged body flows to Filament.create() — a
   // document under schema strict mode, which silently drops unknown
   // $-prefixed paths — not to findOneAndUpdate, so an `overrides` such as
-  // { "$set": … } can never act as an update operator.
-  //
-  // The mapper derives `instanceId` from the tag's spool_uid so a re-scan
-  // exact-matches the created filament; capture it here and re-apply it AFTER
-  // the generic `delete body.instanceId` strip below. Only the create-from-tag
-  // path does this — a normal POST's client-supplied instanceId is still
-  // dropped — and `overrides` (name/vendor/type only) can't influence it.
-  let tagInstanceId: string | null = null;
+  // { "$set": … } can never act as an update operator. instanceId is NOT taken
+  // from the tag — it stays system-assigned (the strip below removes any
+  // client value, including a forged tagData.spool_uid); see
+  // decodedTagToFilament for why.
   if (body && typeof body === "object" && body.tagData && typeof body.tagData === "object") {
     const overrides =
       body.overrides && typeof body.overrides === "object" && !Array.isArray(body.overrides)
         ? body.overrides
         : {};
-    const mapped = decodedTagToFilamentPayload(body.tagData);
-    if (typeof mapped.instanceId === "string" && mapped.instanceId.length > 0) {
-      tagInstanceId = mapped.instanceId;
-    }
-    delete mapped.instanceId;
-    body = { ...mapped, ...overrides };
+    body = { ...decodedTagToFilamentPayload(body.tagData), ...overrides };
   }
 
   delete body._id;
@@ -371,13 +362,6 @@ export async function POST(request: NextRequest) {
   // user-edited fields to silently auto-adopt on the next re-sync. Only the
   // OPT import/sync routes may write it.
   delete body.openprinttagSnapshot;
-
-  // Re-apply the tag's own id as instanceId for create-from-tag (captured from
-  // the mapper before the strip above). It's the tag's server-decoded
-  // spool_uid — not the arbitrary client instanceId the strip guards against —
-  // and is what makes a re-scan exact-match this filament instead of offering
-  // to create a duplicate.
-  if (tagInstanceId) body.instanceId = tagInstanceId;
 
   // GH #431: the PUT handler explicitly strips `body.spools` to prevent a
   // bulk rewrite of a spool's `usageHistory` ledger. The POST handler

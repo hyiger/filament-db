@@ -169,9 +169,10 @@ export async function POST(request: NextRequest) {
       type: boundedField(decoded.materialType),
     });
     // Tell the scanner HOW we matched. Only an instanceId match is a confident
-    // "this exact physical tag is in the DB" — it's our own tag's id, or one
-    // that create-from-scan preserved as the new filament's instanceId. The
-    // weaker name / vendor+type heuristics (matchFilament's fallback tiers) can
+    // "this exact physical tag is in the DB" — the tag's spool_uid equals a
+    // filament's instanceId, which is what Filament DB wrote into the tag for
+    // that filament (GET /api/filaments/{id}/openprinttag). The weaker name /
+    // vendor+type heuristics (matchFilament's fallback tiers) can
     // open an existing sibling color, so the scanner must NOT treat them as
     // exact: it offers "create new" alongside opening the heuristic match.
     // instanceId is detected by comparing the matched row's id to the queried
