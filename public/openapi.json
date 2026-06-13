@@ -154,7 +154,10 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/FilamentInput"
+                "oneOf": [
+                  { "$ref": "#/components/schemas/FilamentInput" },
+                  { "$ref": "#/components/schemas/CreateFromTagInput" }
+                ]
               }
             }
           }
@@ -6390,6 +6393,23 @@
                 }
               }
             }
+          }
+        }
+      },
+      "CreateFromTagInput": {
+        "type": "object",
+        "description": "Create-from-scan variant of POST /api/filaments (mobile Phase 2, plan §4.4). The server maps the decoded tag to a filament payload, then applies overrides (which win). Same mass-assignment strips as a normal create body; no spool subdocuments are fabricated.",
+        "required": ["tagData"],
+        "properties": {
+          "tagData": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "A DecodedOpenPrintTag exactly as POST /api/nfc/decode returns it in `decoded`. The server maps it via decodedTagToFilament; the tag's spool_uid becomes the new filament's instanceId so a re-scan exact-matches."
+          },
+          "overrides": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Filament fields that override the tag-mapped values — the scanner sends the user-confirmed name/vendor/type (required identity fields). Server-owned fields (instanceId, _purged, …) are stripped."
           }
         }
       },
