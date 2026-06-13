@@ -97,10 +97,17 @@ export function createApi(cfg: ApiConfig) {
      * `overrides` (the user's confirmed name/vendor/type) win. The phone does
      * no field mapping — design rule #1.
      */
-    createFromTag: (tagData: DecodedOpenPrintTag, overrides: Record<string, unknown>) =>
+    createFromTag: (
+      tagData: DecodedOpenPrintTag,
+      overrides: Record<string, unknown>,
+      // Grams of filament remaining for the spool to create (default = the
+      // tag's net weight). null = don't create a spool (catalog-only). The
+      // server converts this to the spool's gross weight using the tag tare.
+      spoolRemainingGrams: number | null,
+    ) =>
       request<Filament>(cfg, '/api/filaments', {
         method: 'POST',
-        body: JSON.stringify({ tagData, overrides }),
+        body: JSON.stringify({ tagData, overrides, spoolRemainingGrams }),
       }),
     /** Update a spool — location and/or remaining weight (server converts). */
     updateSpool: (filamentId: string, spoolId: string, patch: Record<string, unknown>) =>

@@ -70,10 +70,51 @@ describe("POST /api/filaments — create from decoded tag (#4.4)", () => {
     expect(created.temperatures.nozzle).toBe(250);
     expect(created.temperatures.nozzleRangeMin).toBe(240);
     expect(created.optTags).toEqual([4]);
-    // Tag roll weight + tare land on filament-level fields (no spool subdoc).
+    // Tag roll weight + tare land on filament-level fields.
     expect(created.netFilamentWeight).toBe(1000);
     expect(created.spoolWeight).toBe(215);
-    // No spool fabricated on create (plan §4.4).
+    // No spoolRemainingGrams was sent → no spool (it's opt-in; the scanner
+    // defaults it on, but the catalog/API path stays spool-free).
+    expect(created.spools ?? []).toHaveLength(0);
+  });
+
+  it("creates a spool from spoolRemainingGrams (remaining → gross via the tag tare)", async () => {
+    const res = await createFilament(
+      postReq({
+        tagData: tag({ brandName: "B", materialName: "Owned Roll", materialType: "PLA", emptySpoolWeight: 200 }),
+        spoolRemainingGrams: 800,
+      }),
+    );
+    expect(res.status).toBe(201);
+    const created = await res.json();
+    expect(created.spools).toHaveLength(1);
+    // gross = remaining (800) + tare (200) = 1000
+    expect(created.spools[0].totalWeight).toBe(1000);
+    expect(created.spoolWeight).toBe(200);
+  });
+
+  it("creates the spool even at 0 g remaining (an empty roll you still own)", async () => {
+    const res = await createFilament(
+      postReq({
+        tagData: tag({ brandName: "B", materialName: "Empty Roll", materialType: "PLA", emptySpoolWeight: 200 }),
+        spoolRemainingGrams: 0,
+      }),
+    );
+    expect(res.status).toBe(201);
+    const created = await res.json();
+    expect(created.spools).toHaveLength(1);
+    expect(created.spools[0].totalWeight).toBe(200);
+  });
+
+  it("ignores a negative spoolRemainingGrams (no spool rather than a bad one)", async () => {
+    const res = await createFilament(
+      postReq({
+        tagData: tag({ brandName: "B", materialName: "Neg", materialType: "PLA", emptySpoolWeight: 200 }),
+        spoolRemainingGrams: -5,
+      }),
+    );
+    expect(res.status).toBe(201);
+    const created = await res.json();
     expect(created.spools ?? []).toHaveLength(0);
   });
 

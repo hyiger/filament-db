@@ -340,7 +340,23 @@ export async function POST(request: NextRequest) {
       body.overrides && typeof body.overrides === "object" && !Array.isArray(body.overrides)
         ? body.overrides
         : {};
-    body = { ...decodedTagToFilamentPayload(body.tagData), ...overrides };
+    const mapped = decodedTagToFilamentPayload(body.tagData);
+    // Spool-on-create: a scanner owns the roll it just scanned, so it sends the
+    // remaining grams (defaulting to the tag's nominal net weight) and the
+    // server creates ONE spool from it. We convert remaining → the gross
+    // `totalWeight` the auto-spool logic below consumes by adding the tag tare
+    // (the mapped spoolWeight) — the phone never does this math (design rule #1).
+    // Omitting `spoolRemainingGrams` (e.g. a catalog-only or API caller) creates
+    // no spool, so the field is the opt-in the scanner defaults on.
+    const spoolRemaining =
+      typeof body.spoolRemainingGrams === "number" && body.spoolRemainingGrams >= 0
+        ? body.spoolRemainingGrams
+        : null;
+    body = { ...mapped, ...overrides };
+    if (spoolRemaining != null) {
+      const tare = typeof mapped.spoolWeight === "number" ? mapped.spoolWeight : 0;
+      body.totalWeight = spoolRemaining + tare;
+    }
   }
 
   delete body._id;
