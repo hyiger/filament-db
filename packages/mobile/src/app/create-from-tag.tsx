@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 
 import { ApiError, createApi } from '@/lib/api';
-import { takePendingScan } from '@/lib/pendingScan';
+import { clearPendingScan, peekPendingScan } from '@/lib/pendingScan';
 import { useServerConfig } from '@/lib/serverConfig';
 import { useColors } from '@/lib/theme';
 import type { DecodedOpenPrintTag } from '@/lib/types';
@@ -51,9 +51,11 @@ export default function CreateFromTagScreen() {
   const router = useRouter();
   const c = useColors();
   const { baseUrl, apiKey } = useServerConfig();
-  // Consume the handed-off scan once (lazy initializer — runs on first render,
-  // never re-runs, and isn't an effect so it doesn't trip set-state-in-effect).
-  const [tag] = useState(() => takePendingScan());
+  // Read the handed-off scan in a lazy initializer. peekPendingScan does NOT
+  // clear the ref, so a StrictMode / React-Compiler double-invoke of this
+  // initializer stays pure (a read-and-clear would hand `null` to the second
+  // call); we clear explicitly after a successful create.
+  const [tag] = useState(() => peekPendingScan());
   const [name, setName] = useState(() => deriveName(tag));
   const [vendor, setVendor] = useState(() => (tag?.brandName ?? '').trim());
   const [type, setType] = useState(() => (tag?.materialType ?? '').trim());
@@ -93,7 +95,9 @@ export default function CreateFromTagScreen() {
     try {
       const api = createApi({ baseUrl, apiKey });
       const created = await api.createFromTag(tag, { name: n, vendor: v, type: t });
-      // Replace so Back doesn't return to this one-shot confirm screen.
+      // Consume the hand-off now that the filament exists (explicit clear, not
+      // during render). Replace so Back doesn't return to this confirm screen.
+      clearPendingScan();
       router.replace({ pathname: '/filament/[id]', params: { id: created._id } });
     } catch (e) {
       Alert.alert('Create failed', e instanceof ApiError ? e.message : (e as Error).message);

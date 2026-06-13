@@ -115,6 +115,29 @@ describe("POST /api/filaments — create from decoded tag (#4.4)", () => {
     expect(created.secondaryColors).toEqual(["#ff0000", "#0000ff"]);
   });
 
+  it("preserves the tag's spool_uid as instanceId so a re-scan exact-matches", async () => {
+    const res = await createFilament(
+      postReq({
+        tagData: tag({ brandName: "B", materialName: "Rescannable", materialType: "PLA", spoolUid: "abc123def0" }),
+      }),
+    );
+    expect(res.status).toBe(201);
+    const created = await res.json();
+    expect(created.instanceId).toBe("abc123def0");
+  });
+
+  it("ignores an overrides.instanceId — the tag's spool_uid wins", async () => {
+    const res = await createFilament(
+      postReq({
+        tagData: tag({ brandName: "B", materialName: "TagWins", materialType: "PLA", spoolUid: "tagid12345" }),
+        overrides: { instanceId: "forged-by-client" },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const created = await res.json();
+    expect(created.instanceId).toBe("tagid12345");
+  });
+
   it("applies mass-assignment strips to the merged body (overrides can't inject _purged/instanceId)", async () => {
     const res = await createFilament(
       postReq({

@@ -32,6 +32,16 @@ export function decodedTagToFilamentPayload(
   const brand = decoded.brandName?.trim() || "";
   const material = decoded.materialName?.trim() || "";
   const type = decoded.materialType?.trim() || "";
+  // The tag's own id. Filament DB writes a filament's `instanceId` into the
+  // tag's spool_uid (GET /api/filaments/{id}/openprinttag), and a Bambu /
+  // community tag's UID is stable per physical spool — so preserving it as the
+  // new filament's instanceId lets a RE-scan exact-match this filament (the
+  // decode route tries instanceId first) instead of re-offering "create". The
+  // POST route strips client-supplied instanceId and re-applies this tag-
+  // derived one only on the create-from-tag path. Bounded to 128 chars, like
+  // the match route's instanceId param.
+  const spoolUid = decoded.spoolUid?.trim();
+  const instanceId = spoolUid && spoolUid.length > 0 && spoolUid.length <= 128 ? spoolUid : undefined;
 
   // Best-effort default name from the tag; the create screen lets the user edit
   // it before submit (it's the unique key, so a sensible default matters).
@@ -68,5 +78,7 @@ export function decodedTagToFilamentPayload(
     shoreHardnessD: decoded.shoreHardnessD ?? null,
     transmissionDistance: decoded.transmissionDistance ?? null,
     optTags: Array.isArray(decoded.tags) ? decoded.tags : [],
+    // Only present when the tag carries a usable spool_uid (see above).
+    ...(instanceId ? { instanceId } : {}),
   };
 }
