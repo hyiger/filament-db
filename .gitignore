@@ -49,3 +49,6 @@ next-env.d.ts
 /dist-electron/
 /standalone/
 .claude/scheduled_tasks.lock
+
+# backfill-spools rollback logs (scripts/backfill-spools.ts --apply)
+backfill-spools-*.json

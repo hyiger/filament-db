@@ -26,7 +26,8 @@
     "electron:pack": "electron-builder --config electron-builder.yml",
     "label:print": "tsx scripts/print-label.ts",
     "label:sim": "tsx scripts/print-label-sim.ts",
-    "fetch:reference": "node scripts/fetch-reference.mjs"
+    "fetch:reference": "node scripts/fetch-reference.mjs",
+    "backfill:spools": "tsx scripts/backfill-spools.ts"
   },
   "dependencies": {
     "@pokusew/pcsclite": "^0.6.0",

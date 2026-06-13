@@ -39,7 +39,7 @@ src/models/         Mongoose schemas (Filament, Nozzle, Printer, BedType, Locati
 src/types/          TypeScript type defs (electron.d.ts, filament.ts)
 electron/           Electron main process (main.ts, preload.ts, ndef.ts, bambu-tag.ts, auto-updater.ts, nfc-service.ts, sync-service.ts, local-mongo.ts, ipc-security.ts, label-printer.ts, csp-scope.ts)
 tests/              Vitest tests — unit + Mongoose model + Next.js route (mirrors src structure)
-scripts/            CLI tools (read-nfc-tag, seed import, backfill-all-fields, backfill-material-defaults, audit-filaments, merge-filaments, generate-icon)
+scripts/            CLI tools (read-nfc-tag, seed import, backfill-all-fields, backfill-material-defaults, backfill-spools, audit-filaments, merge-filaments, generate-icon)
 ```
 
 ## Key Conventions
