@@ -211,6 +211,9 @@ function NewFilamentContent() {
       const bedMax = searchParams.get("bed") ? Number(searchParams.get("bed")) : null;
       const bedMin = searchParams.get("bedMin") ? Number(searchParams.get("bedMin")) : null;
       const weight = searchParams.get("weight") ? Number(searchParams.get("weight")) : null;
+      // Nominal net (weight) vs actual remaining net + tare (Codex P2 r7 #706).
+      const actualWeight = searchParams.get("actualWeight") ? Number(searchParams.get("actualWeight")) : null;
+      const emptySpool = searchParams.get("emptySpool") ? Number(searchParams.get("emptySpool")) : null;
 
       // Syncing external URL state into form initial data. Can't be derived
       // because the form is controlled elsewhere via formKey remounts.
@@ -243,6 +246,8 @@ function NewFilamentContent() {
           bedFirstLayer: bedMin ?? bedMax,
         },
         ...(weight != null ? { netFilamentWeight: weight } : {}),
+        ...(emptySpool != null ? { spoolWeight: emptySpool } : {}),
+        ...(actualWeight != null ? { totalWeight: actualWeight + (emptySpool ?? 0) } : {}),
         ...(searchParams.get("shoreA") ? { shoreHardnessA: Number(searchParams.get("shoreA")) } : {}),
         ...(searchParams.get("shoreD") ? { shoreHardnessD: Number(searchParams.get("shoreD")) } : {}),
         ...(searchParams.get("optTags") ? { optTags: searchParams.get("optTags")!.split(",").map(Number) } : {}),
@@ -408,7 +413,16 @@ function NewFilamentContent() {
         bed: data.bedTemp ?? null,
         bedFirstLayer: data.bedTempMin ?? data.bedTemp ?? null,
       },
+      // weightGrams is the tag's NOMINAL net capacity; actualWeightGrams is the
+      // current remaining net. Carry the tare (emptySpoolWeight) and, when the
+      // tag reports actual remaining, prefill Initial Weight with the on-scale
+      // gross (actual + tare) so the auto-created spool reflects a partially
+      // used roll instead of a full one (Codex P2 r7 on #706).
       ...(data.weightGrams != null ? { netFilamentWeight: data.weightGrams } : {}),
+      ...(data.emptySpoolWeight != null ? { spoolWeight: data.emptySpoolWeight } : {}),
+      ...(data.actualWeightGrams != null
+        ? { totalWeight: data.actualWeightGrams + (data.emptySpoolWeight ?? 0) }
+        : {}),
       settings: {
         ...(data.chamberTemp != null ? { chamber_temperature: String(data.chamberTemp) } : {}),
         ...(data.countryOfOrigin ? { filament_notes: `"Origin: ${data.countryOfOrigin}"` } : {}),

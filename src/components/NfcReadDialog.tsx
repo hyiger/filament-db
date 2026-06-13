@@ -118,6 +118,10 @@ export default function NfcReadDialog() {
     if (data.bedTempMin != null) params.set("bedMin", String(data.bedTempMin));
     if (data.chamberTemp != null) params.set("chamber", String(data.chamberTemp));
     if (data.weightGrams != null) params.set("weight", String(data.weightGrams));
+    // Actual remaining net + tare so the new-filament form can seed a spool
+    // that reflects a partially used roll, not a full one (Codex P2 r7 #706).
+    if (data.actualWeightGrams != null) params.set("actualWeight", String(data.actualWeightGrams));
+    if (data.emptySpoolWeight != null) params.set("emptySpool", String(data.emptySpoolWeight));
     if (data.countryOfOrigin) params.set("country", data.countryOfOrigin);
     if (data.shoreHardnessA != null) params.set("shoreA", String(data.shoreHardnessA));
     if (data.shoreHardnessD != null) params.set("shoreD", String(data.shoreHardnessD));
