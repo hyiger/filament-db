@@ -132,50 +132,42 @@ function NewFilamentContent() {
         typeof v === "number" && Number.isFinite(v) ? v : null;
       const total = num(data.totalWeight);
       const net = num(data.netFilamentWeight);
-      let gross = total;
-      if (gross == null && net != null) {
-        const ownTare = num(data.spoolWeight);
-        const isVariant = typeof data.parentId === "string" && data.parentId !== "";
-        if (ownTare != null) {
-          // Explicit Empty Spool wins for both standalone and variant.
-          gross = net + ownTare;
-        } else if (isVariant) {
-          // No own tare on a variant: try to inherit the parent's so the gross
-          // matches the tare the variant resolves to. initialData._parent is
-          // only populated for ?parentId= creates, so for a form parent-picker
-          // / clone-toolbar variant we fetch the parent to read its tare.
-          const pre = initialData?._parent as { spoolWeight?: number } | undefined;
-          let parentTare = num(pre?.spoolWeight);
-          if (parentTare == null && pre === undefined) {
-            try {
-              const r = await fetch(
-                `/api/filaments/${encodeURIComponent(data.parentId as string)}?raw=true`,
-              );
-              if (r.ok) parentTare = num((await r.json())?.spoolWeight);
-            } catch {
-              /* parentTare stays null → pinned to 0 below */
-            }
-          }
-          if (parentTare != null) {
-            // A real tare to inherit: bake it into the gross and leave
-            // spoolWeight blank so the variant keeps tracking the parent
-            // (Codex P2 round 1 — don't clobber inheritance with a 0).
-            gross = net + parentTare;
-          } else {
-            // No tare to inherit (parent has none, or couldn't be read). Use 0
-            // AND persist it: getRemainingGrams treats a spooled filament whose
-            // spoolWeight is null as untracked, so a blank tare would hide the
-            // entered net as "unknown remaining" (Codex P2 rounds 2-3).
-            gross = net;
-            data.spoolWeight = 0;
-          }
-        } else {
-          // Standalone with no tare: 0 fallback (remaining = net), persisted so
-          // remaining = totalWeight - spoolWeight stays consistent.
-          data.spoolWeight = 0;
-          gross = net;
+      const ownTare = num(data.spoolWeight);
+      const isVariant = typeof data.parentId === "string" && data.parentId !== "";
+
+      // Effective tare = own Empty Spool, else (for a variant) the SELECTED
+      // parent's inherited tare. Always fetch by the current data.parentId —
+      // the form picker can swap the parent after a ?parentId= open, so any
+      // cached parent doc may be stale (Codex P2 rounds 2 + 4).
+      let effTare = ownTare;
+      if (effTare == null && isVariant) {
+        try {
+          const r = await fetch(
+            `/api/filaments/${encodeURIComponent(data.parentId as string)}?raw=true`,
+          );
+          if (r.ok) effTare = num((await r.json())?.spoolWeight);
+        } catch {
+          /* effTare stays null → 0 pinned below */
         }
       }
+
+      // Gross: explicit initial weight, else net + tare (0 when no tare), else
+      // unknown. The tare is baked in so remaining resolves back to net.
+      let gross: number | null;
+      if (total != null) gross = total;
+      else if (net != null) gross = net + (effTare ?? 0);
+      else gross = null;
+
+      // A weighted spool whose filament has no effective tare reads as
+      // "untracked" in getRemainingGrams (null spoolWeight → null remaining),
+      // hiding the entered weight. Pin spoolWeight=0 so remaining resolves to
+      // the gross. Skip when there's already a tare: an explicit own value
+      // stays, and a variant's real inherited tare must NOT be clobbered (it
+      // keeps tracking the parent — Codex P2 round 1).
+      if (gross != null && effTare == null && ownTare == null) {
+        data.spoolWeight = 0;
+      }
+
       data.totalWeight = null;
       data.spools = [{ label: "", totalWeight: gross }];
     }
