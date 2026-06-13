@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Hardened Runtime entitlements for the Electron app. Required because
+    notarization mandates Hardened Runtime (mac.hardenedRuntime: true). Lives in
+    assets/ because that is electron-builder's buildResources directory here
+    (the repo gitignores /build).
+
+    - allow-jit / allow-unsigned-executable-memory: V8 (Electron's JS engine)
+      JITs code and needs writable+executable memory.
+    - disable-library-validation: lets the signed app load the
+      @pokusew/pcsclite native .node, which is signed with a different (or no)
+      Team ID than the app bundle. Without this the app crashes on launch when
+      the NFC module loads.
+    - allow-dyld-environment-variables: Electron/Chromium relies on DYLD env
+      vars in some helper-process launch paths.
+  -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+  <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+  <true/>
+</dict>
+</plist>
