@@ -495,10 +495,17 @@ function FilamentDetail() {
 
     setNfcWriteSuccess(null);
     try {
-      // Compute actual remaining weight from the most recent scale reading
+      // Compute actual remaining weight. Prefer the live spool's gross — the
+      // create flow (and the backfill script) move the initial weight onto a
+      // spool and null the legacy top-level totalWeight, so reading totalWeight
+      // alone falls back to nominal for spool-based filaments. Fall back to the
+      // legacy field for pre-spool rows (Codex P1 on PR #707).
+      const activeSpool =
+        filament.spools?.find((s) => !s.retired) ?? filament.spools?.[0];
+      const grossWeight = activeSpool?.totalWeight ?? filament.totalWeight;
       let actualWeightGrams: number | null = null;
-      if (filament.totalWeight != null && filament.spoolWeight != null) {
-        actualWeightGrams = Math.max(0, filament.totalWeight - filament.spoolWeight);
+      if (grossWeight != null && filament.spoolWeight != null) {
+        actualWeightGrams = Math.max(0, grossWeight - filament.spoolWeight);
       }
       const payload = generateOpenPrintTagBinary({
         materialName: filament.name,

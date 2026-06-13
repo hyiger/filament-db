@@ -83,6 +83,8 @@ export interface FilamentSpool {
   purchaseDate?: string | null;
   openedDate?: string | null;
   createdAt: string;
+  /** Retired spools drop out of inventory counts but keep their history. */
+  retired?: boolean;
 }
 
 export interface FilamentTemperatures {

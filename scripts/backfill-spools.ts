@@ -282,7 +282,25 @@ async function main() {
   let wrote = 0;
   let skipped = 0;
 
-  for (const t of targets) {
+  const stamp = now.toISOString().replace(/[:.]/g, "-");
+  const logPath = path.resolve(process.cwd(), `backfill-spools-${stamp}.json`);
+  // Persist whatever has been logged so far. Called from `finally` so a thrown
+  // updateOne partway through still leaves a durable, precise rollback log
+  // rather than losing the already-written spool IDs (Codex P2 on #707).
+  const flushLog = () => {
+    if (logEntries.length === 0) return;
+    fs.writeFileSync(
+      logPath,
+      JSON.stringify(
+        { db: conn.name, weightMode: WEIGHT_MODE, appliedAt: now.toISOString(), added: logEntries },
+        null,
+        2,
+      ),
+    );
+  };
+
+  try {
+    for (const t of targets) {
     const spoolId = new mongoose.Types.ObjectId();
     const spool = {
       _id: spoolId,
@@ -343,18 +361,10 @@ async function main() {
     } else {
       skipped++;
     }
+    }
+  } finally {
+    flushLog();
   }
-
-  const stamp = now.toISOString().replace(/[:.]/g, "-");
-  const logPath = path.resolve(process.cwd(), `backfill-spools-${stamp}.json`);
-  fs.writeFileSync(
-    logPath,
-    JSON.stringify(
-      { db: conn.name, weightMode: WEIGHT_MODE, appliedAt: now.toISOString(), added: logEntries },
-      null,
-      2,
-    ),
-  );
 
   console.log(`APPLY — wrote ${wrote} spool(s)${skipped > 0 ? ` (${skipped} skipped — gained a spool or tare between scan and write)` : ""}.`);
   console.log(`Rollback log: ${logPath}`);
