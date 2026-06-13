@@ -62,6 +62,12 @@ files:
   - "!docs"
   - "!coverage"
 
+# Ship the AGPL license text inside the packaged app (Resources/LICENSE) so
+# distributed Electron builds convey the license that package.json declares,
+# per AGPL §1.
+extraResources:
+  - LICENSE
+
 mac:
   category: public.app-category.utilities
   # Code signing + notarization. Signing only happens when the release workflow

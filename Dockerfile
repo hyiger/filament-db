@@ -27,6 +27,9 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 # Copy static assets and pre-rendered pages
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+# Ship the AGPL license text in the image so the distributed container conveys
+# the license that package.json declares, per AGPL §1.
+COPY --from=builder --chown=nextjs:nodejs /app/LICENSE ./LICENSE
 
 USER nextjs
 
