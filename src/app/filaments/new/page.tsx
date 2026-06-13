@@ -159,19 +159,28 @@ function NewFilamentContent() {
       }
 
       // Gross: explicit initial weight, else net + tare (0 when no tare), else
-      // unknown. The tare is baked in so remaining resolves back to net.
+      // unknown. When derived from net the tare is baked in so remaining
+      // resolves back to net.
       let gross: number | null;
-      if (total != null) gross = total;
-      else if (effNet != null) gross = effNet + (effTare ?? 0);
-      else gross = null;
+      let derivedFromNet = false;
+      if (total != null) {
+        gross = total;
+      } else if (effNet != null) {
+        gross = effNet + (effTare ?? 0);
+        derivedFromNet = true;
+      } else {
+        gross = null;
+      }
 
-      // A weighted spool whose filament has no effective tare reads as
-      // "untracked" in getRemainingGrams (null spoolWeight → null remaining),
-      // hiding the entered weight. Pin spoolWeight=0 so remaining resolves to
-      // the gross. Skip when there's already a tare: an explicit own value
-      // stays, and a variant's real inherited tare must NOT be clobbered (it
-      // keeps tracking the parent — Codex P2 round 1).
-      if (gross != null && effTare == null && ownTare == null) {
+      // Pin spoolWeight=0 ONLY when the gross was DERIVED FROM NET and there's
+      // no tare: net is filament-only, so net + 0 means remaining = net (and
+      // getRemainingGrams would otherwise read a null-tare spooled filament as
+      // "untracked", hiding the weight). When the user ENTERED the gross
+      // (Initial Weight) with an unknown tare, the gross includes the spool
+      // mass — pinning 0 would overstate remaining by the tare, so leave it
+      // null and let it stay untracked until the tare is known (Codex P2 r6).
+      // effTare == null already implies ownTare == null (effTare ?? own).
+      if (derivedFromNet && effTare == null) {
         data.spoolWeight = 0;
       }
 
