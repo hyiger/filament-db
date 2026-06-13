@@ -131,23 +131,30 @@ function NewFilamentContent() {
       const num = (v: unknown): number | null =>
         typeof v === "number" && Number.isFinite(v) ? v : null;
       const total = num(data.totalWeight);
-      const net = num(data.netFilamentWeight);
+      const ownNet = num(data.netFilamentWeight);
       const ownTare = num(data.spoolWeight);
       const isVariant = typeof data.parentId === "string" && data.parentId !== "";
 
-      // Effective tare = own Empty Spool, else (for a variant) the SELECTED
-      // parent's inherited tare. Always fetch by the current data.parentId —
-      // the form picker can swap the parent after a ?parentId= open, so any
-      // cached parent doc may be stale (Codex P2 rounds 2 + 4).
+      // A variant leaves Net / Empty Spool blank to inherit them — FilamentForm
+      // keeps parent placeholders out of submitted state, so data.netFilament-
+      // Weight / spoolWeight are null even when the parent has values. Fetch the
+      // SELECTED parent (by current data.parentId — the picker can swap it after
+      // a ?parentId= open, so a cached doc may be stale; Codex P2 rounds 2/4/5)
+      // and fill in whichever of net/tare the variant left blank.
+      let effNet = ownNet;
       let effTare = ownTare;
-      if (effTare == null && isVariant) {
+      if (isVariant && (effNet == null || effTare == null)) {
         try {
           const r = await fetch(
             `/api/filaments/${encodeURIComponent(data.parentId as string)}?raw=true`,
           );
-          if (r.ok) effTare = num((await r.json())?.spoolWeight);
+          if (r.ok) {
+            const parent = await r.json();
+            if (effNet == null) effNet = num(parent?.netFilamentWeight);
+            if (effTare == null) effTare = num(parent?.spoolWeight);
+          }
         } catch {
-          /* effTare stays null → 0 pinned below */
+          /* leave effNet/effTare as-is — falls through to unknown / 0-pin */
         }
       }
 
@@ -155,7 +162,7 @@ function NewFilamentContent() {
       // unknown. The tare is baked in so remaining resolves back to net.
       let gross: number | null;
       if (total != null) gross = total;
-      else if (net != null) gross = net + (effTare ?? 0);
+      else if (effNet != null) gross = effNet + (effTare ?? 0);
       else gross = null;
 
       // A weighted spool whose filament has no effective tare reads as
