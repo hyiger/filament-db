@@ -45,8 +45,17 @@ export function decodedTagToFilamentPayload(
 
   // Best-effort default name from the tag; the create screen lets the user edit
   // it before submit (it's the unique key, so a sensible default matters).
-  const name =
-    [brand, material].filter(Boolean).join(" ") || material || brand || type || "Scanned filament";
+  // Filament DB writes a filament's FULL name (brand included) into the tag's
+  // materialName, while community tags carry the bare material — so only prefix
+  // the brand when materialName doesn't already lead with it, else a re-scanned
+  // FDB tag would yield "Prusament Prusament PLA …".
+  const combined =
+    brand && material
+      ? material.toLowerCase().startsWith(brand.toLowerCase())
+        ? material
+        : `${brand} ${material}`
+      : "";
+  const name = combined || material || brand || type || "Scanned filament";
 
   const secondaryColors = Array.isArray(decoded.secondaryColors) ? decoded.secondaryColors : [];
 
@@ -77,6 +86,12 @@ export function decodedTagToFilamentPayload(
     shoreHardnessA: decoded.shoreHardnessA ?? null,
     shoreHardnessD: decoded.shoreHardnessD ?? null,
     transmissionDistance: decoded.transmissionDistance ?? null,
+    // Nominal roll weight + empty-spool tare as filament-level defaults (NOT a
+    // spool subdoc — §4.4 never fabricates spools). spoolWeight feeds the
+    // remaining-weight math (totalWeight = remainingWeight + spoolWeight) when
+    // the user later adds a spool; netFilamentWeight is the nominal full weight.
+    netFilamentWeight: decoded.weightGrams ?? null,
+    spoolWeight: decoded.emptySpoolWeight ?? null,
     optTags: Array.isArray(decoded.tags) ? decoded.tags : [],
     // Only present when the tag carries a usable spool_uid (see above).
     ...(instanceId ? { instanceId } : {}),

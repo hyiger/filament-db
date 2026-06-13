@@ -29,7 +29,16 @@ function deriveName(tag: DecodedOpenPrintTag | null): string {
   if (!tag) return '';
   const brand = (tag.brandName ?? '').trim();
   const material = (tag.materialName ?? '').trim();
-  return [brand, material].filter(Boolean).join(' ') || material || brand || (tag.materialType ?? '').trim();
+  // Filament DB tags store the full name (brand included) in materialName, so
+  // only prefix the brand when it isn't already there (mirrors the server
+  // mapper) — else a re-scanned FDB tag yields "Prusament Prusament PLA …".
+  const combined =
+    brand && material
+      ? material.toLowerCase().startsWith(brand.toLowerCase())
+        ? material
+        : `${brand} ${material}`
+      : '';
+  return combined || material || brand || (tag.materialType ?? '').trim();
 }
 
 /** A one-line, read-only summary of what the tag will fill in (server-mapped). */

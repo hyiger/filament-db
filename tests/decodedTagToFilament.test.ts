@@ -56,6 +56,30 @@ describe("decodedTagToFilamentPayload", () => {
     expect(decodedTagToFilamentPayload(tag()).name).toBe("Scanned filament");
   });
 
+  it("does not duplicate the brand when materialName already includes it", () => {
+    // FDB-written tags store the FULL filament name in materialName.
+    expect(
+      decodedTagToFilamentPayload(tag({ brandName: "Prusament", materialName: "Prusament PLA Galaxy Black" })).name,
+    ).toBe("Prusament PLA Galaxy Black");
+    // Community tags carry the bare material → the brand is still prefixed.
+    expect(
+      decodedTagToFilamentPayload(tag({ brandName: "Prusament", materialName: "PLA Galaxy Black" })).name,
+    ).toBe("Prusament PLA Galaxy Black");
+  });
+
+  it("maps the tag's roll weight + tare to filament-level fields (no spool subdoc)", () => {
+    const p = decodedTagToFilamentPayload(tag({ weightGrams: 1000, emptySpoolWeight: 215 }));
+    expect(p.netFilamentWeight).toBe(1000);
+    expect(p.spoolWeight).toBe(215);
+    expect("spools" in p).toBe(false);
+  });
+
+  it("defaults weight fields to null when the tag omits them", () => {
+    const p = decodedTagToFilamentPayload(tag({ brandName: "B", materialName: "M", materialType: "PLA" }));
+    expect(p.netFilamentWeight).toBeNull();
+    expect(p.spoolWeight).toBeNull();
+  });
+
   it("preserves a null primary for coextruded/multi-color tags", () => {
     const p = decodedTagToFilamentPayload(
       tag({ color: undefined, secondaryColors: ["#ff0000", "#00ff00"] }),

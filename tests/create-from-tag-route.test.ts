@@ -55,6 +55,8 @@ describe("POST /api/filaments — create from decoded tag (#4.4)", () => {
           nozzleTemp: 250,
           nozzleTempMin: 240,
           bedTemp: 90,
+          weightGrams: 1000,
+          emptySpoolWeight: 215,
           tags: [4],
         }),
       }),
@@ -68,6 +70,9 @@ describe("POST /api/filaments — create from decoded tag (#4.4)", () => {
     expect(created.temperatures.nozzle).toBe(250);
     expect(created.temperatures.nozzleRangeMin).toBe(240);
     expect(created.optTags).toEqual([4]);
+    // Tag roll weight + tare land on filament-level fields (no spool subdoc).
+    expect(created.netFilamentWeight).toBe(1000);
+    expect(created.spoolWeight).toBe(215);
     // No spool fabricated on create (plan §4.4).
     expect(created.spools ?? []).toHaveLength(0);
   });
