@@ -144,8 +144,13 @@ interface SpoolPlan {
 /** Plan the spool for one filament: its gross weight, mirroring the web
  * create-time spool defaulting, plus whether a 0-tare must be pinned. */
 function planSpool(filament: Doc, parent: Doc | null): SpoolPlan {
-  // Unknown mode never derives a weight and never touches the legacy field.
-  if (WEIGHT_MODE === "unknown") return { gross: null, pinTareZero: false, clearTotalWeight: false };
+  // Unknown mode never derives a weight, but still clears a legacy top-level
+  // totalWeight (recorded in the rollback log) so the NFC/OPT export can't keep
+  // reading a stale scale weight after the row gets a weight-unknown spool
+  // (Codex P2). The spool itself stays unweighted per the flag.
+  if (WEIGHT_MODE === "unknown") {
+    return { gross: null, pinTareZero: false, clearTotalWeight: num(filament.totalWeight) != null };
+  }
   const eff = parent ? resolveFilament(filament, parent) : filament;
   const effTare = num(eff.spoolWeight);
   // totalWeight is variant-only (never inherited) — read it off the doc.
