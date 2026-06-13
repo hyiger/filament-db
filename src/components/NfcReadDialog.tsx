@@ -143,12 +143,14 @@ export default function NfcReadDialog() {
     if (data.secondaryColors && data.secondaryColors.length > 0) {
       params.set("secondaryColors", data.secondaryColors.join(","));
     }
-    // Carry the spool-specific weights (actual remaining + tare) so a variant
-    // created from a partially used tag records the real roll, not a full
-    // inherited one. Nominal net is intentionally NOT passed — the variant
-    // inherits it from the parent (Codex P2 r8 on #706).
-    if (data.actualWeightGrams != null) params.set("actualWeight", String(data.actualWeightGrams));
-    if (data.emptySpoolWeight != null) params.set("emptySpool", String(data.emptySpoolWeight));
+    // NOTE: the tag's actual remaining weight + tare are deliberately NOT
+    // carried here. A variant-from-tag goes through both the from_nfc effect
+    // AND the ?parentId= parent-loader on /filaments/new, and the latter
+    // currently replaces initialData wholesale — so any weights set here are
+    // discarded before the form renders (the same pre-existing race already
+    // drops the name/color above). Wiring spool weights through that path
+    // correctly is tracked as a separate follow-up; until then we don't pass
+    // values that would be silently lost (Codex #706 r9).
     dismissTagRead();
     router.push(`/filaments/new?${params}`);
   };
