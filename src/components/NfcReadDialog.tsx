@@ -143,6 +143,12 @@ export default function NfcReadDialog() {
     if (data.secondaryColors && data.secondaryColors.length > 0) {
       params.set("secondaryColors", data.secondaryColors.join(","));
     }
+    // Carry the spool-specific weights (actual remaining + tare) so a variant
+    // created from a partially used tag records the real roll, not a full
+    // inherited one. Nominal net is intentionally NOT passed — the variant
+    // inherits it from the parent (Codex P2 r8 on #706).
+    if (data.actualWeightGrams != null) params.set("actualWeight", String(data.actualWeightGrams));
+    if (data.emptySpoolWeight != null) params.set("emptySpool", String(data.emptySpoolWeight));
     dismissTagRead();
     router.push(`/filaments/new?${params}`);
   };

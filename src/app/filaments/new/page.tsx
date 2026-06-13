@@ -246,7 +246,14 @@ function NewFilamentContent() {
           bedFirstLayer: bedMin ?? bedMax,
         },
         ...(weight != null ? { netFilamentWeight: weight } : {}),
-        ...(emptySpool != null ? { spoolWeight: emptySpool } : {}),
+        // actualWeight is the tag's NET remaining, so pin a 0 tare when the tag
+        // carries no emptySpool — else the derived spool reads as untracked
+        // (null spoolWeight) and hides the entered remaining (Codex P2 r7/r8).
+        ...(emptySpool != null
+          ? { spoolWeight: emptySpool }
+          : actualWeight != null
+            ? { spoolWeight: 0 }
+            : {}),
         ...(actualWeight != null ? { totalWeight: actualWeight + (emptySpool ?? 0) } : {}),
         ...(searchParams.get("shoreA") ? { shoreHardnessA: Number(searchParams.get("shoreA")) } : {}),
         ...(searchParams.get("shoreD") ? { shoreHardnessD: Number(searchParams.get("shoreD")) } : {}),
@@ -419,7 +426,14 @@ function NewFilamentContent() {
       // gross (actual + tare) so the auto-created spool reflects a partially
       // used roll instead of a full one (Codex P2 r7 on #706).
       ...(data.weightGrams != null ? { netFilamentWeight: data.weightGrams } : {}),
-      ...(data.emptySpoolWeight != null ? { spoolWeight: data.emptySpoolWeight } : {}),
+      // actualWeightGrams is NET remaining, so pin a 0 tare when the tag carries
+      // no emptySpoolWeight — else the spool reads as untracked (null
+      // spoolWeight) and hides the remaining (Codex P2 r7/r8).
+      ...(data.emptySpoolWeight != null
+        ? { spoolWeight: data.emptySpoolWeight }
+        : data.actualWeightGrams != null
+          ? { spoolWeight: 0 }
+          : {}),
       ...(data.actualWeightGrams != null
         ? { totalWeight: data.actualWeightGrams + (data.emptySpoolWeight ?? 0) }
         : {}),
