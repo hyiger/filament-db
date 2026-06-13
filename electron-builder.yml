@@ -86,8 +86,16 @@ mac:
   # per matrix job, and electron-builder treats CLI arch flags as additive
   # when a target has an arch list, so both archs would be built per job.
   # Leaving arch unset means the CLI flag alone determines what gets built.
+  #
+  # `zip` is REQUIRED for auto-update: electron-updater's macOS updater
+  # (Squirrel.Mac) downloads a .zip of the app and throws "ZIP file not
+  # provided" when the release ships only a .dmg. The .dmg stays for manual
+  # download. The global artifactName embeds ${arch}, so the zips land as
+  # FilamentDB-<version>-mac-arm64.zip / -mac-x64.zip — the "arm64" in the name
+  # is what electron-updater's MacUpdater filters on to install the native arch.
   target:
     - dmg
+    - zip
 
 win:
   # Do NOT hardcode arch here (mirrors the mac config above). Each CI matrix

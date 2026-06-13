@@ -209,6 +209,28 @@ jobs:
         shell: bash
         run: rm -f dist-electron/*.blockmap
 
+      # macOS auto-update needs ONE multi-arch latest-mac.yml so electron-updater
+      # serves the native arch. Each mac job emits its own single-arch
+      # latest-mac.yml; uploading both would let the later one win and serve one
+      # arch to every Mac (the macOS analogue of the Windows #586 collision
+      # below). Stash each arch's yml as an artifact and drop it from the upload
+      # set; the `merge-mac-metadata` job combines them into the multi-arch file.
+      - name: Stash mac update metadata for the multi-arch merge
+        if: startsWith(matrix.platform, 'mac')
+        shell: bash
+        run: |
+          mkdir -p mac-update-yml
+          cp dist-electron/latest-mac.yml "mac-update-yml/latest-mac-${{ matrix.arch }}.yml"
+          rm -f dist-electron/latest-mac.yml
+
+      - name: Upload mac update metadata artifact
+        if: startsWith(matrix.platform, 'mac')
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac-update-yml-${{ matrix.arch }}
+          path: mac-update-yml/latest-mac-${{ matrix.arch }}.yml
+          retention-days: 1
+
       # GH #586: Windows update metadata is named `latest.yml` with NO arch
       # suffix (unlike latest-mac.yml / latest-linux-arm64.yml), so the x64 and
       # the arm64 Windows jobs each emit one and the later softprops upload
@@ -228,11 +250,13 @@ jobs:
       - name: Upload release artifacts
         uses: softprops/action-gh-release@v2
         with:
-          # Installers (FilamentDB-*) AND the electron-updater metadata files
-          # (latest-mac.yml, latest-mac-x64.yml, latest-linux.yml,
+          # Installers (FilamentDB-* — dmg, zip, AppImage, deb, exe) AND the
+          # electron-updater metadata files (latest-linux.yml,
           # latest-linux-arm64.yml, latest.yml). Without the yml files the
           # auto-updater cannot resolve the newest release and every update
-          # check fails with a 404.
+          # check fails with a 404. NOTE: the mac jobs deleted their
+          # latest-mac.yml above (stashed for the merge); the multi-arch
+          # latest-mac.yml is uploaded by the merge-mac-metadata job instead.
           files: |
             dist-electron/FilamentDB-*
             dist-electron/latest*.yml
@@ -240,6 +264,48 @@ jobs:
           # build steps re-run softprops/action-gh-release. Without
           # append_body, an empty `body` input replaces whatever notes were
           # set via `gh release create` minutes earlier.
+          append_body: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Combine the two macOS jobs' single-arch latest-mac.yml into ONE multi-arch
+  # file and upload it. electron-updater filters the yml's `files` by the
+  # running arch and downloads the matching .zip, so this is what makes an Apple
+  # Silicon Mac auto-update to the arm64 build and an Intel Mac to the x64 build.
+  # Runs after the whole build matrix so both arch artifacts exist.
+  merge-mac-metadata:
+    name: Merge multi-arch latest-mac.yml
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      # --ignore-scripts: only js-yaml (pure JS) is needed for the merge; skip
+      # the native-module postinstall (pcsclite) that needs PC/SC headers.
+      - run: npm ci --ignore-scripts
+      - name: Download both arches' latest-mac.yml
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mac-update-yml-*
+          path: mac-yml
+          merge-multiple: true
+      - name: Merge into a multi-arch latest-mac.yml
+        run: |
+          ls -la mac-yml
+          node scripts/merge-mac-latest-yml.mjs \
+            mac-yml/latest-mac-arm64.yml \
+            mac-yml/latest-mac-x64.yml \
+            > latest-mac.yml
+          echo "=== merged latest-mac.yml ==="
+          cat latest-mac.yml
+      - name: Upload merged latest-mac.yml to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: latest-mac.yml
           append_body: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

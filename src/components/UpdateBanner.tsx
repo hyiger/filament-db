@@ -25,13 +25,6 @@ export default function UpdateBanner() {
   // error still surfaces instead of staying hidden behind a stale dismiss.
   const [dismissedError, setDismissedError] = useState<string | null>(null);
   const isElectron = typeof window !== "undefined" && !!window.electronAPI;
-  // macOS Gatekeeper blocks unsigned auto-installs. Even the download path
-  // currently fails ("ZIP file not provided") because we don't ship mac
-  // .zip artifacts and the per-arch yml lookup picks the wrong installer
-  // on Apple Silicon (GH #154). Until those ship, route mac users straight
-  // to the GitHub release page where they can grab the right .dmg manually.
-  const isMac =
-    typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
 
   useEffect(() => {
     if (!isElectron) return;
@@ -79,21 +72,15 @@ export default function UpdateBanner() {
     body = (
       <>
         <span>{t("update.available", { version: status.version ?? "" })}</span>
-        {!isMac && (
-          <button
-            onClick={handleDownload}
-            className="px-2 py-0.5 rounded bg-white/20 hover:bg-white/30 text-xs"
-          >
-            {t("update.download")}
-          </button>
-        )}
+        <button
+          onClick={handleDownload}
+          className="px-2 py-0.5 rounded bg-white/20 hover:bg-white/30 text-xs"
+        >
+          {t("update.download")}
+        </button>
         <button
           onClick={handleOpenPage}
-          className={
-            isMac
-              ? "px-2 py-0.5 rounded bg-white/20 hover:bg-white/30 text-xs"
-              : "text-xs underline opacity-80 hover:opacity-100"
-          }
+          className="text-xs underline opacity-80 hover:opacity-100"
         >
           {t("update.viewRelease")}
         </button>

@@ -7,18 +7,22 @@ import { assertTrustedSender } from "./ipc-security";
  * running and surfaces a download-and-restart prompt when an update is ready.
  *
  * Notes on signing:
- * - On macOS, unsigned apps cannot auto-install. We still detect that an
- *   update exists and prompt the user to download the new DMG manually via
- *   the GitHub release page.
+ * - On macOS, auto-update works now that builds are Developer ID-signed +
+ *   notarized (v1.39.1+) AND the release ships per-arch `.zip` artifacts with a
+ *   merged multi-arch `latest-mac.yml`: electron-updater requires a `.zip`
+ *   (throws "ZIP file not provided" for a dmg-only release) and filters the
+ *   yml's `files` by the running arch, so it downloads the NATIVE build. The
+ *   "View release" link stays as a manual fallback (e.g. if a download fails).
  * - On Windows, unsigned NSIS installers work fine with auto-update (the
  *   user just sees an SmartScreen warning on launch).
  * - On Linux, AppImage updates work when the app was launched via
  *   AppImageLauncher or a similar integration. deb updates are NOT handled
  *   here — package managers should be used.
  *
- * The release workflow already produces `latest-mac.yml`, `latest-linux.yml`,
- * `latest-linux-arm64.yml` for each v* tag, which is what electron-updater
- * reads from the GitHub release.
+ * The release workflow produces `latest-mac.yml` (multi-arch, merged from the
+ * arm64 + x64 jobs), `latest-linux.yml`, `latest-linux-arm64.yml`, and
+ * `latest.yml` (Windows x64) for each v* tag — what electron-updater reads from
+ * the GitHub release.
  */
 
 interface UpdateInfo {
