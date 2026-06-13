@@ -164,6 +164,14 @@ export default function FilamentDetailScreen() {
   const hasColor = !!filament.color || (filament.secondaryColors?.length ?? 0) > 0;
   const swatchColor = filament.color || filament.secondaryColors?.[0] || '#808080';
 
+  // The spool PUT returns the RAW (unresolved) filament — for a variant that
+  // inherits density / temps / weights from its parent, those come back null.
+  // Keep the resolved scalar fields already in state and only swap in the
+  // updated spools, so the Details card (and the tare used for remaining-weight
+  // math) doesn't lose inherited values after a spool save / move.
+  const handleSpoolUpdated = (updated: Filament) =>
+    setFilament((prev) => (prev ? { ...prev, spools: updated.spools } : updated));
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={[styles.name, { color: c.text }]}>{filament.name}</Text>
@@ -213,7 +221,7 @@ export default function FilamentDetailScreen() {
             locations={locations}
             colors={c}
             highlighted={s._id === highlightSpoolId}
-            onUpdated={setFilament}
+            onUpdated={handleSpoolUpdated}
           />
         ))
       )}
