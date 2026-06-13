@@ -35,13 +35,23 @@ async function request<T>(cfg: ApiConfig, path: string, init?: RequestInit): Pro
   if (cfg.apiKey) headers['authorization'] = `Bearer ${cfg.apiKey}`;
 
   let res: Response;
+  // Fail fast on an unreachable/wrong host instead of hanging the UI forever —
+  // RN's fetch has no default timeout. clearTimeout in finally avoids a late
+  // abort firing on a slow-but-successful response. (GH #693 review.)
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15000);
   try {
-    res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers });
+    res = await fetch(`${cfg.baseUrl}${path}`, { ...init, headers, signal: controller.signal });
   } catch (e) {
+    const aborted = (e as Error).name === 'AbortError';
     throw new ApiError(
       0,
-      `Can't reach the server. Check the address and that this device is on the same network. (${(e as Error).message})`,
+      aborted
+        ? `The server didn't respond. Check the address and that this device is on the same network.`
+        : `Can't reach the server. Check the address and that this device is on the same network. (${(e as Error).message})`,
     );
+  } finally {
+    clearTimeout(timer);
   }
 
   const text = await res.text();

@@ -1,5 +1,5 @@
 import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,7 +17,7 @@ import { useColors, type ThemeColors } from '@/lib/theme';
 import type { Filament, Location, Spool } from '@/lib/types';
 
 export default function FilamentDetailScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, spool: spoolParam } = useLocalSearchParams<{ id: string; spool?: string }>();
   const { baseUrl, apiKey } = useServerConfig();
   const c = useColors();
   const [filament, setFilament] = useState<Filament | null>(null);
@@ -25,6 +25,10 @@ export default function FilamentDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // GH #595/#693: arrived via a spool deep-link QR (`?spool=<id>`) — briefly
+  // highlight that spool's card once the filament (with its spools) loads.
+  const [highlightSpoolId, setHighlightSpoolId] = useState<string | null>(null);
+  const deepLinkHandled = useRef(false);
 
   // Fetch on mount (and on Retry, which bumps reloadKey). All setState runs
   // inside the async IIFE *after* an await — never synchronously in the effect
@@ -61,13 +65,28 @@ export default function FilamentDetailScreen() {
     setReloadKey((k) => k + 1);
   };
 
-  if (loading) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator />
-      </View>
-    );
-  }
+  // GH #595/#693: once the filament + its spools have loaded, if the scanned URL
+  // carried `?spool=<id>` matching a real spool, flag it and clear after a beat.
+  // The ref fires it once (not on every later spool edit that re-sets `filament`).
+  // setState is deferred via setTimeout — a synchronous set here would trip
+  // react-hooks/set-state-in-effect (the rule the fetch effect above dances around).
+  useEffect(() => {
+    if (deepLinkHandled.current || !filament || !spoolParam) return;
+    deepLinkHandled.current = true;
+    if (!filament.spools?.some((s) => s._id === spoolParam)) return;
+    const set = setTimeout(() => setHighlightSpoolId(spoolParam), 0);
+    const clear = setTimeout(() => setHighlightSpoolId(null), 2600);
+    return () => {
+      clearTimeout(set);
+      clearTimeout(clear);
+    };
+  }, [filament, spoolParam]);
+
+  // Check "not connected"/error BEFORE the loading spinner: when no server is
+  // configured the fetch effect returns early without clearing `loading` (it
+  // can't setState synchronously without tripping react-hooks/set-state-in-effect),
+  // so gating on `loading` first would strand a deep-linked open on a spinner
+  // forever. (GH #693 review.)
   if (error || !baseUrl) {
     return (
       <View style={styles.centered}>
@@ -75,6 +94,13 @@ export default function FilamentDetailScreen() {
         <Pressable style={[styles.retry, { backgroundColor: c.tint }]} onPress={retry}>
           <Text style={[styles.retryText, { color: c.onTint }]}>Retry</Text>
         </Pressable>
+      </View>
+    );
+  }
+  if (loading) {
+    return (
+      <View style={styles.centered}>
+        <ActivityIndicator />
       </View>
     );
   }
@@ -109,6 +135,7 @@ export default function FilamentDetailScreen() {
             tare={tare}
             locations={locations}
             colors={c}
+            highlighted={s._id === highlightSpoolId}
             onUpdated={setFilament}
           />
         ))
@@ -124,6 +151,7 @@ function SpoolRow({
   tare,
   locations,
   colors: c,
+  highlighted = false,
   onUpdated,
 }: {
   api: Api;
@@ -132,6 +160,7 @@ function SpoolRow({
   tare: number;
   locations: Location[];
   colors: ThemeColors;
+  highlighted?: boolean;
   onUpdated: (f: Filament) => void;
 }) {
   const remaining = spool.totalWeight == null ? null : Math.max(0, Math.round(spool.totalWeight - tare));
@@ -166,7 +195,13 @@ function SpoolRow({
   }
 
   return (
-    <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+    <View
+      style={[
+        styles.card,
+        { backgroundColor: c.card, borderColor: c.border },
+        highlighted && { borderColor: c.tint, backgroundColor: c.inputBg },
+      ]}
+    >
       <Text style={[styles.cardTitle, { color: c.text }]}>{spool.label || 'Spool'}</Text>
 
       <Text style={[styles.fieldLabel, { color: c.muted }]}>Remaining filament (g)</Text>

@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -26,6 +27,8 @@ export default function SettingsScreen() {
     try {
       await save({ baseUrl: url, apiKey: key });
       router.back();
+    } catch (e) {
+      Alert.alert('Invalid server address', (e as Error).message);
     } finally {
       setSaving(false);
     }

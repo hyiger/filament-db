@@ -50,6 +50,12 @@ export function ServerConfigProvider({ children }: { children: ReactNode }) {
   const save = async (cfg: ServerConfig) => {
     // Normalize: strip trailing slashes off the base URL, treat blanks as unset.
     const url = cfg.baseUrl?.trim().replace(/\/+$/, '') || null;
+    // Only persist http(s) addresses — the base URL is concatenated into fetch()
+    // and the bearer API key rides every request, so a bad/foreign scheme would
+    // either fail obscurely or send the credential somewhere unintended. (GH #693.)
+    if (url && !/^https?:\/\/[^/]+/i.test(url)) {
+      throw new Error('Enter a full http:// or https:// address, e.g. http://192.168.1.50:3456');
+    }
     const key = cfg.apiKey?.trim() || null;
     if (url) await SecureStore.setItemAsync(BASE_URL_KEY, url);
     else await SecureStore.deleteItemAsync(BASE_URL_KEY);

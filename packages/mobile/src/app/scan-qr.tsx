@@ -41,11 +41,15 @@ export default function ScanQrScreen() {
     handled.current = true;
     setError(null);
     try {
-      // Filament DB labels encode either a deep-link URL (/filaments/{id}) or a
-      // bare instanceId. Parse the URL form first; otherwise resolve via match.
-      const id = extractFilamentId(data);
-      if (id) {
-        router.replace({ pathname: '/filament/[id]', params: { id } });
+      // Filament DB labels encode either a deep-link URL (/filaments/{id}, with an
+      // optional ?spool=<id> for spool-specific labels — GH #595) or a bare
+      // instanceId. Parse the URL form first; otherwise resolve via match.
+      const parsed = parseFilamentDeepLink(data);
+      if (parsed) {
+        router.replace({
+          pathname: '/filament/[id]',
+          params: parsed.spool ? { id: parsed.id, spool: parsed.spool } : { id: parsed.id },
+        });
         return;
       }
       const api = createApi({ baseUrl, apiKey });
@@ -76,10 +80,19 @@ export default function ScanQrScreen() {
   );
 }
 
-/** Extract a filament id from a scanned Filament DB deep-link URL. */
-function extractFilamentId(s: string): string | null {
+/**
+ * Parse a scanned Filament DB deep-link URL into its filament id and optional
+ * spool id. Mirrors buildFilamentDeepLink (src/lib/labelDeepLink.ts):
+ * `/filaments/{id}` or `/filaments/{id}?spool=<spoolId>`. Returns null for
+ * non-URL payloads (a bare instanceId), so those fall through to match resolve.
+ */
+function parseFilamentDeepLink(s: string): { id: string; spool: string | null } | null {
   const m = /\/filaments\/([^/?#]+)/.exec(s);
-  return m ? decodeURIComponent(m[1]) : null;
+  if (!m) return null;
+  const id = decodeURIComponent(m[1]);
+  const q = /[?&]spool=([^&#]+)/.exec(s);
+  const spool = q ? decodeURIComponent(q[1]) : null;
+  return { id, spool: spool && spool.trim() ? spool : null };
 }
 
 const styles = StyleSheet.create({

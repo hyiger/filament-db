@@ -28,13 +28,22 @@ const plugins: NonNullable<ExpoConfig['plugins']> = [
     { cameraPermission: 'Filament DB uses the camera to scan QR codes on spool labels.' },
   ],
   'expo-secure-store',
+  [
+    // Android 9+ blocks cleartext http by default; the app reaches a self-hosted
+    // Filament DB over http on the LAN, so allow cleartext. (usesCleartextTraffic
+    // isn't a typed Expo android.* key — it must go through this plugin. The
+    // user-entered URL is http(s)-validated and the bearer key is the auth, so
+    // this isn't a blanket "trust any http". GH #693 review.)
+    'expo-build-properties',
+    { android: { usesCleartextTraffic: true } },
+  ],
 ];
 
 if (nfcEnabled) {
   plugins.push([
     'react-native-nfc-manager',
     {
-      nfcPermissionString:
+      nfcPermission:
         'Filament DB reads NFC filament spool tags (OpenPrintTag) to look them up in your database.',
       includeNdefEntitlement: true,
     },
@@ -53,6 +62,18 @@ const config: ExpoConfig = {
     icon: './assets/expo.icon',
     bundleIdentifier: 'com.filamentdb.scanner',
     supportsTablet: true,
+    infoPlist: {
+      // The app talks to a self-hosted Filament DB over http on the local
+      // network (e.g. http://192.168.1.50:3456). App Transport Security blocks
+      // plain http in release builds, so scope an exception to local networking
+      // only — NOT NSAllowsArbitraryLoads, which would weaken ATS for the whole
+      // internet. (Matches the value Expo's prebuild template already bakes into
+      // Info.plist; pinned here so it survives template changes. GH #693 review.)
+      NSAppTransportSecurity: {
+        NSAllowsArbitraryLoads: false,
+        NSAllowsLocalNetworking: true,
+      },
+    },
   },
   android: {
     package: 'com.filamentdb.scanner',
