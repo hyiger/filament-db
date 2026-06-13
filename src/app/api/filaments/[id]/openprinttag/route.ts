@@ -26,14 +26,22 @@ export async function GET(
       resolved = resolveFilament(filament, parent);
     }
 
-    // Compute actual remaining weight. Prefer the live spool's gross — the
-    // create flow (and the backfill script) move the initial weight onto a
-    // spool and null the legacy top-level totalWeight, so reading totalWeight
-    // alone would fall back to nominal for every spool-based filament. Fall
-    // back to the legacy field for pre-spool rows (Codex P1 on PR #707).
+    // Compute actual remaining weight. Prefer the live (non-retired) spool's
+    // gross — the create flow (and the backfill script) move the initial weight
+    // onto a spool and null the legacy top-level totalWeight, so reading
+    // totalWeight alone would fall back to nominal for every spool-based
+    // filament. If spools exist but ALL are retired there's no current roll, so
+    // report no actual weight rather than a retired spool's historical weight.
+    // Only fall back to the legacy field when there are NO spools (pre-spool
+    // rows). Codex P1/P2 on PR #707.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const activeSpool = resolved.spools?.find((s: any) => !s.retired) ?? resolved.spools?.[0];
-    const grossWeight = activeSpool?.totalWeight ?? resolved.totalWeight;
+    const spools: any[] = resolved.spools ?? [];
+    const activeSpool = spools.find((s) => !s.retired);
+    const grossWeight = activeSpool
+      ? activeSpool.totalWeight
+      : spools.length === 0
+        ? resolved.totalWeight
+        : null;
     let actualWeightGrams: number | null = null;
     if (grossWeight != null && resolved.spoolWeight != null) {
       actualWeightGrams = Math.max(0, grossWeight - resolved.spoolWeight);
