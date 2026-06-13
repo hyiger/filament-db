@@ -145,7 +145,12 @@ jobs:
           # Notarize only when the Prepare step set the flag (i.e. secrets exist).
           NOTARIZE_FLAG=""
           [ "${FILAMENTDB_MAC_NOTARIZE:-}" = "true" ] && NOTARIZE_FLAG="--config.mac.notarize=true"
-          npx electron-builder --config electron-builder.yml --arm64 $NOTARIZE_FLAG
+          # --publish never: electron-builder's `publish: github` config would
+          # otherwise upload this job's SINGLE-arch latest-mac.yml on the tag
+          # build (GH_TOKEN is set), racing the multi-arch merge job and serving
+          # one arch to every Mac if that merge is ever skipped. Installers go up
+          # via softprops; the yml is owned by merge-mac-metadata. (Mirrors #586.)
+          npx electron-builder --config electron-builder.yml --arm64 $NOTARIZE_FLAG --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -190,7 +195,10 @@ jobs:
           # Notarize only when the Prepare step set the flag (i.e. secrets exist).
           NOTARIZE_FLAG=""
           [ "${FILAMENTDB_MAC_NOTARIZE:-}" = "true" ] && NOTARIZE_FLAG="--config.mac.notarize=true"
-          npx electron-builder --config electron-builder.yml --x64 $NOTARIZE_FLAG
+          # --publish never — see the macOS arm64 step: stop electron-builder
+          # publishing this job's single-arch latest-mac.yml; merge-mac-metadata
+          # owns the mac update channel.
+          npx electron-builder --config electron-builder.yml --x64 $NOTARIZE_FLAG --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
