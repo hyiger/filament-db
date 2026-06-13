@@ -63,4 +63,10 @@ export interface NfcDecodeResponse {
   decoded: DecodedOpenPrintTag;
   match: Filament | null;
   candidates: Filament[];
+  /**
+   * How `match` was resolved. Only `'instanceId'` is a confident "this exact
+   * tag is in the DB"; `'heuristic'` is a weaker name / vendor+type match that
+   * may be a sibling color, so the scanner offers "create new" alongside it.
+   */
+  matchedBy?: 'instanceId' | 'heuristic' | null;
 }

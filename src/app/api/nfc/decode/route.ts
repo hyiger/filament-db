@@ -161,13 +161,34 @@ export async function POST(request: NextRequest) {
     // For a Bambu tag (spoolUid = 32-char tray UID) or a community OpenPrintTag
     // it won't collide with a 10-char FDB instanceId, so it harmlessly falls
     // through to the name/vendor/type matching that mirrors scanMatchHandler.
+    const queriedInstanceId = boundedField(decoded.spoolUid);
     const { match, candidates } = await matchFilament({
-      instanceId: boundedField(decoded.spoolUid),
+      instanceId: queriedInstanceId,
       name: boundedField(decoded.materialName),
       vendor: boundedField(decoded.brandName),
       type: boundedField(decoded.materialType),
     });
-    return NextResponse.json({ decoded, match, candidates });
+    // Tell the scanner HOW we matched. Only an instanceId match is a confident
+    // "this exact physical tag is in the DB" — it's our own tag's id, or one
+    // that create-from-scan preserved as the new filament's instanceId. The
+    // weaker name / vendor+type heuristics (matchFilament's fallback tiers) can
+    // open an existing sibling color, so the scanner must NOT treat them as
+    // exact: it offers "create new" alongside opening the heuristic match.
+    // instanceId is detected by comparing the matched row's id to the queried
+    // spool_uid (case-insensitively, mirroring matchFilament's CI fallback);
+    // since matchFilament tries instanceId FIRST, a row returned by a later
+    // tier necessarily has a different (or no) instanceId.
+    let matchedBy: "instanceId" | "heuristic" | null = null;
+    if (match) {
+      const matchedInstanceId = (match as { instanceId?: unknown }).instanceId;
+      matchedBy =
+        queriedInstanceId &&
+        typeof matchedInstanceId === "string" &&
+        matchedInstanceId.toLowerCase() === queriedInstanceId.toLowerCase()
+          ? "instanceId"
+          : "heuristic";
+    }
+    return NextResponse.json({ decoded, match, candidates, matchedBy });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to match decoded tag");
   }

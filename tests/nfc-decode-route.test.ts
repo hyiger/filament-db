@@ -80,6 +80,9 @@ describe("POST /api/nfc/decode", () => {
     const res = await decodeTag(decodeReq({ tagType: "openprinttag", payload: b64(cbor) }));
     const body = await res.json();
     expect(body.match?.name).toBe("Prusament PLA Galaxy Black");
+    // Matched by name (the tag carries no spool_uid), so the scanner treats it
+    // as a heuristic match — not a confident "this exact tag is in the DB".
+    expect(body.matchedBy).toBe("heuristic");
     expect(body.candidates).toEqual([]);
   });
 
@@ -103,6 +106,8 @@ describe("POST /api/nfc/decode", () => {
     const body = await res.json();
     expect(body.match?.name).toBe("Renamed In DB");
     expect(body.match?.instanceId).toBe("abc1230000");
+    // The matched row's id equals the queried spool_uid → confident exact tag.
+    expect(body.matchedBy).toBe("instanceId");
     expect(body.candidates).toEqual([]);
   });
 
@@ -118,6 +123,7 @@ describe("POST /api/nfc/decode", () => {
     const res = await decodeTag(decodeReq({ tagType: "openprinttag", payload: b64(cbor) }));
     const body = await res.json();
     expect(body.match).toBeNull();
+    expect(body.matchedBy).toBeNull();
     expect(
       body.candidates.map((c: { name: string }) => c.name).sort(),
     ).toEqual(["Bambu PLA Black", "Bambu PLA White"]);
