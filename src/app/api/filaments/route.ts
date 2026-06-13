@@ -354,8 +354,12 @@ export async function POST(request: NextRequest) {
         : null;
     body = { ...mapped, ...overrides };
     if (spoolRemaining != null) {
-      const tare = typeof mapped.spoolWeight === "number" ? mapped.spoolWeight : 0;
-      body.totalWeight = spoolRemaining + tare;
+      // Use the FINAL stored tare (after overrides, which may correct it), and
+      // persist a 0 fallback when the tag carried none (e.g. a Bambu tag) so the
+      // spool's gross weight and the filament's spoolWeight agree — otherwise
+      // `remaining = totalWeight - storedTare` wouldn't equal the entered grams.
+      if (typeof body.spoolWeight !== "number") body.spoolWeight = 0;
+      body.totalWeight = spoolRemaining + body.spoolWeight;
     }
   }
 

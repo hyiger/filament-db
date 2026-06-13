@@ -118,6 +118,34 @@ describe("POST /api/filaments — create from decoded tag (#4.4)", () => {
     expect(created.spools ?? []).toHaveLength(0);
   });
 
+  it("uses the override-corrected tare for the spool's gross weight", async () => {
+    const res = await createFilament(
+      postReq({
+        tagData: tag({ brandName: "B", materialName: "OverrideTare", materialType: "PLA", emptySpoolWeight: 200 }),
+        overrides: { spoolWeight: 250 },
+        spoolRemainingGrams: 800,
+      }),
+    );
+    expect(res.status).toBe(201);
+    const created = await res.json();
+    expect(created.spoolWeight).toBe(250);
+    // gross = remaining (800) + FINAL tare (250) = 1050; remaining still 800.
+    expect(created.spools[0].totalWeight).toBe(1050);
+  });
+
+  it("persists a 0 tare when the tag carries none, keeping remaining math consistent", async () => {
+    const res = await createFilament(
+      postReq({
+        tagData: tag({ brandName: "B", materialName: "NoTare", materialType: "PLA" }),
+        spoolRemainingGrams: 800,
+      }),
+    );
+    expect(res.status).toBe(201);
+    const created = await res.json();
+    expect(created.spoolWeight).toBe(0);
+    expect(created.spools[0].totalWeight).toBe(800);
+  });
+
   it("lets user overrides win over the tag (the confirm-screen edits)", async () => {
     const res = await createFilament(
       postReq({
