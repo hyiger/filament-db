@@ -1160,7 +1160,7 @@
   "form.placeholder.initialWeight": "Spule auf Waage wiegen",
   "form.netFilamentHint": "Filamentgewicht ohne Spule (aus TDS oder Verpackung).",
   "form.emptySpoolHint": "Gewicht der leeren Spulenrolle (ohne Filament).",
-  "form.initialWeightHint": "Erstellt Ihre erste Spule. Weitere können auf der Detailseite hinzugefügt werden.",
+  "form.initialWeightHint": "Legt das aktuelle Gewicht der neuen Spule fest. Für ein neues Filament wird immer eine Spule erstellt — bei leerem Feld aus Netto + Leergewicht abgeleitet. Weitere können auf der Detailseite hinzugefügt werden.",
   "form.initialWeightHintEdit": "Spulen werden auf der Detailseite hinzugefügt oder entfernt; dieses Feld zeigt die Summe.",
   "form.minPrintSpeed": "Min. Druckgeschw. (mm/s)",
   "form.maxPrintSpeed": "Max. Druckgeschw. (mm/s)",

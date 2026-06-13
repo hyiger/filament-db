@@ -123,6 +123,71 @@ function NewFilamentContent() {
   };
 
   const handleSubmit = async (data: Record<string, unknown>) => {
+    // "+ Add Filament" registers a spool you own — you only add a filament to
+    // the DB because you have it. So always create exactly one spool on create:
+    // its gross weight is the entered initial weight, else net + tare, else
+    // unknown.
+    if (!Array.isArray(data.spools) || data.spools.length === 0) {
+      const num = (v: unknown): number | null =>
+        typeof v === "number" && Number.isFinite(v) ? v : null;
+      const total = num(data.totalWeight);
+      const ownNet = num(data.netFilamentWeight);
+      const ownTare = num(data.spoolWeight);
+      const isVariant = typeof data.parentId === "string" && data.parentId !== "";
+
+      // A variant leaves Net / Empty Spool blank to inherit them — FilamentForm
+      // keeps parent placeholders out of submitted state, so data.netFilament-
+      // Weight / spoolWeight are null even when the parent has values. Fetch the
+      // SELECTED parent (by current data.parentId — the picker can swap it after
+      // a ?parentId= open, so a cached doc may be stale; Codex P2 rounds 2/4/5)
+      // and fill in whichever of net/tare the variant left blank.
+      let effNet = ownNet;
+      let effTare = ownTare;
+      if (isVariant && (effNet == null || effTare == null)) {
+        try {
+          const r = await fetch(
+            `/api/filaments/${encodeURIComponent(data.parentId as string)}?raw=true`,
+          );
+          if (r.ok) {
+            const parent = await r.json();
+            if (effNet == null) effNet = num(parent?.netFilamentWeight);
+            if (effTare == null) effTare = num(parent?.spoolWeight);
+          }
+        } catch {
+          /* leave effNet/effTare as-is — falls through to unknown / 0-pin */
+        }
+      }
+
+      // Gross: explicit initial weight, else net + tare (0 when no tare), else
+      // unknown. When derived from net the tare is baked in so remaining
+      // resolves back to net.
+      let gross: number | null;
+      let derivedFromNet = false;
+      if (total != null) {
+        gross = total;
+      } else if (effNet != null) {
+        gross = effNet + (effTare ?? 0);
+        derivedFromNet = true;
+      } else {
+        gross = null;
+      }
+
+      // Pin spoolWeight=0 ONLY when the gross was DERIVED FROM NET and there's
+      // no tare: net is filament-only, so net + 0 means remaining = net (and
+      // getRemainingGrams would otherwise read a null-tare spooled filament as
+      // "untracked", hiding the weight). When the user ENTERED the gross
+      // (Initial Weight) with an unknown tare, the gross includes the spool
+      // mass — pinning 0 would overstate remaining by the tare, so leave it
+      // null and let it stay untracked until the tare is known (Codex P2 r6).
+      // effTare == null already implies ownTare == null (effTare ?? own).
+      if (derivedFromNet && effTare == null) {
+        data.spoolWeight = 0;
+      }
+
+      data.totalWeight = null;
+      data.spools = [{ label: "", totalWeight: gross }];
+    }
+
     const res = await fetch("/api/filaments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -146,6 +211,9 @@ function NewFilamentContent() {
       const bedMax = searchParams.get("bed") ? Number(searchParams.get("bed")) : null;
       const bedMin = searchParams.get("bedMin") ? Number(searchParams.get("bedMin")) : null;
       const weight = searchParams.get("weight") ? Number(searchParams.get("weight")) : null;
+      // Nominal net (weight) vs actual remaining net + tare (Codex P2 r7 #706).
+      const actualWeight = searchParams.get("actualWeight") ? Number(searchParams.get("actualWeight")) : null;
+      const emptySpool = searchParams.get("emptySpool") ? Number(searchParams.get("emptySpool")) : null;
 
       // Syncing external URL state into form initial data. Can't be derived
       // because the form is controlled elsewhere via formKey remounts.
@@ -178,6 +246,15 @@ function NewFilamentContent() {
           bedFirstLayer: bedMin ?? bedMax,
         },
         ...(weight != null ? { netFilamentWeight: weight } : {}),
+        // actualWeight is the tag's NET remaining, so pin a 0 tare when the tag
+        // carries no emptySpool — else the derived spool reads as untracked
+        // (null spoolWeight) and hides the entered remaining (Codex P2 r7/r8).
+        ...(emptySpool != null
+          ? { spoolWeight: emptySpool }
+          : actualWeight != null
+            ? { spoolWeight: 0 }
+            : {}),
+        ...(actualWeight != null ? { totalWeight: actualWeight + (emptySpool ?? 0) } : {}),
         ...(searchParams.get("shoreA") ? { shoreHardnessA: Number(searchParams.get("shoreA")) } : {}),
         ...(searchParams.get("shoreD") ? { shoreHardnessD: Number(searchParams.get("shoreD")) } : {}),
         ...(searchParams.get("optTags") ? { optTags: searchParams.get("optTags")!.split(",").map(Number) } : {}),
@@ -343,7 +420,23 @@ function NewFilamentContent() {
         bed: data.bedTemp ?? null,
         bedFirstLayer: data.bedTempMin ?? data.bedTemp ?? null,
       },
+      // weightGrams is the tag's NOMINAL net capacity; actualWeightGrams is the
+      // current remaining net. Carry the tare (emptySpoolWeight) and, when the
+      // tag reports actual remaining, prefill Initial Weight with the on-scale
+      // gross (actual + tare) so the auto-created spool reflects a partially
+      // used roll instead of a full one (Codex P2 r7 on #706).
       ...(data.weightGrams != null ? { netFilamentWeight: data.weightGrams } : {}),
+      // actualWeightGrams is NET remaining, so pin a 0 tare when the tag carries
+      // no emptySpoolWeight — else the spool reads as untracked (null
+      // spoolWeight) and hides the remaining (Codex P2 r7/r8).
+      ...(data.emptySpoolWeight != null
+        ? { spoolWeight: data.emptySpoolWeight }
+        : data.actualWeightGrams != null
+          ? { spoolWeight: 0 }
+          : {}),
+      ...(data.actualWeightGrams != null
+        ? { totalWeight: data.actualWeightGrams + (data.emptySpoolWeight ?? 0) }
+        : {}),
       settings: {
         ...(data.chamberTemp != null ? { chamber_temperature: String(data.chamberTemp) } : {}),
         ...(data.countryOfOrigin ? { filament_notes: `"Origin: ${data.countryOfOrigin}"` } : {}),
