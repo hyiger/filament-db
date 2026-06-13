@@ -172,6 +172,8 @@ filament-db/
 
 Copyright (C) 2026 hyiger
 
-Filament DB is free software, licensed under the **GNU Affero General Public License v3.0 or later** (`AGPL-3.0-or-later`) — see [LICENSE](LICENSE) for the full text. You may redistribute and/or modify it under those terms.
+The Filament DB **software** is free software, licensed under the **GNU Affero General Public License v3.0 or later** (`AGPL-3.0-or-later`) — see [LICENSE](LICENSE) for the full text. You may redistribute and/or modify the software under those terms.
 
 Note the AGPL's network-use clause (§13): if you run a **modified** version of Filament DB as a network-accessible service (e.g. the web app or REST API), you must make the corresponding source available to the users interacting with it over that network. Running the unmodified app imposes no obligation beyond the license terms.
+
+**Bundled documentation exception.** The *FDM Polymers — A Technical Reference* text bundled under `src/content/` (generated from the [project wiki](https://github.com/hyiger/filament-db/wiki)) is © hyiger and licensed **[CC BY-NC-ND 4.0](https://creativecommons.org/licenses/by-nc-nd/4.0/)**, included verbatim with attribution. It is **not** covered by the AGPL grant above: under CC BY-NC-ND you may share it with attribution but may **not** modify it or use it commercially. The AGPL applies to the software; this reference text keeps its own terms.
