@@ -34,9 +34,13 @@
  *   - Skips parents (filaments that have variants — their inventory lives on
  *     the variants), trashed (`_deletedAt`) and purged (`_purged`) rows, and
  *     filaments that already have at least one spool (retired or not).
+ *   - Bumps `updatedAt` on each write so the hybrid-sync engine (last-write-
+ *     wins on `updatedAt`) propagates the added spool; clears the legacy
+ *     top-level `totalWeight` once its value lives on the spool.
  *   - On `--apply` it writes a JSON log of every (filamentId, spoolId,
- *     totalWeight, pinnedTareZero) it added, so the backfill can be reversed
- *     precisely (pull the spool; for pinned rows also reset spoolWeight to null).
+ *     totalWeight, pinnedTareZero, clearedTotalWeight) it added, so the backfill
+ *     can be reversed precisely (pull the spool; for pinned rows reset
+ *     spoolWeight to null; restore any clearedTotalWeight).
  *
  * Usage:
  *   MONGODB_URI="mongodb+srv://..." npx tsx scripts/backfill-spools.ts            # dry run
@@ -127,12 +131,21 @@ interface SpoolPlan {
    * tare is never clobbered.
    */
   pinTareZero: boolean;
+  /**
+   * Whether the gross came from the legacy top-level `totalWeight` field, which
+   * must then be nulled. The web create path moves an entered initial weight
+   * into the spool and clears `totalWeight` (route.ts) — left in place, the
+   * OpenPrintTag/NFC export still reads `actualWeightGrams` off the stale
+   * top-level value after the user edits the new spool. Mirror that migration.
+   */
+  clearTotalWeight: boolean;
 }
 
 /** Plan the spool for one filament: its gross weight, mirroring the web
  * create-time spool defaulting, plus whether a 0-tare must be pinned. */
 function planSpool(filament: Doc, parent: Doc | null): SpoolPlan {
-  if (WEIGHT_MODE === "unknown") return { gross: null, pinTareZero: false };
+  // Unknown mode never derives a weight and never touches the legacy field.
+  if (WEIGHT_MODE === "unknown") return { gross: null, pinTareZero: false, clearTotalWeight: false };
   const eff = parent ? resolveFilament(filament, parent) : filament;
   const effTare = num(eff.spoolWeight);
   // totalWeight is variant-only (never inherited) — read it off the doc.
@@ -150,7 +163,7 @@ function planSpool(filament: Doc, parent: Doc | null): SpoolPlan {
       derivedFromNet = true;
     }
   }
-  return { gross, pinTareZero: derivedFromNet && effTare == null };
+  return { gross, pinTareZero: derivedFromNet && effTare == null, clearTotalWeight: total != null };
 }
 
 async function main() {
@@ -259,6 +272,7 @@ async function main() {
     spoolId: string;
     totalWeight: number | null;
     pinnedTareZero: boolean;
+    clearedTotalWeight: number | null;
   }[] = [];
   let wrote = 0;
   let skipped = 0;
@@ -281,9 +295,16 @@ async function main() {
     };
     // $set the whole array rather than $push: $push errors on an explicit
     // `spools: null` (F3), and the guard already pins us to a spool-less row so
-    // there's nothing to append to. Pin spoolWeight=0 only when planned.
-    const set: Record<string, unknown> = { spools: [spool] };
+    // there's nothing to append to. Also bump updatedAt — the raw driver
+    // bypasses Mongoose timestamps, and the hybrid-sync engine uses updatedAt
+    // for last-write-wins, so without it a peer can ignore the added spool (F5).
+    const set: Record<string, unknown> = { spools: [spool], updatedAt: now };
     if (t.plan.pinTareZero) set.spoolWeight = 0;
+    // Clear the legacy top-level totalWeight once its value lives on the spool,
+    // mirroring the web create migration — else NFC/OPT export reads the stale
+    // value after a spool edit (F6).
+    const clearedTotalWeight = t.plan.clearTotalWeight ? num(t.f.totalWeight) : null;
+    if (t.plan.clearTotalWeight) set.totalWeight = null;
 
     // Guard so the write lands only while the row is STILL spool-less (empty /
     // missing / null) — idempotent, concurrent-safe, re-runnable. When pinning
@@ -312,6 +333,7 @@ async function main() {
         spoolId: String(spoolId),
         totalWeight: t.plan.gross,
         pinnedTareZero: t.plan.pinTareZero,
+        clearedTotalWeight,
       });
     } else {
       skipped++;
@@ -332,7 +354,8 @@ async function main() {
   console.log(`APPLY — wrote ${wrote} spool(s)${skipped > 0 ? ` (${skipped} skipped — gained a spool or tare between scan and write)` : ""}.`);
   console.log(`Rollback log: ${logPath}`);
   console.log("  (To reverse: pull each spoolId from its filament's spools; for");
-  console.log("   entries with pinnedTareZero, also reset that filament's spoolWeight to null.)\n");
+  console.log("   pinnedTareZero entries reset spoolWeight to null; for entries with a");
+  console.log("   clearedTotalWeight, restore that top-level totalWeight value.)\n");
 
   await mongoose.disconnect();
 }
