@@ -64,6 +64,18 @@ files:
 
 mac:
   category: public.app-category.utilities
+  # Code signing + notarization. Signing only happens when the release workflow
+  # provides a Developer ID cert (CSC_LINK); otherwise electron-builder builds
+  # an UNSIGNED dmg as before (the workflow sets CSC_IDENTITY_AUTO_DISCOVERY=
+  # false when the signing secrets are absent). Hardened Runtime is required for
+  # notarization; the entitlements below let V8 JIT and let the signed app load
+  # the @pokusew/pcsclite native module. Notarization itself is enabled per-build
+  # via the CLI flag `--config.mac.notarize=true`, which the workflow appends
+  # ONLY when the Apple notarization secrets are present.
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: assets/entitlements.mac.plist
+  entitlementsInherit: assets/entitlements.mac.plist
   # Do NOT hardcode arch here. The release workflow passes --arm64 or --x64
   # per matrix job, and electron-builder treats CLI arch flags as additive
   # when a target has an arch list, so both archs would be built per job.

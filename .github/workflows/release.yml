@@ -100,11 +100,52 @@ jobs:
           npm run electron:fixlinks
           npm run electron:compile
 
+      # macOS code signing + notarization. Exports the signing env (via
+      # $GITHUB_ENV) consumed by the mac packaging steps below. When the secrets
+      # aren't configured, it disables auto-discovery so the build is UNSIGNED —
+      # exactly today's behavior — instead of failing. Notarization is opt-in via
+      # FILAMENTDB_MAC_NOTARIZE, set here only when the Apple key secrets exist.
+      - name: Prepare macOS code signing & notarization
+        if: startsWith(matrix.platform, 'mac')
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          if [ -z "$MAC_CSC_LINK" ] || [ -z "$APPLE_API_KEY_BASE64" ]; then
+            echo "::notice::macOS signing secrets not set — building UNSIGNED (no notarization)."
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/apple_api_key.p8"
+          {
+            echo "CSC_LINK=$MAC_CSC_LINK"
+            echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD"
+            echo "APPLE_API_KEY=$RUNNER_TEMP/apple_api_key.p8"
+            echo "APPLE_API_KEY_ID=$APPLE_API_KEY_ID"
+            echo "APPLE_API_ISSUER=$APPLE_API_ISSUER"
+            echo "FILAMENTDB_MAC_NOTARIZE=true"
+          } >> "$GITHUB_ENV"
+          echo "::notice::macOS signing + notarization enabled."
+
       - name: Rebuild native modules and package (default — host arch matches target)
-        if: matrix.platform != 'linux-arm64' && matrix.platform != 'mac-x64-cross' && matrix.platform != 'win-arm64-cross'
+        if: matrix.platform != 'linux-arm64' && matrix.platform != 'mac-x64-cross' && matrix.platform != 'win-arm64-cross' && matrix.platform != 'mac'
         run: |
           npm run electron:rebuild
           npx electron-builder --config electron-builder.yml ${{ matrix.arch != '' && format('--{0}', matrix.arch) || '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rebuild native modules, sign, notarize, and package (macOS arm64)
+        if: matrix.platform == 'mac'
+        run: |
+          npm run electron:rebuild
+          # Notarize only when the Prepare step set the flag (i.e. secrets exist).
+          NOTARIZE_FLAG=""
+          [ "${FILAMENTDB_MAC_NOTARIZE:-}" = "true" ] && NOTARIZE_FLAG="--config.mac.notarize=true"
+          npx electron-builder --config electron-builder.yml --arm64 $NOTARIZE_FLAG
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -146,7 +187,10 @@ jobs:
           # fast rather than shipping an arm64 binary inside an x64 dmg.
           file node_modules/@pokusew/pcsclite/build/Release/pcsclite.node | tee /tmp/arch-check.txt
           grep -q "x86_64" /tmp/arch-check.txt
-          npx electron-builder --config electron-builder.yml --x64
+          # Notarize only when the Prepare step set the flag (i.e. secrets exist).
+          NOTARIZE_FLAG=""
+          [ "${FILAMENTDB_MAC_NOTARIZE:-}" = "true" ] && NOTARIZE_FLAG="--config.mac.notarize=true"
+          npx electron-builder --config electron-builder.yml --x64 $NOTARIZE_FLAG
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
