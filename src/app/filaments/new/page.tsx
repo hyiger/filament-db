@@ -126,9 +126,7 @@ function NewFilamentContent() {
     // "+ Add Filament" registers a spool you own — you only add a filament to
     // the DB because you have it. So always create exactly one spool on create:
     // its gross weight is the entered initial weight, else net + tare, else
-    // unknown. When deriving from net, persist the tare used (0 fallback) so
-    // remaining = totalWeight - spoolWeight stays consistent (mirrors the
-    // create-from-tag route).
+    // unknown.
     if (!Array.isArray(data.spools) || data.spools.length === 0) {
       const num = (v: unknown): number | null =>
         typeof v === "number" && Number.isFinite(v) ? v : null;
@@ -136,9 +134,20 @@ function NewFilamentContent() {
       const net = num(data.netFilamentWeight);
       let gross = total;
       if (gross == null && net != null) {
-        const tare = num(data.spoolWeight) ?? 0;
-        data.spoolWeight = tare;
+        const ownTare = num(data.spoolWeight);
+        const isVariant = typeof data.parentId === "string" && data.parentId !== "";
+        // A variant intentionally leaves the tare blank to inherit the parent's.
+        // Use that inherited tare for the gross and DON'T persist a 0 override —
+        // doing so would stop the variant inheriting and short the spool by the
+        // parent's tare (Codex P2 on #706). A standalone with no tare falls back
+        // to 0 (so remaining = net) and persists it for consistent math.
+        const parent = initialData?._parent as { spoolWeight?: number } | undefined;
+        const inheritedTare = isVariant ? num(parent?.spoolWeight) : null;
+        const tare = ownTare ?? inheritedTare ?? 0;
         gross = net + tare;
+        if (ownTare == null && !isVariant) {
+          data.spoolWeight = 0;
+        }
       }
       data.totalWeight = null;
       data.spools = [{ label: "", totalWeight: gross }];
