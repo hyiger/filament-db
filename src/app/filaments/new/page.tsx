@@ -140,31 +140,35 @@ function NewFilamentContent() {
           // Explicit Empty Spool wins for both standalone and variant.
           gross = net + ownTare;
         } else if (isVariant) {
-          // A variant leaves the tare blank to inherit the parent's, so the
-          // gross must match that inherited tare (else remaining = net - tare).
-          // initialData._parent is only populated for ?parentId= creates; for a
-          // form parent-picker / clone-toolbar variant we fetch the parent to
-          // read its tare. Leave spoolWeight blank to keep inheriting; only pin
-          // a 0 when the parent can't be read at all (Codex P2 on #706).
+          // No own tare on a variant: try to inherit the parent's so the gross
+          // matches the tare the variant resolves to. initialData._parent is
+          // only populated for ?parentId= creates, so for a form parent-picker
+          // / clone-toolbar variant we fetch the parent to read its tare.
           const pre = initialData?._parent as { spoolWeight?: number } | undefined;
           let parentTare = num(pre?.spoolWeight);
-          let resolved = pre !== undefined;
-          if (!resolved) {
+          if (parentTare == null && pre === undefined) {
             try {
               const r = await fetch(
                 `/api/filaments/${encodeURIComponent(data.parentId as string)}?raw=true`,
               );
-              if (r.ok) {
-                const p = await r.json();
-                parentTare = num(p?.spoolWeight);
-                resolved = true;
-              }
+              if (r.ok) parentTare = num((await r.json())?.spoolWeight);
             } catch {
-              /* fall through to the pin-0 fallback below */
+              /* parentTare stays null → pinned to 0 below */
             }
           }
-          gross = net + (parentTare ?? 0);
-          if (!resolved) data.spoolWeight = 0;
+          if (parentTare != null) {
+            // A real tare to inherit: bake it into the gross and leave
+            // spoolWeight blank so the variant keeps tracking the parent
+            // (Codex P2 round 1 — don't clobber inheritance with a 0).
+            gross = net + parentTare;
+          } else {
+            // No tare to inherit (parent has none, or couldn't be read). Use 0
+            // AND persist it: getRemainingGrams treats a spooled filament whose
+            // spoolWeight is null as untracked, so a blank tare would hide the
+            // entered net as "unknown remaining" (Codex P2 rounds 2-3).
+            gross = net;
+            data.spoolWeight = 0;
+          }
         } else {
           // Standalone with no tare: 0 fallback (remaining = net), persisted so
           // remaining = totalWeight - spoolWeight stays consistent.
