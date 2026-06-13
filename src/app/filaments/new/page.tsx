@@ -123,6 +123,27 @@ function NewFilamentContent() {
   };
 
   const handleSubmit = async (data: Record<string, unknown>) => {
+    // "+ Add Filament" registers a spool you own — you only add a filament to
+    // the DB because you have it. So always create exactly one spool on create:
+    // its gross weight is the entered initial weight, else net + tare, else
+    // unknown. When deriving from net, persist the tare used (0 fallback) so
+    // remaining = totalWeight - spoolWeight stays consistent (mirrors the
+    // create-from-tag route).
+    if (!Array.isArray(data.spools) || data.spools.length === 0) {
+      const num = (v: unknown): number | null =>
+        typeof v === "number" && Number.isFinite(v) ? v : null;
+      const total = num(data.totalWeight);
+      const net = num(data.netFilamentWeight);
+      let gross = total;
+      if (gross == null && net != null) {
+        const tare = num(data.spoolWeight) ?? 0;
+        data.spoolWeight = tare;
+        gross = net + tare;
+      }
+      data.totalWeight = null;
+      data.spools = [{ label: "", totalWeight: gross }];
+    }
+
     const res = await fetch("/api/filaments", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
