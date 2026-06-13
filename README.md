@@ -170,4 +170,8 @@ filament-db/
 
 ## License
 
-MIT
+Copyright (C) 2026 hyiger
+
+Filament DB is free software, licensed under the **GNU Affero General Public License v3.0 or later** (`AGPL-3.0-or-later`) — see [LICENSE](LICENSE) for the full text. You may redistribute and/or modify it under those terms.
+
+Note the AGPL's network-use clause (§13): if you run a **modified** version of Filament DB as a network-accessible service (e.g. the web app or REST API), you must make the corresponding source available to the users interacting with it over that network. Running the unmodified app imposes no obligation beyond the license terms.
