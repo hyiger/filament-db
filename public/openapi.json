@@ -3,7 +3,7 @@
   "info": {
     "title": "Filament DB API",
     "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports.",
-    "version": "1.40.1",
+    "version": "1.41.0",
     "license": {
       "name": "AGPL-3.0-or-later",
       "url": "https://www.gnu.org/licenses/agpl-3.0.html"
@@ -155,8 +155,12 @@
             "application/json": {
               "schema": {
                 "oneOf": [
-                  { "$ref": "#/components/schemas/FilamentInput" },
-                  { "$ref": "#/components/schemas/CreateFromTagInput" }
+                  {
+                    "$ref": "#/components/schemas/FilamentInput"
+                  },
+                  {
+                    "$ref": "#/components/schemas/CreateFromTagInput"
+                  }
                 ]
               }
             }
@@ -6399,7 +6403,9 @@
       "CreateFromTagInput": {
         "type": "object",
         "description": "Create-from-scan variant of POST /api/filaments (mobile Phase 2, plan §4.4). The server maps the decoded tag to a filament payload, then applies overrides (which win). Same mass-assignment strips as a normal create body; no spool subdocuments are fabricated.",
-        "required": ["tagData"],
+        "required": [
+          "tagData"
+        ],
         "properties": {
           "tagData": {
             "type": "object",
