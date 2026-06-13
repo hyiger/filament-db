@@ -6418,7 +6418,8 @@
             "description": "Filament fields that override the tag-mapped values — the scanner sends the user-confirmed name/vendor/type (required identity fields). Server-owned fields (instanceId, _purged, …) are stripped."
           },
           "spoolRemainingGrams": {
-            "type": ["number", "null"],
+            "type": "number",
+            "nullable": true,
             "minimum": 0,
             "description": "Grams of filament remaining for the spool to create (the scanner defaults this to the tag's net weight). The server adds the tag tare to derive the spool's gross weight and creates ONE spool. Omit or null to create no spool (catalog-only)."
           }

@@ -71,11 +71,19 @@ export default function CreateFromTagScreen() {
   const [vendor, setVendor] = useState(() => (tag?.brandName ?? '').trim());
   const [type, setType] = useState(() => (tag?.materialType ?? '').trim());
   // Spool-on-create: a scanned roll is one you own, so default to adding a spool
-  // prefilled with the tag's net weight. Clearing the field catalogs the
-  // filament without a spool.
-  const [spoolRemaining, setSpoolRemaining] = useState(() =>
-    tag && typeof tag.weightGrams === 'number' ? String(tag.weightGrams) : '',
-  );
+  // prefilled with the tag's remaining weight. Prefer the ACTUAL remaining
+  // weight (OpenPrintTag key 17) over the nominal full-roll weight so a partial
+  // roll doesn't overstate inventory; clearing the field catalogs the filament
+  // without a spool.
+  const [spoolRemaining, setSpoolRemaining] = useState(() => {
+    const w =
+      typeof tag?.actualWeightGrams === 'number'
+        ? tag.actualWeightGrams
+        : typeof tag?.weightGrams === 'number'
+          ? tag.weightGrams
+          : null;
+    return w != null ? String(w) : '';
+  });
   const [saving, setSaving] = useState(false);
 
   if (!tag) {

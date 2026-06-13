@@ -18,7 +18,11 @@ export interface DecodedOpenPrintTag {
   nozzleTemp?: number;
   nozzleTempMin?: number;
   bedTemp?: number;
+  /** Nominal full-roll net weight (OpenPrintTag key 16), grams. */
   weightGrams?: number;
+  /** ACTUAL remaining filament weight (OpenPrintTag key 17), grams — what's
+   *  really left on a partial roll; defaults to weightGrams on a full roll. */
+  actualWeightGrams?: number;
   spoolUid?: string;
   tagSource?: 'openprinttag' | 'bambu';
   readOnly?: boolean;
