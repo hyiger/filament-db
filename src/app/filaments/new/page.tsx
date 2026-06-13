@@ -136,17 +136,40 @@ function NewFilamentContent() {
       if (gross == null && net != null) {
         const ownTare = num(data.spoolWeight);
         const isVariant = typeof data.parentId === "string" && data.parentId !== "";
-        // A variant intentionally leaves the tare blank to inherit the parent's.
-        // Use that inherited tare for the gross and DON'T persist a 0 override —
-        // doing so would stop the variant inheriting and short the spool by the
-        // parent's tare (Codex P2 on #706). A standalone with no tare falls back
-        // to 0 (so remaining = net) and persists it for consistent math.
-        const parent = initialData?._parent as { spoolWeight?: number } | undefined;
-        const inheritedTare = isVariant ? num(parent?.spoolWeight) : null;
-        const tare = ownTare ?? inheritedTare ?? 0;
-        gross = net + tare;
-        if (ownTare == null && !isVariant) {
+        if (ownTare != null) {
+          // Explicit Empty Spool wins for both standalone and variant.
+          gross = net + ownTare;
+        } else if (isVariant) {
+          // A variant leaves the tare blank to inherit the parent's, so the
+          // gross must match that inherited tare (else remaining = net - tare).
+          // initialData._parent is only populated for ?parentId= creates; for a
+          // form parent-picker / clone-toolbar variant we fetch the parent to
+          // read its tare. Leave spoolWeight blank to keep inheriting; only pin
+          // a 0 when the parent can't be read at all (Codex P2 on #706).
+          const pre = initialData?._parent as { spoolWeight?: number } | undefined;
+          let parentTare = num(pre?.spoolWeight);
+          let resolved = pre !== undefined;
+          if (!resolved) {
+            try {
+              const r = await fetch(
+                `/api/filaments/${encodeURIComponent(data.parentId as string)}?raw=true`,
+              );
+              if (r.ok) {
+                const p = await r.json();
+                parentTare = num(p?.spoolWeight);
+                resolved = true;
+              }
+            } catch {
+              /* fall through to the pin-0 fallback below */
+            }
+          }
+          gross = net + (parentTare ?? 0);
+          if (!resolved) data.spoolWeight = 0;
+        } else {
+          // Standalone with no tare: 0 fallback (remaining = net), persisted so
+          // remaining = totalWeight - spoolWeight stays consistent.
           data.spoolWeight = 0;
+          gross = net;
         }
       }
       data.totalWeight = null;
