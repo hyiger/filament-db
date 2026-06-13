@@ -34,16 +34,41 @@ export interface Spool {
   retired?: boolean;
 }
 
+/** Resolved temperatures (the detail endpoint runs resolveFilament). All nullable. */
+export interface FilamentTemperatures {
+  nozzle?: number | null;
+  nozzleFirstLayer?: number | null;
+  nozzleRangeMin?: number | null;
+  nozzleRangeMax?: number | null;
+  bed?: number | null;
+  bedFirstLayer?: number | null;
+  standby?: number | null;
+}
+
 export interface Filament {
   _id: string;
   name: string;
   vendor?: string;
   type?: string;
   color?: string | null;
+  colorName?: string | null;
   secondaryColors?: string[];
   instanceId?: string;
   /** Empty-spool tare, grams. Used to derive remaining filament. */
   spoolWeight?: number | null;
+  /** Nominal net filament weight, grams. */
+  netFilamentWeight?: number | null;
+  density?: number | null;
+  diameter?: number | null;
+  temperatures?: FilamentTemperatures;
+  dryingTemperature?: number | null;
+  /** Drying time in minutes. */
+  dryingTime?: number | null;
+  shoreHardnessA?: number | null;
+  shoreHardnessD?: number | null;
+  transmissionDistance?: number | null;
+  glassTempTransition?: number | null;
+  heatDeflectionTemp?: number | null;
   spools?: Spool[];
   [k: string]: unknown;
 }

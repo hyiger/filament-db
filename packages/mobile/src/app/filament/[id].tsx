@@ -16,6 +16,49 @@ import { useServerConfig } from '@/lib/serverConfig';
 import { useColors, type ThemeColors } from '@/lib/theme';
 import type { Filament, Location, Spool } from '@/lib/types';
 
+/** Human-readable rows of the filament's present properties for the detail card. */
+function buildDetailRows(f: Filament): { label: string; value: string }[] {
+  const rows: { label: string; value: string }[] = [];
+  const push = (label: string, value: string | null) => {
+    if (value != null && value !== '') rows.push({ label, value });
+  };
+  const num = (v: unknown): number | null => (typeof v === 'number' ? v : null);
+
+  const diameter = num(f.diameter);
+  if (diameter != null) push('Diameter', `${diameter} mm`);
+  const density = num(f.density);
+  if (density != null) push('Density', `${density} g/cm³`);
+
+  const t = f.temperatures ?? {};
+  const nozzle = num(t.nozzle);
+  if (nozzle != null) {
+    const lo = num(t.nozzleRangeMin);
+    const hi = num(t.nozzleRangeMax);
+    const range = lo != null && hi != null && lo !== hi ? ` (${lo}–${hi})` : '';
+    push('Nozzle', `${nozzle}°C${range}`);
+  }
+  const bed = num(t.bed);
+  if (bed != null) push('Bed', `${bed}°C`);
+
+  const dryT = num(f.dryingTemperature);
+  if (dryT != null) {
+    const mins = num(f.dryingTime);
+    const hrs = mins != null ? ` for ${Math.round((mins / 60) * 10) / 10} h` : '';
+    push('Drying', `${dryT}°C${hrs}`);
+  }
+  const shoreD = num(f.shoreHardnessD);
+  const shoreA = num(f.shoreHardnessA);
+  if (shoreD != null) push('Hardness', `${shoreD} Shore D`);
+  else if (shoreA != null) push('Hardness', `${shoreA} Shore A`);
+  const glass = num(f.glassTempTransition);
+  if (glass != null) push('Glass transition', `${glass}°C`);
+  const net = num(f.netFilamentWeight);
+  if (net != null) push('Net weight', `${net} g`);
+  const tare = num(f.spoolWeight);
+  if (tare != null) push('Spool tare', `${tare} g`);
+  return rows;
+}
+
 export default function FilamentDetailScreen() {
   const { id, spool: spoolParam } = useLocalSearchParams<{ id: string; spool?: string }>();
   const { baseUrl, apiKey } = useServerConfig();
@@ -114,7 +157,12 @@ export default function FilamentDetailScreen() {
 
   const api = createApi({ baseUrl, apiKey });
   const tare = filament.spoolWeight ?? 0;
-  const activeSpools = (filament.spools ?? []).filter((s) => !s.retired);
+  const allSpools = filament.spools ?? [];
+  const activeSpools = allSpools.filter((s) => !s.retired);
+  const retiredCount = allSpools.length - activeSpools.length;
+  const detailRows = buildDetailRows(filament);
+  const hasColor = !!filament.color || (filament.secondaryColors?.length ?? 0) > 0;
+  const swatchColor = filament.color || filament.secondaryColors?.[0] || '#808080';
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -123,8 +171,37 @@ export default function FilamentDetailScreen() {
         {[filament.vendor, filament.type].filter(Boolean).join(' · ')}
       </Text>
 
+      {(hasColor || detailRows.length > 0) && (
+        <View style={[styles.detailCard, { backgroundColor: c.card, borderColor: c.border }]}>
+          {hasColor && (
+            <View style={styles.detailRow}>
+              <Text style={[styles.detailLabel, { color: c.muted }]}>Color</Text>
+              <View style={styles.colorVal}>
+                <View
+                  style={[styles.detailSwatch, { backgroundColor: swatchColor, borderColor: c.border }]}
+                />
+                <Text style={[styles.detailValue, { color: c.text }]}>
+                  {filament.colorName || filament.color || filament.secondaryColors?.[0] || '—'}
+                </Text>
+              </View>
+            </View>
+          )}
+          {detailRows.map((row) => (
+            <View key={row.label} style={styles.detailRow}>
+              <Text style={[styles.detailLabel, { color: c.muted }]}>{row.label}</Text>
+              <Text style={[styles.detailValue, { color: c.text }]}>{row.value}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      <Text style={[styles.sectionHeading, { color: c.text }]}>Spools</Text>
       {activeSpools.length === 0 ? (
-        <Text style={[styles.muted, { color: c.muted }]}>No active spools on this filament.</Text>
+        <Text style={[styles.muted, { color: c.muted }]}>
+          {retiredCount > 0
+            ? `No active spools (${retiredCount} retired).`
+            : 'No spools tracked yet on this filament.'}
+        </Text>
       ) : (
         activeSpools.map((s) => (
           <SpoolRow
@@ -268,6 +345,13 @@ const styles = StyleSheet.create({
   name: { fontSize: 22, fontWeight: '600' },
   sub: { fontSize: 15, marginBottom: 8 },
   muted: { fontSize: 15, marginTop: 12 },
+  detailCard: { borderWidth: 1, borderRadius: 12, padding: 14, marginTop: 4, gap: 10 },
+  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  detailLabel: { fontSize: 14 },
+  detailValue: { fontSize: 14, fontWeight: '600', flexShrink: 1, textAlign: 'right' },
+  colorVal: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1 },
+  detailSwatch: { width: 18, height: 18, borderRadius: 9, borderWidth: 1 },
+  sectionHeading: { fontSize: 17, fontWeight: '600', marginTop: 20 },
   error: { fontSize: 15, textAlign: 'center' },
   retry: { paddingVertical: 10, paddingHorizontal: 18, borderRadius: 10 },
   retryText: { fontWeight: '600' },
