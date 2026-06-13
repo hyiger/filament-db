@@ -7,10 +7,12 @@ import { ApiError, createApi } from '@/lib/api';
 import { NFC_ENABLED } from '@/lib/features';
 import { readOpenPrintTag } from '@/lib/nfc';
 import { useServerConfig } from '@/lib/serverConfig';
+import { useColors } from '@/lib/theme';
 
 export default function ScanScreen() {
   const { baseUrl, apiKey, loading } = useServerConfig();
   const router = useRouter();
+  const c = useColors();
   const [busy, setBusy] = useState(false);
 
   if (loading) {
@@ -24,13 +26,13 @@ export default function ScanScreen() {
   if (!baseUrl) {
     return (
       <Centered>
-        <Text style={styles.title}>Not connected</Text>
-        <Text style={styles.muted}>
+        <Text style={[styles.title, { color: c.text }]}>Not connected</Text>
+        <Text style={[styles.muted, { color: c.muted }]}>
           Set your Filament DB server address to start scanning spools.
         </Text>
         <Link href="/settings" asChild>
-          <Pressable style={styles.button}>
-            <Text style={styles.buttonText}>Open server settings</Text>
+          <Pressable style={StyleSheet.flatten([styles.button, { backgroundColor: c.tint }])}>
+            <Text style={[styles.buttonText, { color: c.onTint }]}>Open server settings</Text>
           </Pressable>
         </Link>
       </Centered>
@@ -67,25 +69,27 @@ export default function ScanScreen() {
     <SafeAreaView style={styles.container} edges={['bottom']}>
       <View style={styles.actions}>
         <Pressable
-          style={[styles.bigButton, busy && styles.disabled]}
+          style={[styles.bigButton, { backgroundColor: c.tint }, busy && styles.disabled]}
           onPress={() => router.push('/scan-qr')}
           disabled={busy}
         >
-          <Text style={styles.bigButtonText}>Scan QR code</Text>
+          <Text style={[styles.bigButtonText, { color: c.onTint }]}>Scan QR code</Text>
           <Text style={styles.bigButtonHint}>Filament DB label</Text>
         </Pressable>
         {NFC_ENABLED && (
           <Pressable
-            style={[styles.bigButton, busy && styles.disabled]}
+            style={[styles.bigButton, { backgroundColor: c.tint }, busy && styles.disabled]}
             onPress={scanNfc}
             disabled={busy}
           >
-            <Text style={styles.bigButtonText}>{busy ? 'Scanning…' : 'Scan NFC tag'}</Text>
+            <Text style={[styles.bigButtonText, { color: c.onTint }]}>
+              {busy ? 'Scanning…' : 'Scan NFC tag'}
+            </Text>
             <Text style={styles.bigButtonHint}>OpenPrintTag</Text>
           </Pressable>
         )}
       </View>
-      <Link href="/settings" style={styles.footerLink}>
+      <Link href="/settings" style={[styles.footerLink, { color: c.tint }]}>
         Server: {baseUrl}
       </Link>
     </SafeAreaView>
@@ -101,18 +105,17 @@ const styles = StyleSheet.create({
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 12 },
   actions: { flex: 1, justifyContent: 'center', gap: 16 },
   title: { fontSize: 22, fontWeight: '600' },
-  muted: { fontSize: 15, opacity: 0.7, textAlign: 'center' },
-  button: { backgroundColor: '#208AEF', paddingVertical: 12, paddingHorizontal: 20, borderRadius: 10 },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  muted: { fontSize: 15, textAlign: 'center' },
+  button: { paddingVertical: 12, paddingHorizontal: 20, borderRadius: 10 },
+  buttonText: { fontSize: 16, fontWeight: '600' },
   bigButton: {
-    backgroundColor: '#208AEF',
     paddingVertical: 28,
     borderRadius: 16,
     alignItems: 'center',
     gap: 4,
   },
-  bigButtonText: { color: '#fff', fontSize: 20, fontWeight: '600' },
+  bigButtonText: { fontSize: 20, fontWeight: '600' },
   bigButtonHint: { color: '#dceaff', fontSize: 13 },
   disabled: { opacity: 0.5 },
-  footerLink: { textAlign: 'center', color: '#208AEF', paddingVertical: 8 },
+  footerLink: { textAlign: 'center', paddingVertical: 8 },
 });

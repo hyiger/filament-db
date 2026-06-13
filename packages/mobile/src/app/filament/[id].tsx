@@ -13,11 +13,13 @@ import {
 
 import { ApiError, createApi, type Api } from '@/lib/api';
 import { useServerConfig } from '@/lib/serverConfig';
+import { useColors, type ThemeColors } from '@/lib/theme';
 import type { Filament, Location, Spool } from '@/lib/types';
 
 export default function FilamentDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { baseUrl, apiKey } = useServerConfig();
+  const c = useColors();
   const [filament, setFilament] = useState<Filament | null>(null);
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
@@ -69,9 +71,9 @@ export default function FilamentDetailScreen() {
   if (error || !baseUrl) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.error}>{error ?? 'Not connected.'}</Text>
-        <Pressable style={styles.retry} onPress={retry}>
-          <Text style={styles.retryText}>Retry</Text>
+        <Text style={[styles.error, { color: c.danger }]}>{error ?? 'Not connected.'}</Text>
+        <Pressable style={[styles.retry, { backgroundColor: c.tint }]} onPress={retry}>
+          <Text style={[styles.retryText, { color: c.onTint }]}>Retry</Text>
         </Pressable>
       </View>
     );
@@ -79,7 +81,7 @@ export default function FilamentDetailScreen() {
   if (!filament) {
     return (
       <View style={styles.centered}>
-        <Text>Filament not found.</Text>
+        <Text style={{ color: c.text }}>Filament not found.</Text>
       </View>
     );
   }
@@ -90,11 +92,13 @@ export default function FilamentDetailScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.name}>{filament.name}</Text>
-      <Text style={styles.sub}>{[filament.vendor, filament.type].filter(Boolean).join(' · ')}</Text>
+      <Text style={[styles.name, { color: c.text }]}>{filament.name}</Text>
+      <Text style={[styles.sub, { color: c.muted }]}>
+        {[filament.vendor, filament.type].filter(Boolean).join(' · ')}
+      </Text>
 
       {activeSpools.length === 0 ? (
-        <Text style={styles.muted}>No active spools on this filament.</Text>
+        <Text style={[styles.muted, { color: c.muted }]}>No active spools on this filament.</Text>
       ) : (
         activeSpools.map((s) => (
           <SpoolRow
@@ -104,6 +108,7 @@ export default function FilamentDetailScreen() {
             spool={s}
             tare={tare}
             locations={locations}
+            colors={c}
             onUpdated={setFilament}
           />
         ))
@@ -118,6 +123,7 @@ function SpoolRow({
   spool,
   tare,
   locations,
+  colors: c,
   onUpdated,
 }: {
   api: Api;
@@ -125,6 +131,7 @@ function SpoolRow({
   spool: Spool;
   tare: number;
   locations: Location[];
+  colors: ThemeColors;
   onUpdated: (f: Filament) => void;
 }) {
   const remaining = spool.totalWeight == null ? null : Math.max(0, Math.round(spool.totalWeight - tare));
@@ -159,49 +166,61 @@ function SpoolRow({
   }
 
   return (
-    <View style={styles.card}>
-      <Text style={styles.cardTitle}>{spool.label || 'Spool'}</Text>
+    <View style={[styles.card, { backgroundColor: c.card, borderColor: c.border }]}>
+      <Text style={[styles.cardTitle, { color: c.text }]}>{spool.label || 'Spool'}</Text>
 
-      <Text style={styles.fieldLabel}>Remaining filament (g)</Text>
+      <Text style={[styles.fieldLabel, { color: c.muted }]}>Remaining filament (g)</Text>
       <View style={styles.row}>
         <TextInput
-          style={styles.weightInput}
+          style={[styles.weightInput, { color: c.text, borderColor: c.border, backgroundColor: c.inputBg }]}
           value={grams}
           onChangeText={setGrams}
           keyboardType="numeric"
           inputMode="numeric"
           placeholder="grams left"
+          placeholderTextColor={c.muted}
         />
         <Pressable
-          style={[styles.smallButton, saving === 'weight' && styles.disabled]}
+          style={[styles.smallButton, { backgroundColor: c.tint }, saving === 'weight' && styles.disabled]}
           onPress={saveWeight}
           disabled={saving === 'weight'}
         >
-          <Text style={styles.smallButtonText}>{saving === 'weight' ? '…' : 'Save'}</Text>
+          <Text style={[styles.smallButtonText, { color: c.onTint }]}>
+            {saving === 'weight' ? '…' : 'Save'}
+          </Text>
         </Pressable>
       </View>
 
-      <Text style={styles.fieldLabel}>Location</Text>
+      <Text style={[styles.fieldLabel, { color: c.muted }]}>Location</Text>
       <View style={styles.chips}>
         {locations.map((loc) => {
           const active = spool.locationId === loc._id;
           return (
             <Pressable
               key={loc._id}
-              style={[styles.chip, active && styles.chipActive]}
+              style={[
+                styles.chip,
+                { borderColor: active ? c.tint : c.border, backgroundColor: active ? c.tint : 'transparent' },
+              ]}
               onPress={() => move(loc._id)}
               disabled={saving === loc._id}
             >
-              <Text style={[styles.chipText, active && styles.chipTextActive]}>{loc.name}</Text>
+              <Text style={[styles.chipText, { color: active ? c.onTint : c.text }]}>{loc.name}</Text>
             </Pressable>
           );
         })}
         <Pressable
-          style={[styles.chip, !spool.locationId && styles.chipActive]}
+          style={[
+            styles.chip,
+            {
+              borderColor: !spool.locationId ? c.tint : c.border,
+              backgroundColor: !spool.locationId ? c.tint : 'transparent',
+            },
+          ]}
           onPress={() => move(null)}
           disabled={saving === 'none'}
         >
-          <Text style={[styles.chipText, !spool.locationId && styles.chipTextActive]}>None</Text>
+          <Text style={[styles.chipText, { color: !spool.locationId ? c.onTint : c.text }]}>None</Text>
         </Pressable>
       </View>
     </View>
@@ -212,48 +231,42 @@ const styles = StyleSheet.create({
   container: { padding: 20, gap: 8 },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 14 },
   name: { fontSize: 22, fontWeight: '600' },
-  sub: { fontSize: 15, opacity: 0.7, marginBottom: 8 },
-  muted: { fontSize: 15, opacity: 0.6, marginTop: 12 },
-  error: { fontSize: 15, color: '#c0392b', textAlign: 'center' },
-  retry: { backgroundColor: '#208AEF', paddingVertical: 10, paddingHorizontal: 18, borderRadius: 10 },
-  retryText: { color: '#fff', fontWeight: '600' },
+  sub: { fontSize: 15, marginBottom: 8 },
+  muted: { fontSize: 15, marginTop: 12 },
+  error: { fontSize: 15, textAlign: 'center' },
+  retry: { paddingVertical: 10, paddingHorizontal: 18, borderRadius: 10 },
+  retryText: { fontWeight: '600' },
   card: {
     borderWidth: 1,
-    borderColor: '#8883',
     borderRadius: 12,
     padding: 14,
     marginTop: 12,
     gap: 8,
   },
   cardTitle: { fontSize: 16, fontWeight: '600' },
-  fieldLabel: { fontSize: 13, opacity: 0.6, marginTop: 4 },
+  fieldLabel: { fontSize: 13, marginTop: 4 },
   row: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   weightInput: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#8884',
     borderRadius: 8,
     paddingVertical: 10,
     paddingHorizontal: 12,
     fontSize: 16,
   },
   smallButton: {
-    backgroundColor: '#208AEF',
     paddingVertical: 10,
     paddingHorizontal: 18,
     borderRadius: 8,
   },
-  smallButtonText: { color: '#fff', fontWeight: '600' },
+  smallButtonText: { fontWeight: '600' },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
     borderWidth: 1,
-    borderColor: '#8886',
     borderRadius: 16,
     paddingVertical: 6,
     paddingHorizontal: 12,
   },
-  chipActive: { backgroundColor: '#208AEF', borderColor: '#208AEF' },
   chipText: { fontSize: 14 },
-  chipTextActive: { color: '#fff', fontWeight: '600' },
   disabled: { opacity: 0.5 },
 });

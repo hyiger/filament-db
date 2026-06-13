@@ -5,18 +5,20 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, createApi } from '@/lib/api';
 import { useServerConfig } from '@/lib/serverConfig';
+import { useColors } from '@/lib/theme';
 
 export default function ScanQrScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const { baseUrl, apiKey } = useServerConfig();
   const router = useRouter();
+  const c = useColors();
   const handled = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   if (!permission) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.text}>Checking camera permission…</Text>
+        <Text style={[styles.text, { color: c.text }]}>Checking camera permission…</Text>
       </View>
     );
   }
@@ -24,9 +26,11 @@ export default function ScanQrScreen() {
   if (!permission.granted) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.text}>Camera access is needed to scan QR codes.</Text>
-        <Pressable style={styles.button} onPress={requestPermission}>
-          <Text style={styles.buttonText}>Grant permission</Text>
+        <Text style={[styles.text, { color: c.text }]}>
+          Camera access is needed to scan QR codes.
+        </Text>
+        <Pressable style={[styles.button, { backgroundColor: c.tint }]} onPress={requestPermission}>
+          <Text style={[styles.buttonText, { color: c.onTint }]}>Grant permission</Text>
         </Pressable>
       </View>
     );
