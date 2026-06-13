@@ -329,23 +329,24 @@ async function main() {
     const clearedTotalWeight = t.plan.clearTotalWeight ? num(t.f.totalWeight) : null;
     if (t.plan.clearTotalWeight) set.totalWeight = null;
 
-    // Guard so the write lands only while the row is STILL spool-less (empty /
-    // missing / null) — idempotent, concurrent-safe, re-runnable. When pinning
-    // the tare, ALSO require spoolWeight to be unset, so a tare set by a
-    // concurrent edit / sync between scan and write isn't clobbered with 0 (F1);
-    // that row is counted as skipped and a re-run picks it up with the real tare.
-    const spoolsEmpty = {
-      $or: [{ spools: { $size: 0 } }, { spools: { $exists: false } }, { spools: null }],
-    };
-    const filter = t.plan.pinTareZero
-      ? {
-          _id: t.f._id,
-          $and: [
-            spoolsEmpty,
-            { $or: [{ spoolWeight: null }, { spoolWeight: { $exists: false } }] },
-          ],
-        }
-      : { _id: t.f._id, ...spoolsEmpty };
+    // Guard so the write lands only while the row still matches what we scanned
+    // — idempotent, concurrent-safe, re-runnable. Always require spools still
+    // empty (missing / [] / null). When pinning the tare, also require
+    // spoolWeight unset, so a tare set by a concurrent edit / sync isn't
+    // clobbered with 0 (F1). When clearing the legacy totalWeight, also require
+    // it unchanged, so a newer scale reading written between scan and write
+    // isn't dropped (Codex P2). A non-match counts as skipped; a re-run picks
+    // up the new value.
+    const guards: Record<string, unknown>[] = [
+      { $or: [{ spools: { $size: 0 } }, { spools: { $exists: false } }, { spools: null }] },
+    ];
+    if (t.plan.pinTareZero) {
+      guards.push({ $or: [{ spoolWeight: null }, { spoolWeight: { $exists: false } }] });
+    }
+    if (t.plan.clearTotalWeight) {
+      guards.push({ totalWeight: clearedTotalWeight });
+    }
+    const filter = { _id: t.f._id, $and: guards };
 
     const res = await col.updateOne(filter, { $set: set });
     if (res.modifiedCount === 1) {
