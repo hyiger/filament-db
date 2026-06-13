@@ -118,15 +118,19 @@ interface SpoolPlan {
    * Whether to also pin the filament's spoolWeight to 0. A weighted spool on a
    * filament with no effective tare reads as "untracked" in getRemainingGrams
    * (null spoolWeight → null), hiding the gross as unknown remaining. Pinning 0
-   * makes remaining resolve to the gross — mirrors the web create path. Set
-   * only when there's NO effective tare (own or inherited), so a variant that
-   * inherits a real parent tare is never clobbered.
+   * makes remaining resolve to the gross — but ONLY safe when the gross was
+   * derived from net (filament-only, so remaining = net). An explicit
+   * totalWeight is an on-scale gross that INCLUDES the unknown spool mass, so
+   * pinning 0 there would overstate remaining by the tare — leave such a spool
+   * untracked until the tare is known. Never set when there's already an
+   * effective tare (own or inherited), so a variant inheriting a real parent
+   * tare is never clobbered.
    */
   pinTareZero: boolean;
 }
 
-/** Plan the spool for one filament: its gross weight, mirroring the create-time
- * logic in POST /api/filaments, plus whether a 0-tare must be pinned. */
+/** Plan the spool for one filament: its gross weight, mirroring the web
+ * create-time spool defaulting, plus whether a 0-tare must be pinned. */
 function planSpool(filament: Doc, parent: Doc | null): SpoolPlan {
   if (WEIGHT_MODE === "unknown") return { gross: null, pinTareZero: false };
   const eff = parent ? resolveFilament(filament, parent) : filament;
@@ -134,13 +138,19 @@ function planSpool(filament: Doc, parent: Doc | null): SpoolPlan {
   // totalWeight is variant-only (never inherited) — read it off the doc.
   const total = num(filament.totalWeight);
   let gross: number | null;
+  let derivedFromNet = false;
   if (total != null) {
     gross = total;
   } else {
     const net = num(eff.netFilamentWeight);
-    gross = net == null ? null : net + (effTare ?? 0);
+    if (net == null) {
+      gross = null;
+    } else {
+      gross = net + (effTare ?? 0);
+      derivedFromNet = true;
+    }
   }
-  return { gross, pinTareZero: gross != null && effTare == null };
+  return { gross, pinTareZero: derivedFromNet && effTare == null };
 }
 
 async function main() {
