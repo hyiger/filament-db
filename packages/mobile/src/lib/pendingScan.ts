@@ -1,28 +1,36 @@
-import type { DecodedOpenPrintTag } from './types';
+import type { DecodedOpenPrintTag, Filament } from './types';
 
 /**
- * A one-shot hand-off for the decoded tag between the scan screen and the
- * create-from-tag confirm screen. expo-router params are strings, and the
- * decoded tag is a nested object the create screen must POST back verbatim as
- * `tagData`, so we stash it in a module ref instead of URL-encoding it.
+ * Hand-off from the scan screen to the create-from-tag confirm screen: the
+ * decoded tag plus any existing filaments the decode route matched
+ * heuristically (a single vendor+type/name match, or several candidates). The
+ * confirm screen offers those as "open an existing one" before the create form,
+ * so a re-scanned roll isn't steered into a duplicate. expo-router params are
+ * strings, so we stash the nested objects in a module ref instead of
+ * URL-encoding them.
  *
- * `peek` reads WITHOUT clearing so it's safe to call from a `useState` lazy
- * initializer — React StrictMode and the React Compiler (enabled in
- * app.config.ts) may invoke initializers more than once to detect impure
- * renders, and a read-and-clear there would hand `null` to the second
- * invocation. The screen clears explicitly via `clearPendingScan` after a
- * successful create. A stale value can't leak into a later flow: the scan
- * screen always calls `setPendingScan` immediately before navigating here, so
- * the ref is freshly overwritten on every entry.
+ * `peek` reads WITHOUT clearing so it's safe in a `useState` lazy initializer —
+ * React StrictMode and the React Compiler (enabled in app.config.ts) may invoke
+ * initializers more than once to detect impure renders, and a read-and-clear
+ * there would hand `null` to the second invocation. The screen clears
+ * explicitly via `clearPendingScan` once it navigates away. A stale value can't
+ * leak into a later flow: the scan screen always calls `setPendingScan`
+ * immediately before navigating here, so the ref is freshly overwritten.
  */
-let pending: DecodedOpenPrintTag | null = null;
+export interface PendingScan {
+  decoded: DecodedOpenPrintTag;
+  /** Existing filaments the decode route matched (heuristically); may be empty. */
+  matches: Filament[];
+}
 
-export function setPendingScan(tag: DecodedOpenPrintTag): void {
-  pending = tag;
+let pending: PendingScan | null = null;
+
+export function setPendingScan(scan: PendingScan): void {
+  pending = scan;
 }
 
 /** Read the pending scan without consuming it (safe during render). */
-export function peekPendingScan(): DecodedOpenPrintTag | null {
+export function peekPendingScan(): PendingScan | null {
   return pending;
 }
 

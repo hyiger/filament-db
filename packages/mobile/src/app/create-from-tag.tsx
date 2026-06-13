@@ -64,7 +64,9 @@ export default function CreateFromTagScreen() {
   // clear the ref, so a StrictMode / React-Compiler double-invoke of this
   // initializer stays pure (a read-and-clear would hand `null` to the second
   // call); we clear explicitly after a successful create.
-  const [tag] = useState(() => peekPendingScan());
+  const [pending] = useState(() => peekPendingScan());
+  const tag = pending?.decoded ?? null;
+  const matches = pending?.matches ?? [];
   const [name, setName] = useState(() => deriveName(tag));
   const [vendor, setVendor] = useState(() => (tag?.brandName ?? '').trim());
   const [type, setType] = useState(() => (tag?.materialType ?? '').trim());
@@ -115,6 +117,11 @@ export default function CreateFromTagScreen() {
     }
   }
 
+  const openMatch = (id: string) => {
+    clearPendingScan();
+    router.replace({ pathname: '/filament/[id]', params: { id } });
+  };
+
   const inputStyle = [
     styles.input,
     { color: c.text, borderColor: c.border, backgroundColor: c.inputBg },
@@ -139,6 +146,33 @@ export default function CreateFromTagScreen() {
             )}
           </View>
         </View>
+
+        {matches.length > 0 && (
+          <View style={styles.matches}>
+            <Text style={[styles.label, { color: c.text }]}>Already have one of these?</Text>
+            <Text style={[styles.hint, { color: c.muted }]}>
+              The scan matched {matches.length === 1 ? 'an existing filament' : `${matches.length} existing filaments`}.
+              Tap to open instead of creating a duplicate.
+            </Text>
+            {matches.map((m) => (
+              <Pressable
+                key={m._id}
+                style={[styles.matchRow, { backgroundColor: c.card, borderColor: c.border }]}
+                onPress={() => openMatch(m._id)}
+              >
+                <Text style={[styles.matchName, { color: c.text }]} numberOfLines={1}>
+                  {m.name}
+                </Text>
+                {[m.vendor, m.type].filter(Boolean).length > 0 && (
+                  <Text style={[styles.matchSub, { color: c.muted }]} numberOfLines={1}>
+                    {[m.vendor, m.type].filter(Boolean).join(' · ')}
+                  </Text>
+                )}
+              </Pressable>
+            ))}
+            <Text style={[styles.orCreate, { color: c.text }]}>Or create a new filament from this tag:</Text>
+          </View>
+        )}
 
         <Text style={[styles.hint, { color: c.muted }]}>
           Color, temperatures, density, and tags are filled from the tag. Confirm the identity below.
@@ -206,6 +240,17 @@ const styles = StyleSheet.create({
   previewText: { flex: 1, gap: 2 },
   previewTitle: { fontSize: 16, fontWeight: '600' },
   previewSub: { fontSize: 13 },
+  matches: { gap: 6, marginBottom: 8 },
+  matchRow: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    gap: 2,
+  },
+  matchName: { fontSize: 15, fontWeight: '600' },
+  matchSub: { fontSize: 13 },
+  orCreate: { fontSize: 14, fontWeight: '600', marginTop: 8 },
   hint: { fontSize: 13, marginBottom: 8 },
   label: { fontSize: 15, fontWeight: '600' },
   spaced: { marginTop: 14 },

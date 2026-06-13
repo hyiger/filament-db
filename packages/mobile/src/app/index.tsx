@@ -47,48 +47,23 @@ export default function ScanScreen() {
     try {
       const scan = await readOpenPrintTag();
       const res = await api.decodeNfc(scan);
-      const decoded = res.decoded;
-      const goCreate = () => {
-        // The create screen consumes the handed-off scan and POSTs it back as
-        // tagData; the server does the field mapping (Phase 2).
-        setPendingScan(decoded);
-        router.push('/create-from-tag');
-      };
 
-      // Only an instanceId match is confident enough to open directly — the
-      // tag is one Filament DB wrote for this filament (its spool_uid is the
-      // filament's instanceId). A weaker heuristic match (name / vendor+type)
-      // can be a different color of a filament you already own, so never treat
-      // it as "this exact tag is in the DB": offer to open it OR create the scan.
+      // Only an instanceId match is confident enough to open directly — the tag
+      // is one Filament DB wrote for this filament (its spool_uid is the
+      // filament's instanceId). For everything else — a weak heuristic match
+      // (could be a sibling color), several candidates, or no match — hand the
+      // decoded tag AND any matched filaments to the create screen, which lets
+      // the user open an existing one or create from the scan. This avoids
+      // steering a multi-candidate scan into a duplicate and dodges Alert's
+      // cross-platform button caps.
       if (res.match?._id && res.matchedBy === 'instanceId') {
         router.push({ pathname: '/filament/[id]', params: { id: res.match._id } });
         return;
       }
-      const name = `${res.decoded.brandName ?? ''} ${res.decoded.materialName ?? ''}`.trim();
-      if (res.match?._id) {
-        const matchId = res.match._id;
-        const matchName = res.match.name ?? 'the match';
-        Alert.alert(
-          name || 'Tag decoded',
-          `Closest match: ${matchName}. This may be a different color or variant — open it, or create a new filament from this tag?`,
-          [
-            { text: 'Cancel', style: 'cancel' },
-            {
-              text: 'Open match',
-              onPress: () => router.push({ pathname: '/filament/[id]', params: { id: matchId } }),
-            },
-            { text: 'Create new', onPress: goCreate },
-          ],
-        );
-        return;
-      }
-      const detail = res.candidates.length
-        ? `${res.candidates.length} possible match(es) exist, but none is an exact match.`
-        : "This tag isn't in your database yet.";
-      Alert.alert(name || 'Tag decoded', `${detail}\n\nCreate a new filament from this tag?`, [
-        { text: 'Not now', style: 'cancel' },
-        { text: 'Create filament', onPress: goCreate },
-      ]);
+      // matchFilament returns EITHER a single match OR candidates, never both.
+      const matches = res.match ? [res.match] : res.candidates;
+      setPendingScan({ decoded: res.decoded, matches });
+      router.push('/create-from-tag');
     } catch (e) {
       Alert.alert('Scan failed', e instanceof ApiError ? e.message : (e as Error).message);
     } finally {
