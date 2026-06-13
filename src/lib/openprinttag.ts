@@ -516,7 +516,7 @@ export interface OpenPrintTagInput {
   bedTempFirstLayer?: number | null;
   chamberTemp?: number | null; // °C
   weightGrams?: number | null; // nominal net weight in grams
-  actualWeightGrams?: number | null; // actual remaining filament weight (key 17), defaults to weightGrams
+  actualWeightGrams?: number | null; // actual remaining filament weight (key 17); omitted when null (spec resolves absent → nominal)
   emptySpoolWeight?: number | null; // empty spool/container weight in grams
   countryOfOrigin?: string;    // ISO 3166-1 alpha-2, default "US"
   spoolUid?: string | null;    // brand-specific instance ID (e.g. "2acc21072a")
@@ -634,12 +634,15 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
     encodeCBORCompactNumber(buf, input.weightGrams);
   }
 
-  // actual_netto_full_weight (key 17) — actual remaining filament weight
-  // If actualWeightGrams is explicitly provided, use it; otherwise default to nominal
-  const actualWeight = input.actualWeightGrams ?? input.weightGrams;
-  if (actualWeight != null && actualWeight > 0) {
+  // actual_netto_full_weight (key 17) — actual remaining filament weight.
+  // Only written when actually known. We deliberately do NOT default it to the
+  // nominal weight: per the OpenPrintTag spec an absent key 17 already resolves
+  // to nominal on read, and fabricating a nominal "actual" for a filament with
+  // no current roll (all spools retired / weight unknown) would assert a full
+  // roll the user doesn't have (Codex P2 on PR #707).
+  if (input.actualWeightGrams != null && input.actualWeightGrams > 0) {
     encodeCBORKey(buf, OPT_KEY.ACTUAL_NETTO_FULL_WEIGHT);
-    encodeCBORCompactNumber(buf, actualWeight);
+    encodeCBORCompactNumber(buf, input.actualWeightGrams);
   }
 
   // empty_container_weight (grams)
