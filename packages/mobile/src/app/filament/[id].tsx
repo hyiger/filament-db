@@ -69,34 +69,39 @@ function buildDetailRows(f: Filament): { label: string; value: string }[] {
 /** Track the live offline-queue pending count and flush on screen focus. */
 function usePendingSync(api: Api | null, setReloadKey: React.Dispatch<React.SetStateAction<number>>): number {
   const [pending, setPending] = useState(0);
+  const prevPending = useRef(0);
 
-  // Read initial count after mount (async IIFE — state set after await, not synchronously).
+  // Read initial count after mount (async IIFE — state set after await, not
+  // synchronously). Then track changes: a DROP means a flush applied writes —
+  // including the app-wide foreground flusher in _layout, which doesn't itself
+  // tell this screen to reload (Codex P2) — so re-fetch to show the synced
+  // server state rather than just clearing the pill. An increase is an enqueue,
+  // already reflected locally by the optimistic patch, so no re-fetch.
   useEffect(() => {
     let active = true;
     (async () => {
       const count = await pendingCount();
-      if (active) setPending(count);
+      if (active) {
+        prevPending.current = count;
+        setPending(count);
+      }
     })();
     const unsub = subscribePending((count) => {
+      if (count < prevPending.current) setReloadKey((k) => k + 1);
+      prevPending.current = count;
       setPending(count);
     });
     return () => {
       active = false;
       unsub();
     };
-  }, []);
+  }, [setReloadKey]);
 
-  // Flush on focus, and bump reloadKey if anything was flushed.
+  // Drain on focus; the subscriber above re-fetches on the resulting count drop.
   useFocusEffect(
     useCallback(() => {
-      if (!api) return;
-      (async () => {
-        const result = await flushQueue(api);
-        if (result.flushed > 0) {
-          setReloadKey((k) => k + 1);
-        }
-      })();
-    }, [api, setReloadKey]),
+      if (api) flushQueue(api).catch(() => {});
+    }, [api]),
   );
 
   return pending;
@@ -297,6 +302,12 @@ export default function FilamentDetailScreen() {
       ) : (
         spoolsToRender.map((s) => {
           const isHighlighted = s._id === highlightSpoolId;
+          // Scroll to the DEEP-LINK TARGET row, not the highlighted one: the
+          // highlight is set after first render and only changes colors, so RN
+          // wouldn't re-fire layout — the scroll would never run for a spool
+          // below the fold. Keying on spoolParam attaches onLayout from the
+          // first render, so it fires on mount (Codex P2).
+          const isDeepLinkTarget = !!spoolParam && s._id === spoolParam;
           return (
             <SpoolRow
               key={s._id}
@@ -310,7 +321,7 @@ export default function FilamentDetailScreen() {
               onUpdated={handleSpoolUpdated}
               onLocalPatch={handleLocalPatch}
               onLayoutY={
-                isHighlighted
+                isDeepLinkTarget
                   ? (y) => {
                       if (!scrolledToSpool.current) {
                         scrolledToSpool.current = true;
