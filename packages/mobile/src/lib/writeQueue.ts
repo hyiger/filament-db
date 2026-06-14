@@ -102,6 +102,18 @@ export async function pendingCount(): Promise<number> {
   return withLock(async () => (await readQueue()).length);
 }
 
+/**
+ * Drop all queued writes. Called when the configured server changes — queued
+ * edits were made against the previous server and must NOT replay to a
+ * different Filament DB instance (wrong spools / 404s). Codex P2 on #709.
+ */
+export async function clearQueue(): Promise<void> {
+  await withLock(async () => {
+    await writeQueueRaw([]);
+    notify(0);
+  });
+}
+
 /** Dispatch one queued write to the matching API call. */
 export function applyWrite(api: Api, q: QueuedWrite): Promise<unknown> {
   switch (q.write.kind) {
@@ -161,14 +173,21 @@ export async function submitWrite(
   api: Api,
   entry: Omit<QueuedWrite, 'id' | 'createdAt'>,
 ): Promise<SubmitResult> {
-  // FIFO ordering: if queueable writes are already pending, enqueue this one
-  // too instead of sending it live. Going live now would let an OLDER queued
-  // write replay on top of this newer value on the next flush and overwrite it
-  // (Codex P1, e.g. queued remaining=100 then a live remaining=50). The pending
-  // writes drain in order on the next flush, this one after them.
-  if (isQueueable(entry.write) && (await pendingCount()) > 0) {
-    await enqueue(entry);
-    return { queued: true };
+  // FIFO ordering: while any write is already pending, a live write would let
+  // an OLDER queued write replay on top of it on the next flush (Codex P1/P2,
+  // e.g. queued remaining=100 then a live remaining=50, or a queued SET that
+  // replays over a live usage decrement).
+  if ((await pendingCount()) > 0) {
+    if (isQueueable(entry.write)) {
+      // Idempotent — enqueue it to drain in order behind the pending writes.
+      await enqueue(entry);
+      return { queued: true };
+    }
+    // Non-idempotent (usage / dry cycle) can't be queued safely, so it must
+    // wait for the queue to drain rather than apply out of order.
+    throw new Error(
+      'You have unsynced offline changes. Let them sync first, then log usage or a dry cycle.',
+    );
   }
   try {
     const result = await applyWrite(api, { ...entry, id: 'live', createdAt: 0 });

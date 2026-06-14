@@ -1,6 +1,8 @@
 import * as SecureStore from 'expo-secure-store';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 
+import { clearQueue } from './writeQueue';
+
 /**
  * The server connection (base URL + optional API key), persisted in the OS
  * secure store (iOS Keychain / Android Keystore) — never plain storage, since
@@ -57,6 +59,13 @@ export function ServerConfigProvider({ children }: { children: ReactNode }) {
       throw new Error('Enter a full http:// or https:// address, e.g. http://192.168.1.50:3456');
     }
     const key = cfg.apiKey?.trim() || null;
+    // If the server address changes, drop any queued offline writes — they were
+    // made against the previous server and must not replay to a different
+    // Filament DB instance (Codex P2 on #709). Validation above has passed, so
+    // we only clear on a genuine, accepted change of address.
+    if (url !== baseUrl) {
+      await clearQueue();
+    }
     if (url) await SecureStore.setItemAsync(BASE_URL_KEY, url);
     else await SecureStore.deleteItemAsync(BASE_URL_KEY);
     if (key) await SecureStore.setItemAsync(API_KEY_KEY, key);
