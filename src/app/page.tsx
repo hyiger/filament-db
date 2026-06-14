@@ -421,7 +421,15 @@ export default function Home() {
     // The "all" view keeps parents in the dataset so the list renders them as
     // grouping headers above their color variants. By default it hides
     // out-of-stock filaments (no active spools); the toggle reveals them.
-    if (quickFilter === "all") return showOutOfStock ? filaments : filaments.filter(inStock);
+    // The hide runs ONLY on the UNFILTERED view: search/type/vendor are applied
+    // server-side, so a filtered response can return a parent WITHOUT its
+    // (stocked) variants — parentsWithStock would then miss it and wrongly hide
+    // the family. While a filter is active, show every match in or out of stock
+    // (Codex P2 on #712).
+    if (quickFilter === "all") {
+      const filterActive = !!debouncedSearch || !!typeFilter || !!vendorFilter;
+      return showOutOfStock || filterActive ? filaments : filaments.filter(inStock);
+    }
     // #552: "Has spools" resolves against the full list (parents
     // included) because a parent carrying its own spool genuinely has
     // one — see the matching note in `quickFilterCounts`. Dropping it
@@ -442,7 +450,7 @@ export default function Home() {
       if (quickFilter === "noCalibration") return !f.hasCalibrations;
       return true;
     });
-  }, [filaments, inventoryFilaments, quickFilter, showOutOfStock, inStock]);
+  }, [filaments, inventoryFilaments, quickFilter, showOutOfStock, inStock, debouncedSearch, typeFilter, vendorFilter]);
 
   // Parent lookup built from the *full* filament list so variant
   // enrichment (inherited nozzle/bed/cost/density/spool/net) works
@@ -1025,7 +1033,7 @@ export default function Home() {
             onChange={setQuickFilter}
             counts={quickFilterCounts}
           />
-          {quickFilter === "all" && outOfStockCount > 0 && (
+          {quickFilter === "all" && !debouncedSearch && !typeFilter && !vendorFilter && outOfStockCount > 0 && (
             <button
               onClick={() => setShowOutOfStock((s) => !s)}
               aria-pressed={showOutOfStock}
