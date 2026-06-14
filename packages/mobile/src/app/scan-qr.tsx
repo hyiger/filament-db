@@ -44,15 +44,32 @@ export default function ScanQrScreen() {
       // Filament DB labels encode either a deep-link URL (/filaments/{id}, with an
       // optional ?spool=<id> for spool-specific labels — GH #595) or a bare
       // instanceId. Parse the URL form first; otherwise resolve via match.
+      const api = createApi({ baseUrl, apiKey });
       const parsed = parseFilamentDeepLink(data);
       if (parsed) {
+        // Spool deep-link: resolve the spool server-side (the single-spool
+        // endpoint) so the filament id comes authoritatively from the spool,
+        // falling back to the id embedded in the URL when the server can't
+        // resolve it (an older server without the endpoint, or a transient
+        // error — the URL still carries a usable filament id).
+        if (parsed.spool) {
+          try {
+            const { filament } = await api.getSpool(parsed.spool);
+            router.replace({
+              pathname: '/filament/[id]',
+              params: { id: filament._id, spool: parsed.spool },
+            });
+            return;
+          } catch {
+            // fall through to the URL-embedded filament id below
+          }
+        }
         router.replace({
           pathname: '/filament/[id]',
           params: parsed.spool ? { id: parsed.id, spool: parsed.spool } : { id: parsed.id },
         });
         return;
       }
-      const api = createApi({ baseUrl, apiKey });
       const res = await api.matchByInstanceId(data.trim());
       if (res.match?._id) {
         router.replace({ pathname: '/filament/[id]', params: { id: res.match._id } });

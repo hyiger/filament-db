@@ -4709,6 +4709,52 @@
         }
       }
     },
+    "/api/spools/{spoolId}": {
+      "get": {
+        "tags": [
+          "Spools"
+        ],
+        "summary": "Resolve a single spool by id (v1.43)",
+        "description": "Resolve a spool's subdocument id to its owning filament (inheritance-resolved for variants) plus the spool itself. Powers the mobile scanner's spool-level deep links — the label QR's ?spool=<spoolId> link resolves here so the phone can open the filament detail with that spool highlighted without knowing the parent filament id up front.",
+        "parameters": [
+          {
+            "name": "spoolId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The spool subdocument _id"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The owning filament + the spool",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "filament": {
+                      "type": "object"
+                    },
+                    "spool": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed spool id"
+          },
+          "404": {
+            "description": "No spool with that id (or its owning filament is trashed)"
+          }
+        }
+      }
+    },
     "/api/spools/by-location": {
       "get": {
         "tags": [

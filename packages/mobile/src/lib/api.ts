@@ -4,6 +4,7 @@ import type {
   Location,
   MatchResult,
   NfcDecodeResponse,
+  Spool,
 } from './types';
 
 /**
@@ -109,12 +110,40 @@ export function createApi(cfg: ApiConfig) {
         method: 'POST',
         body: JSON.stringify({ tagData, overrides, spoolRemainingGrams }),
       }),
-    /** Update a spool — location and/or remaining weight (server converts). */
+    /** Update a spool — location, remaining weight, and/or retired (server converts). */
     updateSpool: (filamentId: string, spoolId: string, patch: Record<string, unknown>) =>
       request<Filament>(
         cfg,
         `/api/filaments/${encodeURIComponent(filamentId)}/spools/${encodeURIComponent(spoolId)}`,
         { method: 'PUT', body: JSON.stringify(patch) },
+      ),
+    /**
+     * Resolve a single spool by id to its (inheritance-resolved) filament + the
+     * spool itself. Powers spool-level deep links — a label QR's `?spool=` link
+     * opens straight to that spool without knowing the parent filament up front.
+     */
+    getSpool: (spoolId: string) =>
+      request<{ filament: Filament; spool: Spool }>(
+        cfg,
+        `/api/spools/${encodeURIComponent(spoolId)}`,
+      ),
+    /** Log filament usage — decrements the spool's remaining weight by `grams`. */
+    logUsage: (filamentId: string, spoolId: string, grams: number, jobLabel?: string) =>
+      request<Filament>(
+        cfg,
+        `/api/filaments/${encodeURIComponent(filamentId)}/spools/${encodeURIComponent(spoolId)}/usage`,
+        { method: 'POST', body: JSON.stringify({ grams, ...(jobLabel ? { jobLabel } : {}) }) },
+      ),
+    /** Log a dry-box cycle for a spool (temperature / duration / notes). */
+    logDryCycle: (
+      filamentId: string,
+      spoolId: string,
+      cycle: { tempC?: number; durationMin?: number; notes?: string },
+    ) =>
+      request<Filament>(
+        cfg,
+        `/api/filaments/${encodeURIComponent(filamentId)}/spools/${encodeURIComponent(spoolId)}/dry-cycles`,
+        { method: 'POST', body: JSON.stringify(cycle) },
       ),
   };
 }

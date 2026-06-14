@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "dependencies": {
     "@expo/ui": "~56.0.17",
+    "@react-native-async-storage/async-storage": "2.2.0",
     "eslint-config-expo": "~56.0.4",
     "expo": "~56.0.11",
     "expo-build-properties": "~56.0.18",

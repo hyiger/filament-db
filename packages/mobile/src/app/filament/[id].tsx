@@ -1,5 +1,5 @@
-import { useLocalSearchParams } from 'expo-router';
-import { useEffect, useRef, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -15,6 +15,13 @@ import { ApiError, createApi, type Api } from '@/lib/api';
 import { useServerConfig } from '@/lib/serverConfig';
 import { useColors, type ThemeColors } from '@/lib/theme';
 import type { Filament, Location, Spool } from '@/lib/types';
+import {
+  flushQueue,
+  pendingCount,
+  submitWrite,
+  subscribePending,
+  type WriteOp,
+} from '@/lib/writeQueue';
 
 /** Human-readable rows of the filament's present properties for the detail card. */
 function buildDetailRows(f: Filament): { label: string; value: string }[] {
@@ -59,6 +66,42 @@ function buildDetailRows(f: Filament): { label: string; value: string }[] {
   return rows;
 }
 
+/** Track the live offline-queue pending count and flush on screen focus. */
+function usePendingSync(api: Api | null, setReloadKey: React.Dispatch<React.SetStateAction<number>>): number {
+  const [pending, setPending] = useState(0);
+
+  // Read initial count after mount (async IIFE — state set after await, not synchronously).
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const count = await pendingCount();
+      if (active) setPending(count);
+    })();
+    const unsub = subscribePending((count) => {
+      setPending(count);
+    });
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, []);
+
+  // Flush on focus, and bump reloadKey if anything was flushed.
+  useFocusEffect(
+    useCallback(() => {
+      if (!api) return;
+      (async () => {
+        const result = await flushQueue(api);
+        if (result.flushed > 0) {
+          setReloadKey((k) => k + 1);
+        }
+      })();
+    }, [api, setReloadKey]),
+  );
+
+  return pending;
+}
+
 export default function FilamentDetailScreen() {
   const { id, spool: spoolParam } = useLocalSearchParams<{ id: string; spool?: string }>();
   const { baseUrl, apiKey } = useServerConfig();
@@ -72,6 +115,21 @@ export default function FilamentDetailScreen() {
   // highlight that spool's card once the filament (with its spools) loads.
   const [highlightSpoolId, setHighlightSpoolId] = useState<string | null>(null);
   const deepLinkHandled = useRef(false);
+  // Feature A: scroll-to-spool support.
+  const scrollRef = useRef<ScrollView>(null);
+  const scrolledToSpool = useRef(false);
+
+  // Build the api instance once baseUrl is known (used by usePendingSync too).
+  // Memoized so its identity is stable across renders — the focus-effect and
+  // the SpoolRow `api` prop depend on it, and a fresh object each render would
+  // re-subscribe / re-render needlessly.
+  const api = useMemo(
+    () => (baseUrl ? createApi({ baseUrl, apiKey }) : null),
+    [baseUrl, apiKey],
+  );
+
+  // Feature C: pending-sync count + flush-on-focus.
+  const pending = usePendingSync(api, setReloadKey);
 
   // Fetch on mount (and on Retry, which bumps reloadKey). All setState runs
   // inside the async IIFE *after* an await — never synchronously in the effect
@@ -80,12 +138,12 @@ export default function FilamentDetailScreen() {
   useEffect(() => {
     if (!baseUrl || !id) return;
     let active = true;
-    const api = createApi({ baseUrl, apiKey });
+    const fetchApi = createApi({ baseUrl, apiKey });
     (async () => {
       try {
         const [f, locs] = await Promise.all([
-          api.getFilament(id),
-          api.getLocations().catch(() => [] as Location[]),
+          fetchApi.getFilament(id),
+          fetchApi.getLocations().catch(() => [] as Location[]),
         ]);
         if (!active) return;
         setFilament(f);
@@ -116,6 +174,7 @@ export default function FilamentDetailScreen() {
   useEffect(() => {
     if (deepLinkHandled.current || !filament || !spoolParam) return;
     deepLinkHandled.current = true;
+    // Feature A: include retired spools in the check too.
     if (!filament.spools?.some((s) => s._id === spoolParam)) return;
     const set = setTimeout(() => setHighlightSpoolId(spoolParam), 0);
     const clear = setTimeout(() => setHighlightSpoolId(null), 2600);
@@ -155,7 +214,6 @@ export default function FilamentDetailScreen() {
     );
   }
 
-  const api = createApi({ baseUrl, apiKey });
   const tare = filament.spoolWeight ?? 0;
   const allSpools = filament.spools ?? [];
   const activeSpools = allSpools.filter((s) => !s.retired);
@@ -163,6 +221,14 @@ export default function FilamentDetailScreen() {
   const detailRows = buildDetailRows(filament);
   const hasColor = !!filament.color || (filament.secondaryColors?.length ?? 0) > 0;
   const swatchColor = filament.color || filament.secondaryColors?.[0] || '#808080';
+
+  // Feature A: if the deep-linked spool is retired and not in activeSpools, include it.
+  const deepLinkedSpool = spoolParam ? allSpools.find((s) => s._id === spoolParam) : undefined;
+  const deepLinkedIsRetiredExtra =
+    deepLinkedSpool?.retired && !activeSpools.some((s) => s._id === spoolParam);
+  const spoolsToRender: Spool[] = deepLinkedIsRetiredExtra
+    ? [...activeSpools, deepLinkedSpool as Spool]
+    : activeSpools;
 
   // The spool PUT returns the RAW (unresolved) filament — for a variant that
   // inherits density / temps / weights from its parent, those come back null.
@@ -172,12 +238,30 @@ export default function FilamentDetailScreen() {
   const handleSpoolUpdated = (updated: Filament) =>
     setFilament((prev) => (prev ? { ...prev, spools: updated.spools } : updated));
 
+  // Feature C: optimistic local patch (no server round-trip needed for the UI).
+  const handleLocalPatch = (spoolId: string, patch: Partial<Spool>) => {
+    setFilament((prev) =>
+      prev
+        ? { ...prev, spools: prev.spools?.map((s) => (s._id === spoolId ? { ...s, ...patch } : s)) }
+        : prev,
+    );
+  };
+
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <ScrollView ref={scrollRef} contentContainerStyle={styles.container}>
       <Text style={[styles.name, { color: c.text }]}>{filament.name}</Text>
       <Text style={[styles.sub, { color: c.muted }]}>
         {[filament.vendor, filament.type].filter(Boolean).join(' · ')}
       </Text>
+
+      {/* Feature C: pending-sync pill */}
+      {pending > 0 && (
+        <View style={[styles.pendingPill, { borderColor: c.border }]}>
+          <Text style={[styles.pendingPillText, { color: c.muted }]}>
+            {pending} change{pending === 1 ? '' : 's'} pending sync
+          </Text>
+        </View>
+      )}
 
       {(hasColor || detailRows.length > 0) && (
         <View style={[styles.detailCard, { backgroundColor: c.card, borderColor: c.border }]}>
@@ -204,26 +288,40 @@ export default function FilamentDetailScreen() {
       )}
 
       <Text style={[styles.sectionHeading, { color: c.text }]}>Spools</Text>
-      {activeSpools.length === 0 ? (
+      {spoolsToRender.length === 0 ? (
         <Text style={[styles.muted, { color: c.muted }]}>
           {retiredCount > 0
             ? `No active spools (${retiredCount} retired).`
             : 'No spools tracked yet on this filament.'}
         </Text>
       ) : (
-        activeSpools.map((s) => (
-          <SpoolRow
-            key={s._id}
-            api={api}
-            filamentId={filament._id}
-            spool={s}
-            tare={tare}
-            locations={locations}
-            colors={c}
-            highlighted={s._id === highlightSpoolId}
-            onUpdated={handleSpoolUpdated}
-          />
-        ))
+        spoolsToRender.map((s) => {
+          const isHighlighted = s._id === highlightSpoolId;
+          return (
+            <SpoolRow
+              key={s._id}
+              api={api as Api}
+              filamentId={filament._id}
+              spool={s}
+              tare={tare}
+              locations={locations}
+              colors={c}
+              highlighted={isHighlighted}
+              onUpdated={handleSpoolUpdated}
+              onLocalPatch={handleLocalPatch}
+              onLayoutY={
+                isHighlighted
+                  ? (y) => {
+                      if (!scrolledToSpool.current) {
+                        scrolledToSpool.current = true;
+                        scrollRef.current?.scrollTo({ y, animated: true });
+                      }
+                    }
+                  : undefined
+              }
+            />
+          );
+        })
       )}
     </ScrollView>
   );
@@ -238,6 +336,8 @@ function SpoolRow({
   colors: c,
   highlighted = false,
   onUpdated,
+  onLocalPatch,
+  onLayoutY,
 }: {
   api: Api;
   filamentId: string;
@@ -247,10 +347,41 @@ function SpoolRow({
   colors: ThemeColors;
   highlighted?: boolean;
   onUpdated: (f: Filament) => void;
+  onLocalPatch: (spoolId: string, patch: Partial<Spool>) => void;
+  onLayoutY?: (y: number) => void;
 }) {
   const remaining = spool.totalWeight == null ? null : Math.max(0, Math.round(spool.totalWeight - tare));
   const [grams, setGrams] = useState(remaining == null ? '' : String(remaining));
   const [saving, setSaving] = useState<string | null>(null);
+  // Feature B: log usage input state.
+  const [usageGrams, setUsageGrams] = useState('');
+
+  /** Feature C: route every spool mutation through the offline write queue. */
+  /** Returns true when the write went through or was queued; false on a real
+   * server error (so callers can keep the user's input to retry). */
+  async function runWrite(
+    saveKey: string,
+    label: string,
+    write: WriteOp,
+    optimisticPatch: Partial<Spool>,
+  ): Promise<boolean> {
+    setSaving(saveKey);
+    try {
+      const result = await submitWrite(api, { filamentId, spoolId: spool._id, label, write });
+      if (result.queued) {
+        onLocalPatch(spool._id, optimisticPatch);
+        Alert.alert('Saved offline', 'This change will sync when the server is reachable.');
+      } else {
+        onUpdated(result.result as Filament);
+      }
+      return true;
+    } catch (e) {
+      Alert.alert('Update failed', (e as Error).message);
+      return false;
+    } finally {
+      setSaving(null);
+    }
+  }
 
   async function saveWeight() {
     const n = Number(grams);
@@ -258,25 +389,63 @@ function SpoolRow({
       Alert.alert('Invalid weight', 'Enter the grams of filament remaining (0 or more).');
       return;
     }
-    setSaving('weight');
-    try {
-      onUpdated(await api.updateSpool(filamentId, spool._id, { remainingWeight: n }));
-    } catch (e) {
-      Alert.alert('Update failed', (e as Error).message);
-    } finally {
-      setSaving(null);
-    }
+    await runWrite(
+      'weight',
+      `Set remaining to ${n} g`,
+      { kind: 'updateSpool', patch: { remainingWeight: n } },
+      { totalWeight: n + tare },
+    );
   }
 
-  async function move(locationId: string | null) {
-    setSaving(locationId ?? 'none');
-    try {
-      onUpdated(await api.updateSpool(filamentId, spool._id, { locationId }));
-    } catch (e) {
-      Alert.alert('Move failed', (e as Error).message);
-    } finally {
-      setSaving(null);
+  async function move(locationId: string | null, locationName?: string) {
+    await runWrite(
+      locationId ?? 'none',
+      locationId ? `Move to ${locationName ?? 'location'}` : 'Clear location',
+      { kind: 'updateSpool', patch: { locationId } },
+      { locationId },
+    );
+  }
+
+  // Feature B: retire / un-retire toggle.
+  async function toggleRetire() {
+    const newRetired = !spool.retired;
+    await runWrite(
+      'retire',
+      newRetired ? 'Retire spool' : 'Un-retire spool',
+      { kind: 'updateSpool', patch: { retired: newRetired } },
+      { retired: newRetired },
+    );
+  }
+
+  // Feature B: log usage.
+  async function logUsage() {
+    const g = Number(usageGrams);
+    if (!usageGrams.trim() || !Number.isFinite(g) || g <= 0) {
+      Alert.alert('Invalid amount', 'Enter a positive number of grams used.');
+      return;
     }
+    const optimisticTotalWeight =
+      spool.totalWeight == null ? undefined : Math.max(0, spool.totalWeight - g);
+    const optimisticPatch: Partial<Spool> =
+      optimisticTotalWeight !== undefined ? { totalWeight: optimisticTotalWeight } : {};
+    const ok = await runWrite(
+      'usage',
+      `Use ${g} g`,
+      { kind: 'logUsage', grams: g },
+      optimisticPatch,
+    );
+    // Clear the input only on success/queued — keep it on a server error to retry.
+    if (ok) setUsageGrams('');
+  }
+
+  // Feature B: log dry cycle.
+  async function logDryCycle() {
+    await runWrite(
+      'dry',
+      'Log dry cycle',
+      { kind: 'logDryCycle', cycle: {} },
+      {},
+    );
   }
 
   return (
@@ -286,6 +455,7 @@ function SpoolRow({
         { backgroundColor: c.card, borderColor: c.border },
         highlighted && { borderColor: c.tint, backgroundColor: c.inputBg },
       ]}
+      onLayout={onLayoutY ? (e) => onLayoutY(e.nativeEvent.layout.y) : undefined}
     >
       <Text style={[styles.cardTitle, { color: c.text }]}>{spool.label || 'Spool'}</Text>
 
@@ -322,7 +492,7 @@ function SpoolRow({
                 styles.chip,
                 { borderColor: active ? c.tint : c.border, backgroundColor: active ? c.tint : 'transparent' },
               ]}
-              onPress={() => move(loc._id)}
+              onPress={() => move(loc._id, loc.name)}
               disabled={saving === loc._id}
             >
               <Text style={[styles.chipText, { color: active ? c.onTint : c.text }]}>{loc.name}</Text>
@@ -343,6 +513,64 @@ function SpoolRow({
           <Text style={[styles.chipText, { color: !spool.locationId ? c.onTint : c.text }]}>None</Text>
         </Pressable>
       </View>
+
+      {/* Feature B: inventory actions */}
+      <View style={[styles.divider, { borderColor: c.border }]} />
+
+      {/* Retire / Un-retire */}
+      <Pressable
+        style={[
+          styles.smallButton,
+          styles.actionButton,
+          { backgroundColor: spool.retired ? c.tint : c.card, borderColor: c.border },
+          saving === 'retire' && styles.disabled,
+        ]}
+        onPress={toggleRetire}
+        disabled={saving === 'retire'}
+      >
+        <Text style={[styles.smallButtonText, { color: spool.retired ? c.onTint : c.text }]}>
+          {saving === 'retire' ? '…' : spool.retired ? 'Un-retire' : 'Retire'}
+        </Text>
+      </Pressable>
+
+      {/* Log usage */}
+      <Text style={[styles.fieldLabel, { color: c.muted }]}>Log usage (g)</Text>
+      <View style={styles.row}>
+        <TextInput
+          style={[styles.weightInput, { color: c.text, borderColor: c.border, backgroundColor: c.inputBg }]}
+          value={usageGrams}
+          onChangeText={setUsageGrams}
+          keyboardType="numeric"
+          inputMode="numeric"
+          placeholder="grams used"
+          placeholderTextColor={c.muted}
+        />
+        <Pressable
+          style={[styles.smallButton, { backgroundColor: c.tint }, saving === 'usage' && styles.disabled]}
+          onPress={logUsage}
+          disabled={saving === 'usage'}
+        >
+          <Text style={[styles.smallButtonText, { color: c.onTint }]}>
+            {saving === 'usage' ? '…' : 'Log'}
+          </Text>
+        </Pressable>
+      </View>
+
+      {/* Log dry cycle */}
+      <Pressable
+        style={[
+          styles.smallButton,
+          styles.actionButton,
+          { backgroundColor: c.card, borderColor: c.border },
+          saving === 'dry' && styles.disabled,
+        ]}
+        onPress={logDryCycle}
+        disabled={saving === 'dry'}
+      >
+        <Text style={[styles.smallButtonText, { color: c.text }]}>
+          {saving === 'dry' ? '…' : 'Log dry cycle'}
+        </Text>
+      </Pressable>
     </View>
   );
 }
@@ -396,4 +624,21 @@ const styles = StyleSheet.create({
   },
   chipText: { fontSize: 14 },
   disabled: { opacity: 0.5 },
+  pendingPill: {
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    alignSelf: 'flex-start',
+    marginBottom: 4,
+  },
+  pendingPillText: { fontSize: 13 },
+  divider: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginVertical: 4,
+  },
+  actionButton: {
+    borderWidth: 1,
+    alignSelf: 'flex-start',
+  },
 });
