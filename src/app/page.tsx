@@ -176,6 +176,13 @@ export default function Home() {
     () => false,
   );
   const [expandedParents, setExpandedParents] = useState<Set<string>>(new Set());
+  // #717: per-filament spool panel (location display + quick change). Keyed by
+  // filament id. Separate from expandedParents (which toggles parent→variants).
+  const [expandedSpools, setExpandedSpools] = useState<Set<string>>(new Set());
+  const [locations, setLocations] = useState<{ _id: string; name: string; kind: string }[]>([]);
+  // `${filamentId}:${spoolId}` while a location change is in flight, so that
+  // spool's dropdown disables without freezing the others.
+  const [movingSpool, setMovingSpool] = useState<string | null>(null);
   const [showAtlasImport, setShowAtlasImport] = useState(false);
   const [showPrusamentImport, setShowPrusamentImport] = useState(false);
   const [showSpoolCsvImport, setShowSpoolCsvImport] = useState(false);
@@ -200,6 +207,18 @@ export default function Home() {
   // gone or race the main list fetch un-cancellably.
   const filterOptionsAcRef = useRef<AbortController | null>(null);
   useEffect(() => () => filterOptionsAcRef.current?.abort(), []);
+
+  // #717: load locations for the per-spool "move to" dropdowns. Best-effort —
+  // if it fails the panel just shows the ids' current selection with no
+  // options, and the rest of the page is unaffected.
+  useEffect(() => {
+    const ac = new AbortController();
+    fetch("/api/locations", { signal: ac.signal })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list) => setLocations(Array.isArray(list) ? list : []))
+      .catch(() => {});
+    return () => ac.abort();
+  }, []);
 
   // Debounce search input by 300ms
   useEffect(() => {
@@ -550,6 +569,55 @@ export default function Home() {
     });
   };
 
+  // #717: expand/collapse a filament's per-spool panel.
+  const toggleSpools = (filamentId: string) => {
+    setExpandedSpools((prev) => {
+      const next = new Set(prev);
+      if (next.has(filamentId)) next.delete(filamentId);
+      else next.add(filamentId);
+      return next;
+    });
+  };
+
+  // #717: change one spool's location from the home page. Optimistically
+  // patches local state (location isn't a filter/sort/visibility input, so the
+  // row stays put and the panel stays open) instead of a full refetch that
+  // would collapse the expansion. PUT is same-origin so the CSRF guard passes.
+  const moveSpool = useCallback(
+    async (filamentId: string, spoolId: string, locationId: string | null) => {
+      const key = `${filamentId}:${spoolId}`;
+      setMovingSpool(key);
+      try {
+        const res = await fetch(`/api/filaments/${filamentId}/spools/${spoolId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ locationId }),
+        });
+        if (!res.ok) {
+          toast(t("filaments.spools.moveError"), "error");
+          return;
+        }
+        setFilaments((prev) =>
+          prev.map((f) =>
+            f._id === filamentId
+              ? {
+                  ...f,
+                  spools: f.spools?.map((s) =>
+                    s._id === spoolId ? { ...s, locationId } : s,
+                  ) ?? [],
+                }
+              : f,
+          ),
+        );
+      } catch {
+        toast(t("filaments.spools.moveError"), "error");
+      } finally {
+        setMovingSpool(null);
+      }
+    },
+    [toast, t],
+  );
+
   const handleSort = (key: SortKey) => {
     const next = nextSortState({ sortKey, sortDir }, key);
     setSortKey(next.sortKey);
@@ -728,9 +796,12 @@ export default function Home() {
 
   const thClass = "py-3 px-2 cursor-pointer select-none hover:text-blue-500 transition-colors";
 
-  const renderRow = (f: Filament, isVariant = false) => (
+  const renderRow = (f: Filament, isVariant = false) => {
+    const spools = f.spools ?? [];
+    const spoolsExpanded = expandedSpools.has(f._id);
+    return (
+    <React.Fragment key={f._id}>
     <tr
-      key={f._id}
       className={`border-b border-gray-200 hover:bg-gray-50 dark:hover:bg-gray-900 ${isVariant ? "bg-gray-50/50 dark:bg-gray-950/50" : ""} ${selected.has(f._id) ? "bg-red-50 dark:bg-red-900/25" : ""}`}
     >
       <td className="py-2 px-2">
@@ -803,15 +874,39 @@ export default function Home() {
         {(() => {
           const pct = getRemainingPct(f);
           const spoolCt = getSpoolCount(f);
-          if (pct == null) return <span className="text-gray-400">—</span>;
-          const color = pct > 25 ? "bg-green-500" : pct > 10 ? "bg-yellow-500" : "bg-red-500";
+          const color =
+            pct == null ? "" : pct > 25 ? "bg-green-500" : pct > 10 ? "bg-yellow-500" : "bg-red-500";
           return (
-            <div className="flex items-center gap-1.5 justify-end" title={spoolCt > 1 ? t("filaments.remainingWithSpools", { pct, spools: spoolCt }) : t("filaments.remaining", { pct })}>
-              <div className="w-12 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                <div className={`h-2 rounded-full ${color}`} style={{ width: `${pct}%` }} />
-              </div>
-              <span className="text-xs text-gray-500 w-8 text-right">{pct}%</span>
-              {spoolCt > 1 && <span className="text-xs text-gray-400">×{spoolCt}</span>}
+            <div className="flex items-center gap-1.5 justify-end">
+              {pct == null ? (
+                <span className="text-gray-400">—</span>
+              ) : (
+                <div
+                  className="flex items-center gap-1.5"
+                  title={spoolCt > 1 ? t("filaments.remainingWithSpools", { pct, spools: spoolCt }) : t("filaments.remaining", { pct })}
+                >
+                  <div className="w-12 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+                    <div className={`h-2 rounded-full ${color}`} style={{ width: `${pct}%` }} />
+                  </div>
+                  <span className="text-xs text-gray-500 w-8 text-right">{pct}%</span>
+                </div>
+              )}
+              {/* #717: expand the per-spool location panel. Shown whenever the
+                  filament has any spool (incl. retired) so the user can see /
+                  change where each one lives. */}
+              {spools.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => toggleSpools(f._id)}
+                  aria-expanded={spoolsExpanded}
+                  aria-label={spoolsExpanded ? t("filaments.spools.collapse") : t("filaments.spools.expand")}
+                  title={spoolsExpanded ? t("filaments.spools.collapse") : t("filaments.spools.expand")}
+                  className="text-xs text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 inline-flex items-center gap-0.5"
+                >
+                  <span aria-hidden="true">{spoolsExpanded ? "▾" : "▸"}</span>
+                  <span>×{spools.length}</span>
+                </button>
+              )}
             </div>
           );
         })()}
@@ -825,7 +920,50 @@ export default function Home() {
         </Link>
       </td>
     </tr>
-  );
+    {/* #717: per-spool location panel */}
+    {spoolsExpanded && spools.length > 0 && (
+      <tr className="border-b border-gray-200 dark:border-gray-800 bg-blue-50/40 dark:bg-blue-950/20">
+        <td colSpan={10} className="py-2 px-2 pl-10">
+          <div className="space-y-1.5">
+            {spools.map((s, i) => (
+              <div key={s._id} className="flex items-center gap-3 text-xs flex-wrap">
+                <span className="font-medium text-gray-700 dark:text-gray-300 min-w-[110px]">
+                  {s.label || t("filaments.spools.spoolN", { n: i + 1 })}
+                </span>
+                {s.retired && (
+                  <span className="text-[10px] text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/40 px-1 py-0.5 rounded">
+                    {t("filaments.spools.retired")}
+                  </span>
+                )}
+                <span className="text-gray-400">
+                  {s.totalWeight != null ? `${Math.round(s.totalWeight)} g` : "—"}
+                </span>
+                <label className="flex items-center gap-1.5 ml-auto">
+                  <span className="text-gray-500">{t("filaments.spools.location")}</span>
+                  <select
+                    value={s.locationId ?? ""}
+                    disabled={movingSpool === `${f._id}:${s._id}`}
+                    onChange={(e) => moveSpool(f._id, s._id, e.target.value || null)}
+                    aria-label={t("filaments.spools.location")}
+                    className="px-2 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 disabled:opacity-50"
+                  >
+                    <option value="">{t("filaments.spools.noLocation")}</option>
+                    {locations.map((l) => (
+                      <option key={l._id} value={l._id}>
+                        {l.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            ))}
+          </div>
+        </td>
+      </tr>
+    )}
+    </React.Fragment>
+    );
+  };
 
   const renderParentRow = (group: GroupedFilament) => {
     const f = group.parent;

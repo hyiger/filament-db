@@ -165,12 +165,16 @@ export interface FilamentSummary {
   parentId: string | null;
   spools: {
     _id: string;
+    /** #717 — per-spool label, shown in the home-page spool panel so the user
+     * can tell spools apart when changing a location. */
+    label?: string | null;
     totalWeight: number | null;
     /** v1.11 — retired spools are excluded from inventory totals and list
      * weight bars, but the spool itself remains for historical reference. */
     retired?: boolean;
-    /** #616 — location reference, used only to count distinct spool
-     * locations for the home-page stat line. Null when unassigned. */
+    /** #616 — location reference, used to count distinct spool locations for
+     * the home-page stat line AND (#717) to show/change a spool's location
+     * inline in the expandable per-spool panel. Null when unassigned. */
     locationId?: string | null;
   }[];
   spoolWeight: number | null;
