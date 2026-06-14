@@ -83,6 +83,10 @@ export default function LocationForm({ initialData, onSubmit, onDirtyChange }: P
 
   const inputClass =
     "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm dark:text-gray-100 bg-transparent";
+  // GH #711: a <select> needs an explicit dark background so its native option
+  // popup follows dark mode — a transparent bg makes the popup render
+  // light-on-white. Text inputs keep bg-transparent (they have no popup).
+  const selectClass = inputClass.replace("bg-transparent", "bg-white dark:bg-gray-900");
   const labelClass =
     "block text-sm font-medium text-gray-900 dark:text-gray-100 mb-1";
 
@@ -102,7 +106,7 @@ export default function LocationForm({ initialData, onSubmit, onDirtyChange }: P
       <div>
         <label className={labelClass}>{t("locations.form.kind")}</label>
         <select
-          className={inputClass}
+          className={selectClass}
           value={form.kind}
           onChange={(e) => updateForm({ kind: e.target.value })}
         >

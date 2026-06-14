@@ -525,6 +525,10 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
 
   const inputClass =
     "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent text-gray-900 dark:text-gray-100";
+  // GH #711: a <select> needs an explicit dark background so its native option
+  // popup follows dark mode — a transparent bg makes the popup render
+  // light-on-white. Text inputs keep bg-transparent (they have no popup).
+  const selectClass = inputClass.replace("bg-transparent", "bg-white dark:bg-gray-900");
   const labelClass = "block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100";
 
   return (
@@ -691,7 +695,7 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
                     })}
                   />
                   <select
-                    className={`col-span-5 ${inputClass}`}
+                    className={`col-span-5 ${selectClass}`}
                     value={slot.filamentId ?? ""}
                     onChange={(e) =>
                       updateSlot(slot._uid, {
@@ -711,7 +715,7 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
                     ))}
                   </select>
                   <select
-                    className={`col-span-3 ${inputClass}`}
+                    className={`col-span-3 ${selectClass}`}
                     value={slot.spoolId ?? ""}
                     onChange={(e) =>
                       updateSlot(slot._uid, { spoolId: e.target.value || null })

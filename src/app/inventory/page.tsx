@@ -427,7 +427,7 @@ export default function InventoryPage() {
             id="inv-kind"
             value={kind}
             onChange={(e) => setKind(e.target.value)}
-            className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
+            className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
           >
             <option value="">{t("inventory.filter.allKinds")}</option>
             <option value="shelf">{t("locations.kind.shelf")}</option>
@@ -940,7 +940,7 @@ function SpoolEditRow({
             }}
             aria-label={t("inventory.moveTo")}
             title={t("inventory.moveTo")}
-            className="text-xs px-1 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-transparent disabled:opacity-50"
+            className="text-xs px-1 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 disabled:opacity-50"
           >
             <option value="">{t("inventory.moveTo")}</option>
             <option value="__none">{t("inventory.noLocation")}</option>

@@ -914,6 +914,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
 
   const inputClass =
     "w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent text-gray-900 dark:text-gray-100";
+  // GH #711: a <select> needs an explicit dark background so its native option
+  // popup follows dark mode — a transparent bg makes the popup render
+  // light-on-white. Text inputs keep bg-transparent (they have no popup).
+  const selectClass = inputClass.replace("bg-transparent", "bg-white dark:bg-gray-900");
   const labelClass = "block text-sm font-medium mb-1 text-gray-900 dark:text-gray-100";
 
   // Single source of truth for the submit button label so the duplicate at
@@ -2100,7 +2104,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         </div>
         <div>
           <label className={labelClass}>{t("form.spoolType")}</label>
-          <select className={inputClass} value={form.spoolType}
+          <select className={selectClass} value={form.spoolType}
             onChange={(e) => setForm({ ...form, spoolType: e.target.value })}>
             <option value="">—</option>
             <option value="plastic">{t("form.spoolType.plastic")}</option>

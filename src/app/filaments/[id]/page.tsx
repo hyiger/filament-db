@@ -2225,7 +2225,7 @@ function SpoolCard({
       <div className="mt-3 flex items-center gap-2 text-xs">
         <label className="text-gray-500">{t("detail.spool.location")}:</label>
         <select
-          className="px-2 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+          className="px-2 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
           value={spool.locationId ?? ""}
           onChange={(e) => onUpdateLocation(e.target.value || null)}
         >
@@ -2278,7 +2278,7 @@ function SpoolCard({
           <span className="text-gray-400">{t("detail.spool.noPrinterSlots")}</span>
         ) : (
           <select
-            className="px-2 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-transparent disabled:opacity-50"
+            className="px-2 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 disabled:opacity-50"
             value=""
             disabled={spool.retired}
             title={spool.retired ? t("detail.spool.retiredCannotAssign") : undefined}
