@@ -1084,6 +1084,7 @@ export default function Home() {
                 <div className="px-4 py-1">
                   <span className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">{t("spools.export")}</span>
                 </div>
+                {/* eslint-disable-next-line @next/next/no-html-link-for-pages -- a CSV download endpoint, not a page; the new dynamic /api/spools/[spoolId] route makes the linter match this static export-csv path as a "page" */}
                 <a
                   href="/api/spools/export-csv"
                   className="block px-4 py-2 text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 flex items-center gap-2"
