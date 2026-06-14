@@ -599,11 +599,32 @@ function withIpcTimeout<T>(fn: () => Promise<T>, label: string, timeoutMs: numbe
   ]);
 }
 
-function stopServer() {
-  if (serverProcess) {
-    serverProcess.kill();
-    serverProcess = null;
-  }
+/**
+ * Stop the embedded server and resolve only once it has actually exited, so a
+ * follow-up startProductionServer() doesn't probe a port the dying process
+ * still owns — otherwise waitForServer() can be answered by the OLD server and
+ * report "ready" before the replacement has bound, and the new child then
+ * fails with EADDRINUSE (Codex P2 on PR #718). serverProcess is nulled FIRST
+ * so the GH #315 crash-restart guard (thisProc !== serverProcess) suppresses a
+ * respawn of the process we're intentionally killing.
+ */
+function stopServer(): Promise<void> {
+  const proc = serverProcess;
+  if (!proc) return Promise.resolve();
+  serverProcess = null;
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      resolve();
+    };
+    proc.once("exit", finish);
+    proc.kill();
+    // Safety net: never hang the caller if "exit" doesn't fire (already-dead
+    // handle, etc.). In practice the utility process exits within a few ms.
+    setTimeout(finish, 5000);
+  });
 }
 
 /**
@@ -863,7 +884,7 @@ ipcMain.handle("save-config", async (event, config: {
 
     if (!isDev) {
       // Restart the production server with the new URI
-      stopServer();
+      await stopServer();
       try {
         await startProductionServer(uri || undefined);
       } catch (err) {
@@ -897,7 +918,7 @@ ipcMain.handle("save-config", async (event, config: {
     // re-initialised) and no window reload (the renderer talks to localhost
     // either way). The await means this resolves only once the server is back
     // up, so the renderer's "applying…" state reflects real readiness.
-    stopServer();
+    await stopServer();
     try {
       await startProductionServer((store.get("mongodbUri") as string) || undefined);
     } catch (err) {
@@ -909,6 +930,9 @@ ipcMain.handle("save-config", async (event, config: {
       // isn't left with a dead window. Either way return failure so the
       // renderer's error path fires and the toggle doesn't show as applied.
       store.set("exposeToLan", !config.exposeToLan);
+      // Clear any half-spawned/failed process before the recovery start so it
+      // doesn't collide with the retry.
+      await stopServer();
       try {
         await startProductionServer((store.get("mongodbUri") as string) || undefined);
       } catch (recoveryErr) {
@@ -1609,7 +1633,7 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
-    stopServer();
+    void stopServer();
     app.quit();
   }
 });
@@ -1618,7 +1642,7 @@ app.on("before-quit", (event) => {
   if (isQuitting) return;
   isQuitting = true;
   event.preventDefault();
-  stopServer();
+  void stopServer();
   if (syncService) syncService.destroy();
   if (nfcService) nfcService.destroy();
 

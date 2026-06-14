@@ -1373,7 +1373,7 @@
   "settings.lanShare.activeHint": "Reachable on your network",
   "settings.lanShare.connectAt": "On your phone, enter this server address:",
   "settings.lanShare.noIp": "No local network address found — make sure this computer is connected to Wi-Fi or Ethernet.",
-  "settings.lanShare.warning": "Only enable this on networks you trust. While shared, any device on the network can reach Filament DB and its data. For an extra layer, set a FILAMENTDB_API_KEY (see the API docs).",
+  "settings.lanShare.warning": "Only enable this on networks you trust — your home or office Wi-Fi, not public or guest networks. While shared, any device on the network can open Filament DB and read or change its data; there is no password.",
   "settings.lanShare.error": "Couldn't change the setting. Please try again.",
   "settings.connectionAtlas": "Atlas (Cloud)",
   "settings.connectionAtlasDesc": "Store data in MongoDB Atlas. Accessible from any device.",
