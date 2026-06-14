@@ -116,6 +116,8 @@ export default function FilamentDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // Show retired spools too (so the Un-retire action is reachable, Codex P2).
+  const [showRetired, setShowRetired] = useState(false);
   // GH #595/#693: arrived via a spool deep-link QR (`?spool=<id>`) — briefly
   // highlight that spool's card once the filament (with its spools) loads.
   const [highlightSpoolId, setHighlightSpoolId] = useState<string | null>(null);
@@ -227,13 +229,19 @@ export default function FilamentDetailScreen() {
   const hasColor = !!filament.color || (filament.secondaryColors?.length ?? 0) > 0;
   const swatchColor = filament.color || filament.secondaryColors?.[0] || '#808080';
 
-  // Feature A: if the deep-linked spool is retired and not in activeSpools, include it.
+  // Which spools to render: active ones, plus retired ones when the user has
+  // toggled them on (so Un-retire is reachable, Codex P2), plus a retired
+  // deep-link target even when the toggle is off (Feature A).
   const deepLinkedSpool = spoolParam ? allSpools.find((s) => s._id === spoolParam) : undefined;
   const deepLinkedIsRetiredExtra =
-    deepLinkedSpool?.retired && !activeSpools.some((s) => s._id === spoolParam);
-  const spoolsToRender: Spool[] = deepLinkedIsRetiredExtra
-    ? [...activeSpools, deepLinkedSpool as Spool]
-    : activeSpools;
+    !showRetired &&
+    deepLinkedSpool?.retired &&
+    !activeSpools.some((s) => s._id === spoolParam);
+  const spoolsToRender: Spool[] = showRetired
+    ? allSpools
+    : deepLinkedIsRetiredExtra
+      ? [...activeSpools, deepLinkedSpool as Spool]
+      : activeSpools;
 
   // The spool PUT returns the RAW (unresolved) filament — for a variant that
   // inherits density / temps / weights from its parent, those come back null.
@@ -334,6 +342,17 @@ export default function FilamentDetailScreen() {
           );
         })
       )}
+
+      {retiredCount > 0 && (
+        <Pressable
+          style={[styles.retiredToggle, { borderColor: c.border }]}
+          onPress={() => setShowRetired((v) => !v)}
+        >
+          <Text style={[styles.retiredToggleText, { color: c.muted }]}>
+            {showRetired ? 'Hide retired' : `Show ${retiredCount} retired`}
+          </Text>
+        </Pressable>
+      )}
     </ScrollView>
   );
 }
@@ -367,28 +386,30 @@ function SpoolRow({
   // Feature B: log usage input state.
   const [usageGrams, setUsageGrams] = useState('');
 
-  /** Feature C: route every spool mutation through the offline write queue. */
-  /** Returns true when the write went through or was queued; false on a real
-   * server error (so callers can keep the user's input to retry). */
+  /** Feature C: route every spool mutation through the offline write queue.
+   * Returns `{ ok }` — false on a real server error so callers can keep the
+   * user's input to retry — and the server's `filament` when it went through
+   * live (callers refresh from the authoritative state rather than props). */
   async function runWrite(
     saveKey: string,
     label: string,
     write: WriteOp,
     optimisticPatch: Partial<Spool>,
-  ): Promise<boolean> {
+  ): Promise<{ ok: boolean; filament?: Filament }> {
     setSaving(saveKey);
     try {
       const result = await submitWrite(api, { filamentId, spoolId: spool._id, label, write });
       if (result.queued) {
         onLocalPatch(spool._id, optimisticPatch);
         Alert.alert('Saved offline', 'This change will sync when the server is reachable.');
-      } else {
-        onUpdated(result.result as Filament);
+        return { ok: true };
       }
-      return true;
+      const f = result.result as Filament;
+      onUpdated(f);
+      return { ok: true, filament: f };
     } catch (e) {
       Alert.alert('Update failed', (e as Error).message);
-      return false;
+      return { ok: false };
     } finally {
       setSaving(null);
     }
@@ -439,19 +460,23 @@ function SpoolRow({
       spool.totalWeight == null ? undefined : Math.max(0, spool.totalWeight - g);
     const optimisticPatch: Partial<Spool> =
       optimisticTotalWeight !== undefined ? { totalWeight: optimisticTotalWeight } : {};
-    const ok = await runWrite(
+    const res = await runWrite(
       'usage',
       `Use ${g} g`,
       { kind: 'logUsage', grams: g },
       optimisticPatch,
     );
-    if (ok) {
+    if (res.ok) {
       setUsageGrams('');
-      // Reflect the decrement in the remaining-weight field too — otherwise it
-      // keeps the pre-usage value and a later Save writes it back, undoing the
-      // usage (Codex P2). Usage is online-only (not queued), so `remaining`
-      // here minus g equals the server's new remaining.
-      if (remaining != null) setGrams(String(Math.max(0, remaining - g)));
+      // Refresh the remaining-weight field from the SERVER's authoritative
+      // spool, not the pre-request value — the weight may have changed
+      // server-side since this screen loaded (another device / print history),
+      // and a stale value would be written back on a later Save (Codex P2).
+      // Usage is online-only (never queued), so res.filament is present.
+      const updated = res.filament?.spools?.find((sp) => sp._id === spool._id);
+      if (updated?.totalWeight != null) {
+        setGrams(String(Math.max(0, Math.round(updated.totalWeight - tare))));
+      }
     }
   }
 
@@ -474,7 +499,10 @@ function SpoolRow({
       ]}
       onLayout={onLayoutY ? (e) => onLayoutY(e.nativeEvent.layout.y) : undefined}
     >
-      <Text style={[styles.cardTitle, { color: c.text }]}>{spool.label || 'Spool'}</Text>
+      <Text style={[styles.cardTitle, { color: c.text }]}>
+        {spool.label || 'Spool'}
+        {spool.retired ? <Text style={{ color: c.muted, fontWeight: '400' }}> · retired</Text> : null}
+      </Text>
 
       <Text style={[styles.fieldLabel, { color: c.muted }]}>Remaining filament (g)</Text>
       <View style={styles.row}>
@@ -641,6 +669,15 @@ const styles = StyleSheet.create({
   },
   chipText: { fontSize: 14 },
   disabled: { opacity: 0.5 },
+  retiredToggle: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    alignSelf: 'flex-start',
+    marginTop: 14,
+  },
+  retiredToggleText: { fontSize: 14, fontWeight: '600' },
   pendingPill: {
     borderWidth: 1,
     borderRadius: 12,
