@@ -41,7 +41,14 @@ function instanceName(): string {
 export function startMdnsAdvertisement(port: number, version: string): void {
   stopMdnsAdvertisement();
   try {
-    bonjour = new Bonjour();
+    // Pass an errorCallback so the underlying responder routes async multicast
+    // send/respond errors here instead of its default (which THROWS when no
+    // callback is given) — a transient socket error must not crash the main
+    // process for a best-effort advertiser (Codex #723). service.on("error")
+    // below only covers publish errors, not responder-level ones.
+    bonjour = new Bonjour(undefined, (err: unknown) => {
+      console.error("mDNS responder error:", err);
+    });
     service = bonjour.publish({
       name: instanceName(),
       type: SERVICE_TYPE,

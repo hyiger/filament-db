@@ -145,6 +145,10 @@ export function useServerDiscovery(): ServerDiscovery {
     });
     zc.on('error', (err) => {
       console.warn('zeroconf error', err);
+      // Tear down so `scanning` clears and the Scan button re-enables — an async
+      // error (denied iOS Local Network permission, Android NSD failure) would
+      // otherwise strand the UI in a permanent "Scanning…" state (Codex #723).
+      stop();
     });
     try {
       zc.scan('filamentdb', 'tcp', 'local.');
