@@ -1,3 +1,4 @@
+import os from "os";
 import { Bonjour, type Service } from "bonjour-service";
 
 /**
@@ -18,6 +19,23 @@ const SERVICE_NAME = "Filament DB";
 let bonjour: Bonjour | null = null;
 let service: Service | null = null;
 
+/**
+ * A per-machine instance name. mDNS instance names must be unique on a LAN —
+ * two desktops publishing the bare "Filament DB" would collide and bonjour-
+ * service would suppress the second on probe, hiding it from discovery
+ * (Codex #723). Suffix the hostname so each host is distinct and recognisable
+ * in the mobile picker.
+ */
+function instanceName(): string {
+  let host = "";
+  try {
+    host = os.hostname().replace(/\.local$/i, "").trim();
+  } catch {
+    host = "";
+  }
+  return host ? `${SERVICE_NAME} (${host})` : SERVICE_NAME;
+}
+
 /** Start (or restart) advertising the server on `port`. Idempotent and
  *  best-effort — a failure to advertise must never crash the app. */
 export function startMdnsAdvertisement(port: number, version: string): void {
@@ -25,7 +43,7 @@ export function startMdnsAdvertisement(port: number, version: string): void {
   try {
     bonjour = new Bonjour();
     service = bonjour.publish({
-      name: SERVICE_NAME,
+      name: instanceName(),
       type: SERVICE_TYPE,
       port,
       txt: { app: "filament-db", version },

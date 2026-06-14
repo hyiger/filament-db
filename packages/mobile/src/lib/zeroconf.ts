@@ -29,21 +29,38 @@ export interface ZeroconfService {
 
 const IPV4_RE = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
 
+/** RFC1918 private ranges — the addresses a phone on the same Wi-Fi can route
+ *  to. Sorted ahead of anything else so the likely-LAN candidate leads. */
+function isPrivateIpv4(ip: string): boolean {
+  if (ip.startsWith('192.168.')) return true;
+  if (ip.startsWith('10.')) return true;
+  const m = /^172\.(\d{1,3})\./.exec(ip);
+  return m ? Number(m[1]) >= 16 && Number(m[1]) <= 31 : false;
+}
+
 /**
- * Build a Filament DB server entry from a resolved zeroconf service. Prefers an
- * IPv4 address over the `.local` hostname — phones reach a raw LAN IP reliably,
- * whereas `.local` resolution over HTTP is flaky on some networks. Returns null
- * when the service carries no usable address or port. Pure + unit-testable.
+ * Build the candidate server entries from a resolved zeroconf service.
+ *
+ * A desktop with several non-loopback interfaces (Wi-Fi + Docker/VM/VPN) is
+ * advertised with multiple IPv4 addresses, and only some are reachable from the
+ * phone. Rather than guess one (Codex #723), return EVERY usable IPv4 as its own
+ * entry — RFC1918 private addresses first — so the user can pick the one that
+ * connects. Falls back to the `.local` hostname only when no IPv4 is offered.
+ * Returns [] when the service has no usable address/port. Pure + unit-testable.
  */
-export function discoveredServerFromService(
+export function discoveredServersFromService(
   svc: ZeroconfService | null | undefined,
-): DiscoveredServer | null {
-  if (!svc || !svc.port) return null;
-  const ipv4 = (svc.addresses ?? []).find((a) => IPV4_RE.test(a));
-  const host = ipv4 ?? (svc.host ? svc.host.replace(/\.$/, '') : null);
-  if (!host) return null;
-  const url = `http://${host}:${svc.port}`;
-  return { id: url, name: svc.name?.trim() || host, url };
+): DiscoveredServer[] {
+  if (!svc || !svc.port) return [];
+  const name = svc.name?.trim() ?? '';
+  const ipv4s = (svc.addresses ?? [])
+    .filter((a) => IPV4_RE.test(a) && !a.startsWith('169.254.')) // skip link-local APIPA
+    .sort((a, b) => (isPrivateIpv4(a) ? 0 : 1) - (isPrivateIpv4(b) ? 0 : 1));
+  const hosts = ipv4s.length > 0 ? ipv4s : svc.host ? [svc.host.replace(/\.$/, '')] : [];
+  return hosts.map((host) => {
+    const url = `http://${host}:${svc.port}`;
+    return { id: url, name: name || host, url };
+  });
 }
 
 interface ZeroconfInstance {
@@ -116,9 +133,15 @@ export function useServerDiscovery(): ServerDiscovery {
     setServers([]);
     setScanning(true);
     zc.on('resolved', (svc) => {
-      const server = discoveredServerFromService(svc);
-      if (!server) return;
-      setServers((prev) => (prev.some((s) => s.id === server.id) ? prev : [...prev, server]));
+      const found = discoveredServersFromService(svc);
+      if (found.length === 0) return;
+      setServers((prev) => {
+        const next = [...prev];
+        for (const s of found) {
+          if (!next.some((p) => p.id === s.id)) next.push(s);
+        }
+        return next;
+      });
     });
     zc.on('error', (err) => {
       console.warn('zeroconf error', err);
