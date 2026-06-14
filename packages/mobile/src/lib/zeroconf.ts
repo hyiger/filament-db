@@ -98,13 +98,26 @@ export interface ServerDiscovery {
  * (e.g. on the settings screen) and the returned `servers` list fills in as
  * instances resolve. Scanning stops on unmount.
  */
+/** Bound the scanning window. Android's default NSD backend can fail SILENTLY
+ *  (no 'resolved' and no 'error' — react-native-zeroconf 0.14 documents this),
+ *  so neither the resolved handler nor the error handler would ever clear
+ *  `scanning`, stranding the UI on "Scanning…". A hard timeout guarantees the
+ *  Scan button re-enables; servers found during the window stay listed and the
+ *  user can Rescan. (Codex #723.) */
+const SCAN_TIMEOUT_MS = 15_000;
+
 export function useServerDiscovery(): ServerDiscovery {
   const [servers, setServers] = useState<DiscoveredServer[]>([]);
   const [scanning, setScanning] = useState(false);
   const [supported, setSupported] = useState(true);
   const zcRef = useRef<ZeroconfInstance | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stop = useCallback(() => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
     const zc = zcRef.current;
     zcRef.current = null;
     if (zc) {
@@ -152,6 +165,8 @@ export function useServerDiscovery(): ServerDiscovery {
     });
     try {
       zc.scan('filamentdb', 'tcp', 'local.');
+      // Hard stop after the window so a silent native failure can't hang the UI.
+      timeoutRef.current = setTimeout(stop, SCAN_TIMEOUT_MS);
     } catch (err) {
       console.warn('zeroconf scan failed', err);
       setSupported(false);
