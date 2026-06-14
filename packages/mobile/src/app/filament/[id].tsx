@@ -518,7 +518,7 @@ function SpoolRow({
         <Pressable
           style={[styles.smallButton, { backgroundColor: c.tint }, saving === 'weight' && styles.disabled]}
           onPress={saveWeight}
-          disabled={saving === 'weight'}
+          disabled={saving !== null}
         >
           <Text style={[styles.smallButtonText, { color: c.onTint }]}>
             {saving === 'weight' ? '…' : 'Save'}
@@ -538,7 +538,7 @@ function SpoolRow({
                 { borderColor: active ? c.tint : c.border, backgroundColor: active ? c.tint : 'transparent' },
               ]}
               onPress={() => move(loc._id, loc.name)}
-              disabled={saving === loc._id}
+              disabled={saving !== null}
             >
               <Text style={[styles.chipText, { color: active ? c.onTint : c.text }]}>{loc.name}</Text>
             </Pressable>
@@ -553,7 +553,7 @@ function SpoolRow({
             },
           ]}
           onPress={() => move(null)}
-          disabled={saving === 'none'}
+          disabled={saving !== null}
         >
           <Text style={[styles.chipText, { color: !spool.locationId ? c.onTint : c.text }]}>None</Text>
         </Pressable>
@@ -571,7 +571,7 @@ function SpoolRow({
           saving === 'retire' && styles.disabled,
         ]}
         onPress={toggleRetire}
-        disabled={saving === 'retire'}
+        disabled={saving !== null}
       >
         <Text style={[styles.smallButtonText, { color: spool.retired ? c.onTint : c.text }]}>
           {saving === 'retire' ? '…' : spool.retired ? 'Un-retire' : 'Retire'}
@@ -593,7 +593,7 @@ function SpoolRow({
         <Pressable
           style={[styles.smallButton, { backgroundColor: c.tint }, saving === 'usage' && styles.disabled]}
           onPress={logUsage}
-          disabled={saving === 'usage'}
+          disabled={saving !== null}
         >
           <Text style={[styles.smallButtonText, { color: c.onTint }]}>
             {saving === 'usage' ? '…' : 'Log'}
@@ -610,7 +610,7 @@ function SpoolRow({
           saving === 'dry' && styles.disabled,
         ]}
         onPress={logDryCycle}
-        disabled={saving === 'dry'}
+        disabled={saving !== null}
       >
         <Text style={[styles.smallButtonText, { color: c.text }]}>
           {saving === 'dry' ? '…' : 'Log dry cycle'}

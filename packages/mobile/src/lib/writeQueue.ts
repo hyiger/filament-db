@@ -178,6 +178,13 @@ export async function submitWrite(
   // e.g. queued remaining=100 then a live remaining=50, or a queued SET that
   // replays over a live usage decrement).
   if ((await pendingCount()) > 0) {
+    // First try to drain — the server may be reachable now even though no
+    // mount/focus/foreground flush has fired, so we shouldn't enqueue/block
+    // unnecessarily and leave the user stuck (Codex P2). A concurrent flush
+    // (the guard) no-ops here; we then re-check below.
+    await flushQueue(api).catch(() => {});
+  }
+  if ((await pendingCount()) > 0) {
     if (isQueueable(entry.write)) {
       // Idempotent — enqueue it to drain in order behind the pending writes.
       await enqueue(entry);
