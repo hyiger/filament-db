@@ -1,6 +1,7 @@
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
   Platform,
@@ -9,16 +10,19 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  View,
 } from 'react-native';
 
 import { useServerConfig } from '@/lib/serverConfig';
 import { useColors } from '@/lib/theme';
+import { useServerDiscovery } from '@/lib/zeroconf';
 
 export default function SettingsScreen() {
   const { baseUrl, apiKey, save } = useServerConfig();
   const [url, setUrl] = useState(baseUrl ?? '');
   const [key, setKey] = useState(apiKey ?? '');
   const [saving, setSaving] = useState(false);
+  const { servers, scanning, supported, scan } = useServerDiscovery();
   const router = useRouter();
   const c = useColors();
 
@@ -45,7 +49,46 @@ export default function SettingsScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-        <Text style={[styles.label, { color: c.text }]}>Server address</Text>
+        {supported && (
+          <>
+            <View style={styles.discoverHeader}>
+              <Text style={[styles.label, { color: c.text }]}>Find on your network</Text>
+              <Pressable onPress={scan} hitSlop={8} disabled={scanning}>
+                <View style={styles.scanAction}>
+                  {scanning && <ActivityIndicator size="small" color={c.tint} />}
+                  <Text style={[styles.scanText, { color: c.tint }]}>
+                    {scanning ? 'Scanning…' : servers.length > 0 ? 'Rescan' : 'Scan'}
+                  </Text>
+                </View>
+              </Pressable>
+            </View>
+            {servers.map((s) => {
+              const selected = s.url === url;
+              return (
+                <Pressable
+                  key={s.id}
+                  onPress={() => setUrl(s.url)}
+                  style={[
+                    styles.serverRow,
+                    { borderColor: selected ? c.tint : c.border, backgroundColor: c.inputBg },
+                  ]}
+                >
+                  <Text style={[styles.serverName, { color: c.text }]}>{s.name}</Text>
+                  <Text style={[styles.serverUrl, { color: c.muted }]}>{s.url}</Text>
+                </Pressable>
+              );
+            })}
+            <Text style={[styles.hint, { color: c.muted }]}>
+              {servers.length > 0
+                ? 'Tap a server to use its address, then Save.'
+                : scanning
+                  ? 'Looking for Filament DB on this network…'
+                  : 'Make sure “Share on local network” is on in the desktop app and this phone is on the same Wi-Fi, then Scan.'}
+            </Text>
+            <Text style={[styles.label, styles.spaced, { color: c.text }]}>Server address</Text>
+          </>
+        )}
+        {!supported && <Text style={[styles.label, { color: c.text }]}>Server address</Text>}
         <TextInput
           style={inputStyle}
           value={url}
@@ -95,6 +138,22 @@ const styles = StyleSheet.create({
   container: { padding: 20, gap: 6 },
   label: { fontSize: 15, fontWeight: '600' },
   spaced: { marginTop: 18 },
+  discoverHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  scanAction: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  scanText: { fontSize: 15, fontWeight: '600' },
+  serverRow: {
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    marginTop: 8,
+    gap: 2,
+  },
+  serverName: { fontSize: 16, fontWeight: '600' },
+  serverUrl: { fontSize: 13 },
   input: {
     borderWidth: 1,
     borderRadius: 10,

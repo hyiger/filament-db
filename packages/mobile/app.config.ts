@@ -73,10 +73,26 @@ const config: ExpoConfig = {
         NSAllowsArbitraryLoads: false,
         NSAllowsLocalNetworking: true,
       },
+      // mDNS auto-discovery (react-native-zeroconf). iOS 14+ requires every
+      // Bonjour service type the app browses to be declared here, plus a
+      // local-network usage description for the permission prompt. The desktop
+      // app advertises `_filamentdb._tcp` when "Share on local network" is on.
+      NSBonjourServices: ['_filamentdb._tcp'],
+      NSLocalNetworkUsageDescription:
+        'Filament DB looks for your Filament DB desktop app on this network so you can connect without typing its address.',
     },
   },
   android: {
     package: 'com.filamentdb.scanner',
+    // mDNS auto-discovery (react-native-zeroconf / NsdManager). INTERNET is
+    // added by default; the multicast + network/wifi-state perms are needed to
+    // browse Bonjour services on the LAN. `android.permissions` is additive.
+    permissions: [
+      'android.permission.INTERNET',
+      'android.permission.ACCESS_NETWORK_STATE',
+      'android.permission.ACCESS_WIFI_STATE',
+      'android.permission.CHANGE_WIFI_MULTICAST_STATE',
+    ],
     adaptiveIcon: {
       backgroundColor: '#E6F4FE',
       foregroundImage: './assets/images/android-icon-foreground.png',

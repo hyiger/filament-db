@@ -8,6 +8,7 @@ import { NfcService } from "./nfc-service";
 import { listLabelPrinters, printLabel as printLabelToDevice } from "./label-printer";
 import { isLoopbackHostname } from "../src/lib/loopbackHost";
 import { listLanIpv4 } from "../src/lib/getLanIp";
+import { startMdnsAdvertisement, stopMdnsAdvertisement } from "./mdns-service";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
 import { initAutoUpdater } from "./auto-updater";
@@ -628,6 +629,21 @@ function stopServer(): Promise<void> {
 }
 
 /**
+ * Advertise (or stop advertising) the embedded server over mDNS so the mobile
+ * app can auto-discover it on the LAN. Only when packaged AND "Share on local
+ * network" is enabled — in dev the renderer is served by a separate `next dev`,
+ * and when exposeToLan is off the server is loopback-only (nothing to reach).
+ * Idempotent; call it after the server's bind state settles.
+ */
+function syncMdnsAdvertisement(): void {
+  if (!isDev && store.get("exposeToLan")) {
+    startMdnsAdvertisement(PORT, app.getVersion());
+  } else {
+    stopMdnsAdvertisement();
+  }
+}
+
+/**
  * Resolve which MongoDB URI to use based on connection mode.
  * For offline/hybrid, starts local MongoDB.
  * For hybrid, also initializes sync service.
@@ -938,10 +954,15 @@ ipcMain.handle("save-config", async (event, config: {
       } catch (recoveryErr) {
         console.error("Failed to restore server after LAN-share toggle failure:", recoveryErr);
       }
+      // Reflect the reverted bind state in the mDNS advertisement too.
+      syncMdnsAdvertisement();
       return { success: false };
     }
   }
 
+  // Start/stop LAN auto-discovery to match the new "Share on local network"
+  // state once the server's bind has settled.
+  if (exposeToLanChanged) syncMdnsAdvertisement();
   return { success: true };
 });
 
@@ -1609,6 +1630,9 @@ app.whenReady().then(async () => {
         `The embedded web server failed to start. The app may not work correctly.\n\n${err instanceof Error ? err.message : String(err)}`,
       );
     }
+    // Advertise over mDNS if "Share on local network" is on, so the mobile app
+    // can auto-discover this instance from a cold start.
+    syncMdnsAdvertisement();
   }
 
   // Create the window. NFC init is deferred to the window's "show" event
@@ -1643,6 +1667,7 @@ app.on("before-quit", (event) => {
   isQuitting = true;
   event.preventDefault();
   void stopServer();
+  stopMdnsAdvertisement();
   if (syncService) syncService.destroy();
   if (nfcService) nfcService.destroy();
 
