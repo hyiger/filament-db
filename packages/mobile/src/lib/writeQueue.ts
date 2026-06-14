@@ -248,15 +248,16 @@ export async function flushQueue(api: Api): Promise<FlushResult> {
   flushing = true;
   let flushed = 0;
   let dropped = 0;
-  const removeById = (id: string) =>
+  // Remove a processed entry by id; returns false if it was no longer present.
+  const removeById = (id: string): Promise<boolean> =>
     withLock(async () => {
       const list = await readQueue();
       const idx = list.findIndex((e) => e.id === id);
-      if (idx >= 0) {
-        list.splice(idx, 1);
-        await writeQueueRaw(list);
-        notify(list.length);
-      }
+      if (idx < 0) return false;
+      list.splice(idx, 1);
+      await writeQueueRaw(list);
+      notify(list.length);
+      return true;
     });
   try {
     for (;;) {
@@ -266,12 +267,15 @@ export async function flushQueue(api: Api): Promise<FlushResult> {
       try {
         await applyWrite(api, head);
         flushed++;
-        await removeById(head.id);
       } catch (e) {
         if (e instanceof ApiError && isTransient(e.status)) break; // keep it, stop
-        dropped++; // permanent rejection — drop so it can't wedge the queue
-        await removeById(head.id);
+        dropped++; // permanent rejection — fall through and remove
       }
+      // Remove the processed head. If it's already gone, the queue was cleared
+      // under us (a server change called clearQueue) and may now hold entries
+      // for a DIFFERENT server — stop rather than replay them via this now-stale
+      // api (Codex P2).
+      if (!(await removeById(head.id))) break;
     }
   } finally {
     flushing = false;
