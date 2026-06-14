@@ -163,6 +163,10 @@ export default function Home() {
   const [types, setTypes] = useState<string[]>([]);
   const [vendors, setVendors] = useState<string[]>([]);
   const [showStats, setShowStats] = useState(false);
+  // Main list hides filaments with no active (non-retired) spools by default —
+  // retiring the last spool drops it off the main screen without deleting it
+  // (re-adding / un-retiring a spool brings it back). Toggle to reveal them.
+  const [showOutOfStock, setShowOutOfStock] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [importing, setImporting] = useState(false);
@@ -392,10 +396,32 @@ export default function Home() {
     return counts;
   }, [filaments, inventoryFilaments]);
 
+  // "Out of stock" = no active (non-retired) spools. Parents own no spools, so
+  // a parent counts as in-stock when any of its variants is — otherwise hiding
+  // out-of-stock would drop a parent whose variants are fully stocked.
+  const parentsWithStock = useMemo(() => {
+    const s = new Set<string>();
+    for (const f of filaments) {
+      if (f.parentId && getSpoolCount(f) > 0) s.add(f.parentId);
+    }
+    return s;
+  }, [filaments]);
+  const inStock = useCallback(
+    (f: Filament) => getSpoolCount(f) > 0 || parentsWithStock.has(f._id),
+    [parentsWithStock],
+  );
+  // Count of hidden inventory rows (standalone + variants with no active spool;
+  // parents are grouping headers, not stock) — drives the toggle's badge.
+  const outOfStockCount = useMemo(
+    () => filaments.filter((f) => !f.hasVariants && getSpoolCount(f) === 0).length,
+    [filaments],
+  );
+
   const visibleFilaments = useMemo(() => {
-    // The "all" view keeps parents in the dataset so the list renders
-    // them as grouping headers above their color variants.
-    if (quickFilter === "all") return filaments;
+    // The "all" view keeps parents in the dataset so the list renders them as
+    // grouping headers above their color variants. By default it hides
+    // out-of-stock filaments (no active spools); the toggle reveals them.
+    if (quickFilter === "all") return showOutOfStock ? filaments : filaments.filter(inStock);
     // #552: "Has spools" resolves against the full list (parents
     // included) because a parent carrying its own spool genuinely has
     // one — see the matching note in `quickFilterCounts`. Dropping it
@@ -416,7 +442,7 @@ export default function Home() {
       if (quickFilter === "noCalibration") return !f.hasCalibrations;
       return true;
     });
-  }, [filaments, inventoryFilaments, quickFilter]);
+  }, [filaments, inventoryFilaments, quickFilter, showOutOfStock, inStock]);
 
   // Parent lookup built from the *full* filament list so variant
   // enrichment (inherited nozzle/bed/cost/density/spool/net) works
@@ -993,11 +1019,28 @@ export default function Home() {
       )}
 
       <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
-        <QuickFilterChips
-          active={quickFilter}
-          onChange={setQuickFilter}
-          counts={quickFilterCounts}
-        />
+        <div className="flex items-center gap-2 flex-wrap">
+          <QuickFilterChips
+            active={quickFilter}
+            onChange={setQuickFilter}
+            counts={quickFilterCounts}
+          />
+          {quickFilter === "all" && outOfStockCount > 0 && (
+            <button
+              onClick={() => setShowOutOfStock((s) => !s)}
+              aria-pressed={showOutOfStock}
+              className={`px-3 py-1 rounded-full text-sm border transition-colors ${
+                showOutOfStock
+                  ? "bg-gray-700 text-white border-gray-700 dark:bg-gray-200 dark:text-gray-900 dark:border-gray-200"
+                  : "bg-transparent text-gray-600 border-gray-300 hover:bg-gray-100 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700"
+              }`}
+            >
+              {showOutOfStock
+                ? t("filaments.hideOutOfStock")
+                : t("filaments.showOutOfStock", { count: outOfStockCount })}
+            </button>
+          )}
+        </div>
         <div className="flex gap-2 shrink-0">
           {/* Import / Export dropdown */}
           <div className="relative" ref={importExportRef}>

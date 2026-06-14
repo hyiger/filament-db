@@ -19,6 +19,8 @@
   "inventory.batch.confirmRetire": "{count} Spulen stilllegen? Sie werden aus den Bestandssummen ausgeschlossen (Verlauf bleibt erhalten).",
   "filaments.addNew": "+ Filament hinzufügen",
   "filaments.importExport": "Import / Export",
+  "filaments.showOutOfStock": "Nicht vorrätige anzeigen ({count})",
+  "filaments.hideOutOfStock": "Nicht vorrätige ausblenden",
   "filaments.import.prusamentQR": "Prusament QR",
   "filaments.import.fromAtlas": "Aus Atlas importieren",
   "filaments.import.browseOpenPrintTag": "OpenPrintTag DB durchsuchen",

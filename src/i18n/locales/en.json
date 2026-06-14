@@ -19,6 +19,8 @@
   "inventory.batch.confirmRetire": "Retire {count} spools? They will be excluded from inventory totals (history preserved).",
   "filaments.addNew": "+ Add Filament",
   "filaments.importExport": "Import / Export",
+  "filaments.showOutOfStock": "Show out of stock ({count})",
+  "filaments.hideOutOfStock": "Hide out of stock",
   "filaments.import.prusamentQR": "Prusament QR",
   "filaments.import.fromAtlas": "Import from Atlas",
   "filaments.import.browseOpenPrintTag": "Browse OpenPrintTag DB",
