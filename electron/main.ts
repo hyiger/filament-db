@@ -7,6 +7,7 @@ import http from "http";
 import { NfcService } from "./nfc-service";
 import { listLabelPrinters, printLabel as printLabelToDevice } from "./label-printer";
 import { isLoopbackHostname } from "../src/lib/loopbackHost";
+import { listLanIpv4 } from "../src/lib/getLanIp";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
 import { initAutoUpdater } from "./auto-updater";
@@ -70,6 +71,10 @@ const store = new Store({
     aiApiKey: "",
     aiProvider: "gemini",
     locale: "en",
+    // GH #711-follow-up: when true, the embedded server binds to 0.0.0.0 so
+    // other devices on the LAN (e.g. the mobile scanner app) can reach it.
+    // Default false → loopback-only, the prior behaviour.
+    exposeToLan: false,
   },
 });
 
@@ -449,7 +454,10 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
     const env: Record<string, string> = {
       ...process.env as Record<string, string>,
       PORT: String(PORT),
-      HOSTNAME: "localhost",
+      // Bind loopback-only by default; "Share on local network" (Settings)
+      // flips this to 0.0.0.0 so LAN devices (the mobile scanner) can reach
+      // the embedded server. Toggling it restarts the server (see save-config).
+      HOSTNAME: store.get("exposeToLan") ? "0.0.0.0" : "localhost",
       NODE_ENV: "production",
     };
 
@@ -738,7 +746,16 @@ ipcMain.handle("get-config", (event) => {
     customCurrencies: store.get("customCurrencies") as string,
     locale: store.get("locale") as string,
     labelFormat: store.get("labelFormat") as string,
+    exposeToLan: store.get("exposeToLan") as boolean,
   };
+});
+
+// "Share on local network" needs to tell the user which URL to point a phone
+// at. Returns the machine's LAN IPv4 candidates (private ranges first) + the
+// server port. Empty `ips` → no usable LAN interface (e.g. Wi-Fi is off).
+ipcMain.handle("get-lan-ip", (event) => {
+  assertTrustedSender(event, "get-lan-ip");
+  return { ips: listLanIpv4(), port: PORT };
 });
 
 // (#489) Expose whether Electron is running packaged or in dev mode.
@@ -765,6 +782,7 @@ ipcMain.handle("save-config", async (event, config: {
   customCurrencies?: string;
   locale?: string;
   labelFormat?: string;
+  exposeToLan?: boolean;
 }) => {
   assertTrustedSender(event, "save-config");
 
@@ -806,6 +824,17 @@ ipcMain.handle("save-config", async (event, config: {
   // not affect the DB connection so it never triggers a server restart).
   if (config.labelFormat !== undefined) {
     store.set("labelFormat", config.labelFormat);
+  }
+
+  // "Share on local network": flips the embedded server's bind address
+  // (localhost ⇄ 0.0.0.0). Only a real change needs a server respawn; record
+  // it before writing so we can decide below.
+  let exposeToLanChanged = false;
+  if (config.exposeToLan !== undefined) {
+    if ((store.get("exposeToLan") as boolean) !== config.exposeToLan) {
+      exposeToLanChanged = true;
+    }
+    store.set("exposeToLan", config.exposeToLan);
   }
 
   // Legacy: if only mongodbUri is sent (old atlas-only flow)
@@ -859,6 +888,33 @@ ipcMain.handle("save-config", async (event, config: {
       })();
       const isSetupCompletion = currentPath === "/setup";
       mainWindow.loadURL(getAppURL(isSetupCompletion ? "/" : "/settings"));
+    }
+  } else if (exposeToLanChanged && !isDev) {
+    // LAN-share toggled with no connection change: respawn the embedded
+    // server so it rebinds to the new HOSTNAME, reusing the already-resolved
+    // active URI (store.mongodbUri — the same source the crash-restart path
+    // uses). No URI re-resolution (so sync / local-mongo aren't
+    // re-initialised) and no window reload (the renderer talks to localhost
+    // either way). The await means this resolves only once the server is back
+    // up, so the renderer's "applying…" state reflects real readiness.
+    stopServer();
+    try {
+      await startProductionServer((store.get("mongodbUri") as string) || undefined);
+    } catch (err) {
+      console.error("Failed to restart server after LAN-share toggle:", err);
+      // The new bind failed and stopServer() already tore the old server
+      // down, so the app currently has NO embedded server. Revert the
+      // persisted flag (keep the store consistent with the actual bind) and
+      // try to bring the server back on the previous binding so the user
+      // isn't left with a dead window. Either way return failure so the
+      // renderer's error path fires and the toggle doesn't show as applied.
+      store.set("exposeToLan", !config.exposeToLan);
+      try {
+        await startProductionServer((store.get("mongodbUri") as string) || undefined);
+      } catch (recoveryErr) {
+        console.error("Failed to restore server after LAN-share toggle failure:", recoveryErr);
+      }
+      return { success: false };
     }
   }
 

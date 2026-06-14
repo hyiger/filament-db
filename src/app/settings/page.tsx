@@ -103,6 +103,12 @@ export default function SettingsPage() {
   const [showUriInput, setShowUriInput] = useState(false);
   const [testingConnection, setTestingConnection] = useState(false);
 
+  // "Share on local network" (Electron only)
+  const [exposeToLan, setExposeToLan] = useState(false);
+  const [lanInfo, setLanInfo] = useState<{ ips: string[]; port: number } | null>(null);
+  const [lanSaving, setLanSaving] = useState(false);
+  const [lanError, setLanError] = useState(false);
+
   // NFC state (Electron only)
   const isElectron = useIsElectron();
   const [nfcStatus, setNfcStatus] = useState<{
@@ -136,6 +142,14 @@ export default function SettingsPage() {
         if (cfg.atlasUri) {
           setHasStoredUri(true);
         }
+        if (typeof cfg.exposeToLan === "boolean") {
+          setExposeToLan(cfg.exposeToLan);
+        }
+      }).catch(() => {});
+      // LAN addresses to display in the "Share on local network" section.
+      api.getLanInfo?.().then((info) => {
+        if (controller.signal.aborted) return;
+        setLanInfo(info);
       }).catch(() => {});
     } else {
       // Web mode — check API
@@ -146,6 +160,28 @@ export default function SettingsPage() {
     }
     return () => { controller.abort(); };
   }, []);
+
+  // Toggle "Share on local network". Persisting flips the embedded server's
+  // bind address; saveConfig resolves only once the server has restarted, so
+  // the button stays in its "applying" state until LAN access is really live.
+  async function toggleLanShare(next: boolean) {
+    const api = window.electronAPI;
+    if (!api?.saveConfig) return;
+    setLanSaving(true);
+    setLanError(false);
+    try {
+      const res = await api.saveConfig({ exposeToLan: next });
+      if (res?.success) {
+        setExposeToLan(next);
+      } else {
+        setLanError(true);
+      }
+    } catch {
+      setLanError(true);
+    } finally {
+      setLanSaving(false);
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -707,6 +743,77 @@ export default function SettingsPage() {
               {modeResult.message}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Share on local network (Electron only) */}
+      {isElectron && (
+        <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
+          <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">
+            {t("settings.lanShare.title")}
+          </h2>
+          <p className="text-sm text-gray-500 mb-4">{t("settings.lanShare.desc")}</p>
+
+          <div className="flex items-center gap-3 flex-wrap">
+            <button
+              type="button"
+              role="switch"
+              aria-checked={exposeToLan}
+              disabled={lanSaving}
+              onClick={() => toggleLanShare(!exposeToLan)}
+              className={`px-4 py-2 text-sm rounded border transition-colors disabled:opacity-50 ${
+                exposeToLan
+                  ? "border-green-500 bg-green-50 dark:bg-green-600/20 text-green-700 dark:text-green-300"
+                  : "border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-400 dark:hover:border-gray-500 hover:text-gray-800 dark:hover:text-gray-300"
+              }`}
+            >
+              {lanSaving
+                ? t("settings.lanShare.applying")
+                : exposeToLan
+                  ? t("settings.lanShare.on")
+                  : t("settings.lanShare.off")}
+            </button>
+            {exposeToLan && !lanSaving && (
+              <span className="text-sm text-green-700 dark:text-green-300">
+                {t("settings.lanShare.activeHint")}
+              </span>
+            )}
+          </div>
+
+          {lanError && (
+            <div className="mt-3 text-sm px-3 py-2 rounded bg-red-50 dark:bg-red-900/50 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800">
+              {t("settings.lanShare.error")}
+            </div>
+          )}
+
+          {exposeToLan && (
+            <div className="mt-4">
+              {lanInfo && lanInfo.ips.length > 0 ? (
+                <>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                    {t("settings.lanShare.connectAt")}
+                  </p>
+                  <ul className="space-y-1">
+                    {lanInfo.ips.map((ip) => (
+                      <li key={ip}>
+                        <code className="text-sm px-2 py-1 bg-gray-100 dark:bg-gray-800 rounded font-mono text-gray-800 dark:text-gray-200">
+                          http://{ip}:{lanInfo.port}
+                        </code>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              ) : (
+                <p className="text-sm text-amber-600 dark:text-amber-400">
+                  {t("settings.lanShare.noIp")}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="mt-4 text-xs text-amber-700 dark:text-amber-300/90 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/60 rounded px-3 py-2">
+            {t("settings.lanShare.warning")}
+          </div>
         </div>
       )}
 

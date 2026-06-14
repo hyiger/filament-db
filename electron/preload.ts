@@ -32,10 +32,11 @@ interface UpdateInstallStrings {
 contextBridge.exposeInMainWorld("electronAPI", {
   // Config
   getConfig: () => ipcRenderer.invoke("get-config"),
-  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string }) =>
+  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string; labelFormat?: string; exposeToLan?: boolean }) =>
     ipcRenderer.invoke("save-config", config),
   resetConfig: () => ipcRenderer.invoke("reset-config"),
   testConnection: (uri: string) => ipcRenderer.invoke("test-connection", uri),
+  getLanInfo: () => ipcRenderer.invoke("get-lan-ip"),
   // GH #523: showMessage bridge removed — see corresponding comment in
   // electron/main.ts. Re-add only with assertTrustedSender + payload
   // allowlist if a future feature needs it.
