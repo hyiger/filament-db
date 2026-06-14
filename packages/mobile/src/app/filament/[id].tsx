@@ -434,8 +434,14 @@ function SpoolRow({
       { kind: 'logUsage', grams: g },
       optimisticPatch,
     );
-    // Clear the input only on success/queued — keep it on a server error to retry.
-    if (ok) setUsageGrams('');
+    if (ok) {
+      setUsageGrams('');
+      // Reflect the decrement in the remaining-weight field too — otherwise it
+      // keeps the pre-usage value and a later Save writes it back, undoing the
+      // usage (Codex P2). Usage is online-only (not queued), so `remaining`
+      // here minus g equals the server's new remaining.
+      if (remaining != null) setGrams(String(Math.max(0, remaining - g)));
+    }
   }
 
   // Feature B: log dry cycle.
