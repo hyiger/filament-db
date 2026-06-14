@@ -161,6 +161,15 @@ export async function submitWrite(
   api: Api,
   entry: Omit<QueuedWrite, 'id' | 'createdAt'>,
 ): Promise<SubmitResult> {
+  // FIFO ordering: if queueable writes are already pending, enqueue this one
+  // too instead of sending it live. Going live now would let an OLDER queued
+  // write replay on top of this newer value on the next flush and overwrite it
+  // (Codex P1, e.g. queued remaining=100 then a live remaining=50). The pending
+  // writes drain in order on the next flush, this one after them.
+  if (isQueueable(entry.write) && (await pendingCount()) > 0) {
+    await enqueue(entry);
+    return { queued: true };
+  }
   try {
     const result = await applyWrite(api, { ...entry, id: 'live', createdAt: 0 });
     return { queued: false, result };
