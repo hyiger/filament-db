@@ -971,8 +971,11 @@ ipcMain.handle("save-config", async (event, config: {
   }
 
   // Start/stop LAN auto-discovery to match the new "Share on local network"
-  // state once the server's bind has settled.
-  if (exposeToLanChanged) syncMdnsAdvertisement();
+  // state once the server's bind has settled. Only for the exposeToLan-ONLY
+  // path: when connectionChanged ran it already synced/stopped mDNS based on
+  // its own restart outcome, so re-syncing here would re-advertise a dead
+  // server if that restart failed while turning LAN sharing on (Codex #723).
+  if (exposeToLanChanged && !connectionChanged) syncMdnsAdvertisement();
   return { success: true };
 });
 
