@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
+import { niceAxisScale } from "@/lib/chartScale";
 
 interface AnalyticsData {
   since: string;
@@ -64,6 +65,10 @@ export default function AnalyticsPage() {
     if (!data) return 0;
     return data.usageByDay.reduce((max, d) => Math.max(max, d.grams), 0);
   }, [data]);
+
+  // #716: a rounded axis scale + tick values so the "Usage by day" bars are
+  // readable against gridlines instead of guessing magnitudes by eye.
+  const dayScale = useMemo(() => niceAxisScale(maxDayGrams), [maxDayGrams]);
 
   const maxByFilament = useMemo(() => {
     if (!data) return 0;
@@ -185,24 +190,54 @@ export default function AnalyticsPage() {
               <p className="text-sm text-gray-500">{t("analytics.noData")}</p>
             ) : (
               <div className="border border-gray-200 dark:border-gray-700 rounded p-3">
-                <div className="flex items-end gap-0.5 h-40">
-                  {data.usageByDay.map((d) => {
-                    const pct = maxDayGrams > 0 ? (d.grams / maxDayGrams) * 100 : 0;
-                    return (
-                      <div
-                        key={d.date}
-                        className="flex-1 flex flex-col items-center justify-end"
-                        title={`${d.date}: ${d.grams} g`}
+                <div className="flex">
+                  {/* Y axis: tick labels positioned to line up with the
+                      gridlines (bottom = tick/max). */}
+                  <div className="relative h-40 w-10 shrink-0 mr-2" aria-hidden="true">
+                    {dayScale.ticks.map((tick) => (
+                      <span
+                        key={tick}
+                        className="absolute right-0 -translate-y-1/2 text-[10px] tabular-nums text-gray-400 dark:text-gray-500"
+                        style={{ bottom: `${dayScale.max > 0 ? (tick / dayScale.max) * 100 : 0}%` }}
                       >
-                        <div
-                          className={`w-full ${d.grams > 0 ? "bg-blue-500" : "bg-transparent"} rounded-sm`}
-                          style={{ height: `${pct}%`, minHeight: d.grams > 0 ? "2px" : "0" }}
-                        />
-                      </div>
-                    );
-                  })}
+                        {tick}
+                      </span>
+                    ))}
+                  </div>
+                  {/* Plot: gridlines behind, bars in front. Bars scale against
+                      dayScale.max so the tallest aligns under the top gridline.
+                      The column wrappers are h-full so the % bar height
+                      resolves against a definite height (the prior bug: a
+                      `flex items-end` row doesn't stretch its children, so
+                      `height: N%` collapsed every bar to its 2px minHeight). */}
+                  <div className="relative flex-1 h-40">
+                    {dayScale.ticks.map((tick) => (
+                      <div
+                        key={tick}
+                        className="absolute inset-x-0 border-t border-gray-200 dark:border-gray-800"
+                        style={{ bottom: `${dayScale.max > 0 ? (tick / dayScale.max) * 100 : 0}%` }}
+                      />
+                    ))}
+                    <div className="absolute inset-0 flex items-end gap-0.5">
+                      {data.usageByDay.map((d) => {
+                        const pct = dayScale.max > 0 ? (d.grams / dayScale.max) * 100 : 0;
+                        return (
+                          <div
+                            key={d.date}
+                            className="flex-1 h-full flex flex-col items-center justify-end"
+                            title={`${d.date}: ${d.grams} g`}
+                          >
+                            <div
+                              className={`w-full ${d.grams > 0 ? "bg-blue-500" : "bg-transparent"} rounded-sm`}
+                              style={{ height: `${pct}%`, minHeight: d.grams > 0 ? "2px" : "0" }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
-                <div className="flex justify-between text-xs text-gray-500 mt-2">
+                <div className="flex justify-between text-xs text-gray-500 mt-2 pl-12">
                   <span>{data.usageByDay[0]?.date}</span>
                   <span>
                     {data.usageByDay[data.usageByDay.length - 1]?.date}
