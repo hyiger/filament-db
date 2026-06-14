@@ -393,6 +393,10 @@ function SpoolRow({
   const [saving, setSaving] = useState<string | null>(null);
   // Feature B: log usage input state.
   const [usageGrams, setUsageGrams] = useState('');
+  // Feature B: dry-cycle inputs (at least one required so an accidental tap
+  // can't log a blank cycle and reset dry-due tracking — Codex P2).
+  const [dryTemp, setDryTemp] = useState('');
+  const [dryDuration, setDryDuration] = useState('');
 
   /** Feature C: route every spool mutation through the offline write queue.
    * Returns `{ ok }` — false on a real server error so callers can keep the
@@ -490,12 +494,30 @@ function SpoolRow({
 
   // Feature B: log dry cycle.
   async function logDryCycle() {
-    await runWrite(
-      'dry',
-      'Log dry cycle',
-      { kind: 'logDryCycle', cycle: {} },
-      {},
-    );
+    const t = dryTemp.trim() ? Number(dryTemp) : null;
+    const d = dryDuration.trim() ? Number(dryDuration) : null;
+    // Require at least one detail — a blank cycle would still stamp a date and
+    // mark the spool freshly dried on the dashboard (Codex P2).
+    if (t == null && d == null) {
+      Alert.alert('Add a detail', 'Enter a temperature (°C) or duration (min) for the dry cycle.');
+      return;
+    }
+    if (t != null && (!Number.isFinite(t) || t < 0 || t > 300)) {
+      Alert.alert('Invalid temperature', 'Temperature must be between 0 and 300 °C.');
+      return;
+    }
+    if (d != null && (!Number.isFinite(d) || d < 0)) {
+      Alert.alert('Invalid duration', 'Duration must be 0 minutes or more.');
+      return;
+    }
+    const cycle: { tempC?: number; durationMin?: number } = {};
+    if (t != null) cycle.tempC = t;
+    if (d != null) cycle.durationMin = d;
+    const res = await runWrite('dry', 'Log dry cycle', { kind: 'logDryCycle', cycle }, {});
+    if (res.ok) {
+      setDryTemp('');
+      setDryDuration('');
+    }
   }
 
   return (
@@ -609,21 +631,37 @@ function SpoolRow({
         </Pressable>
       </View>
 
-      {/* Log dry cycle */}
-      <Pressable
-        style={[
-          styles.smallButton,
-          styles.actionButton,
-          { backgroundColor: c.card, borderColor: c.border },
-          saving === 'dry' && styles.disabled,
-        ]}
-        onPress={logDryCycle}
-        disabled={saving !== null}
-      >
-        <Text style={[styles.smallButtonText, { color: c.text }]}>
-          {saving === 'dry' ? '…' : 'Log dry cycle'}
-        </Text>
-      </Pressable>
+      {/* Log dry cycle — temp and/or duration (at least one required) */}
+      <Text style={[styles.fieldLabel, { color: c.muted }]}>Log dry cycle</Text>
+      <View style={styles.row}>
+        <TextInput
+          style={[styles.dryInput, { color: c.text, borderColor: c.border, backgroundColor: c.inputBg }]}
+          value={dryTemp}
+          onChangeText={setDryTemp}
+          keyboardType="numeric"
+          inputMode="numeric"
+          placeholder="°C"
+          placeholderTextColor={c.muted}
+        />
+        <TextInput
+          style={[styles.dryInput, { color: c.text, borderColor: c.border, backgroundColor: c.inputBg }]}
+          value={dryDuration}
+          onChangeText={setDryDuration}
+          keyboardType="numeric"
+          inputMode="numeric"
+          placeholder="min"
+          placeholderTextColor={c.muted}
+        />
+        <Pressable
+          style={[styles.smallButton, { backgroundColor: c.tint }, saving === 'dry' && styles.disabled]}
+          onPress={logDryCycle}
+          disabled={saving !== null}
+        >
+          <Text style={[styles.smallButtonText, { color: c.onTint }]}>
+            {saving === 'dry' ? '…' : 'Log'}
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
@@ -655,6 +693,14 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: 13, marginTop: 4 },
   row: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   weightInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    fontSize: 16,
+  },
+  dryInput: {
     flex: 1,
     borderWidth: 1,
     borderRadius: 8,
