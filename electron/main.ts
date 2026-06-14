@@ -533,6 +533,9 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
 
       if (serverRestartCount >= MAX_SERVER_RESTARTS) {
         diag(`server crash-restart cap reached (${MAX_SERVER_RESTARTS})`);
+        // The server is dead for good — stop advertising it over mDNS so the
+        // mobile app doesn't keep discovering a host it can't reach (Codex #723).
+        stopMdnsAdvertisement();
         dialog.showErrorBox(
           "Server Crashed",
           `The embedded web server crashed repeatedly (${MAX_SERVER_RESTARTS} restart attempts) and has been left stopped.`,
