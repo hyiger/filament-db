@@ -39,21 +39,25 @@ export function startMdnsAdvertisement(port: number, version: string): void {
   }
 }
 
-/** Stop advertising and tear down the responder. Safe to call when not running. */
+/** Stop advertising and tear down the responder. Safe to call when not running.
+ *  Module refs are cleared FIRST, before the (async-goodbye) teardown, so a
+ *  re-entrant start/stop can never reuse a stale handle. */
 export function stopMdnsAdvertisement(): void {
+  const svc = service;
+  const responder = bonjour;
+  service = null;
+  bonjour = null;
   try {
-    service?.stop?.();
+    svc?.stop?.();
   } catch (err) {
     console.error("Failed to stop mDNS service:", err);
   }
-  service = null;
   try {
-    bonjour?.unpublishAll?.();
-    bonjour?.destroy?.();
+    responder?.unpublishAll?.();
+    responder?.destroy?.();
   } catch (err) {
     console.error("Failed to destroy mDNS responder:", err);
   }
-  bonjour = null;
 }
 
 /** Whether an advertisement is currently published. */

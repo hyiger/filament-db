@@ -901,11 +901,18 @@ ipcMain.handle("save-config", async (event, config: {
     if (!isDev) {
       // Restart the production server with the new URI
       await stopServer();
+      let serverRestarted = false;
       try {
         await startProductionServer(uri || undefined);
+        serverRestarted = true;
       } catch (err) {
         console.error("Failed to start server after config save:", err);
       }
+      // Refresh LAN auto-discovery so a stale advert doesn't point at a server
+      // that just restarted (or failed to). syncMdnsAdvertisement() no-ops when
+      // exposeToLan is off; stop outright if the restart failed.
+      if (serverRestarted) syncMdnsAdvertisement();
+      else stopMdnsAdvertisement();
     }
 
     // Reload the window on a connection change so the renderer picks up
@@ -1621,8 +1628,10 @@ app.whenReady().then(async () => {
     // Always start the server — even without mongoUri, the setup page needs it.
     // Crash-restart is handled inside startProductionServer (GH #315), so
     // every spawned process — including restarts — gets the handler.
+    let serverStarted = false;
     try {
       await startProductionServer(mongoUri || undefined);
+      serverStarted = true;
     } catch (err) {
       console.error("Failed to start server:", err);
       dialog.showErrorBox(
@@ -1630,9 +1639,12 @@ app.whenReady().then(async () => {
         `The embedded web server failed to start. The app may not work correctly.\n\n${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    // Advertise over mDNS if "Share on local network" is on, so the mobile app
-    // can auto-discover this instance from a cold start.
-    syncMdnsAdvertisement();
+    // Advertise over mDNS (if "Share on local network" is on) only when the
+    // server actually came up — otherwise the phone would discover a server it
+    // can't reach. The catch above SWALLOWS the error, so a plain post-try call
+    // would advertise regardless; the flag is load-bearing.
+    if (serverStarted) syncMdnsAdvertisement();
+    else stopMdnsAdvertisement();
   }
 
   // Create the window. NFC init is deferred to the window's "show" event
