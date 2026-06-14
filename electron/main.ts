@@ -531,11 +531,15 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
       if (isQuitting || thisProc !== serverProcess) return;
       if (code === 0 || code === null) return; // clean exit, not a crash
 
+      // The current server crashed unexpectedly. Stop advertising it over mDNS
+      // for the entire down/restart window so a mobile scan can't discover and
+      // save a dead URL — it's re-published only after a healthy restart below
+      // (Codex #723). Covers both the backoff window and a failed restart;
+      // the retry-cap branch inherits this too.
+      stopMdnsAdvertisement();
+
       if (serverRestartCount >= MAX_SERVER_RESTARTS) {
         diag(`server crash-restart cap reached (${MAX_SERVER_RESTARTS})`);
-        // The server is dead for good — stop advertising it over mDNS so the
-        // mobile app doesn't keep discovering a host it can't reach (Codex #723).
-        stopMdnsAdvertisement();
         dialog.showErrorBox(
           "Server Crashed",
           `The embedded web server crashed repeatedly (${MAX_SERVER_RESTARTS} restart attempts) and has been left stopped.`,
@@ -562,6 +566,8 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
         startProductionServer((store.get("mongodbUri") as string) || undefined)
           .then(() => {
             diag("server restarted successfully after crash");
+            // Server healthy again — re-publish mDNS (no-op if exposeToLan off).
+            syncMdnsAdvertisement();
             mainWindow?.reload();
           })
           .catch((restartErr) => {
