@@ -70,6 +70,7 @@ function buildDetailRows(f: Filament): { label: string; value: string }[] {
 function usePendingSync(api: Api | null, setReloadKey: React.Dispatch<React.SetStateAction<number>>): number {
   const [pending, setPending] = useState(0);
   const prevPending = useRef(0);
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Read initial count after mount (async IIFE — state set after await, not
   // synchronously). Then track changes: a DROP means a flush applied writes —
@@ -87,13 +88,20 @@ function usePendingSync(api: Api | null, setReloadKey: React.Dispatch<React.SetS
       }
     })();
     const unsub = subscribePending((count) => {
-      if (count < prevPending.current) setReloadKey((k) => k + 1);
+      // A multi-item flush drops the count once per entry; DEBOUNCE the refetch
+      // so a reconnect with many queued writes coalesces into a single reload
+      // after the flush settles, not one API burst per item (Codex P2).
+      if (count < prevPending.current) {
+        if (reloadTimer.current) clearTimeout(reloadTimer.current);
+        reloadTimer.current = setTimeout(() => setReloadKey((k) => k + 1), 500);
+      }
       prevPending.current = count;
       setPending(count);
     });
     return () => {
       active = false;
       unsub();
+      if (reloadTimer.current) clearTimeout(reloadTimer.current);
     };
   }, [setReloadKey]);
 
