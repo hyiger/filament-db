@@ -788,6 +788,9 @@ export default function SettingsPage() {
 
           {exposeToLan && (
             <div className="mt-4">
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-3">
+                {t("settings.lanShare.autoDiscover")}
+              </p>
               {lanInfo && lanInfo.ips.length > 0 ? (
                 <>
                   <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
