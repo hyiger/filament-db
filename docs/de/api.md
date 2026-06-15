@@ -31,6 +31,8 @@
 | `POST` | `/api/filaments/parse-ini` | Parst eine INI-Datei und liefert die Filamentprofile zurück, ohne sie zu speichern |
 | `POST` | `/api/filaments/import-atlas` | Verbindet sich mit einer entfernten MongoDB-Atlas-Datenbank und importiert Filamente |
 | `GET` | `/api/filaments/:id/openprinttag` | Lädt das OpenPrintTag-Binary für ein Filament herunter |
+| `GET` | `/api/filaments/:id/openprinttag/check` | Vergleicht ein verknüpftes Filament mit dem aktuellen OpenPrintTag-Material |
+| `POST` | `/api/filaments/:id/openprinttag/sync` | Wendet ausgewählte OpenPrintTag-Aktualisierungen auf ein verknüpftes Filament an |
 | `GET` | `/api/filaments/:id/calibration` | Liefert Kalibrierungsdaten für ein Filament und einen Düsendurchmesser |
 | `GET` | `/api/filaments/:id/spool-check` | Prüft, ob eine Spule genug Filament für einen Druckauftrag hat |
 | `POST` | `/api/filaments/:id` | Synchronisiert ein Filament-Preset zurück aus PrusaSlicer |
@@ -335,6 +337,32 @@ Liefert 400, wenn `weight` fehlt oder ungültig ist. Liefert 404, wenn das Filam
 
 Lädt das Filament als OpenPrintTag-CBOR-Binary (`.bin`-Datei) herunter. Das Binary kann auf ein NFC-V-Tag (ISO 15693) geschrieben oder mit anderen OpenPrintTag-kompatiblen Tools verwendet werden.
 
+### GET /api/filaments/:id/openprinttag/check
+
+Vergleicht ein Filament, das aus der OpenPrintTag-Community-Datenbank importiert wurde, mit dem **aktuellen** Upstream-Material und liefert eine feldweise Änderungsliste. Nur lesend — es wird nichts verändert. Die Verknüpfung ist der `settings.openprinttag_slug`, der beim Import gestempelt wurde.
+
+Antworten:
+- `{ "linked": false }` — das Filament hat keinen OpenPrintTag-Slug.
+- `{ "linked": true, "found": false, "slug": "…" }` — der Slug existiert nicht mehr in der OpenPrintTag-Datenbank (Upstream umbenannt/entfernt).
+- `{ "linked": true, "found": true, "slug": "…", "materialName": "…", "changes": [...] }` — ein leeres `changes`-Array bedeutet, dass die Zeile bereits aktuell ist.
+
+Jeder `changes[]`-Eintrag hat die Form `{ field, labelKey, current, incoming, kind }`. `kind` ist entweder `"adopt"` (das Feld war nicht gesetzt, hielt noch den grauen `#808080`-Platzhalter oder stimmte mit dem Wert überein, den OpenPrintTag zuletzt geschrieben hat — sicher zu übernehmen) oder `"conflict"` (der lokale Wert weicht von dem ab, was OpenPrintTag zuletzt geschrieben hat, d. h. du hast ihn bearbeitet — wird angezeigt, aber nicht automatisch angewendet). Nur die verwalteten Felder werden verglichen (Farbe, Sekundärfarben, Dichte, die von OPT mitgeführten Temperaturen, Trocknungstemperatur/-zeit, Shore D, Transmissionsdistanz, Tags); Identitätsfelder (Name/Hersteller/Typ) und der Durchmesser werden nie neu synchronisiert.
+
+### POST /api/filaments/:id/openprinttag/sync
+
+Wendet die vom Benutzer akzeptierte Teilmenge der OpenPrintTag-Aktualisierungen auf ein verknüpftes Filament an. Same-Origin-geschützt. Sende einen JSON-Body:
+
+```json
+{ "fields": ["density", "temperatures.nozzle"] }
+```
+
+Es werden nur Feldschlüssel aus dem verwalteten Satz akzeptiert — ein unbekannter Schlüssel liefert 400, statt stillschweigend verworfen zu werden. Der Provenance-Snapshot (`openprinttagSnapshot`) wird bei jeder Synchronisation auf das vollständige aktuelle OpenPrintTag-Angebot aktualisiert, unabhängig davon, welche Felder angewendet wurden, sodass eine spätere Prüfung für die abgelehnten Felder weiterhin "OpenPrintTag hat es geändert" von "du hast es geändert" unterscheiden kann.
+
+Antworten:
+- `{ "applied": ["density", "temperatures.nozzle"], "filament": { … } }` — die geschriebenen Felder + das frische Dokument.
+- `400` — fehlerhafter Body, ein unbekanntes Feld, ein Feld, das OpenPrintTag derzeit nicht anbietet (Prüfung erneut ausführen), oder das Filament ist nicht mit OpenPrintTag verknüpft.
+- `404` — der Slug existiert nicht mehr in der OpenPrintTag-Datenbank.
+
 ### POST /api/filaments/:id/spools
 
 Fügt einem Filament eine neue Spule hinzu. Sende einen JSON-Body:
@@ -540,7 +568,7 @@ Der Stream sendet ein `retry: 5000`-Prelude (EventSource-Clients verbinden sich 
 
 Der Bus ist in-process (Node `EventEmitter` auf `globalThis`). „In-process" bedeutet hier **eine Filament-DB-Instanz, nicht eine physische Maschine** — Abonnenten können überall sitzen, wo sie per HTTP erreichbar sind (ein Pi, der Filament DB ausführt, kann PrusaSlicer auf einem Mac über das LAN ansteuern; der Slicer verbindet sich einfach mit `http://<filament-db-host>:3456/api/scan/stream`). Was auf eine einzelne Maschine festgenagelt ist, ist der Publisher: NFC-Lesungen kommen aus dem `NfcProvider` des Electron-Renderers, also muss der Reader an die Box angeschlossen sein, die die Electron-App ausführt — ein Headless-Docker-/Web-Only-Deploy hat keinen `NfcProvider` und veröffentlicht nichts. Ein horizontal skaliertes Multi-Prozess-Deployment bräuchte einen externen Broker hinter dem Bus.
 
-Ein paar Netzwerk-Deploy-Hinweise, wenn du cross-machine gehst: Die API ist absichtlich nicht authentifiziert (Single-User-Vertrauensmodell — siehe README-Warnung), also überlege bewusst, auf welchem Netzwerk Port 3456 freigegeben ist. Das Electron-gebündelte Next.js bindet sich anhand der `HOSTNAME`-Umgebungsvariable; wenn cross-machine-Abonnenten sich nicht verbinden können, versuche `HOSTNAME=0.0.0.0`. Und weil `replay`-Events veraltete Scans über Slicer-Neustarts hinweg tragen, sollten Konsumenten nach `timestamp` filtern, falls ein mehrere Stunden altes Tag nicht erneut angewendet werden soll.
+Ein paar Netzwerk-Deploy-Hinweise, wenn du cross-machine gehst: Die API ist standardmäßig nicht authentifiziert (Single-User-Vertrauensmodell — siehe README-Warnung), also überlege bewusst, auf welchem Netzwerk Port 3456 freigegeben ist. Für freigegebene Deployments kannst du `FILAMENTDB_API_KEY` setzen; danach muss jede `/api`-Anfrage — einschließlich dieses SSE-Streams und der Slicer-Integrationen — den Header `Authorization: Bearer <key>` senden; bei nicht gesetztem Schlüssel ist es ein No-op. Das Electron-gebündelte Next.js bindet sich anhand der `HOSTNAME`-Umgebungsvariable; wenn cross-machine-Abonnenten sich nicht verbinden können, versuche `HOSTNAME=0.0.0.0`. Und weil `replay`-Events veraltete Scans über Slicer-Neustarts hinweg tragen, sollten Konsumenten nach `timestamp` filtern, falls ein mehrere Stunden altes Tag nicht erneut angewendet werden soll.
 
 ### POST /api/scan/publish
 
@@ -1343,6 +1371,64 @@ Liefert:
 Holt mehrere Filamente für die Vergleichsansicht in einem Round-Trip. `ids` ist eine kommagetrennte Liste (Minimum 1, Maximum 8). Liefert Filamente in derselben Reihenfolge wie die `ids`-Liste, mit `compatibleNozzles` und `calibrations.{nozzle,printer,bedType}` populiert, damit die UI Namen direkt rendern kann.
 
 `400`, wenn `ids` fehlt, leer ist oder über 8 liegt.
+
+### GET /api/spools/by-location (v1.32)
+
+Versorgt die **Inventar**-Seite (`/inventory`). Einmalige Aggregation über die `spools[]`-Subdokumente der Filament-Collection, gruppiert nach `spools[].locationId`. Ein Self-`$lookup` auf `parentId` legt das `spoolWeight` / `netFilamentWeight` des Eltern-Filaments offen, damit der Client den Verbleibend-Prozentwert einer Variantenzeile ohne zweiten Abruf berechnen kann.
+
+Query-Parameter:
+
+| Parameter | Beschreibung |
+|-----------|-------------|
+| `kind` | Auf eine einzelne Standort-Art filtern (`shelf`, `drybox`, `printer`, …). |
+| `type` | Auf einen einzelnen Filament-Typ filtern (`PLA`, `PETG`, …). |
+| `vendor` | Auf einen einzelnen Hersteller filtern (exakte Übereinstimmung). |
+| `includeRetired` | `1`, um ausgemusterte Spulen einzubeziehen (Standard: ausgeschlossen — sie sind nicht im Inventar). |
+
+Eine synthetische Gruppe mit `locationId: null` trägt jede Spule, deren `locationId` nicht gesetzt ist. Die Aggregation sortiert sie ans ENDE der Antwort, sodass die Seite sie als „erfordert Aufmerksamkeit"-Anhang statt als ersten Eimer darstellt.
+
+Antwort-Form:
+
+```json
+{
+  "groups": [
+    {
+      "locationId": "…",
+      "location": { "_id": "…", "name": "Drybox A", "kind": "drybox", "humidity": 20, "notes": "" },
+      "spools": [
+        {
+          "_id": "…",
+          "label": "",
+          "totalWeight": 850,
+          "lotNumber": null,
+          "purchaseDate": "2026-03-12T00:00:00.000Z",
+          "openedDate": null,
+          "retired": false,
+          "photoDataUrl": null,
+          "dryCycleCount": 2,
+          "lastDryAt": "2026-05-10T14:22:00.000Z",
+          "filamentId": "…",
+          "filamentName": "Galaxy Black PLA",
+          "filamentVendor": "Sunlu",
+          "filamentType": "PLA",
+          "filamentColor": "#000000",
+          "spoolWeight": null,
+          "netFilamentWeight": null,
+          "parentSpoolWeight": 250,
+          "parentNetFilamentWeight": 1000
+        }
+      ],
+      "count": 1,
+      "totalGrams": 850
+    }
+  ],
+  "totalSpools": 1
+}
+```
+
+`totalSpools` ist die Summe der `count`-Werte aller Gruppen, sodass der Seitenkopf eine einzige Zahl anzeigen kann, ohne sie clientseitig neu zu summieren.
+
+Soft-gelöschte Filamente und ihre Spulen werden unabhängig von `includeRetired` aus der Aggregation ausgeschlossen.
 
 ### GET /api/embed-check?url=…
 

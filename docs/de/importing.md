@@ -115,6 +115,52 @@ Funktioniert auch von der Detailseite eines Filaments, um eine weitere Spule des
 
 ---
 
+## Bambu-Studio-Filament-Preset-Import
+
+Bambu Studio speichert jedes Filament-Preset als `.json`-Datei unter `~/Library/Application Support/BambuStudio/user/<user>/filament/` (macOS) bzw. im entsprechenden `%APPDATA%`-Pfad unter Windows. Die App akzeptiert diese Dateien direkt — inklusive ihrer Kalibrierungswerte (Flow Ratio, Pressure Advance, Retraction, Lüfterdrehzahlen) — und versucht, die Kalibrierung automatisch dem richtigen Drucker + der richtigen Düse zuzuordnen.
+
+Je nachdem, was du vorhast, gibt es zwei Einstiegspunkte.
+
+### Ein kalibriertes Preset IN ein bestehendes Filament synchronisieren
+
+Am besten für den Workflow „Ich habe dieses Filament gerade in Bambu Studio kalibriert".
+
+1. Klicke in Bambu Studio mit der rechten Maustaste auf das kalibrierte Filament → **Preset exportieren**, um eine `.json` zu erhalten
+2. Öffne in Filament DB die Detailseite des Filaments
+3. Klicke auf **Aus Bambu Studio synchronisieren** (neben dem Slicer-Export-Menü) und wähle die Datei aus
+4. Die Seite lädt neu, sodass die neuen Werte sofort erscheinen
+
+Das Filament wird per ID adressiert — ein Umbenennen des Presets in Bambu Studio bricht die Verknüpfung nicht.
+
+### Ein neues Filament aus einem Bambu-Preset importieren
+
+Für den Fall „Ich habe ein Bambu-Preset für ein Filament, das ich noch nicht in der App habe".
+
+1. Öffne **Importieren / Exportieren** (oben rechts oder `/import-export`)
+2. Klicke auf die Kachel **Bambu Studio (.json)** und wähle die Datei aus
+3. Die Route fügt anhand des Namens ein bzw. aktualisiert (verwendet `filament_settings_id` aus der Datei): ein bestehendes aktives Filament wird aktualisiert, ein soft-gelöschtes mit demselben Namen wird wiederhergestellt, andernfalls wird ein neues Filament angelegt
+
+Für einen ganzen Ordner voller Presets kann der API-Endpunkt (`POST /api/filaments/bambustudio`) per Skript über die Dateien iterieren.
+
+### Kalibrierungs-Auto-Erkennung
+
+Bambus Kalibrierungswerte liegen IM Filament-Preset. Der Importer liest `printer_settings_id` (etwa `"Bambu Lab P1S 0.4 nozzle"`), findet einen Drucker in der App, dessen Name oder Modell passt, und wählt die eindeutig installierte Düse mit diesem Durchmesser. Gelingt die Zuordnung, landet eine `calibrations[]`-Zeile, die mit diesem Drucker + dieser Düse getaggt ist — du musst Flow Ratio, Pressure Advance usw. nicht erneut eintippen.
+
+Schlägt die Zuordnung fehl (kein Drucker, mehrdeutiger Drucker, mehrere Düsen mit demselben Durchmesser am zugeordneten Drucker oder keine Düse mit diesem Durchmesser im gesamten Katalog), erscheint ein Toast: **„Kalibrierungswerte gefunden, konnten aber keinem Drucker zugeordnet werden — öffne das Filament und wähle den richtigen Drucker bzw. die richtige Düse, um sie anzuwenden."** Die übergeordnete `Max Volumetric Speed` landet dennoch; nur die pro-Düse-Werte, die nicht eindeutig platziert werden können, werden übersprungen.
+
+### Was beim Round-Trip erhalten bleibt
+
+Exportiere das Filament via **Für Slicer exportieren → Bambu Studio** wieder zurück, bearbeite / re-kalibriere es in Bambu und importiere es erneut — jedes Feld, das der Exporter schreibt, wird vom Parser zurückgelesen. Unbekannte Bambu-spezifische Keys reisen in einem Settings-Passthrough-Bag mit, sodass sie über die Runden hinweg erhalten bleiben, ohne dass die App jeden einzelnen modellieren muss.
+
+Was beim Import NICHT angetastet wird (damit der Round-Trip dein Inventar nicht beschädigen kann):
+
+- Spulen-Subdokumente (Label, Gewicht, Standort, Foto)
+- `usageHistory` (durch den Druckverlauf gesteuerte Gramm-Rückbuchungen)
+- `dryCycles`
+- Eltern-/Variantenbeziehungen
+
+---
+
 ## CSV-/XLSX-Import
 
 1. Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke auf **„Datei importieren (INI / CSV / XLSX)"** — die App leitet anhand der Dateierweiterung weiter (`.csv` → CSV-Importer, `.xlsx` → XLSX-Importer, `.ini` → PrusaSlicer-Bundle)

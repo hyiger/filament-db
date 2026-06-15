@@ -66,7 +66,9 @@ Mehrere Hostnamen werden mit Komma getrennt. Starte den Dev-Server nach Änderun
 
 ## Desktop-App: macOS-App hängt oder lässt sich nach der Installation nicht öffnen
 
-macOS Gatekeeper blockiert die App, weil sie nicht mit einer Apple-Developer-ID notarisiert ist. Entferne das Quarantäne-Flag im Terminal:
+Offizielle Release-`.dmg`s sind mit einer Apple-Developer-ID signiert und notarisiert (seit v1.39.1), öffnen sich also ohne Gatekeeper-Warnungen und aktualisieren sich normal automatisch — keine zusätzlichen Schritte nötig. Der erste Start nach einer frisch notarisierten Installation kann langsam sein (macOS prüft das Notarisierungs-Ticket); gib ihm also eine Minute, bevor du von einem Hänger ausgehst.
+
+Das Folgende betrifft nur ein selbst gebautes **unsigniertes** `.dmg`: Gatekeeper blockiert es. Entferne das Quarantäne-Flag im Terminal:
 
 ```bash
 xattr -cr "/Applications/Filament DB.app"

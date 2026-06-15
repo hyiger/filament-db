@@ -6163,6 +6163,12 @@
             "readOnly": true,
             "description": "Permanent-delete tombstone (v1.15). True means the filament was purged from the trash; the row is retained only as a one-way sync signal so the deletion propagates instead of being resurrected. Stripped from all client-writable request bodies."
           },
+          "openprinttagSnapshot": {
+            "type": "object",
+            "nullable": true,
+            "additionalProperties": true,
+            "description": "OpenPrintTag provenance store (v1.36). Records the values OpenPrintTag last offered for every managed field at import/sync time, so a later re-check can distinguish upstream changes from local user edits. Lives outside the settings bag on purpose (a structured object would break the detail-page settings table and slicer exports). Null when the filament has no OPT linkage."
+          },
           "spools": {
             "type": "array",
             "items": {
@@ -6440,6 +6446,11 @@
                 },
                 "retired": {
                   "type": "boolean"
+                },
+                "locationId": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "Spool's location id (#616) — projected so the home-page stat line can count distinct spool locations without a Location join. Null for spools with no assigned location."
                 }
               }
             }
@@ -6684,6 +6695,16 @@
           "notes": {
             "type": "string",
             "nullable": true
+          },
+          "syncId": {
+            "type": "string",
+            "nullable": true
+          },
+          "_deletedAt": {
+            "type": "string",
+            "format": "date-time",
+            "nullable": true,
+            "readOnly": true
           },
           "createdAt": {
             "type": "string",

@@ -20,13 +20,13 @@ Lade die neueste Version für deine Plattform von [GitHub Releases](https://gith
 | Linux arm64 | `FilamentDB-x.x.x-linux-arm64.AppImage` | Für Raspberry Pi 5 und andere arm64-Boards |
 | Linux arm64 | `FilamentDB-x.x.x-linux-arm64.deb` | Für arm64 Ubuntu/Debian — installiere mit `sudo dpkg -i` |
 
-> **macOS Gatekeeper:** Die App ist nicht mit einer Apple-Developer-ID notarisiert. Nach der Installation blockiert macOS die App möglicherweise. Führe im Terminal aus:
+> **macOS Gatekeeper:** Seit v1.39.1 sind die Release-DMGs mit einer Apple-Developer-ID signiert **und** notarisiert, öffnen also ohne jede Gatekeeper-Warnung und aktualisieren sich normal automatisch — keine manuellen Schritte nötig. Der erste Start nach einer notarisierten Installation kann etwas dauern, während macOS die App prüft (die erste Notarisierung selbst läuft beim Release ~40 Minuten, das ist kein Hängenbleiben). Wenn du selbst ein **unsigniertes** DMG gebaut hast, blockiert macOS es möglicherweise; entferne dann das Quarantäne-Flag mit:
 >
 > ```bash
 > xattr -cr "/Applications/Filament DB.app"
 > ```
 >
-> Das entfernt das Quarantäne-Flag, das macOS auf heruntergeladene Apps setzt. Nach der Installation nur einmal erforderlich.
+> Das brauchst du nur für eine selbst gebaute, unsignierte App, und nur einmal nach der Installation.
 
 ## Erster Start
 
@@ -55,13 +55,16 @@ Die paketierte App fragt GitHub Releases regelmäßig nach neuen Versionen ab un
 4. **error** — der Banner färbt sich gelb und zeigt einen **View release**-Link als manuellen Fallback.
 
 **Plattformspezifisches Verhalten:**
-- **macOS**: Unsignierte Builds können über Gatekeeper nicht automatisch installieren; die App bietet die „view release page"-Fallback-Option, damit du die neue DMG manuell herunterladen kannst. Signierte Builds installieren sauber.
+- **macOS**: Signierte + notarisierte Builds (v1.39.1+) aktualisieren sich sauber automatisch über Gatekeeper. Das `mac.target` ist `[dmg, zip]`, weil electron-updater nicht aus einem DMG automatisch aktualisieren kann, und der Updater lädt das ZIP der passenden Architektur. Die „view release page"-Fallback-Option erscheint weiterhin im **error**-Zustand.
 - **Windows**: Unsignierte NSIS-Installer installieren automatisch problemlos. Beim nächsten App-Start erscheint eine SmartScreen-Warnung.
 - **Linux**: AppImage-Updates funktionieren, wenn die App über AppImageLauncher oder eine vergleichbare Integration gestartet wurde. `.deb`-Builds werden nicht automatisch aktualisiert — nutze stattdessen deinen Paketmanager.
 
-**Wie Updates gefunden werden:** Der Release-Workflow erzeugt bei jedem `v*`-Tag die `electron-updater`-Manifeste — `latest.yml` (Windows), `latest-mac.yml` (macOS) und `latest-linux.yml` / `latest-linux-arm64.yml` (Linux). `electron-updater` liest diese Manifeste beim Start vom GitHub-Release (mit 20 Sekunden Verzögerung, damit die UI Zeit zum Mounten hat) und danach alle 6 Stunden, solange die App läuft.
+**Wie Updates gefunden werden:** Der Release-Workflow erzeugt bei jedem `v*`-Tag die `electron-updater`-Manifeste — `latest.yml` (Windows, **nur x64** per Design, siehe unten), `latest-mac.yml` (macOS, ein **zusammengeführtes Multi-Arch**-Manifest, das sowohl `-mac-arm64.zip` als auch `-mac-x64.zip` auflistet) und `latest-linux.yml` / `latest-linux-arm64.yml` (Linux). `electron-updater` liest diese Manifeste beim Start vom GitHub-Release (mit 20 Sekunden Verzögerung, damit die UI Zeit zum Mounten hat) und danach alle 6 Stunden, solange die App läuft. Auf macOS filtert sein `MacUpdater` das Multi-Arch-Manifest auf die laufende Architektur, sodass Apple Silicon das arm64-ZIP und Intel das x64-ZIP zieht.
 
-> ⚠️ **Bekannte Einschränkung (Multi-Arch-Auto-Update auf macOS *und* Windows):** macOS und Windows werden jeweils von zwei separaten, nicht geordneten Jobs gebaut (arm64 und x64). electron-builder benennt das Update-Manifest für beide Architekturen einer Plattform gleich — `latest-mac.yml` für macOS, `latest.yml` für Windows (ohne Architektur-Suffix) — sodass die Manifeste der beiden Jobs beim Upload kollidieren und nur das zuletzt hochgeladene verbleibt, das **nur den Installer dieser einen Architektur** referenziert. Welche Architektur gewinnt, ist **nicht deterministisch** (im v1.34.4-Release war es bei beiden Plattformen arm64). Die *jeweils andere* Architektur der Plattform kann sich dann nicht über das Manifest automatisch aktualisieren. Linux ist nicht betroffen — dort hängt electron-builder ein Architektur-Suffix an (`latest-linux.yml` / `latest-linux-arm64.yml`). (Als Release-Workflow-Korrektur vorgemerkt.)
+**Multi-Arch-Auto-Update:** Sowohl die macOS- als auch die Windows-Multi-Arch-Builds sind so gelöst, dass jede Architektur auf einem funktionierenden Update-Kanal bleibt.
+> - **macOS** — beide Arch-Build-Jobs laufen mit `--publish never`, und ein dedizierter `merge-mac-metadata`-CI-Job führt ihre beiden Single-Arch-`latest-mac.yml`-Dateien zu einem Multi-Arch-Manifest zusammen (dem alleinigen Schreiber dieses Assets). `MacUpdater` filtert es dann auf die laufende Architektur, sodass Apple Silicon sich automatisch auf arm64 und Intel auf x64 aktualisiert.
+> - **Windows** — x64 ist per Design der **einzige** Update-Kanal (#586). Der arm64-Cross-Job läuft mit `--publish never` und löscht seine `latest.yml`, sodass nur das x64-Manifest ausgeliefert wird. arm64-Windows aktualisiert sich automatisch auf den emulierten x64-Build (der über die Emulationsschicht des Betriebssystems problemlos läuft); ein nativer arm64-Installer bleibt zum manuellen Download im Release.
+> - **Linux** ist nicht betroffen — dort hängt electron-builder ein Architektur-Suffix an (`latest-linux.yml` / `latest-linux-arm64.yml`).
 
 **Im Dev-Modus:** Die IPC-Handler sind immer registriert, geben aber bei mutierenden Aktionen `{ ok: false, error: "dev-mode" }` zurück, damit der Banner in einem nicht-paketierten Lauf nie auslöst.
 

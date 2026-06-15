@@ -11,6 +11,8 @@ The home page displays all filaments in a sortable table with columns for color,
 - **Filter by Type**: Use the type dropdown to show only specific material types (PLA, PETG, ASA, etc.)
 - **Filter by Vendor**: Use the vendor dropdown to show only filaments from a specific manufacturer
 - **Sort**: Click any column header to sort ascending/descending. The active sort column is highlighted with a blue arrow
+- **Hide out of stock**: By default, filaments with no active (non-retired) spools are hidden. When any are hidden, a **Show out of stock (N)** chip appears beside the quick filters to reveal them; click again to **Hide out of stock**. (The toggle only shows on the unfiltered "all" view — an active search/type/vendor/quick filter always shows every match in or out of stock.)
+- **Quick-change spool location** *(#717)*: a filament row with spools shows a **×N** toggle in the remaining-stock cell. Expand it to list each spool with its current location and a **move-to** dropdown — change a spool's location inline without opening the filament's detail page. The move is saved straight to the spool (parents with their own spools get the same panel).
 
 ## Viewing Filament Details
 
@@ -674,4 +676,29 @@ Settings → **Theme**: choose **Light**, **Dark**, or **System**. System mode f
 
 A thin banner at the top of the app announces when a new version is available, downloads it in the background on request, and prompts for a restart-and-install when ready. All strings are localized — the native install confirmation dialog uses the renderer's current locale.
 
-On macOS, unsigned builds cannot auto-install through Gatekeeper. The banner surfaces a **View release** button as a fallback so you can download the DMG manually.
+On macOS, release builds are Developer ID-signed **and** notarized (since v1.39.1), so they open without a Gatekeeper warning and auto-update normally — no `xattr -cr` needed. (The first launch after a notarized download can be slow as macOS verifies it; that's expected, not a hang.) Use `xattr -cr` only as a fallback for an *unsigned* DMG you built yourself. The banner also surfaces a **View release** button if you'd rather download the DMG manually.
+
+## Share on Local Network (Desktop) *(v1.45)*
+
+Settings → **Share on local network** lets other devices on your LAN reach this desktop instance's built-in server. It's **off by default** — when off, the embedded server binds to localhost only and nothing outside the machine can connect.
+
+Turn it on and the server re-binds to `0.0.0.0` (all interfaces), and the settings panel shows the LAN URL to point another device at (e.g. `http://192.168.1.50:3456`). This is what the mobile scanner app connects to.
+
+**Securing a shared instance**: set the `FILAMENTDB_API_KEY` environment variable on the desktop host (or server) to put a bearer-token gate in front of every `/api/*` request — clients must then send a matching API key. Leaving it unset (the default) leaves the API unauthenticated, which is fine for a trusted home network but not for an exposed one.
+
+## Find on Your Network — mDNS Auto-Discovery *(v1.47)*
+
+While **Share on local network** is enabled, the desktop app advertises itself over mDNS / Bonjour (`_filamentdb._tcp`), so clients can find it without typing an IP. The mobile scanner app's **Find on your network** button scans for the advertisement and offers the instance to connect to. Advertising stops as soon as you turn LAN sharing back off.
+
+## Mobile Scanner App
+
+A lightweight iOS / Android companion app ships in [`packages/mobile/`](../packages/mobile/README.md). It's a thin "remote control" for your Filament DB server — the business logic stays on the server; the app forwards scans and edits to the REST API and renders the responses (plus a small idempotent offline write queue that survives an app restart).
+
+What it does:
+
+- **Connect** to a Filament DB server by manual URL **or** mDNS auto-discovery (see above), with an optional API key stored in the device keychain
+- **Scan** a spool's QR label (a label deep link or bare instance ID) or an **OpenPrintTag** NFC tag (raw bytes decoded + matched server-side); NFC is gated behind the `EXPO_PUBLIC_ENABLE_NFC` build flag (so a free Apple ID can ship a QR-only build)
+- **Create a filament** from a scan, and follow **spool deep links** (`?spool=`)
+- **Update a spool**: set remaining weight, move it between locations, retire / un-retire, and log usage or dry cycles
+
+Bambu Lab MIFARE Classic tags are Android-only — iPhone's Core NFC can't read them. See [`packages/mobile/README.md`](../packages/mobile/README.md) for build and setup instructions.

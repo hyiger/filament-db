@@ -18,13 +18,13 @@ Download the latest release for your platform from [GitHub Releases](https://git
 | Linux arm64 | `FilamentDB-x.x.x-linux-arm64.AppImage` | For Raspberry Pi 5 and other arm64 boards |
 | Linux arm64 | `FilamentDB-x.x.x-linux-arm64.deb` | For arm64 Ubuntu/Debian -- install with `sudo dpkg -i` |
 
-> **macOS Gatekeeper:** The app is not notarized with an Apple Developer ID. After installing, macOS may block the app from opening. To fix this, run the following command in Terminal:
+> **macOS Gatekeeper:** Since v1.39.1 the release DMGs are Developer ID-signed **and** notarized, so they open without any Gatekeeper warning and auto-update normally — no manual steps required. The first launch after a notarized install can take a while as macOS verifies the app (the first notarization itself runs ~40 minutes during the release, not a hang). If you built an **unsigned** DMG yourself, macOS may block it; clear the quarantine flag with:
 >
 > ```bash
 > xattr -cr "/Applications/Filament DB.app"
 > ```
 >
-> This removes the quarantine flag that macOS applies to downloaded apps. You only need to do this once after installation.
+> You only need that for a self-built unsigned app, and only once after installation.
 
 ## First Launch
 
@@ -43,6 +43,14 @@ Your configuration is stored in an encrypted local file (using `electron-store` 
 
 In offline and hybrid modes, the local database files are stored under the same directory in a `mongodb-data/` subfolder.
 
+## Share on Local Network *(v1.45.0)*
+
+By default the embedded Next.js server binds to `localhost`, so it's reachable only from the same machine. **Settings → Share on local network** (an `electron-store` toggle, `exposeToLan`, off by default) rebinds the server to `0.0.0.0` so other devices on your LAN can reach it. When it's on, the **`get-lan-ip` IPC** surfaces the LAN URL to use (e.g. `http://192.168.1.20:3456`), which pairs with the companion mobile scanner app.
+
+Since v1.47.0 the desktop also advertises itself over **mDNS** (`_filamentdb._tcp`, via `electron/mdns-service.ts` / `bonjour-service`) **only while "Share on local network" is on**, so the mobile app's **Find on your network** scan can auto-discover it without typing a URL.
+
+> **Securing a LAN-exposed instance:** set the `FILAMENTDB_API_KEY` environment variable to require a bearer token on every `/api/*` request (`src/lib/apiAuth.ts`). Leaving it unset keeps the API unauthenticated (the default).
+
 ## Auto-Update *(v1.11)*
 
 The packaged app polls GitHub Releases for new versions and surfaces a banner at the top of the window when an update is available. The lifecycle:
@@ -53,13 +61,16 @@ The packaged app polls GitHub Releases for new versions and surfaces a banner at
 4. **error** — the banner switches to amber and exposes a **View release** link as a manual fallback.
 
 **Platform-specific behaviour:**
-- **macOS**: unsigned builds cannot auto-install through Gatekeeper; the app surfaces the "view release page" fallback so you can download the new DMG manually. Signed builds install cleanly.
+- **macOS**: signed + notarized builds (v1.39.1+) auto-update cleanly through Gatekeeper. The `mac.target` is `[dmg, zip]` because electron-updater can't auto-update from a DMG, and the updater downloads the matching-arch ZIP. The "view release page" fallback still appears on the **error** state.
 - **Windows**: unsigned NSIS installers auto-install fine. The user sees a SmartScreen warning the next time the app launches.
 - **Linux**: AppImage updates work when the app was launched via AppImageLauncher or a similar integration. `.deb` builds are not auto-updated — use your package manager instead.
 
-**How it finds updates:** the release workflow produces the `electron-updater` manifests on every `v*` tag — `latest.yml` (Windows), `latest-mac.yml` (macOS), and `latest-linux.yml` / `latest-linux-arm64.yml` (Linux). `electron-updater` reads those manifests from the GitHub release on startup (with a 20-second delay so the UI has time to mount) and every 6 hours while the app is running.
+**How it finds updates:** the release workflow produces the `electron-updater` manifests on every `v*` tag — `latest.yml` (Windows, **x64-only** by design, see below), `latest-mac.yml` (macOS, a **merged multi-arch** manifest listing both `-mac-arm64.zip` and `-mac-x64.zip`), and `latest-linux.yml` / `latest-linux-arm64.yml` (Linux). `electron-updater` reads those manifests from the GitHub release on startup (with a 20-second delay so the UI has time to mount) and every 6 hours while the app is running. On macOS its `MacUpdater` filters the multi-arch manifest down to the running architecture, so Apple Silicon pulls the arm64 ZIP and Intel pulls the x64 ZIP.
 
-> ⚠️ **Known limitation (multi-arch auto-update on macOS *and* Windows):** macOS and Windows are each built by two separate, unordered jobs (arm64 and x64). electron-builder names the update manifest the same for both arches of a platform — `latest-mac.yml` for macOS, `latest.yml` for Windows (no arch suffix) — so the two jobs' manifests collide on upload and only the last one survives, referencing **only that arch's installer**. Which arch wins is **non-deterministic** (in the v1.34.4 release it was arm64 for both platforms). The *other* architecture on each platform is left unable to auto-update from the manifest. Linux is unaffected — electron-builder appends an arch suffix there (`latest-linux.yml` / `latest-linux-arm64.yml`). (Tracked as a release-workflow fix.)
+**Multi-arch auto-update:** both the macOS and Windows multi-arch builds are handled so every architecture stays on a working update channel.
+> - **macOS** — both arch build jobs run with `--publish never`, and a dedicated `merge-mac-metadata` CI job combines their two single-arch `latest-mac.yml` files into one multi-arch manifest (the sole writer of that asset). `MacUpdater` then filters it to the running arch, so Apple Silicon auto-updates to arm64 and Intel to x64.
+> - **Windows** — x64 is the **single** update channel by design (#586). The arm64 cross job runs with `--publish never` and deletes its `latest.yml` so only the x64 manifest ships. arm64 Windows auto-updates to the emulated x64 build (which runs fine via the OS emulation layer); a native arm64 installer stays on the release for manual download.
+> - **Linux** is unaffected — electron-builder appends an arch suffix there (`latest-linux.yml` / `latest-linux-arm64.yml`).
 
 **In dev:** the IPC handlers are always registered but short-circuit to `{ ok: false, error: "dev-mode" }` for mutating actions so the banner never triggers in a packaged-false run.
 

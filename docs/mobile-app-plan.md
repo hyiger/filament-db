@@ -1,6 +1,8 @@
 # Filament DB Mobile Scanner — Plan
 
-> Status: planning (no code yet). Owner decisions captured 2026-06-12.
+> Status: **SHIPPED.** Phase 0 (server prep) + Phase 1 (MVP scanner) + Phase 2 create-from-tag are
+> done, plus what were "Phase 3 niceties" — mDNS auto-discovery and the offline write queue — now ship.
+> The remaining gap is **Bambu NFC** (Android MIFARE Classic read path). Owner decisions captured 2026-06-12.
 > A lightweight "remote control" for Filament DB. Primary function: a **scanner**.
 
 ## 1. Goal & scope
@@ -19,7 +21,8 @@ Filament DB instance over its REST API.
 
 **Later (nice-to-have)**
 
-- Broader inventory management, mDNS/Bonjour server discovery, offline write queue.
+- ✅ **Shipped:** mDNS/Bonjour server discovery (v1.47.0), offline write queue (`writeQueue.ts`).
+- Still open: broader inventory management.
 
 ### Hard design rules (from the product brief)
 
@@ -170,7 +173,8 @@ integrations / `/api/scan/stream` consumers) talk to — all of which must then 
 **not** meant for the desktop app serving its own browser renderer keyless; giving the browser UI a
 keyless session needs a real login/cookie flow (out of scope here). The mobile app stores the key +
 base URL in **`expo-secure-store`** (iOS Keychain / Android Keystore). Recommend HTTPS / trusted LAN
-for any non-localhost use. (mDNS discovery is a Phase 3 nicety in `electron/main.ts`.)
+for any non-localhost use. ✅ **Shipped:** auth is `src/lib/apiAuth.ts` + `src/proxy.ts`; mDNS
+auto-discovery moved out of "Phase 3 nicety" and now ships (see §8).
 
 ## 5. Scanner data flows
 
@@ -236,15 +240,22 @@ fall back to QR / manual entry with a clear message.
 
 ## 8. Phased roadmap
 
-- **Phase 0 — server prep (this repo):** relocate decoders to `src/lib/`; `POST /api/nfc/decode`;
-  `remainingWeight` on spool PUT; create-from-decoded-tag; env-gated API-key auth; tests.
-- **Phase 1 — MVP scanner (cross-platform):** connect/settings (base URL + key); QR scan → resolve →
-  spool detail; OpenPrintTag NFC → decode → match; update location; update remaining weight / log
-  usage. Ships iOS + Android.
-- **Phase 2 — create new filament:** decode → prefilled confirm → create (OpenPrintTag both
-  platforms; **Bambu NFC Android-only**, QR/manual on iOS).
-- **Phase 3 — niceties:** mDNS discovery, single-spool endpoint, broader inventory management,
-  offline write queue.
+- ✅ **Phase 0 — server prep (this repo) — Shipped:** relocate decoders to `src/lib/`; `POST
+  /api/nfc/decode`; `remainingWeight` on spool PUT; create-from-decoded-tag; env-gated API-key auth
+  (`src/lib/apiAuth.ts` + `src/proxy.ts`); tests.
+- ✅ **Phase 1 — MVP scanner (cross-platform) — Shipped:** connect/settings (base URL + key); QR scan
+  → resolve → spool detail; OpenPrintTag NFC → decode → match; update location; update remaining
+  weight / log usage. iOS + Android. (NFC gated behind `EXPO_PUBLIC_ENABLE_NFC`.)
+- ✅ **Phase 2 — create new filament — Shipped:** decode → prefilled confirm → create
+  (`packages/mobile/src/app/create-from-tag.tsx`), OpenPrintTag both platforms. **Bambu NFC (Android
+  MIFARE Classic) is the remaining gap** — QR/manual is the fallback on iOS and unsupported Android.
+- ✅ **mDNS discovery — Shipped (v1.47.0):** desktop advertises `_filamentdb._tcp` via
+  `bonjour-service` (`electron/mdns-service.ts`) while "Share on local network" is on; the app finds
+  it via `react-native-zeroconf` (`packages/mobile/src/lib/zeroconf.ts`). Pairs with the "Share on
+  local network" desktop toggle (v1.45.0, electron-store key `exposeToLan`).
+- ✅ **Offline write queue — Shipped:** `packages/mobile/src/lib/writeQueue.ts` — idempotent, survives
+  app restart.
+- **Phase 3 — remaining niceties:** single-spool endpoint, broader inventory management.
 
 ## 9. Open items
 

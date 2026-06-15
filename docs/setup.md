@@ -256,6 +256,8 @@ sudo chmod 600 "/opt/Filament DB/.env"
 
 `HOSTNAME=0.0.0.0` makes the server listen on all network interfaces so other devices on your network can reach it.
 
+> **Note:** If you're running the desktop app instead of a headless service, you don't need to set `HOSTNAME` by hand — flip on the **Share on local network** toggle in Settings (electron-store key `exposeToLan`, off by default) and the embedded server binds `0.0.0.0` for you. It pairs with mDNS auto-discovery, so the mobile companion app can find your instance on the network without typing a URL.
+
 ### 2. Create the service
 
 ```bash

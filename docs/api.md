@@ -22,6 +22,7 @@
 | `POST` | `/api/filaments/import-csv` | Upload a CSV file to import filaments |
 | `POST` | `/api/filaments/import-xlsx` | Upload an XLSX file to import filaments |
 | `GET` | `/api/filaments/match` | Match an NFC tag or scanned label QR against existing filaments. Query params: `instanceId` (highest priority), `name`, `vendor`, `type` |
+| `POST` | `/api/nfc/decode` | Decode raw NFC tag bytes (OpenPrintTag or Bambu) server-side and match the result against the DB. Backs the mobile scanner app |
 | `GET` | `/api/filaments/types` | List all distinct filament types |
 | `GET` | `/api/filaments/vendors` | List all distinct vendor names |
 | `GET` | `/api/filaments/parents` | List filaments that can be used as parents. Query params: `search`, `exclude` |
@@ -625,6 +626,67 @@ Returns `202 Accepted`:
 ```
 
 400 if the body isn't valid JSON, isn't an object, or contains neither a filament match nor any decoded fields (nothing for a consumer to act on).
+
+---
+
+## NFC Tag Decode
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/nfc/decode` | Decode raw NFC tag bytes server-side and match against the DB |
+
+### POST /api/nfc/decode
+
+Decodes raw NFC tag bytes into a `DecodedOpenPrintTag` and attaches a DB match in one round trip. The mobile scanner app reads the tag bytes on-device, POSTs them here, and renders the result — the decode logic (OpenPrintTag CBOR, Bambu MIFARE Classic with its UID-derived HKDF key) is intricate and, for Bambu, depends on Node crypto that won't run in React Native, so it lives on the server. Keeping it here also means one tested code path shared with the desktop reader instead of a client decoder that drifts.
+
+Like `GET /api/filaments/match`, this route is intentionally **not** behind `assertSameOriginRequest` — it performs no mutation (decode + read-only lookup) and is meant to be reached by the cross-origin mobile app. When `FILAMENTDB_API_KEY` is set, `src/proxy.ts` requires every `/api` caller (this route included) to present `Authorization: Bearer <key>`; that key, not a same-origin check, is what gates off-device access.
+
+Send a JSON body. `tagType` selects the decoder; the byte fields are base64:
+
+```json
+{
+  "tagType": "openprinttag",
+  "payload": "…base64…",
+  "tagMemory": "…base64…",
+  "blocks": { "1": "…base64…", "2": "…base64…" }
+}
+```
+
+- `tagType` (required) — `"openprinttag"` or `"bambu"`.
+- **OpenPrintTag (ISO 15693 / NFC-V)** — supply **one** of:
+  - `payload` — base64 of the NDEF record payload (CBOR). Preferred; iOS Core NFC hands back already-parsed NDEF records.
+  - `tagMemory` — base64 of the raw tag memory; the route runs `parseNdefFromTag` to extract the payload.
+- **Bambu (MIFARE Classic / ISO 14443-3A)** — `blocks`: an object mapping the absolute MIFARE block number (`0`–`63`, as a string key) to the base64 of that 16-byte plaintext block. At least one readable block is required, and the dump must carry at least one identity block (variant/material id or filament type) — an empty or identity-less block map is rejected as an undecodable read rather than returned as a fabricated all-zero tag.
+
+Matching mirrors the NFC read workflow: the decoded `spoolUid` is tried as an `instanceId` first (an OpenPrintTag written by Filament DB stores the filament's `instanceId` in its `spool_uid` field), then it falls through to `name` → `vendor`+`type` exactly like `GET /api/filaments/match`. Decoded strings are bounded to 128 chars before they feed the regex queries.
+
+Returns `200`:
+
+```json
+{
+  "decoded": {
+    "materialName": "Prusament PLA Galaxy Black",
+    "brandName": "Prusament",
+    "materialType": "PLA",
+    "color": "#000000",
+    "spoolUid": "2acc21072a",
+    "tagSource": "openprinttag"
+  },
+  "match": { "_id": "…", "name": "…", "vendor": "…", "type": "…", "color": "…" },
+  "candidates": [],
+  "matchedBy": "instanceId"
+}
+```
+
+- `decoded` — the full `DecodedOpenPrintTag`.
+- `match` — the matched DB row, or `null` when nothing matches.
+- `candidates` — plausible alternatives (vendor+type, then vendor-only) when there's no confident match; empty otherwise.
+- `matchedBy` — `"instanceId"` when the tag's `spool_uid` equals the matched filament's `instanceId` (a confident "this exact physical tag is in the DB"), `"heuristic"` when the match came from the weaker name / vendor+type tiers (the scanner should offer "create new" alongside opening the heuristic match), or `null` when there's no match.
+
+Errors:
+- `400` — invalid JSON, body not an object, missing byte fields for the chosen `tagType`, or undecodable / wrong-format bytes (`"Could not decode tag"` with the underlying reason).
+- `413` — request body larger than the 64 KB ceiling (checked against both the `Content-Length` header and the buffered byte length, so a chunked body can't slip past).
+- `415` — `tagType` is neither `"openprinttag"` nor `"bambu"`.
 
 ---
 

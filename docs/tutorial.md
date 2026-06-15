@@ -2,7 +2,7 @@
 
 [< Back to README](../README.md)
 
-A step-by-step tutorial covering every feature of the app -- from first launch through NFC tag writing.
+A step-by-step tutorial covering the core workflows of the app -- from first launch through NFC tag writing. It's a guided tour of the everyday features, not an exhaustive reference for every setting and corner case.
 
 ---
 
@@ -255,6 +255,14 @@ The home page shows all filaments in a sortable table.
 
 If you have color variants, parent filaments show a count badge (e.g. "5 colors"). The parent's own swatch is a composite of the group's colors — its own color plus each variant's, as equal-width segments (or a solid fill when the whole group is one color); a parent with no known colors falls back to a neutral cross-hatch. Click the expand arrow to reveal variant rows, each showing their own color swatch and name. Click again to collapse.
 
+### Hide Out-of-Stock Filaments
+
+When no filter is active, the list hides filaments that have no active spools and surfaces a **"Show out of stock (N)"** toggle above the table. Click it to reveal them; click **"Hide out of stock"** to tuck them away again. Applying a search or a type/vendor filter shows every match regardless of stock so you never lose a row you're looking for.
+
+### Quick-Change a Spool's Location
+
+For any filament that tracks spools, a small **×N** disclosure sits next to the row. Click it to expand an inline spool panel showing each spool's label, weight, and a **Location** dropdown. Pick a location from the dropdown to move that spool right from the list — no need to open the filament's detail page. Choose **No location** to clear it.
+
 ---
 
 ## Step 8: View Filament Details
@@ -413,6 +421,17 @@ If you prefer using external NFC tools:
 1. On any filament's detail page, open the **Export ▾** menu and click **Export OPT**.
 2. A `.bin` file downloads containing the NDEF-wrapped CBOR payload.
 3. Write this file to a tag using your preferred NFC software.
+
+### Printing a Label (Desktop App + Brother PT-P710BT)
+
+If you have a Brother PT-P710BT (P-touch CUBE) connected over USB, you can print a QR label for a filament or an individual spool:
+
+1. In **Settings**, scroll to the label-printer section and pick your printer from the list (PT-Touch matches are badged). Customize the label format — QR placement, the text fields, font, orientation, invert — in the live-preview editor.
+2. On a filament's detail page, open the **Export ▾** menu and click **Print label**.
+3. Choose the QR mode — a scannable **URL** (the phone-friendly one; for a multi-spool filament you can also pick which spool to deep-link) or the filament's **instance ID** — and review the live preview at the printer's native resolution.
+4. Click **Print**. The app hands the label to your OS print system over USB.
+
+> The **URL** QR mode in the packaged desktop app needs a reachable address — set a **Public URL** in the label-printer settings so phones on your network can open it (the default `localhost` origin isn't reachable from another device). Pairs well with **Share on local network** (see "Share on Your Local Network" below).
 
 ---
 
@@ -586,6 +605,30 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 
 ---
 
+## Step 26: Share on Your Local Network *(desktop app)*
+
+By default the desktop app's database is reachable only from the computer it runs on. To open it up to phones and other devices on your Wi-Fi — for the companion app (Step 27) or to scan a label's URL QR (Step 13) — turn on LAN sharing:
+
+1. In **Settings**, find **Share on local network** and toggle it on. The embedded server rebinds to your LAN address (instead of localhost), and Settings shows the URL other devices can use.
+2. With sharing on, the app also advertises itself over Bonjour/mDNS (`_filamentdb._tcp`), so the mobile app can find it without you typing an IP.
+
+> **Securing a shared instance:** set the `FILAMENTDB_API_KEY` environment variable to require a bearer token on every API request. Unset, a LAN-exposed instance is unauthenticated.
+
+---
+
+## Step 27: Use the Mobile Scanner App
+
+A companion Expo/React Native app (in `packages/mobile`) turns your phone into a roaming scanner and quick-edit tool for your library.
+
+1. **Point it at your library.** In the app's **Settings**, either enter your Filament DB server URL manually, or tap **"Find on your network"** → **Scan** to auto-discover it over Bonjour/mDNS (needs **Share on local network**, Step 26).
+2. **Scan a tag or QR.** Scan an OpenPrintTag (NFC, where enabled) or a QR label (Step 13) to jump straight to the matching filament — or, when there's no match, to **create a filament from the scan**.
+3. **Update spools on the go.** Adjust a spool's remaining weight, move it to another location, retire or un-retire it, and log usage or a dry cycle — all from the phone. A URL-mode label's `?spool=` deep link opens that exact spool.
+4. **Work offline.** Writes are queued and replayed when you reconnect, so a scan in the workshop isn't lost if the server is briefly unreachable.
+
+> NFC reading is gated behind the `EXPO_PUBLIC_ENABLE_NFC` build flag; QR scanning and all the spool-editing flows work regardless. (Bambu MIFARE Classic tags can't be read on iPhone — that's an iOS hardware limit.)
+
+---
+
 ## Quick Reference
 
 | Action | Where |
@@ -612,7 +655,10 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 | Write NFC tag | Detail page > Write NFC (desktop app) |
 | Erase NFC tag | Settings > NFC Tools > Erase Tag (desktop app) |
 | Export NFC binary | Detail page > Export ▾ > Export OPT |
+| Print a label | Detail page > Export ▾ > Print label (desktop app + Brother PT-P710BT) |
 | Track spools | Detail page > Spool Tracker > + Add Spool |
+| Hide/show out-of-stock | Home > Show / Hide out of stock toggle |
+| Quick-change a spool's location | Home > expand row (×N) > Location dropdown |
 | Assign spool to a location | Spool detail > Location dropdown |
 | Assign spool to a printer slot | Spool detail > Printer slot picker |
 | Log manual spool usage | Spool detail > Log usage |
@@ -622,6 +668,8 @@ Missing locations are auto-created, so you don't need to seed locations in advan
 | Compare filaments | Compare page > pick up to 8 (or /compare?ids=…) |
 | Publish a shared catalog | Top nav > Share > + New |
 | Import spools from CSV | Home > Import > Spools from CSV |
+| Share on local network | Settings > Share on local network (desktop app) |
+| Use the mobile scanner | Mobile app > Settings > set URL or Find on your network |
 | Switch theme | Settings > Theme |
 | Manual sync | Click status pill > Sync Now (desktop hybrid mode) |
 | Check connection status | Status pill next to "Filament DB" title |

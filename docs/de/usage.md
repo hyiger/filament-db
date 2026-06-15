@@ -536,6 +536,19 @@ Klicke eine Material-Zeile, um eine Detailansicht mit drei Spalten auszuklappen:
    - **Neue Materialien** werden mit allen verfügbaren Feldern angelegt
    - **Bestehende Materialien** werden konservativ aktualisiert — nur null/leere Felder werden gefüllt, deine vorhandenen Kalibrierungsdaten bleiben erhalten
 
+### Auf Community-Updates prüfen *(v1.35)*
+
+Die OpenPrintTag-Datenbank wird im Lauf der Zeit überarbeitet, während die Community Daten ergänzt. Ein importiertes Filament behält eine Verknüpfung zu seinem Quell-Material, sodass du spätere Verbesserungen übernehmen kannst, ohne den ganzen Katalog neu zu importieren.
+
+Auf der Detailseite jedes aus OpenPrintTag importierten Filaments erscheint neben **Bearbeiten** ein türkiser **„Auf Updates prüfen"**-Button. Klicke ihn, um dein Filament mit dem aktuellen Upstream-Material zu vergleichen. Der Dialog listet jedes abweichende Feld auf:
+
+- **Sichere Änderungen** (ein Feld, das du nie gefüllt hast, oder eines, das noch mit dem übereinstimmt, was OpenPrintTag zuletzt geliefert hat) sind **vorab angehakt** — sie sind bereit zur Übernahme.
+- **Bearbeitete Felder** — bei denen dein lokaler Wert von dem abweicht, was OpenPrintTag zuletzt geliefert hat — sind als **„bearbeitet"** markiert und bleiben **nicht angehakt**, sodass das Anwenden von Updates einen selbst gesetzten Wert nicht stillschweigend überschreibt. Du kannst eines trotzdem anhaken, um den OpenPrintTag-Wert zu übernehmen.
+
+Hake die gewünschten Änderungen an und klicke auf **„Anwenden"**. Nur die Identität bleibt unangetastet — Name, Vendor und Typ werden von einem Sync nie geändert, ebenso wenig der Durchmesser. Deine Spulen, Kalibrierungen und Verbrauchshistorie bleiben unberührt.
+
+Sagt der Dialog, das Filament sei **aktuell**, gibt es upstream nichts Neues. Sagt er, das Material sei **nicht mehr in der Datenbank**, wurde der Eintrag auf der OpenPrintTag-Seite umbenannt oder entfernt.
+
 ---
 
 ## PrusaSlicer-Integration
@@ -665,4 +678,4 @@ Einstellungen → **Theme**: wähle **Hell**, **Dunkel** oder **System**. System
 
 Ein schmaler Banner oben in der App kündigt eine neue Version an, lädt sie auf Wunsch im Hintergrund und fordert zum Restart-and-Install auf, sobald bereit. Alle Texte sind lokalisiert — der native Installations-Bestätigungsdialog nutzt die aktuelle Sprache des Renderers.
 
-Unter macOS können unsignierte Builds nicht über Gatekeeper automatisch installieren. Der Banner zeigt als Fallback einen **View release**-Button, damit du die DMG manuell herunterladen kannst.
+Unter macOS sind Release-Builds Developer-ID-signiert **und** notarisiert (seit v1.39.1), öffnen also ohne Gatekeeper-Warnung und aktualisieren sich normal automatisch — kein `xattr -cr` nötig. (Der erste Start nach einem notarisierten Download kann langsam sein, während macOS ihn verifiziert; das ist erwartet, kein Hänger.) Nutze `xattr -cr` nur als Fallback für eine *unsignierte* DMG, die du selbst gebaut hast. Der Banner zeigt außerdem einen **View release**-Button, falls du die DMG lieber manuell herunterlädst.

@@ -64,7 +64,9 @@ Multiple hostnames can be comma-separated. Restart the dev server after changing
 
 ## Desktop app: macOS app hangs or won't open after installation
 
-macOS Gatekeeper blocks the app because it is not notarized with an Apple Developer ID. Remove the quarantine flag by running in Terminal:
+Official release `.dmg`s are Developer ID-signed and notarized (since v1.39.1), so they open without Gatekeeper warnings and auto-update normally — no extra steps needed. The first launch after a fresh notarized install can be slow (macOS verifies the notarization ticket), so give it a minute before assuming it has hung.
+
+This only applies to a self-built **unsigned** `.dmg`: Gatekeeper will block it. Remove the quarantine flag by running in Terminal:
 
 ```bash
 xattr -cr "/Applications/Filament DB.app"

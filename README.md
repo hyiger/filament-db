@@ -1,6 +1,6 @@
 # Filament DB
 
-A desktop and web application for managing 3D printing filament profiles. Import filament configurations from PrusaSlicer, store them in MongoDB or MongoDB Atlas, and manage them through a clean interface. The desktop app reads and writes [OpenPrintTag](https://openprinttag.io/) NFC tags (NFC-V / ISO 15693) and reads Bambu Lab MIFARE Classic spool tags via an ACR1552U reader, so you can scan a spool to autofill a profile or write your own per-spool tags. Available as an installable desktop app for macOS, Windows, and Linux, or run as a local web app. The desktop app supports offline mode with an embedded local database, hybrid mode with automatic cloud sync, or direct Atlas cloud mode. The API is unauthenticated by default and intended for single-user localhost use; do not expose to untrusted networks without adding an auth layer. For exposed/headless deployments (e.g. the mobile companion app talking to it over the LAN), set the `FILAMENTDB_API_KEY` environment variable — every `/api` request must then send `Authorization: Bearer <key>`. Leave it unset for localhost/desktop use, where it stays a no-op.
+A desktop and web application for managing 3D printing filament profiles. Import filament configurations from PrusaSlicer, store them in MongoDB or MongoDB Atlas, and manage them through a clean interface. The desktop app reads and writes [OpenPrintTag](https://openprinttag.org/) NFC tags (NFC-V / ISO 15693) and reads Bambu Lab MIFARE Classic spool tags via an ACR1552U reader, so you can scan a spool to autofill a profile or write your own per-spool tags. Available as an installable desktop app for macOS, Windows, and Linux, or run as a local web app. The desktop app supports offline mode with an embedded local database, hybrid mode with automatic cloud sync, or direct Atlas cloud mode. The API is unauthenticated by default and intended for single-user localhost use; do not expose to untrusted networks without adding an auth layer. For exposed/headless deployments (e.g. the mobile companion app talking to it over the LAN), set the `FILAMENTDB_API_KEY` environment variable — every `/api` request must then send `Authorization: Bearer <key>`. Leave it unset for localhost/desktop use, where it stays a no-op.
 
 ![Filament DB](docs/images/filament-db-screenshot.png)
 
@@ -11,7 +11,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Full CRUD** -- create, view, edit, and delete filament profiles with temperatures, fan settings, shrinkage, retraction, pressure advance, abrasive/soluble flags, and notes
 - **Material properties** -- glass transition temperature (Tg), heat deflection temperature (HDT), shore hardness (A/D), nozzle temp ranges, print speed ranges, per-bed-type temperatures
 - **Slicer parity** -- OrcaSlicer/BambuStudio/PrusaSlicer settings: overhang fan, aux fan, layer time thresholds, MMU/AMS params, start/end G-code, z-offset, air filtration
-- **Color variants** -- clone a filament as a color variant; inherited settings resolve automatically from the parent
+- **Color variants** -- Duplicate a filament as a color variant; inherited settings resolve automatically from the parent
 - **Presets** -- named parameter variants per filament (e.g., shore hardness profiles with different temps and extrusion multiplier)
 - **Spool tracking** -- track multiple spools per filament with individual weights, lot numbers, purchase/opened dates, photos, location assignment, printer-slot assignment, retirement flag, dry-cycle log, and per-spool usage history
 - **Locations** -- dedicated collection for dryboxes / shelves / cabinets / AMS slots with optional humidity readings; every spool can be assigned to one
@@ -28,7 +28,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Nozzles** -- define nozzles by diameter, type, high-flow, and hardened attributes; each physical nozzle is installed in at most one printer at a time
 - **Bed types** -- define bed surfaces (Smooth PEI, Textured PEI, G10/FR4, Glass, etc.) for per-bed-type calibration
 - **Per-printer per-nozzle per-bed-type calibration** -- store EM, max volumetric speed, pressure advance, retraction, temperature overrides, and fan settings per printer/nozzle/bed-type combination
-- **NFC tag read/write/erase** -- read, write, and erase [OpenPrintTag](https://openprinttag.io/) NFC-V (ISO 15693) tags and read Bambu Lab MIFARE Classic spool tags using an ACR1552U reader (desktop app)
+- **NFC tag read/write/erase** -- read, write, and erase [OpenPrintTag](https://openprinttag.org/) NFC-V (ISO 15693) tags and read Bambu Lab MIFARE Classic spool tags using an ACR1552U reader (desktop app)
 - **NFC scan → slicer preset** -- live Server-Sent Events stream at `GET /api/scan/stream` emits each tag read so a subscribed PrusaSlicer / OrcaSlicer FilamentDB module can auto-select the matching filament preset by name; the most recent scan replays on connect so a slicer opened just after a tag read still picks it up
 - **Instance IDs** -- unique per-filament identifier (5-byte hex, Prusament-compatible), written to NFC tags
 - **Label printer (Brother PT-P710BT)** -- print a 24mm-tape spool label directly from the filament detail page over **USB** (the printer's Bluetooth is mobile-only; the desktop app prints through the OS print system — CUPS on macOS/Linux, the spooler on Windows). The layout is **configurable under Settings → Label format** with a live preview: QR placement (left / right / off), which text fields (presets + toggles for name / vendor / type / color, stacked), curated font + size, horizontal/vertical orientation, and invert (white-on-black, QR stays scannable). The QR encodes either the spool instance ID (compact, re-scans into the match endpoint) or a deep-link URL (chosen per print, sticky default). Bitmap is rendered renderer-side and serialized via the Brother raster command set; the same code path supports a `Print` button in the dialog (Electron) or a `.bin` download for offline inspection via the `npm run label:sim` simulator (web)
@@ -58,8 +58,17 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **Cross-platform** -- installable on macOS (.dmg), Windows (.exe), and Linux (.AppImage, .deb) including arm64 for Raspberry Pi
 - **Offline mode** -- embedded local MongoDB; choose cloud-only, hybrid, or fully offline
 - **Atlas sync** -- automatic bidirectional sync with MongoDB Atlas using last-write-wins conflict resolution; covers filaments (with embedded spools), nozzles, printers, locations, bedtypes, printhistories, and sharedcatalogs with cross-DB ref remap (calibrations, AMS slots) and soft-delete tombstone propagation
+- **Share on local network** -- a Settings toggle (off by default) binds the embedded server to `0.0.0.0` so the instance is reachable from other devices on your LAN (e.g. the mobile companion app) instead of localhost-only; Settings shows the reachable URL. Pairs with mDNS auto-discovery — the desktop advertises itself as `_filamentdb._tcp` while sharing is on. Secure an exposed instance with the `FILAMENTDB_API_KEY` bearer-token gate
 - **Hardened external URL handling** -- Electron `setWindowOpenHandler` only forwards `http(s)` to the OS shell (not `file:` / `javascript:` / custom protocols); render-time guards on TDS / photo / product links; `tdsUrl` schema-validated to http(s) on every write path; TDS extractor follows redirects manually with per-hop SSRF re-checks (5-redirect cap)
-- **Auto-update** -- in-app banner announces new versions, downloads in the background, and prompts to restart-and-install (localized); falls back to the GitHub release page on macOS since Gatekeeper blocks unsigned auto-install
+- **Auto-update** -- in-app banner announces new versions, downloads in the background, and prompts to restart-and-install (localized). macOS builds are Developer ID-signed and notarized (v1.39.1+), so they open without Gatekeeper warnings and auto-update normally; a `merge-mac-metadata` CI job combines both arches into one multi-arch update channel (Apple Silicon → arm64, Intel → x64). On Windows, x64 is the single auto-update channel — arm64 machines auto-update to the emulated x64 build, with a native arm64 installer available for manual download
+
+### Mobile Companion App
+- **Scanner app** (`packages/mobile`) -- an Expo / React Native companion for iOS and Android. A thin client that talks to a running desktop or web instance over the LAN — pair it once, then scan from your phone at the bench
+- **NFC + QR scanning** -- read [OpenPrintTag](https://openprinttag.org/) NFC tags (decoded server-side) or scan a filament/spool QR code to pull up the matching profile. NFC is gated behind the `EXPO_PUBLIC_ENABLE_NFC` build flag so a QR-only build can ship for devices without the Core NFC entitlement
+- **Server discovery** -- enter the instance URL manually, or auto-discover a desktop app advertising itself on the network (mDNS / Bonjour) and tap to connect
+- **Create from a scan** -- a scanned tag with no matching filament can be turned into a new filament profile right from the phone (`create-from-tag`)
+- **Per-spool updates** -- adjust remaining weight, move a spool to a new location, retire / un-retire it, and log usage or dry-cycle entries; spool deep links (`?spool=`) jump straight to the right spool
+- **Offline write queue** -- spool edits made while the server is unreachable are persisted and replayed FIFO once it's back; idempotent ops only, and the queue survives an app restart
 
 ### Developer
 - **REST API** -- full CRUD endpoints for filaments, nozzles, printers, and bed types
@@ -123,6 +132,11 @@ See the [Setup Guide](docs/setup.md) for detailed instructions.
 filament-db/
 ├── docs/                    # Documentation (setup, usage, API, desktop, testing, troubleshooting)
 ├── electron/                # Electron main process + preload (bundled by esbuild)
+├── packages/
+│   └── mobile/              # Expo / React Native companion scanner app (NFC + QR)
+│       └── src/
+│           ├── app/            # Expo Router screens (index, scan-qr, create-from-tag, settings)
+│           └── lib/            # API client, NFC decode, zeroconf (mDNS), offline writeQueue
 ├── scripts/                 # CLI tools (seed import, icon generator, filament merge)
 ├── src/
 │   ├── app/

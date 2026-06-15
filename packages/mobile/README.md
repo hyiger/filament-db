@@ -2,10 +2,11 @@
 
 A lightweight iOS/Android companion for [Filament DB](../..) — a "remote control"
 that scans a spool's **QR label** or **NFC tag** and lets you update its
-inventory location and remaining filament. It does no business logic of its
-own: it forwards scans and edits to the Filament DB REST API and renders the
-responses. See [`docs/mobile-app-plan.md`](../../docs/mobile-app-plan.md) for the
-full plan.
+inventory location and remaining filament. It keeps the business logic on the
+server: it forwards scans and edits to the Filament DB REST API and renders the
+responses, holding only a little client-side state (a few input defaults plus an
+idempotent offline write queue). See
+[`docs/mobile-app-plan.md`](../../docs/mobile-app-plan.md) for the full plan.
 
 Built with Expo (SDK 56) + expo-router + TypeScript.
 
@@ -17,11 +18,21 @@ Built with Expo (SDK 56) + expo-router + TypeScript.
   `instanceId` — and open the matched filament.
 - **Scan an OpenPrintTag** NFC tag (`react-native-nfc-manager`) — the raw bytes
   are sent to `POST /api/nfc/decode`, which decodes + matches server-side.
-- **Update a spool**: set remaining filament (grams) and move it between
-  locations, via `PUT /api/filaments/{id}/spools/{spoolId}`.
+- **Create a filament from a scan**: when a decoded tag doesn't match anything in
+  the DB, confirm a name/vendor/type and `POST /api/filaments` to create it (the
+  server maps the tag's fields — the phone does no mapping). See
+  `src/app/create-from-tag.tsx`.
+- **Update a spool**: set remaining filament (grams), move it between locations,
+  and retire / un-retire it, via `PUT /api/filaments/{id}/spools/{spoolId}`. Log
+  filament usage (`POST …/spools/{spoolId}/usage`) and dry-box cycles
+  (`POST …/spools/{spoolId}/dry-cycles`).
+- **Spool deep links**: a label QR's `?spool=<id>` opens straight to that spool
+  via `GET /api/spools/{spoolId}` without knowing the parent filament up front.
+- **Offline support**: spool edits made while the server is unreachable are
+  queued and replayed FIFO once it's back (see "Offline support" below).
 
 Not yet (later phases): **Bambu NFC** (MIFARE Classic — Android-only; iPhone's
-Core NFC can't read those tags), and creating a new filament from a scan.
+Core NFC can't read those tags).
 
 ## Requirements
 
@@ -80,21 +91,46 @@ Then in the app: open **Server connection**, enter your Filament DB address
 (e.g. `http://192.168.1.50:3456`) and, if the server sets `FILAMENTDB_API_KEY`,
 the API key. Scan away.
 
+### Find your server automatically (mDNS)
+
+Instead of typing an IP, tap **Find on your network → Scan** on the Server
+connection screen. The phone discovers desktop instances advertising
+`_filamentdb._tcp` over mDNS/Bonjour and fills in the address for you. This
+requires the desktop app to have **"Share on local network"** turned on
+(Settings → Connection) and both devices on the same Wi-Fi. (Discovery uses a
+native module, so it works only in a development/standalone build, not Expo Go.)
+
+### Offline support
+
+Spool edits (move location, set remaining weight, retire / un-retire) made while
+the server is unreachable are saved to an on-device queue (`src/lib/writeQueue.ts`)
+and replayed FIFO once the server is reachable again — a scan-and-update on a
+flaky shop network isn't lost. The queue persists across app restarts
+(AsyncStorage) and is safe to replay because only idempotent absolute-SET edits
+are queued. Usage / dry-cycle logging decrements/appends, so those require live
+connectivity and are never queued.
+
 ## Project layout
 
 ```
-src/app/             expo-router screens
-  _layout.tsx        root Stack + ServerConfigProvider
-  index.tsx          scan home (QR + NFC)
-  settings.tsx       server connection (base URL + API key)
-  scan-qr.tsx        camera QR scanner (modal)
-  filament/[id].tsx  filament detail + spool location / remaining-weight updates
+src/app/               expo-router screens
+  _layout.tsx          root Stack + ServerConfigProvider
+  index.tsx            scan home (QR + NFC)
+  settings.tsx         server connection (base URL + API key + LAN discovery)
+  scan-qr.tsx          camera QR scanner (modal)
+  create-from-tag.tsx  confirm + create a filament from an unmatched scan
+  filament/[id].tsx    filament detail + spool updates (location, weight, retire, usage, dry cycle)
 src/lib/
-  types.ts           REST DTOs (can later be generated from public/openapi.json)
-  api.ts             typed fetch client (bearer key aware)
-  serverConfig.tsx   base URL + API key in expo-secure-store
-  nfc.ts             OpenPrintTag NDEF read → base64 payload for /api/nfc/decode
-  base64.ts          dependency-free byte helpers
+  types.ts             REST DTOs (can later be generated from public/openapi.json)
+  api.ts               typed fetch client (bearer key aware)
+  serverConfig.tsx     base URL + API key in expo-secure-store
+  nfc.ts               OpenPrintTag NDEF read → base64 payload for /api/nfc/decode
+  base64.ts            dependency-free byte helpers
+  features.ts          build-time feature flags (EXPO_PUBLIC_ENABLE_NFC gate)
+  pendingScan.ts       scan → create-from-tag hand-off (module ref, not URL params)
+  theme.ts             system light/dark color set (useColors)
+  writeQueue.ts        offline write queue — idempotent, survives restart
+  zeroconf.ts          mDNS / Bonjour discovery of desktop instances on the LAN
 ```
 
 ## Checks

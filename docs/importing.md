@@ -183,7 +183,7 @@ You can restore a previously exported snapshot to import core app data: filament
 
 ## CSV / XLSX Export
 
-Open the **Import/Export** dropdown on the home page and, under **Export**, click **"CSV"** or **"Excel (XLSX)"** to download all filaments. Exports include name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying settings, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, spool type, and (as of v1.30.3) two columns surfacing the parent/variant relationship:
+Open the **Import/Export** dropdown on the home page and, under **Export**, click **"CSV"** or **"Excel (XLSX)"** to download all filaments. Exports include name, vendor, type, color, color name, temperatures (nozzle, bed, first layer, ranges, standby), cost, density, weights, instance ID, drying settings, transmission distance, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), print speed ranges, spool type, and (as of v1.30) two columns surfacing the parent/variant relationship:
 
 - **Parent** — name of the parent filament when this row is a variant; empty for roots and standalones.
 - **Variant Count** — number of variants this filament has (>0 only for parents with variants).
