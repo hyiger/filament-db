@@ -45,11 +45,7 @@ if (nfcEnabled) {
     {
       nfcPermission:
         'Filament DB reads NFC filament spool tags (OpenPrintTag) to look them up in your database.',
-      // Entitlement is `['TAG']` only — NOT `NDEF`. Apple's iOS 26 SDK rejects
-      // the `NDEF` reader-format value at App Store submission (error 90778).
-      // We read OpenPrintTag (ISO 15693) through a TAG session on iOS, which
-      // needs only `TAG` (see src/lib/nfc.ts).
-      includeNdefEntitlement: false,
+      includeNdefEntitlement: true,
     },
   ]);
 }
