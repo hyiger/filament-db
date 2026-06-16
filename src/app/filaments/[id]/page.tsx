@@ -403,7 +403,7 @@ function FilamentDetail() {
   //    electron/ndef.ts + the auto-read classifier in electron/main.ts.
   // Returns true if the caller should proceed with the write.
   const ensureTagWritable = useCallback(
-    async ({ confirmOverwrite = false }: { confirmOverwrite?: boolean } = {}): Promise<boolean> => {
+    async ({ confirmOverwrite = false, targetInstanceId }: { confirmOverwrite?: boolean; targetInstanceId?: string } = {}): Promise<boolean> => {
       type ProbedTag = { tagSource?: string; materialName?: string; brandName?: string; spoolUid?: string; readOnly?: boolean };
       let existing: ProbedTag | null | undefined;
       // The tag carries a valid NDEF message but no OpenPrintTag record (e.g.
@@ -452,15 +452,23 @@ function FilamentDetail() {
         // path (confirmOverwrite=false) trusts this to skip the prompt.
         const norm = (s?: string | null) => (s ?? "").trim().toLowerCase();
         const tagInstance = norm(existing?.spoolUid);
-        // #732: a tag of ours may carry the filament-level id (legacy) OR any of
-        // this filament's spool instanceIds (Phase 3 writes are spool-scoped).
-        const ownInstanceIds = new Set<string>();
-        if (filament?.instanceId) ownInstanceIds.add(norm(filament.instanceId));
-        for (const s of filament?.spools ?? []) {
-          if (s.instanceId) ownInstanceIds.add(norm(s.instanceId));
-        }
-        const sameInstance = tagInstance !== "" && ownInstanceIds.has(tagInstance);
+        // #732 (Codex P2): the SILENT (weight-update) re-write may only accept a
+        // tag that belongs to THIS write's target — the specific spool being
+        // updated (targetInstanceId) or, during the transition, the legacy
+        // filament-level id. A SIBLING spool's tag (a different spool id on the
+        // same filament) must NOT be silently clobbered — it falls through to
+        // the overwrite prompt below.
+        const targetId = norm(targetInstanceId);
+        const sameInstance =
+          tagInstance !== "" &&
+          (tagInstance === norm(filament?.instanceId) ||
+            (targetId !== "" && tagInstance === targetId));
+        // A tag with NO spool id but matching name+vendor is a legacy
+        // (pre-spool-id) tag of this filament — safe to upgrade silently. A tag
+        // that DOES carry a spool id is judged by `sameInstance` above, so
+        // name+vendor can't silently claim a sibling's spool-scoped tag.
         const sameNameVendor =
+          tagInstance === "" &&
           norm(existing?.materialName) !== "" &&
           norm(existing?.materialName) === norm(filament?.name) &&
           norm(existing?.brandName) === norm(filament?.vendor);
@@ -579,16 +587,18 @@ function FilamentDetail() {
 
   const handleNfcWeightUpdate = useCallback(async (scaleWeight: number, spoolId?: string) => {
     if (!filament || filament.spoolWeight == null) return;
-    // Bambu (read-only) tags can't be written — refuse with the friendly
-    // message here too (no overwrite confirm: a weight update is a deliberate
-    // re-write of this filament's own tag). Codex P2 on PR #584.
-    if (!(await ensureTagWritable())) return;
     const actualRemaining = Math.max(0, scaleWeight - filament.spoolWeight);
     // #732: write the id of the SPOOL being updated — a spool card passes its
     // own id (so updating spool B's weight writes spool B's id, not the default
     // spool A's); the filament-level NFC-tools button passes none → the
     // active-roll default. Falls back to the filament id for a spool-less row.
     const writeSel = selectSpoolForWrite(filament, spoolId);
+    // Bambu (read-only) tags can't be written — refuse with the friendly
+    // message here too. #732 (Codex P2): pass the TARGET spool id so the silent
+    // re-write only accepts a tag for THIS spool (or a legacy filament-level
+    // tag); a sibling spool's tag falls through to the overwrite prompt instead
+    // of being silently relabeled. Codex P2 on PR #584.
+    if (!(await ensureTagWritable({ targetInstanceId: writeSel.ok ? writeSel.instanceId : undefined }))) return;
     setNfcWriteSuccess(null);
     try {
       const payload = generateOpenPrintTagBinary({
