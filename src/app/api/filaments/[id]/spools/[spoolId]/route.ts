@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
-import Filament from "@/models/Filament";
+import Filament, { generateInstanceId, isSpoolInstanceIdTaken } from "@/models/Filament";
 import Printer from "@/models/Printer";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
@@ -50,6 +50,20 @@ export async function PUT(
       return errorResponse("Invalid filament or spool id", 400);
     }
 
+    // #732 Phase 4: edit or regenerate the spool's instanceId. `regenerate`
+    // wins and mints a fresh id; a user-entered id (charset/length already
+    // validated) is checked for uniqueness vs OTHER spools so the match path
+    // stays unambiguous — a spool keeps its own id (excludeSpoolId = spoolId).
+    let finalInstanceId: string | undefined;
+    if (validation.regenerate === true) {
+      finalInstanceId = generateInstanceId();
+    } else if (validation.instanceId !== undefined) {
+      if (await isSpoolInstanceIdTaken(validation.instanceId, spoolId)) {
+        return errorResponse("That spool ID is already used by another spool", 409);
+      }
+      finalInstanceId = validation.instanceId;
+    }
+
     // Convert a remainingWeight input to an absolute totalWeight by adding the
     // spool's tare — the filament's own spoolWeight, inherited from the parent
     // when a variant doesn't set its own. The 0g fallback (neither set, legacy
@@ -92,6 +106,7 @@ export async function PUT(
     if (validation.lotNumber !== undefined) update["spools.$.lotNumber"] = validation.lotNumber;
     if (validation.purchaseDate !== undefined) update["spools.$.purchaseDate"] = validation.purchaseDate;
     if (validation.openedDate !== undefined) update["spools.$.openedDate"] = validation.openedDate;
+    if (finalInstanceId !== undefined) update["spools.$.instanceId"] = finalInstanceId;
 
     if (Object.keys(update).length === 0) {
       return NextResponse.json(

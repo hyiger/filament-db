@@ -258,4 +258,60 @@ describe("validateSpoolBody (PUT semantics with partial: true)", () => {
     if (!r.ok) return;
     expect(r.photoDataUrl).toBeNull();
   });
+
+  // #732 Phase 4: user-entered/edited spool instanceId + regenerate.
+  describe("instanceId (#732 Phase 4)", () => {
+    const ok = (v: unknown) => validateSpoolBody({ instanceId: v });
+
+    it("accepts a numeric Prusa roll id, hex, and a custom id", () => {
+      for (const id of ["1086170252", "a1b2c3d4e5", "drybox-A.1", "X_2"]) {
+        const r = ok(id);
+        expect(r.ok).toBe(true);
+        if (r.ok) expect(r.instanceId).toBe(id);
+      }
+    });
+
+    it("trims surrounding whitespace", () => {
+      const r = ok("  abc123  ");
+      expect(r.ok).toBe(true);
+      if (r.ok) expect(r.instanceId).toBe("abc123");
+    });
+
+    it("accepts a 128-char id and rejects 129", () => {
+      expect(ok("a".repeat(128)).ok).toBe(true);
+      const tooLong = ok("a".repeat(129));
+      expect(tooLong.ok).toBe(false);
+      if (!tooLong.ok) expect(tooLong.error).toMatch(/128/);
+    });
+
+    it("rejects empty / whitespace-only", () => {
+      expect(ok("").ok).toBe(false);
+      expect(ok("   ").ok).toBe(false);
+    });
+
+    it("rejects disallowed characters", () => {
+      for (const bad of ["foo@bar", "has space", "slash/x", "semi;colon", "quote'x"]) {
+        const r = ok(bad);
+        expect(r.ok).toBe(false);
+        if (!r.ok) expect(r.error).toMatch(/letters, numbers/);
+      }
+    });
+
+    it("rejects a non-string instanceId", () => {
+      expect(ok(123).ok).toBe(false);
+      expect(ok({}).ok).toBe(false);
+    });
+
+    it("parses regenerate:true and ignores any instanceId supplied alongside", () => {
+      const r = validateSpoolBody({ regenerate: true, instanceId: "ignored123" });
+      expect(r.ok).toBe(true);
+      if (!r.ok) return;
+      expect(r.regenerate).toBe(true);
+      expect(r.instanceId).toBeUndefined();
+    });
+
+    it("rejects a non-boolean regenerate", () => {
+      expect(validateSpoolBody({ regenerate: "yes" }).ok).toBe(false);
+    });
+  });
 });

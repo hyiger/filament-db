@@ -674,4 +674,42 @@ export async function backfillSpoolInstanceIds(): Promise<number> {
   return res.modifiedCount ?? 0;
 }
 
+/**
+ * #732 Phase 4: is `instanceId` already held by some OTHER spool on a
+ * non-deleted filament? Used by the spool create/edit routes to keep a
+ * user-entered id unique across spools so `matchFilament` resolves it
+ * unambiguously. `excludeSpoolId` lets a spool keep its own id on edit.
+ *
+ * Scoped to `_deletedAt: null` (mirrors the filament-level partial-unique
+ * index posture — a trashed filament's spool id may be reused). Uses
+ * `$elemMatch` for the exclude case so the SAME spool element must both carry
+ * the id AND not be the excluded one (a dot-path query would match across two
+ * different array elements).
+ */
+export async function isSpoolInstanceIdTaken(
+  instanceId: string,
+  excludeSpoolId?: string,
+): Promise<boolean> {
+  if (excludeSpoolId) {
+    const hit = await Filament.findOne(
+      {
+        _deletedAt: null,
+        spools: {
+          $elemMatch: {
+            instanceId,
+            _id: { $ne: new mongoose.Types.ObjectId(excludeSpoolId) },
+          },
+        },
+      },
+      { _id: 1 },
+    ).lean();
+    return !!hit;
+  }
+  const hit = await Filament.findOne(
+    { _deletedAt: null, "spools.instanceId": instanceId },
+    { _id: 1 },
+  ).lean();
+  return !!hit;
+}
+
 export default Filament;

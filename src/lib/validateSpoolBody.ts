@@ -32,6 +32,13 @@ export type SpoolValidation =
       locationId?: string | null;
       photoDataUrl?: string | null;
       retired?: boolean;
+      // #732 Phase 4: a user-entered/edited spool id (e.g. a Prusa roll id),
+      // validated for charset/length here; uniqueness is enforced at the route
+      // (it needs a DB query).
+      instanceId?: string;
+      /** #732 Phase 4: PUT-only — replace the spool's id with a fresh
+       * auto-generated one. Mutually exclusive with `instanceId`. */
+      regenerate?: boolean;
     }
   | { ok: false; error: string };
 
@@ -260,5 +267,53 @@ export function validateSpoolBody(
     result.retired = b.retired;
   }
 
+  // #732 Phase 4: regenerate (PUT-only intent) — mint a fresh id at the route.
+  if (b.regenerate !== undefined) {
+    if (typeof b.regenerate !== "boolean") {
+      return { ok: false, error: "regenerate must be a boolean" };
+    }
+    result.regenerate = b.regenerate;
+  }
+
+  // #732 Phase 4: a user-entered/edited spool id. Charset + length validated
+  // here; uniqueness is the route's job (DB query). `regenerate: true` wins —
+  // ignore any instanceId supplied alongside it.
+  if (b.instanceId !== undefined && result.regenerate !== true) {
+    const idCheck = validateSpoolInstanceId(b.instanceId);
+    if (!idCheck.ok) {
+      return { ok: false, error: idCheck.error };
+    }
+    result.instanceId = idCheck.value;
+  }
+
   return result;
+}
+
+/** #732 Phase 4: pure charset/length validation for a user-entered spool id.
+ * Allows letters, digits, dot, underscore, hyphen — covers numeric Prusa roll
+ * ids (`1086170252`), auto-generated hex (`a1b2c3d4e5`), and custom ids
+ * (`drybox-A.1`). Capped at 128 to match the match route's `boundedParam`, so a
+ * custom id always round-trips through a QR/NFC scan. Uniqueness is enforced
+ * separately at the route (it needs a DB query). */
+export function validateSpoolInstanceId(
+  value: unknown,
+): { ok: true; value: string } | { ok: false; error: string } {
+  if (typeof value !== "string") {
+    return { ok: false, error: "instanceId must be a string" };
+  }
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    return { ok: false, error: "instanceId must not be empty" };
+  }
+  if (trimmed.length > 128) {
+    return { ok: false, error: "instanceId must be 128 characters or fewer" };
+  }
+  if (!/^[A-Za-z0-9._-]+$/.test(trimmed)) {
+    return {
+      ok: false,
+      error:
+        "instanceId may only contain letters, numbers, dot, underscore, and hyphen",
+    };
+  }
+  return { ok: true, value: trimmed };
 }
