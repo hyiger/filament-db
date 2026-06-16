@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { MongoClient } from "mongodb";
 import dbConnect from "@/lib/mongodb";
-import Filament from "@/models/Filament";
+import Filament, { generateInstanceId } from "@/models/Filament";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { assertSafeMongoUri } from "@/lib/mongoUriGuard";
 import { validateSpoolPhotoDataUrl } from "@/lib/validateSpoolBody";
@@ -140,6 +140,14 @@ export async function POST(request: NextRequest) {
             if (s && typeof s === "object") {
               const spool = s as Record<string, unknown>;
               spool.locationId = null;
+              // GH #732: the top-level `instanceId` is already excluded from
+              // IMPORTABLE_FILAMENT_FIELDS so a remote can't spoof a filament
+              // identity. The spool `instanceId` rides inside the allow-listed
+              // `spools` array, so regenerate it locally — otherwise an
+              // attacker-controlled / unrelated Atlas DB could persist duplicate
+              // or spoofed spool identities that Phase 2 will match labels/NFC
+              // against.
+              spool.instanceId = generateInstanceId();
               // GH #626: the remote document is attacker-controllable, and
               // spool photos here bypassed the MIME allow-list + 5MB cap
               // that the dedicated spool routes enforce via

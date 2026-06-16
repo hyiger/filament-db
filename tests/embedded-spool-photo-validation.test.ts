@@ -208,5 +208,40 @@ describe("embedded spool photoDataUrl validation (#626)", () => {
       expect(fresh.spools).toHaveLength(1);
       expect(fresh.spools[0].photoDataUrl).toBeNull();
     });
+
+    // GH #732: the spool instanceId is a persisted identity. A remote
+    // (attacker-controllable) document must not be able to plant a spoofed or
+    // duplicate spool id — it is regenerated locally, mirroring how the
+    // top-level instanceId is excluded from the import allow-list.
+    it("regenerates spool instanceId from the remote document (no identity spoofing)", async () => {
+      const remoteId = new mongoose.Types.ObjectId();
+      await remoteCollection().insertOne({
+        _id: remoteId,
+        name: "Remote Spoofed PLA",
+        vendor: "RemoteCo",
+        type: "PLA",
+        _deletedAt: null,
+        instanceId: "REMOTE-FIL", // top-level — dropped by the field allow-list
+        spools: [
+          { label: "Spoofed", totalWeight: 800, instanceId: "SPOOFED-ID" },
+        ],
+      });
+
+      const res = await importAtlas(
+        postReq("http://localhost/api/filaments/import-atlas", {
+          uri: remoteUri(),
+          filamentIds: [String(remoteId)],
+        }),
+      );
+      expect(res.status).toBe(200);
+
+      const imported = await Filament.findOne({ name: "Remote Spoofed PLA" });
+      expect(imported.spools).toHaveLength(1);
+      // The remote spool id was NOT persisted verbatim — a fresh local id.
+      expect(imported.spools[0].instanceId).toMatch(/^[0-9a-f]{10}$/);
+      expect(imported.spools[0].instanceId).not.toBe("SPOOFED-ID");
+      // And the top-level filament instanceId isn't the remote's either.
+      expect(imported.instanceId).not.toBe("REMOTE-FIL");
+    });
   });
 });
