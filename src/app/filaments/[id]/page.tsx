@@ -577,16 +577,18 @@ function FilamentDetail() {
     }
   };
 
-  const handleNfcWeightUpdate = useCallback(async (scaleWeight: number) => {
+  const handleNfcWeightUpdate = useCallback(async (scaleWeight: number, spoolId?: string) => {
     if (!filament || filament.spoolWeight == null) return;
     // Bambu (read-only) tags can't be written — refuse with the friendly
     // message here too (no overwrite confirm: a weight update is a deliberate
     // re-write of this filament's own tag). Codex P2 on PR #584.
     if (!(await ensureTagWritable())) return;
     const actualRemaining = Math.max(0, scaleWeight - filament.spoolWeight);
-    // #732: write the active roll's spool id (same default selection as the
-    // explicit Write path); falls back to the filament id for a spool-less row.
-    const writeSel = selectSpoolForWrite(filament);
+    // #732: write the id of the SPOOL being updated — a spool card passes its
+    // own id (so updating spool B's weight writes spool B's id, not the default
+    // spool A's); the filament-level NFC-tools button passes none → the
+    // active-roll default. Falls back to the filament id for a spool-less row.
+    const writeSel = selectSpoolForWrite(filament, spoolId);
     setNfcWriteSuccess(null);
     try {
       const payload = generateOpenPrintTagBinary({
@@ -1470,7 +1472,7 @@ function FilamentDetail() {
                     onLogUsage={(entry) => handleLogUsage(spool._id, entry)}
                     onUpdateMeta={(patch) => handleUpdateSpool(spool._id, patch)}
                     onRemove={() => handleRemoveSpool(spool._id)}
-                    onNfcWeightUpdate={(scaleWeight) => handleNfcWeightUpdate(scaleWeight)}
+                    onNfcWeightUpdate={(scaleWeight) => handleNfcWeightUpdate(scaleWeight, String(spool._id))}
                     nfcAvailable={isElectron && nfcStatus.tagPresent}
                     nfcWriting={nfcWriting}
                     highlight={highlightSpoolId === String(spool._id)}
