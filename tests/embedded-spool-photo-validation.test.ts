@@ -243,5 +243,45 @@ describe("embedded spool photoDataUrl validation (#626)", () => {
       // And the top-level filament instanceId isn't the remote's either.
       expect(imported.instanceId).not.toBe("REMOTE-FIL");
     });
+
+    // GH #732: a routine re-import (update path) must NOT rotate the durable
+    // local spool id — otherwise it would orphan any label/NFC/match that
+    // stored the prior value. The local id is preserved by position; the
+    // remote's id is still never trusted.
+    it("preserves the local spool instanceId across a re-import (update path)", async () => {
+      const remoteId = new mongoose.Types.ObjectId();
+      await remoteCollection().insertOne({
+        _id: remoteId,
+        name: "Reimport PLA",
+        vendor: "RemoteCo",
+        type: "PLA",
+        _deletedAt: null,
+        spools: [{ label: "S1", totalWeight: 1000, instanceId: "REMOTE-ID-1" }],
+      });
+
+      // First import → create. The spool gets a fresh local id (not the remote's).
+      await importAtlas(
+        postReq("http://localhost/api/filaments/import-atlas", {
+          uri: remoteUri(),
+          filamentIds: [String(remoteId)],
+        }),
+      );
+      let local = await Filament.findOne({ name: "Reimport PLA" });
+      const firstId = local.spools[0].instanceId;
+      expect(firstId).toMatch(/^[0-9a-f]{10}$/);
+      expect(firstId).not.toBe("REMOTE-ID-1");
+
+      // Re-import the SAME remote → update path. The local id must be preserved.
+      await importAtlas(
+        postReq("http://localhost/api/filaments/import-atlas", {
+          uri: remoteUri(),
+          filamentIds: [String(remoteId)],
+        }),
+      );
+      local = await Filament.findOne({ name: "Reimport PLA" });
+      expect(local.spools).toHaveLength(1);
+      expect(local.spools[0].instanceId).toBe(firstId); // not rotated
+      expect(local.spools[0].instanceId).not.toBe("REMOTE-ID-1");
+    });
   });
 });

@@ -1,5 +1,5 @@
 import { EventEmitter } from "events";
-import { randomBytes, randomUUID } from "crypto";
+import { createHash, randomBytes, randomUUID } from "crypto";
 import { MongoClient, ObjectId, Document } from "mongodb";
 
 /**
@@ -1386,16 +1386,24 @@ export class SyncService extends EventEmitter {
       // pre-#732 peer would otherwise arrive with no instanceId, leaving the
       // "every spool has a 5-byte hex id" invariant false on the hybrid-sync
       // path. Existing ids are preserved; only missing/empty ones are minted.
-      // Cross-side id consistency isn't guaranteed (spools have no stable
-      // cross-side identity — same documented limitation as amsSlots[].spoolId);
-      // this only guarantees the written side's local invariant, and
-      // last-write-wins converges the two sides over subsequent cycles.
+      //
+      // The minted id is DERIVED from the source spool's `_id` (not random) so
+      // it is STABLE across re-syncs of the same spool: if the id-less peer
+      // wins a later last-write-wins cycle, re-normalizing yields the SAME id
+      // rather than rotating it — which would otherwise invalidate any
+      // label/NFC/match that saved the prior value. Full cross-side
+      // convergence (both peers agreeing on one id for the same physical spool)
+      // still requires stable cross-side spool identity — the deferred
+      // spool-syncId migration, the same limitation that clears
+      // amsSlots[].spoolId / usage[].spoolId on cross-side remap.
       if (Array.isArray(doc.spools)) {
         doc.spools = doc.spools.map((spool: Document) => {
           const instanceId =
             typeof spool.instanceId === "string" && spool.instanceId
               ? spool.instanceId
-              : randomBytes(5).toString("hex");
+              : spool._id
+                ? createHash("sha1").update(String(spool._id)).digest("hex").slice(0, 10)
+                : randomBytes(5).toString("hex");
           if (!spool.locationId) return { ...spool, instanceId };
           const locSyncId = sourceLocationIdToSyncId.get(spool.locationId.toString());
           const targetLocationId = locSyncId ? targetLocationMap.get(locSyncId) : null;

@@ -162,9 +162,31 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        // GH #732: on an UPDATE the whole spools array is replaced, so reuse
+        // the EXISTING LOCAL spool instanceId by position rather than the
+        // freshly-minted one — otherwise a routine re-import from Atlas would
+        // rotate the durable spool identity every time and orphan any
+        // label/NFC/match that stored the prior id. New positions (beyond the
+        // local count) keep their minted id; the remote's id is never trusted
+        // (anti-spoofing, GH #732 round 2). Matching is positional because
+        // spool subdocs have no stable cross-side id (the deferred spool-syncId
+        // migration — same limitation as amsSlots[].spoolId).
+        const preserveLocalSpoolIds = (
+          localSpools: Array<{ instanceId?: string }> | undefined,
+        ) => {
+          if (!Array.isArray(filamentData.spools) || !Array.isArray(localSpools)) return;
+          for (let i = 0; i < filamentData.spools.length; i++) {
+            const localId = localSpools[i]?.instanceId;
+            if (localId) {
+              (filamentData.spools[i] as Record<string, unknown>).instanceId = localId;
+            }
+          }
+        };
+
         const importName = String(filamentData.name ?? "");
         const existing = await Filament.findOne({ name: importName, _deletedAt: null });
         if (existing) {
+          preserveLocalSpoolIds(existing.spools);
           // GH #255: runValidators so schema constraints (cost.min, etc.)
           // are enforced on the update path, not just on create.
           await Filament.updateOne(
@@ -193,6 +215,7 @@ export async function POST(request: NextRequest) {
             _purged: { $ne: true },
           });
           if (softDeleted) {
+            preserveLocalSpoolIds(softDeleted.spools);
             await Filament.updateOne(
               { _id: softDeleted._id },
               { ...filamentData, _deletedAt: null },
