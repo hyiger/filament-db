@@ -6,6 +6,7 @@ import type { DecodedOpenPrintTag } from "@/lib/openprinttag-decode";
 import {
   createScanMatchHandler,
   type FilamentMatch,
+  type MatchedSpool,
   type NfcTagReadResult,
 } from "@/lib/scanMatchHandler";
 
@@ -76,10 +77,14 @@ function publishScan(
   decoded: DecodedOpenPrintTag,
   match: FilamentMatch | null,
   candidates: FilamentMatch[],
+  matchedSpool: MatchedSpool | null,
 ): void {
   const body = {
     filament: match,
     candidates,
+    // #732: the spool the scan resolved to (null for a filament-level/heuristic
+    // match), so SSE subscribers can act per-spool.
+    matchedSpool,
     decoded: {
       materialName: decoded.materialName,
       brandName: decoded.brandName,

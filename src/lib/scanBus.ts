@@ -32,6 +32,14 @@ export interface ScanEventDecoded {
   tagSource?: "openprinttag" | "bambu";
 }
 
+/** #732: the specific spool a scan resolved to, when the tag's spool_uid matched
+ * a spools[].instanceId. Null for a filament-level / heuristic match. */
+export interface ScanEventSpool {
+  _id: string;
+  instanceId: string;
+  label: string;
+}
+
 export interface ScanEvent {
   /** Epoch ms when the scan was published. */
   timestamp: number;
@@ -39,6 +47,8 @@ export interface ScanEvent {
   filament: ScanEventFilament | null;
   /** Other plausible filaments (vendor+type or vendor-only candidates). */
   candidates: ScanEventFilament[];
+  /** #732: the spool the tag's spool_uid resolved to, or null. */
+  matchedSpool?: ScanEventSpool | null;
   /** Subset of the decoded tag fields useful to consumers. */
   decoded: ScanEventDecoded;
 }

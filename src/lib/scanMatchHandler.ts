@@ -30,6 +30,14 @@ export interface FilamentMatch {
   color: string;
 }
 
+/** #732: the spool a scan resolved to (when the tag's spool_uid matched a
+ * spools[].instanceId). Null for a filament-level / name / vendor+type match. */
+export interface MatchedSpool {
+  _id: string;
+  instanceId: string;
+  label: string;
+}
+
 export interface NfcTagReadEvent {
   data?: DecodedOpenPrintTag;
   error?: string;
@@ -42,6 +50,9 @@ export interface NfcTagReadResult {
   empty?: boolean;
   match?: FilamentMatch | null;
   candidates?: FilamentMatch[];
+  /** #732: the spool the tag's spool_uid resolved to (null for a filament-level
+   * / heuristic match). */
+  matchedSpool?: MatchedSpool | null;
 }
 
 export interface ScanMatchDeps {
@@ -54,6 +65,7 @@ export interface ScanMatchDeps {
     decoded: DecodedOpenPrintTag,
     match: FilamentMatch | null,
     candidates: FilamentMatch[],
+    matchedSpool: MatchedSpool | null,
   ) => void;
 }
 
@@ -91,6 +103,12 @@ export function createScanMatchHandler(deps: ScanMatchDeps) {
     inFlight = controller;
 
     const params = new URLSearchParams();
+    // #732: resolve by the written SPOOL id first (the matcher tries spool then
+    // filament instanceId), so a desktop scan/read-back of a spool-scoped tag
+    // resolves the exact spool/filament even after a rename — matching mobile.
+    // Bambu tray UIDs (32 hex) harmlessly won't match a 10-char id and fall
+    // through to name/vendor/type below.
+    if (event.data.spoolUid) params.set("instanceId", event.data.spoolUid);
     if (event.data.materialName) params.set("name", event.data.materialName);
     if (event.data.brandName) params.set("vendor", event.data.brandName);
     if (event.data.materialType) params.set("type", event.data.materialType);
@@ -99,10 +117,11 @@ export function createScanMatchHandler(deps: ScanMatchDeps) {
       result: NfcTagReadResult,
       match: FilamentMatch | null,
       candidates: FilamentMatch[],
+      matchedSpool: MatchedSpool | null,
     ) => {
       if (mySeq !== seq) return;
       deps.onResult(result);
-      deps.onPublish(event.data!, match, candidates);
+      deps.onPublish(event.data!, match, candidates, matchedSpool);
     };
 
     try {
@@ -110,7 +129,7 @@ export function createScanMatchHandler(deps: ScanMatchDeps) {
         signal: controller.signal,
       });
       if (!res.ok) {
-        commit({ data: event.data, match: null, candidates: [] }, null, []);
+        commit({ data: event.data, match: null, candidates: [], matchedSpool: null }, null, [], null);
         return;
       }
       const parsed = await res.json();
@@ -118,10 +137,11 @@ export function createScanMatchHandler(deps: ScanMatchDeps) {
       const candidates: FilamentMatch[] = Array.isArray(parsed?.candidates)
         ? parsed.candidates
         : [];
-      commit({ data: event.data, match, candidates }, match, candidates);
+      const matchedSpool: MatchedSpool | null = parsed?.matchedSpool ?? null;
+      commit({ data: event.data, match, candidates, matchedSpool }, match, candidates, matchedSpool);
     } catch (err) {
       if (isAbortError(err, controller.signal)) return;
-      commit({ data: event.data, match: null, candidates: [] }, null, []);
+      commit({ data: event.data, match: null, candidates: [], matchedSpool: null }, null, [], null);
     }
   };
 }

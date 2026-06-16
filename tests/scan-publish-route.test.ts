@@ -55,6 +55,38 @@ describe("POST /api/scan/publish", () => {
     expect(getLastScan()).toEqual(received[0]);
   });
 
+  it("round-trips a valid matchedSpool and drops a malformed one (#732)", async () => {
+    const received: ScanEvent[] = [];
+    subscribeScans((e) => received.push(e));
+
+    // Valid matched spool → carried through to the event.
+    await publish(
+      postJson({
+        filament: { _id: "abc", name: "PLA", vendor: "V", type: "PLA", color: "#000" },
+        candidates: [],
+        matchedSpool: { _id: "sp1", instanceId: "5p001dcafe", label: "Drybox" },
+        decoded: { materialName: "PLA" },
+      }),
+    );
+    expect(received[0]!.matchedSpool).toEqual({
+      _id: "sp1",
+      instanceId: "5p001dcafe",
+      label: "Drybox",
+    });
+
+    // Malformed matchedSpool (missing instanceId) → dropped to null, scan still
+    // accepted on its decoded fields.
+    await publish(
+      postJson({
+        filament: null,
+        candidates: [],
+        matchedSpool: { _id: "sp2" },
+        decoded: { materialName: "PLA" },
+      }),
+    );
+    expect(received[1]!.matchedSpool).toBeNull();
+  });
+
   it("accepts a no-match scan as long as decoded fields are present", async () => {
     const res = await publish(
       postJson({

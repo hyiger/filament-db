@@ -4,6 +4,7 @@ import {
   type ScanEvent,
   type ScanEventDecoded,
   type ScanEventFilament,
+  type ScanEventSpool,
 } from "@/lib/scanBus";
 import { errorResponse, getErrorMessage } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
@@ -54,6 +55,21 @@ function pickCandidates(value: unknown): ScanEventFilament[] {
   return out;
 }
 
+/** #732: validate the matched-spool object (a renderer-supplied, same-origin
+ * payload). Requires a string _id + instanceId; label bounded to a sane
+ * length. Returns null for anything malformed. */
+function pickMatchedSpool(value: unknown): ScanEventSpool | null {
+  if (!isObject(value)) return null;
+  const id = value._id;
+  const instanceId = value.instanceId;
+  if (typeof id !== "string" || typeof instanceId !== "string") return null;
+  return {
+    _id: id,
+    instanceId,
+    label: typeof value.label === "string" ? value.label.slice(0, 200) : "",
+  };
+}
+
 const DECODED_STRING_FIELDS = [
   "materialName",
   "brandName",
@@ -94,6 +110,7 @@ export async function POST(request: NextRequest) {
 
   const filament = pickFilament(body.filament);
   const candidates = pickCandidates(body.candidates);
+  const matchedSpool = pickMatchedSpool(body.matchedSpool);
   const decoded = pickDecoded(body.decoded);
 
   // Reject a scan with no useful content — without either a matched filament
@@ -109,6 +126,7 @@ export async function POST(request: NextRequest) {
     timestamp: Date.now(),
     filament,
     candidates,
+    matchedSpool,
     decoded,
   };
 

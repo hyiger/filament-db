@@ -85,6 +85,26 @@ describe("createScanMatchHandler", () => {
     expect(onPublish.mock.calls[0]![1]).toEqual(matchFor("abc", "PLA"));
   });
 
+  it("matches by the written spool id and propagates matchedSpool (#732)", async () => {
+    const onResult = vi.fn();
+    const onPublish = vi.fn();
+    const spool = { _id: "sp1", instanceId: "5p001dcafe", label: "Drybox" };
+    const fetchMock = makeAbortAwareFetch([
+      async () => jsonResponse({ match: matchFor("fil1", "PLA"), candidates: [], matchedSpool: spool }),
+    ]);
+    const handle = createScanMatchHandler({ onResult, onPublish, fetch: fetchMock });
+
+    await handle({ data: { ...decoded("PLA"), spoolUid: "5p001dcafe" } as DecodedOpenPrintTag });
+
+    // The match request carried the decoded spool id as `instanceId` so the
+    // server resolves by spool first (rename-robust, matching mobile).
+    const url = (fetchMock as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]![0] as string;
+    expect(url).toContain("instanceId=5p001dcafe");
+    // matchedSpool is propagated to both callbacks.
+    expect(onResult.mock.calls[0]![0].matchedSpool).toEqual(spool);
+    expect(onPublish.mock.calls[0]![3]).toEqual(spool);
+  });
+
   it("drops the commit from a superseded scan (regression: codex P1 on PR #234)", async () => {
     const onResult = vi.fn();
     const onPublish = vi.fn();
