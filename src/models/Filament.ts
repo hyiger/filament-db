@@ -634,16 +634,23 @@ export async function backfillSpoolInstanceIds(): Promise<number> {
       ops.push({
         updateOne: {
           filter: { _id: doc._id },
+          // The array filter also requires the spool to STILL lack an id, so a
+          // concurrent migration (two cold-start requests / two app instances)
+          // or an in-process retry can't overwrite an instanceId another run
+          // already assigned — once a spool is filled this write is a no-op
+          // (query semantics: `$in: [null, ""]` matches missing, null, and "").
           update: { $set: { "spools.$[s].instanceId": newId } },
-          arrayFilters: [{ "s._id": s._id }],
+          arrayFilters: [{ "s._id": s._id, "s.instanceId": { $in: [null, ""] } }],
         },
       });
     }
   }
 
   if (ops.length === 0) return 0;
-  await Filament.bulkWrite(ops);
-  return ops.length;
+  // Report spools actually filled (modifiedCount), not ops submitted, so the
+  // count is accurate when the array-filter guard skips already-filled spools.
+  const res = await Filament.bulkWrite(ops);
+  return res.modifiedCount ?? 0;
 }
 
 export default Filament;

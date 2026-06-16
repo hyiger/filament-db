@@ -212,6 +212,65 @@ describe("dbConnect", () => {
     }
   });
 
+  // GH #732 (Codex P2): the filament backfill is gated on the spool backfill
+  // succeeding. If the spool backfill throws, NO filament id may be minted —
+  // otherwise the next retry's carry-over would adopt that brand-new id.
+  it("does not mint filament ids while the spool backfill is failing", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    // Legacy doc: NO filament instanceId, one id-less spool.
+    await Filament.collection.insertOne({
+      name: "GatedOrdering",
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      _deletedAt: null,
+      spools: [{ _id: new mongoose.Types.ObjectId(), label: "A", totalWeight: 1000 }],
+    });
+
+    const filamentMod = await import("@/models/Filament");
+    const spy = vi
+      .spyOn(filamentMod, "backfillSpoolInstanceIds")
+      .mockRejectedValueOnce(new Error("transient failure"));
+    try {
+      const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
+      cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
+      cached.conn = null;
+      cached.promise = null;
+
+      // Read PERSISTED values via the raw driver — a hydrated findOne() would
+      // apply the schema default for a missing instanceId in memory, masking
+      // whether anything was actually written.
+      const raw = () => Filament.collection.findOne({ name: "GatedOrdering" });
+
+      // Cycle 1: spool backfill throws → filament backfill is SKIPPED.
+      await dbConnect();
+      const m = (cached.migrations as { spoolInstanceIds: boolean; instanceIds: boolean });
+      expect(m.spoolInstanceIds).toBe(false);
+      expect(m.instanceIds).toBe(false);
+      let doc = await raw();
+      expect(doc!.instanceId).toBeUndefined(); // no filament id minted yet
+      expect(doc!.spools[0].instanceId).toBeUndefined(); // spool untouched too
+
+      // Cycle 2: spool backfill succeeds first (spool gets a FRESH id, no
+      // carry-over since the filament still had no id), THEN filament backfill
+      // mints the filament id.
+      await dbConnect();
+      expect(m.spoolInstanceIds).toBe(true);
+      expect(m.instanceIds).toBe(true);
+      doc = await raw();
+      expect(doc!.instanceId).toMatch(/^[0-9a-f]{10}$/);
+      expect(doc!.spools[0].instanceId).toMatch(/^[0-9a-f]{10}$/);
+      // The ordering guarantee held: the spool did NOT inherit the later-minted
+      // filament id.
+      expect(doc!.spools[0].instanceId).not.toBe(doc!.instanceId);
+    } finally {
+      spy.mockRestore();
+      await Filament.deleteMany({ name: "GatedOrdering" });
+    }
+  });
+
 
   it("reconnects when URI changes", async () => {
     // First connect with current URI

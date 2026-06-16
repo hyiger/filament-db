@@ -146,7 +146,15 @@ export default async function dbConnect() {
   // The backfill is cheap on fresh / already-migrated installs
   // (count === 0, flag flips immediately) and the retry tracking
   // ensures a transient blip is recoverable on the next request.
-  if (!cached.migrations.instanceIds) {
+  //
+  // GATED ON spoolInstanceIds (GH #732, Codex P2): this MUST NOT run until the
+  // spool backfill above has succeeded. Otherwise, if the spool backfill threw
+  // (transient failure, caught above), minting a fresh filament id here would
+  // make the next retry's carry-over adopt that brand-new id into the first
+  // spool — breaking the guarantee that a legacy filament which never had an id
+  // gives its spools FRESH per-spool ids, not an id invented during the upgrade.
+  // The dependent coreModelIndexes pass also retries until both succeed.
+  if (cached.migrations.spoolInstanceIds && !cached.migrations.instanceIds) {
     try {
       const { backfillInstanceIds } = await import("@/models/Filament");
       const count = await backfillInstanceIds();
