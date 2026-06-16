@@ -109,6 +109,35 @@ describe("POST /api/nfc/decode", () => {
     // The matched row's id equals the queried spool_uid → confident exact tag.
     expect(body.matchedBy).toBe("instanceId");
     expect(body.candidates).toEqual([]);
+    // #732: this is a FILAMENT-level (fallback) hit, so no spool is reported.
+    expect(body.matchedSpool).toBeNull();
+  });
+
+  it("#732: matches a tag's spoolUid against a spools[].instanceId and reports the spool", async () => {
+    // A Phase-3-written tag stores the SPOOL's instanceId in spool_uid. The
+    // decode endpoint resolves it to the spool, and matchedBy stays "instanceId"
+    // even though the matched filament's top-level instanceId differs.
+    const f = await Filament.create({
+      name: "Spool Tag PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      spools: [{ label: "Drybox 3", totalWeight: 1000, instanceId: "5p001dcafe" }],
+    });
+    const cbor = generateOpenPrintTagBinary({
+      materialName: "On-tag name",
+      brandName: "Prusament",
+      materialType: "PLA",
+      spoolUid: "5p001dcafe",
+    });
+    const res = await decodeTag(decodeReq({ tagType: "openprinttag", payload: b64(cbor) }));
+    const body = await res.json();
+    expect(body.match?.name).toBe("Spool Tag PLA");
+    expect(body.matchedBy).toBe("instanceId");
+    expect(body.matchedSpool).toMatchObject({
+      instanceId: "5p001dcafe",
+      label: "Drybox 3",
+      _id: String(f.spools[0]._id),
+    });
   });
 
   it("returns candidates (no auto-match) on an ambiguous vendor+type", async () => {

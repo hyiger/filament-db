@@ -72,7 +72,13 @@ export default function ScanQrScreen() {
       }
       const res = await api.matchByInstanceId(data.trim());
       if (res.match?._id) {
-        router.replace({ pathname: '/filament/[id]', params: { id: res.match._id } });
+        // #732: if the code resolved to a specific spool, deep-link to it so the
+        // detail screen highlights that spool (older servers omit matchedSpool).
+        const spoolId = res.matchedSpool?._id;
+        router.replace({
+          pathname: '/filament/[id]',
+          params: spoolId ? { id: res.match._id, spool: spoolId } : { id: res.match._id },
+        });
       } else {
         setError('No filament matched that code.');
         handled.current = false;

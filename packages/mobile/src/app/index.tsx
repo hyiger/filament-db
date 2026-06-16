@@ -57,7 +57,13 @@ export default function ScanScreen() {
       // steering a multi-candidate scan into a duplicate and dodges Alert's
       // cross-platform button caps.
       if (res.match?._id && res.matchedBy === 'instanceId') {
-        router.push({ pathname: '/filament/[id]', params: { id: res.match._id } });
+        // #732: if the tag resolved to a specific spool, deep-link to it so the
+        // detail screen highlights that spool (older servers omit matchedSpool).
+        const spoolId = res.matchedSpool?._id;
+        router.push({
+          pathname: '/filament/[id]',
+          params: spoolId ? { id: res.match._id, spool: spoolId } : { id: res.match._id },
+        });
         return;
       }
       // matchFilament returns EITHER a single match OR candidates, never both.

@@ -32,6 +32,8 @@ export interface DecodedOpenPrintTag {
 export interface Spool {
   _id: string;
   label?: string;
+  /** #732: per-spool 5-byte hex id (10 hex chars) — the durable spool identity. */
+  instanceId?: string;
   /** Gross weight (filament + empty spool tare), grams. Null = unknown. */
   totalWeight?: number | null;
   locationId?: string | null;
@@ -86,6 +88,12 @@ export interface Location {
 export interface MatchResult {
   match: Filament | null;
   candidates: Filament[];
+  /**
+   * #732: the specific spool whose instanceId matched, or null/absent for a
+   * filament-level (legacy fallback) / name / vendor+type match. Absent when
+   * talking to a pre-Phase-2 server — always read it optionally.
+   */
+  matchedSpool?: Spool | null;
 }
 
 export interface NfcDecodeResponse {
@@ -98,4 +106,6 @@ export interface NfcDecodeResponse {
    * may be a sibling color, so the scanner offers "create new" alongside it.
    */
   matchedBy?: 'instanceId' | 'heuristic' | null;
+  /** #732: the spool the tag's spool_uid resolved to (see MatchResult.matchedSpool). */
+  matchedSpool?: Spool | null;
 }
