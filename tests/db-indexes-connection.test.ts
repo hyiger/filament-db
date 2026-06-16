@@ -46,6 +46,18 @@ describe("DB index correctness + embedded-array bounds", () => {
       });
     });
 
+    it("#732 — declares a multikey index on spools.instanceId for the spool-id match path", () => {
+      const indexes = Filament.schema.indexes() as [
+        Record<string, number>,
+        Record<string, unknown>,
+      ][];
+      const spoolIdIndex = indexes.find((ix) => ix[0]["spools.instanceId"] === 1);
+      expect(spoolIdIndex).toBeDefined();
+      // Non-unique (spool ids aren't globally unique-enforced) and not scoped
+      // to non-deleted, so it stays a plain multikey index.
+      expect(spoolIdIndex![1].unique).toBeFalsy();
+    });
+
     it("lets a new filament reuse the instanceId of a soft-deleted one", async () => {
       const a = await Filament.create({
         name: "Original",

@@ -507,6 +507,15 @@ FilamentSchema.index(
 // Composite index for common filter queries (vendor + type)
 FilamentSchema.index({ vendor: 1, type: 1 });
 
+// #732: the QR/NFC match path resolves a scanned id against spools[].instanceId
+// (matchFilament's spool tiers) BEFORE the top-level instanceId fallback. This
+// multikey index keeps that lookup bounded as inventories grow — without it a
+// scan-by-spool-id (and every CI-regex miss) would collection-scan. Non-unique
+// (spool ids aren't globally unique-enforced; the matcher handles collisions)
+// and not scoped to non-deleted, so a trashed filament's spool tag still
+// resolves for restore/awareness.
+FilamentSchema.index({ "spools.instanceId": 1 });
+
 // Ensure instanceId is always set before saving
 FilamentSchema.pre("save", function () {
   if (!this.instanceId) {
