@@ -86,6 +86,29 @@ describe("GET /api/filaments/[id]/openprinttag — spool-scoped spool_uid (#732)
     expect(await decodedSpoolUid(res)).toBe("5p001aaaaa");
   });
 
+  it("encodes the SELECTED spool's remaining weight, not another spool's (#732 Codex P2)", async () => {
+    const f = await Filament.create({
+      name: "Weight Pair PLA",
+      vendor: "Test",
+      type: "PLA",
+      diameter: 1.75,
+      spoolWeight: 200,
+      spools: [
+        { label: "A", totalWeight: 1000, instanceId: "5p001aaaaa" }, // remaining 800
+        { label: "B", totalWeight: 600, instanceId: "5p002bbbbb" }, // remaining 400
+      ],
+    });
+    const res = await openprinttag(req(String(f._id), String(f.spools[1]._id)), {
+      params: Promise.resolve({ id: String(f._id) }),
+    });
+    expect(res.status).toBe(200);
+    const decoded = decodeOpenPrintTagBinary(new Uint8Array(await res.arrayBuffer()));
+    // The tag identifies spool B AND carries B's remaining weight (600-200=400),
+    // not A's (800).
+    expect(decoded.spoolUid).toBe("5p002bbbbb");
+    expect(decoded.actualWeightGrams).toBe(400);
+  });
+
   it("returns 400 for an unknown ?spool id", async () => {
     const f = await Filament.create({
       name: "Bad Spool PLA",
