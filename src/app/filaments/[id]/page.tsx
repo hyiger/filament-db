@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useNfcContext } from "@/components/NfcProvider";
 import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
+import { selectSpoolForWrite } from "@/lib/selectSpoolForWrite";
 import { safeHttpUrl } from "@/lib/safeRenderUrl";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
@@ -451,7 +452,14 @@ function FilamentDetail() {
         // path (confirmOverwrite=false) trusts this to skip the prompt.
         const norm = (s?: string | null) => (s ?? "").trim().toLowerCase();
         const tagInstance = norm(existing?.spoolUid);
-        const sameInstance = tagInstance !== "" && tagInstance === norm(filament?.instanceId);
+        // #732: a tag of ours may carry the filament-level id (legacy) OR any of
+        // this filament's spool instanceIds (Phase 3 writes are spool-scoped).
+        const ownInstanceIds = new Set<string>();
+        if (filament?.instanceId) ownInstanceIds.add(norm(filament.instanceId));
+        for (const s of filament?.spools ?? []) {
+          if (s.instanceId) ownInstanceIds.add(norm(s.instanceId));
+        }
+        const sameInstance = tagInstance !== "" && ownInstanceIds.has(tagInstance);
         const sameNameVendor =
           norm(existing?.materialName) !== "" &&
           norm(existing?.materialName) === norm(filament?.name) &&
@@ -514,6 +522,9 @@ function FilamentDetail() {
       if (grossWeight != null && filament.spoolWeight != null) {
         actualWeightGrams = Math.max(0, grossWeight - filament.spoolWeight);
       }
+      // #732: encode the SELECTED spool's instanceId (default = first
+      // non-retired spool; filament-level id only for a spool-less filament).
+      const writeSel = selectSpoolForWrite(filament);
       const payload = generateOpenPrintTagBinary({
         materialName: filament.name,
         brandName: filament.vendor,
@@ -535,7 +546,7 @@ function FilamentDetail() {
         weightGrams: filament.netFilamentWeight ?? null,
         actualWeightGrams,
         emptySpoolWeight: filament.spoolWeight ?? null,
-        spoolUid: filament.instanceId ?? null,
+        spoolUid: writeSel.ok ? writeSel.instanceId : null,
         dryingTemperature: filament.dryingTemperature,
         dryingTime: filament.dryingTime,
         transmissionDistance: filament.transmissionDistance,
@@ -573,6 +584,9 @@ function FilamentDetail() {
     // re-write of this filament's own tag). Codex P2 on PR #584.
     if (!(await ensureTagWritable())) return;
     const actualRemaining = Math.max(0, scaleWeight - filament.spoolWeight);
+    // #732: write the active roll's spool id (same default selection as the
+    // explicit Write path); falls back to the filament id for a spool-less row.
+    const writeSel = selectSpoolForWrite(filament);
     setNfcWriteSuccess(null);
     try {
       const payload = generateOpenPrintTagBinary({
@@ -596,7 +610,7 @@ function FilamentDetail() {
         weightGrams: filament.netFilamentWeight ?? null,
         actualWeightGrams: actualRemaining,
         emptySpoolWeight: filament.spoolWeight ?? null,
-        spoolUid: filament.instanceId ?? null,
+        spoolUid: writeSel.ok ? writeSel.instanceId : null,
         dryingTemperature: filament.dryingTemperature,
         dryingTime: filament.dryingTime,
         transmissionDistance: filament.transmissionDistance,
@@ -1925,9 +1939,12 @@ function FilamentDetail() {
           type: filament.type ?? null,
           colorName: filament.colorName ?? null,
           // GH #595: pass spools so the URL-mode QR can deep-link to one.
+          // #732: include instanceId so the instance-ID QR can encode the
+          // selected spool's id.
           spools: (filament.spools ?? []).map((s) => ({
             _id: String(s._id),
             label: s.label ?? null,
+            instanceId: s.instanceId ?? null,
           })),
         }}
       />
@@ -2126,8 +2143,19 @@ function SpoolCard({
               className="text-sm font-medium hover:text-blue-600 transition-colors"
               title={t("detail.spool.clickToRename")}
             >
-              {spool.label || t("detail.spool.unnamed")}
+              {/* #732: a spool's display name defaults to its hex id. */}
+              {spool.label || spool.instanceId || t("detail.spool.unnamed")}
             </button>
+          )}
+          {/* #732: surface the durable per-spool id (when a label is also set,
+              so the id stays visible/copyable). */}
+          {spool.label && spool.instanceId && (
+            <code
+              className="text-[11px] text-gray-400 dark:text-gray-500 font-mono"
+              title={spool.instanceId}
+            >
+              {spool.instanceId}
+            </code>
           )}
         </div>
         <button
