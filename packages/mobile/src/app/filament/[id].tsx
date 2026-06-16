@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -530,9 +531,15 @@ function SpoolRow({
       onLayout={onLayoutY ? (e) => onLayoutY(e.nativeEvent.layout.y) : undefined}
     >
       <Text style={[styles.cardTitle, { color: c.text }]}>
-        {spool.label || 'Spool'}
+        {spool.label || spool.instanceId || 'Spool'}
         {spool.retired ? <Text style={{ color: c.muted, fontWeight: '400' }}> · retired</Text> : null}
       </Text>
+      {/* #732: surface the durable per-spool id so a scanned spool is verifiable. */}
+      {spool.instanceId ? (
+        <Text style={[styles.spoolId, { color: c.muted }]} selectable>
+          ID {spool.instanceId}
+        </Text>
+      ) : null}
 
       <Text style={[styles.fieldLabel, { color: c.muted }]}>Remaining filament (g)</Text>
       <View style={styles.row}>
@@ -690,6 +697,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   cardTitle: { fontSize: 16, fontWeight: '600' },
+  spoolId: { fontSize: 12, marginTop: 2, fontFamily: Platform.select({ ios: 'Menlo', android: 'monospace', default: 'monospace' }) },
   fieldLabel: { fontSize: 13, marginTop: 4 },
   row: { flexDirection: 'row', gap: 8, alignItems: 'center' },
   weightInput: {

@@ -272,4 +272,119 @@ describe("/api/filaments/match", () => {
     expect(body.match).toBeNull();
     expect(body.candidates).toEqual([]);
   });
+
+  // #732 Phase 2: resolve by spools[].instanceId, report which spool, and keep
+  // the filament-level fallback.
+  describe("#732 spool-level instanceId resolution", () => {
+    it("resolves an exact spool instanceId and reports the matched spool", async () => {
+      const f = await Filament.create({
+        name: "Spool Match PLA",
+        vendor: "Test",
+        type: "PLA",
+        spools: [
+          { label: "Drybox A", totalWeight: 1000, instanceId: "5p00111111" },
+          { label: "Shelf B", totalWeight: 800, instanceId: "5pool22222" },
+        ],
+      });
+      const res = await matchFilaments(matchReq({ instanceId: "5pool22222" }));
+      const body = await res.json();
+      expect(body.match?.name).toBe("Spool Match PLA");
+      expect(body.candidates).toEqual([]);
+      expect(body.matchedSpool).toMatchObject({
+        instanceId: "5pool22222",
+        label: "Shelf B",
+        _id: String(f.spools[1]._id),
+      });
+    });
+
+    it("resolves a spool instanceId case-insensitively", async () => {
+      await Filament.create({
+        name: "CI Spool PLA",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ label: "A", totalWeight: 1000, instanceId: "ABCDEF0011" }],
+      });
+      const res = await matchFilaments(matchReq({ instanceId: "abcdef0011" }));
+      const body = await res.json();
+      expect(body.match?.name).toBe("CI Spool PLA");
+      expect(body.matchedSpool?.instanceId).toBe("ABCDEF0011");
+    });
+
+    it("a spool hit wins over a filament whose top-level instanceId also matches", async () => {
+      // Filament Y carries the queried id at the FILAMENT level; filament X
+      // carries it on a SPOOL. The spool tier runs first, so X wins.
+      await Filament.create({
+        name: "Filament-level Y",
+        vendor: "Test",
+        type: "PLA",
+        instanceId: "c0111db123",
+      });
+      await Filament.create({
+        name: "Spool-level X",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ label: "S", totalWeight: 900, instanceId: "c0111db123" }],
+      });
+      const res = await matchFilaments(matchReq({ instanceId: "c0111db123" }));
+      const body = await res.json();
+      expect(body.match?.name).toBe("Spool-level X");
+      expect(body.matchedSpool?.instanceId).toBe("c0111db123");
+    });
+
+    it("falls back to the filament-level instanceId when no spool matches (matchedSpool null)", async () => {
+      await Filament.create({
+        name: "Legacy Filament ID",
+        vendor: "Test",
+        type: "PLA",
+        instanceId: "fa11bac001",
+        spools: [{ label: "S", totalWeight: 900, instanceId: "differentaa" }],
+      });
+      const res = await matchFilaments(matchReq({ instanceId: "fa11bac001" }));
+      const body = await res.json();
+      expect(body.match?.name).toBe("Legacy Filament ID");
+      expect(body.matchedSpool).toBeNull();
+    });
+
+    it("a cross-filament spool id collision is ambiguous (candidates, no match)", async () => {
+      await Filament.create({
+        name: "Collide One",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ label: "S", totalWeight: 900, instanceId: "c0111de999" }],
+      });
+      await Filament.create({
+        name: "Collide Two",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ label: "S", totalWeight: 900, instanceId: "c0111de999" }],
+      });
+      const res = await matchFilaments(matchReq({ instanceId: "c0111de999" }));
+      const body = await res.json();
+      expect(body.match).toBeNull();
+      expect(body.matchedSpool).toBeNull();
+      expect(names(body.candidates)).toEqual(["Collide One", "Collide Two"]);
+    });
+
+    it("excludes soft-deleted filaments from spool resolution", async () => {
+      await Filament.create({
+        name: "Trashed Spool",
+        vendor: "Test",
+        type: "PLA",
+        _deletedAt: new Date(),
+        spools: [{ label: "S", totalWeight: 900, instanceId: "dead5p0011" }],
+      });
+      const res = await matchFilaments(matchReq({ instanceId: "dead5p0011" }));
+      const body = await res.json();
+      expect(body.match).toBeNull();
+      expect(body.matchedSpool).toBeNull();
+    });
+
+    it("a name match carries matchedSpool: null", async () => {
+      await Filament.create({ name: "Named PLA", vendor: "Test", type: "PLA" });
+      const res = await matchFilaments(matchReq({ name: "Named PLA" }));
+      const body = await res.json();
+      expect(body.match?.name).toBe("Named PLA");
+      expect(body.matchedSpool).toBeNull();
+    });
+  });
 });

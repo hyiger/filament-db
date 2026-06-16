@@ -9,8 +9,12 @@ import Filament from "@/models/Filament";
  * sites. The match route is a thin wrapper around this helper.
  *
  * A non-null `match` is only ever returned for a *confident* match:
- *   0. an exact instance-ID match (the strongest signal — auto-generated 5-byte
- *      hex that NFC tags and printed-label QRs encode), or
+ *   0a. an instance-ID match against a SPOOL's id (#732 — the durable per-spool
+ *       identity; resolved first, exact-case then CI, and the matched spool is
+ *       reported in `matchedSpool`), or
+ *   0b. an instance-ID match against the FILAMENT's id (the transitional
+ *       fallback kept until the Phase-3 writers move off it — `matchedSpool`
+ *       stays null), or
  *   1. an exact (case-insensitive) name match, or
  *   2. exactly one filament agreeing on BOTH vendor and type.
  *
@@ -30,15 +34,45 @@ export interface MatchQuery {
   instanceId?: string | null;
 }
 
+/** The specific spool a scan resolved to (#732). Non-null ONLY when the match
+ * came from a `spools[].instanceId` hit — a filament-level instanceId hit (the
+ * transitional fallback) leaves this null. */
+export interface MatchedSpool {
+  _id: string;
+  instanceId: string;
+  label: string;
+}
+
 export interface MatchResult {
   /** A lean filament document, or null when there's no confident match. */
   match: unknown;
   /** Lean filament documents to disambiguate, when the match is ambiguous. */
   candidates: unknown[];
+  /** The spool whose instanceId matched (#732), or null for a filament-level
+   * (legacy fallback) / name / vendor+type match. */
+  matchedSpool: MatchedSpool | null;
 }
 
 export function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** Minimal lean shapes for reading spool subdocs off a `.lean()` filament. */
+interface LeanSpool {
+  _id: unknown;
+  instanceId?: string | null;
+  label?: string | null;
+}
+interface LeanFilamentWithSpools {
+  spools?: LeanSpool[];
+}
+
+function toMatchedSpool(spool: LeanSpool): MatchedSpool {
+  return {
+    _id: String(spool._id),
+    instanceId: String(spool.instanceId ?? ""),
+    label: typeof spool.label === "string" ? spool.label : "",
+  };
 }
 
 export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
@@ -51,6 +85,64 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
   //    match is unambiguous: return the filament directly and skip the
   //    name/vendor/type fallback.
   if (instanceId) {
+    // 0a. SPOOL-level instanceId (#732) — the durable per-spool identity is
+    //     resolved FIRST (exact-case, then CI), and the matched spool is
+    //     reported so callers know which roll was scanned. The dot-notation
+    //     query matches the FILAMENT if ANY spool matches, so re-scan the
+    //     subdocs to find which one (and its _id/label). A filament with
+    //     multiple spools sharing an id picks the first by array order
+    //     (creation order); only a CROSS-filament collision is ambiguous.
+    const spoolExact = (await Filament.find({
+      "spools.instanceId": instanceId,
+      _deletedAt: null,
+    })
+      .limit(2)
+      .lean()) as LeanFilamentWithSpools[];
+    const exactPairs = spoolExact.flatMap((f) => {
+      const s = (f.spools ?? []).find((sp) => sp.instanceId === instanceId);
+      return s ? [{ filament: f, spool: s }] : [];
+    });
+    if (exactPairs.length === 1) {
+      return {
+        match: exactPairs[0].filament,
+        candidates: [],
+        matchedSpool: toMatchedSpool(exactPairs[0].spool),
+      };
+    }
+    if (exactPairs.length > 1) {
+      return { match: null, candidates: exactPairs.map((p) => p.filament), matchedSpool: null };
+    }
+
+    const spoolCi = (await Filament.find({
+      "spools.instanceId": { $regex: `^${escapeRegex(instanceId)}$`, $options: "i" },
+      _deletedAt: null,
+    })
+      .limit(2)
+      .lean()) as LeanFilamentWithSpools[];
+    const lowerId = instanceId.toLowerCase();
+    const ciPairs = spoolCi.flatMap((f) => {
+      const s = (f.spools ?? []).find(
+        (sp) => typeof sp.instanceId === "string" && sp.instanceId.toLowerCase() === lowerId,
+      );
+      return s ? [{ filament: f, spool: s }] : [];
+    });
+    if (ciPairs.length === 1) {
+      return {
+        match: ciPairs[0].filament,
+        candidates: [],
+        matchedSpool: toMatchedSpool(ciPairs[0].spool),
+      };
+    }
+    if (ciPairs.length > 1) {
+      return { match: null, candidates: ciPairs.map((p) => p.filament), matchedSpool: null };
+    }
+
+    // 0b. FILAMENT-level instanceId — the transitional fallback (#732). The
+    //     label / NFC writers still encode the filament id until Phase 3, so
+    //     this MUST stay until those writers move AND no field tag carries a
+    //     filament id any longer. See the ISpool.instanceId contract in
+    //     src/models/Filament.ts. matchedSpool is null here (no spool hit).
+    //
     // 1. Exact-case match first — unambiguous, fast, and deterministic when
     //    the query case matches what's stored (the common case).
     const exact = await Filament.findOne({
@@ -58,7 +150,7 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
       _deletedAt: null,
     }).lean();
     if (exact) {
-      return { match: exact, candidates: [] };
+      return { match: exact, candidates: [], matchedSpool: null };
     }
 
     // 2. Case-insensitive fallback for legacy case drift. The partial unique
@@ -73,12 +165,12 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
       .limit(2)
       .lean();
     if (ciMatches.length === 1) {
-      return { match: ciMatches[0], candidates: [] };
+      return { match: ciMatches[0], candidates: [], matchedSpool: null };
     }
     if (ciMatches.length > 1) {
       // Ambiguous — case-only collision in legacy data. Surface as candidates
       // instead of returning an arbitrary row.
-      return { match: null, candidates: ciMatches };
+      return { match: null, candidates: ciMatches, matchedSpool: null };
     }
     // No match → fall through so the caller can still get name / vendor / type
     // suggestions if they supplied those alongside.
@@ -91,7 +183,7 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
       _deletedAt: null,
     }).lean();
     if (exact) {
-      return { match: exact, candidates: [] };
+      return { match: exact, candidates: [], matchedSpool: null };
     }
   }
 
@@ -111,10 +203,10 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
   // Exactly one vendor+type hit → confident match. More than one → hand them
   // back as candidates for the user to disambiguate.
   if (vendorTypeMatches.length === 1) {
-    return { match: vendorTypeMatches[0], candidates: [] };
+    return { match: vendorTypeMatches[0], candidates: [], matchedSpool: null };
   }
   if (vendorTypeMatches.length > 1) {
-    return { match: null, candidates: vendorTypeMatches };
+    return { match: null, candidates: vendorTypeMatches, matchedSpool: null };
   }
 
   // 3. Vendor-only fallback — suggestions ONLY, never an auto-match. The type
@@ -128,8 +220,8 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
       .sort({ name: 1 })
       .limit(5)
       .lean();
-    return { match: null, candidates: vendorMatches };
+    return { match: null, candidates: vendorMatches, matchedSpool: null };
   }
 
-  return { match: null, candidates: [] };
+  return { match: null, candidates: [], matchedSpool: null };
 }

@@ -162,7 +162,7 @@ export async function POST(request: NextRequest) {
     // it won't collide with a 10-char FDB instanceId, so it harmlessly falls
     // through to the name/vendor/type matching that mirrors scanMatchHandler.
     const queriedInstanceId = boundedField(decoded.spoolUid);
-    const { match, candidates } = await matchFilament({
+    const { match, candidates, matchedSpool } = await matchFilament({
       instanceId: queriedInstanceId,
       name: boundedField(decoded.materialName),
       vendor: boundedField(decoded.brandName),
@@ -175,21 +175,26 @@ export async function POST(request: NextRequest) {
     // vendor+type heuristics (matchFilament's fallback tiers) can
     // open an existing sibling color, so the scanner must NOT treat them as
     // exact: it offers "create new" alongside opening the heuristic match.
-    // instanceId is detected by comparing the matched row's id to the queried
-    // spool_uid (case-insensitively, mirroring matchFilament's CI fallback);
-    // since matchFilament tries instanceId FIRST, a row returned by a later
-    // tier necessarily has a different (or no) instanceId.
+    // instanceId is detected EITHER by a spool-level hit (#732 — matchedSpool
+    // is non-null, the tag's spool_uid equals a spools[].instanceId) OR by the
+    // filament-level fallback (the matched row's top-level instanceId equals
+    // the queried spool_uid, case-insensitively). Both are confident "this
+    // exact physical tag is in the DB". A spool hit's matched FILAMENT carries a
+    // DIFFERENT top-level instanceId than the queried spool id, so the
+    // matchedSpool check must come first — otherwise a genuine spool match would
+    // be mislabelled "heuristic". The weaker name / vendor+type tiers
+    // (matchedSpool null AND no filament-id equality) stay "heuristic" so the
+    // scanner offers "create new" alongside opening the heuristic match.
     let matchedBy: "instanceId" | "heuristic" | null = null;
     if (match) {
       const matchedInstanceId = (match as { instanceId?: unknown }).instanceId;
-      matchedBy =
-        queriedInstanceId &&
+      const filamentIdHit =
+        !!queriedInstanceId &&
         typeof matchedInstanceId === "string" &&
-        matchedInstanceId.toLowerCase() === queriedInstanceId.toLowerCase()
-          ? "instanceId"
-          : "heuristic";
+        matchedInstanceId.toLowerCase() === queriedInstanceId.toLowerCase();
+      matchedBy = matchedSpool || filamentIdHit ? "instanceId" : "heuristic";
     }
-    return NextResponse.json({ decoded, match, candidates, matchedBy });
+    return NextResponse.json({ decoded, match, candidates, matchedBy, matchedSpool });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to match decoded tag");
   }
