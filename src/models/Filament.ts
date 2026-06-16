@@ -675,24 +675,30 @@ export async function backfillSpoolInstanceIds(): Promise<number> {
 }
 
 /**
- * #732 Phase 4: is `instanceId` already held by some OTHER spool on a
- * non-deleted filament? Used by the spool create/edit routes to keep a
- * user-entered id unique across spools so `matchFilament` resolves it
- * unambiguously. `excludeSpoolId` lets a spool keep its own id on edit.
+ * #732 Phase 4: is `instanceId` already taken — by another spool OR by another
+ * filament's top-level id? Used by the spool create/edit routes to keep a
+ * user-entered id unique so `matchFilament` resolves it unambiguously.
  *
- * Scoped to `_deletedAt: null` (mirrors the filament-level partial-unique
- * index posture — a trashed filament's spool id may be reused). Uses
- * `$elemMatch` for the exclude case so the SAME spool element must both carry
- * the id AND not be the excluded one (a dot-path query would match across two
- * different array elements).
+ * Both halves matter because `matchFilament` resolves spool ids BEFORE the
+ * filament-level fallback: a spool id equal to ANOTHER filament's `instanceId`
+ * would shadow that filament's existing labels/tags (Codex P2). So we reject
+ * collisions with both `spools.instanceId` and the top-level `instanceId`.
+ *
+ * Exclusions: `excludeSpoolId` lets a spool keep its own id on edit;
+ * `ownFilamentId` permits the legitimate Phase-1 carry-over where a spool's id
+ * equals ITS OWN filament's top-level id. Scoped to `_deletedAt: null` (mirrors
+ * the filament-level partial-unique index — a trashed filament's id may be
+ * reused). `$elemMatch` ensures the SAME spool element both carries the id and
+ * isn't the excluded one (a dot-path query would match across two elements).
  */
 export async function isSpoolInstanceIdTaken(
   instanceId: string,
   excludeSpoolId?: string,
+  ownFilamentId?: string,
 ): Promise<boolean> {
-  if (excludeSpoolId) {
-    const hit = await Filament.findOne(
-      {
+  // 1. Collision with another spool's id.
+  const spoolQuery = excludeSpoolId
+    ? {
         _deletedAt: null,
         spools: {
           $elemMatch: {
@@ -700,16 +706,19 @@ export async function isSpoolInstanceIdTaken(
             _id: { $ne: new mongoose.Types.ObjectId(excludeSpoolId) },
           },
         },
-      },
-      { _id: 1 },
-    ).lean();
-    return !!hit;
+      }
+    : { _deletedAt: null, "spools.instanceId": instanceId };
+  if (await Filament.findOne(spoolQuery, { _id: 1 }).lean()) return true;
+
+  // 2. Collision with another filament's top-level id (excluding the spool's
+  //    own filament, where carry-over legitimately makes them equal).
+  const filamentQuery: Record<string, unknown> = { _deletedAt: null, instanceId };
+  if (ownFilamentId) {
+    filamentQuery._id = { $ne: new mongoose.Types.ObjectId(ownFilamentId) };
   }
-  const hit = await Filament.findOne(
-    { _deletedAt: null, "spools.instanceId": instanceId },
-    { _id: 1 },
-  ).lean();
-  return !!hit;
+  if (await Filament.findOne(filamentQuery, { _id: 1 }).lean()) return true;
+
+  return false;
 }
 
 export default Filament;

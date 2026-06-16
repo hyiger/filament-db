@@ -82,6 +82,34 @@ describe("#732 Phase 4 — spool instanceId edit/create", () => {
     expect(res.status).toBe(409);
   });
 
+  it("rejects a spool id that collides with ANOTHER filament's top-level instanceId (409)", async () => {
+    // matchFilament resolves spool ids before the filament-level fallback, so a
+    // spool id == another filament's id would shadow that filament's tags.
+    await Filament.create({
+      name: "Has Filament Id",
+      vendor: "V",
+      type: "PLA",
+      instanceId: "fila1d0001",
+    });
+    const f = await seed([{ label: "A", totalWeight: 1000 }]);
+    const res = await putReq(String(f._id), String(f.spools[0]._id), { instanceId: "fila1d0001" });
+    expect(res.status).toBe(409);
+  });
+
+  it("allows a spool id equal to its OWN filament's instanceId (carry-over)", async () => {
+    const f = await Filament.create({
+      name: "Own Id Filament",
+      vendor: "V",
+      type: "PLA",
+      instanceId: "ownfil0001",
+      spools: [{ label: "A", totalWeight: 1000, instanceId: "differenta" }],
+    });
+    const res = await putReq(String(f._id), String(f.spools[0]._id), { instanceId: "ownfil0001" });
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools[0].instanceId).toBe("ownfil0001");
+  });
+
   it("allows setting a spool's id to its own current value (no self-conflict)", async () => {
     const f = await seed([{ label: "A", totalWeight: 1000, instanceId: "keepme0001" }]);
     const res = await putReq(String(f._id), String(f.spools[0]._id), { instanceId: "keepme0001" });

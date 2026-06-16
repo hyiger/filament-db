@@ -101,7 +101,7 @@ export async function POST(
       // arbitrary pick, and auto-generated ids never collide — acceptable for a
       // single-user/self-host app (a DB-level guard is deferred to a Phase-5
       // spool-syncId migration).
-      if (await isSpoolInstanceIdTaken(validation.instanceId)) {
+      if (await isSpoolInstanceIdTaken(validation.instanceId, undefined, id)) {
         return errorResponse("That spool ID is already used by another spool", 409);
       }
       newSpool.instanceId = validation.instanceId;

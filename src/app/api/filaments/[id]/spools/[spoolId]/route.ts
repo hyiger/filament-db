@@ -62,7 +62,7 @@ export async function PUT(
       // see the POST route + the spools.instanceId index comment). A concurrent
       // identical manual entry could slip through; the matcher tolerates that
       // (ambiguous candidates, never an arbitrary pick).
-      if (await isSpoolInstanceIdTaken(validation.instanceId, spoolId)) {
+      if (await isSpoolInstanceIdTaken(validation.instanceId, spoolId, id)) {
         return errorResponse("That spool ID is already used by another spool", 409);
       }
       finalInstanceId = validation.instanceId;
