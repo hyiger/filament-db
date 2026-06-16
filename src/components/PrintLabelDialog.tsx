@@ -57,7 +57,7 @@ export interface PrintLabelDialogProps {
     // GH #595: the filament's spools, so a multi-spool filament can deep-link
     // the URL-mode QR to a specific spool. #732: `instanceId` lets the
     // instance-ID QR mode encode the SELECTED spool's id (not the filament's).
-    spools?: Array<{ _id: string; label?: string | null; instanceId?: string | null }>;
+    spools?: Array<{ _id: string; label?: string | null; instanceId?: string | null; retired?: boolean | null }>;
   };
 }
 
@@ -93,7 +93,12 @@ export default function PrintLabelDialog({
   const effectiveSpoolId = useMemo(() => {
     if (spoolChoice === "") return null; // explicit "filament only"
     if (spoolChoice && spools.some((s) => s._id === spoolChoice)) return spoolChoice;
-    return spools[0]?._id ?? null; // default to the first spool (or none if there are none)
+    // #732: default to the first NON-retired spool, mirroring
+    // selectSpoolForWrite so the label QR's no-interaction default targets the
+    // SAME spool as the .bin route and the detail-page NFC writers (a filament
+    // whose first spool is retired must not default-encode the retired one).
+    const def = spools.find((s) => !s.retired) ?? spools[0];
+    return def?._id ?? null;
   }, [spoolChoice, spools]);
 
   // #732: the id the instance-ID QR encodes — the SELECTED spool's instanceId
@@ -500,6 +505,7 @@ export default function PrintLabelDialog({
                 {spools.map((s, i) => (
                   <option key={s._id} value={s._id}>
                     {(s.label && s.label.trim()) || t("printLabel.spool.fallback", { n: i + 1 })}
+                    {s.retired ? t("printLabel.spool.retiredSuffix") : ""}
                   </option>
                 ))}
               </select>
