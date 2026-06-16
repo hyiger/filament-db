@@ -4,9 +4,10 @@ import Filament from "@/models/Filament";
 import "@/models/Nozzle";
 import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
 import { resolveFilament } from "@/lib/resolveFilament";
+import { selectSpoolForWrite } from "@/lib/selectSpoolForWrite";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -16,6 +17,25 @@ export async function GET(
     const filament = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
     if (!filament) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    // #732 Phase 3: encode the SELECTED spool's instanceId (falling back to the
+    // filament-level id only for a spool-less filament). `?spool=<id>` targets a
+    // specific spool; an unknown id is a 400 (don't silently write the wrong
+    // spool). Spools are the filament's own (not inherited), so select off the
+    // raw doc rather than the variant-resolved view.
+    const requestedSpool = request.nextUrl.searchParams.get("spool");
+    const selection = selectSpoolForWrite(filament, requestedSpool);
+    if (!selection.ok) {
+      return NextResponse.json(
+        {
+          error:
+            selection.reason === "spool-not-found"
+              ? "Spool not found on this filament"
+              : "No instance ID available to encode",
+        },
+        { status: selection.reason === "spool-not-found" ? 400 : 422 },
+      );
     }
 
     // Resolve inherited values if this is a variant
@@ -73,7 +93,7 @@ export async function GET(
       weightGrams: resolved.netFilamentWeight ?? null,
       actualWeightGrams,
       emptySpoolWeight: resolved.spoolWeight ?? null,
-      spoolUid: filament.instanceId ?? null,
+      spoolUid: selection.instanceId,
       dryingTemperature: resolved.dryingTemperature ?? null,
       dryingTime: resolved.dryingTime ?? null,
       transmissionDistance: resolved.transmissionDistance ?? null,
