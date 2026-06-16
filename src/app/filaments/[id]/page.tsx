@@ -452,23 +452,27 @@ function FilamentDetail() {
         // path (confirmOverwrite=false) trusts this to skip the prompt.
         const norm = (s?: string | null) => (s ?? "").trim().toLowerCase();
         const tagInstance = norm(existing?.spoolUid);
-        // #732 (Codex P2): the SILENT (weight-update) re-write may only accept a
-        // tag that belongs to THIS write's target — the specific spool being
-        // updated (targetInstanceId) or, during the transition, the legacy
-        // filament-level id. A SIBLING spool's tag (a different spool id on the
-        // same filament) must NOT be silently clobbered — it falls through to
-        // the overwrite prompt below.
+        // #732 (Codex P2 r2/r3): the SILENT (weight-update) re-write may only
+        // accept a tag that positively identifies as THIS write's target spool
+        // — its spool_uid equals the target spool's instanceId. The
+        // filament-level id is NOT a blanket pass: backfillSpoolInstanceIds
+        // carries the filament id onto the FIRST spool, so accepting any tag
+        // bearing the filament id would let spool[0]'s tag be silently
+        // rewritten while updating a sibling. When the target IS spool[0] (or a
+        // spool-less filament), its own id equals the filament id, so the
+        // exact-target check still accepts it; a sibling falls through to the
+        // overwrite prompt.
         const targetId = norm(targetInstanceId);
-        const sameInstance =
-          tagInstance !== "" &&
-          (tagInstance === norm(filament?.instanceId) ||
-            (targetId !== "" && tagInstance === targetId));
+        const sameInstance = tagInstance !== "" && targetId !== "" && tagInstance === targetId;
         // A tag with NO spool id but matching name+vendor is a legacy
-        // (pre-spool-id) tag of this filament — safe to upgrade silently. A tag
-        // that DOES carry a spool id is judged by `sameInstance` above, so
-        // name+vendor can't silently claim a sibling's spool-scoped tag.
+        // (pre-spool-id) tag of this filament — safe to upgrade silently ONLY
+        // when the filament has at most one spool. With multiple spools it's
+        // ambiguous which roll the unscoped tag is, so it could clobber a
+        // sibling → fall through to the prompt.
+        const singleSpool = (filament?.spools?.length ?? 0) <= 1;
         const sameNameVendor =
           tagInstance === "" &&
+          singleSpool &&
           norm(existing?.materialName) !== "" &&
           norm(existing?.materialName) === norm(filament?.name) &&
           norm(existing?.brandName) === norm(filament?.vendor);
