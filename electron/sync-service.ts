@@ -618,7 +618,11 @@ export class SyncService extends EventEmitter {
     localDb: ReturnType<MongoClient["db"]>,
     remoteDb: ReturnType<MongoClient["db"]>,
     collectionName: string,
-    transformDoc?: (doc: Document, direction: "toLocal" | "toRemote") => Document,
+    transformDoc?: (
+      doc: Document,
+      direction: "toLocal" | "toRemote",
+      targetSpoolIds?: (string | undefined)[],
+    ) => Document,
   ): Promise<SyncResult> {
     const localCol = localDb.collection(collectionName);
     const remoteCol = remoteDb.collection(collectionName);
@@ -653,6 +657,26 @@ export class SyncService extends EventEmitter {
       localCol.findOne({ _id: slim._id });
     const hydrateRemote = (slim: Document): Promise<Document | null> =>
       remoteCol.findOne({ _id: slim._id });
+
+    // GH #732: on a filament UPDATE the whole spools array is overwritten by
+    // the source. If the source spool lacks an instanceId (a pre-#732 peer) we
+    // must reuse the TARGET's already-assigned spool id (matched by position)
+    // rather than minting a new one — otherwise an id-less-source edit would
+    // rotate the durable spool id the target already backfilled (and that a
+    // label/NFC/match may key on). Returns the target's spool instanceIds by
+    // position; only the filaments collection has spools, so skip the extra
+    // read elsewhere.
+    const fetchTargetSpoolIds = async (
+      col: ReturnType<ReturnType<MongoClient["db"]>["collection"]>,
+      id: ObjectId,
+    ): Promise<(string | undefined)[] | undefined> => {
+      if (collectionName !== "filaments") return undefined;
+      const d = await col.findOne({ _id: id }, { projection: { "spools.instanceId": 1 } });
+      if (!d || !Array.isArray(d.spools)) return undefined;
+      return d.spools.map((s: Document) =>
+        typeof s.instanceId === "string" && s.instanceId ? s.instanceId : undefined,
+      );
+    };
 
     const result: SyncResult = { collection: collectionName, pushed: 0, pulled: 0, updated: 0, deleted: 0 };
 
@@ -753,7 +777,8 @@ export class SyncService extends EventEmitter {
             const full = await hydrateRemote(remoteDoc);
             if (full) {
               const doc = this.stripForTransfer(full);
-              const transformed = transformDoc ? transformDoc(doc, "toLocal") : doc;
+              const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(localCol, localDoc._id) : undefined;
+              const transformed = transformDoc ? transformDoc(doc, "toLocal", targetSpoolIds) : doc;
               await localCol.updateOne({ _id: localDoc._id }, { $set: { ...transformed, _deletedAt: null } });
               result.pulled++;
             }
@@ -772,7 +797,8 @@ export class SyncService extends EventEmitter {
             const full = await hydrateLocal(localDoc);
             if (full) {
               const doc = this.stripForTransfer(full);
-              const transformed = transformDoc ? transformDoc(doc, "toRemote") : doc;
+              const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(remoteCol, remoteDoc._id) : undefined;
+              const transformed = transformDoc ? transformDoc(doc, "toRemote", targetSpoolIds) : doc;
               await remoteCol.updateOne({ _id: remoteDoc._id }, { $set: { ...transformed, _deletedAt: null } });
               result.pushed++;
             }
@@ -791,7 +817,8 @@ export class SyncService extends EventEmitter {
           const full = await hydrateLocal(localDoc);
           if (full) {
             const doc = this.stripForTransfer(full);
-            const transformed = transformDoc ? transformDoc(doc, "toRemote") : doc;
+            const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(remoteCol, remoteDoc._id) : undefined;
+            const transformed = transformDoc ? transformDoc(doc, "toRemote", targetSpoolIds) : doc;
             await remoteCol.updateOne({ _id: remoteDoc._id }, { $set: transformed });
             result.updated++;
           }
@@ -800,7 +827,8 @@ export class SyncService extends EventEmitter {
           const full = await hydrateRemote(remoteDoc);
           if (full) {
             const doc = this.stripForTransfer(full);
-            const transformed = transformDoc ? transformDoc(doc, "toLocal") : doc;
+            const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(localCol, localDoc._id) : undefined;
+            const transformed = transformDoc ? transformDoc(doc, "toLocal", targetSpoolIds) : doc;
             await localCol.updateOne({ _id: localDoc._id }, { $set: transformed });
             result.updated++;
           }
@@ -1291,7 +1319,11 @@ export class SyncService extends EventEmitter {
     remoteLocationBySyncId: Map<string, ObjectId>,
     localBedTypeBySyncId: Map<string, ObjectId>,
     remoteBedTypeBySyncId: Map<string, ObjectId>,
-  ): (doc: Document, direction: "toLocal" | "toRemote") => Document {
+  ): (
+    doc: Document,
+    direction: "toLocal" | "toRemote",
+    targetSpoolIds?: (string | undefined)[],
+  ) => Document {
     // Build reverse maps once (source ID → syncId) for both directions
     const buildReverse = (map: Map<string, ObjectId>) => {
       const reverse = new Map<string, string>();
@@ -1312,7 +1344,11 @@ export class SyncService extends EventEmitter {
     const localBedTypeIdToSyncId = buildReverse(localBedTypeBySyncId);
     const remoteBedTypeIdToSyncId = buildReverse(remoteBedTypeBySyncId);
 
-    return (doc: Document, direction: "toLocal" | "toRemote"): Document => {
+    return (
+      doc: Document,
+      direction: "toLocal" | "toRemote",
+      targetSpoolIds?: (string | undefined)[],
+    ): Document => {
       const sourceNozzleIdToSyncId = direction === "toLocal" ? remoteNozzleIdToSyncId : localNozzleIdToSyncId;
       const targetNozzleMap = direction === "toLocal" ? localNozzleBySyncId : remoteNozzleBySyncId;
       const sourcePrinterIdToSyncId = direction === "toLocal" ? remotePrinterIdToSyncId : localPrinterIdToSyncId;
@@ -1397,13 +1433,20 @@ export class SyncService extends EventEmitter {
       // spool-syncId migration, the same limitation that clears
       // amsSlots[].spoolId / usage[].spoolId on cross-side remap.
       if (Array.isArray(doc.spools)) {
-        doc.spools = doc.spools.map((spool: Document) => {
+        doc.spools = doc.spools.map((spool: Document, idx: number) => {
+          // Precedence: the source spool's own id wins (it's the authoritative
+          // last-write-wins value); else REUSE the target's existing id at this
+          // position so an id-less source doesn't rotate an id the target
+          // already backfilled; else derive a stable id from the source spool
+          // _id (so re-syncs don't churn); else random as a last resort.
           const instanceId =
-            typeof spool.instanceId === "string" && spool.instanceId
+            (typeof spool.instanceId === "string" && spool.instanceId
               ? spool.instanceId
-              : spool._id
-                ? createHash("sha1").update(String(spool._id)).digest("hex").slice(0, 10)
-                : randomBytes(5).toString("hex");
+              : undefined) ??
+            targetSpoolIds?.[idx] ??
+            (spool._id
+              ? createHash("sha1").update(String(spool._id)).digest("hex").slice(0, 10)
+              : randomBytes(5).toString("hex"));
           if (!spool.locationId) return { ...spool, instanceId };
           const locSyncId = sourceLocationIdToSyncId.get(spool.locationId.toString());
           const targetLocationId = locSyncId ? targetLocationMap.get(locSyncId) : null;
