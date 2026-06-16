@@ -48,6 +48,8 @@ import { errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 interface AggregatedSpool {
   _id: string;
+  /** #732 Phase 4: the durable per-spool id, surfaced on /inventory. */
+  instanceId: string;
   label: string;
   totalWeight: number | null;
   lotNumber: string | null;
@@ -212,6 +214,8 @@ export async function GET(request: NextRequest) {
           spools: {
             $push: {
               _id: "$spools._id",
+              // #732 Phase 4: surface the per-spool id on /inventory.
+              instanceId: "$spools.instanceId",
               label: "$spools.label",
               totalWeight: "$spools.totalWeight",
               lotNumber: "$spools.lotNumber",

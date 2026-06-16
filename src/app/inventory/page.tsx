@@ -31,6 +31,8 @@ import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 
 interface SpoolRow {
   _id: string;
+  /** #732 Phase 4: the durable per-spool id, surfaced read-only here. */
+  instanceId?: string;
   label: string;
   totalWeight: number | null;
   lotNumber: string | null;
@@ -810,6 +812,12 @@ function SpoolEditRow({
       </td>
       <td className="py-2 px-3">
         <div className="font-medium">{row.label || <span className="text-gray-400 italic">{t("inventory.unnamed")}</span>}</div>
+        {/* #732 Phase 4: the per-spool id (read-only; edit on the detail page). */}
+        {row.instanceId && (
+          <code className="text-[11px] text-gray-400 dark:text-gray-500 font-mono" title={row.instanceId}>
+            {row.instanceId}
+          </code>
+        )}
         {row.retired && (
           <span className="inline-block text-xs px-2 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
             {t("inventory.retiredBadge")}

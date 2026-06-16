@@ -90,6 +90,9 @@ describe("GET /api/spools/by-location", () => {
     expect(shelfGroup.count).toBe(1);
     // S1: 1100 − 200 tare = 900g of filament.
     expect(shelfGroup.totalGrams).toBe(900);
+
+    // #732 Phase 4: each spool carries its instanceId so /inventory can show it.
+    expect(shelfGroup.spools[0].instanceId).toMatch(/^[0-9a-f]{10}$/);
   });
 
   it("totalGrams subtracts INHERITED parent tare for variant spools (Codex P2 #391)", async () => {

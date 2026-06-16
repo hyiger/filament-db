@@ -839,6 +839,13 @@ export default function Home() {
                 <span className="font-medium text-gray-700 dark:text-gray-300 min-w-[110px]">
                   {s.label || t("filaments.spools.spoolN", { n: i + 1 })}
                 </span>
+                {/* #732 Phase 4: surface the per-spool id (read-only; edit on
+                    the filament detail page). */}
+                {s.instanceId && (
+                  <code className="text-[10px] text-gray-400 dark:text-gray-500 font-mono" title={s.instanceId}>
+                    {s.instanceId}
+                  </code>
+                )}
                 {s.retired && (
                   <span className="text-[10px] text-amber-700 dark:text-amber-300 bg-amber-100 dark:bg-amber-900/40 px-1 py-0.5 rounded">
                     {t("filaments.spools.retired")}

@@ -737,6 +737,9 @@ function FilamentDetail() {
       lotNumber?: string | null;
       purchaseDate?: string | null;
       openedDate?: string | null;
+      // #732 Phase 4: edit the spool's id, or regenerate a fresh one.
+      instanceId?: string;
+      regenerate?: boolean;
     },
   ) => {
     if (!filament) return;
@@ -783,6 +786,17 @@ function FilamentDetail() {
           await refreshPrinters();
         }
         toast(t("detail.spool.updated"));
+      } else if (data.instanceId !== undefined || data.regenerate) {
+        // #732 Phase 4: surface the specific id-edit failure (409 duplicate /
+        // 400 invalid charset) rather than the generic update error.
+        toast(
+          res.status === 409
+            ? t("detail.spool.instanceIdDuplicate")
+            : res.status === 400
+              ? t("detail.spool.instanceIdInvalid")
+              : t("detail.spool.updateFailed"),
+          "error",
+        );
       } else {
         toast(t("detail.spool.updateFailed"), "error");
       }
@@ -1485,6 +1499,8 @@ function FilamentDetail() {
                     onLogUsage={(entry) => handleLogUsage(spool._id, entry)}
                     onUpdateMeta={(patch) => handleUpdateSpool(spool._id, patch)}
                     onRemove={() => handleRemoveSpool(spool._id)}
+                    onUpdateInstanceId={(instanceId) => handleUpdateSpool(spool._id, { instanceId })}
+                    onRegenerateInstanceId={() => handleUpdateSpool(spool._id, { regenerate: true })}
                     onNfcWeightUpdate={(scaleWeight) => handleNfcWeightUpdate(scaleWeight, String(spool._id))}
                     nfcAvailable={isElectron && nfcStatus.tagPresent}
                     nfcWriting={nfcWriting}
@@ -2027,6 +2043,9 @@ interface SpoolCardProps {
   onNfcWeightUpdate?: (scaleWeight: number) => void;
   nfcAvailable?: boolean;
   nfcWriting?: boolean;
+  /** #732 Phase 4: set a custom spool id (e.g. a Prusa roll id), or regenerate. */
+  onUpdateInstanceId: (instanceId: string) => void;
+  onRegenerateInstanceId: () => void;
   /** GH #595: briefly ring this card when reached via a `?spool=` deep link. */
   highlight?: boolean;
 }
@@ -2049,6 +2068,8 @@ function SpoolCard({
   onNfcWeightUpdate,
   nfcAvailable,
   nfcWriting,
+  onUpdateInstanceId,
+  onRegenerateInstanceId,
   highlight,
 }: SpoolCardProps) {
   const { t, locale } = useTranslation();
@@ -2056,6 +2077,9 @@ function SpoolCard({
   const [saving, setSaving] = useState(false);
   const [editingLabel, setEditingLabel] = useState(false);
   const [labelInput, setLabelInput] = useState(spool.label);
+  // #732 Phase 4: inline spool-id editing (mirrors the label-edit pattern).
+  const [editingId, setEditingId] = useState(false);
+  const [idInput, setIdInput] = useState(spool.instanceId ?? "");
   const [showMore, setShowMore] = useState(false);
   const [dryTemp, setDryTemp] = useState("");
   const [dryDuration, setDryDuration] = useState("");
@@ -2123,6 +2147,17 @@ function SpoolCard({
     setEditingLabel(false);
   };
 
+  // #732 Phase 4: commit an edited spool id. Submit only on a real change; the
+  // server validates charset/length (400) + uniqueness (409) and the parent
+  // surfaces those as toasts. Blank reverts (use Regenerate to mint a new one).
+  const handleIdSave = () => {
+    const next = idInput.trim();
+    setEditingId(false);
+    if (next && next !== (spool.instanceId ?? "")) {
+      onUpdateInstanceId(next);
+    }
+  };
+
   return (
     <div
       id={`spool-${String(spool._id)}`}
@@ -2159,19 +2194,46 @@ function SpoolCard({
               className="text-sm font-medium hover:text-blue-600 transition-colors"
               title={t("detail.spool.clickToRename")}
             >
-              {/* #732: a spool's display name defaults to its hex id. */}
-              {spool.label || spool.instanceId || t("detail.spool.unnamed")}
+              {spool.label || t("detail.spool.unnamed")}
             </button>
           )}
-          {/* #732: surface the durable per-spool id (when a label is also set,
-              so the id stays visible/copyable). */}
-          {spool.label && spool.instanceId && (
-            <code
-              className="text-[11px] text-gray-400 dark:text-gray-500 font-mono"
-              title={spool.instanceId}
-            >
-              {spool.instanceId}
-            </code>
+          {/* #732 Phase 4: the durable per-spool id, always visible and
+              editable (click to enter a Prusa roll id / custom id; ⟳ to mint a
+              fresh one). Changing it won't rewrite already-printed labels/tags. */}
+          {editingId ? (
+            <input
+              type="text"
+              className="px-2 py-0.5 border border-gray-300 rounded text-xs font-mono bg-transparent w-44"
+              value={idInput}
+              onChange={(e) => setIdInput(e.target.value)}
+              onBlur={handleIdSave}
+              onKeyDown={(e) => { if (e.key === "Enter") handleIdSave(); if (e.key === "Escape") { setIdInput(spool.instanceId ?? ""); setEditingId(false); } }}
+              autoFocus
+              maxLength={128}
+              placeholder={t("detail.spool.instanceIdPlaceholder")}
+              aria-label={t("detail.spool.instanceId")}
+              title={t("detail.spool.instanceIdOrphanHint")}
+            />
+          ) : (
+            <span className="inline-flex items-center gap-1">
+              <button
+                onClick={() => { setIdInput(spool.instanceId ?? ""); setEditingId(true); }}
+                className="text-[11px] text-gray-400 dark:text-gray-500 font-mono hover:text-blue-600 transition-colors"
+                title={t("detail.spool.editInstanceId")}
+              >
+                {spool.instanceId || t("detail.spool.setInstanceId")}
+              </button>
+              <button
+                onClick={onRegenerateInstanceId}
+                className="text-gray-300 dark:text-gray-600 hover:text-blue-600 transition-colors"
+                title={t("detail.spool.regenerateId")}
+                aria-label={t("detail.spool.regenerateId")}
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+              </button>
+            </span>
           )}
         </div>
         <button
