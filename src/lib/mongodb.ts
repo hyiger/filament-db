@@ -16,6 +16,11 @@ interface MongooseCache {
    * `cached.migrations.instanceIds`, they're safe to drop. */
   migrations: {
     instanceIds: boolean;
+    /** GH #732 — backfill a per-spool `instanceId` onto every spool that
+     * lacks one (the first missing spool adopts the filament's id, the rest
+     * get fresh ids). Idempotent: count === 0 on a fresh / already-migrated
+     * install and the flag flips on first connect. */
+    spoolInstanceIds: boolean;
     sharedCatalogIndexes: boolean;
     /** GH #232 — split nozzles that are referenced by >1 printer into
      * one physical instance per printer. Idempotent: on a clean DB the
@@ -45,7 +50,7 @@ export default async function dbConnect() {
     conn: null,
     promise: null,
     uri: null,
-    migrations: { instanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
+    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
   };
 
   if (!global.mongoose) {
@@ -59,7 +64,7 @@ export default async function dbConnect() {
     cached.conn = null;
     cached.promise = null;
     cached.uri = null;
-    cached.migrations = { instanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
   }
 
   // GH #312: a cached connection can go dead after a DB outage or an
@@ -79,6 +84,7 @@ export default async function dbConnect() {
   if (
     cached.conn &&
     cached.migrations.instanceIds &&
+    cached.migrations.spoolInstanceIds &&
     cached.migrations.sharedCatalogIndexes &&
     cached.migrations.nozzlePhysicalInstances &&
     cached.migrations.coreModelIndexes
@@ -95,6 +101,37 @@ export default async function dbConnect() {
       });
     }
     cached.conn = await cached.promise;
+  }
+
+  // GH #732 — the 5-byte hex identity is moving from the filament to the
+  // spool. Backfill a per-spool `instanceId` onto every spool that lacks one
+  // so existing installs converge on first connect after upgrade. The first
+  // id-less spool of each filament adopts the filament's own `instanceId`
+  // (keeping already-printed labels / written NFC tags resolvable once the
+  // match path looks at spools), the rest get fresh ids. Cheap on fresh /
+  // already-migrated installs (count === 0, flag flips immediately); the
+  // retry tracking makes a transient blip recoverable on the next request.
+  //
+  // ORDER MATTERS: this runs BEFORE the filament-level `backfillInstanceIds`
+  // below. Carry-over reads each filament's *existing* `instanceId`, so it
+  // must see the pre-upgrade value — for a legacy filament that already had a
+  // real id (printed on a label / written to a tag) the first spool adopts
+  // that real id, while a filament that never had one leaves `doc.instanceId`
+  // absent so all its spools get fresh per-spool ids. If the filament backfill
+  // ran first it would mint a brand-new filament id and the spool would
+  // "carry over" a value that was never on any tag — defeating the point.
+  // Both backfills still precede the `coreModelIndexes` syncIndexes() pass.
+  if (!cached.migrations.spoolInstanceIds) {
+    try {
+      const { backfillSpoolInstanceIds } = await import("@/models/Filament");
+      const count = await backfillSpoolInstanceIds();
+      if (count > 0) {
+        console.log(`[migration] Backfilled instanceId for ${count} spool(s)`);
+      }
+      cached.migrations.spoolInstanceIds = true;
+    } catch (err) {
+      console.error("[migration] Failed to backfill spool instanceIds (will retry on next connect):", err);
+    }
   }
 
   // GH #457 — RESTORED (Codex P1 on PR #467): the per-startup

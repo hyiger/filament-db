@@ -1,9 +1,11 @@
 import crypto from "crypto";
-import mongoose, { Schema, Document, Model } from "mongoose";
+import mongoose, { Schema, Document, Model, AnyBulkWriteOperation } from "mongoose";
 import { isEncodableOptTag } from "@/lib/openprinttag";
 
-/** Generate a random 5-byte hex instance ID (10 hex chars), matching Prusament's format. */
-function generateInstanceId(): string {
+/** Generate a random 5-byte hex instance ID (10 hex chars), matching Prusament's format.
+ * Exported (#732) so the spool-create routes that write via `$push` — which
+ * bypasses Mongoose schema defaults — can stamp a spool `instanceId` explicitly. */
+export function generateInstanceId(): string {
   return crypto.randomBytes(5).toString("hex");
 }
 
@@ -93,6 +95,11 @@ export interface IUsageEntry {
 
 export interface ISpool {
   _id: mongoose.Types.ObjectId;
+  /** #732: per-spool 5-byte hex id (10 hex chars), auto-generated; a
+   * Prusa-assigned spool id can be entered manually. This is the spool-level
+   * identity used by labels / NFC / match — it supersedes the filament-level
+   * instanceId (which is removed in a later phase once nothing reads it). */
+  instanceId: string;
   label: string;
   totalWeight: number | null;
   lotNumber: string | null;
@@ -366,6 +373,8 @@ const FilamentSchema = new Schema<IFilament>(
     ],
     spools: [
       {
+        // #732: each spool gets its own 5-byte hex id (default-generated).
+        instanceId: { type: String, default: generateInstanceId },
         label: { type: String, default: "" },
         totalWeight: { type: Number, default: null, min: 0 },
         lotNumber: { type: String, default: null },
@@ -575,6 +584,66 @@ export async function backfillInstanceIds(): Promise<number> {
 
   const result = await Filament.bulkWrite(ops);
   return result.modifiedCount;
+}
+
+/**
+ * #732: backfill a per-spool `instanceId` onto every spool that lacks one.
+ * Safe to call repeatedly — only fills missing ids (idempotent).
+ *
+ * Carry-over rule (preserves identity that's already on printed labels /
+ * written NFC tags): the FIRST spool of a filament that is missing an id
+ * adopts the filament's own `instanceId`, the rest get fresh ids. Skipped when
+ * the filament's id is already held by one of its spools (avoid a duplicate).
+ * For the common single-spool filament this means its spool simply inherits
+ * the filament id, so existing labels/tags keep resolving once the match path
+ * (Phase 2) looks at spools.
+ *
+ * Returns the number of spools assigned an id. Uses positional arrayFilters so
+ * a spool's other fields and concurrent edits aren't clobbered.
+ */
+export async function backfillSpoolInstanceIds(): Promise<number> {
+  const docs = await Filament.find(
+    {
+      $or: [
+        { spools: { $elemMatch: { instanceId: { $exists: false } } } },
+        { spools: { $elemMatch: { instanceId: { $in: [null, ""] } } } },
+      ],
+    },
+    { instanceId: 1, "spools._id": 1, "spools.instanceId": 1 },
+  ).lean();
+
+  if (docs.length === 0) return 0;
+
+  const ops: AnyBulkWriteOperation<IFilament>[] = [];
+  for (const doc of docs) {
+    const spools = doc.spools ?? [];
+    // If a spool already carries the filament's id, don't reuse it.
+    const filamentIdTaken = spools.some(
+      (s) => s.instanceId && s.instanceId === doc.instanceId,
+    );
+    let carriedOver = false;
+    for (const s of spools) {
+      if (s.instanceId) continue; // already has one — idempotent skip
+      let newId: string;
+      if (!carriedOver && !filamentIdTaken && doc.instanceId) {
+        newId = doc.instanceId; // first missing spool adopts the filament id
+        carriedOver = true;
+      } else {
+        newId = generateInstanceId();
+      }
+      ops.push({
+        updateOne: {
+          filter: { _id: doc._id },
+          update: { $set: { "spools.$[s].instanceId": newId } },
+          arrayFilters: [{ "s._id": s._id }],
+        },
+      });
+    }
+  }
+
+  if (ops.length === 0) return 0;
+  await Filament.bulkWrite(ops);
+  return ops.length;
 }
 
 export default Filament;

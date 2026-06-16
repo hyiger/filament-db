@@ -77,6 +77,8 @@ export interface FilamentPreset {
 
 export interface FilamentSpool {
   _id: string;
+  /** #732: per-spool 5-byte hex id (10 hex chars). */
+  instanceId?: string;
   label: string;
   totalWeight: number | null;
   lotNumber?: string | null;
@@ -165,6 +167,8 @@ export interface FilamentSummary {
   parentId: string | null;
   spools: {
     _id: string;
+    /** #732 — per-spool 5-byte hex id (10 hex chars). */
+    instanceId?: string;
     /** #717 — per-spool label, shown in the home-page spool panel so the user
      * can tell spools apart when changing a location. */
     label?: string | null;

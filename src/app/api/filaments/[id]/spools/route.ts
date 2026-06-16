@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
-import Filament from "@/models/Filament";
+import Filament, { generateInstanceId } from "@/models/Filament";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
@@ -85,6 +85,12 @@ export async function POST(
     // photoDataUrl / retired even when the client supplied them — a
     // separate latent bug paired with the empty-body phantom (GH #203).
     const newSpool: Record<string, unknown> = {};
+    // #732: stamp the spool id explicitly. Mongoose does apply the
+    // spools[].instanceId schema default when casting a $push payload, so
+    // this is belt-and-suspenders — but it makes the #732 "every spool has
+    // an id" invariant guaranteed and obvious at the create site rather than
+    // dependent on a subtle ODM behaviour.
+    newSpool.instanceId = generateInstanceId();
     if (validation.label !== undefined) newSpool.label = validation.label;
     if (validation.totalWeight !== undefined) newSpool.totalWeight = validation.totalWeight;
     if (validation.lotNumber !== undefined) newSpool.lotNumber = validation.lotNumber;

@@ -43,7 +43,7 @@ describe("dbConnect", () => {
       conn: null,
       promise: connectPromise,
       uri: process.env.MONGODB_URI,
-      migrations: { instanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
+      migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
     };
 
     const result = await dbConnect();
@@ -72,7 +72,7 @@ describe("dbConnect", () => {
       _deletedAt: null,
     });
     const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
-    cached.migrations = { instanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
     cached.conn = null;
     cached.promise = null;
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -84,6 +84,131 @@ describe("dbConnect", () => {
     } finally {
       logSpy.mockRestore();
       await Filament.deleteMany({ name: "MigrationTest" });
+    }
+  });
+
+  // GH #732: the spool-level instanceId backfill runs as its own migration.
+  it("logs when migration backfills spool instanceIds", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    // Raw insert: filament already has an id (skips the filament backfill);
+    // its lone spool is missing one (triggers the spool backfill).
+    await Filament.collection.insertOne({
+      name: "SpoolMigrationTest",
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      instanceId: "filparent1",
+      _deletedAt: null,
+      spools: [{ _id: new mongoose.Types.ObjectId(), label: "A", totalWeight: 1000 }],
+    });
+    const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
+    cached.conn = null;
+    cached.promise = null;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await dbConnect();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[migration] Backfilled instanceId for 1 spool(s)"),
+      );
+      expect(
+        (cached.migrations as { spoolInstanceIds: boolean }).spoolInstanceIds,
+      ).toBe(true);
+      // The lone spool carried over the filament's id.
+      const doc = await Filament.findOne({ name: "SpoolMigrationTest" });
+      expect(doc!.spools[0].instanceId).toBe("filparent1");
+    } finally {
+      logSpy.mockRestore();
+      await Filament.deleteMany({ name: "SpoolMigrationTest" });
+    }
+  });
+
+  // GH #732: the spool backfill runs BEFORE the filament backfill so carry-over
+  // only adopts a PRE-EXISTING filament id. A legacy filament that never had an
+  // id must NOT have its first spool "carry over" a freshly-minted filament id.
+  it("spool backfill runs before the filament backfill (no carry-over of a fresh id)", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    const spoolA = new mongoose.Types.ObjectId();
+    const spoolB = new mongoose.Types.ObjectId();
+    // Legacy doc: NO filament instanceId, two id-less spools.
+    await Filament.collection.insertOne({
+      name: "OrderingTest",
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      _deletedAt: null,
+      spools: [
+        { _id: spoolA, label: "A", totalWeight: 1000 },
+        { _id: spoolB, label: "B", totalWeight: 1000 },
+      ],
+    });
+    const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
+    cached.conn = null;
+    cached.promise = null;
+    try {
+      await dbConnect();
+      const doc = await Filament.findOne({ name: "OrderingTest" });
+      // Filament got a fresh id from the filament backfill...
+      expect(doc!.instanceId).toMatch(/^[0-9a-f]{10}$/);
+      // ...but neither spool carried it over (spool backfill ran first, when
+      // the filament had no id) — both spools have their own fresh ids.
+      expect(doc!.spools[0].instanceId).toMatch(/^[0-9a-f]{10}$/);
+      expect(doc!.spools[1].instanceId).toMatch(/^[0-9a-f]{10}$/);
+      expect(doc!.spools[0].instanceId).not.toBe(doc!.spools[1].instanceId);
+      expect(doc!.spools[0].instanceId).not.toBe(doc!.instanceId);
+      expect(doc!.spools[1].instanceId).not.toBe(doc!.instanceId);
+    } finally {
+      await Filament.deleteMany({ name: "OrderingTest" });
+    }
+  });
+
+  it("does not log a spool backfill when nothing needs migrating", async () => {
+    // Steady-state path: empty DB → count 0 → no "[migration] Backfilled
+    // instanceId for N spool(s)" line, but the flag still flips to true.
+    (global as Record<string, unknown>).mongoose = undefined;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await dbConnect();
+      expect(logSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("Backfilled instanceId for"),
+      );
+      const cached = (global as Record<string, unknown>).mongoose as {
+        migrations: { spoolInstanceIds: boolean };
+      };
+      expect(cached.migrations.spoolInstanceIds).toBe(true);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("retries the spool backfill on the next connect when it fails once", async () => {
+    (global as Record<string, unknown>).mongoose = undefined;
+
+    // mongodb.ts dynamically imports the model each connect, so spy on the
+    // shared module export to intercept the call.
+    const filamentMod = await import("@/models/Filament");
+    const spy = vi
+      .spyOn(filamentMod, "backfillSpoolInstanceIds")
+      .mockRejectedValueOnce(new Error("transient failure"));
+
+    try {
+      await dbConnect();
+      const cached = (global as Record<string, unknown>).mongoose as {
+        migrations: { spoolInstanceIds: boolean };
+      };
+      // Didn't succeed yet — flag stays false so the next connect retries.
+      expect(cached.migrations.spoolInstanceIds).toBe(false);
+
+      await dbConnect();
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(cached.migrations.spoolInstanceIds).toBe(true);
+    } finally {
+      spy.mockRestore();
     }
   });
 
@@ -107,9 +232,10 @@ describe("dbConnect", () => {
     const result = await dbConnect();
     expect(result).toBeDefined();
     const cached = (global as Record<string, unknown>).mongoose as {
-      migrations: { sharedCatalogIndexes: boolean };
+      migrations: { sharedCatalogIndexes: boolean; spoolInstanceIds: boolean };
     };
     expect(cached.migrations.sharedCatalogIndexes).toBe(true);
+    expect(cached.migrations.spoolInstanceIds).toBe(true);
   });
 
   it("skips migrations on subsequent connects once they've succeeded", async () => {

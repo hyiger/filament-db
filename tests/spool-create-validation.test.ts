@@ -69,6 +69,18 @@ describe("POST /api/filaments/[id]/spools — body validation (GH #203)", () => 
     expect(fresh.spools[0].totalWeight).toBe(1000);
   });
 
+  it("a created spool always carries a per-spool instanceId (#732)", async () => {
+    const f = await seed();
+    const res = await createSpool(postReq(String(f._id), { totalWeight: 1000 }), {
+      params: Promise.resolve({ id: String(f._id) }),
+    });
+    expect(res.status).toBe(201);
+    const fresh = await Filament.findById(f._id);
+    // The route stamps the id explicitly (the schema default would also fire
+    // on $push) — either way the #732 invariant holds: every spool has an id.
+    expect(fresh.spools[0].instanceId).toMatch(/^[0-9a-f]{10}$/);
+  });
+
   it("accepts a body with only label", async () => {
     const f = await seed();
     const res = await createSpool(postReq(String(f._id), { label: "Drybox A" }), {

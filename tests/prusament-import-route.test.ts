@@ -140,6 +140,8 @@ describe("POST /api/prusament/import", () => {
       expect(stored.spools).toHaveLength(1);
       expect(stored.spools[0].lotNumber).toBe("1086170252");
       expect(stored.spools[0].totalWeight).toBe(1171);
+      // #732: the Prusament spool subdoc carries its own instanceId.
+      expect(stored.spools[0].instanceId).toMatch(/^[0-9a-f]{10}$/);
     });
 
     it("falls back to add-spool when an active filament already owns the name", async () => {
@@ -158,6 +160,30 @@ describe("POST /api/prusament/import", () => {
       const rows = await Filament.find({ name: "Prusament PLA Galaxy Black" });
       expect(rows).toHaveLength(1);
       expect(rows[0].spools).toHaveLength(1);
+      // #732: the existing-name $push fallback spool carries an instanceId.
+      expect(rows[0].spools[0].instanceId).toMatch(/^[0-9a-f]{10}$/);
+    });
+  });
+
+  describe("add-spool action", () => {
+    it("the pushed spool carries a per-spool instanceId (#732)", async () => {
+      const existing = await Filament.create({
+        name: "Existing Prusament",
+        vendor: "Prusa Research",
+        type: "PLA",
+      });
+      const res = await POST(
+        postReq({
+          spool: validSpool(),
+          action: "add-spool",
+          filamentId: String(existing._id),
+        }),
+      );
+      expect(res.status).toBe(200);
+
+      const stored = await Filament.findById(existing._id);
+      expect(stored.spools).toHaveLength(1);
+      expect(stored.spools[0].instanceId).toMatch(/^[0-9a-f]{10}$/);
     });
   });
 

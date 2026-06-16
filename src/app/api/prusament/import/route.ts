@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
-import Filament from "@/models/Filament";
+import Filament, { generateInstanceId } from "@/models/Filament";
 import type { PrusamentScrapeResult } from "../route";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { isValidIsoDateString } from "@/lib/validateSpoolBody";
@@ -198,6 +198,9 @@ export async function POST(request: NextRequest) {
         {
           $push: {
             spools: {
+              // #732: stamp the spool id explicitly (belt-and-suspenders;
+              // the schema default would also fire on $push).
+              instanceId: generateInstanceId(),
               label: spoolLabel,
               totalWeight: spool.totalWeight,
               lotNumber: spool.spoolId,
@@ -250,6 +253,11 @@ export async function POST(request: NextRequest) {
       ? new Date(spool.manufactureDate.split(" ")[0])
       : null;
     const prusamentSpoolFields = {
+      // #732: stamp the spool id once for every branch that reuses this
+      // object (the create path + the existing-name $push fallbacks).
+      // Belt-and-suspenders: the schema default would also fire on both
+      // Filament.create and $push — explicit keeps the invariant obvious.
+      instanceId: generateInstanceId(),
       label: spoolLabel,
       totalWeight: spool.totalWeight,
       lotNumber: spool.spoolId,

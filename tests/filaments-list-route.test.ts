@@ -98,6 +98,33 @@ describe("GET /api/filaments — projection to FilamentSummary", () => {
     expect(entry.spools[1].label).toBe("Backup");
   });
 
+  it("surfaces spools[].instanceId so labels/NFC/match can resolve a spool (#732)", async () => {
+    const Filament = (await import("@/models/Filament")).default;
+    await Filament.create({
+      name: "Spool IDs",
+      vendor: "Test",
+      type: "PLA",
+      spools: [
+        { label: "A", totalWeight: 800 },
+        { label: "B", totalWeight: 1000 },
+        // Explicit id proves the $map surfaces the STORED value verbatim — the
+        // whole point of #732 is that a printed-label / NFC id resolves. A
+        // /^[0-9a-f]{10}$/ check alone wouldn't catch a regenerated id.
+        { label: "C", totalWeight: 500, instanceId: "carryover9" },
+      ],
+    });
+
+    const res = await listFilaments(
+      new NextRequest("http://localhost/api/filaments"),
+    );
+    const body = await res.json();
+    const entry = body.find((f: { name: string }) => f.name === "Spool IDs");
+    expect(entry.spools[0].instanceId).toMatch(/^[0-9a-f]{10}$/);
+    expect(entry.spools[1].instanceId).toMatch(/^[0-9a-f]{10}$/);
+    expect(entry.spools[0].instanceId).not.toBe(entry.spools[1].instanceId);
+    expect(entry.spools[2].instanceId).toBe("carryover9");
+  });
+
   it("hasCalibrations reflects effective state — a variant with no own calibrations inherits from parent", async () => {
     // Codex round-3 P2: variants with empty calibrations[] inherit from
     // their parent (see resolveFilament). The list projection used to
