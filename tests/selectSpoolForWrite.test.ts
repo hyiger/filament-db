@@ -30,6 +30,16 @@ describe("selectSpoolForWrite (#732)", () => {
     expect(selectSpoolForWrite(f, "nope")).toEqual({ ok: false, reason: "spool-not-found" });
   });
 
+  it("picks the sole spool when none is requested (single-spool filament)", () => {
+    const f = { instanceId: "fila000000", spools: [spool("s1", "aaaaaaaaaa")] };
+    expect(selectSpoolForWrite(f)).toEqual({
+      ok: true,
+      instanceId: "aaaaaaaaaa",
+      spoolId: "s1",
+      source: "spool",
+    });
+  });
+
   it("picks the first NON-retired spool when none is requested", () => {
     const f = {
       instanceId: "fila000000",

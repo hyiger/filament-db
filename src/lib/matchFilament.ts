@@ -120,6 +120,12 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
       .limit(2)
       .lean()) as LeanFilamentWithSpools[];
     const lowerId = instanceId.toLowerCase();
+    // Like the exact tier, this picks the first lowercase-equal spool by array
+    // order when a single filament has multiple case-only-colliding spool ids
+    // (only a CROSS-filament collision below is ambiguous). Unreachable from
+    // auto-generated lowercase-hex ids; reachable only via deliberate manual
+    // entry, where the filament still resolves and only which spool is reported
+    // is arbitrary.
     const ciPairs = spoolCi.flatMap((f) => {
       const s = (f.spools ?? []).find(
         (sp) => typeof sp.instanceId === "string" && sp.instanceId.toLowerCase() === lowerId,

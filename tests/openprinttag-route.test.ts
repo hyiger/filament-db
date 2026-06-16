@@ -67,6 +67,25 @@ describe("GET /api/filaments/[id]/openprinttag — spool-scoped spool_uid (#732)
     expect(await decodedSpoolUid(res)).toBe("5p002bbbbb");
   });
 
+  it("honors an explicitly requested RETIRED spool", async () => {
+    const f = await Filament.create({
+      name: "Retired Pick PLA",
+      vendor: "Test",
+      type: "PLA",
+      diameter: 1.75,
+      spools: [
+        { label: "A", totalWeight: 1000, instanceId: "5p001aaaaa", retired: true },
+        { label: "B", totalWeight: 900, instanceId: "5p002bbbbb" },
+      ],
+    });
+    // Explicitly target the retired spool A — the route must honor the choice.
+    const res = await openprinttag(req(String(f._id), String(f.spools[0]._id)), {
+      params: Promise.resolve({ id: String(f._id) }),
+    });
+    expect(res.status).toBe(200);
+    expect(await decodedSpoolUid(res)).toBe("5p001aaaaa");
+  });
+
   it("returns 400 for an unknown ?spool id", async () => {
     const f = await Filament.create({
       name: "Bad Spool PLA",

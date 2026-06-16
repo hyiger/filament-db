@@ -1945,6 +1945,7 @@ function FilamentDetail() {
             _id: String(s._id),
             label: s.label ?? null,
             instanceId: s.instanceId ?? null,
+            retired: s.retired ?? false,
           })),
         }}
       />
