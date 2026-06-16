@@ -785,7 +785,11 @@ function FilamentDetail() {
         if (data.retired === true) {
           await refreshPrinters();
         }
-        toast(t("detail.spool.updated"));
+        toast(
+          data.instanceId !== undefined || data.regenerate
+            ? t("detail.spool.instanceIdUpdated")
+            : t("detail.spool.updated"),
+        );
       } else if (data.instanceId !== undefined || data.regenerate) {
         // #732 Phase 4: surface the specific id-edit failure (409 duplicate /
         // 400 invalid charset) rather than the generic update error.
@@ -1500,7 +1504,20 @@ function FilamentDetail() {
                     onUpdateMeta={(patch) => handleUpdateSpool(spool._id, patch)}
                     onRemove={() => handleRemoveSpool(spool._id)}
                     onUpdateInstanceId={(instanceId) => handleUpdateSpool(spool._id, { instanceId })}
-                    onRegenerateInstanceId={() => handleUpdateSpool(spool._id, { regenerate: true })}
+                    onRegenerateInstanceId={async () => {
+                      // #732 Phase 4: regenerating is irreversible and orphans
+                      // any already-printed label / written tag for this spool —
+                      // confirm first.
+                      if (
+                        await confirm({
+                          message: t("detail.spool.regenerateConfirm"),
+                          confirmLabel: t("detail.spool.regenerateId"),
+                          destructive: true,
+                        })
+                      ) {
+                        handleUpdateSpool(spool._id, { regenerate: true });
+                      }
+                    }}
                     onNfcWeightUpdate={(scaleWeight) => handleNfcWeightUpdate(scaleWeight, String(spool._id))}
                     nfcAvailable={isElectron && nfcStatus.tagPresent}
                     nfcWriting={nfcWriting}
@@ -2218,7 +2235,7 @@ function SpoolCard({
             <span className="inline-flex items-center gap-1">
               <button
                 onClick={() => { setIdInput(spool.instanceId ?? ""); setEditingId(true); }}
-                className="text-[11px] text-gray-400 dark:text-gray-500 font-mono hover:text-blue-600 transition-colors"
+                className="inline-block max-w-[11rem] truncate align-bottom text-[11px] text-gray-400 dark:text-gray-500 font-mono hover:text-blue-600 transition-colors"
                 title={t("detail.spool.editInstanceId")}
               >
                 {spool.instanceId || t("detail.spool.setInstanceId")}

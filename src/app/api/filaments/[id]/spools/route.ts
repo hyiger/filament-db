@@ -66,7 +66,7 @@ export async function POST(
     return NextResponse.json(
       {
         error:
-          "At least one of label, totalWeight, lotNumber, purchaseDate, openedDate, locationId, photoDataUrl, or retired is required",
+          "At least one of label, totalWeight, lotNumber, purchaseDate, openedDate, locationId, photoDataUrl, retired, or instanceId is required",
       },
       { status: 400 },
     );
@@ -94,6 +94,13 @@ export async function POST(
     // vs other spools so the match path stays unambiguous. Otherwise
     // auto-generate.
     if (validation.instanceId !== undefined) {
+      // Best-effort uniqueness: a read-then-write check, not a DB unique
+      // constraint (the spools.instanceId index is non-unique multikey). A
+      // concurrent identical manual entry could slip a duplicate through; the
+      // matcher tolerates that by returning ambiguous candidates rather than an
+      // arbitrary pick, and auto-generated ids never collide — acceptable for a
+      // single-user/self-host app (a DB-level guard is deferred to a Phase-5
+      // spool-syncId migration).
       if (await isSpoolInstanceIdTaken(validation.instanceId)) {
         return errorResponse("That spool ID is already used by another spool", 409);
       }

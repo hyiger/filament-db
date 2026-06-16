@@ -842,7 +842,7 @@ export default function Home() {
                 {/* #732 Phase 4: surface the per-spool id (read-only; edit on
                     the filament detail page). */}
                 {s.instanceId && (
-                  <code className="text-[10px] text-gray-400 dark:text-gray-500 font-mono" title={s.instanceId}>
+                  <code className="inline-block max-w-[12rem] truncate align-bottom text-[10px] text-gray-400 dark:text-gray-500 font-mono" title={s.instanceId}>
                     {s.instanceId}
                   </code>
                 )}

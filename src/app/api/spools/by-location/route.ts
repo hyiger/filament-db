@@ -48,8 +48,9 @@ import { errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
 interface AggregatedSpool {
   _id: string;
-  /** #732 Phase 4: the durable per-spool id, surfaced on /inventory. */
-  instanceId: string;
+  /** #732 Phase 4: the durable per-spool id, surfaced on /inventory. Nullable —
+   * a legacy spool not yet backfilled can emit null. */
+  instanceId: string | null;
   label: string;
   totalWeight: number | null;
   lotNumber: string | null;

@@ -1045,6 +1045,8 @@
   "detail.spool.setInstanceId": "Set ID",
   "detail.spool.instanceIdPlaceholder": "Prusa roll ID or custom",
   "detail.spool.regenerateId": "Regenerate ID",
+  "detail.spool.regenerateConfirm": "Generate a new ID for this spool? Already-printed labels and written NFC tags will no longer match it.",
+  "detail.spool.instanceIdUpdated": "Spool ID updated",
   "detail.spool.instanceIdOrphanHint": "Changing the ID won't update already-printed labels or written NFC tags",
   "detail.spool.instanceIdDuplicate": "That spool ID is already used by another spool",
   "detail.spool.instanceIdInvalid": "ID may only contain letters, numbers, dot, underscore, and hyphen (max 128)",

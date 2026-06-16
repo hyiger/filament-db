@@ -814,7 +814,7 @@ function SpoolEditRow({
         <div className="font-medium">{row.label || <span className="text-gray-400 italic">{t("inventory.unnamed")}</span>}</div>
         {/* #732 Phase 4: the per-spool id (read-only; edit on the detail page). */}
         {row.instanceId && (
-          <code className="text-[11px] text-gray-400 dark:text-gray-500 font-mono" title={row.instanceId}>
+          <code className="block max-w-[14rem] truncate text-[11px] text-gray-400 dark:text-gray-500 font-mono" title={row.instanceId}>
             {row.instanceId}
           </code>
         )}

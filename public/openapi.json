@@ -2215,6 +2215,11 @@
                   "retired": {
                     "type": "boolean",
                     "description": "True if the spool is empty / no longer in use; excluded from inventory totals"
+                  },
+                  "instanceId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9._-]{1,128}$",
+                    "description": "#732: optional explicit per-spool ID (e.g. a Prusa roll ID). Charset/length validated and uniqueness-checked against other spools; auto-generated when omitted."
                   }
                 }
               }
@@ -2244,6 +2249,16 @@
           },
           "404": {
             "description": "Filament not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The supplied instanceId is already used by another spool (#732)",
             "content": {
               "application/json": {
                 "schema": {
@@ -2321,6 +2336,15 @@
                   "retired": {
                     "type": "boolean",
                     "description": "Retiring a loaded spool also clears it from any printer AMS slot it occupied (side effect)."
+                  },
+                  "instanceId": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z0-9._-]{1,128}$",
+                    "description": "#732: edit this spool's ID (e.g. set a Prusa roll ID). Charset/length validated and uniqueness-checked against other spools; a spool keeps its own ID."
+                  },
+                  "regenerate": {
+                    "type": "boolean",
+                    "description": "#732: PUT-only. When true, mints a fresh auto-generated instanceId; mutually exclusive with instanceId (regenerate wins — any supplied instanceId is ignored)."
                   }
                 }
               }
@@ -2350,6 +2374,16 @@
           },
           "404": {
             "description": "Filament or spool not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The supplied instanceId is already used by another spool (#732)",
             "content": {
               "application/json": {
                 "schema": {

@@ -58,6 +58,10 @@ export async function PUT(
     if (validation.regenerate === true) {
       finalInstanceId = generateInstanceId();
     } else if (validation.instanceId !== undefined) {
+      // Best-effort uniqueness (read-then-write, not a DB unique constraint —
+      // see the POST route + the spools.instanceId index comment). A concurrent
+      // identical manual entry could slip through; the matcher tolerates that
+      // (ambiguous candidates, never an arbitrary pick).
       if (await isSpoolInstanceIdTaken(validation.instanceId, spoolId)) {
         return errorResponse("That spool ID is already used by another spool", 409);
       }
