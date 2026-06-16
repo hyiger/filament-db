@@ -515,28 +515,27 @@ function FilamentDetail() {
 
     setNfcWriteSuccess(null);
     try {
-      // Compute actual remaining weight. Prefer the live (non-retired) spool's
-      // gross — the create flow (and the backfill script) move the initial
-      // weight onto a spool and null the legacy top-level totalWeight, so
-      // reading totalWeight alone falls back to nominal for spool-based
-      // filaments. If spools exist but ALL are retired there's no current roll,
-      // so report no actual weight rather than a retired spool's historical
-      // weight. Only fall back to the legacy field when there are NO spools
-      // (pre-spool rows). Codex P1/P2 on PR #707.
+      // #732: encode the SELECTED spool's instanceId (default = first
+      // non-retired spool; filament-level id only for a spool-less filament),
+      // and read the remaining weight from that SAME spool so the tag's id and
+      // weight agree (Codex P2 — an all-retired filament selects a retired spool
+      // for the id, and its weight must come from that spool too, not be
+      // dropped). Filament-level fallback uses the legacy top-level weight.
+      const writeSel = selectSpoolForWrite(filament);
       const spools = filament.spools ?? [];
-      const activeSpool = spools.find((s) => !s.retired);
-      const grossWeight = activeSpool
-        ? activeSpool.totalWeight
-        : spools.length === 0
+      const selectedSpool =
+        writeSel.ok && writeSel.source === "spool" && writeSel.spoolId
+          ? spools.find((s) => String(s._id) === writeSel.spoolId)
+          : null;
+      const grossWeight = selectedSpool
+        ? selectedSpool.totalWeight
+        : writeSel.ok && writeSel.source === "filament"
           ? filament.totalWeight
           : null;
       let actualWeightGrams: number | null = null;
       if (grossWeight != null && filament.spoolWeight != null) {
         actualWeightGrams = Math.max(0, grossWeight - filament.spoolWeight);
       }
-      // #732: encode the SELECTED spool's instanceId (default = first
-      // non-retired spool; filament-level id only for a spool-less filament).
-      const writeSel = selectSpoolForWrite(filament);
       const payload = generateOpenPrintTagBinary({
         materialName: filament.name,
         brandName: filament.vendor,
