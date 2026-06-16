@@ -1,5 +1,5 @@
 import { EventEmitter } from "events";
-import { randomUUID } from "crypto";
+import { randomBytes, randomUUID } from "crypto";
 import { MongoClient, ObjectId, Document } from "mongodb";
 
 /**
@@ -1379,12 +1379,27 @@ export class SyncService extends EventEmitter {
       // the ObjectIds differ across DBs, so each spool's locationId must be
       // translated through the syncId map. Unknown locations clear to null
       // rather than pointing at a wrong location on the target side.
+      //
+      // GH #732: also normalize spools[].instanceId. Synced docs are written
+      // with raw insertOne/updateOne, which bypass BOTH the Mongoose schema
+      // default and the dbConnect() backfill — so a spool pulled from a
+      // pre-#732 peer would otherwise arrive with no instanceId, leaving the
+      // "every spool has a 5-byte hex id" invariant false on the hybrid-sync
+      // path. Existing ids are preserved; only missing/empty ones are minted.
+      // Cross-side id consistency isn't guaranteed (spools have no stable
+      // cross-side identity — same documented limitation as amsSlots[].spoolId);
+      // this only guarantees the written side's local invariant, and
+      // last-write-wins converges the two sides over subsequent cycles.
       if (Array.isArray(doc.spools)) {
         doc.spools = doc.spools.map((spool: Document) => {
-          if (!spool.locationId) return spool;
+          const instanceId =
+            typeof spool.instanceId === "string" && spool.instanceId
+              ? spool.instanceId
+              : randomBytes(5).toString("hex");
+          if (!spool.locationId) return { ...spool, instanceId };
           const locSyncId = sourceLocationIdToSyncId.get(spool.locationId.toString());
           const targetLocationId = locSyncId ? targetLocationMap.get(locSyncId) : null;
-          return { ...spool, locationId: targetLocationId || null };
+          return { ...spool, instanceId, locationId: targetLocationId || null };
         });
       }
 

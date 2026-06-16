@@ -98,7 +98,19 @@ export interface ISpool {
   /** #732: per-spool 5-byte hex id (10 hex chars), auto-generated; a
    * Prusa-assigned spool id can be entered manually. This is the spool-level
    * identity used by labels / NFC / match — it supersedes the filament-level
-   * instanceId (which is removed in a later phase once nothing reads it). */
+   * instanceId (which is removed in a later phase once nothing reads it).
+   *
+   * PHASE-2 CONTRACT (must hold before the match path moves to spool ids):
+   * the writers still encode the FILAMENT-level instanceId during the
+   * transition — `PrintLabelDialog` uses `filament.instanceId` for the
+   * instance-ID QR mode, and `POST /api/filaments/[id]/openprinttag` writes
+   * `spoolUid: filament.instanceId`. Labels/tags created in the Phase-1 window
+   * therefore carry the filament id, while a freshly-created spool gets its own
+   * id. So the Phase-2 matcher MUST resolve `spools[].instanceId` first and
+   * then FALL BACK to the filament-level `instanceId` (which `GET
+   * /api/filaments/match` already does today), and Phase 3 moves the writers to
+   * the selected spool's id. Dropping that fallback before Phase 3 would orphan
+   * every transition-era label/tag. */
   instanceId: string;
   label: string;
   totalWeight: number | null;
