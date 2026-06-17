@@ -22,3 +22,21 @@ packages/mobile/android/
 packages/mobile/.expo/
 packages/mobile/dist/
 packages/mobile/web-build/
+
+# CRITICAL: .easignore REPLACES .gitignore for the EAS upload, so the
+# secret/local patterns .gitignore protects must be restated or the whitelist
+# above would upload them from a developer's machine. (No-slash patterns match
+# at any depth; listed last so they win even inside the whitelisted dir.)
+*.p12
+*.p8
+*.key
+*.jks
+*.mobileprovision
+*.pem
+*.cer
+*.keystore
+.env*.local
+.DS_Store
+*.tsbuildinfo
+expo-env.d.ts
+.metro-health-check*

@@ -63,12 +63,11 @@ Local native build onto a connected device/simulator:
 npx expo run:ios       # or: npx expo run:android
 ```
 
-Or build a dev client with EAS and start the bundler:
-
-```bash
-npx eas build --profile development --platform ios   # one-time, per platform
-npx expo start --dev-client
-```
+`expo run:ios` builds a debug build with Metro attached — no extra packages
+needed. (For a cloud dev-client build instead, add `expo-dev-client`
+[`npx expo install expo-dev-client`] and a matching `development` profile to
+`eas.json`; it's omitted by default since the local `run:*` flow above covers
+development without the dependency.)
 
 ### Free Apple ID? Build QR-only (no NFC)
 
@@ -121,7 +120,6 @@ installs Pods, and signs the app on Expo's servers. Profiles live in
 
 | Profile | Use |
 | --- | --- |
-| `development` | dev client for `expo start --dev-client` (internal distribution) |
 | `preview` | internal release build for ad-hoc device testing |
 | `preview-qr` | same as `preview` but `EXPO_PUBLIC_ENABLE_NFC=0` — drops the NFC entitlement so the build can sign without the paid-account NFC capability |
 | `production` | App Store / TestFlight build (auto-incremented build number) |

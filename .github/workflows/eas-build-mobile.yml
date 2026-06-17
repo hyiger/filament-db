@@ -36,7 +36,7 @@ on:
         description: "eas.json build profile"
         type: choice
         default: production
-        options: [development, preview, preview-qr, production]
+        options: [preview, preview-qr, production]
 
 jobs:
   build:
