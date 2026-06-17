@@ -401,12 +401,17 @@ export default function OpenPrintTagBrowser() {
     async (refresh = false) => {
       setLoading(true);
       setError(null);
-      // #743: bound the request so a stalled/slow cold fetch on the server
-      // surfaces a retryable error instead of an infinite spinner ("never
-      // returns"). The server caches the result, so a retry after a timeout
-      // picks up the in-progress single-flight load once it completes.
+      // #743: a backstop against a truly-stuck request (the real "whole app
+      // hangs" cause — a synchronous parse blocking the event loop — is fixed
+      // server-side). This MUST exceed the server's worst-case window so it
+      // never pre-empts the legitimate slow paths: the server retries the
+      // GitHub fetch up to 3×60s + backoff (~183s) and then serves a stale
+      // cached DB (GH #225) — a cached user on a flaky network must still get
+      // that stale data, not a premature timeout (Codex P2). 240s clears the
+      // ~183s server window with margin; the single-flight means a retry after
+      // a timeout joins the in-progress load rather than duplicating it.
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 90_000);
+      const timeout = setTimeout(() => controller.abort(), 240_000);
       try {
         // GH #427: refresh moved from `GET ?refresh=true` to POST so
         // the cache-mutation isn't a GET-with-side-effect.
