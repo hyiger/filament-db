@@ -41,6 +41,9 @@ HEAD = sys.argv[2]
 REPO = sys.argv[3] if len(sys.argv) > 3 else None
 
 def gh(path):
+    # Use the relative endpoint form (no leading "/"): on Windows `gh api`
+    # rejects an endpoint that looks like an absolute filesystem path.
+    path = path.lstrip("/")
     out = subprocess.run(["gh", "api", path, "--paginate"], capture_output=True, text=True)
     if out.returncode != 0:
         out = subprocess.run(["gh", "api", path], capture_output=True, text=True)
@@ -63,8 +66,19 @@ if REPO is None:
         sys.exit(2)
     REPO = r.stdout.strip()
 
-def is_codex(login):
-    return bool(login) and "codex" in login.lower()
+# The Codex actor's identity — REST gives `chatgpt-codex-connector[bot]` (type
+# "Bot"); the bare form appears in GraphQL. A substring match on "codex" is
+# SPOOFABLE on a public PR (a human could register a "codex"-ish login and post
+# a fake "Didn't find any issues" comment to bypass the gate), so pin the exact
+# identity. The `[bot]` suffix is itself unspoofable (brackets aren't valid in a
+# human username); `type == "Bot"` is the belt-and-suspenders check.
+CODEX_LOGINS = {"chatgpt-codex-connector[bot]", "chatgpt-codex-connector"}
+
+def is_codex(user):
+    if not isinstance(user, dict):
+        return False
+    login = user.get("login")
+    return login in CODEX_LOGINS and (login.endswith("[bot]") or user.get("type") == "Bot")
 
 def reviewed_oid(body):
     m = re.search(r"Reviewed commit:\**\s*`?([0-9a-f]{7,40})`?", body or "")
@@ -74,9 +88,9 @@ reviews = gh(f"/repos/{REPO}/pulls/{PR}/reviews")
 inline = gh(f"/repos/{REPO}/pulls/{PR}/comments")
 issues = gh(f"/repos/{REPO}/issues/{PR}/comments")
 
-codex_issue = [c for c in issues if is_codex(c["user"]["login"])]
+codex_issue = [c for c in issues if is_codex(c.get("user"))]
 codex_reviews = sorted(
-    [r for r in reviews if r.get("user") and is_codex(r["user"]["login"])],
+    [r for r in reviews if is_codex(r.get("user"))],
     key=lambda r: r.get("submitted_at") or "",
 )
 ratelimit_comments = [c for c in codex_issue if re.search(r"reached your Codex usage limits|usage limit", c["body"], re.I)]
@@ -86,32 +100,43 @@ def newest(ts_list):
     ts = [t for t in ts_list if t]
     return max(ts) if ts else ""
 
+def first_sha(body):
+    m = re.search(r"([0-9a-f]{7,40})", body or "")
+    return m.group(1) if m else None
+
+# Resolve the verdicts that pertain to the CURRENT HEAD, with their timestamps,
+# then report whichever is FRESHEST — so a stale (older-commit) review never
+# overrides a HEAD verdict, AND a clean comment never masks a NEWER HEAD review
+# that has findings (e.g. an auto-review says clean, then `@codex review`
+# returns suggestions on the same commit).
+head_clean_time = ""
+for c in clean_comments:
+    oid = reviewed_oid(c["body"]) or first_sha(c["body"])
+    if oid and HEAD.startswith(oid):
+        head_clean_time = max(head_clean_time, c["created_at"])
+
+head_review = None  # (submitted_at, findings_count, has_findings)
+for r in codex_reviews:  # ascending; the last HEAD review wins
+    oid = reviewed_oid(r.get("body"))
+    if oid and HEAD.startswith(oid):
+        tied = [c for c in inline if is_codex(c.get("user")) and c.get("pull_request_review_id") == r["id"]]
+        has_findings = r.get("state") == "CHANGES_REQUESTED" or bool(tied)
+        head_review = (r.get("submitted_at") or "", len(tied), has_findings)
+
+# 1) Decide between the HEAD clean-comment and the HEAD review by recency.
+if head_review and (not head_clean_time or head_review[0] >= head_clean_time):
+    if head_review[2]:
+        print("FINDINGS", HEAD[:10], head_review[1]); sys.exit(0)
+    print("CLEAN", HEAD[:10]); sys.exit(0)
+if head_clean_time:
+    print("CLEAN", HEAD[:10]); sys.exit(0)
+
+# 2) Rate limit — only if it's Codex's FRESHEST signal. A historical limit hit
+#    later followed by a successful review/clean comment must NOT block the gate
+#    forever, so require it to be newer than any review or clean verdict.
 review_time = codex_reviews[-1].get("submitted_at") if codex_reviews else ""
 clean_time = newest([c["created_at"] for c in clean_comments])
 rl_time = newest([c["created_at"] for c in ratelimit_comments])
-
-# 1) Clean issue comment for the current HEAD (the authoritative clean signal).
-for c in sorted(clean_comments, key=lambda c: c["created_at"], reverse=True):
-    oid = reviewed_oid(c["body"]) or (re.search(r"([0-9a-f]{7,40})", c["body"]) or [None, None])[0]
-    if oid and HEAD.startswith(oid):
-        print("CLEAN", oid); sys.exit(0)
-    break  # only the newest clean comment matters
-
-# 2) Latest Codex review object — trust it only if it reviewed the current HEAD.
-if codex_reviews:
-    latest = codex_reviews[-1]
-    oid = reviewed_oid(latest.get("body"))
-    if oid and HEAD.startswith(oid):
-        rid = latest["id"]
-        tied = [c for c in inline if is_codex(c["user"]["login"]) and c.get("pull_request_review_id") == rid]
-        if latest.get("state") == "CHANGES_REQUESTED" or tied:
-            print("FINDINGS", oid, len(tied)); sys.exit(0)
-        print("CLEAN", oid); sys.exit(0)
-
-# 3) Rate limit — only if it's Codex's FRESHEST signal. A historical limit hit
-#    that was followed by a successful review/clean comment must NOT block the
-#    gate forever, so require the rate-limit comment to be newer than any review
-#    or clean verdict.
 if rl_time and rl_time >= review_time and rl_time >= clean_time:
     print("RATELIMIT"); sys.exit(0)
 
@@ -125,7 +150,7 @@ requests = sorted(
 )
 if requests:
     rc = gh(f"/repos/{REPO}/issues/comments/{requests[-1]['id']}/reactions")
-    if any(is_codex((x.get("user") or {}).get("login")) and x.get("content") in ("+1", "hooray", "rocket", "heart") for x in rc):
+    if any(is_codex(x.get("user")) and x.get("content") in ("+1", "hooray", "rocket", "heart") for x in rc):
         print("CLEAN reaction"); sys.exit(0)
 
 # 5) A review exists but it reviewed an older commit (and no fresher verdict).
