@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
-import Filament from "@/models/Filament";
+import Filament, { generateInstanceId, isSpoolInstanceIdTaken } from "@/models/Filament";
 import Location from "@/models/Location";
 import { parseCsv } from "@/lib/parseCsv";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { unsanitizeCsvCell } from "@/lib/csvWriter";
-import { isValidIsoDateString } from "@/lib/validateSpoolBody";
+import { isValidIsoDateString, validateSpoolInstanceId } from "@/lib/validateSpoolBody";
 
 /**
  * POST /api/spools/import — bulk-create OR upsert spools from CSV.
@@ -31,6 +31,13 @@ import { isValidIsoDateString } from "@/lib/validateSpoolBody";
  *     updated instead of appending a new one. This makes the export →
  *     re-import round-trip idempotent (GH #159 — pre-fix re-importing
  *     an export silently doubled inventory).
+ *   instanceId — the spool's own id (#732 Phase 5). Validated for
+ *     charset/length and checked for uniqueness (against other spools'
+ *     ids, other filaments' top-level ids, AND other rows in this same
+ *     CSV). On CREATE it's stamped on the new spool (auto-generated when
+ *     absent); on UPDATE a non-empty cell rewrites the matched spool's id
+ *     (an empty cell leaves it unchanged). A duplicate or malformed id
+ *     fails just that row, side-effect-free.
  *
  * Returns a per-row result tagged `created | updated` so the client can
  * show granular success/failure. Does not transactionally roll back on
@@ -161,6 +168,14 @@ export async function POST(request: NextRequest) {
       { doc: any; rows: Array<{ index: number; action: "created" | "updated"; name: string }> }
     >();
 
+    // #732 Phase 5: ids explicitly claimed (set/changed) by earlier rows in
+    // THIS CSV. Newly minted/changed ids aren't persisted until the post-loop
+    // save(), so the DB uniqueness check can't see them — this Set catches a
+    // same-id collision between two rows in the same import. Auto-generated
+    // ids aren't tracked (40 bits of entropy; collision is negligible and the
+    // POST /spools route takes the same posture).
+    const claimedInstanceIds = new Set<string>();
+
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       // Strip the formula guard apostrophe (`csvCell` adds `'` in front
@@ -243,6 +258,67 @@ export async function POST(request: NextRequest) {
       const purchaseDate = rawPurchase ? new Date(rawPurchase) : null;
       const openedDate = rawOpened ? new Date(rawOpened) : null;
 
+      // #732 Phase 5: optional `instanceId` column — the spool's own id.
+      // Resolve and fully uniqueness-check it HERE, before `resolveLocationId`
+      // auto-creates a Location, so a malformed/duplicate id fails this row
+      // side-effect-free (mirrors the date checks above — Codex P2 on PR #375).
+      // The mutation is applied later against the bucket doc; this block is
+      // read-only against persisted state via `resolved`.
+      const incomingSpoolId = (r.spoolId || "").trim();
+      let incomingInstanceId: string | undefined;
+      if ("instanceId" in r) {
+        const rawId = unsanitizeCsvCell((r.instanceId || "").trim());
+        // Empty cell = "leave unchanged" on update / auto-generate on create;
+        // only a non-empty cell is a real id to validate + claim.
+        if (rawId !== "") {
+          const idCheck = validateSpoolInstanceId(rawId);
+          if (!idCheck.ok) {
+            rowResults[i] = { row: i + 2, ok: false, error: idCheck.error };
+            continue;
+          }
+          incomingInstanceId = idCheck.value;
+
+          // Locate the spool this row would touch (round-trip dedup by subdoc
+          // _id) so we can let it keep its own id and exclude itself from the
+          // uniqueness check. Read-only lookup against the persisted doc.
+          const existingForCheck = incomingSpoolId
+            ? (resolved.spools as unknown as {
+                id(id: string): Record<string, unknown> | null;
+              }).id(incomingSpoolId)
+            : null;
+          const keepsOwnId =
+            !!existingForCheck && existingForCheck.instanceId === incomingInstanceId;
+          if (!keepsOwnId) {
+            if (claimedInstanceIds.has(incomingInstanceId)) {
+              rowResults[i] = {
+                row: i + 2,
+                ok: false,
+                error: `instanceId "${incomingInstanceId}" is used by more than one row in this CSV`,
+              };
+              continue;
+            }
+            const excludeSpoolId = existingForCheck
+              ? String(existingForCheck._id)
+              : undefined;
+            if (
+              await isSpoolInstanceIdTaken(
+                incomingInstanceId,
+                excludeSpoolId,
+                String(resolved._id),
+              )
+            ) {
+              rowResults[i] = {
+                row: i + 2,
+                ok: false,
+                error: "That spool ID is already used by another spool",
+              };
+              continue;
+            }
+          }
+          claimedInstanceIds.add(incomingInstanceId);
+        }
+      }
+
       const locationId = await resolveLocationId(
         unsanitizeCsvCell((r.location || "").trim()),
       );
@@ -256,6 +332,10 @@ export async function POST(request: NextRequest) {
         purchaseDate: purchaseDate && !isNaN(+purchaseDate) ? purchaseDate : null,
         openedDate: openedDate && !isNaN(+openedDate) ? openedDate : null,
         locationId: locationId || null,
+        // #732 Phase 5: stamp the spool's own id explicitly (user-supplied +
+        // already validated/uniqueness-checked above, or a fresh one) rather
+        // than relying on the subdoc default — matches POST /spools.
+        instanceId: incomingInstanceId ?? generateInstanceId(),
       };
 
       // Codex P1 on PR #546: two rows for the SAME filament can resolve via
@@ -290,7 +370,7 @@ export async function POST(request: NextRequest) {
       // `filament,totalWeight,spoolId` to bulk-update weights) would
       // silently null label / lotNumber / dates / location on every
       // matched spool. Codex P1 on PR #172.
-      const incomingSpoolId = (r.spoolId || "").trim();
+      // `incomingSpoolId` was parsed during the instanceId check above.
       let action: "created" | "updated" = "created";
       if (incomingSpoolId) {
         // .id() returns the matching subdoc or null. Cast through unknown
@@ -310,6 +390,11 @@ export async function POST(request: NextRequest) {
             partialUpdate.openedDate = openedDate && !isNaN(+openedDate) ? openedDate : null;
           }
           if ("location" in r) partialUpdate.locationId = locationId || null;
+          // #732 Phase 5: rewrite the id only when a non-empty `instanceId`
+          // cell was given (already validated + uniqueness-checked above). An
+          // empty/absent cell leaves the spool's existing id untouched — a
+          // spool must always keep an id.
+          if (incomingInstanceId !== undefined) partialUpdate.instanceId = incomingInstanceId;
           Object.assign(existing, partialUpdate);
           action = "updated";
         }
