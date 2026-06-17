@@ -35,7 +35,12 @@ packages/mobile/web-build/
 *.pem
 *.cer
 *.keystore
-.env*.local
+# All env files (mirrors the root .gitignore's `.env*` + `!.env.example`).
+# Must be the broad `.env*`, not just `.env*.local`: a local `eas build` from a
+# dev workstation would otherwise upload an uncommitted `.env` / `.env.production`
+# (potential secrets) since .easignore replaces .gitignore (Codex P1 on #747).
+.env*
+!.env.example
 .DS_Store
 *.tsbuildinfo
 expo-env.d.ts
