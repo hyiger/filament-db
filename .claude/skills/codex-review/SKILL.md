@@ -12,11 +12,11 @@ A **clean Codex review of the current HEAD is a HARD gate for merging** any PR i
 1. **Identify the PR + HEAD.** `gh pr view <PR> --json headRefOid,headRefName -q '.headRefOid + " " + .headRefName'`. Capture the full HEAD SHA — every verdict is judged against it.
 2. **Request a review** (do this after EVERY push to the PR, not just the first):
    ```
-   gh pr comment <PR> --body "Addressed in <short-sha> — <one-line summary>.
+   gh pr comment <PR> --body "Addressed in <sha> — <one-line summary>.
 
    @codex review"
    ```
-   On the first open, Codex auto-fires, so the explicit request is redundant-but-harmless. **Include the new HEAD short-SHA** in the body (`Addressed in <sha>`): it ties the request to HEAD so the detector can safely accept a Codex 👍-reaction as clean only when it was earned by the current commit.
+   On the first open, Codex auto-fires, so the explicit request is redundant-but-harmless. **Include the new HEAD SHA** in the body (`Addressed in <sha>`) — use the **full** SHA or `git rev-parse --short=12 HEAD` (NOT the default 7-char `--short`, which the detector won't bind): it ties the request to HEAD so a Codex 👍-reaction is accepted as clean only when it was earned by the current commit.
 3. **Poll the verdict** with the bundled detector (commit-aware — see Gotchas):
    ```
    python3 .claude/skills/codex-review/codex-verdict.py <PR> <HEAD_full_sha>

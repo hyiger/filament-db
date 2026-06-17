@@ -48,17 +48,22 @@ def gh(path):
     # Relative endpoint form (no leading "/"): on Windows `gh api` rejects an
     # endpoint that looks like an absolute filesystem path.
     path = path.lstrip("/")
-    out = subprocess.run(["gh", "api", path, "--paginate"], capture_output=True, text=True)
+    # `--paginate` alone emits each page as a SEPARATE JSON document (so a
+    # multi-page PR isn't a single parseable doc). `--slurp` wraps the pages in
+    # one outer array — flatten it (all our endpoints return arrays).
+    out = subprocess.run(["gh", "api", path, "--paginate", "--slurp"], capture_output=True, text=True)
+    if out.returncode == 0:
+        pages = json.loads(out.stdout or "[]")
+        flat = []
+        for p in pages:
+            flat.extend(p if isinstance(p, list) else [p])
+        return flat
+    # Fallback for an older gh without --slurp: a single (first) page.
+    out = subprocess.run(["gh", "api", path], capture_output=True, text=True)
     if out.returncode != 0:
-        out = subprocess.run(["gh", "api", path], capture_output=True, text=True)
-        if out.returncode != 0:
-            print("ERR", out.stderr.strip()[:200], file=sys.stderr)
-            sys.exit(2)
-    txt = out.stdout.strip()
-    try:
-        return json.loads(txt)
-    except json.JSONDecodeError:
-        return json.loads(txt.replace("][", ","))  # --paginate may concat arrays
+        print("ERR", out.stderr.strip()[:200], file=sys.stderr)
+        sys.exit(2)
+    return json.loads(out.stdout or "[]")
 
 if REPO is None:
     r = subprocess.run(
