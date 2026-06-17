@@ -1,7 +1,12 @@
 ---
 name: release
 description: Cut a versioned release of Filament DB — bump the version via the release-bump workflow, tag and push, watch the build matrix, apply release notes, and verify the macOS auto-update metadata carries both arches. Use when asked to "cut a release", "ship vX.Y.Z", or "do a release". Optionally runs a docs-drift check first.
+disable-model-invocation: true
 ---
+
+> Manual-invoke only (`/release`). This skill tags and PUBLISHES a release —
+> side effects that must never auto-fire from release-related conversation,
+> especially in auto/bypass-permission sessions.
 
 # Cut a release
 
