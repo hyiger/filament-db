@@ -489,6 +489,23 @@ export default function Home() {
     return map;
   }, [filaments]);
 
+  // True variant count per parent, derived from the FULL fetched list (#744).
+  // The collapsed parent's "N color(s)" chip must reflect every variant in the
+  // family, not just those left in `visibleFilaments` after the #712
+  // out-of-stock hide — otherwise a parent with out-of-stock variants
+  // under-counts vs. its own detail page. `filaments` holds every non-deleted
+  // variant (out-of-stock filtering is applied only when deriving
+  // `visibleFilaments`); when a server-side search/type/vendor filter is
+  // active `filaments` is already that filtered set, so the chip then reflects
+  // the filtered family, matching the rows shown.
+  const variantCountByParent = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of filaments) {
+      if (f.parentId) m.set(f.parentId, (m.get(f.parentId) ?? 0) + 1);
+    }
+    return m;
+  }, [filaments]);
+
   const groupedFilaments = useMemo(() => {
     const parentMap = new Map<string, GroupedFilament>();
     const standalone: Filament[] = [];
@@ -1049,7 +1066,9 @@ export default function Home() {
               {f.name}
             </Link>
             <span className="ml-1.5 text-[10px] text-gray-500 bg-gray-200 dark:bg-gray-800 px-1 py-0.5 rounded">
-              {t("filaments.colorCount", { count: group.variants.length })}
+              {t("filaments.colorCount", {
+                count: variantCountByParent.get(f._id) ?? group.variants.length,
+              })}
             </span>
           </td>
           <td className="py-2 px-2">{f.vendor}</td>
