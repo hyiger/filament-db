@@ -381,6 +381,18 @@ describe("pruneOptPayloadAgainstParent (Issue #753)", () => {
     expect(pruneOptPayloadAgainstParent(p, null)).toBe(p);
   });
 
+  it("leaves an empty OPT array empty even when the parent has one (documented empty=inherit limit)", () => {
+    // The OPT material has no tags but the parent does. The prune leaves the
+    // variant's optTags as []; downstream resolveFilament treats [] as
+    // "inherit", so the variant resolves to the parent's tags. This is the
+    // documented empty=inherit model limitation (Codex P2 on #753) — the prune
+    // must not fabricate the parent's data onto the variant.
+    const p = payload({ optTags: [], secondaryColors: [] });
+    const pruned = pruneOptPayloadAgainstParent(p, { optTags: [16], secondaryColors: ["#aabbcc"] });
+    expect(pruned.optTags).toEqual([]);
+    expect(pruned.secondaryColors).toEqual([]);
+  });
+
   it("keeps a value the parent lacks (a null parent field is not a real OPT value)", () => {
     const pruned = pruneOptPayloadAgainstParent(payload(), { density: null });
     expect(pruned.density).toBe(1.24);

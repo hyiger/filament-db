@@ -392,6 +392,19 @@ export function pruneOptPayloadAgainstParent(
   // inherits the parent's array (empty === inherit, GH #106). A non-empty
   // array that DIFFERS from the parent stays — that's the variant's distinct
   // data (e.g. a coextruded variant's own secondaryColors).
+  //
+  // KNOWN LIMITATION (Codex P2 on #753): when the OPT material's array is EMPTY
+  // but the parent's is NON-empty, the variant can't represent "explicitly
+  // empty" — `resolveFilament` reads `[]` as "inherit", so the variant resolves
+  // to the parent's array (e.g. a single-color/no-tag material imported under a
+  // multi-color/tagged parent shows the parent's colors/tags). This is the SAME
+  // empty=inherit constraint the resync side documents in
+  // OPT_CLEARABLE_ARRAY_FIELDS above; there is no stored value that resolves to
+  // empty while the parent is non-empty, so it can't be fixed here without a
+  // model-level "no-inherit" array sentinel (out of scope — it would ripple
+  // through resolveFilament, the resync diff, and exports). The user can still
+  // override after import by editing the variant's colors/tags. The common case
+  // (parent is a base catalog entry without secondaries/tags) is unaffected.
   for (const field of PRUNE_ARRAY_FIELDS) {
     const v = pruned[field];
     if (!Array.isArray(v) || v.length === 0) continue;
