@@ -115,10 +115,14 @@ for c in clean_comments:
     if oid and HEAD.startswith(oid):
         head_clean_time = max(head_clean_time, c["created_at"])
 
+# A review's `commit_id` is the STABLE record of the commit it reviewed (set at
+# submit time; unlike an inline comment's commit_id it isn't re-anchored). Use
+# it to classify the review — a findings review whose body omits the "Reviewed
+# commit" line would otherwise never match HEAD and the findings would be hidden.
 head_review = None  # (submitted_at, findings_count, has_findings)
 for r in codex_reviews:  # ascending; the last HEAD review wins
-    oid = reviewed_oid(r.get("body"))
-    if oid and HEAD.startswith(oid):
+    oid = r.get("commit_id") or reviewed_oid(r.get("body"))
+    if oid and (HEAD == oid or HEAD.startswith(oid)):
         tied = [c for c in inline if is_codex(c.get("user")) and c.get("pull_request_review_id") == r["id"]]
         has_findings = r.get("state") == "CHANGES_REQUESTED" or bool(tied)
         head_review = (r.get("submitted_at") or "", len(tied), has_findings)
@@ -153,8 +157,19 @@ if requests:
     if any(is_codex(x.get("user")) and x.get("content") in ("+1", "hooray", "rocket", "heart") for x in rc):
         print("CLEAN reaction"); sys.exit(0)
 
-# 5) A review exists but it reviewed an older commit (and no fresher verdict).
+# 5) Codex has weighed in, but its latest verdict is for an OLDER commit — a
+#    review for a non-HEAD SHA OR a clean comment for one (which may exist with
+#    NO review objects at all). Report STALE (push a new commit) rather than
+#    NONE (poll forever).
+stale = []
 if codex_reviews:
-    print("STALE", reviewed_oid(codex_reviews[-1].get("body")) or "?"); sys.exit(0)
+    r = codex_reviews[-1]
+    stale.append((r.get("submitted_at") or "", r.get("commit_id") or reviewed_oid(r.get("body")) or "?"))
+if clean_comments:
+    c = max(clean_comments, key=lambda c: c["created_at"])
+    stale.append((c["created_at"], reviewed_oid(c["body"]) or first_sha(c["body"]) or "?"))
+if stale:
+    stale.sort()
+    print("STALE", stale[-1][1]); sys.exit(0)
 
 print("NONE")
