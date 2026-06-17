@@ -435,7 +435,9 @@ Go to **Settings → Backup & Restore** and click **"Restore from Snapshot"**. S
 
 ## Instance IDs
 
-Each filament has a unique instance identifier (5-byte hex string, e.g. `2acc21072a`), auto-generated on creation. This matches Prusament's `brand_specific_instance_id` format and is written to NFC tags. Instance IDs are visible on the filament detail page next to the vendor/type and are included in CSV/XLSX exports.
+Each filament has a unique instance identifier (5-byte hex string, e.g. `2acc21072a`), auto-generated on creation. This matches Prusament's `brand_specific_instance_id` format. Instance IDs are visible on the filament detail page next to the vendor/type and are included in CSV/XLSX exports.
+
+As of v1.48–v1.50 (#732), **each spool also has its own instance ID** — the durable per-roll identity that NFC tags carry, QR labels encode, and the spool CSV round-trips, resolved first by tag/QR matching ahead of the filament-level id. A spool's ID is shown and editable on the filament detail page (the "Spool ID" field — enter your own, e.g. a Prusament roll ID, or regenerate it) and shown read-only on the Inventory page and the main list. The filament-level ID is kept as a fallback for older tags.
 
 ---
 
@@ -443,7 +445,7 @@ Each filament has a unique instance identifier (5-byte hex string, e.g. `2acc210
 
 Print a 24mm-tape spool label directly from the filament detail page to a **Brother PT-P710BT** (P-touch CUBE). The label carries a QR code (optional) and configurable text. Two QR payload modes you can pick per print:
 
-- **Filament instance ID** — the filament's 5-byte hex identifier (e.g. `2acc21072a`). This is a **filament-level** value (one per filament — *not* per spool) and matches what an NFC tag carries. It's resolved by the in-app NFC reader and the slicer integration; a phone camera just shows the raw hex with nothing to act on, so use this for the NFC/slicer ecosystem rather than phone scanning.
+- **Instance ID** — a 5-byte hex identifier (e.g. `2acc21072a`). As of #732 this encodes the **selected spool's** instance ID (the spool picker below chooses which; it defaults to the first non-retired spool), falling back to the filament-level ID only for a filament with no spools. It matches what an NFC tag carries and is resolved by the in-app NFC reader and the slicer integration; a phone camera just shows the raw hex with nothing to act on, so use this for the NFC/slicer ecosystem rather than phone scanning.
 - **Deep-link URL** — a full URL to the filament's detail page (e.g. `https://your-instance.lan/filaments/<id>`). Scanned by **any phone** it opens the page directly — no app required. This is the phone-scannable option. For a filament with **multiple spools**, a spool picker appears so the QR can target a specific spool (`…/filaments/<id>?spool=<spoolId>`); scanning it opens the filament with that spool highlighted. *(Spool targeting, v1.35.)*
 
 Your last choice is remembered as the default for the next print.

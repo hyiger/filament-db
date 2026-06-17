@@ -1439,6 +1439,22 @@
                       "nullable": true,
                       "description": "Confident DB match (a Filament), or null when there isn't one."
                     },
+                    "matchedSpool": {
+                      "type": "object",
+                      "nullable": true,
+                      "description": "The spool whose instanceId matched the tag (#732), or null when the hit was filament-level or heuristic.",
+                      "properties": {
+                        "_id": { "type": "string" },
+                        "instanceId": { "type": "string" },
+                        "label": { "type": "string" }
+                      }
+                    },
+                    "matchedBy": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": ["instanceId", "heuristic", null],
+                      "description": "\"instanceId\" when the tag's spool_uid matched a per-spool spools[].instanceId (matchedSpool set) or the filament-level instanceId; \"heuristic\" for a name / vendor+type match; null when nothing matched."
+                    },
                     "candidates": {
                       "type": "array",
                       "items": {
@@ -1478,7 +1494,7 @@
               "type": "string",
               "maxLength": 128
             },
-            "description": "Exact instance-ID match (case-insensitive). Unambiguous because every filament has a unique instanceId — auto-generated as 5-byte hex for new filaments, but legacy / re-imported records may carry any string. The same value NFC tags and Brother label-printer QR codes carry. When set and a match is found, the response carries that filament directly. When set but no match is found, the route falls through to name/vendor/type matching if those params are also supplied."
+            "description": "Instance-ID match. As of #732 the id is resolved against per-spool spools[].instanceId FIRST (exact-case then case-insensitive, returning the matched spool in matchedSpool), then the filament-level instanceId as a transitional fallback. Auto-generated as 5-byte hex, but legacy / user-set / re-imported records may carry any string. The same value NFC tags and Brother label-printer QR codes carry. When set and a match is found, the response carries that filament directly (plus matchedSpool when a spool matched). When set but no match is found, the route falls through to name/vendor/type matching if those params are also supplied."
           },
           {
             "name": "name",
@@ -1520,6 +1536,16 @@
                           "$ref": "#/components/schemas/Filament"
                         }
                       ]
+                    },
+                    "matchedSpool": {
+                      "type": "object",
+                      "nullable": true,
+                      "description": "The spool whose instanceId matched the query (#732), or null when the hit was filament-level or heuristic.",
+                      "properties": {
+                        "_id": { "type": "string" },
+                        "instanceId": { "type": "string" },
+                        "label": { "type": "string" }
+                      }
                     },
                     "candidates": {
                       "type": "array",
@@ -6211,6 +6237,10 @@
                 "_id": {
                   "type": "string"
                 },
+                "instanceId": {
+                  "type": "string",
+                  "description": "Per-spool 5-byte hex identity (#732, v1.48+); auto-generated or user-set. The value NFC tags carry, QR labels encode, and tag/QR matching resolves first (ahead of the filament-level instanceId)."
+                },
                 "label": {
                   "type": "string"
                 },
@@ -6470,6 +6500,10 @@
               "properties": {
                 "_id": {
                   "type": "string"
+                },
+                "instanceId": {
+                  "type": "string",
+                  "description": "Per-spool 5-byte hex identity (#732), projected into the list aggregation."
                 },
                 "label": {
                   "type": "string"

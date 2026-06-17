@@ -45,6 +45,14 @@ Deine Konfiguration wird in einer verschlüsselten lokalen Datei gespeichert (pe
 
 Im Offline- und Hybrid-Modus liegen die lokalen Datenbankdateien unter demselben Verzeichnis im Unterordner `mongodb-data/`.
 
+## Im lokalen Netzwerk freigeben *(v1.45.0)*
+
+Standardmäßig bindet der eingebettete Next.js-Server an `localhost` und ist somit nur vom selben Rechner aus erreichbar. **Einstellungen → Im lokalen Netzwerk freigeben** (ein `electron-store`-Schalter, `exposeToLan`, standardmäßig aus) bindet den Server an `0.0.0.0`, sodass andere Geräte im LAN ihn erreichen können. Ist er aktiviert, liefert der **`get-lan-ip`-IPC** die zu verwendende LAN-URL (z. B. `http://192.168.1.20:3456`), die mit der mobilen Scanner-App zusammenspielt.
+
+Seit v1.47.0 kündigt sich der Desktop zusätzlich per **mDNS** an (`_filamentdb._tcp`, über `electron/mdns-service.ts` / `bonjour-service`) – **nur solange „Im lokalen Netzwerk freigeben" aktiv ist** –, sodass der **Im Netzwerk suchen**-Scan der mobilen App ihn ohne URL-Eingabe automatisch findet.
+
+> **Eine im LAN freigegebene Instanz absichern:** Setze die Umgebungsvariable `FILAMENTDB_API_KEY`, um bei jeder `/api/*`-Anfrage ein Bearer-Token zu verlangen (`src/lib/apiAuth.ts`). Bleibt sie ungesetzt, bleibt die API unauthentifiziert (Standard).
+
 ## Auto-Update *(v1.11)*
 
 Die paketierte App fragt GitHub Releases regelmäßig nach neuen Versionen ab und zeigt oben im Fenster einen Banner, sobald ein Update verfügbar ist. Der Lebenszyklus:

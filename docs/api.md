@@ -45,9 +45,10 @@
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/filaments/:id/spools` | Add a spool to a filament |
-| `PUT` | `/api/filaments/:id/spools/:spoolId` | Update a spool's weight or label |
+| `POST` | `/api/filaments/:id/spools` | Add a spool to a filament (optional explicit `instanceId`) |
+| `PUT` | `/api/filaments/:id/spools/:spoolId` | Update a spool's weight/label/location, or its `instanceId` (`{ regenerate: true }` mints a fresh one) — #732 |
 | `DELETE` | `/api/filaments/:id/spools/:spoolId` | Remove a spool from a filament |
+| `GET` | `/api/spools/:spoolId` | Resolve a spool subdoc id to its (inheritance-resolved) owning filament + the spool — powers the mobile scanner's `?spool=<id>` deep links (v1.43) |
 
 ### GET /api/filaments
 
@@ -77,13 +78,16 @@ Returns an array of projected filament summaries (not the full documents — hea
   "tdsUrl": "https://example.com/tds.pdf",
   "temperatures": { "nozzle": 215, "bed": 60 },
   "hasCalibrations": true,
+  "hasVariants": false,
+  "optTags": [],
   "spools": [
-    { "_id": "…", "label": "AMS slot 1", "totalWeight": 800, "retired": false }
+    { "_id": "…", "instanceId": "2acc21072a", "label": "AMS slot 1", "totalWeight": 800, "retired": false, "locationId": "…" }
   ]
 }
 ```
 
 - `hasCalibrations` is `true` when the filament has at least one calibration, **or** when it's a variant whose parent has at least one (via aggregation `$lookup`). The "Missing calibration" quick filter on the list page reads this — variants that inherit from a parent are correctly counted as calibrated.
+- `hasVariants` is `true` when the filament has at least one non-deleted variant (drives the parent cross-hatch/composite swatch); `optTags` (effective, parent-inherited) drives the finish indicator; `spools[].instanceId` is the per-spool id (#732) and `spools[].locationId` powers the inline move-to dropdown on the main list.
 - `tdsUrl` is included so `FilamentForm`'s vendor-keyed TDS suggestions still work.
 - `spools[].label` is included so `PrinterForm`'s AMS slot picker can render `s.label || s._id.slice(-4)`.
 - `color` is **nullable** — coextruded multi-color filaments leave it null and put their colors in `secondaryColors`. `secondaryColors` is an ordered array of up to 5 `#RRGGBB` hex codes that mirrors OpenPrintTag's `secondary_color_0..4` keys (spec keys 20–24). Variants inherit `secondaryColors` array-fallback style: a variant either declares its own non-empty array or inherits the parent's entire array (same pattern as `optTags` / `bedTypeTemps`). Slicer-bound exports (PrusaSlicer / OrcaSlicer / Bambu Studio) drop secondaries silently — slicer presets are single-color formats.
@@ -179,17 +183,18 @@ Returns:
 
 Match an NFC tag's decoded data or a scanned Brother label-printer QR against existing filaments. Used internally by the NFC read workflow and by anything that scans an instance-ID QR back into the app.
 
-- `instanceId` -- exact instance-ID match (highest-confidence; checked first). Same value carried on NFC tags and printed by the label-printer dialog's instance-ID QR mode. Exact-case is preferred; falls back to case-insensitive when no exact hit. A case-only collision (legacy data with both `ABC` and `abc` stored) returns both as `candidates` instead of an arbitrary pick. Max length 128; the value is escaped before the case-insensitive regex so regex-special characters in stored IDs are matched literally.
+- `instanceId` -- exact instance-ID match (highest-confidence; checked first). As of #732 this resolves against **per-spool** `spools[].instanceId` first (exact-case then case-insensitive), returning the matched spool in `matchedSpool`, then falls back to the **filament-level** `instanceId` (transitional). Same value carried on NFC tags and printed by the label-printer dialog's instance-ID QR mode. A case-only collision (legacy data with both `ABC` and `abc` stored) returns both as `candidates` instead of an arbitrary pick. Max length 128; the value is escaped before the case-insensitive regex so regex-special characters in stored IDs are matched literally.
 - `name` -- material name (exact match, case-insensitive)
 - `vendor` -- brand name (substring match, case-insensitive)
 - `type` -- material type (exact match, case-insensitive)
 
-The four parameters are checked in priority order: `instanceId` → `name` → `vendor`+`type` → `vendor` only. If `instanceId` misses, the route falls through to the next branch when the relevant params are also supplied, so a label scan against a since-deleted filament can still surface suggestions instead of 404ing.
+The parameters are checked in priority order: per-spool `instanceId` → filament-level `instanceId` → `name` → `vendor`+`type` → `vendor` only. If `instanceId` misses, the route falls through to the next branch when the relevant params are also supplied, so a label scan against a since-deleted filament can still surface suggestions instead of 404ing.
 
-Returns:
+Returns (`matchedSpool` is the spool whose `instanceId` matched, or `null` when the hit was filament-level or heuristic):
 ```json
 {
   "match": { "_id": "...", "name": "...", "vendor": "...", "type": "...", "color": "..." },
+  "matchedSpool": { "_id": "...", "instanceId": "...", "label": "..." },
   "candidates": []
 }
 ```
@@ -673,6 +678,7 @@ Returns `200`:
     "tagSource": "openprinttag"
   },
   "match": { "_id": "…", "name": "…", "vendor": "…", "type": "…", "color": "…" },
+  "matchedSpool": { "_id": "…", "instanceId": "…", "label": "…" },
   "candidates": [],
   "matchedBy": "instanceId"
 }
@@ -680,8 +686,9 @@ Returns `200`:
 
 - `decoded` — the full `DecodedOpenPrintTag`.
 - `match` — the matched DB row, or `null` when nothing matches.
+- `matchedSpool` — the spool whose `instanceId` matched the tag (#732), or `null` when the hit was filament-level or heuristic.
 - `candidates` — plausible alternatives (vendor+type, then vendor-only) when there's no confident match; empty otherwise.
-- `matchedBy` — `"instanceId"` when the tag's `spool_uid` equals the matched filament's `instanceId` (a confident "this exact physical tag is in the DB"), `"heuristic"` when the match came from the weaker name / vendor+type tiers (the scanner should offer "create new" alongside opening the heuristic match), or `null` when there's no match.
+- `matchedBy` — `"instanceId"` when the tag's `spool_uid` matched a **per-spool** `spools[].instanceId` (`matchedSpool` is set) OR the filament-level `instanceId` (a confident "this exact physical tag is in the DB"), `"heuristic"` when the match came from the weaker name / vendor+type tiers (the scanner should offer "create new" alongside opening the heuristic match), or `null` when there's no match.
 
 Errors:
 - `400` — invalid JSON, body not an object, missing byte fields for the chosen `tagType`, or undecodable / wrong-format bytes (`"Could not decode tag"` with the underlying reason).
@@ -1339,15 +1346,19 @@ Accepts any of:
 ### Optional columns
 
 - `vendor`, `label`, `lotNumber`, `purchaseDate` (ISO), `openedDate`, `location` (name — auto-created if it doesn't already exist)
+- `spoolId` — when it matches an existing spool's subdoc `_id`, that spool is **updated in place** instead of a new one being appended, so an export → re-import round-trip is idempotent (GH #159).
+- `instanceId` — the per-spool instance ID (#732). Honored **on CREATE only** (validated for charset/length and uniqueness-checked against other spools, other filaments' top-level ids, and other rows in the same CSV; auto-generated when absent). On the UPDATE path (a matching `spoolId`) the column is informational and the spool keeps its id.
 
-Each row is processed independently; per-row errors are reported in the response without aborting the batch:
+Each row is processed independently; per-row errors are reported in the response without aborting the batch. `created`/`updated` break down the successes (`imported` = their sum) and each ok row carries its `action`:
 
 ```json
 {
   "imported": 12,
+  "created": 9,
+  "updated": 3,
   "failed": 2,
   "results": [
-    { "row": 2, "ok": true, "filament": "PLA Black" },
+    { "row": 2, "ok": true, "action": "created", "filament": "PLA Black" },
     { "row": 3, "ok": false, "error": "No filament named \"Unknown\"" }
   ]
 }
@@ -1357,7 +1368,7 @@ A single request is capped at 10,000 rows by `parseCsv`; beyond that the request
 
 ### GET /api/spools/export-csv
 
-Mirror of `GET /api/filaments/export-csv` for spool inventory. Streams every active spool from every active filament as a single CSV with one row per spool. Columns include `filament`, `vendor`, `label`, `totalWeight`, `lotNumber`, `purchaseDate`, `openedDate`, `location`, and `retired`. Soft-deleted filaments and retired-only spools are excluded by default. Suitable for round-tripping through `POST /api/spools/import` when migrating between instances.
+Mirror of `GET /api/filaments/export-csv` for spool inventory. Streams every spool from every active filament as a single CSV with one row per spool. Round-trippable leading columns (`filament`, `vendor`, `label`, `totalWeight`, `lotNumber`, `purchaseDate`, `openedDate`, `location`) match `POST /api/spools/import`; trailing context columns include `type`, `color`, `spoolWeight`, `netFilamentWeight`, `retired`, `dryCyclesCount`, `lastDriedAt`, `usedGrams`, `createdAt`, the per-spool `instanceId` (#732), `filamentId`, `spoolId`, and `Parent` / `Variant Count`. Only **soft-deleted filaments** are excluded; **retired spools ARE included** and carry `retired: true`. Suitable for round-tripping through `POST /api/spools/import` when migrating between instances.
 
 Response headers: `Content-Type: text/csv` and `Content-Disposition: attachment; filename="spools.csv"`.
 

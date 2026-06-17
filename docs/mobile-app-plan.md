@@ -217,7 +217,7 @@ fall back to QR / manual entry with a clear message.
 | **Set absolute remaining weight** | `PUT …/spools/{spoolId}` `{remainingWeight}` | **new field (§4.3)** |
 | **Create from decoded tag** | `POST /api/filaments` `{tagData, overrides}` | **new variant (§4.4)** |
 | **Optional API-key auth** | `src/proxy.ts` (Next 16 Proxy), `FILAMENTDB_API_KEY` | **new (§4.5)** |
-| Single-spool GET (avoid full filament fetch) | `GET …/spools/{spoolId}` | nice-to-have, skip v1 |
+| Single-spool GET (avoid full filament fetch) | `GET …/spools/{spoolId}` | **shipped** (v1.43; used by `api.getSpool` for `?spool=` deep links) |
 
 ## 7. Stack & repo layout
 
@@ -228,12 +228,14 @@ fall back to QR / manual entry with a clear message.
   `MifareClassic` (Bambu, Android-only, runtime-detected).
 - **`expo-camera` `CameraView`** for QR.
 - **`expo-secure-store`** for base URL + API key.
-- **Repo layout: in-repo npm workspace.** Keep `filament-db` at the repo root unchanged (moving it
-  into `apps/web` would disrupt the Electron release CI + version-bump process). Add the Expo app
-  under **`packages/mobile`** as an npm workspace. Share only a small **types** package
-  (`DecodedOpenPrintTag` + filament/spool DTOs), ideally generated from `public/openapi.json` so the
-  client and API can't drift. No decoder, no `Buffer`, no crypto crosses the boundary — so the
-  classic Expo-monorepo Metro/symlink pain is avoided.
+- **Repo layout: standalone in-repo package (NOT an npm workspace).** Keep `filament-db` at the repo
+  root unchanged (moving it into `apps/web` would disrupt the Electron release CI + version-bump
+  process). The Expo app lives under **`packages/mobile`** as a **self-contained package** with its
+  own `node_modules` + `package-lock.json` — the repo root deliberately has **no `workspaces`**
+  field, so installing the mobile app never touches the web/Electron dependency tree (see
+  `packages/mobile/README.md`). Types are restated client-side (DTOs in `src/lib/types.ts`), ideally
+  later generated from `public/openapi.json`. No decoder, no `Buffer`, no crypto crosses the boundary
+  — and avoiding workspaces also sidesteps the classic Expo-monorepo Metro/symlink pain.
   - Keep the EAS build pipeline isolated from the Electron release CI (`release.yml` / `docker.yml`).
   - Note: `packages/mobile/node_modules` is already gitignored; stage explicit paths (never
     `git add -A`) given the 1.3 GB tree.
@@ -255,7 +257,7 @@ fall back to QR / manual entry with a clear message.
   local network" desktop toggle (v1.45.0, electron-store key `exposeToLan`).
 - ✅ **Offline write queue — Shipped:** `packages/mobile/src/lib/writeQueue.ts` — idempotent, survives
   app restart.
-- **Phase 3 — remaining niceties:** single-spool endpoint, broader inventory management.
+- **Phase 3 — remaining niceties:** broader inventory management. (The single-spool endpoint shipped — `GET /api/spools/{spoolId}`.)
 
 ## 9. Open items
 
