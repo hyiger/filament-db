@@ -74,21 +74,30 @@ reviews = gh(f"/repos/{REPO}/pulls/{PR}/reviews")
 inline = gh(f"/repos/{REPO}/pulls/{PR}/comments")
 issues = gh(f"/repos/{REPO}/issues/{PR}/comments")
 
-# 1) Rate limit (issue comment)
-for c in issues:
-    if is_codex(c["user"]["login"]) and re.search(r"reached your Codex usage limits|usage limit", c["body"], re.I):
-        print("RATELIMIT"); sys.exit(0)
+codex_issue = [c for c in issues if is_codex(c["user"]["login"])]
+codex_reviews = sorted(
+    [r for r in reviews if r.get("user") and is_codex(r["user"]["login"])],
+    key=lambda r: r.get("submitted_at") or "",
+)
+ratelimit_comments = [c for c in codex_issue if re.search(r"reached your Codex usage limits|usage limit", c["body"], re.I)]
+clean_comments = [c for c in codex_issue if re.search(r"didn'?t find any (major )?issues|no major issues", c["body"], re.I)]
 
-# 2) Clean issue comment referencing the current HEAD
-for c in sorted(issues, key=lambda c: c["created_at"], reverse=True):
-    if is_codex(c["user"]["login"]) and re.search(r"didn'?t find any (major )?issues|no major issues", c["body"], re.I):
-        oid = reviewed_oid(c["body"]) or (re.search(r"([0-9a-f]{7,40})", c["body"]) or [None, None])[0]
-        if oid and HEAD.startswith(oid):
-            print("CLEAN", oid); sys.exit(0)
+def newest(ts_list):
+    ts = [t for t in ts_list if t]
+    return max(ts) if ts else ""
 
-# 3) Latest Codex review object — only trust it if it reviewed the current HEAD
-codex_reviews = [r for r in reviews if r.get("user") and is_codex(r["user"]["login"])]
-codex_reviews.sort(key=lambda r: r.get("submitted_at") or "")
+review_time = codex_reviews[-1].get("submitted_at") if codex_reviews else ""
+clean_time = newest([c["created_at"] for c in clean_comments])
+rl_time = newest([c["created_at"] for c in ratelimit_comments])
+
+# 1) Clean issue comment for the current HEAD (the authoritative clean signal).
+for c in sorted(clean_comments, key=lambda c: c["created_at"], reverse=True):
+    oid = reviewed_oid(c["body"]) or (re.search(r"([0-9a-f]{7,40})", c["body"]) or [None, None])[0]
+    if oid and HEAD.startswith(oid):
+        print("CLEAN", oid); sys.exit(0)
+    break  # only the newest clean comment matters
+
+# 2) Latest Codex review object — trust it only if it reviewed the current HEAD.
 if codex_reviews:
     latest = codex_reviews[-1]
     oid = reviewed_oid(latest.get("body"))
@@ -98,16 +107,29 @@ if codex_reviews:
         if latest.get("state") == "CHANGES_REQUESTED" or tied:
             print("FINDINGS", oid, len(tied)); sys.exit(0)
         print("CLEAN", oid); sys.exit(0)
-    else:
-        # Latest review is stale — but a 👍 on the most recent request means clean.
-        reqs = sorted(
-            [c for c in issues if c["body"].strip().lower().startswith("@codex review")],
-            key=lambda c: c["created_at"],
-        )
-        if reqs:
-            rc = gh(f"/repos/{REPO}/issues/comments/{reqs[-1]['id']}/reactions")
-            if any(x.get("content") in ("+1", "hooray", "rocket", "heart") for x in rc):
-                print("CLEAN reaction"); sys.exit(0)
-        print("STALE", oid or "?"); sys.exit(0)
+
+# 3) Rate limit — only if it's Codex's FRESHEST signal. A historical limit hit
+#    that was followed by a successful review/clean comment must NOT block the
+#    gate forever, so require the rate-limit comment to be newer than any review
+#    or clean verdict.
+if rl_time and rl_time >= review_time and rl_time >= clean_time:
+    print("RATELIMIT"); sys.exit(0)
+
+# 4) A Codex 👍 on the most recent review REQUEST means clean (Codex's documented
+#    "no suggestions" behaviour). The request comment must merely CONTAIN
+#    "@codex review" (the skill's request also leads with "Addressed in <sha>…"),
+#    and the reaction must be from Codex itself — a maintainer's 👍 doesn't count.
+requests = sorted(
+    [c for c in issues if "@codex review" in c["body"].lower()],
+    key=lambda c: c["created_at"],
+)
+if requests:
+    rc = gh(f"/repos/{REPO}/issues/comments/{requests[-1]['id']}/reactions")
+    if any(is_codex((x.get("user") or {}).get("login")) and x.get("content") in ("+1", "hooray", "rocket", "heart") for x in rc):
+        print("CLEAN reaction"); sys.exit(0)
+
+# 5) A review exists but it reviewed an older commit (and no fresher verdict).
+if codex_reviews:
+    print("STALE", reviewed_oid(codex_reviews[-1].get("body")) or "?"); sys.exit(0)
 
 print("NONE")
