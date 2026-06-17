@@ -31,13 +31,14 @@ import { isValidIsoDateString, validateSpoolInstanceId } from "@/lib/validateSpo
  *     updated instead of appending a new one. This makes the export →
  *     re-import round-trip idempotent (GH #159 — pre-fix re-importing
  *     an export silently doubled inventory).
- *   instanceId — the spool's own id (#732 Phase 5). Validated for
- *     charset/length and checked for uniqueness (against other spools'
- *     ids, other filaments' top-level ids, AND other rows in this same
- *     CSV). On CREATE it's stamped on the new spool (auto-generated when
- *     absent); on UPDATE a non-empty cell rewrites the matched spool's id
- *     (an empty cell leaves it unchanged). A duplicate or malformed id
- *     fails just that row, side-effect-free.
+ *   instanceId — the spool's own id (#732 Phase 5). Honored on the CREATE
+ *     path ONLY: stamped on the new spool (validated for charset/length and
+ *     uniqueness-checked against other spools' ids, other filaments'
+ *     top-level ids, and other rows in this same CSV; auto-generated when
+ *     absent; a malformed/duplicate id fails just that row, side-effect-free).
+ *     On the UPDATE path (a row whose spoolId matches an existing spool) the
+ *     column is informational and IGNORED — the spool keeps its id. See the
+ *     CONTRACT note at the parse site for the full rationale.
  *
  * Returns a per-row result tagged `created | updated` so the client can
  * show granular success/failure. Does not transactionally roll back on
@@ -259,50 +260,73 @@ export async function POST(request: NextRequest) {
       const openedDate = rawOpened ? new Date(rawOpened) : null;
 
       // #732 Phase 5: optional `instanceId` column — the spool's own id.
-      // Resolve and fully uniqueness-check it HERE, before `resolveLocationId`
-      // auto-creates a Location, so a malformed/duplicate id fails this row
-      // side-effect-free (mirrors the date checks above — Codex P2 on PR #375).
+      // CONTRACT: the column is honored only when CREATING a new spool; on the
+      // UPDATE path (a row whose `spoolId` matches an existing spool) it is
+      // informational and the spool's id is left untouched. Rationale:
+      //   - Pre-Phase-5 exports wrote the FILAMENT-level id into this column for
+      //     EVERY spool row (the bug this phase fixes) AND always emitted
+      //     `spoolId`, so that legacy artifact only ever arrives on an UPDATE
+      //     row. Ignoring it there makes such a CSV round-trip idempotently
+      //     (no id rewritten to the filament id, no within-batch dup) — exactly
+      //     what Codex asked for on PR #742. Keying off the runtime value
+      //     (`rawId === filament.instanceId`) instead was fragile: a legitimate
+      //     carry-over spool's own id EQUALS the filament id, so the value test
+      //     couldn't tell "legacy artifact" from "real id" (two review rounds
+      //     found edge cases). The structural create-vs-update split is exact.
+      //   - A NEW (Phase-5) export round-trips losslessly anyway: an update
+      //     row's spool already holds the id sitting in its (ignored) cell.
+      //   - The spool's id is its stable scan identity; deliberate per-spool id
+      //     edits go through the detail-page editor (PUT /spools/{id}, Phase 4),
+      //     not a bulk-CSV rewrite.
+      // The id resolution/validation/uniqueness runs HERE, before
+      // `resolveLocationId` auto-creates a Location, so a malformed/duplicate id
+      // fails its row side-effect-free (mirrors the date checks above).
       //
-      // Limitation: the DB uniqueness check reads PERSISTED state, and the
-      // within-batch Set only tracks ids freshly CLAIMED this run — neither
-      // models an id RELEASED earlier in the same CSV. So an in-batch id swap
-      // (row A takes row B's id while row B takes A's) or free-then-reuse
-      // (row 1 frees `x`, row 2 claims `x`) fails safely with "already used"
-      // rather than succeeding. Rare for a machine-generated export; a
-      // separate spool-syncId migration is the real fix.
+      // Limitation: the DB uniqueness check reads PERSISTED state and the
+      // within-batch Set only tracks ids freshly CLAIMED this run, so two CREATE
+      // rows in one CSV claiming the same explicit id fail the second safely
+      // ("already used") rather than succeeding. Rare for a machine export.
+      //
+      // Known transitional edge: a PRE-Phase-5 export (filament-level id in
+      // every row) imported into a FRESH DB hits the CREATE path for every row,
+      // so a multi-spool filament's rows all carry the same id → the first
+      // creates, the rest fail loudly as within-batch dups. This is NOT the
+      // backup-restore path (full restores go through /api/snapshot/restore,
+      // which preserves spool ids verbatim); spool CSV import is for
+      // incremental bulk-add. Remedy: re-export with the current version (each
+      // row then carries its spool's own id) or drop the instanceId column.
       const incomingSpoolId = (r.spoolId || "").trim();
       let incomingInstanceId: string | undefined;
       if ("instanceId" in r) {
         const rawId = unsanitizeCsvCell((r.instanceId || "").trim());
-        // Empty cell = "leave unchanged" on update / auto-generate on create;
-        // only a non-empty cell is a real id to validate + claim.
         if (rawId !== "") {
-          const idCheck = validateSpoolInstanceId(rawId);
-          if (!idCheck.ok) {
-            rowResults[i] = { row: i + 2, ok: false, error: idCheck.error };
-            continue;
-          }
-          incomingInstanceId = idCheck.value;
-
-          // Locate the spool this row would touch (round-trip dedup by subdoc
-          // _id) so we can let it keep its own id and exclude itself from the
-          // uniqueness check. Read from the bucket doc when an earlier row
-          // already hydrated this filament — two rows for the same _id can
-          // resolve via different cache keys to SEPARATE instances (#546), and
-          // the mutation always lands on `bucket.doc`. Reading the same
-          // instance here keeps `keepsOwnId` consistent with what gets saved;
-          // falling back to `resolved` on the first touch is equivalent
-          // (both freshly reflect persisted state).
-          const docForCheck =
-            touched.get(String(resolved._id))?.doc ?? resolved;
-          const existingForCheck = incomingSpoolId
-            ? (docForCheck.spools as unknown as {
+          // Determine create-vs-update by locating the spool this row targets.
+          // A pure persisted-existence question (the column only changes
+          // behavior on CREATE), so reading `resolved` is correct regardless of
+          // the #546 dual-instance split — a row can only reference a spool _id
+          // that already exists in the DB, which every instance of the filament
+          // sees identically. The mutation itself still lands on `bucket.doc`
+          // in the update/create branch below.
+          const existingSpool = incomingSpoolId
+            ? (resolved.spools as unknown as {
                 id(id: string): Record<string, unknown> | null;
               }).id(incomingSpoolId)
             : null;
-          const keepsOwnId =
-            !!existingForCheck && existingForCheck.instanceId === incomingInstanceId;
-          if (!keepsOwnId) {
+
+          // UPDATE path → leave the existing spool's id untouched (see CONTRACT).
+          // CREATE path → honor the supplied id: validate, then uniqueness-check
+          // against other spools, other filaments' top-level ids, and other
+          // rows in this CSV (the Set, since freshly minted ids aren't persisted
+          // until the batched save). `ownFilamentId` permits the legitimate
+          // self-filament carry-over collision.
+          if (!existingSpool) {
+            const idCheck = validateSpoolInstanceId(rawId);
+            if (!idCheck.ok) {
+              rowResults[i] = { row: i + 2, ok: false, error: idCheck.error };
+              continue;
+            }
+            incomingInstanceId = idCheck.value;
+
             if (claimedInstanceIds.has(incomingInstanceId)) {
               rowResults[i] = {
                 row: i + 2,
@@ -311,13 +335,10 @@ export async function POST(request: NextRequest) {
               };
               continue;
             }
-            const excludeSpoolId = existingForCheck
-              ? String(existingForCheck._id)
-              : undefined;
             if (
               await isSpoolInstanceIdTaken(
                 incomingInstanceId,
-                excludeSpoolId,
+                undefined,
                 String(resolved._id),
               )
             ) {
@@ -328,8 +349,8 @@ export async function POST(request: NextRequest) {
               };
               continue;
             }
+            claimedInstanceIds.add(incomingInstanceId);
           }
-          claimedInstanceIds.add(incomingInstanceId);
         }
       }
 
@@ -404,11 +425,9 @@ export async function POST(request: NextRequest) {
             partialUpdate.openedDate = openedDate && !isNaN(+openedDate) ? openedDate : null;
           }
           if ("location" in r) partialUpdate.locationId = locationId || null;
-          // #732 Phase 5: rewrite the id only when a non-empty `instanceId`
-          // cell was given (already validated + uniqueness-checked above). An
-          // empty/absent cell leaves the spool's existing id untouched — a
-          // spool must always keep an id.
-          if (incomingInstanceId !== undefined) partialUpdate.instanceId = incomingInstanceId;
+          // #732 Phase 5: the spool's id is intentionally NOT updated here — the
+          // `instanceId` column is honored on CREATE only (see the CONTRACT note
+          // where the column is parsed). An existing spool keeps its id.
           Object.assign(existing, partialUpdate);
           action = "updated";
         }
