@@ -1,0 +1,24 @@
+# EAS Build upload scope (repo root).
+#
+# EAS Build archives the GIT REPOSITORY ROOT, not the directory eas.json lives
+# in. The only EAS-built app in this monorepo is packages/mobile, so without
+# this file every `eas build` would upload the entire Next.js + Electron
+# desktop app too. .easignore uses .gitignore syntax and overrides .gitignore
+# for EAS uploads; it is read only by the EAS CLI and affects nothing else.
+#
+# Whitelist just packages/mobile (the "ignore everything except one subdir"
+# idiom: ignore each level, then re-include the path down to the app).
+/*
+!packages/
+packages/*
+!packages/mobile/
+
+# Within the mobile app, still drop heavy/generated dirs that EAS regenerates
+# on its build servers (these are also in packages/mobile/.gitignore, but
+# .easignore must restate them since it replaces .gitignore for EAS).
+packages/mobile/node_modules/
+packages/mobile/ios/
+packages/mobile/android/
+packages/mobile/.expo/
+packages/mobile/dist/
+packages/mobile/web-build/
