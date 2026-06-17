@@ -4674,7 +4674,7 @@
           "Spools"
         ],
         "summary": "Export spools as CSV",
-        "description": "Exports one row per spool with round-trippable columns for filament, vendor, label, total weight, lot number, dates, and location.",
+        "description": "Exports one row per spool with round-trippable columns for filament, vendor, label, total weight, lot number, dates, and location. The `instanceId` column carries each spool's OWN per-spool id (#732 Phase 5) — distinct per row — so re-importing the file preserves each roll's identity.",
         "responses": {
           "200": {
             "description": "Spool CSV",
@@ -4695,7 +4695,7 @@
           "Spools"
         ],
         "summary": "Import spools from CSV",
-        "description": "Bulk-creates spools from CSV. Required columns are filament and totalWeight; vendor can disambiguate, and location names are created when missing.",
+        "description": "Bulk-creates or updates spools from CSV. Required columns are filament and totalWeight; vendor can disambiguate, location names are created when missing, and a spoolId column updates an existing spool in place (idempotent re-import). The optional `instanceId` column (#732 Phase 5) sets each spool's own id — validated for charset/length and checked for uniqueness against other spools' ids, other filaments' top-level ids, and other rows in the same CSV; absent/empty means auto-generate on create or leave unchanged on update. A malformed or duplicate id fails just that row.",
         "requestBody": {
           "required": true,
           "content": {
