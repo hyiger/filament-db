@@ -861,6 +861,92 @@
         }
       }
     },
+    "/api/filaments/{id}/openprinttag/link": {
+      "post": {
+        "tags": [
+          "Filaments"
+        ],
+        "summary": "Link a filament to an OpenPrintTag material",
+        "description": "Links an existing filament to an OpenPrintTag material so it can use the check-for-updates re-sync loop (Issue #753). Same-origin guarded. Writes only the OpenPrintTag reference (settings.openprinttag_slug/_uuid) and the provenance snapshot (openprinttagSnapshot) — no field value is changed, so a variant's inherited values are never clobbered. A subsequent check classifies each managed field (unedited-equal-to-OPT → adopt, diverged → conflict).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FilamentId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "slug"
+                ],
+                "properties": {
+                  "slug": {
+                    "type": "string",
+                    "description": "The OpenPrintTag material slug to link."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Link established + fresh document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "linked": {
+                      "type": "boolean"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "filament": {
+                      "$ref": "#/components/schemas/Filament"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or empty slug",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request rejected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Filament not found, or the slug is not (or no longer) in the OpenPrintTag database",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/filaments/{id}/calibration": {
       "get": {
         "tags": [
@@ -5423,7 +5509,7 @@
           "OpenPrintTag"
         ],
         "summary": "Import OpenPrintTag materials",
-        "description": "Import selected OpenPrintTag materials into Filament DB. Materials are upserted by name (not name+vendor). If a filament with the same name exists under a different vendor, the import is skipped with an error.",
+        "description": "Import selected OpenPrintTag materials into Filament DB. Bulk mode (no parentId): materials are upserted by name (not name+vendor); if a filament with the same name exists under a different vendor, the import is skipped with an error. Variant mode (parentId set — Issue #753): imports exactly one slug as a variant of the given parent, keeping only the fields that differ from the parent (the rest inherit) and linking the variant to the material for later re-sync; a name collision is refused (409) rather than re-parenting an existing row.",
         "requestBody": {
           "required": true,
           "content": {
@@ -5439,6 +5525,10 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "parentId": {
+                    "type": "string",
+                    "description": "Optional. When set, imports exactly one slug as a VARIANT of this filament, pruning fields equal to the parent so they inherit. The parent must exist, be active, and not itself be a variant."
                   }
                 }
               }
@@ -5447,7 +5537,7 @@
         },
         "responses": {
           "200": {
-            "description": "Import result",
+            "description": "Import result. In variant mode the body also includes the created `filament`.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5457,7 +5547,17 @@
             }
           },
           "400": {
-            "description": "Missing slugs or database not loaded",
+            "description": "Missing slugs or database not loaded; or (variant mode) more than one slug, a missing/invalid parent, or a parent that is itself a variant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Variant mode: a filament with the imported material's name already exists",
             "content": {
               "application/json": {
                 "schema": {

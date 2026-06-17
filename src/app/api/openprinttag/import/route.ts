@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import {
   fetchOpenPrintTagDatabase,
   mapToFilamentPayload,
 } from "@/lib/openprinttagBrowser";
-import { buildOptSnapshot } from "@/lib/optResync";
+import {
+  buildOptLinkUpdate,
+  buildOptSnapshot,
+  pruneOptPayloadAgainstParent,
+} from "@/lib/optResync";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
 
@@ -14,11 +19,17 @@ import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
  *
  * Import selected OpenPrintTag materials into Filament DB.
  *
- * Request body: { slugs: string[] }
+ * Request body: { slugs: string[], parentId?: string }
  *
- * For each slug, the material is fetched from the cached OpenPrintTag
- * database, mapped to the Filament schema, and created or updated
- * (upsert by name + vendor).
+ * Bulk mode (no `parentId`): for each slug, the material is fetched from the
+ * cached OpenPrintTag database, mapped to the Filament schema, and created or
+ * updated (upsert by name + vendor).
+ *
+ * Variant mode (`parentId` set — Issue #753, approach A): imports exactly ONE
+ * slug AS A VARIANT of `parentId`, pulling only the fields DISTINCT from the
+ * parent onto the variant (everything identical to the parent is left to
+ * inherit dynamically). The variant is linked to the OPT material so it can use
+ * the "Check for updates" re-sync loop afterwards.
  */
 export async function POST(request: NextRequest) {
   const guard = assertSameOriginRequest(request);
@@ -56,6 +67,13 @@ export async function POST(request: NextRequest) {
     }
 
     await dbConnect();
+
+    // Issue #753 (approach A): variant mode — import a single material as a
+    // variant of an existing parent, pulling only its distinct fields.
+    const parentId = body.parentId;
+    if (parentId != null && parentId !== "") {
+      return importAsVariant(slugs, parentId);
+    }
 
     // Get the cached database (should already be cached from the browse page)
     const db = await fetchOpenPrintTagDatabase();
@@ -99,16 +117,11 @@ export async function POST(request: NextRequest) {
         // race where two concurrent imports could both see "no existing"
         // and both try to create, causing a duplicate-key error.
 
-        // Always include the OpenPrintTag reference in settings
-        const optUpdateFields: Record<string, unknown> = {
-          "settings.openprinttag_uuid":
-            (payload.settings as Record<string, string>).openprinttag_uuid,
-          "settings.openprinttag_slug":
-            (payload.settings as Record<string, string>).openprinttag_slug,
-          // GH #607: refresh the provenance snapshot on every (re-)import so
-          // an existing row's snapshot stays current with the upstream offer.
-          openprinttagSnapshot: optSnapshot,
-        };
+        // Always include the OpenPrintTag reference in settings + refresh the
+        // GH #607 provenance snapshot on every (re-)import so an existing row's
+        // snapshot stays current with the upstream offer. Shared with the
+        // variant-import + link routes via buildOptLinkUpdate.
+        const optUpdateFields: Record<string, unknown> = buildOptLinkUpdate(payload);
 
         // Build conditional updates: only set fields that are currently null.
         const conditionalDefaults: Record<string, unknown> = {};
@@ -277,5 +290,99 @@ export async function POST(request: NextRequest) {
       { error: "Import failed", detail: err instanceof Error ? err.message : "Unknown error" },
       { status: 500 },
     );
+  }
+}
+
+/**
+ * Issue #753 (approach A): import ONE OpenPrintTag material as a VARIANT of an
+ * existing parent. Only fields distinct from the parent land on the variant —
+ * everything identical is pruned so it inherits dynamically (resolveFilament).
+ * The variant is created linked (settings.openprinttag_* + snapshot) so it can
+ * use the re-sync loop. Create-only: a name collision is refused, never
+ * silently updating / re-parenting another row.
+ */
+async function importAsVariant(slugs: string[], parentId: string) {
+  if (typeof parentId !== "string" || !mongoose.isValidObjectId(parentId)) {
+    return NextResponse.json({ error: "'parentId' must be a valid filament id" }, { status: 400 });
+  }
+  if (slugs.length !== 1) {
+    return NextResponse.json(
+      { error: "Variant import takes exactly one slug (a variant has a single parent)" },
+      { status: 400 },
+    );
+  }
+
+  // Parent must exist, be active, and not itself be a variant (no nested
+  // inheritance) — mirrors the create route's parent validation.
+  const parent = await Filament.findOne({ _id: parentId, _deletedAt: null }).lean();
+  if (!parent) {
+    return NextResponse.json({ error: "Parent filament not found" }, { status: 400 });
+  }
+  if (parent.parentId) {
+    return NextResponse.json(
+      { error: "Cannot set a variant as parent (no nested inheritance)" },
+      { status: 400 },
+    );
+  }
+
+  const db = await fetchOpenPrintTagDatabase();
+  const material = db.materials.find((m) => m.slug === slugs[0]);
+  if (!material) {
+    return NextResponse.json(
+      { error: "No matching material found for the provided slug" },
+      { status: 404 },
+    );
+  }
+
+  const payload = mapToFilamentPayload(material);
+  // Snapshot the FULL OPT offer BEFORE pruning: a field we prune (the variant
+  // inherits it) must still carry provenance, so if the user later overrides it
+  // a re-check classifies it correctly instead of as a no-provenance conflict.
+  const snapshot = buildOptSnapshot(payload);
+  const name = payload.name as string;
+
+  // Refuse a name collision rather than updating / re-parenting an existing
+  // row — a "create variant" action must never mutate another filament.
+  const collision = await Filament.findOne({ name, _deletedAt: null }).lean();
+  if (collision) {
+    return NextResponse.json(
+      { error: `A filament named "${name}" already exists — rename it, or import it without a parent.` },
+      { status: 409 },
+    );
+  }
+
+  // Prune against the parent's effective values (the parent is a root, so its
+  // stored values ARE its effective values). Strict equality only — a value
+  // that merely resembles the parent's is kept as the variant's distinct data.
+  const variantPayload = pruneOptPayloadAgainstParent(
+    payload,
+    parent as unknown as Record<string, unknown>,
+  );
+  variantPayload.parentId = parentId;
+  variantPayload.openprinttagSnapshot = snapshot;
+  // diameter is hardcoded 1.75 by mapToFilamentPayload (not real OPT data) —
+  // null it so the variant inherits the parent's diameter (GH #106), exactly
+  // as the create route does for variants.
+  variantPayload.diameter = null;
+
+  try {
+    const created = await Filament.create(variantPayload);
+    return NextResponse.json({
+      message: `Imported "${name}" as a variant`,
+      total: 1,
+      created: 1,
+      updated: 0,
+      filament: created,
+    });
+  } catch (createErr) {
+    // A concurrent create can win the unique-name race between the collision
+    // check and here — surface it as a 409, never leak the raw E11000.
+    if (isDuplicateKeyError(createErr)) {
+      return NextResponse.json(
+        { error: `A filament named "${name}" already exists — rename it, or import it without a parent.` },
+        { status: 409 },
+      );
+    }
+    throw createErr;
   }
 }
