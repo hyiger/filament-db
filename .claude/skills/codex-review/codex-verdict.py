@@ -157,7 +157,9 @@ head_requests = sorted(
 if head_requests:
     rc = gh(f"repos/{REPO}/issues/comments/{head_requests[-1]['id']}/reactions")
     if any(is_codex(x.get("user")) and x.get("content") in ("+1", "hooray", "rocket", "heart") for x in rc):
-        print("CLEAN reaction"); sys.exit(0)
+        # The request is already HEAD-tied (names_head), so emit the standard
+        # `CLEAN <oid>` contract (not a bare "reaction") for the poller/operator.
+        print("CLEAN", HEAD[:10]); sys.exit(0)
 
 # 5) Codex weighed in, but its latest verdict is for an OLDER commit (a review
 #    for a non-HEAD SHA, or a clean comment for one — which may exist with NO
