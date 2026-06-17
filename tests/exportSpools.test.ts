@@ -206,8 +206,31 @@ describe("getSpoolExportRows", () => {
     const row = rows[0];
     expect(row.filamentId).toBe(filament._id.toString());
     expect(row.spoolId).toBe(filament.spools[0]._id.toString());
-    expect(row.instanceId).toBe(filament.instanceId);
+    // #732 Phase 5: instanceId is the SPOOL's own id, not the filament-level one.
+    expect(row.instanceId).toBe(filament.spools[0].instanceId);
     expect(row.instanceId.length).toBeGreaterThan(0);
+  });
+
+  it("#732 Phase 5: each spool row carries its OWN instanceId (not the filament's)", async () => {
+    const filament = await Filament.create({
+      name: "Multi-spool export",
+      vendor: "Test",
+      type: "PLA",
+      spools: [
+        { label: "A", totalWeight: 1000 },
+        { label: "B", totalWeight: 900 },
+      ],
+    });
+    const rows = (await getSpoolExportRows()).filter(
+      (r) => r.filamentId === filament._id.toString(),
+    );
+    expect(rows).toHaveLength(2);
+    const a = filament.spools[0].instanceId;
+    const b = filament.spools[1].instanceId;
+    expect(new Set(rows.map((r) => r.instanceId))).toEqual(new Set([a, b]));
+    // Distinct per spool, and never the filament-level id.
+    expect(a).not.toBe(b);
+    expect(rows.every((r) => r.instanceId !== filament.instanceId)).toBe(true);
   });
 
   // Matches the parent/variant exposure added to exportFilaments — the spool

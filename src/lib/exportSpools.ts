@@ -191,7 +191,9 @@ export async function getSpoolExportRows(): Promise<SpoolExportRow[]> {
         lastDriedAt: isoDateTime(lastDried),
         usedGrams,
         createdAt: isoDateTime(spool.createdAt),
-        instanceId: filament.instanceId ?? "",
+        // #732 Phase 5: the SPOOL's own id (per-spool identity), not the
+        // filament-level id — so a spool CSV round-trips each roll's id.
+        instanceId: spool.instanceId ?? "",
         filamentId: filament._id.toString(),
         spoolId: spool._id ? spool._id.toString() : "",
         parentName: parentDoc?.name ?? null,
