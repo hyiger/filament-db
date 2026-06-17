@@ -29,7 +29,7 @@
 import QRCode from "qrcode";
 import { PRINT_HEAD_DOTS } from "./labelEncoder";
 import {
-  composeLabelLines,
+  composeWrappedLabelLines,
   FONT_STACKS,
   FONT_SIZE_DOTS,
   type LabelFilament,
@@ -179,7 +179,11 @@ async function composeLabelCanvas(opts: RenderLabelOpts): Promise<HTMLCanvasElem
     format.qr.enabled && qrPayload ? await renderQr(qrPayload, ec, MAX_QR_DOTS) : null;
   const qrDots = qrCanvas ? qrCanvas.width : 0;
 
-  const lines = composeLabelLines(filament, format);
+  // #745: composeWrappedLabelLines word-wraps each field across up to
+  // format.maxLinesPerField lines (default 1 = no wrap, identical to
+  // composeLabelLines) so a long OpenPrintTag name no longer prints as one
+  // crazy-long line. The font auto-shrink below fits the resulting lines.
+  const lines = composeWrappedLabelLines(filament, format);
   const baseFontPx = Math.floor(FONT_SIZE_DOTS[format.font.size] / LINE_LEADING);
   const textBlock = renderTextBlock(lines, FONT_STACKS[format.font.family], baseFontPx, format.orientation);
 

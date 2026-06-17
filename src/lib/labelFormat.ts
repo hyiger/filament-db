@@ -27,7 +27,15 @@ export interface LabelFormat {
   orientation: LabelOrientation;
   /** White text on a black background. */
   invert: boolean;
+  /** #745: max lines a single field's text may word-wrap across. 1 = no wrap
+   *  (one line per field, the pre-#745 behaviour). Up to MAX_LINES_PER_FIELD —
+   *  lets a long OpenPrintTag name spread over several lines instead of one
+   *  crazy-long line. The renderer shrinks the font so the wrapped lines fit. */
+  maxLinesPerField: number;
 }
+
+/** Upper bound for the per-field word-wrap (the reporter's "not exceed 3 lines"). */
+export const MAX_LINES_PER_FIELD = 3;
 
 /** The subset of a filament the label can display. */
 export interface LabelFilament {
@@ -44,6 +52,7 @@ export const DEFAULT_LABEL_FORMAT: LabelFormat = {
   font: { family: "sans", size: "m" },
   orientation: "horizontal",
   invert: false,
+  maxLinesPerField: 1,
 };
 
 /** Curated font families → safe CSS stacks (no bundled fonts; identical across OSes). */
@@ -94,6 +103,44 @@ export function composeLabelLines(filament: LabelFilament, format: LabelFormat):
     .filter((s) => s.length > 0);
 }
 
+/**
+ * #745: word-wrap a single field's text into at most `maxLines` lines,
+ * BALANCED so each line carries roughly the same number of words, with any
+ * remainder going on the FIRST lines (the reporter's "divide words by N,
+ * remainder to the first lines"). Pure string math — no width measurement; the
+ * canvas renderer shrinks the font so the wrapped lines fit the print head.
+ *
+ * A single unbreakable token (or maxLines <= 1) returns one line unchanged — a
+ * 40-char single word still goes on one line, which is correct for word-wrap.
+ */
+export function wrapLabelLine(text: string, maxLines: number): string[] {
+  const trimmed = text.trim();
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length <= 1 || maxLines <= 1) return [trimmed];
+  const lineCount = Math.min(maxLines, words.length);
+  const base = Math.floor(words.length / lineCount);
+  const rem = words.length % lineCount;
+  const out: string[] = [];
+  let i = 0;
+  for (let line = 0; line < lineCount; line++) {
+    const take = base + (line < rem ? 1 : 0); // first `rem` lines get one extra
+    out.push(words.slice(i, i + take).join(" "));
+    i += take;
+  }
+  return out;
+}
+
+/**
+ * Like `composeLabelLines`, but each field's value is word-wrapped into up to
+ * `format.maxLinesPerField` lines (#745), then flattened top→bottom. With the
+ * default `maxLinesPerField === 1` this returns exactly what `composeLabelLines`
+ * does, so the un-wrapped path is unchanged.
+ */
+export function composeWrappedLabelLines(filament: LabelFilament, format: LabelFormat): string[] {
+  const maxLines = format.maxLinesPerField ?? 1;
+  return composeLabelLines(filament, format).flatMap((s) => wrapLabelLine(s, maxLines));
+}
+
 const FONT_FAMILIES: LabelFontFamily[] = ["sans", "serif", "mono", "condensed"];
 const FONT_SIZES: LabelFontSize[] = ["s", "m", "l"];
 const FIELD_IDS: LabelFieldId[] = ["name", "vendor", "type", "vendorType", "colorName"];
@@ -134,5 +181,17 @@ export function normalizeLabelFormat(input: unknown): LabelFormat {
       DEFAULT_LABEL_FORMAT.orientation,
     ),
     invert: typeof o.invert === "boolean" ? o.invert : DEFAULT_LABEL_FORMAT.invert,
+    maxLinesPerField: clampInt(
+      o.maxLinesPerField,
+      1,
+      MAX_LINES_PER_FIELD,
+      DEFAULT_LABEL_FORMAT.maxLinesPerField,
+    ),
   };
+}
+
+/** Coerce a value to an integer in [min, max]; fall back when not a finite number. */
+function clampInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, Math.round(value)));
 }

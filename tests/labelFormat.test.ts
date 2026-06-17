@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
   composeLabelLines,
+  composeWrappedLabelLines,
+  wrapLabelLine,
   normalizeLabelFormat,
   DEFAULT_LABEL_FORMAT,
   LABEL_PRESETS,
+  MAX_LINES_PER_FIELD,
   SAMPLE_FILAMENT,
   type LabelFormat,
 } from "../src/lib/labelFormat";
@@ -90,7 +93,84 @@ describe("normalizeLabelFormat", () => {
       font: { family: "condensed", size: "l" },
       orientation: "vertical",
       invert: true,
+      maxLinesPerField: 2,
     };
     expect(normalizeLabelFormat(JSON.parse(JSON.stringify(f)))).toEqual(f);
+  });
+
+  it("#745: defaults maxLinesPerField to 1 and clamps to [1, MAX]", () => {
+    expect(normalizeLabelFormat({}).maxLinesPerField).toBe(1);
+    expect(normalizeLabelFormat({ maxLinesPerField: 3 }).maxLinesPerField).toBe(3);
+    // Out of range / wrong type → clamp or fall back.
+    expect(normalizeLabelFormat({ maxLinesPerField: 0 }).maxLinesPerField).toBe(1);
+    expect(normalizeLabelFormat({ maxLinesPerField: 99 }).maxLinesPerField).toBe(MAX_LINES_PER_FIELD);
+    expect(normalizeLabelFormat({ maxLinesPerField: 2.6 }).maxLinesPerField).toBe(3); // rounded
+    expect(normalizeLabelFormat({ maxLinesPerField: "x" }).maxLinesPerField).toBe(1);
+  });
+});
+
+describe("wrapLabelLine (#745)", () => {
+  it("returns the text unchanged when maxLines <= 1 or one/zero words", () => {
+    expect(wrapLabelLine("Polymaker Panchroma PLA", 1)).toEqual(["Polymaker Panchroma PLA"]);
+    expect(wrapLabelLine("Polymaker", 3)).toEqual(["Polymaker"]);
+    expect(wrapLabelLine("  ", 3)).toEqual([""]);
+    // A single unbreakable token can't wrap, even past maxLines.
+    expect(wrapLabelLine("Supercalifragilistic", 3)).toEqual(["Supercalifragilistic"]);
+  });
+
+  it("balances words across lines, remainder on the FIRST lines (reporter's examples)", () => {
+    // 6 words / 3 lines → 2 each.
+    expect(wrapLabelLine("Polymaker Panchroma™ Gradient Matte PLA Wood", 3)).toEqual([
+      "Polymaker Panchroma™",
+      "Gradient Matte",
+      "PLA Wood",
+    ]);
+    // 7 words / 3 lines → 3,2,2 (extra on the first line).
+    expect(wrapLabelLine("Polymaker Panchroma™ Dual Matte PLA Sunrise (Red-Yellow)", 3)).toEqual([
+      "Polymaker Panchroma™ Dual",
+      "Matte PLA",
+      "Sunrise (Red-Yellow)",
+    ]);
+    // 6 words / 3 lines → 2 each.
+    expect(wrapLabelLine("Prusament PLA Blend Viva La Bronze", 3)).toEqual([
+      "Prusament PLA",
+      "Blend Viva",
+      "La Bronze",
+    ]);
+  });
+
+  it("never produces more lines than there are words", () => {
+    expect(wrapLabelLine("Alpha Beta", 3)).toEqual(["Alpha", "Beta"]); // 2 words, maxLines 3 → 2 lines
+    expect(wrapLabelLine("a b c d e", 2)).toEqual(["a b c", "d e"]); // 5 words / 2 → 3,2
+  });
+});
+
+describe("composeWrappedLabelLines (#745)", () => {
+  const fmt = (over: Partial<LabelFormat>): LabelFormat => ({
+    ...DEFAULT_LABEL_FORMAT,
+    ...over,
+  });
+
+  it("equals composeLabelLines when maxLinesPerField === 1 (default)", () => {
+    const f = fmt({ lines: ["name"], maxLinesPerField: 1 });
+    const fil = { name: "Polymaker Panchroma Gradient Matte PLA Wood" };
+    expect(composeWrappedLabelLines(fil, f)).toEqual(composeLabelLines(fil, f));
+    expect(composeWrappedLabelLines(fil, f)).toEqual(["Polymaker Panchroma Gradient Matte PLA Wood"]);
+  });
+
+  it("wraps each field and flattens top→bottom in field order", () => {
+    const f = fmt({ lines: ["vendor", "name"], maxLinesPerField: 2 });
+    const fil = { vendor: "Prusa Polymers", name: "Galaxy Black Edition" };
+    expect(composeWrappedLabelLines(fil, f)).toEqual([
+      "Prusa", // vendor: 2 words / 2 lines
+      "Polymers",
+      "Galaxy Black", // name: 3 words / 2 lines → 2,1
+      "Edition",
+    ]);
+  });
+
+  it("still drops empty fields before wrapping", () => {
+    const f = fmt({ lines: ["vendor", "name"], maxLinesPerField: 3 });
+    expect(composeWrappedLabelLines({ name: "Solo Name Here" }, f)).toEqual(["Solo", "Name", "Here"]);
   });
 });

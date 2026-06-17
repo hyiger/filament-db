@@ -6,6 +6,7 @@ import { useLabelFormat } from "@/hooks/useLabelFormat";
 import { renderLabelPreviewDataUrl } from "@/lib/labelBitmap";
 import {
   LABEL_PRESETS,
+  MAX_LINES_PER_FIELD,
   SAMPLE_FILAMENT,
   normalizeLabelFormat,
   type LabelFieldId,
@@ -208,6 +209,24 @@ export default function LabelFormatEditor() {
             <option value="s">{t("settings.labelFormat.size.s")}</option>
             <option value="m">{t("settings.labelFormat.size.m")}</option>
             <option value="l">{t("settings.labelFormat.size.l")}</option>
+          </select>
+        </div>
+
+        {/* Word wrap (max lines per field) — #745 */}
+        <div>
+          <label className={labelCls} htmlFor="lf-maxlines">{t("settings.labelFormat.maxLines")}</label>
+          <select
+            id="lf-maxlines"
+            className={`${selectCls} w-full mt-1`}
+            value={format.maxLinesPerField}
+            onChange={(e) => update({ maxLinesPerField: Number(e.target.value) })}
+          >
+            <option value={1}>{t("settings.labelFormat.maxLines.off")}</option>
+            {Array.from({ length: MAX_LINES_PER_FIELD - 1 }, (_, i) => i + 2).map((n) => (
+              <option key={n} value={n}>
+                {t("settings.labelFormat.maxLines.lines", { count: n })}
+              </option>
+            ))}
           </select>
         </div>
 
