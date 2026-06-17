@@ -803,6 +803,36 @@ describe("/api/spools/import", () => {
       expect(fresh.spools).toHaveLength(0);
     });
 
+    it("#546 dual-instance: two rows for the same spool+id succeed regardless of vendor-column presence", async () => {
+      // Two rows for the SAME filament resolve via different cache keys (one
+      // omits vendor, one supplies it) → separate Mongoose instances for one
+      // _id. Both address the SAME spool with the SAME new id. The check must
+      // read the bucket instance (where row 1's mutation landed), not a fresh
+      // `resolved`, or row 2 would be wrongly rejected as a within-batch dup
+      // and its weight update lost.
+      const f = await Filament.create({
+        name: "DualInst",
+        vendor: "VendG",
+        type: "PLA",
+        spools: [{ label: "S", totalWeight: 1000 }],
+      });
+      const spoolId = String(f.spools[0]._id);
+
+      const csv =
+        "filament,vendor,totalWeight,spoolId,instanceId\n" +
+        `DualInst,,800,${spoolId},gnew000001\n` + // no vendor → instance A
+        `DualInst,VendG,900,${spoolId},gnew000001\n`; // vendor → instance B
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(2);
+      expect(body.failed).toBe(0);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools).toHaveLength(1);
+      expect(fresh.spools[0].instanceId).toBe("gnew000001");
+      expect(fresh.spools[0].totalWeight).toBe(900); // last write wins, not dropped
+    });
+
     it("rejects the SECOND of two rows claiming the same instanceId within one CSV", async () => {
       // Within-batch dedup: the first row's new id isn't persisted until the
       // post-loop save(), so the DB check can't catch the collision — the

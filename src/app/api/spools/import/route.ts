@@ -262,8 +262,14 @@ export async function POST(request: NextRequest) {
       // Resolve and fully uniqueness-check it HERE, before `resolveLocationId`
       // auto-creates a Location, so a malformed/duplicate id fails this row
       // side-effect-free (mirrors the date checks above — Codex P2 on PR #375).
-      // The mutation is applied later against the bucket doc; this block is
-      // read-only against persisted state via `resolved`.
+      //
+      // Limitation: the DB uniqueness check reads PERSISTED state, and the
+      // within-batch Set only tracks ids freshly CLAIMED this run — neither
+      // models an id RELEASED earlier in the same CSV. So an in-batch id swap
+      // (row A takes row B's id while row B takes A's) or free-then-reuse
+      // (row 1 frees `x`, row 2 claims `x`) fails safely with "already used"
+      // rather than succeeding. Rare for a machine-generated export; a
+      // separate spool-syncId migration is the real fix.
       const incomingSpoolId = (r.spoolId || "").trim();
       let incomingInstanceId: string | undefined;
       if ("instanceId" in r) {
@@ -280,9 +286,17 @@ export async function POST(request: NextRequest) {
 
           // Locate the spool this row would touch (round-trip dedup by subdoc
           // _id) so we can let it keep its own id and exclude itself from the
-          // uniqueness check. Read-only lookup against the persisted doc.
+          // uniqueness check. Read from the bucket doc when an earlier row
+          // already hydrated this filament — two rows for the same _id can
+          // resolve via different cache keys to SEPARATE instances (#546), and
+          // the mutation always lands on `bucket.doc`. Reading the same
+          // instance here keeps `keepsOwnId` consistent with what gets saved;
+          // falling back to `resolved` on the first touch is equivalent
+          // (both freshly reflect persisted state).
+          const docForCheck =
+            touched.get(String(resolved._id))?.doc ?? resolved;
           const existingForCheck = incomingSpoolId
-            ? (resolved.spools as unknown as {
+            ? (docForCheck.spools as unknown as {
                 id(id: string): Record<string, unknown> | null;
               }).id(incomingSpoolId)
             : null;
