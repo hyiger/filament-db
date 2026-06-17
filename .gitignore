@@ -52,3 +52,7 @@ next-env.d.ts
 
 # backfill-spools rollback logs (scripts/backfill-spools.ts --apply)
 backfill-spools-*.json
+
+# Python bytecode (skill scripts)
+__pycache__/
+*.pyc
