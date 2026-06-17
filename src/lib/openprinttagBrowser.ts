@@ -689,9 +689,17 @@ let inFlightFetch: Promise<OPTDatabase> | null = null;
 
 /**
  * Clear the cached database (useful for forcing a refresh).
+ *
+ * #743 (Codex P1): clears ONLY the cached result — NOT `inFlightFetch`. The
+ * refresh-POST path calls this and then re-fetches; if a cold load is still
+ * running, forgetting (not cancelling) the in-flight promise would let the
+ * refetch start a SECOND download+parse instead of joining the running one,
+ * and the older load's `finally` could later clobber the newer in-flight/cache
+ * state — reintroducing the duplicate cold parses this fix prevents. Leaving
+ * `inFlightFetch` intact means a refresh joins any in-progress load (which is
+ * itself a fresh download), or starts a clean one when none is running.
  */
 export function clearCache(): void {
   cachedDatabase = null;
   cacheTimestamp = 0;
-  inFlightFetch = null;
 }

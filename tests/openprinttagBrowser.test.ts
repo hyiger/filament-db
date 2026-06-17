@@ -901,4 +901,24 @@ type: Resin
     const db = await fetchOpenPrintTagDatabase();
     expect(db.totalFFF).toBe(1);
   });
+
+  it("#743: clearCache during an in-flight load doesn't start a duplicate fetch", async () => {
+    // Codex P1: a refresh (clearCache + refetch) while a cold load is still
+    // running must JOIN that load, not start a second download+parse. clearCache
+    // therefore must NOT forget the in-flight promise.
+    const tarballPath = mockFetchTarball({
+      "OpenPrintTag-cc/data/brands/.gitkeep": "",
+      "OpenPrintTag-cc/data/materials/m.yaml":
+        "uuid: m\nslug: m\nbrand:\n  slug: x\nname: M\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+
+    const p1 = fetchOpenPrintTagDatabase(); // starts the load (sets inFlightFetch)
+    clearCache(); // refresh clears the cached RESULT mid-flight
+    const p2 = fetchOpenPrintTagDatabase(); // must join the running load
+    const [a, b] = await Promise.all([p1, p2]);
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1); // joined, not duplicated
+    expect(a).toBe(b);
+  });
 });
