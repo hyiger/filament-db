@@ -711,6 +711,7 @@
   "openprinttag.fetchingDescription": "Ca. 11.000 Materialdateien werden von GitHub heruntergeladen und verarbeitet.\nDies kann beim ersten Laden 10–30 Sekunden dauern (danach 1 Stunde gecacht).",
   "openprinttag.failedToLoadDatabase": "Datenbank konnte nicht geladen werden",
   "openprinttag.failedToLoad": "OpenPrintTag-Datenbank konnte nicht geladen werden",
+  "openprinttag.loadTimeout": "Zeitüberschreitung beim Laden — die Datenbank wird möglicherweise noch auf dem Server heruntergeladen. Warte einen Moment und versuche es erneut.",
   "openprinttag.retry": "Erneut versuchen",
   "openprinttag.importFailed": "Import fehlgeschlagen",
   "openprinttag.importFailedNetwork": "Import fehlgeschlagen: Netzwerkfehler",

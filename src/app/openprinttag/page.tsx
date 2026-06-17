@@ -401,12 +401,18 @@ export default function OpenPrintTagBrowser() {
     async (refresh = false) => {
       setLoading(true);
       setError(null);
+      // #743: bound the request so a stalled/slow cold fetch on the server
+      // surfaces a retryable error instead of an infinite spinner ("never
+      // returns"). The server caches the result, so a retry after a timeout
+      // picks up the in-progress single-flight load once it completes.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 90_000);
       try {
         // GH #427: refresh moved from `GET ?refresh=true` to POST so
         // the cache-mutation isn't a GET-with-side-effect.
         const res = refresh
-          ? await fetch("/api/openprinttag", { method: "POST" })
-          : await fetch("/api/openprinttag");
+          ? await fetch("/api/openprinttag", { method: "POST", signal: controller.signal })
+          : await fetch("/api/openprinttag", { signal: controller.signal });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));
           throw new Error(data.error || `HTTP ${res.status}`);
@@ -414,9 +420,14 @@ export default function OpenPrintTagBrowser() {
         const data: OPTDatabase = await res.json();
         setDb(data);
       } catch (err) {
-        setError(String(err));
-        toast(t("openprinttag.failedToLoad"), "error");
+        const timedOut = err instanceof DOMException && err.name === "AbortError";
+        setError(timedOut ? t("openprinttag.loadTimeout") : String(err));
+        toast(
+          timedOut ? t("openprinttag.loadTimeout") : t("openprinttag.failedToLoad"),
+          "error",
+        );
       } finally {
+        clearTimeout(timeout);
         setLoading(false);
       }
     },

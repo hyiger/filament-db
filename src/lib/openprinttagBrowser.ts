@@ -13,7 +13,8 @@
  */
 
 import { parse as parseYaml } from "yaml";
-import { mkdtempSync, readFileSync, rmSync, readdirSync, statSync } from "fs";
+import { mkdtempSync, rmSync } from "fs";
+import { readFile, readdir } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { Readable } from "node:stream";
@@ -405,14 +406,17 @@ export function mapToFilamentPayload(
 
 /**
  * Walk a directory recursively, yielding file paths.
+ *
+ * #743: async (fs/promises) rather than readdirSync/statSync so the recursive
+ * walk over the OpenPrintTag tree (~11k material files) doesn't block the
+ * embedded server's single event loop on a cold parse.
  */
-function walkDir(dir: string): string[] {
+async function walkDir(dir: string): Promise<string[]> {
   const results: string[] = [];
-  for (const entry of readdirSync(dir)) {
-    const full = join(dir, entry);
-    const stat = statSync(full);
-    if (stat.isDirectory()) {
-      results.push(...walkDir(full));
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...(await walkDir(full)));
     } else {
       results.push(full);
     }
@@ -441,6 +445,23 @@ export async function fetchOpenPrintTagDatabase(): Promise<OPTDatabase> {
     return cachedDatabase;
   }
 
+  // #743: single-flight. On a fresh install the cache is empty, and the page
+  // auto-fetches on mount — a reload / re-navigation / second tab would each
+  // otherwise kick off an independent GitHub download + tar extract + ~11k-file
+  // parse, piling up on the one embedded-server event loop and compounding the
+  // freeze. Share ONE in-progress load; clear it in `finally` (success OR
+  // failure) so a failed cold load doesn't leave a rejected promise that every
+  // later caller awaits forever.
+  if (inFlightFetch) return inFlightFetch;
+  inFlightFetch = runFetchWithRetries();
+  try {
+    return await inFlightFetch;
+  } finally {
+    inFlightFetch = null;
+  }
+}
+
+async function runFetchWithRetries(): Promise<OPTDatabase> {
   const MAX_ATTEMPTS = 3;
   let lastError: unknown = null;
 
@@ -565,7 +586,7 @@ async function fetchAndParse(tmpDir: string): Promise<OPTDatabase> {
     );
 
     // The tarball extracts to a subdirectory like OpenPrintTag-openprinttag-database-<sha>/
-    const extracted = readdirSync(tmpDir);
+    const extracted = await readdir(tmpDir);
     if (extracted.length === 0) throw new Error("Tarball extraction produced no files");
     const repoRoot = join(tmpDir, extracted[0]);
 
@@ -573,9 +594,9 @@ async function fetchAndParse(tmpDir: string): Promise<OPTDatabase> {
     const brandMap = new Map<string, { name: string; country?: string }>();
     const brandsDir = join(repoRoot, "data", "brands");
     try {
-      for (const file of readdirSync(brandsDir)) {
+      for (const file of await readdir(brandsDir)) {
         if (!file.endsWith(".yaml")) continue;
-        const content = readFileSync(join(brandsDir, file), "utf-8");
+        const content = await readFile(join(brandsDir, file), "utf-8");
         const brand = parseBrandYaml(content);
         if (brand) brandMap.set(brand.slug, { name: brand.name, country: brand.country });
       }
@@ -583,16 +604,25 @@ async function fetchAndParse(tmpDir: string): Promise<OPTDatabase> {
       // brands dir may not exist in some edge cases
     }
 
-    // Parse materials
+    // Parse materials. #743: async file reads + a periodic event-loop yield so
+    // this ~11k-file parse doesn't block the embedded server's single event
+    // loop (which would freeze the WHOLE app — every other tab/route — on a
+    // cold fetch, the reported symptom). parseYaml itself is synchronous, so we
+    // also yield via setImmediate every YIELD_EVERY files to break up CPU bursts.
     const materials: OPTMaterial[] = [];
     let totalSLA = 0;
     const materialsDir = join(repoRoot, "data", "materials");
-    const allFiles = walkDir(materialsDir);
+    const allFiles = await walkDir(materialsDir);
 
+    const YIELD_EVERY = 256;
+    let seen = 0;
     for (const filePath of allFiles) {
       if (!filePath.endsWith(".yaml")) continue;
+      if (++seen % YIELD_EVERY === 0) {
+        await new Promise<void>((resolve) => setImmediate(resolve));
+      }
       try {
-        const content = readFileSync(filePath, "utf-8");
+        const content = await readFile(filePath, "utf-8");
         const raw = parseYaml(content) as Record<string, unknown>;
         if (!raw || !raw.class) continue;
 
@@ -654,6 +684,8 @@ async function fetchAndParse(tmpDir: string): Promise<OPTDatabase> {
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 let cachedDatabase: OPTDatabase | null = null;
 let cacheTimestamp = 0;
+// #743: in-progress fetch shared by concurrent callers (single-flight).
+let inFlightFetch: Promise<OPTDatabase> | null = null;
 
 /**
  * Clear the cached database (useful for forcing a refresh).
@@ -661,4 +693,5 @@ let cacheTimestamp = 0;
 export function clearCache(): void {
   cachedDatabase = null;
   cacheTimestamp = 0;
+  inFlightFetch = null;
 }

@@ -711,6 +711,7 @@
   "openprinttag.fetchingDescription": "Downloading and parsing ~11,000 material files from GitHub.\nThis may take 10–30 seconds on first load (cached for 1 hour after).",
   "openprinttag.failedToLoadDatabase": "Failed to load database",
   "openprinttag.failedToLoad": "Failed to load OpenPrintTag database",
+  "openprinttag.loadTimeout": "Loading timed out — the database may still be downloading on the server. Wait a moment and try again.",
   "openprinttag.retry": "Retry",
   "openprinttag.importFailed": "Import failed",
   "openprinttag.importFailedNetwork": "Import failed: network error",

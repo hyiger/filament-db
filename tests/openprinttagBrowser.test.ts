@@ -858,4 +858,47 @@ type: Resin
       /404|Not Found|GitHub tarball/,
     );
   });
+
+  it("#743: single-flight — concurrent callers share ONE fetch", async () => {
+    // On a fresh install the cache is empty and the page auto-fetches; a
+    // reload / second tab must not each kick off an independent
+    // download+extract+parse. Concurrent calls share one in-flight load.
+    const tarballPath = mockFetchTarball({
+      "OpenPrintTag-sf/data/brands/.gitkeep": "",
+      "OpenPrintTag-sf/data/materials/m.yaml":
+        "uuid: m\nslug: m\nbrand:\n  slug: x\nname: M\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+
+    const [a, b] = await Promise.all([
+      fetchOpenPrintTagDatabase(),
+      fetchOpenPrintTagDatabase(),
+    ]);
+
+    // Without single-flight this would be 2 (each call fetches independently).
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(a).toBe(b); // both callers get the same resolved object
+  });
+
+  it("#743: a failed cold load doesn't wedge later calls (in-flight cleared on reject)", async () => {
+    // Every attempt fails and there's no cache to fall back on (clean install),
+    // so the first call rejects. The in-flight promise must be cleared so a
+    // later call RE-ATTEMPTS rather than awaiting the dead rejected promise.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("nope", { status: 503, statusText: "Service Unavailable" }),
+    );
+    await expect(fetchOpenPrintTagDatabase()).rejects.toThrow();
+
+    // Now the server recovers — a subsequent call must succeed, not hang on a
+    // stale rejected promise.
+    vi.restoreAllMocks();
+    const tarballPath = mockFetchTarball({
+      "OpenPrintTag-recover/data/brands/.gitkeep": "",
+      "OpenPrintTag-recover/data/materials/m.yaml":
+        "uuid: m\nslug: m\nbrand:\n  slug: x\nname: M\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+    const db = await fetchOpenPrintTagDatabase();
+    expect(db.totalFFF).toBe(1);
+  });
 });
