@@ -22,7 +22,7 @@ Present the report grouped by file, severity-ranked, each with the doc's claim, 
 
 ## Acting on the report
 - **Audit only:** stop at the report (the literal meaning of "audit").
-- **Fix as a PR (the #727/#748 pattern):** branch off main, apply the fixes (each mirrors a verified finding), open ONE `docs:` PR, and take it through the `codex-review` gate before merging. Group commits by file/theme.
+- **Fix as a PR (the #727/#748 pattern):** branch off main, apply the fixes (each mirrors a verified finding), open ONE `docs:` PR, and take it through Codex review before merging — push, comment `@codex review`, and iterate until Codex's review of the current HEAD is clean (the user-level `codex-review` skill automates that loop if you have it installed). Group commits by file/theme.
 
 ## Sequencing caveat
 Don't document a feature whose files only exist on an unmerged PR — that's itself drift. If a finding references something landing in another open PR, fix it **in that PR** (its natural home) or defer until that PR merges to main.

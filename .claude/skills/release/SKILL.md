@@ -15,7 +15,7 @@ End-to-end release for this repo. The version lives in **three** files but the b
 ## Pre-flight
 1. Be on a clean `main` that's up to date (`git checkout main && git pull --ff-only`).
 2. Confirm `main` CI is green (`gh run list --branch main --workflow=test.yml --limit 1`).
-3. **Optional drift check:** run the `docs-audit` skill (or at least skim CLAUDE.md's last version section vs. what shipped) so the release doesn't go out with stale docs. Land any doc fixes via a normal PR (through the `codex-review` gate) BEFORE tagging.
+3. **Optional drift check:** run the `docs-audit` skill (or at least skim CLAUDE.md's last version section vs. what shipped) so the release doesn't go out with stale docs. Land any doc fixes via a normal PR — taken through Codex review (push → `@codex review` → iterate until the review of HEAD is clean) — BEFORE tagging.
 4. Decide the semver `X.Y.Z`.
 
 ## Bump → merge
