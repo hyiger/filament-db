@@ -520,4 +520,50 @@ describe("snapshot route — Location + PrintHistory round-trip", () => {
     expect(all).toHaveLength(1);
     expect(all[0].name).toBe("Survivor PLA");
   });
+
+  /**
+   * #732 Phase 5: filaments are snapshotted whole, so each embedded spool's
+   * per-spool `instanceId` must survive a full GET → restore round-trip.
+   * No special handling exists for it — this guards that none is ever
+   * needed (e.g. if a future change started projecting spool subfields).
+   */
+  it("snapshot/restore round-trip preserves each spool's instanceId (#732 Phase 5)", async () => {
+    const seed = await Filament.create({
+      name: "Snapshot Spools",
+      vendor: "T",
+      type: "PLA",
+      spools: [
+        { label: "A", totalWeight: 1000, instanceId: "snap-roll-1" },
+        { label: "B", totalWeight: 900, instanceId: "snap-roll-2" },
+      ],
+    });
+    const ids = (seed.spools as { instanceId: string }[]).map((s) => s.instanceId);
+    expect(ids).toEqual(["snap-roll-1", "snap-roll-2"]);
+
+    // Export, then feed the GET output straight back into the restore.
+    const getRes = await GET(new NextRequest("http://localhost/api/snapshot"));
+    const snapshot = await getRes.json();
+    const exported = snapshot.collections.filaments.find(
+      (f: { name: string }) => f.name === "Snapshot Spools",
+    );
+    expect(exported.spools.map((s: { instanceId: string }) => s.instanceId)).toEqual([
+      "snap-roll-1",
+      "snap-roll-2",
+    ]);
+
+    const res = await POST(
+      new NextRequest("http://localhost/api/snapshot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(snapshot),
+      }),
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Filament.findOne({ name: "Snapshot Spools" }).lean();
+    expect(fresh.spools.map((s: { instanceId: string }) => s.instanceId)).toEqual([
+      "snap-roll-1",
+      "snap-roll-2",
+    ]);
+  });
 });

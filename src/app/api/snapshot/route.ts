@@ -81,6 +81,10 @@ function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
  * and shared catalogs. Timestamps, _ids, and references are preserved
  * so the snapshot can be restored as-is.
  *
+ * #732 Phase 5: filaments are exported whole (embedded spools included),
+ * so each spool's per-spool `instanceId` round-trips with no special
+ * handling — restore re-hydrates the subdoc through the Filament schema.
+ *
  * Note on JSON keys: `bedTypes`, `printHistory`, and `sharedCatalogs`
  * are camelCase keys in the JSON shape, but the restore writes go
  * through the corresponding Mongoose models (BedType, PrintHistory,

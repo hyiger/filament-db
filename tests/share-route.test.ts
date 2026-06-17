@@ -196,6 +196,10 @@ describe("/api/share", () => {
             lotNumber: "SECRET-LOT-42",
             purchaseDate: new Date("2025-01-01"),
             openedDate: new Date("2025-02-01"),
+            // #732 Phase 5: the per-spool id is private inventory state and
+            // must never reach a public share (it identifies a physical roll
+            // and is what NFC/QR scans resolve against).
+            instanceId: "secret-spool-id-99",
           },
         ],
       });
@@ -222,8 +226,12 @@ describe("/api/share", () => {
       expect(shared.totalWeight).toBeUndefined();
 
       // Serialised payload as a string must not contain the secret lot number
-      // (guards against re-adding a leaky field by another name).
-      expect(JSON.stringify(saved.payload)).not.toContain("SECRET-LOT-42");
+      // or the per-spool instanceId (guards against re-adding a leaky field
+      // by another name, and against a future change projecting spool
+      // subfields back onto the shared profile — #732 Phase 5).
+      const serialized = JSON.stringify(saved.payload);
+      expect(serialized).not.toContain("SECRET-LOT-42");
+      expect(serialized).not.toContain("secret-spool-id-99");
     });
   });
 
