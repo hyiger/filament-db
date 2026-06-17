@@ -3,7 +3,7 @@
   "info": {
     "title": "Filament DB API",
     "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports.",
-    "version": "1.50.0",
+    "version": "1.51.0",
     "license": {
       "name": "AGPL-3.0-or-later",
       "url": "https://www.gnu.org/licenses/agpl-3.0.html"
@@ -1444,15 +1444,25 @@
                       "nullable": true,
                       "description": "The spool whose instanceId matched the tag (#732), or null when the hit was filament-level or heuristic.",
                       "properties": {
-                        "_id": { "type": "string" },
-                        "instanceId": { "type": "string" },
-                        "label": { "type": "string" }
+                        "_id": {
+                          "type": "string"
+                        },
+                        "instanceId": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        }
                       }
                     },
                     "matchedBy": {
                       "type": "string",
                       "nullable": true,
-                      "enum": ["instanceId", "heuristic", null],
+                      "enum": [
+                        "instanceId",
+                        "heuristic",
+                        null
+                      ],
                       "description": "\"instanceId\" when the tag's spool_uid matched a per-spool spools[].instanceId (matchedSpool set) or the filament-level instanceId; \"heuristic\" for a name / vendor+type match; null when nothing matched."
                     },
                     "candidates": {
@@ -1542,9 +1552,15 @@
                       "nullable": true,
                       "description": "The spool whose instanceId matched the query (#732), or null when the hit was filament-level or heuristic.",
                       "properties": {
-                        "_id": { "type": "string" },
-                        "instanceId": { "type": "string" },
-                        "label": { "type": "string" }
+                        "_id": {
+                          "type": "string"
+                        },
+                        "instanceId": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        }
                       }
                     },
                     "candidates": {
