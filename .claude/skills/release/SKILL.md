@@ -40,9 +40,12 @@ End-to-end release for this repo. The version lives in **three** files but the b
    ```
    gh release edit vX.Y.Z --notes-file .release-notes-X.Y.Z.md
    ```
-9. Wait for the **`release.yml` workflow run** to finish (6 build jobs + `merge-mac-metadata`). **Assets appearing ≠ release done** — wait for the run, not just the release-created event.
+9. The `v*` tag triggers **TWO** workflows — wait for **both** to finish `completed/success`. **Assets/release appearing ≠ release done** — wait for the runs.
+   - **`release.yml`** — the desktop installers (6 build jobs + `merge-mac-metadata`).
+   - **`docker.yml`** — the multi-arch GHCR image (incl. the `latest` tag). If this fails or lags, Docker users stay on the old image even though the desktop release is live.
    ```
    gh run list --workflow=release.yml --limit 1   # poll until completed/success
+   gh run list --workflow=docker.yml  --limit 1   # poll until completed/success
    ```
 
 ## Verify (don't skip)
@@ -51,7 +54,12 @@ End-to-end release for this repo. The version lives in **three** files but the b
     gh release download vX.Y.Z -p latest-mac.yml -D /tmp/relchk --clobber
     grep -E '\.zip' /tmp/relchk/latest-mac.yml   # must show -mac-x64.zip AND -mac-arm64.zip
     ```
-11. Report: version live, notes applied, both arches present.
+11. **Confirm the GHCR image published** for this version (so Docker users get it):
+    ```
+    gh run list --workflow=docker.yml --limit 1   # completed/success
+    # optionally: docker manifest inspect ghcr.io/hyiger/filament-db:<X.Y.Z>
+    ```
+12. Report: version live, notes applied, both mac arches present, Docker image published.
 
 ## Gotchas
 - The bump goes through a PR (branch protection forbids direct pushes to `main`); don't try to `git push` the version commit directly.
