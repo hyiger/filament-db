@@ -16,7 +16,7 @@ A **clean Codex review of the current HEAD is a HARD gate for merging** any PR i
 
    @codex review"
    ```
-   On the first open, Codex auto-fires, so the explicit request is redundant-but-harmless.
+   On the first open, Codex auto-fires, so the explicit request is redundant-but-harmless. **Include the new HEAD short-SHA** in the body (`Addressed in <sha>`): it ties the request to HEAD so the detector can safely accept a Codex 👍-reaction as clean only when it was earned by the current commit.
 3. **Poll the verdict** with the bundled detector (commit-aware — see Gotchas):
    ```
    python3 .claude/skills/codex-review/codex-verdict.py <PR> <HEAD_full_sha>
@@ -24,11 +24,12 @@ A **clean Codex review of the current HEAD is a HARD gate for merging** any PR i
    Run it on a cadence (background loop, ~45s between polls; Codex usually answers in a few minutes). Terminal states: `CLEAN`, `FINDINGS`, `RATELIMIT`. Keep polling on `STALE` / `NONE`.
 4. **Act on the verdict:**
    - `CLEAN <oid>` (oid == HEAD) → gate satisfied. Confirm CI is green (`gh pr checks <PR>`), then the PR is mergeable. **Do not merge unless the user has greenlit the merge** — getting clean ≠ permission to merge.
-   - `FINDINGS <oid> <n>` → read the inline comments, fix each, reply to the threads explaining the fix, push, and **go back to step 2**. Read them with:
+   - `FINDINGS <oid> <n>` → read the findings, fix each, reply to the threads explaining the fix, push, and **go back to step 2**. Read the inline comments with:
      ```
      RID=$(gh api repos/<owner/repo>/pulls/<PR>/reviews --jq '[.[] | select(.user.login|test("codex";"i"))] | sort_by(.submitted_at) | last | .id')
      gh api repos/<owner/repo>/pulls/<PR>/comments --jq ".[] | select(.pull_request_review_id == $RID) | {path, line, body}"
      ```
+     **If `<n>` is 0**, the findings are in the review BODY (no inline anchors) — read it: `gh api repos/<owner/repo>/pulls/<PR>/reviews --jq ".[] | select(.id == $RID) | .body"`.
      Reply to a thread: `gh api repos/<owner/repo>/pulls/<PR>/comments/<comment_id>/replies -f body="Fixed in <sha>. <how>"`
      (Use the relative `repos/…` endpoint form — `gh api /repos/…` fails on Windows.)
    - `RATELIMIT` → do NOT merge and do NOT substitute green-CI for the gate. Wait for the limit to reset, then re-request and resume polling.

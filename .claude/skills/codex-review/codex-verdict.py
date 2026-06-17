@@ -2,29 +2,33 @@
 """Commit-aware Codex review verdict for a PR.
 
 Codex's review state is subtle and easy to misread — this script encodes the
-gotchas learned the hard way:
+rules learned the hard way (and hardened by adversarial review):
 
-  * A CLEAN review is an ISSUE COMMENT ("Codex Review: Didn't find any major
-    issues. Reviewed commit `<oid>`") — NOT a PR review object. A watcher that
-    only polls /pulls/{n}/reviews will wait forever on a clean PR.
-  * FINDINGS are a PR REVIEW object (state COMMENTED/CHANGES_REQUESTED, body
-    "Here are some automated review suggestions") plus inline comments. The
-    inline comments are tied to that review via `pull_request_review_id` — do
-    NOT key off comment.commit_id, which GitHub re-anchors to the new HEAD on a
-    stale finding.
-  * Codex sometimes RE-REVIEWS A STALE COMMIT — its "Reviewed commit" line is
-    the previous SHA. Re-posting `@codex review` does NOT dislodge it; only a
-    NEW push does. So always gate the verdict on reviewed-commit == HEAD.
-  * A clean re-review can arrive as a 👍 REACTION on the `@codex review`
-    request comment instead of a new comment.
-  * Bot login is `chatgpt-codex-connector` in GraphQL, `chatgpt-codex-connector[bot]`
-    in REST — match the substring "codex" to cover both.
+  * The CLEAN signal is an ISSUE COMMENT ("Codex Review: Didn't find any major
+    issues. Reviewed commit `<oid>`") or a 👍 REACTION — NEVER a PR review
+    object. Codex never submits an APPROVED review.
+  * A PR REVIEW OBJECT therefore always means FINDINGS (its suggestions may be
+    inline comments tied via `pull_request_review_id`, OR in the review body).
+    A review carries a stable `commit_id` (the commit it reviewed).
+  * FINDINGS on the current HEAD are STICKY (worst-wins): a later clean comment
+    or a benign 0-inline review can never clear an earlier HEAD findings review.
+    (Safe direction: at worst this blocks merging a HEAD Codex later re-cleared
+    in place — recover by pushing a new commit.)
+  * Codex re-reviews STALE commits — gate every verdict on the current HEAD.
+    Match a review by `commit_id`; match a clean comment ONLY via its explicit
+    "Reviewed commit" line (never guess a SHA from arbitrary body text); require
+    >= 9 SHA chars to avoid prefix-collision false matches.
+  * A clean 👍 reaction is trusted only when it's a CODEX reaction on a request
+    tied to the current HEAD (its body names a SHA HEAD starts with) — otherwise
+    a 👍 earned by an earlier commit would pass the gate for unreviewed changes.
+  * Bot identity is pinned (`chatgpt-codex-connector[bot]`, type "Bot") — a
+    "codex" substring login is spoofable on a public PR.
 
 Output (one line):
-  CLEAN <oid>            -- gate satisfied: clean review of the current HEAD
-  FINDINGS <oid> <n>     -- a review of HEAD with n inline findings to address
-  RATELIMIT              -- Codex usage limit hit; wait for reset
-  STALE <oid>            -- latest review is for an older commit; push/wait
+  CLEAN <oid>            -- gate satisfied: clean review/reaction of HEAD
+  FINDINGS <oid> <n>     -- a review of HEAD; n inline findings (read body too if 0)
+  RATELIMIT              -- Codex usage limit is the freshest signal; wait for reset
+  STALE <oid>            -- latest verdict is for an older commit; push/wait
   NONE                   -- no Codex activity yet
 
 Usage: codex-verdict.py <PR> <HEAD_full_sha> [owner/repo]
@@ -37,12 +41,12 @@ if len(sys.argv) < 3:
     sys.exit(2)
 
 PR = sys.argv[1]
-HEAD = sys.argv[2]
+HEAD = sys.argv[2].lower()
 REPO = sys.argv[3] if len(sys.argv) > 3 else None
 
 def gh(path):
-    # Use the relative endpoint form (no leading "/"): on Windows `gh api`
-    # rejects an endpoint that looks like an absolute filesystem path.
+    # Relative endpoint form (no leading "/"): on Windows `gh api` rejects an
+    # endpoint that looks like an absolute filesystem path.
     path = path.lstrip("/")
     out = subprocess.run(["gh", "api", path, "--paginate"], capture_output=True, text=True)
     if out.returncode != 0:
@@ -66,12 +70,9 @@ if REPO is None:
         sys.exit(2)
     REPO = r.stdout.strip()
 
-# The Codex actor's identity — REST gives `chatgpt-codex-connector[bot]` (type
-# "Bot"); the bare form appears in GraphQL. A substring match on "codex" is
-# SPOOFABLE on a public PR (a human could register a "codex"-ish login and post
-# a fake "Didn't find any issues" comment to bypass the gate), so pin the exact
-# identity. The `[bot]` suffix is itself unspoofable (brackets aren't valid in a
-# human username); `type == "Bot"` is the belt-and-suspenders check.
+# Pin the Codex actor: the `[bot]` login is unspoofable (brackets aren't valid
+# in a human username) and `type == "Bot"` confirms it. A substring match on
+# "codex" would let a public-PR user spoof a clean verdict.
 CODEX_LOGINS = {"chatgpt-codex-connector[bot]", "chatgpt-codex-connector"}
 
 def is_codex(user):
@@ -80,94 +81,89 @@ def is_codex(user):
     login = user.get("login")
     return login in CODEX_LOGINS and (login.endswith("[bot]") or user.get("type") == "Bot")
 
-def reviewed_oid(body):
-    m = re.search(r"Reviewed commit:\**\s*`?([0-9a-f]{7,40})`?", body or "")
-    return m.group(1) if m else None
+def body_of(x):
+    return x.get("body") or ""  # REST can return body: null (hidden/deleted)
 
-reviews = gh(f"/repos/{REPO}/pulls/{PR}/reviews")
-inline = gh(f"/repos/{REPO}/pulls/{PR}/comments")
-issues = gh(f"/repos/{REPO}/issues/{PR}/comments")
+def reviewed_oid(body):
+    m = re.search(r"Reviewed commit:\**\s*`?([0-9a-f]{7,40})`?", body or "", re.I)
+    return m.group(1).lower() if m else None
+
+MIN_SHA = 9  # reject sub-9-char SHAs — a short prefix can collide with HEAD.
+
+def matches_head(oid):
+    return bool(oid) and len(oid) >= MIN_SHA and HEAD.startswith(oid.lower())
+
+def names_head(body):
+    # True if the text contains a >=9-char hex SHA that HEAD starts with.
+    return any(HEAD.startswith(m.lower()) for m in re.findall(r"[0-9a-f]{9,40}", body or "", re.I))
+
+reviews = gh(f"repos/{REPO}/pulls/{PR}/reviews")
+inline = gh(f"repos/{REPO}/pulls/{PR}/comments")
+issues = gh(f"repos/{REPO}/issues/{PR}/comments")
 
 codex_issue = [c for c in issues if is_codex(c.get("user"))]
-codex_reviews = sorted(
-    [r for r in reviews if is_codex(r.get("user"))],
-    key=lambda r: r.get("submitted_at") or "",
-)
-ratelimit_comments = [c for c in codex_issue if re.search(r"reached your Codex usage limits|usage limit", c["body"], re.I)]
-clean_comments = [c for c in codex_issue if re.search(r"didn'?t find any (major )?issues|no major issues", c["body"], re.I)]
+codex_reviews = sorted([r for r in reviews if is_codex(r.get("user"))], key=lambda r: r.get("submitted_at") or "")
+ratelimit_comments = [c for c in codex_issue if re.search(r"reached your Codex usage limits|usage limit", body_of(c), re.I)]
+clean_comments = [c for c in codex_issue if re.search(r"didn'?t find any (major )?issues|no major issues", body_of(c), re.I)]
 
-def newest(ts_list):
-    ts = [t for t in ts_list if t]
-    return max(ts) if ts else ""
-
-def first_sha(body):
-    m = re.search(r"([0-9a-f]{7,40})", body or "")
-    return m.group(1) if m else None
-
-# Resolve the verdicts that pertain to the CURRENT HEAD, with their timestamps,
-# then report whichever is FRESHEST — so a stale (older-commit) review never
-# overrides a HEAD verdict, AND a clean comment never masks a NEWER HEAD review
-# that has findings (e.g. an auto-review says clean, then `@codex review`
-# returns suggestions on the same commit).
-head_clean_time = ""
-for c in clean_comments:
-    oid = reviewed_oid(c["body"]) or first_sha(c["body"])
-    if oid and HEAD.startswith(oid):
-        head_clean_time = max(head_clean_time, c["created_at"])
-
-# A review's `commit_id` is the STABLE record of the commit it reviewed (set at
-# submit time; unlike an inline comment's commit_id it isn't re-anchored). Use
-# it to classify the review — a findings review whose body omits the "Reviewed
-# commit" line would otherwise never match HEAD and the findings would be hidden.
-head_review = None  # (submitted_at, findings_count, has_findings)
-for r in codex_reviews:  # ascending; the last HEAD review wins
-    oid = r.get("commit_id") or reviewed_oid(r.get("body"))
-    if oid and (HEAD == oid or HEAD.startswith(oid)):
+# HEAD findings are STICKY: any non-APPROVED Codex review on HEAD = findings
+# (Codex never APPROVEs). Worst-wins — a later clean comment / benign review
+# never clears it.
+head_findings = False
+head_findings_count = 0
+for r in codex_reviews:
+    oid = r.get("commit_id") or reviewed_oid(body_of(r))
+    if matches_head(oid):
         tied = [c for c in inline if is_codex(c.get("user")) and c.get("pull_request_review_id") == r["id"]]
-        has_findings = r.get("state") == "CHANGES_REQUESTED" or bool(tied)
-        head_review = (r.get("submitted_at") or "", len(tied), has_findings)
+        if r.get("state") != "APPROVED" or tied:
+            head_findings = True
+            head_findings_count = max(head_findings_count, len(tied))
 
-# 1) Decide between the HEAD clean-comment and the HEAD review by recency.
-if head_review and (not head_clean_time or head_review[0] >= head_clean_time):
-    if head_review[2]:
-        print("FINDINGS", HEAD[:10], head_review[1]); sys.exit(0)
-    print("CLEAN", HEAD[:10]); sys.exit(0)
-if head_clean_time:
+# Clean issue comment for HEAD — bound ONLY via the explicit "Reviewed commit"
+# line, never a guessed body token.
+head_clean = any(matches_head(reviewed_oid(body_of(c))) for c in clean_comments)
+
+# 1) Findings on HEAD win unconditionally (worst-wins).
+if head_findings:
+    print("FINDINGS", HEAD[:10], head_findings_count); sys.exit(0)
+
+# 2) Clean comment for HEAD.
+if head_clean:
     print("CLEAN", HEAD[:10]); sys.exit(0)
 
-# 2) Rate limit — only if it's Codex's FRESHEST signal. A historical limit hit
-#    later followed by a successful review/clean comment must NOT block the gate
-#    forever, so require it to be newer than any review or clean verdict.
+# 3) Rate limit — only if it's Codex's FRESHEST signal (a historical limit hit
+#    later followed by a verdict must not block the gate forever).
+def newest(ts):
+    ts = [t for t in ts if t]
+    return max(ts) if ts else ""
 review_time = codex_reviews[-1].get("submitted_at") if codex_reviews else ""
-clean_time = newest([c["created_at"] for c in clean_comments])
-rl_time = newest([c["created_at"] for c in ratelimit_comments])
+clean_time = newest([c.get("created_at") for c in clean_comments])
+rl_time = newest([c.get("created_at") for c in ratelimit_comments])
 if rl_time and rl_time >= review_time and rl_time >= clean_time:
     print("RATELIMIT"); sys.exit(0)
 
-# 4) A Codex 👍 on the most recent review REQUEST means clean (Codex's documented
-#    "no suggestions" behaviour). The request comment must merely CONTAIN
-#    "@codex review" (the skill's request also leads with "Addressed in <sha>…"),
-#    and the reaction must be from Codex itself — a maintainer's 👍 doesn't count.
-requests = sorted(
-    [c for c in issues if "@codex review" in c["body"].lower()],
-    key=lambda c: c["created_at"],
+# 4) A CODEX 👍 on a review REQUEST tied to the CURRENT HEAD means clean. The
+#    request body must name HEAD (the skill's "Addressed in <sha>") so a 👍
+#    earned by an earlier commit can't pass the gate for unreviewed changes.
+head_requests = sorted(
+    [c for c in issues if "@codex review" in body_of(c).lower() and names_head(body_of(c))],
+    key=lambda c: c.get("created_at") or "",
 )
-if requests:
-    rc = gh(f"/repos/{REPO}/issues/comments/{requests[-1]['id']}/reactions")
+if head_requests:
+    rc = gh(f"repos/{REPO}/issues/comments/{head_requests[-1]['id']}/reactions")
     if any(is_codex(x.get("user")) and x.get("content") in ("+1", "hooray", "rocket", "heart") for x in rc):
         print("CLEAN reaction"); sys.exit(0)
 
-# 5) Codex has weighed in, but its latest verdict is for an OLDER commit — a
-#    review for a non-HEAD SHA OR a clean comment for one (which may exist with
-#    NO review objects at all). Report STALE (push a new commit) rather than
-#    NONE (poll forever).
+# 5) Codex weighed in, but its latest verdict is for an OLDER commit (a review
+#    for a non-HEAD SHA, or a clean comment for one — which may exist with NO
+#    review objects). Report STALE (push a new commit) rather than NONE.
 stale = []
 if codex_reviews:
     r = codex_reviews[-1]
-    stale.append((r.get("submitted_at") or "", r.get("commit_id") or reviewed_oid(r.get("body")) or "?"))
+    stale.append((r.get("submitted_at") or "", r.get("commit_id") or reviewed_oid(body_of(r)) or "?"))
 if clean_comments:
-    c = max(clean_comments, key=lambda c: c["created_at"])
-    stale.append((c["created_at"], reviewed_oid(c["body"]) or first_sha(c["body"]) or "?"))
+    c = max(clean_comments, key=lambda c: c.get("created_at") or "")
+    stale.append((c.get("created_at") or "", reviewed_oid(body_of(c)) or "?"))
 if stale:
     stale.sort()
     print("STALE", stale[-1][1]); sys.exit(0)
