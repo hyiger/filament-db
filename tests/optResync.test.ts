@@ -3,6 +3,8 @@ import {
   buildOptSnapshot,
   diffOptFields,
   buildOptSyncUpdate,
+  buildOptLinkUpdate,
+  pruneOptPayloadAgainstParent,
   optSnapshotKey,
   OPT_MANAGED_FIELD_KEYS,
 } from "@/lib/optResync";
@@ -328,5 +330,99 @@ describe("buildOptSyncUpdate", () => {
   it("returns an empty patch when nothing valid is selected", () => {
     expect(buildOptSyncUpdate([], payload())).toEqual({});
     expect(buildOptSyncUpdate(["bogus"], payload())).toEqual({});
+  });
+});
+
+describe("pruneOptPayloadAgainstParent (Issue #753)", () => {
+  it("drops an inheritable scalar equal to the parent so the variant inherits", () => {
+    const parent = { density: 1.24 };
+    const pruned = pruneOptPayloadAgainstParent(payload(), parent);
+    expect("density" in pruned).toBe(false);
+  });
+
+  it("keeps an inheritable scalar that differs from the parent", () => {
+    const pruned = pruneOptPayloadAgainstParent(payload(), { density: 1.5 });
+    expect(pruned.density).toBe(1.24);
+  });
+
+  it("never prunes color (variant-only) even when equal to the parent", () => {
+    const pruned = pruneOptPayloadAgainstParent(payload(), { color: "#3d3e3d" });
+    expect(pruned.color).toBe("#3d3e3d");
+  });
+
+  it("never prunes the required vendor/type even when equal to the parent", () => {
+    const pruned = pruneOptPayloadAgainstParent(payload(), { vendor: "Prusament", type: "PLA" });
+    expect(pruned.vendor).toBe("Prusament");
+    expect(pruned.type).toBe("PLA");
+  });
+
+  it("nulls a temperature subfield equal to the parent, keeps a differing one", () => {
+    // nozzle equal (225) → inherit; bed differs (parent 55 vs OPT 60) → keep.
+    const pruned = pruneOptPayloadAgainstParent(payload(), {
+      temperatures: { nozzle: 225, bed: 55 },
+    });
+    const temps = pruned.temperatures as Record<string, unknown>;
+    expect(temps.nozzle).toBeNull();
+    expect(temps.bed).toBe(60);
+  });
+
+  it("empties an array equal to the parent, keeps a differing array", () => {
+    const p = payload({ secondaryColors: ["#000000", "#111111"], optTags: [99] });
+    const pruned = pruneOptPayloadAgainstParent(p, {
+      secondaryColors: ["#000000", "#111111"],
+      optTags: [16],
+    });
+    expect(pruned.secondaryColors).toEqual([]); // equal → inherit
+    expect(pruned.optTags).toEqual([99]); // differs → kept
+  });
+
+  it("returns the payload unchanged when there is no parent", () => {
+    const p = payload();
+    expect(pruneOptPayloadAgainstParent(p, null)).toBe(p);
+  });
+
+  it("leaves an empty OPT array empty even when the parent has one (documented empty=inherit limit)", () => {
+    // The OPT material has no tags but the parent does. The prune leaves the
+    // variant's optTags as []; downstream resolveFilament treats [] as
+    // "inherit", so the variant resolves to the parent's tags. This is the
+    // documented empty=inherit model limitation (Codex P2 on #753) — the prune
+    // must not fabricate the parent's data onto the variant.
+    const p = payload({ optTags: [], secondaryColors: [] });
+    const pruned = pruneOptPayloadAgainstParent(p, { optTags: [16], secondaryColors: ["#aabbcc"] });
+    expect(pruned.optTags).toEqual([]);
+    expect(pruned.secondaryColors).toEqual([]);
+  });
+
+  it("keeps a value the parent lacks (a null parent field is not a real OPT value)", () => {
+    const pruned = pruneOptPayloadAgainstParent(payload(), { density: null });
+    expect(pruned.density).toBe(1.24);
+  });
+
+  it("does not mutate the input payload", () => {
+    const p = payload();
+    pruneOptPayloadAgainstParent(p, { density: 1.24, temperatures: { nozzle: 225 } });
+    expect(p.density).toBe(1.24);
+    expect((p.temperatures as Record<string, unknown>).nozzle).toBe(225);
+  });
+});
+
+describe("buildOptLinkUpdate (Issue #753)", () => {
+  it("writes the dotted settings link keys + the full provenance snapshot", () => {
+    const p = payload({ settings: { openprinttag_uuid: "u-1", openprinttag_slug: "s-1" } });
+    const update = buildOptLinkUpdate(p);
+    expect(update["settings.openprinttag_uuid"]).toBe("u-1");
+    expect(update["settings.openprinttag_slug"]).toBe("s-1");
+    const snap = update.openprinttagSnapshot as Record<string, unknown>;
+    expect(snap.density).toBe(1.24);
+    expect(snap.temperatures_nozzle).toBe(225);
+    expect(snap.color).toBe("#3d3e3d");
+  });
+
+  it("tolerates a payload without a settings bag", () => {
+    const p = payload();
+    delete p.settings;
+    const update = buildOptLinkUpdate(p);
+    expect(update["settings.openprinttag_slug"]).toBeUndefined();
+    expect(update.openprinttagSnapshot).toBeTruthy();
   });
 });

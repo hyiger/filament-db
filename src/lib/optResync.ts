@@ -32,6 +32,8 @@
  * an auto-apply. Nothing here mutates anything.
  */
 
+import { INHERITABLE_FIELDS } from "@/lib/resolveFilament";
+
 /** A flattened, comparable field value. */
 export type OptValue = string | number | string[] | null;
 
@@ -281,4 +283,135 @@ export function buildOptSyncUpdate(
     update[field] = getPath(payload, field);
   }
   return update;
+}
+
+/**
+ * Build the `$set` patch that LINKS a filament to an OpenPrintTag material —
+ * the `settings.openprinttag_slug` / `_uuid` reference plus the provenance
+ * snapshot. Writes the linkage and provenance ONLY; it never touches a field
+ * value, so linking an existing filament (Issue #753, approach C) can't
+ * clobber a user-set or inherited value. The snapshot records the FULL current
+ * OPT offer (`buildOptSnapshot`) so the very next "check for updates" classifies
+ * each managed field correctly (unedited-equal-to-OPT → adopt, diverged →
+ * conflict). Dotted `settings.*` keys are written so an existing row's other
+ * settings survive the `$set`. Shared by the OPT import route and the link
+ * route so both establish the link identically.
+ */
+export function buildOptLinkUpdate(
+  payload: Record<string, unknown>,
+): Record<string, unknown> {
+  const settings = (payload.settings as Record<string, string> | undefined) ?? {};
+  return {
+    "settings.openprinttag_uuid": settings.openprinttag_uuid,
+    "settings.openprinttag_slug": settings.openprinttag_slug,
+    openprinttagSnapshot: buildOptSnapshot(payload),
+  };
+}
+
+/**
+ * Issue #753 (approach A) — prune a mapped OPT payload so that creating it as a
+ * VARIANT of `parentEffective` carries only the fields that are DISTINCT from
+ * the parent. Every inheritable field whose incoming OPT value EXACTLY equals
+ * the parent's effective value is removed/emptied so the variant inherits it
+ * dynamically via `resolveFilament` (matching the read-time inheritance model
+ * exactly: scalars/temps → null, the whole-array fields → `[]`). Strict
+ * equality only — a value that merely resembles the parent is kept.
+ *
+ * Never pruned:
+ *   - `color` / `colorName` / `name` — variant-only (a color variant's whole
+ *     point is its own color; `name` is the unique-name key). `color` isn't in
+ *     INHERITABLE_FIELDS, so it's untouched here; `name` likewise.
+ *   - `vendor` / `type` — required identity fields (`required: true` in the
+ *     schema). A variant must carry its own (so it can't be left to inherit a
+ *     null), and they're identity, not "a bunch of values to strip". Excluded
+ *     even though they're inheritable.
+ *   - `settings` / `openprinttagSnapshot` — the OPT linkage + provenance must
+ *     ride on the variant itself (so it's the variant that's "linked").
+ *
+ * Pruning to inherit relies on the inheritance contract that null/""/[] mean
+ * "inherit from parent" (see resolveFilament INHERITABLE_FIELDS + the
+ * empty-array fallback). Pass the parent's EFFECTIVE (resolved) values — a
+ * parent that is itself a variant must contribute its inherited values.
+ * Returns the original payload unchanged when there's no parent.
+ */
+const PRUNE_TEMP_FIELDS = [
+  "nozzle",
+  "nozzleFirstLayer",
+  "bed",
+  "bedFirstLayer",
+  "nozzleRangeMin",
+  "nozzleRangeMax",
+  "standby",
+] as const;
+
+/** Whole-array fields that inherit when empty (empty === inherit). */
+const PRUNE_ARRAY_FIELDS = ["optTags", "secondaryColors"] as const;
+
+/** Inheritable fields that must NOT be pruned: `vendor`/`type` are
+ *  `required: true` in the schema, so a variant must carry its own value (it
+ *  can't be left null to inherit) — and they're identity, not "values to
+ *  strip". */
+const PRUNE_SKIP_FIELDS: ReadonlySet<string> = new Set(["vendor", "type"]);
+
+export function pruneOptPayloadAgainstParent(
+  payload: Record<string, unknown>,
+  parentEffective: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  if (!parentEffective) return payload;
+  const pruned: Record<string, unknown> = { ...payload };
+
+  // Inheritable scalars (density, diameter, drying*, shore*, transmission,
+  // etc.): drop when equal to the parent's effective value so the variant
+  // inherits. `color`/`colorName`/`name` aren't in INHERITABLE_FIELDS (never
+  // pruned); `vendor`/`type` are skipped (required identity).
+  for (const field of INHERITABLE_FIELDS) {
+    if (PRUNE_SKIP_FIELDS.has(field)) continue;
+    if (!(field in pruned)) continue;
+    const v = pruned[field] as OptValue;
+    if (v == null || v === "") continue; // already inheriting
+    if (valuesEqual(v, getPath(parentEffective, field))) {
+      delete pruned[field];
+    }
+  }
+
+  // Temperatures (nested): null out a subfield equal to the parent's so it
+  // inherits via resolveFilament's `?? parentTemps[...]` fallback.
+  if (pruned.temperatures && typeof pruned.temperatures === "object") {
+    const pTemps = { ...(pruned.temperatures as Record<string, unknown>) };
+    for (const tf of PRUNE_TEMP_FIELDS) {
+      const v = pTemps[tf] as OptValue;
+      if (v == null) continue;
+      if (valuesEqual(v, getPath(parentEffective, `temperatures.${tf}`))) {
+        pTemps[tf] = null;
+      }
+    }
+    pruned.temperatures = pTemps;
+  }
+
+  // Whole-array fields: set `[]` when equal to the parent's so the variant
+  // inherits the parent's array (empty === inherit, GH #106). A non-empty
+  // array that DIFFERS from the parent stays — that's the variant's distinct
+  // data (e.g. a coextruded variant's own secondaryColors).
+  //
+  // KNOWN LIMITATION (Codex P2 on #753): when the OPT material's array is EMPTY
+  // but the parent's is NON-empty, the variant can't represent "explicitly
+  // empty" — `resolveFilament` reads `[]` as "inherit", so the variant resolves
+  // to the parent's array (e.g. a single-color/no-tag material imported under a
+  // multi-color/tagged parent shows the parent's colors/tags). This is the SAME
+  // empty=inherit constraint the resync side documents in
+  // OPT_CLEARABLE_ARRAY_FIELDS above; there is no stored value that resolves to
+  // empty while the parent is non-empty, so it can't be fixed here without a
+  // model-level "no-inherit" array sentinel (out of scope — it would ripple
+  // through resolveFilament, the resync diff, and exports). The user can still
+  // override after import by editing the variant's colors/tags. The common case
+  // (parent is a base catalog entry without secondaries/tags) is unaffected.
+  for (const field of PRUNE_ARRAY_FIELDS) {
+    const v = pruned[field];
+    if (!Array.isArray(v) || v.length === 0) continue;
+    if (valuesEqual(v as string[], getPath(parentEffective, field))) {
+      pruned[field] = [];
+    }
+  }
+
+  return pruned;
 }

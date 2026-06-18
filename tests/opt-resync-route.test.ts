@@ -59,6 +59,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
   let Filament: any;
   let checkGET: typeof import("@/app/api/filaments/[id]/openprinttag/check/route").GET;
   let syncPOST: typeof import("@/app/api/filaments/[id]/openprinttag/sync/route").POST;
+  let linkPOST: typeof import("@/app/api/filaments/[id]/openprinttag/link/route").POST;
   let importPOST: typeof import("@/app/api/openprinttag/import/route").POST;
   let detailGET: typeof import("@/app/api/filaments/[id]/route").GET;
 
@@ -84,6 +85,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
 
     checkGET = (await import("@/app/api/filaments/[id]/openprinttag/check/route")).GET;
     syncPOST = (await import("@/app/api/filaments/[id]/openprinttag/sync/route")).POST;
+    linkPOST = (await import("@/app/api/filaments/[id]/openprinttag/link/route")).POST;
     importPOST = (await import("@/app/api/openprinttag/import/route")).POST;
     detailGET = (await import("@/app/api/filaments/[id]/route")).GET;
 
@@ -106,6 +108,22 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
       method: "POST",
       headers: { "content-type": "application/json", ...headers },
       body: JSON.stringify({ fields }),
+    });
+  }
+
+  function linkReq(id: string, slug: unknown, headers: Record<string, string> = {}) {
+    return new NextRequest(`http://localhost:3456/api/filaments/${id}/openprinttag/link`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify({ slug }),
+    });
+  }
+
+  function importReq(body: unknown, headers: Record<string, string> = {}) {
+    return new NextRequest("http://localhost:3456/api/openprinttag/import", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: JSON.stringify(body),
     });
   }
 
@@ -558,5 +576,232 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(res.status).toBe(403);
     const fresh = await Filament.findById(f._id).lean();
     expect(fresh.density).toBeNull(); // untouched
+  });
+
+  // ── link an existing filament to OPT (Issue #753, approach C) ─────────
+
+  it("link: writes the slug/uuid + snapshot WITHOUT touching field values", async () => {
+    const f = await Filament.create({
+      name: "Unlinked PLA",
+      vendor: "Generic",
+      type: "PLA",
+      color: "#112233", // a user value that must survive linking
+      density: 1.5, // a user value that differs from OPT's 1.24
+    });
+    const res = await linkPOST(linkReq(String(f._id), "prusament-pla-galaxy-black"), params(String(f._id)));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.linked).toBe(true);
+    expect(body.slug).toBe("prusament-pla-galaxy-black");
+
+    const fresh = await Filament.findById(f._id).lean();
+    // Linkage + provenance written …
+    expect(fresh.settings.openprinttag_slug).toBe("prusament-pla-galaxy-black");
+    expect(fresh.settings.openprinttag_uuid).toBeTruthy();
+    expect(fresh.openprinttagSnapshot.density).toBe(1.24); // full OPT offer
+    // … but no field VALUE was changed.
+    expect(fresh.color).toBe("#112233");
+    expect(fresh.density).toBe(1.5);
+  });
+
+  it("link: a subsequent check gap-fills nulls (adopt) and flags diverged values (conflict)", async () => {
+    const f = await Filament.create({
+      name: "ToLink PLA",
+      vendor: "Generic",
+      type: "PLA",
+      color: "#3d3e3d", // equals OPT → not offered at all
+      density: null, // gap-fill → adopt
+      temperatures: { nozzle: 200 }, // differs from OPT's 225 → conflict
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    });
+    await linkPOST(linkReq(String(f._id), "prusament-pla-galaxy-black"), params(String(f._id)));
+
+    const checkRes = await checkGET({} as NextRequest, params(String(f._id)));
+    const changes = (await checkRes.json()).changes as Array<{ field: string; kind: string }>;
+    expect(changes.find((c) => c.field === "density")?.kind).toBe("adopt");
+    expect(changes.find((c) => c.field === "temperatures.nozzle")?.kind).toBe("conflict");
+    // A field equal to OPT isn't surfaced.
+    expect(changes.some((c) => c.field === "color")).toBe(false);
+  });
+
+  it("link: a variant's inherited-equal field isn't offered; a diverged one is (variant-aware)", async () => {
+    const parent = await Filament.create({
+      name: "Link Parent PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      density: 1.24, // equals OPT
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    });
+    const variant = await Filament.create({
+      name: "Link Variant PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#3d3e3d",
+      parentId: parent._id,
+      density: null, // inherits 1.24 (equals OPT) → must NOT be offered
+      temperatures: { nozzle: 210 }, // variant override differs from OPT 225 → offered
+    });
+    const res = await linkPOST(linkReq(String(variant._id), "prusament-pla-galaxy-black"), params(String(variant._id)));
+    expect(res.status).toBe(200);
+
+    const checkRes = await checkGET({} as NextRequest, params(String(variant._id)));
+    const changes = (await checkRes.json()).changes as Array<{ field: string }>;
+    // Inherited density already equals OPT → not offered (no overwrite of
+    // inherited identical values — the issue's explicit requirement).
+    expect(changes.some((c) => c.field === "density")).toBe(false);
+    // The variant's own diverged nozzle temp IS surfaced.
+    expect(changes.some((c) => c.field === "temperatures.nozzle")).toBe(true);
+  });
+
+  it("link: 404 when the slug is gone upstream", async () => {
+    const f = await Filament.create({ name: "Gone Link", vendor: "X", type: "PLA" });
+    const res = await linkPOST(linkReq(String(f._id), "no-such-slug"), params(String(f._id)));
+    expect(res.status).toBe(404);
+    const body = await res.json();
+    expect(body.linked).toBe(false);
+    expect(body.found).toBe(false);
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.settings?.openprinttag_slug).toBeUndefined(); // no dangling link
+  });
+
+  it("link: 400 on a missing/empty slug", async () => {
+    const f = await Filament.create({ name: "Bad Link", vendor: "X", type: "PLA" });
+    const res = await linkPOST(linkReq(String(f._id), ""), params(String(f._id)));
+    expect(res.status).toBe(400);
+  });
+
+  it("link: 404 for an unknown filament", async () => {
+    const ghost = new mongoose.Types.ObjectId().toString();
+    const res = await linkPOST(linkReq(ghost, "prusament-pla-galaxy-black"), params(ghost));
+    expect(res.status).toBe(404);
+  });
+
+  it("link: rejects a cross-origin (CSRF) request before mutating", async () => {
+    const f = await Filament.create({ name: "CSRF Link", vendor: "X", type: "PLA" });
+    const res = await linkPOST(
+      linkReq(String(f._id), "prusament-pla-galaxy-black", { "sec-fetch-site": "cross-site" }),
+      params(String(f._id)),
+    );
+    expect(res.status).toBe(403);
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.settings?.openprinttag_slug).toBeUndefined();
+  });
+
+  // ── import AS A VARIANT (Issue #753, approach A) ──────────────────────
+
+  it("import-variant: prunes fields equal to the parent, keeps distinct color, links + resolves clean", async () => {
+    const parent = await Filament.create({
+      name: "Variant Import Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      density: 1.24, // equals OPT → pruned
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    });
+    const importRes = await importPOST(
+      importReq({ slugs: ["prusament-pla-galaxy-black"], parentId: String(parent._id) }),
+    );
+    expect(importRes.status).toBe(200);
+    const body = await importRes.json();
+    expect(body.created).toBe(1);
+    expect(body.filament).toBeTruthy();
+
+    const variant = await Filament.findById(body.filament._id).lean();
+    expect(String(variant.parentId)).toBe(String(parent._id));
+    // Distinct field kept: color is variant-only and the variant's own.
+    expect(variant.color).toBe("#3d3e3d");
+    // Pruned scalars dropped → null/undefined so they inherit.
+    expect(variant.density ?? null).toBeNull();
+    expect(variant.shoreHardnessD ?? null).toBeNull();
+    expect(variant.transmissionDistance ?? null).toBeNull();
+    // Pruned temps nulled.
+    expect(variant.temperatures.nozzle ?? null).toBeNull();
+    expect(variant.temperatures.bed ?? null).toBeNull();
+    // diameter nulled to inherit (mapToFilamentPayload's 1.75 isn't real data).
+    expect(variant.diameter ?? null).toBeNull();
+    // Linked + provenance present (full offer, incl. the pruned fields).
+    expect(variant.settings.openprinttag_slug).toBe("prusament-pla-galaxy-black");
+    expect(variant.openprinttagSnapshot.density).toBe(1.24);
+    expect(variant.openprinttagSnapshot.temperatures_nozzle).toBe(225);
+
+    // A check right after import → everything matches via inheritance → no changes.
+    const checkRes = await checkGET({} as NextRequest, params(String(variant._id)));
+    expect((await checkRes.json()).changes).toEqual([]);
+  });
+
+  it("import-variant: keeps a field that DIFFERS from the parent (strict equality)", async () => {
+    const parent = await Filament.create({
+      name: "Differ Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      density: 1.5, // differs from OPT's 1.24 → variant keeps its own 1.24
+      temperatures: { nozzle: 200 }, // differs from OPT 225 → variant keeps 225
+    });
+    const res = await importPOST(
+      importReq({ slugs: ["prusament-pla-galaxy-black"], parentId: String(parent._id) }),
+    );
+    expect(res.status).toBe(200);
+    const variant = await Filament.findById((await res.json()).filament._id).lean();
+    expect(variant.density).toBe(1.24); // distinct → kept
+    expect(variant.temperatures.nozzle).toBe(225); // distinct → kept
+  });
+
+  it("import-variant: refuses a name collision with 409 (never re-parents an existing row)", async () => {
+    const parent = await Filament.create({ name: "Coll Parent", vendor: "Prusament", type: "PLA" });
+    // A pre-existing filament with the same name the OPT material would produce.
+    const existing = await Filament.create({
+      name: "Prusament PLA Galaxy Black",
+      vendor: "Prusament",
+      type: "PLA",
+    });
+    const res = await importPOST(
+      importReq({ slugs: ["prusament-pla-galaxy-black"], parentId: String(parent._id) }),
+    );
+    expect(res.status).toBe(409);
+    // The existing row was NOT re-parented or mutated.
+    const fresh = await Filament.findById(existing._id).lean();
+    expect(fresh.parentId ?? null).toBeNull();
+  });
+
+  it("import-variant: 400 when the parent doesn't exist", async () => {
+    const ghost = new mongoose.Types.ObjectId().toString();
+    const res = await importPOST(importReq({ slugs: ["prusament-pla-galaxy-black"], parentId: ghost }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/parent/i);
+  });
+
+  it("import-variant: 400 on a malformed parentId (not an ObjectId)", async () => {
+    const res = await importPOST(
+      importReq({ slugs: ["prusament-pla-galaxy-black"], parentId: "not-an-id" }),
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("import-variant: 400 when the parent is itself a variant (no nested inheritance)", async () => {
+    const root = await Filament.create({ name: "Root For Nest", vendor: "Prusament", type: "PLA" });
+    const mid = await Filament.create({
+      name: "Mid Variant",
+      vendor: "Prusament",
+      type: "PLA",
+      parentId: root._id,
+    });
+    const res = await importPOST(
+      importReq({ slugs: ["prusament-pla-galaxy-black"], parentId: String(mid._id) }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/nested|variant as parent/i);
+  });
+
+  it("import-variant: 400 when more than one slug is given with a parent", async () => {
+    const parent = await Filament.create({ name: "Multi Parent", vendor: "Prusament", type: "PLA" });
+    const res = await importPOST(
+      importReq({ slugs: ["prusament-pla-galaxy-black", "another"], parentId: String(parent._id) }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/one slug/i);
   });
 });

@@ -13,6 +13,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import PrintLabelDialog from "@/components/PrintLabelDialog";
 import OptResyncDialog from "@/components/OptResyncDialog";
+import OptLinkDialog from "@/components/OptLinkDialog";
 import TechnicalReferencePanel from "@/components/TechnicalReferencePanel";
 import CopyButton from "@/components/CopyButton";
 import FilamentSwatch from "@/components/FilamentSwatch";
@@ -73,6 +74,8 @@ function FilamentDetail() {
   const [filament, setFilament] = useState<Filament | null>(null);
   // GH #607: "Check for OpenPrintTag updates" dialog.
   const [resyncOpen, setResyncOpen] = useState(false);
+  // Issue #753 (approach C): "Link to OpenPrintTag" dialog.
+  const [linkOpen, setLinkOpen] = useState(false);
   /**
    * Both `previewOpenFor` and `embedCheck` are keyed to the tdsUrl they
    * apply to. Navigating between filaments (same route, different params)
@@ -1270,6 +1273,24 @@ function FilamentDetail() {
                 {t("resync.button")}
               </button>
             )}
+          {/* Issue #753 (approach C): offer to LINK this filament to an
+              OpenPrintTag material when it isn't already linked (the inverse
+              of the re-sync button's gate). Linking writes only the slug +
+              provenance, never a field value, so a variant's inherited values
+              are never clobbered. */}
+          {!filament._hasOwnOptLink && (
+              <button
+                type="button"
+                onClick={() => setLinkOpen(true)}
+                className="px-4 py-2 bg-teal-600 text-white rounded hover:bg-teal-700 text-sm inline-flex items-center gap-1.5"
+                title={t("optLink.button.title")}
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 010 5.656l-3 3a4 4 0 01-5.656-5.656l1.5-1.5m6.656-2.828a4 4 0 010-5.656l3-3a4 4 0 015.656 5.656l-1.5 1.5" />
+                </svg>
+                {t("optLink.button")}
+              </button>
+            )}
           <Link
             href={`/filaments/${filament._id}/edit`}
             className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm"
@@ -2002,6 +2023,13 @@ function FilamentDetail() {
           filamentId={String(filament._id)}
           onApplied={refetchFilament}
           onClose={() => setResyncOpen(false)}
+        />
+      )}
+      {linkOpen && (
+        <OptLinkDialog
+          filamentId={String(filament._id)}
+          onLinked={refetchFilament}
+          onClose={() => setLinkOpen(false)}
         />
       )}
     </main>

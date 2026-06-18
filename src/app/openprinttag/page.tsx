@@ -395,6 +395,14 @@ export default function OpenPrintTagBrowser() {
   const [brandSearch, setBrandSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("completeness");
   const [tierFilter, setTierFilter] = useState<string | null>(null);
+  // Issue #753 (approach A): import a single material AS A VARIANT of a chosen
+  // parent. `parents` is the list of candidate root filaments, lazily fetched
+  // the first time the user narrows to one selected material.
+  const [variantParentId, setVariantParentId] = useState("");
+  const [parents, setParents] = useState<
+    { _id: string; name: string; vendor: string; type: string }[]
+  >([]);
+  const [parentsLoaded, setParentsLoaded] = useState(false);
   const { toast } = useToast();
 
   const fetchDatabase = useCallback(
@@ -446,6 +454,40 @@ export default function OpenPrintTagBrowser() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchDatabase();
   }, [fetchDatabase]);
+
+  // Issue #753 (approach A): lazily load candidate parents (root filaments) the
+  // first time the user narrows to a single material — avoids fetching the
+  // whole filament list on every visit when nobody's importing a variant. The
+  // setState calls live in an async callback (deferred), not the effect body.
+  useEffect(() => {
+    if (selected.size !== 1 || parentsLoaded) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/filaments");
+        if (!res.ok) return;
+        const list = (await res.json()) as {
+          _id: string;
+          name: string;
+          vendor: string;
+          type: string;
+          parentId?: string | null;
+        }[];
+        if (cancelled) return;
+        setParents(
+          list
+            .filter((f) => !f.parentId)
+            .map(({ _id, name, vendor, type }) => ({ _id, name, vendor, type })),
+        );
+        setParentsLoaded(true);
+      } catch {
+        // Non-fatal — the variant affordance just stays unavailable.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selected.size, parentsLoaded]);
 
   // ── Derived data ───────────────────────────────────────────────────
 
@@ -550,6 +592,10 @@ export default function OpenPrintTagBrowser() {
     [filteredMaterials, selected, expanded, toggleSelect],
   );
 
+  // Issue #753 (approach A): variant mode is only valid for a single selected
+  // material with a chosen parent.
+  const asVariant = selected.size === 1 && variantParentId !== "";
+
   const handleImport = async () => {
     if (selected.size === 0) return;
     setImporting(true);
@@ -557,7 +603,11 @@ export default function OpenPrintTagBrowser() {
       const res = await fetch("/api/openprinttag/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slugs: [...selected] }),
+        body: JSON.stringify(
+          asVariant
+            ? { slugs: [...selected], parentId: variantParentId }
+            : { slugs: [...selected] },
+        ),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -565,6 +615,7 @@ export default function OpenPrintTagBrowser() {
       } else {
         toast(data.message, "success");
         setSelected(new Set());
+        setVariantParentId("");
       }
     } catch {
       toast(t("openprinttag.importFailedNetwork"), "error");
@@ -643,12 +694,36 @@ export default function OpenPrintTagBrowser() {
                   {t("openprinttag.selectedCount", { count: selected.size })}
                 </span>
               )}
+              {/* Issue #753 (approach A): when exactly one material is selected,
+                  offer to import it as a variant of a chosen parent. Picking a
+                  parent only pulls the fields DISTINCT from it onto the variant;
+                  leaving it on "no parent" keeps the standalone import. */}
+              {selected.size === 1 && parents.length > 0 && (
+                <select
+                  value={variantParentId}
+                  onChange={(e) => setVariantParentId(e.target.value)}
+                  title={t("openprinttag.variantParentTitle")}
+                  aria-label={t("openprinttag.variantParentLabel")}
+                  className="px-2 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 max-w-[16rem]"
+                >
+                  <option value="">{t("openprinttag.variantParentNone")}</option>
+                  {parents.map((p) => (
+                    <option key={p._id} value={p._id}>
+                      {p.name} ({p.vendor} · {p.type})
+                    </option>
+                  ))}
+                </select>
+              )}
               <button
                 onClick={handleImport}
                 disabled={selected.size === 0 || importing}
                 className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                {importing ? t("openprinttag.importing") : t("openprinttag.importSelected", { count: selected.size })}
+                {importing
+                  ? t("openprinttag.importing")
+                  : asVariant
+                    ? t("openprinttag.importAsVariant")
+                    : t("openprinttag.importSelected", { count: selected.size })}
               </button>
               <button
                 onClick={() => fetchDatabase(true)}
