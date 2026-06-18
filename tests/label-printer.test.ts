@@ -67,7 +67,13 @@ vi.mock("node:child_process", () => {
   return { execFile, spawn };
 });
 
-import { listLabelPrinters, printLabel, windowsPowershellPath } from "../electron/label-printer";
+import {
+  listLabelPrinters,
+  printLabel,
+  windowsPowershellPath,
+  WINDOWS_RAW_PRINT_PS1,
+  WINDOWS_PRINT_TIMEOUT_MS,
+} from "../electron/label-printer";
 
 const BYTES = new Uint8Array([0x1b, 0x40, 0x41, 0x42]);
 const BROTHER_URI = "usb://Brother/PT-P710BT?serial=000M5G671606";
@@ -264,5 +270,29 @@ describe("printLabel — legacy serial targets (GH #589)", () => {
     await expect(printLabel(target, BYTES)).rejects.toThrow(/select your printer again/i);
     expect(h.state.spawnCalls.some((c) => c.cmd === "lp")).toBe(false);
     expect(h.state.execCalls.some((c) => c.cmd === "lpadmin")).toBe(false);
+  });
+});
+
+describe("Windows raw-print job lifecycle (GH #759)", () => {
+  // The win32 print path can't be executed without a Windows host + printer
+  // (see the file header), so these are string-level guards on the generated
+  // PowerShell template + the dedicated timeout — pinning the #759 fix so a
+  // future edit can't silently re-introduce the "job never commits" bug.
+  it("surfaces EndPagePrinter/EndDocPrinter failures instead of completing silently", () => {
+    // The throw-strings only exist if the bool returns of the two commit calls
+    // are checked — discarding them again (the original bug) removes both.
+    expect(WINDOWS_RAW_PRINT_PS1).toMatch(/EndPagePrinter failed/);
+    expect(WINDOWS_RAW_PRINT_PS1).toMatch(/EndDocPrinter failed/);
+    // Still RAW datatype (the Brother raster must bypass driver rendering).
+    expect(WINDOWS_RAW_PRINT_PS1).toContain('di.pDataType = "RAW"');
+    // The guard flags that keep a teardown-after-write-failure from masking
+    // the original WritePrinter error.
+    expect(WINDOWS_RAW_PRINT_PS1).toMatch(/bool pageOk = false/);
+    expect(WINDOWS_RAW_PRINT_PS1).toMatch(/bool docOk = false/);
+  });
+
+  it("gives the Windows print a longer subprocess timeout than the 15s listing timeout, under the 30s IPC wrapper", () => {
+    expect(WINDOWS_PRINT_TIMEOUT_MS).toBeGreaterThan(15_000);
+    expect(WINDOWS_PRINT_TIMEOUT_MS).toBeLessThan(30_000);
   });
 });

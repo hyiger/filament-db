@@ -38,10 +38,19 @@ const PRINTER_PATTERN = /pt-?p710bt|p-?touch|brother/i;
  *  letters, digits and underscores. */
 const MANAGED_QUEUE = "FilamentDB_Label";
 
-/** Per-subprocess timeout. Listing and a single 24mm label both complete
- *  well under this; the IPC handler wraps the whole print in its own 30s
- *  timeout on top. */
+/** Per-subprocess timeout for listing + the CUPS `lp` print. Listing and a
+ *  single 24mm label both complete well under this; the IPC handler wraps the
+ *  whole print in its own 30s timeout on top. */
 const EXEC_TIMEOUT_MS = 15_000;
+
+/** GH #759 — the Windows winspool print gets a LONGER subprocess timeout than
+ *  the 15s listing timeout. `EndDocPrinter` blocks until the spooler drains the
+ *  RAW bytes to the (slow, USB) label printer, which can take several seconds;
+ *  at 15s a busy/recovering spooler could be SIGKILLed mid-`EndDocPrinter`,
+ *  leaving the job open + a leaked printer handle (the "2nd print sticks, 3rd
+ *  errors" cascade). Kept under the IPC handler's 30s wrapper so the user still
+ *  gets a bounded failure. Exported for the regression test. */
+export const WINDOWS_PRINT_TIMEOUT_MS = 25_000;
 
 /** On Linux a GUI app's PATH often omits /usr/sbin where lpadmin/lpinfo
  *  live, so we try the bare name first then the sbin path. (The CUPS tools
@@ -355,7 +364,7 @@ async function printWindows(printerName: string, bytes: Uint8Array): Promise<voi
         "-PrinterName", printerName,
         "-FilePath", dataPath,
       ],
-      { timeout: EXEC_TIMEOUT_MS },
+      { timeout: WINDOWS_PRINT_TIMEOUT_MS },
     );
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -365,8 +374,19 @@ async function printWindows(printerName: string, bytes: Uint8Array): Promise<voi
 /** PowerShell that sends a file's bytes to a printer with the spooler RAW
  *  datatype via winspool.drv WritePrinter — the Windows equivalent of
  *  `lp -o raw`. Bypasses the driver's rendering so the Brother raster
- *  stream reaches the print head verbatim. */
-const WINDOWS_RAW_PRINT_PS1 = `param([Parameter(Mandatory=$true)][string]$PrinterName,
+ *  stream reaches the print head verbatim.
+ *
+ *  GH #759 — `EndPagePrinter`/`EndDocPrinter` are the calls that COMMIT the
+ *  spool job as "printed". The pre-fix code discarded their bool returns, so a
+ *  job that physically printed (WritePrinter succeeded) but failed to commit
+ *  still exited 0 → the renderer saw success while the spooler held an
+ *  uncommitted job that re-spooled on reboot and blocked the next print. We now
+ *  check both returns and throw — but ONLY when the protected body succeeded
+ *  (`pageOk`/`docOk` guard the throw), so a teardown after a real WritePrinter
+ *  failure doesn't mask the original error. EndPage/EndDoc/Close are still
+ *  ALWAYS called in their finallys, so a failed write tears the job down
+ *  instead of leaking it open. Exported for the regression test. */
+export const WINDOWS_RAW_PRINT_PS1 = `param([Parameter(Mandatory=$true)][string]$PrinterName,
       [Parameter(Mandatory=$true)][string]$FilePath)
 $ErrorActionPreference = "Stop"
 $code = @"
@@ -388,13 +408,24 @@ public static class FdbRawPrinter {
     try {
       DOCINFO di = new DOCINFO(); di.pDocName = "Filament DB Label"; di.pDataType = "RAW";
       if (!StartDocPrinter(h, 1, ref di)) throw new Exception("StartDocPrinter failed (" + Marshal.GetLastWin32Error() + ")");
+      bool docOk = false;
       try {
         if (!StartPagePrinter(h)) throw new Exception("StartPagePrinter failed (" + Marshal.GetLastWin32Error() + ")");
-        int written;
-        if (!WritePrinter(h, data, data.Length, out written)) throw new Exception("WritePrinter failed (" + Marshal.GetLastWin32Error() + ")");
-        if (written != data.Length) throw new Exception("WritePrinter wrote " + written + " of " + data.Length + " bytes");
-        EndPagePrinter(h);
-      } finally { EndDocPrinter(h); }
+        bool pageOk = false;
+        try {
+          int written;
+          if (!WritePrinter(h, data, data.Length, out written)) throw new Exception("WritePrinter failed (" + Marshal.GetLastWin32Error() + ")");
+          if (written != data.Length) throw new Exception("WritePrinter wrote " + written + " of " + data.Length + " bytes");
+          pageOk = true;
+        } finally {
+          bool endPage = EndPagePrinter(h);
+          if (pageOk && !endPage) throw new Exception("EndPagePrinter failed (" + Marshal.GetLastWin32Error() + ")");
+        }
+        docOk = true;
+      } finally {
+        bool endDoc = EndDocPrinter(h);
+        if (docOk && !endDoc) throw new Exception("EndDocPrinter failed (" + Marshal.GetLastWin32Error() + ")");
+      }
     } finally { ClosePrinter(h); }
   }
 }
