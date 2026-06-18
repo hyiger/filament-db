@@ -271,6 +271,11 @@ export default function LabelPrinterSettings() {
                   <code className="text-xs text-gray-500 dark:text-gray-400 font-mono">
                     {d.path}
                   </code>
+                  {d.bidiEnabled && (
+                    <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+                      {t("settings.labelPrinter.bidiWarning")}
+                    </p>
+                  )}
                 </div>
               </label>
             );

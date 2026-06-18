@@ -103,6 +103,11 @@ export interface LabelPrinterDevice {
   /** True when the path/manufacturer/friendly name matches a PT-series
    *  printer — the picker pre-selects the obvious choice. */
   looksLikePrinter: boolean;
+  /** Windows only: the queue has bidirectional support (EnableBIDI) on. Some
+   *  drivers crash the Print Spooler with BiDi enabled, so the picker warns.
+   *  `undefined` on macOS/Linux and when the state couldn't be read — only an
+   *  explicit `true` triggers the warning. */
+  bidiEnabled?: boolean;
 }
 
 export interface UpdateStatus {

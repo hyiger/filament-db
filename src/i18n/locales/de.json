@@ -897,6 +897,7 @@
   "settings.labelPrinter.noDevices": "Keine Drucker gefunden. Verbinden Sie den PT-P710BT per USB (fügen Sie ihn bei Bedarf in den Systemeinstellungen für Drucker hinzu) und klicken Sie dann auf Aktualisieren.",
   "settings.labelPrinter.refresh": "Aktualisieren",
   "settings.labelPrinter.looksLikePrinter": "PT-Touch",
+  "settings.labelPrinter.bidiWarning": "Die bidirektionale Unterstützung ist für diesen Drucker aktiviert. Manche Treiber bringen den Windows-Druckwarteschlangendienst zum Absturz, wenn mit aktiviertem BiDi gedruckt wird. Falls der Etikettendruck fehlschlägt, öffnen Sie Druckereigenschaften → Anschlüsse und deaktivieren Sie „Bidirektionale Unterstützung aktivieren“.",
   "settings.labelPrinter.deviceSaved": "Etikettendrucker-Gerät gespeichert.",
   "settings.labelPrinter.deviceSaveFailed": "Gerät konnte nicht gespeichert werden: {error}",
   "settings.labelPrinter.deviceCleared": "Etikettendrucker-Auswahl entfernt.",

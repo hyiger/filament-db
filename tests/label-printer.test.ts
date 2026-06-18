@@ -71,6 +71,8 @@ import {
   listLabelPrinters,
   printLabel,
   windowsPowershellPath,
+  mapWindowsPrintError,
+  SPOOLER_DOWN_MESSAGE,
   WINDOWS_RAW_PRINT_PS1,
   WINDOWS_PRINT_TIMEOUT_MS,
 } from "../electron/label-printer";
@@ -88,6 +90,22 @@ beforeEach(() => {
 // Skip on Windows — that branch uses a different (PowerShell) transport.
 const cups = process.platform !== "win32";
 const d = cups ? describe : describe.skip;
+
+/**
+ * Run `fn` with `process.platform` forced to "win32" so the Windows branch is
+ * reachable on the CUPS test host. execFile is mocked, so nothing is spawned;
+ * the fs calls printWindows makes (mkdtemp/writeFile/rm) are real but
+ * platform-agnostic. Restores the original descriptor even if `fn` throws.
+ */
+async function runAsWin32(fn: () => Promise<void> | void): Promise<void> {
+  const desc = Object.getOwnPropertyDescriptor(process, "platform")!;
+  Object.defineProperty(process, "platform", { ...desc, value: "win32" });
+  try {
+    await fn();
+  } finally {
+    Object.defineProperty(process, "platform", desc);
+  }
+}
 
 d("listLabelPrinters (CUPS)", () => {
   it("surfaces installed queues and available usb devices, badging PT printers", async () => {
@@ -294,5 +312,118 @@ describe("Windows raw-print job lifecycle (GH #759)", () => {
   it("gives the Windows print a longer subprocess timeout than the 15s listing timeout, under the 30s IPC wrapper", () => {
     expect(WINDOWS_PRINT_TIMEOUT_MS).toBeGreaterThan(15_000);
     expect(WINDOWS_PRINT_TIMEOUT_MS).toBeLessThan(30_000);
+  });
+});
+
+describe("Windows spooler-down error mapping (win32 1722)", () => {
+  // win32 1722 = RPC_S_SERVER_UNAVAILABLE — the winspool calls are RPC to the
+  // Print Spooler service, so a stopped/crashed spooler fails OpenPrinter with
+  // 1722. The cryptic "OpenPrinter failed (1722)" becomes an actionable hint.
+
+  it("SPOOLER_DOWN_MESSAGE names the service and how to restart it, ASCII-only", () => {
+    expect(SPOOLER_DOWN_MESSAGE).toMatch(/Print Spooler/i);
+    expect(SPOOLER_DOWN_MESSAGE).toMatch(/services\.msc/i);
+    // ASCII-only: it's embedded in the PS1 here-string that's written to disk
+    // and re-read under the host code page, where non-ASCII can be mangled.
+    expect(/^[\x00-\x7F]*$/.test(SPOOLER_DOWN_MESSAGE)).toBe(true);
+  });
+
+  describe("the PowerShell template special-cases 1722 on OpenPrinter", () => {
+    it("branches on win32 1722 and embeds the friendly message", () => {
+      expect(WINDOWS_RAW_PRINT_PS1).toMatch(/err == 1722/);
+      expect(WINDOWS_RAW_PRINT_PS1).toContain(SPOOLER_DOWN_MESSAGE);
+    });
+    it("keeps the generic 'OpenPrinter failed (N)' for every other code", () => {
+      expect(WINDOWS_RAW_PRINT_PS1).toContain('"OpenPrinter failed (" + err + ")"');
+    });
+    it("the whole template stays ASCII (host-code-page safe)", () => {
+      expect(/^[\x00-\x7F]*$/.test(WINDOWS_RAW_PRINT_PS1)).toBe(true);
+    });
+  });
+
+  describe("mapWindowsPrintError", () => {
+    it("maps the bare 'OpenPrinter failed (1722)' text to the friendly hint", () => {
+      expect(mapWindowsPrintError("OpenPrinter failed (1722)")).toBe(SPOOLER_DOWN_MESSAGE);
+    });
+    it("maps a 1722 buried in .NET/PowerShell noise (later winspool call)", () => {
+      const noise =
+        "Exception calling \"Print\": \"WritePrinter failed (1722)\"\n    at <ScriptBlock>";
+      expect(mapWindowsPrintError(noise)).toBe(SPOOLER_DOWN_MESSAGE);
+    });
+    it("passes through the friendly message the PS child already emitted", () => {
+      expect(mapWindowsPrintError(`boom\n${SPOOLER_DOWN_MESSAGE}\n`)).toBe(SPOOLER_DOWN_MESSAGE);
+    });
+    it("returns null for unrelated win32 codes", () => {
+      expect(mapWindowsPrintError("OpenPrinter failed (5)")).toBeNull(); // access denied
+      expect(mapWindowsPrintError("WritePrinter failed (1784)")).toBeNull();
+    });
+    it("does not match 1722 as a substring of a larger number", () => {
+      expect(mapWindowsPrintError("code 17220")).toBeNull();
+      expect(mapWindowsPrintError("error 21722")).toBeNull();
+    });
+    it("returns null for empty input", () => {
+      expect(mapWindowsPrintError("")).toBeNull();
+    });
+  });
+
+  describe("printWindows surfaces the mapping to the renderer", () => {
+    it("rewrites a 1722 print failure to the actionable spooler-down message", async () => {
+      await runAsWin32(async () => {
+        h.state.execImpl = () => ({
+          error: new Error("Command failed: powershell.exe ..."),
+          stderr: "OpenPrinter failed (1722)",
+        });
+        await expect(printLabel("Brother PT-P710BT", BYTES)).rejects.toThrow(/Print Spooler/i);
+      });
+    });
+
+    it("passes unrelated print failures through unchanged", async () => {
+      await runAsWin32(async () => {
+        h.state.execImpl = () => ({
+          error: new Error("WritePrinter failed (5)"),
+          stderr: "",
+        });
+        await expect(printLabel("Brother PT-P710BT", BYTES)).rejects.toThrow(
+          /WritePrinter failed \(5\)/,
+        );
+      });
+    });
+  });
+});
+
+describe("listWindowsPrinters — bidirectional-support detection", () => {
+  // Some drivers (the PT-P710BT among them) crash the spooler when BiDi is on;
+  // the picker reads EnableBIDI from Win32_Printer to warn the user. Get-Printer
+  // stays the source of the device list — Win32_Printer only supplies the flag.
+
+  it("keeps Get-Printer as the device source and reads EnableBIDI from Win32_Printer", async () => {
+    await runAsWin32(async () => {
+      h.state.execImpl = () => ({ stdout: '[{"Name":"Brother PT-P710BT","EnableBIDI":true}]' });
+      await listLabelPrinters();
+      const script = h.state.execCalls[0].args[3];
+      expect(script).toContain("Get-Printer");
+      expect(script).toContain("Win32_Printer");
+      expect(script).toContain("EnableBIDI");
+    });
+  });
+
+  it("flags printers with BiDi on and leaves it false when off", async () => {
+    await runAsWin32(async () => {
+      h.state.execImpl = () => ({
+        stdout:
+          '[{"Name":"Brother PT-P710BT","EnableBIDI":true},{"Name":"HP DeskJet","EnableBIDI":false}]',
+      });
+      const devices = await listLabelPrinters();
+      expect(devices.find((x) => x.path === "Brother PT-P710BT")?.bidiEnabled).toBe(true);
+      expect(devices.find((x) => x.path === "HP DeskJet")?.bidiEnabled).toBe(false);
+    });
+  });
+
+  it("leaves bidiEnabled undefined when the flag is absent (CIM probe failed)", async () => {
+    await runAsWin32(async () => {
+      h.state.execImpl = () => ({ stdout: '[{"Name":"Brother PT-P710BT"}]' });
+      const devices = await listLabelPrinters();
+      expect(devices[0].bidiEnabled).toBeUndefined();
+    });
   });
 });

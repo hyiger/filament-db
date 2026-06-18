@@ -897,6 +897,7 @@
   "settings.labelPrinter.noDevices": "No printers found. Connect the PT-P710BT via USB (add it in your system print settings if needed), then click Refresh.",
   "settings.labelPrinter.refresh": "Refresh",
   "settings.labelPrinter.looksLikePrinter": "PT-Touch",
+  "settings.labelPrinter.bidiWarning": "Bidirectional support is on for this printer. Some drivers crash the Windows Print Spooler when printing with BiDi enabled. If labels fail to print, open Printer Properties → Ports and uncheck \"Enable bidirectional support\".",
   "settings.labelPrinter.deviceSaved": "Label printer device saved.",
   "settings.labelPrinter.deviceSaveFailed": "Couldn't save device: {error}",
   "settings.labelPrinter.deviceCleared": "Label printer device cleared.",

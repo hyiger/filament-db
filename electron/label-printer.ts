@@ -88,6 +88,12 @@ export interface LabelPrinterDevice {
   /** True when the target matches a PT-series printer — the picker badges
    *  / pre-selects the obvious choice. */
   looksLikePrinter: boolean;
+  /** Windows only: the queue has bidirectional support (EnableBIDI) turned on.
+   *  Some drivers (the PT-P710BT among them) crash the Print Spooler when the
+   *  spooler's bidi status query runs at schedule time, so the picker warns the
+   *  user to disable it. `undefined` on macOS/Linux and whenever the bidi state
+   *  couldn't be read — only an explicit `true` should trigger the warning. */
+  bidiEnabled?: boolean;
 }
 
 function isCups(): boolean {
@@ -202,10 +208,21 @@ function prettifyUsbUri(uri: string): string {
 }
 
 async function listWindowsPrinters(): Promise<LabelPrinterDevice[]> {
-  // ConvertTo-Json yields a single object for one printer and an array for
-  // many; @(...) forces an array so the shape is predictable.
+  // Keep `Get-Printer` as the source of the device list (same printer set +
+  // names as before) and enrich each row with EnableBIDI from Win32_Printer —
+  // `Get-Printer` doesn't surface the bidi flag, but the WMI/CIM class does.
+  // The CIM query is best-effort (wrapped in try/catch in PS): if it fails the
+  // bidi map stays empty and EnableBIDI reports false for every printer, but
+  // the listing itself still works. ConvertTo-Json yields a single object for
+  // one printer and an array for many; @(...) forces an array so the shape is
+  // predictable.
   const script =
-    "@(Get-Printer | Select-Object Name) | ConvertTo-Json -Compress";
+    "$bidi=@{}; " +
+    "try { Get-CimInstance Win32_Printer -ErrorAction Stop | " +
+    "ForEach-Object { $bidi[$_.Name] = [bool]$_.EnableBIDI } } catch {}; " +
+    "@(Get-Printer | ForEach-Object { " +
+    "[pscustomobject]@{ Name = $_.Name; EnableBIDI = [bool]$bidi[$_.Name] } }) | " +
+    "ConvertTo-Json -Compress";
   const { stdout } = await execFileP(
     windowsPowershellPath(),
     ["-NoProfile", "-NonInteractive", "-Command", script],
@@ -221,12 +238,16 @@ async function listWindowsPrinters(): Promise<LabelPrinterDevice[]> {
   }
   const rows = Array.isArray(parsed) ? parsed : [parsed];
   return rows
-    .map((r) => (r && typeof r === "object" ? (r as { Name?: string }).Name : undefined))
-    .filter((n): n is string => typeof n === "string" && n.length > 0)
-    .map((name) => ({
+    .filter((r): r is { Name?: unknown; EnableBIDI?: unknown } => !!r && typeof r === "object")
+    .map((r) => ({ name: r.Name, bidi: r.EnableBIDI }))
+    .filter((r): r is { name: string; bidi: unknown } => typeof r.name === "string" && r.name.length > 0)
+    .map(({ name, bidi }) => ({
       path: name,
       friendlyName: name,
       looksLikePrinter: PRINTER_PATTERN.test(name),
+      // Only a definite `true` warns; a missing/non-boolean value stays
+      // undefined so a failed CIM probe doesn't show a spurious warning.
+      bidiEnabled: typeof bidi === "boolean" ? bidi : undefined,
     }));
 }
 
@@ -343,6 +364,51 @@ async function ensureManagedQueue(uri: string): Promise<void> {
   }
 }
 
+/** win32 `RPC_S_SERVER_UNAVAILABLE`. The winspool APIs are RPC calls to the
+ *  Print Spooler service, so when it's stopped or has crashed `OpenPrinter`
+ *  (and every later winspool call) fails with this code. */
+const WIN32_RPC_S_SERVER_UNAVAILABLE = 1722;
+
+/** Actionable, renderer-ready message for the spooler-down case. Shared by the
+ *  PowerShell `OpenPrinter` throw (interpolated into {@link WINDOWS_RAW_PRINT_PS1})
+ *  and the {@link printWindows} catch, so the toast text is identical whichever
+ *  layer first surfaces it. Kept ASCII-only on purpose: it's embedded in a C#
+ *  string literal inside a PowerShell here-string that's written to disk and
+ *  re-read, where non-ASCII (em dashes, arrows) can be mangled by the host code
+ *  page. Exported for the unit test. */
+export const SPOOLER_DOWN_MESSAGE =
+  "The Windows Print Spooler service isn't running - restart it (open services.msc, select Print Spooler, and click Start), then try printing again.";
+
+/** Flatten an execFile rejection (its message + any captured stderr) into one
+ *  string for pattern matching. PowerShell writes the C# exception to stderr;
+ *  execFile also attaches it to the rejection. */
+function windowsPrintErrorText(err: unknown): string {
+  if (err && typeof err === "object") {
+    const e = err as { message?: unknown; stderr?: unknown };
+    const msg = typeof e.message === "string" ? e.message : "";
+    const stderr = typeof e.stderr === "string" ? e.stderr : "";
+    return `${msg}\n${stderr}`;
+  }
+  return String(err);
+}
+
+/**
+ * Map a raw Windows print-subprocess failure to an actionable message, or
+ * `null` when nothing specific applies (caller keeps the original error).
+ *
+ * Detects the spooler-down case both as the friendly message the PowerShell
+ * child already emits for an `OpenPrinter` 1722 AND as the bare win32 code
+ * `1722`, which can still surface from a later winspool call or be buried in
+ * .NET/PowerShell error noise. Exported for the unit test.
+ */
+export function mapWindowsPrintError(raw: string): string | null {
+  if (!raw) return null;
+  if (raw.includes(SPOOLER_DOWN_MESSAGE)) return SPOOLER_DOWN_MESSAGE;
+  // Word-boundaried so it matches "(1722)" / "error 1722" but not 17220 etc.
+  if (/\b1722\b/.test(raw)) return SPOOLER_DOWN_MESSAGE;
+  return null;
+}
+
 async function printWindows(printerName: string, bytes: Uint8Array): Promise<void> {
   // The spooler RAW datatype needs the bytes as a file; pass it + the printer
   // name to a P/Invoke script that calls winspool WritePrinter. Use a unique
@@ -366,6 +432,12 @@ async function printWindows(printerName: string, bytes: Uint8Array): Promise<voi
       ],
       { timeout: WINDOWS_PRINT_TIMEOUT_MS },
     );
+  } catch (err) {
+    // Replace cryptic winspool failures (notably the Print Spooler being down,
+    // win32 1722) with an actionable message so the renderer toast is clear;
+    // anything we don't recognise rethrows verbatim.
+    const friendly = mapWindowsPrintError(windowsPrintErrorText(err));
+    throw friendly ? new Error(friendly) : err;
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
@@ -404,7 +476,12 @@ public static class FdbRawPrinter {
   [DllImport("winspool.drv", SetLastError=true)] public static extern bool WritePrinter(IntPtr h, byte[] buf, int count, out int written);
   public static void Print(string printer, byte[] data) {
     IntPtr h;
-    if (!OpenPrinter(printer, out h, IntPtr.Zero)) throw new Exception("OpenPrinter failed (" + Marshal.GetLastWin32Error() + ")");
+    if (!OpenPrinter(printer, out h, IntPtr.Zero)) {
+      int err = Marshal.GetLastWin32Error();
+      // win32 1722 (RPC_S_SERVER_UNAVAILABLE) = the Print Spooler service is
+      // down - surface the actionable hint instead of the bare code.
+      throw new Exception(err == ${WIN32_RPC_S_SERVER_UNAVAILABLE} ? "${SPOOLER_DOWN_MESSAGE}" : "OpenPrinter failed (" + err + ")");
+    }
     try {
       DOCINFO di = new DOCINFO(); di.pDocName = "Filament DB Label"; di.pDataType = "RAW";
       if (!StartDocPrinter(h, 1, ref di)) throw new Exception("StartDocPrinter failed (" + Marshal.GetLastWin32Error() + ")");
