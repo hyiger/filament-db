@@ -1,6 +1,6 @@
 # Filament DB
 
-A desktop and web application for managing 3D printing filament profiles. Import filament configurations from PrusaSlicer, store them in MongoDB or MongoDB Atlas, and manage them through a clean interface. The desktop app reads and writes [OpenPrintTag](https://openprinttag.org/) NFC tags (NFC-V / ISO 15693) and reads Bambu Lab MIFARE Classic spool tags via an ACR1552U reader, so you can scan a spool to autofill a profile or write your own per-spool tags. Available as an installable desktop app for macOS, Windows, and Linux, or run as a local web app. The desktop app supports offline mode with an embedded local database, hybrid mode with automatic cloud sync, or direct Atlas cloud mode. The API is unauthenticated by default and intended for single-user localhost use; do not expose to untrusted networks without adding an auth layer. For exposed/headless deployments (e.g. the mobile companion app talking to it over the LAN), set the `FILAMENTDB_API_KEY` environment variable — every `/api` request must then send `Authorization: Bearer <key>`. Leave it unset for localhost/desktop use, where it stays a no-op.
+A desktop and web application for managing 3D printing filament profiles. Import filament configurations from PrusaSlicer, store them in MongoDB or MongoDB Atlas, and manage them through a clean interface. The desktop app reads and writes [OpenPrintTag](https://openprinttag.org/) NFC tags (NFC-V / ISO 15693) and reads Bambu Lab MIFARE Classic spool tags via an ACR1552U reader, so you can scan a spool to autofill a profile or write your own per-spool tags. Available as an installable desktop app for macOS, Windows, and Linux, or run as a local web app. The desktop app supports offline mode with an embedded local database, hybrid mode with automatic cloud sync, or direct Atlas cloud mode. The API is unauthenticated by default and intended for single-user localhost use; do not expose to untrusted networks without adding an auth layer. For exposed/headless deployments (e.g. the mobile companion app talking to it over the LAN), set the `FILAMENTDB_API_KEY` environment variable — every `/api` request must then send `Authorization: Bearer <key>`. Note the gate is all-or-nothing and **disables the first-party browser web UI** (which doesn't send the key), so it's for non-browser clients (mobile app, slicers, scripts); for browser-UI access on a LAN, keep the port on loopback or use an authenticating reverse proxy (see [Securing a network-exposed instance](docs/setup.md#securing-a-network-exposed-instance)). Leave it unset for localhost/desktop use, where it stays a no-op.
 
 ![Filament DB](docs/images/filament-db-screenshot.png)
 
@@ -94,10 +94,10 @@ Download the latest release for your platform from [GitHub Releases](https://git
 ### Docker
 
 ```bash
-docker run -p 3456:3000 -e MONGODB_URI="mongodb+srv://..." ghcr.io/hyiger/filament-db
+docker run -p 127.0.0.1:3456:3000 -e MONGODB_URI="mongodb+srv://..." ghcr.io/hyiger/filament-db
 ```
 
-Open http://localhost:3456. See the [Setup Guide](docs/setup.md#option-2-docker) for Docker Compose and configuration options.
+Open http://localhost:3456. The `127.0.0.1:` prefix binds the port to this machine only — a bare `-p 3456:3000` exposes the (unauthenticated) API to your whole LAN. See [Securing a network-exposed instance](docs/setup.md#securing-a-network-exposed-instance) before exposing it, and the [Setup Guide](docs/setup.md#option-2-docker) for Docker Compose and configuration options.
 
 ### From Source
 

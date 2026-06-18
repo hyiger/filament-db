@@ -612,7 +612,7 @@ By default the desktop app's database is reachable only from the computer it run
 1. In **Settings**, find **Share on local network** and toggle it on. The embedded server rebinds to your LAN address (instead of localhost), and Settings shows the URL other devices can use.
 2. With sharing on, the app also advertises itself over Bonjour/mDNS (`_filamentdb._tcp`), so the mobile app can find it without you typing an IP.
 
-> **Securing a shared instance:** set the `FILAMENTDB_API_KEY` environment variable to require a bearer token on every API request. Unset, a LAN-exposed instance is unauthenticated.
+> **Securing a shared instance:** set the `FILAMENTDB_API_KEY` environment variable to require a bearer token on every API request. Unset, a LAN-exposed instance is unauthenticated. The gate is all-or-nothing and **disables the browser web UI** (it doesn't send the key) — use it for non-browser clients (mobile app, slicers); for browser-UI access on a LAN, use loopback or an authenticating reverse proxy. See [Securing a network-exposed instance](setup.md#securing-a-network-exposed-instance).
 
 ---
 

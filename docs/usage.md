@@ -686,7 +686,7 @@ Settings → **Share on local network** lets other devices on your LAN reach thi
 
 Turn it on and the server re-binds to `0.0.0.0` (all interfaces), and the settings panel shows the LAN URL to point another device at (e.g. `http://192.168.1.50:3456`). This is what the mobile scanner app connects to.
 
-**Securing a shared instance**: set the `FILAMENTDB_API_KEY` environment variable on the desktop host (or server) to put a bearer-token gate in front of every `/api/*` request — clients must then send a matching API key. Leaving it unset (the default) leaves the API unauthenticated, which is fine for a trusted home network but not for an exposed one.
+**Securing a shared instance**: set the `FILAMENTDB_API_KEY` environment variable on the desktop host (or server) to put a bearer-token gate in front of every `/api/*` request — clients must then send a matching API key. Leaving it unset (the default) leaves the API unauthenticated, which is fine for a trusted home network but not for an exposed one. Note the gate is all-or-nothing and **disables the browser web UI** (which doesn't send the key), so it's for non-browser clients (the mobile app, slicers, scripts); for browser-UI access on a LAN, use loopback + the desktop app or an authenticating reverse proxy — see [Securing a network-exposed instance](setup.md#securing-a-network-exposed-instance).
 
 ## Find on Your Network — mDNS Auto-Discovery *(v1.47)*
 

@@ -49,7 +49,7 @@ By default the embedded Next.js server binds to `localhost`, so it's reachable o
 
 Since v1.47.0 the desktop also advertises itself over **mDNS** (`_filamentdb._tcp`, via `electron/mdns-service.ts` / `bonjour-service`) **only while "Share on local network" is on**, so the mobile app's **Find on your network** scan can auto-discover it without typing a URL.
 
-> **Securing a LAN-exposed instance:** set the `FILAMENTDB_API_KEY` environment variable to require a bearer token on every `/api/*` request (`src/lib/apiAuth.ts`). Leaving it unset keeps the API unauthenticated (the default).
+> **Securing a LAN-exposed instance:** set the `FILAMENTDB_API_KEY` environment variable to require a bearer token on every `/api/*` request (`src/lib/apiAuth.ts`). Leaving it unset keeps the API unauthenticated (the default). The gate is all-or-nothing and **disables the browser web UI** (which doesn't attach the key), so it's for non-browser clients (the mobile app, slicers); for browser-UI access on a LAN, use loopback + the desktop app or an authenticating reverse proxy — see [Securing a network-exposed instance](setup.md#securing-a-network-exposed-instance).
 
 ## Auto-Update *(v1.11)*
 

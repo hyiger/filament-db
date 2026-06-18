@@ -177,6 +177,7 @@ from Step 5 (with the real password filled in). The three modes are Atlas (Cloud
 > **Note — Docker alternative:** You can run Filament DB as a container instead:
 > `docker run -p 3456:3000 -e MONGODB_URI="mongodb+srv://..." ghcr.io/hyiger/filament-db`.
 > Maps host port `3456` (matching the desktop app) to container port `3000`, so PrusaSlicer's `http://localhost:3456` works for both.
+> (If PrusaSlicer runs on the **same** machine as the container, use `-p 127.0.0.1:3456:3000` to keep it off the LAN; the bare `-p 3456:3000` above is needed only when PrusaSlicer is on a different machine — that exposes the unauthenticated API, so see [Securing a network-exposed instance](setup.md#securing-a-network-exposed-instance).)
 > The Docker/web version cannot use the USB NFC reader — tag reading and writing needs the
 > **desktop** app.
 

@@ -182,6 +182,7 @@ Atlas (Cloud), Hybrid (Lokal + Cloud) und Offline (Nur lokal).
 > `docker run -p 3456:3000 -e MONGODB_URI="mongodb+srv://..." ghcr.io/hyiger/filament-db`.
 > Mappt Host-Port `3456` (passend zur Desktop-App) auf Container-Port `3000`, sodass PrusaSlicers
 > `http://localhost:3456` für beide funktioniert.
+> (Läuft PrusaSlicer auf **derselben** Maschine wie der Container, verwende `-p 127.0.0.1:3456:3000`, um ihn vom LAN fernzuhalten; das bloße `-p 3456:3000` oben ist nur nötig, wenn PrusaSlicer auf einer anderen Maschine läuft — das gibt die nicht authentifizierte API frei, siehe [Eine netzwerkexponierte Instanz absichern](setup.md#eine-netzwerkexponierte-instanz-absichern).)
 > Die Docker-/Web-Version kann den USB-NFC-Reader nicht nutzen — Tag-Lesen und -Schreiben benötigt
 > die **Desktop**-App.
 

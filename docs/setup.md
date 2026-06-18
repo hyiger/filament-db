@@ -29,12 +29,14 @@ Run Filament DB as a Docker container. The image is ~72MB, built on `node:22-alp
 ### Quick Start
 
 ```bash
-docker run -p 3456:3000 \
+docker run -p 127.0.0.1:3456:3000 \
   -e MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/filament-db" \
   ghcr.io/hyiger/filament-db
 ```
 
 Open http://localhost:3456.
+
+> **Security:** the `127.0.0.1:` prefix binds the port to **this machine only**. A bare `-p 3456:3000` publishes on **all** host interfaces, exposing Filament DB's API to your whole LAN — and the API is **unauthenticated by default**. Only drop the `127.0.0.1:` prefix if you intend to reach it from other devices, and read [Securing a network-exposed instance](#securing-a-network-exposed-instance) first.
 
 ### Docker Compose
 
@@ -45,7 +47,9 @@ services:
   filament-db:
     image: ghcr.io/hyiger/filament-db
     ports:
-      - "3456:3000"
+      # Loopback-only — reachable from this host. To reach it from other
+      # devices, use "3456:3000" and read "Securing a network-exposed instance".
+      - "127.0.0.1:3456:3000"
     environment:
       - MONGODB_URI=mongodb+srv://user:pass@cluster.mongodb.net/filament-db
       # Optional: AI provider for TDS extraction (choose one)
@@ -68,7 +72,8 @@ services:
   filament-db:
     image: ghcr.io/hyiger/filament-db
     ports:
-      - "3456:3000"
+      # Loopback-only (see the note above). Use "3456:3000" to expose on the LAN.
+      - "127.0.0.1:3456:3000"
     environment:
       - MONGODB_URI=mongodb://mongo:27017/filament-db
     depends_on:
@@ -91,10 +96,31 @@ volumes:
 |----------|----------|-------------|
 | `MONGODB_URI` | Yes | MongoDB connection string |
 | `PORT` | No | Server port inside the container (default: `3000`) |
+| `HOSTNAME` | No | Interface the server binds inside the container (default: `0.0.0.0`). Reachability is governed by the `docker run -p` mapping, not this. |
+| `FILAMENTDB_API_KEY` | No | Bearer-token gate on **every** `/api/*` request. See [Securing a network-exposed instance](#securing-a-network-exposed-instance). **Note:** it disables the browser web UI — use it only for non-browser clients (mobile app, slicers, scripts). |
 | `GEMINI_API_KEY` | No | Google Gemini API key for TDS extraction |
 | `ANTHROPIC_API_KEY` | No | Anthropic Claude API key for TDS extraction |
 | `OPENAI_API_KEY` | No | OpenAI API key for TDS extraction |
 | `ALLOWED_DEV_ORIGINS` | No | Comma-separated hostnames allowed to access the dev server (e.g. `myhost.local`) |
+
+### Securing a network-exposed instance
+
+Filament DB's trust model is **localhost / single-user**: by default the API is **unauthenticated**, which is fine when the port is bound to loopback (`127.0.0.1:`) or you're using the desktop app. Publishing it to the LAN (a bare `-p 3456:3000`, or a headless service binding `0.0.0.0`) exposes the full `/api` surface to every device on the network.
+
+You have two ways to secure an exposed instance, depending on **who** needs to reach it:
+
+- **Non-browser clients only** (the [mobile companion app](mobile.md), PrusaSlicer/OrcaSlicer integrations, scripts) — set `FILAMENTDB_API_KEY` to a strong random value. Every `/api/*` request must then send `Authorization: Bearer <key>`; the mobile app and the slicer integrations support this. Generate one with e.g. `openssl rand -hex 32`.
+
+  ```bash
+  docker run -p 3456:3000 \
+    -e MONGODB_URI="mongodb+srv://user:pass@cluster.mongodb.net/filament-db" \
+    -e FILAMENTDB_API_KEY="$(openssl rand -hex 32)" \
+    ghcr.io/hyiger/filament-db
+  ```
+
+  > **The bearer gate is all-or-nothing and disables the first-party browser web UI.** The web UI makes plain same-origin requests and does not attach the key, so with `FILAMENTDB_API_KEY` set the UI loads but every call returns `401`. There is deliberately no same-origin exemption (those request signals are forgeable). Use the key only when the browser UI isn't how you'll access this instance.
+
+- **Browser web-UI access over the LAN** — do **not** rely on `FILAMENTDB_API_KEY` (it breaks the UI, above). Instead either keep the port on loopback and use the desktop app, or put Filament DB behind an **authenticating reverse proxy** (nginx/Caddy/Authelia with basic-auth, SSO, or mTLS) that terminates auth before the request reaches the app.
 
 ### Building from Source
 
@@ -102,7 +128,7 @@ volumes:
 git clone https://github.com/hyiger/filament-db.git
 cd filament-db
 docker build -t filament-db .
-docker run -p 3456:3000 -e MONGODB_URI="mongodb+srv://..." filament-db
+docker run -p 127.0.0.1:3456:3000 -e MONGODB_URI="mongodb+srv://..." filament-db
 ```
 
 ---
@@ -255,6 +281,8 @@ sudo chmod 600 "/opt/Filament DB/.env"
 ```
 
 `HOSTNAME=0.0.0.0` makes the server listen on all network interfaces so other devices on your network can reach it.
+
+> **Security:** binding `0.0.0.0` exposes the **unauthenticated** `/api` surface to everyone on your network. Before doing this, read [Securing a network-exposed instance](#securing-a-network-exposed-instance) — set `FILAMENTDB_API_KEY` if only non-browser clients (the mobile app, slicers) need access, or front the service with an authenticating reverse proxy if you want the browser UI on the LAN (the key disables the web UI).
 
 > **Note:** If you're running the desktop app instead of a headless service, you don't need to set `HOSTNAME` by hand — flip on the **Share on local network** toggle in Settings (electron-store key `exposeToLan`, off by default) and the embedded server binds `0.0.0.0` for you. It pairs with mDNS auto-discovery, so the mobile companion app can find your instance on the network without typing a URL.
 
