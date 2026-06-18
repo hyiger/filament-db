@@ -455,7 +455,7 @@ Your last choice is remembered as the default for the next print.
 ### One-time setup
 
 1. **Connect the printer via USB** and power it on. On macOS/Linux it's reachable through CUPS automatically; on Windows, install it as a normal printer if your OS prompts.
-2. **Open the desktop app → Settings → Label Printer**. Click **Refresh** to list printers. The PT-P710BT shows up with a green **PT-Touch** badge (on macOS/Linux it appears as a `usb://Brother/PT-P710BT…` device). Select it.
+2. **Open the desktop app → Settings → Label Printer**. Any printers already set up as system queues are listed automatically. If your PT-P710BT was just connected and isn't a configured queue yet, click **Scan for USB printers** (or **Refresh**) to detect it — **on macOS this may ask for your administrator password**, because listing USB print devices is an admin operation. The PT-P710BT shows up with a green **PT-Touch** badge (on macOS/Linux it appears as a `usb://Brother/PT-P710BT…` device). Select it.
 3. **(Optional) Public URL for QR-mode labels**: if you want to print labels with deep-link URLs that scan correctly from your phone, also set the **Public base URL** field. URL mode in the desktop app needs a non-localhost address because the renderer's `window.location.origin` is `http://localhost:3456` — unscannable from any other device. Examples: `https://filament-db.lan`, `https://my-instance.example.com`. Loopback addresses, query strings, and URL fragments are rejected with a descriptive error. Leave blank to disable URL mode in the desktop app — the instance-ID mode still works without it.
 4. **Test print**: click **Test print** to send a short label using your saved format. Confirm the QR scans and the text is crisp before you start printing real labels.
 
@@ -479,7 +479,7 @@ If you're running in the **web app instead of Electron**, the Print button downl
 
 ### Troubleshooting
 
-- **No printer listed** in Settings → Label Printer: make sure the printer is connected with a USB **data** cable (charge-only cables power the printer but won't enumerate it) and powered on, then click **Refresh**. On Linux you may need to add the printer in your system print settings first.
+- **No printer listed** in Settings → Label Printer: make sure the printer is connected with a USB **data** cable (charge-only cables power the printer but won't enumerate it) and powered on, then click **Scan for USB printers**. On macOS the scan may prompt for your administrator password (it's the OS authorizing the device query — opening Settings itself no longer prompts, as of the #771 fix). On Linux you may need to add the printer in your system print settings first.
 - **Upgrading from a pre-v1.34.9 build**: if you'd previously selected a Bluetooth/serial device, re-select your printer in Settings → Label Printer. The app detects the old serial-style setting and asks you to pick again rather than failing cryptically.
 - **Label prints mirrored** (text backwards, QR reversed): fixed in v1.34.9 — update to the latest version.
 - **Nothing printed even though it "succeeded"**: the PT-P710BT auto-powers-off when idle. Wake it (press its power button), confirm tape is loaded, and print again.
