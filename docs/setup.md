@@ -124,7 +124,7 @@ You have two ways to secure an exposed instance, depending on **who** needs to r
 
   > **The bearer gate is all-or-nothing and disables the first-party browser web UI.** The web UI makes plain same-origin requests and does not attach the key, so with `FILAMENTDB_API_KEY` set the UI loads but every call returns `401`. There is deliberately no same-origin exemption (those request signals are forgeable). Use the key only when the browser UI isn't how you'll access this instance.
 
-- **Browser web-UI access over the LAN** — do **not** rely on `FILAMENTDB_API_KEY` (it breaks the UI, above). Instead either keep the port on loopback and use the desktop app, or put Filament DB behind an **authenticating reverse proxy** (nginx/Caddy/Authelia with basic-auth, SSO, or mTLS) that terminates auth before the request reaches the app.
+- **Browser web-UI access over the LAN** — do **not** rely on `FILAMENTDB_API_KEY` (it breaks the UI, above). Instead either keep the port on loopback and use the desktop app, or put Filament DB behind an **authenticating reverse proxy** (nginx/Caddy/Authelia with basic-auth, SSO, or mTLS) that terminates auth before the request reaches the app. When you use a reverse proxy, **bind Filament DB itself to loopback** (`-p 127.0.0.1:3456:3000` for Docker, `HOSTNAME=127.0.0.1` for the systemd service) or firewall its direct port — otherwise the app stays reachable at `http://<host>:3456` and browser users bypass the proxy straight to the unauthenticated API. The proxy must be the only way in.
 
 ### Building from Source
 
@@ -286,7 +286,7 @@ sudo chmod 600 "/opt/Filament DB/.env"
 
 `HOSTNAME=0.0.0.0` makes the server listen on all network interfaces so other devices on your network can reach it.
 
-> **Security:** binding `0.0.0.0` exposes the **unauthenticated** `/api` surface to everyone on your network. Before doing this, read [Securing a network-exposed instance](#securing-a-network-exposed-instance) — set `FILAMENTDB_API_KEY` if only non-browser clients (the mobile app, slicers) need access, or front the service with an authenticating reverse proxy if you want the browser UI on the LAN (the key disables the web UI).
+> **Security:** binding `0.0.0.0` exposes the **unauthenticated** `/api` surface to everyone on your network. Before doing this, read [Securing a network-exposed instance](#securing-a-network-exposed-instance) — set `FILAMENTDB_API_KEY` if only non-browser clients (the mobile app, slicers) need access, or front the service with an authenticating reverse proxy if you want the browser UI on the LAN (the key disables the web UI). If you go the reverse-proxy route, set `HOSTNAME=127.0.0.1` here (not `0.0.0.0`) — or firewall port 3456 — so the app is reachable only through the proxy; otherwise browser users can hit `http://<host>:3456` directly and bypass it.
 
 > **Note:** If you're running the desktop app instead of a headless service, you don't need to set `HOSTNAME` by hand — flip on the **Share on local network** toggle in Settings (electron-store key `exposeToLan`, off by default) and the embedded server binds `0.0.0.0` for you. It pairs with mDNS auto-discovery, so the mobile companion app can find your instance on the network without typing a URL.
 

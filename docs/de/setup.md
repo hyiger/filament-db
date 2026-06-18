@@ -127,7 +127,7 @@ Es gibt zwei Wege, eine exponierte Instanz abzusichern — je nachdem, **wer** s
 
   > **Das Bearer-Gate ist Alles-oder-Nichts und deaktiviert die Browser-Web-UI.** Die Web-UI sendet einfache Same-Origin-Anfragen ohne den Schlüssel, daher lädt die UI zwar, aber jeder Aufruf liefert `401`. Es gibt bewusst keine Same-Origin-Ausnahme (diese Signale sind fälschbar). Nutze den Schlüssel nur, wenn der Zugriff auf diese Instanz nicht über die Browser-UI erfolgt.
 
-- **Browser-Web-UI-Zugriff über das LAN** — verlasse dich **nicht** auf `FILAMENTDB_API_KEY` (er bricht die UI, siehe oben). Binde stattdessen den Port an Loopback und nutze die Desktop-App, oder stelle Filament DB hinter einen **authentifizierenden Reverse-Proxy** (nginx/Caddy/Authelia mit Basic-Auth, SSO oder mTLS), der die Authentifizierung übernimmt, bevor die Anfrage die App erreicht.
+- **Browser-Web-UI-Zugriff über das LAN** — verlasse dich **nicht** auf `FILAMENTDB_API_KEY` (er bricht die UI, siehe oben). Binde stattdessen den Port an Loopback und nutze die Desktop-App, oder stelle Filament DB hinter einen **authentifizierenden Reverse-Proxy** (nginx/Caddy/Authelia mit Basic-Auth, SSO oder mTLS), der die Authentifizierung übernimmt, bevor die Anfrage die App erreicht. Wenn du einen Reverse-Proxy nutzt, **binde Filament DB selbst an Loopback** (`-p 127.0.0.1:3456:3000` bei Docker, `HOSTNAME=127.0.0.1` beim systemd-Dienst) oder sperre den direkten Port per Firewall — sonst bleibt die App unter `http://<host>:3456` erreichbar und Browser-Nutzer umgehen den Proxy direkt zur nicht authentifizierten API. Der Proxy muss der einzige Zugang sein.
 
 ### Aus Quellen bauen
 
@@ -289,7 +289,7 @@ sudo chmod 600 "/opt/Filament DB/.env"
 
 `HOSTNAME=0.0.0.0` sorgt dafür, dass der Server auf allen Netzwerkschnittstellen lauscht, sodass andere Geräte im Netz ihn erreichen können.
 
-> **Sicherheit:** Das Binden an `0.0.0.0` gibt die **nicht authentifizierte** `/api`-Oberfläche für alle im Netz frei. Lies vorher [Eine netzwerkexponierte Instanz absichern](#eine-netzwerkexponierte-instanz-absichern) — setze `FILAMENTDB_API_KEY`, wenn nur Nicht-Browser-Clients (Mobile-App, Slicer) Zugriff brauchen, oder stelle den Dienst hinter einen authentifizierenden Reverse-Proxy, wenn du die Browser-UI im LAN willst (der Schlüssel deaktiviert die Web-UI).
+> **Sicherheit:** Das Binden an `0.0.0.0` gibt die **nicht authentifizierte** `/api`-Oberfläche für alle im Netz frei. Lies vorher [Eine netzwerkexponierte Instanz absichern](#eine-netzwerkexponierte-instanz-absichern) — setze `FILAMENTDB_API_KEY`, wenn nur Nicht-Browser-Clients (Mobile-App, Slicer) Zugriff brauchen, oder stelle den Dienst hinter einen authentifizierenden Reverse-Proxy, wenn du die Browser-UI im LAN willst (der Schlüssel deaktiviert die Web-UI). Beim Reverse-Proxy-Weg setze hier `HOSTNAME=127.0.0.1` (nicht `0.0.0.0`) — oder sperre Port 3456 per Firewall — damit die App nur über den Proxy erreichbar ist; sonst können Browser-Nutzer `http://<host>:3456` direkt aufrufen und ihn umgehen.
 
 ### 2. Dienst anlegen
 
