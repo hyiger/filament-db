@@ -1,0 +1,61 @@
+# CI gate for the Expo mobile app (packages/mobile) — GH #765.
+#
+# The root test.yml only exercises the web/Electron package: root tsconfig and
+# eslint exclude packages/, and packages/mobile carries its own package-lock.json
+# (it is NOT an npm workspace member), so root `npm ci`/lint/tsc/audit never touch
+# it. This job runs the mobile package's own lint + typecheck + production audit
+# so a PR can't break the scanner app or introduce mobile-only advisories while
+# the required root checks stay green.
+#
+# Scoped with a paths filter so it only runs when the mobile package (or this
+# workflow) changes — the mobile app is touched far less often than the web app
+# and its install is heavy. NOTE: if this is ever added to branch protection as a
+# REQUIRED check, drop the paths filter (or use a "skipped = success" shim) to
+# avoid the required-check + path-filter "pending forever" deadlock.
+name: Mobile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/mobile/**"
+      - ".github/workflows/mobile.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "packages/mobile/**"
+      - ".github/workflows/mobile.yml"
+
+jobs:
+  mobile:
+    name: lint · typecheck · audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      # node 20 matches the EAS build environment (eas-build-mobile.yml); a
+      # single version is enough for a lint/tsc/audit gate.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: packages/mobile/package-lock.json
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      # No `typecheck` script in packages/mobile — invoke tsc directly.
+      - name: Type check
+        run: npx tsc --noEmit
+
+      # Production-dependency audit. Blocking: the uuid<11.1.1 advisories (GH
+      # #764) are resolved by the `overrides` block in packages/mobile/package.json
+      # shipped in the same PR, so this passes today. If a future Expo bump
+      # re-introduces a transitive advisory, this fails the PR — the intended gate.
+      - name: Security audit (production deps)
+        run: npm audit --audit-level=moderate --omit=dev
