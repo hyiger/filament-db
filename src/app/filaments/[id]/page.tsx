@@ -1029,7 +1029,15 @@ function FilamentDetail() {
         <div className="min-w-0">
           <h1 className="text-2xl font-bold">{filament.name}</h1>
           <p className="text-gray-500">
-            {filament.vendor} &middot; {filament.type}
+            <span>
+              {filament.vendor}
+              {isVariant && inherited.has("vendor") && <InheritedMark />}
+            </span>
+            {" "}&middot;{" "}
+            <span>
+              {filament.type}
+              {isVariant && inherited.has("type") && <InheritedMark />}
+            </span>
             {filament.instanceId && (
               <span className="ml-2 inline-flex items-center gap-1 text-xs font-mono text-gray-400">
                 {filament.instanceId}
@@ -1047,6 +1055,7 @@ function FilamentDetail() {
               </span>
             )}
             {finish && <FinishChip finish={finish} size="sm" className="ml-2" />}
+            {finish && isVariant && inherited.has("optTags") && <InheritedMark />}
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
@@ -1314,14 +1323,21 @@ function FilamentDetail() {
       {/* Variant parent link */}
       {isVariant && (
         <div className="mb-4 px-3 py-2 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded text-sm flex items-center justify-between gap-3 flex-wrap">
-          <span>
-            {t("detail.inheritsFromParent")}
+          <div className="flex flex-col gap-0.5">
+            <span>
+              {t("detail.inheritsFromParent")}
+              {inherited.size > 0 && (
+                <span className="text-gray-500 ml-1">
+                  ({t("detail.inheritedFieldCount", { count: inherited.size })})
+                </span>
+              )}
+            </span>
             {inherited.size > 0 && (
-              <span className="text-gray-500 ml-1">
-                ({t("detail.inheritedFieldCount", { count: inherited.size })})
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                {t("detail.inheritedLegend")}
               </span>
             )}
-          </span>
+          </div>
           {filament._parent && (
             <Link
               href={`/filaments/${filament._parent._id}`}
@@ -1893,6 +1909,7 @@ function FilamentDetail() {
             </svg>
             {showTdsPreview ? t("detail.tds.hide") : t("detail.tds.view")}
           </button>
+          {isVariant && inherited.has("tdsUrl") && <InheritedMark />}
           {safeHttpUrl(filament.tdsUrl) && (
             <a
               href={safeHttpUrl(filament.tdsUrl)!}
@@ -2728,13 +2745,33 @@ function SpoolCard({
   );
 }
 
+/** Compact "inherited" marker for inline labels (e.g. the vendor/type
+ *  subtitle) where a full InfoCard badge doesn't fit. Mirrors the blue
+ *  treatment inherited InfoCards use so the signal reads consistently
+ *  across the page (GH #773). */
+function InheritedMark() {
+  const { t } = useTranslation();
+  return (
+    <sup
+      className="ml-0.5 text-[0.65rem] font-medium text-blue-500 dark:text-blue-400"
+      title={t("detail.inheritedTitle")}
+    >
+      {t("detail.inherited")}
+    </sup>
+  );
+}
+
 function InfoCard({ label, value, inherited = false }: { label: string; value: string; inherited?: boolean }) {
   const { t } = useTranslation();
   return (
     <div className={`rounded p-3 ${inherited ? "bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800" : "bg-gray-50 dark:bg-gray-900"}`}>
       <p className="text-xs text-gray-500 mb-1">
         {label}
-        {inherited && <span className="ml-1 text-blue-500">({t("detail.inherited")})</span>}
+        {inherited && (
+          <span className="ml-1 text-blue-500" title={t("detail.inheritedTitle")}>
+            ({t("detail.inherited")})
+          </span>
+        )}
       </p>
       <p className="text-lg font-semibold">{value}</p>
     </div>
