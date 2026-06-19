@@ -421,4 +421,43 @@ describe("GET /api/spools/by-location", () => {
     expect(body.totalSpools).toBe(1);
     expect(body.groups[0].spools[0].filamentName).toBe("Active");
   });
+
+  it("counts a legacy single-spool row (empty spools[] + top-level totalWeight) — GH #777", async () => {
+    const shelf = await Location.create({ name: "Shelf A", kind: "shelf" });
+    // A normal filament with one real spool.
+    await Filament.create({
+      name: "Normal PLA",
+      vendor: "QA",
+      type: "PLA",
+      diameter: 1.75,
+      spoolWeight: 200,
+      spools: [{ label: "S1", totalWeight: 1100, locationId: shelf._id }],
+    });
+    // A LEGACY single-spool: empty spools[] but a top-level totalWeight
+    // (pre-migration shape). Home's getSpoolCount counts it as one roll; the
+    // spools[]-only aggregation missed it before #777.
+    await Filament.create({
+      name: "Legacy PETG",
+      vendor: "QA",
+      type: "PETG",
+      diameter: 1.75,
+      spoolWeight: 250,
+      spools: [],
+      totalWeight: 800,
+    });
+
+    const { GET } = await import("@/app/api/spools/by-location/route");
+    const body = await (await GET(req())).json();
+    // 1 real spool + 1 legacy roll = 2 (was 1 before #777).
+    expect(body.totalSpools).toBe(2);
+    // The legacy roll lands in the synthetic "no location" group.
+    const noLoc = body.groups.find(
+      (g: { locationId: string | null }) => g.locationId == null,
+    );
+    expect(noLoc).toBeTruthy();
+    expect(noLoc.count).toBe(1);
+    expect(noLoc.spools[0].filamentName).toBe("Legacy PETG");
+    // Remaining grams = gross − tare = 800 − 250 = 550.
+    expect(noLoc.totalGrams).toBe(550);
+  });
 });

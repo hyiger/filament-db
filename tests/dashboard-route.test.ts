@@ -188,6 +188,33 @@ describe("/api/dashboard — counts.spools is active-only (excludes retired)", (
     expect(body.counts.retiredSpools).toBe(2);
     expect(body.counts.totalSpools).toBe(2);
   });
+
+  it("counts a legacy single-spool row (empty spools[] + top-level totalWeight) — GH #777", async () => {
+    // A normal filament with one real spool subdoc …
+    await Filament.create({
+      name: "Normal PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      spools: [{ label: "S1", totalWeight: 1100 }],
+    });
+    // … plus a LEGACY single-spool: empty spools[] but a top-level totalWeight
+    // (pre-migration shape). The home stat counts this as one roll; before
+    // #777 the dashboard missed it and under-counted by one.
+    await Filament.create({
+      name: "Legacy PETG",
+      vendor: "Test",
+      type: "PETG",
+      spoolWeight: 250,
+      spools: [],
+      totalWeight: 800,
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    expect(body.counts.spools).toBe(2); // 1 real + 1 legacy roll (was 1 pre-#777)
+    expect(body.counts.totalSpools).toBe(2);
+  });
 });
 
 /**

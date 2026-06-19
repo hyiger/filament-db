@@ -101,7 +101,14 @@ export async function GET(request: NextRequest) {
     // here is a well-formed stage object.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const pipeline: any[] = [
-      { $match: { _deletedAt: null, spools: { $exists: true, $ne: [] } } },
+      // GH #777: keep legacy single-spool rows (empty `spools[]` but a
+      // top-level `totalWeight` — pre-migration data) in the pipeline so the
+      // /inventory count matches the home stat (`getSpoolCount` counts such a
+      // row as one physical roll). The `$set` below materializes their one
+      // synthetic spool; a truly spool-less, weightless catalog row resolves
+      // to `[]` and is dropped by `$unwind`, exactly as the old
+      // `spools: { $ne: [] }` match did.
+      { $match: { _deletedAt: null } },
       // Self-lookup for parent — needed for spoolWeight / netFilamentWeight
       // inheritance (see resolveFilament INHERITABLE_FIELDS) AND for the
       // type / vendor filters, which both fields inherit from. Done
@@ -193,6 +200,47 @@ export async function GET(request: NextRequest) {
       ...(vendorFilter
         ? [{ $match: { _effectiveVendor: vendorFilter } }]
         : []),
+      // GH #777: materialize a synthetic spool for a LEGACY single-spool row
+      // (empty `spools[]` + a non-null top-level `totalWeight`). The home stat
+      // (`getSpoolCount`, src/lib/inventoryStats.ts) treats such a row as one
+      // physical roll; the spools[]-only `$unwind` below would otherwise miss
+      // it and under-count by one per legacy filament. The synthetic spool
+      // carries `locationId: null` so it lands in the "no location" group
+      // (matching how the home page buckets legacy single-spools), `retired:
+      // false` (legacy rolls have no retired notion → always active, like
+      // `getSpoolCount`), and the filament-level `instanceId`. A row with a
+      // populated `spools[]` is left untouched; a spool-less + weightless row
+      // resolves to `[]` and is dropped by `$unwind`.
+      {
+        $set: {
+          spools: {
+            $cond: [
+              { $gt: [{ $size: { $ifNull: ["$spools", []] } }, 0] },
+              "$spools",
+              {
+                $cond: [
+                  { $ne: [{ $ifNull: ["$totalWeight", null] }, null] },
+                  [
+                    {
+                      _id: "$_id",
+                      instanceId: "$instanceId",
+                      label: "",
+                      totalWeight: "$totalWeight",
+                      lotNumber: null,
+                      purchaseDate: null,
+                      openedDate: null,
+                      retired: false,
+                      locationId: null,
+                      dryCycles: [],
+                    },
+                  ],
+                  [],
+                ],
+              },
+            ],
+          },
+        },
+      },
       { $unwind: "$spools" },
       // Retired filter happens AFTER unwind because it's on the spool
       // subdoc, not the filament.
