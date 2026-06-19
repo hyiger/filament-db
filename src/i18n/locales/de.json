@@ -288,6 +288,8 @@
   "spoolImport.resultsHeading": "Ergebnis — {imported} importiert, {failed} fehlgeschlagen",
   "share.title": "Geteilte Kataloge",
   "share.subtitle": "Veröffentliche einen schreibgeschützten Snapshot ausgewählter Filamente, den jeder mit dem Link ansehen oder importieren kann.",
+  "share.localOnlyWarning": "Diese Links zeigen auf die Adresse dieses Computers (localhost) und öffnen sich nur hier. Damit andere Geräte sie öffnen können, aktiviere „Im lokalen Netzwerk teilen“ in den",
+  "share.localOnlySettingsLink": "Einstellungen",
   "share.backToFilaments": "Zurück zu Filamenten",
   "share.publishSection": "Neuen geteilten Katalog veröffentlichen",
   "share.nozzleSuffix": "{temp}°C Düse",
