@@ -55,7 +55,12 @@ export default function LabelPrinterSettings() {
 
   // Memoised loader so the Refresh button can reuse it without
   // duplicating the IPC dance.
-  const loadDevices = useCallback(async () => {
+  //
+  // GH #771: `probeUsb` defaults to false. The mount-time load lists only
+  // already-configured queues (a prompt-free read); scanning for raw USB
+  // devices runs `lpinfo`, which on macOS pops the admin-password dialog —
+  // so that only happens when the user explicitly clicks Refresh.
+  const loadDevices = useCallback(async (probeUsb = false) => {
     if (!window.electronAPI?.labelPrinterListDevices) {
       setState({
         status: "error",
@@ -66,7 +71,7 @@ export default function LabelPrinterSettings() {
     setState({ status: "loading" });
     try {
       const [devices, selectedPath] = await Promise.all([
-        window.electronAPI.labelPrinterListDevices(),
+        window.electronAPI.labelPrinterListDevices(probeUsb),
         window.electronAPI.labelPrinterGetDevicePath?.() ?? Promise.resolve(null),
       ]);
       setState({ status: "ready", devices, selectedPath });
@@ -220,7 +225,7 @@ export default function LabelPrinterSettings() {
           </p>
           <button
             type="button"
-            onClick={loadDevices}
+            onClick={() => loadDevices(false)}
             className="mt-2 text-sm text-red-700 dark:text-red-300 underline"
           >
             {t("settings.labelPrinter.retry")}
@@ -231,12 +236,15 @@ export default function LabelPrinterSettings() {
           <p className="text-sm text-gray-700 dark:text-gray-300">
             {t("settings.labelPrinter.noDevices")}
           </p>
+          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+            {t("settings.labelPrinter.scanHint")}
+          </p>
           <button
             type="button"
-            onClick={loadDevices}
+            onClick={() => loadDevices(true)}
             className="mt-2 text-sm text-blue-600 dark:text-blue-400 hover:underline"
           >
-            {t("settings.labelPrinter.refresh")}
+            {t("settings.labelPrinter.scanUsb")}
           </button>
         </div>
       ) : (
@@ -283,10 +291,18 @@ export default function LabelPrinterSettings() {
           <div className="flex flex-wrap gap-2 pt-2">
             <button
               type="button"
-              onClick={loadDevices}
+              onClick={() => loadDevices(false)}
               className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
             >
               {t("settings.labelPrinter.refresh")}
+            </button>
+            <button
+              type="button"
+              onClick={() => loadDevices(true)}
+              title={t("settings.labelPrinter.scanHint")}
+              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              {t("settings.labelPrinter.scanUsb")}
             </button>
             <button
               type="button"

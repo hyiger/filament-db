@@ -147,21 +147,17 @@ function ComparePageInner() {
       get: (f) => (f.colorName ? `${f.colorName} (${f.color})` : f.color),
     },
     {
-      label: t("compare.row.cost"),
-      get: (f) => (f.cost != null ? formatCurrency(f.cost) : "—"),
+      // `cost` is stored per-kg (the form labels it "Cost ({symbol}/kg)"), so a
+      // single per-kg row covers it — the old plain "Cost" row showed the same
+      // number without the /kg suffix (#779). No density needed: it's already
+      // per-kg, no 1kg-spool conversion.
+      label: t("compare.row.costPerKg"),
+      get: (f) => (f.cost != null ? `${formatCurrency(f.cost)}/kg` : "—"),
     },
     { label: t("compare.row.diameter"), get: (f) => `${f.diameter} mm` },
     {
       label: t("compare.row.density"),
       get: (f) => (f.density != null ? `${f.density} g/cm³` : "—"),
-    },
-    {
-      label: t("compare.row.costPerKg"),
-      get: (f) => {
-        if (f.cost == null || f.density == null) return "—";
-        // rough cost/kg assuming 1kg spool
-        return `${formatCurrency(f.cost)}/kg`;
-      },
     },
     {
       label: t("compare.row.nozzleTemp"),

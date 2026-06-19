@@ -109,7 +109,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // and encoding stay in the renderer via src/lib/labelBitmap.ts +
   // src/lib/labelEncoder.ts). The Uint8Array byte stream the renderer
   // builds gets serialized through IPC as a plain number[].
-  labelPrinterListDevices: () => ipcRenderer.invoke("label-printer-list-devices"),
+  labelPrinterListDevices: (probeUsb?: boolean) =>
+    ipcRenderer.invoke("label-printer-list-devices", probeUsb === true),
   labelPrinterGetDevicePath: () => ipcRenderer.invoke("label-printer-get-device-path"),
   labelPrinterSetDevicePath: (devicePath: string | null) =>
     ipcRenderer.invoke("label-printer-set-device-path", devicePath),
