@@ -291,11 +291,18 @@ export default function LabelPrinterSettings() {
           <div className="flex flex-wrap gap-2 pt-2">
             <button
               type="button"
+              onClick={() => loadDevices(false)}
+              className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              {t("settings.labelPrinter.refresh")}
+            </button>
+            <button
+              type="button"
               onClick={() => loadDevices(true)}
               title={t("settings.labelPrinter.scanHint")}
               className="px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-700"
             >
-              {t("settings.labelPrinter.refresh")}
+              {t("settings.labelPrinter.scanUsb")}
             </button>
             <button
               type="button"
