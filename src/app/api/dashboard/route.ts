@@ -167,6 +167,15 @@ export async function GET() {
         ? resolveFilament(f, parentMap.get(f.parentId.toString()))
         : f;
       if (typeof resolved.dryingTemperature !== "number") continue;
+      // GH #783 (Codex P2): legacy single-spool rows (empty spools[] + a
+      // top-level totalWeight) are intentionally NOT added to dryDue, even
+      // though they count toward the spool total above. A dryDue entry needs a
+      // real spools[] subdoc — it carries a `spoolId` that drives the
+      // dashboard's per-spool dry-cycle actions, which would 404 on a synthetic
+      // legacy id (the same reason /inventory renders these read-only). A
+      // legacy roll also has no dryCycles history to evaluate. The user
+      // migrates it (Add Spool on the filament page) to get a real, dry-trackable
+      // spool — so the loop over `f.spools` correctly skips legacy rolls.
       for (const s of f.spools || []) {
         if (s.retired) continue;
         const cycles = s.dryCycles || [];
