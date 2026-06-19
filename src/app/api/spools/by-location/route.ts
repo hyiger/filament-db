@@ -109,10 +109,25 @@ export async function GET(request: NextRequest) {
       // top-level `totalWeight` — pre-migration data) in the pipeline so the
       // /inventory count matches the home stat (`getSpoolCount` counts such a
       // row as one physical roll). The `$set` below materializes their one
-      // synthetic spool; a truly spool-less, weightless catalog row resolves
-      // to `[]` and is dropped by `$unwind`, exactly as the old
-      // `spools: { $ne: [] }` match did.
-      { $match: { _deletedAt: null } },
+      // synthetic spool.
+      //
+      // Codex P2 on PR #783: still prune catalog-only rows (no real spools AND
+      // no legacy totalWeight) UP FRONT — sending them through the parent
+      // `$lookup` + effective-type/vendor stages only to drop them at `$unwind`
+      // would turn this into a self-lookup over the whole active catalog. The
+      // `$or` keeps exactly the rows that can yield a spool (real or synthetic);
+      // a truly spool-less, weightless row is still dropped here as before.
+      // (`{ totalWeight: { $ne: null } }` matches present-and-non-null only —
+      // missing is treated as null in query matching.)
+      {
+        $match: {
+          _deletedAt: null,
+          $or: [
+            { spools: { $exists: true, $ne: [] } },
+            { totalWeight: { $ne: null } },
+          ],
+        },
+      },
       // Self-lookup for parent — needed for spoolWeight / netFilamentWeight
       // inheritance (see resolveFilament INHERITABLE_FIELDS) AND for the
       // type / vendor filters, which both fields inherit from. Done

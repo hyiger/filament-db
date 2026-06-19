@@ -445,10 +445,20 @@ describe("GET /api/spools/by-location", () => {
       spools: [],
       totalWeight: 800,
     });
+    // Codex P2 on #783: a catalog-only row (no spools[], no totalWeight) must
+    // still be pruned up front and contribute 0 (not a self-lookup over the
+    // whole catalog, and not a phantom spool).
+    await Filament.create({
+      name: "Catalog Only PLA",
+      vendor: "QA",
+      type: "PLA",
+      diameter: 1.75,
+      spools: [],
+    });
 
     const { GET } = await import("@/app/api/spools/by-location/route");
     const body = await (await GET(req())).json();
-    // 1 real spool + 1 legacy roll = 2 (was 1 before #777).
+    // 1 real spool + 1 legacy roll = 2 (the catalog-only row contributes 0).
     expect(body.totalSpools).toBe(2);
     // The legacy roll lands in the synthetic "no location" group.
     const noLoc = body.groups.find(
