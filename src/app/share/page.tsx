@@ -8,7 +8,7 @@ import CopyButton from "@/components/CopyButton";
 import FilamentPicker from "@/components/FilamentPicker";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { formatDate } from "@/lib/dateFormat";
-import { pickShareBase, type ShareLanInfo } from "@/lib/shareLink";
+import { isShareLinkLocalOnly } from "@/lib/shareLink";
 
 interface SharedCatalog {
   slug: string;
@@ -42,16 +42,10 @@ export default function ShareManagementPage() {
   const [origin] = useState<string>(() =>
     typeof window !== "undefined" ? window.location.origin : "",
   );
-  // GH #780: on a desktop install the origin is localhost, which isn't
-  // reachable by others. Pull the LAN IP + the Share-on-LAN toggle (Electron)
-  // so pickShareBase can upgrade the link or warn.
-  const [lanInfo, setLanInfo] = useState<ShareLanInfo | null>(null);
-  const [exposeToLan, setExposeToLan] = useState(false);
-  // GH #783 (Codex P2): `origin` is read synchronously from window via a lazy
+  // GH #780/#784: `origin` is read synchronously from window via a lazy
   // initializer, so the loopback warning would render on the first client
   // render but not in the SSR HTML (origin === "") — a hydration mismatch.
-  // Gate the warning on a post-mount flag so the first client render matches
-  // the server, then the warning appears.
+  // Gate it on a post-mount flag so the first client render matches the server.
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -68,29 +62,6 @@ export default function ShareManagementPage() {
     return () => ac.abort();
   }, []);
 
-  // GH #780: Electron only — read the LAN IP + the Share-on-LAN toggle so a
-  // localhost share link can be upgraded to a reachable LAN URL (or warned
-  // about). No-ops in web mode, where the origin is already what the user
-  // browsed to. setState lives in deferred callbacks (not the effect body).
-  useEffect(() => {
-    const api = typeof window !== "undefined" ? window.electronAPI : undefined;
-    if (!api) return;
-    let cancelled = false;
-    api.getLanInfo?.()
-      .then((info) => {
-        if (!cancelled) setLanInfo(info);
-      })
-      .catch(() => {});
-    api.getConfig?.()
-      .then((cfg) => {
-        if (!cancelled && typeof cfg.exposeToLan === "boolean") setExposeToLan(cfg.exposeToLan);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   useEffect(() => {
     // Mark hydrated so the origin-dependent loopback warning only renders after
     // the first client render (which matches the server's empty-origin HTML).
@@ -98,8 +69,12 @@ export default function ShareManagementPage() {
     setMounted(true);
   }, []);
 
-  // The reachable base for share links (and whether to warn it's local-only).
-  const shareLink = pickShareBase(origin, lanInfo, exposeToLan);
+  // GH #780/#784: warn when the link is loopback-only. We do NOT rewrite the
+  // link to the host's LAN IP — the /share/<slug> Import action writes to the
+  // serving origin, so a publisher-hosted LAN link would let a recipient write
+  // into the publisher's DB (Codex P2 on PR #784). The link stays the local
+  // origin; the warning points the user to the Share-on-LAN toggle.
+  const linkLocalOnly = isShareLinkLocalOnly(origin);
 
   // GH #640: never throws — a failed refresh keeps the existing list in
   // place (same silent posture as the mount fetch above), so the
@@ -147,10 +122,8 @@ export default function ShareManagementPage() {
       setDescription("");
       setSelectedIds(new Set());
       await refreshCatalogs();
-      // Copy the link to clipboard for convenience. Recompute the base here
-      // (GH #780) so the copied URL uses the LAN IP when the origin is loopback.
-      const base = pickShareBase(window.location.origin, lanInfo, exposeToLan).base;
-      const url = `${base}/share/${body.slug}`;
+      // Copy the link to clipboard for convenience.
+      const url = `${window.location.origin}/share/${body.slug}`;
       navigator.clipboard?.writeText(url).catch(() => {});
       toast(t("share.linkCopied"));
     } catch {
@@ -187,7 +160,7 @@ export default function ShareManagementPage() {
       {/* GH #780: warn when share links resolve to localhost (desktop install,
           Share-on-LAN off) so the user knows the link isn't actually shareable
           and how to fix it. */}
-      {mounted && shareLink.warnLocalOnly && (
+      {mounted && linkLocalOnly && (
         <div className="mb-6 text-sm px-3 py-2 rounded bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
           {t("share.localOnlyWarning")}{" "}
           <Link href="/settings" className="underline font-medium">
@@ -250,7 +223,7 @@ export default function ShareManagementPage() {
         ) : (
           <ul className="space-y-2">
             {catalogs.map((c) => {
-              const url = `${shareLink.base}/share/${c.slug}`;
+              const url = `${origin}/share/${c.slug}`;
               return (
                 <li
                   key={c.slug}
