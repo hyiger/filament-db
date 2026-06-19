@@ -47,6 +47,12 @@ export default function ShareManagementPage() {
   // so pickShareBase can upgrade the link or warn.
   const [lanInfo, setLanInfo] = useState<ShareLanInfo | null>(null);
   const [exposeToLan, setExposeToLan] = useState(false);
+  // GH #783 (Codex P2): `origin` is read synchronously from window via a lazy
+  // initializer, so the loopback warning would render on the first client
+  // render but not in the SSR HTML (origin === "") — a hydration mismatch.
+  // Gate the warning on a post-mount flag so the first client render matches
+  // the server, then the warning appears.
+  const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -83,6 +89,13 @@ export default function ShareManagementPage() {
     return () => {
       cancelled = true;
     };
+  }, []);
+
+  useEffect(() => {
+    // Mark hydrated so the origin-dependent loopback warning only renders after
+    // the first client render (which matches the server's empty-origin HTML).
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- post-hydration gate
+    setMounted(true);
   }, []);
 
   // The reachable base for share links (and whether to warn it's local-only).
@@ -174,7 +187,7 @@ export default function ShareManagementPage() {
       {/* GH #780: warn when share links resolve to localhost (desktop install,
           Share-on-LAN off) so the user knows the link isn't actually shareable
           and how to fix it. */}
-      {shareLink.warnLocalOnly && (
+      {mounted && shareLink.warnLocalOnly && (
         <div className="mb-6 text-sm px-3 py-2 rounded bg-amber-50 dark:bg-amber-900/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
           {t("share.localOnlyWarning")}{" "}
           <Link href="/settings" className="underline font-medium">
