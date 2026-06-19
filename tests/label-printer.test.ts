@@ -118,7 +118,7 @@ d("listLabelPrinters (CUPS)", () => {
       }
       return { stdout: "" };
     };
-    const devices = await listLabelPrinters();
+    const devices = await listLabelPrinters({ probeUsb: true });
     const brother = devices.find((x) => x.path === BROTHER_URI);
     const hp = devices.find((x) => x.path === "HP_DeskJet");
     expect(brother).toBeTruthy();
@@ -136,10 +136,33 @@ d("listLabelPrinters (CUPS)", () => {
     // usb:// lines, so the call must scope to the usb scheme. (Regression
     // guard for the 15s list-devices hang.)
     h.state.execImpl = (cmd) => (cmd === "lpinfo" ? { stdout: `direct ${BROTHER_URI}\n` } : { stdout: "" });
-    await listLabelPrinters();
+    await listLabelPrinters({ probeUsb: true });
     const lpinfo = h.state.execCalls.find((c) => c.cmd === "lpinfo");
     expect(lpinfo).toBeTruthy();
     expect(lpinfo!.args).toEqual(expect.arrayContaining(["--include-schemes", "usb"]));
+  });
+
+  // GH #771: opening Settings used to run `lpinfo`, which on macOS pops the
+  // admin-password dialog (CUPS-Get-Devices is admin-only). The passive
+  // (mount-time) list must NOT invoke lpinfo — only an explicit probe does.
+  it("does NOT run lpinfo on a passive list (no admin prompt on Settings open)", async () => {
+    h.state.execImpl = (cmd, args) => {
+      if (cmd === "lpstat" && args[0] === "-v") {
+        return { stdout: "device for HP_DeskJet: ipp://hp.local/\n" };
+      }
+      return { stdout: "" };
+    };
+    const devices = await listLabelPrinters(); // default: probeUsb = false
+    // Installed queue still surfaces (lpstat is a prompt-free read)…
+    expect(devices.some((x) => x.path === "HP_DeskJet")).toBe(true);
+    // …but lpinfo is never invoked.
+    expect(h.state.execCalls.some((c) => c.cmd === "lpinfo")).toBe(false);
+  });
+
+  it("runs lpinfo only when probeUsb is requested", async () => {
+    h.state.execImpl = (cmd) => (cmd === "lpinfo" ? { stdout: `direct ${BROTHER_URI}\n` } : { stdout: "" });
+    await listLabelPrinters({ probeUsb: true });
+    expect(h.state.execCalls.some((c) => c.cmd === "lpinfo")).toBe(true);
   });
 
   it("surfaces the managed queue as its underlying usb device (and dedups lpinfo)", async () => {
@@ -152,7 +175,7 @@ d("listLabelPrinters (CUPS)", () => {
       }
       return { stdout: "" };
     };
-    const devices = await listLabelPrinters();
+    const devices = await listLabelPrinters({ probeUsb: true });
     // Exactly one entry for the Brother — the managed queue resolves to the
     // device uri, and the identical lpinfo line is deduped away.
     const brotherEntries = devices.filter((x) => x.path === BROTHER_URI);

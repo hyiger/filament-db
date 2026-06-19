@@ -104,10 +104,32 @@ function isCups(): boolean {
  * List the printers/devices the OS print system can reach. Never throws —
  * returns [] on any failure so the picker shows its empty state.
  */
-export async function listLabelPrinters(): Promise<LabelPrinterDevice[]> {
+/**
+ * List label-printer targets.
+ *
+ * `probeUsb` (GH #771): when false (the default), only ALREADY-CONFIGURED
+ * print queues are listed — on CUPS that's `lpstat -v`, which is a plain
+ * read and never prompts. When true, additionally run `lpinfo` to discover
+ * raw `usb://` devices that aren't set up as a queue yet.
+ *
+ * Why this matters: on macOS `lpinfo` issues the CUPS `CUPS-Get-Devices`
+ * operation, which the default cupsd policy restricts to admins — so it pops
+ * the macOS authorization dialog asking for an admin password. The Settings
+ * panel used to call this on mount, so merely opening Settings prompted for
+ * admin credentials (#771), which is especially jarring for the many users
+ * who don't own a label printer. The renderer now does a passive (no-probe)
+ * list on mount and only probes for USB devices on an explicit user action
+ * (the Refresh button), where a credential prompt is expected and contextual.
+ *
+ * Windows (`Get-Printer`) lists installed printers without any elevation, so
+ * `probeUsb` is a no-op there.
+ */
+export async function listLabelPrinters(
+  opts: { probeUsb?: boolean } = {},
+): Promise<LabelPrinterDevice[]> {
   try {
     if (process.platform === "win32") return await listWindowsPrinters();
-    if (isCups()) return await listCupsPrinters();
+    if (isCups()) return await listCupsPrinters(opts.probeUsb === true);
     return [];
   } catch (err) {
     console.error("[label-printer] list failed:", err);
@@ -130,12 +152,14 @@ async function runCupsTool(tool: string, args: string[]): Promise<string> {
   }
 }
 
-async function listCupsPrinters(): Promise<LabelPrinterDevice[]> {
+async function listCupsPrinters(probeUsb: boolean): Promise<LabelPrinterDevice[]> {
   const devices: LabelPrinterDevice[] = [];
   const seenUris = new Set<string>();
 
   // 1. Installed queues (excluding our own managed one). `lpstat -v` lines
   //    look like: "device for NAME: usb://Brother/PT-P710BT?serial=…".
+  //    This is a plain read of configured queues — it never prompts for
+  //    credentials, so it's safe to run on the passive (mount-time) path.
   try {
     const stdout = await runCupsTool("lpstat", ["-v"]);
     for (const line of stdout.split("\n")) {
@@ -174,6 +198,11 @@ async function listCupsPrinters(): Promise<LabelPrinterDevice[]> {
   //    the LAN and can block ~10-15s — enough to blow the IPC timeout (the
   //    list-devices handler hung at 15s, GH follow-up). We only parse usb://
   //    lines anyway, so this is both faster (~0.1s) and strictly correct.
+  //
+  //    GH #771: gated behind `probeUsb`. On macOS `lpinfo` runs the admin-only
+  //    CUPS-Get-Devices op and pops the OS authorization dialog, so this only
+  //    runs on an explicit user action (Refresh), never on Settings mount.
+  if (!probeUsb) return devices;
   try {
     const stdout = await runCupsTool("lpinfo", ["--include-schemes", "usb", "-v"]);
     for (const line of stdout.split("\n")) {

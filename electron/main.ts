@@ -1185,10 +1185,14 @@ ipcMain.handle("nfc-set-readonly", async (event, readOnly: unknown) => {
 // (the OS print system — CUPS / Windows spooler) because the renderer
 // can't shell out or open the USB printer device. (GH #588)
 
-ipcMain.handle("label-printer-list-devices", async (event) => {
+ipcMain.handle("label-printer-list-devices", async (event, probeUsb) => {
   assertTrustedSender(event, "label-printer-list-devices");
+  // GH #771: only probe for raw USB devices (which can pop the macOS admin
+  // prompt via `lpinfo`) when the renderer explicitly asks — i.e. the user
+  // clicked Refresh. The mount-time call passes nothing, so it stays a
+  // passive, prompt-free read of already-configured queues.
   return await withIpcTimeout(
-    () => listLabelPrinters(),
+    () => listLabelPrinters({ probeUsb: probeUsb === true }),
     "label-printer-list-devices",
   );
 });
