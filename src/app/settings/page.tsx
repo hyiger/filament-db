@@ -1105,7 +1105,18 @@ export default function SettingsPage() {
         </div>
       )}
 
-      {/* Danger Zone */}
+      {/* Brother PT-P710BT label printer device picker. Self-gates on
+          isElectron so it disappears entirely in web mode. The label format
+          editor (#592) is NOT gated — the layout also applies to the web
+          .bin-download path, so web users can configure it too. */}
+      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
+        <LabelPrinterSettings />
+        <LabelFormatEditor />
+      </div>
+
+      {/* Danger Zone — kept LAST (after every non-destructive section,
+          including the label sections) so the irreversible Delete All Data
+          action sits at the very bottom and isn't hit mid-scroll (#778). */}
       <div className="mt-8 pt-6 border-t border-red-200 dark:border-red-900/50">
         <h2 className="text-lg font-semibold text-red-600 dark:text-red-400 mb-1">{t("settings.dangerZone")}</h2>
         <p className="text-sm text-gray-500 mb-4">
@@ -1189,15 +1200,6 @@ export default function SettingsPage() {
             {deleteResult.message}
           </div>
         )}
-      </div>
-
-      {/* Brother PT-P710BT label printer device picker. Self-gates on
-          isElectron so it disappears entirely in web mode. The label format
-          editor (#592) is NOT gated — the layout also applies to the web
-          .bin-download path, so web users can configure it too. */}
-      <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
-        <LabelPrinterSettings />
-        <LabelFormatEditor />
       </div>
 
       <div className="mt-8 pt-6 border-t border-gray-200 dark:border-gray-800">
