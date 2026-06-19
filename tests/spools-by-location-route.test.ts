@@ -459,5 +459,14 @@ describe("GET /api/spools/by-location", () => {
     expect(noLoc.spools[0].filamentName).toBe("Legacy PETG");
     // Remaining grams = gross − tare = 800 − 250 = 550.
     expect(noLoc.totalGrams).toBe(550);
+    // GH #783: flagged so /inventory renders it read-only — its _id is the
+    // filament id (not a real spools[] subdoc), so inline edits would 404.
+    expect(noLoc.spools[0].legacySingleSpool).toBe(true);
+    expect(String(noLoc.spools[0]._id)).toBe(String(noLoc.spools[0].filamentId));
+    // A real spool is NOT flagged.
+    const realGroup = body.groups.find(
+      (g: { locationId: string | null }) => g.locationId != null,
+    );
+    expect(realGroup.spools[0].legacySingleSpool).toBe(false);
   });
 });

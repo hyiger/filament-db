@@ -56,6 +56,10 @@ interface SpoolRow {
   netFilamentWeight: number | null;
   parentSpoolWeight: number | null;
   parentNetFilamentWeight: number | null;
+  /** GH #783: a synthetic row for a legacy single-spool filament (no real
+   * spools[] subdoc). Rendered read-only — its inline edit/move/retire routes
+   * would 404 since they match on spools._id. */
+  legacySingleSpool?: boolean;
 }
 
 interface Group {
@@ -634,7 +638,10 @@ export default function InventoryPage() {
                                 when partial, checked when all rows
                                 selected. */}
                             <GroupSelectAllCheckbox
-                              rows={group.spools}
+                              // GH #783: legacy single-spool rows are read-only
+                              // (no checkbox), so exclude them from "select all"
+                              // — selecting them would 404 on batch actions.
+                              rows={group.spools.filter((r) => !r.legacySingleSpool)}
                               selectedKeys={selectedKeys}
                               spoolKey={spoolKey}
                               setSelected={setSelectedKeys}
@@ -774,6 +781,49 @@ function SpoolEditRow({
       setRetirePending(false);
     }
   };
+
+  // GH #783: a legacy single-spool row has no real spools[] subdoc, so the
+  // inline edit/move/retire endpoints (which match spools._id) would 404.
+  // Render it read-only with a link to the filament, where the user can add a
+  // managed spool (which migrates the legacy roll). No checkbox → it can't be
+  // batch-selected either.
+  if (row.legacySingleSpool) {
+    return (
+      <tr className="border-b border-gray-100 dark:border-gray-900">
+        <td className="py-2 px-2" aria-hidden="true" />
+        <td className="py-2 px-3">
+          <div className="flex items-center gap-2 min-w-0">
+            <span
+              className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 dark:border-gray-700 shrink-0"
+              style={{ backgroundColor: row.filamentColor || "#808080" }}
+              aria-hidden="true"
+            />
+            <Link href={`/filaments/${row.filamentId}`} className="text-blue-600 hover:underline truncate">
+              {row.filamentName}
+            </Link>
+            <span className="text-xs text-gray-500 shrink-0">{row.filamentType}</span>
+          </div>
+          <div className="text-xs text-gray-500 truncate">{row.filamentVendor}</div>
+        </td>
+        <td className="py-2 px-3">
+          <span
+            className="inline-block text-xs px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300"
+            title={t("inventory.legacyHint")}
+          >
+            {t("inventory.legacyBadge")}
+          </span>
+        </td>
+        <td className="py-2 px-3 text-right">{row.totalWeight != null ? `${row.totalWeight} g` : "—"}</td>
+        <td className="py-2 px-3 text-right">{grams != null ? `${grams} g` : "—"}</td>
+        <td className="py-2 px-3">—</td>
+        <td className="py-2 px-3 text-right">
+          <Link href={`/filaments/${row.filamentId}`} className="text-xs text-blue-600 hover:underline">
+            {t("inventory.legacyManage")}
+          </Link>
+        </td>
+      </tr>
+    );
+  }
 
   return (
     <tr

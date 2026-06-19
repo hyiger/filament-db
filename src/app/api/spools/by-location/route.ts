@@ -74,6 +74,10 @@ interface AggregatedSpool {
   netFilamentWeight: number | null;
   parentSpoolWeight: number | null;
   parentNetFilamentWeight: number | null;
+  /** GH #783: a synthetic row for a legacy single-spool filament (empty
+   * spools[] + a top-level totalWeight). Has no real spools[] subdoc, so the
+   * /inventory page renders it read-only — its inline edit routes would 404. */
+  legacySingleSpool: boolean;
 }
 
 interface InventoryGroup {
@@ -232,6 +236,13 @@ export async function GET(request: NextRequest) {
                       retired: false,
                       locationId: null,
                       dryCycles: [],
+                      // GH #783 (Codex P2): this row has no real spools[] subdoc
+                      // (its _id is the filament id), so the /inventory inline
+                      // edit/move/retire routes (which match spools._id) would
+                      // 404. Flag it so the page renders it read-only with a
+                      // link to the filament, where the user can add a managed
+                      // spool (migrating the legacy roll).
+                      legacySingleSpool: true,
                     },
                   ],
                   [],
@@ -304,6 +315,10 @@ export async function GET(request: NextRequest) {
               parentNetFilamentWeight: {
                 $ifNull: [{ $arrayElemAt: ["$_parent.netFilamentWeight", 0] }, null],
               },
+              // GH #783: true only for the synthetic legacy single-spool row;
+              // real spools default to false. The /inventory page renders these
+              // read-only (their inline edit routes would 404).
+              legacySingleSpool: { $ifNull: ["$spools.legacySingleSpool", false] },
             },
           },
           count: { $sum: 1 },
