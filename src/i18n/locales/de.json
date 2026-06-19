@@ -792,6 +792,8 @@
   "detail.inheritsFromParent": "Erbt Einstellungen vom übergeordneten Filament.",
   "detail.upToParent": "↑ Zum Eltern-Filament {name}",
   "detail.inheritedFieldCount": "{count} vererbte Felder",
+  "detail.inheritedLegend": "Mit „vererbt“ markierte Felder (blau) stammen vom übergeordneten Filament – alles andere ist auf dieser Variante gesetzt.",
+  "detail.inheritedTitle": "Vom übergeordneten Filament geerbt",
   "detail.inheritsFrom": "Erbt von",
   "detail.total": "gesamt",
   "detail.exportOpt": "OPT exportieren",

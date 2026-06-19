@@ -792,6 +792,8 @@
   "detail.inheritsFromParent": "Inherits settings from parent filament.",
   "detail.upToParent": "↑ Up to {name}",
   "detail.inheritedFieldCount": "{count} inherited fields",
+  "detail.inheritedLegend": "Fields marked inherited (blue) come from the parent — everything else is set on this variant.",
+  "detail.inheritedTitle": "Inherited from parent",
   "detail.inheritsFrom": "Inherits from",
   "detail.total": "total",
   "detail.exportOpt": "Export OPT",
