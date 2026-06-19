@@ -290,6 +290,8 @@
   "spoolImport.resultsHeading": "Results — {imported} imported, {failed} failed",
   "share.title": "Shared Catalogs",
   "share.subtitle": "Publish a read-only snapshot of selected filaments that anyone with the link can view or import.",
+  "share.localOnlyWarning": "These links point to this computer's address (localhost), so they only open here. To let other devices open them, turn on Share on local network in",
+  "share.localOnlySettingsLink": "Settings",
   "share.backToFilaments": "Back to filaments",
   "share.publishSection": "Publish a new share",
   "share.nozzleSuffix": "{temp}°C nozzle",
