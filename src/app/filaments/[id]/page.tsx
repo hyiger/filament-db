@@ -1055,6 +1055,7 @@ function FilamentDetail() {
               </span>
             )}
             {finish && <FinishChip finish={finish} size="sm" className="ml-2" />}
+            {finish && isVariant && inherited.has("optTags") && <InheritedMark />}
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
@@ -1908,6 +1909,7 @@ function FilamentDetail() {
             </svg>
             {showTdsPreview ? t("detail.tds.hide") : t("detail.tds.view")}
           </button>
+          {isVariant && inherited.has("tdsUrl") && <InheritedMark />}
           {safeHttpUrl(filament.tdsUrl) && (
             <a
               href={safeHttpUrl(filament.tdsUrl)!}
