@@ -17,6 +17,7 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
 import { getRemainingGrams, getRemainingPct, getSpoolCount } from "@/lib/inventoryStats";
 import { compareFilaments, nextSortState, type SortKey, type SortDir } from "@/lib/sortFilamentList";
+import { buildFilamentGroups } from "@/lib/groupFilaments";
 
 type Filament = FilamentSummary;
 
@@ -431,12 +432,22 @@ export default function Home() {
     (f: Filament) => getSpoolCount(f) > 0 || parentsWithStock.has(f._id),
     [parentsWithStock],
   );
-  // Count of hidden inventory rows (standalone + variants with no active spool;
-  // parents are grouping headers, not stock) — drives the toggle's badge.
-  const outOfStockCount = useMemo(
-    () => filaments.filter((f) => !f.hasVariants && getSpoolCount(f) === 0).length,
-    [filaments],
-  );
+  // Count of hidden inventory rows — drives the toggle's badge. Parents are
+  // grouping headers (not stock). A variant of a STOCKED family is now always
+  // rendered under its parent (#786), so it isn't "hidden" even with no spool
+  // of its own — only standalone rows and variants of a fully-out-of-stock
+  // family are actually hidden by the default filter.
+  const outOfStockCount = useMemo(() => {
+    const shownParents = new Set(
+      filaments.filter((f) => f.hasVariants && inStock(f)).map((f) => f._id),
+    );
+    return filaments.filter((f) => {
+      if (f.hasVariants) return false;
+      if (getSpoolCount(f) > 0) return false;
+      if (f.parentId && shownParents.has(f.parentId)) return false;
+      return true;
+    }).length;
+  }, [filaments, inStock]);
 
   const visibleFilaments = useMemo(() => {
     // The "all" view keeps parents in the dataset so the list renders them as
@@ -489,32 +500,9 @@ export default function Home() {
     return map;
   }, [filaments]);
 
-  // True variant count per parent, derived from the FULL fetched list (#744).
-  // The collapsed parent's "N color(s)" chip must reflect every variant in the
-  // family, not just those left in `visibleFilaments` after the #712
-  // out-of-stock hide — otherwise a parent with out-of-stock variants
-  // under-counts vs. its own detail page. `filaments` holds every non-deleted
-  // variant (out-of-stock filtering is applied only when deriving
-  // `visibleFilaments`); when a server-side search/type/vendor filter is
-  // active `filaments` is already that filtered set, so the chip then reflects
-  // the filtered family, matching the rows shown.
-  const variantCountByParent = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const f of filaments) {
-      if (f.parentId) m.set(f.parentId, (m.get(f.parentId) ?? 0) + 1);
-    }
-    return m;
-  }, [filaments]);
-
   const groupedFilaments = useMemo(() => {
-    const parentMap = new Map<string, GroupedFilament>();
-    const standalone: Filament[] = [];
-    const variantsByParent = new Map<string, Filament[]>();
-
-    // Apply parent-field fallbacks to a variant. Used both for the
-    // grouped-under-parent and orphaned-variant paths so the same
-    // inheritance is visible regardless of whether the parent row
-    // happens to be in the current filter result set.
+    // Apply parent-field fallbacks to a variant so inherited nozzle/bed/cost/
+    // density/spool values render even when the variant left them blank.
     const enrichVariant = (v: Filament, parent: Filament | undefined): Filament => {
       if (!parent) return v;
       return {
@@ -530,45 +518,18 @@ export default function Home() {
       };
     };
 
-    // First pass: collect variants
-    for (const f of visibleFilaments) {
-      if (f.parentId) {
-        const variants = variantsByParent.get(f.parentId) || [];
-        variants.push(f);
-        variantsByParent.set(f.parentId, variants);
-      }
-    }
+    // #744 / #786: a shown parent's group carries EVERY variant from the full
+    // fetched list, not just those left in `visibleFilaments` after the #712
+    // out-of-stock hide. The chip below renders `group.variants.length`, so the
+    // count and the variant rows/swatches are the same array and can't drift.
+    // `filaments` is already the server-filtered set when a search/type/vendor
+    // filter is active, so filtered views still match.
+    const { groups, standalone } = buildFilamentGroups(filaments, visibleFilaments, {
+      enrichVariant,
+      parentLookup,
+    });
 
-    // Second pass: build groups, resolving inherited fields for variants
-    for (const f of visibleFilaments) {
-      if (f.parentId) continue; // variants are handled by their parent
-      const variants = (variantsByParent.get(f._id) || []).map((v) =>
-        enrichVariant(v, f),
-      );
-      if (variants.length > 0) {
-        parentMap.set(f._id, { parent: f, variants });
-      } else {
-        standalone.push(f);
-      }
-    }
-
-    // Also include orphaned variants (parent not in current filter
-    // results). Enrich from `parentLookup` so the inheritance still
-    // applies — the parent existing-but-filtered-out shouldn't change
-    // what the variant renders.
-    for (const [parentId, variants] of variantsByParent) {
-      if (!parentMap.has(parentId)) {
-        const parent = parentLookup.get(parentId);
-        standalone.push(...variants.map((v) => enrichVariant(v, parent)));
-      }
-    }
-
-    // Combine and sort
-    const all: (Filament | GroupedFilament)[] = [
-      ...parentMap.values(),
-      ...standalone.map((f) => f),
-    ];
-
+    const all: (Filament | GroupedFilament)[] = [...groups, ...standalone];
     const cmp = compareFilaments(sortKey, sortDir);
     all.sort((a, b) => {
       const fa = "parent" in a ? a.parent : a;
@@ -577,7 +538,7 @@ export default function Home() {
     });
 
     return all;
-  }, [visibleFilaments, parentLookup, sortKey, sortDir]);
+  }, [filaments, visibleFilaments, parentLookup, sortKey, sortDir]);
 
   const toggleExpanded = (parentId: string) => {
     setExpandedParents((prev) => {
@@ -1067,7 +1028,7 @@ export default function Home() {
             </Link>
             <span className="ml-1.5 text-[10px] text-gray-500 bg-gray-200 dark:bg-gray-800 px-1 py-0.5 rounded">
               {t("filaments.colorCount", {
-                count: variantCountByParent.get(f._id) ?? group.variants.length,
+                count: group.variants.length,
               })}
             </span>
           </td>
