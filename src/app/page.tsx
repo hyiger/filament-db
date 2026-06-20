@@ -518,13 +518,21 @@ export default function Home() {
       };
     };
 
-    // #744 / #786: a shown parent's group carries EVERY variant from the full
-    // fetched list, not just those left in `visibleFilaments` after the #712
-    // out-of-stock hide. The chip below renders `group.variants.length`, so the
-    // count and the variant rows/swatches are the same array and can't drift.
-    // `filaments` is already the server-filtered set when a search/type/vendor
-    // filter is active, so filtered views still match.
-    const { groups, standalone } = buildFilamentGroups(filaments, visibleFilaments, {
+    // #744 / #786: in the unfiltered "all" view a shown parent's group carries
+    // EVERY variant from the full fetched list, not just those left after the
+    // #712 out-of-stock hide — there the hide is a visibility declutter, not a
+    // content filter, so a shown family shows all its colors and the chip
+    // (rendered as group.variants.length below) counts them all.
+    //
+    // Under a CONTENT filter the variants must respect it, so source from
+    // `visibleFilaments` instead (Codex P2 on #788): otherwise a parent visible
+    // under `hasSpools` (its own spool) would pull in no-spool variants the
+    // filter excluded, and expand → select-all would then include them.
+    // (`lowStock`/`noCalibration` drop parents entirely, so they have no group
+    // either way.) When a server-side search/type/vendor filter is active,
+    // `quickFilter` is "all" but `filaments` is already that filtered set.
+    const variantSource = quickFilter === "all" ? filaments : visibleFilaments;
+    const { groups, standalone } = buildFilamentGroups(variantSource, visibleFilaments, {
       enrichVariant,
       parentLookup,
     });
@@ -538,7 +546,7 @@ export default function Home() {
     });
 
     return all;
-  }, [filaments, visibleFilaments, parentLookup, sortKey, sortDir]);
+  }, [filaments, visibleFilaments, parentLookup, quickFilter, sortKey, sortDir]);
 
   const toggleExpanded = (parentId: string) => {
     setExpandedParents((prev) => {

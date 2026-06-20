@@ -90,6 +90,20 @@ describe("buildFilamentGroups", () => {
     expect(allRendered.filter((id) => id === "v1")).toHaveLength(1);
   });
 
+  // Codex P2 on #788: the FIRST arg (source) controls membership, so the
+  // caller can pass a content-filtered set (e.g. the `hasSpools` quick filter)
+  // and the group will only carry variants that pass the filter — it must NOT
+  // reach past the source into a wider list.
+  it("limits a group's variants to the provided source set", () => {
+    const all = [parent("p"), variant("v1", "p"), variant("v2", "p")];
+    // hasSpools-style: only the parent + v1 survive the content filter.
+    const filtered = [parent("p"), variant("v1", "p")];
+    const { groups } = buildFilamentGroups(filtered, filtered);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].variants.map((v) => v._id)).toEqual(["v1"]); // v2 excluded
+    expect(all.length).toBe(3); // sanity: v2 exists, just not in the source
+  });
+
   it("applies enrichVariant to grouped variants", () => {
     const all = [parent("p", { cost: 30 }), variant("v1", "p", { cost: null })];
     const { groups } = buildFilamentGroups(all, all, {
