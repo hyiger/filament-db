@@ -5,7 +5,7 @@ import { execFile } from "child_process";
 import Store from "electron-store";
 import http from "http";
 import { NfcService } from "./nfc-service";
-import { listLabelPrinters, printLabel as printLabelToDevice } from "./label-printer";
+import { listLabelPrinters, printLabel as printLabelToDevice, disableBidi } from "./label-printer";
 import { isLoopbackHostname } from "../src/lib/loopbackHost";
 import { listLanIpv4 } from "../src/lib/getLanIp";
 import { startMdnsAdvertisement, stopMdnsAdvertisement } from "./mdns-service";
@@ -1344,6 +1344,46 @@ ipcMain.handle("label-printer-print", async (event, bytes: number[]) => {
     30_000, // give long labels + a slow spooler a generous window
   );
   return { ok: true };
+});
+
+// Disable bidirectional support on a Windows printer queue via an elevated
+// helper (UAC). Some drivers (Brother PT-P710BT) crash the Print Spooler with
+// BiDi on; turning it off is a system-level write the unelevated app can't do
+// in-process. Returns a structured { ok, reason } the renderer maps to a
+// localized toast (main-process strings can't cross into the Next renderer).
+ipcMain.handle("label-printer-disable-bidi", async (event, printerName: string) => {
+  assertTrustedSender(event, "label-printer-disable-bidi");
+  // Platform first, so non-Windows callers get the clear message rather than a
+  // name-shape error. (BiDi is a Win32_Printer queue property — Windows only.)
+  if (process.platform !== "win32") {
+    throw new Error("Disabling bidirectional support is only supported on Windows.");
+  }
+  if (typeof printerName !== "string" || printerName.length === 0) {
+    throw new Error("printerName must be a non-empty string");
+  }
+  // Narrower than label-printer-set-device-path's rule: an installed Windows
+  // printer/queue NAME only (no slash, no scheme) — never a usb:// URI.
+  const isQueueName =
+    !printerName.includes("/") && !/^[a-z][a-z0-9+.-]*:\/\//i.test(printerName);
+  if (!isQueueName) {
+    throw new Error("printerName must be an installed printer/queue name");
+  }
+  // MANDATORY: the name must match a printer the user was actually shown — an
+  // installed queue currently reporting BiDi on. This binds the elevated action
+  // to a real, visible printer so a same-origin XSS / compromised renderer
+  // can't pop a UAC prompt for an arbitrary name (consent-fatigue / wrong
+  // printer). listLabelPrinters needs no elevation.
+  const devices = await listLabelPrinters();
+  const match = devices.find(
+    (d) => d.path === printerName && d.bidiEnabled === true,
+  );
+  if (!match) {
+    throw new Error("Printer not found, or bidirectional support is already off.");
+  }
+  // No withIpcTimeout: UAC waits on a human, disableBidi bounds the subprocess
+  // itself (DISABLE_BIDI_TIMEOUT_MS), and a withIpcTimeout reject wouldn't
+  // cancel the elevation anyway (GH #279).
+  return await disableBidi(printerName);
 });
 
 // ── App lifecycle ──

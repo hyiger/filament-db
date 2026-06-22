@@ -67,6 +67,7 @@ vi.mock("node:child_process", () => {
   return { execFile, spawn };
 });
 
+import { writeFileSync } from "node:fs";
 import {
   listLabelPrinters,
   printLabel,
@@ -75,6 +76,10 @@ import {
   SPOOLER_DOWN_MESSAGE,
   WINDOWS_RAW_PRINT_PS1,
   WINDOWS_PRINT_TIMEOUT_MS,
+  disableBidi,
+  WINDOWS_DISABLE_BIDI_PS1,
+  WINDOWS_DISABLE_BIDI_LAUNCH_PS1,
+  ELEVATION_CANCELLED_EXIT,
 } from "../electron/label-printer";
 
 const BYTES = new Uint8Array([0x1b, 0x40, 0x41, 0x42]);
@@ -448,5 +453,110 @@ describe("listWindowsPrinters — bidirectional-support detection", () => {
       const devices = await listLabelPrinters();
       expect(devices[0].bidiEnabled).toBeUndefined();
     });
+  });
+});
+
+describe("disableBidi — elevated Windows BiDi-disable helper", () => {
+  // The elevated path can't run without a real Windows host + UAC, so these are
+  // string/shape guards + structured-outcome mapping with execFile mocked. The
+  // actual Set-CimInstance write and the UAC dialog are manual-QA / release-gate
+  // items (CIM-equivalence-to-the-Ports-checkbox MUST be hardware-confirmed).
+  const onlyOffWin = process.platform === "win32" ? it.skip : it;
+
+  it("elevated script turns EnableBIDI off, RE-READS to confirm, writes a result file (ASCII-only)", () => {
+    expect(WINDOWS_DISABLE_BIDI_PS1).toContain("Set-CimInstance");
+    expect(WINDOWS_DISABLE_BIDI_PS1).toContain("Win32_Printer");
+    expect(WINDOWS_DISABLE_BIDI_PS1).toContain("EnableBIDI = $false");
+    // Re-read after the write so a silent no-op is reported as failure.
+    expect(WINDOWS_DISABLE_BIDI_PS1).toMatch(/\$after\b/);
+    expect(WINDOWS_DISABLE_BIDI_PS1).toContain("still_enabled");
+    // WQL single-quote escaping on the bound param (a name may contain a quote).
+    expect(WINDOWS_DISABLE_BIDI_PS1).toContain(`Replace("'", "''")`);
+    // Outcome crosses the RunAs boundary via a result file, not the console.
+    expect(WINDOWS_DISABLE_BIDI_PS1).toContain("WriteAllText($ResultPath");
+    // Printer name is a bound param, never interpolated into a command line.
+    expect(WINDOWS_DISABLE_BIDI_PS1).toContain(
+      "param([Parameter(Mandatory=$true)][string]$PrinterName",
+    );
+    expect(/^[\x00-\x7F]*$/.test(WINDOWS_DISABLE_BIDI_PS1)).toBe(true);
+  });
+
+  it("launcher detects UAC-cancel structurally (NativeErrorCode 1223), not by message text", () => {
+    expect(WINDOWS_DISABLE_BIDI_LAUNCH_PS1).toContain("Verb RunAs");
+    expect(WINDOWS_DISABLE_BIDI_LAUNCH_PS1).toContain("NativeErrorCode");
+    expect(WINDOWS_DISABLE_BIDI_LAUNCH_PS1).toContain("1223");
+    expect(WINDOWS_DISABLE_BIDI_LAUNCH_PS1).toContain(`exit ${ELEVATION_CANCELLED_EXIT}`);
+    // Args ride into the elevated child via -ArgumentList as a token array.
+    expect(WINDOWS_DISABLE_BIDI_LAUNCH_PS1).toContain("-ArgumentList");
+    expect(WINDOWS_DISABLE_BIDI_LAUNCH_PS1).toContain("$PrinterName");
+    expect(/^[\x00-\x7F]*$/.test(WINDOWS_DISABLE_BIDI_LAUNCH_PS1)).toBe(true);
+  });
+
+  it("invokes powershell by absolute path and passes the printer name as a discrete token", async () => {
+    await runAsWin32(async () => {
+      h.state.execImpl = (_cmd, args) => {
+        // Simulate the elevated child writing its result file.
+        const i = args.indexOf("-ResultPath");
+        if (i >= 0) writeFileSync(args[i + 1], JSON.stringify({ status: "ok", message: "" }));
+        return { stdout: "" };
+      };
+      const res = await disableBidi("Brother PT-P710BT");
+      expect(res).toEqual({ ok: true });
+      const call = h.state.execCalls.at(-1)!;
+      expect(call.cmd).toBe(windowsPowershellPath());
+      expect(call.cmd).toMatch(/powershell\.exe$/);
+      // The name (with its space) is a single argv element — not shell-split.
+      const pIdx = call.args.indexOf("-PrinterName");
+      expect(pIdx).toBeGreaterThan(-1);
+      expect(call.args[pIdx + 1]).toBe("Brother PT-P710BT");
+      // -PsExe (used as the RunAs -FilePath inside the launcher) is absolute too.
+      const psIdx = call.args.indexOf("-PsExe");
+      expect(call.args[psIdx + 1]).toBe(windowsPowershellPath());
+    });
+  });
+
+  it("maps the elevated child's result-file status to the structured reason", async () => {
+    const cases: Array<[string, { ok: false; reason: string }]> = [
+      ["not_found", { ok: false, reason: "not_found" }],
+      ["ambiguous", { ok: false, reason: "ambiguous" }],
+      ["still_enabled", { ok: false, reason: "still_enabled" }],
+    ];
+    for (const [status, expected] of cases) {
+      await runAsWin32(async () => {
+        h.state.execImpl = (_cmd, args) => {
+          const i = args.indexOf("-ResultPath");
+          if (i >= 0) writeFileSync(args[i + 1], JSON.stringify({ status }));
+          // The inner script exits non-zero for these; the launcher relays it,
+          // so execFile rejects — but disableBidi still reads the result file.
+          return { error: Object.assign(new Error("nonzero"), { code: 2 }) };
+        };
+        const res = await disableBidi("Brother PT-P710BT");
+        expect(res).toMatchObject(expected);
+      });
+    }
+  });
+
+  it("returns reason 'cancelled' when the launcher exits the dedicated cancel code", async () => {
+    await runAsWin32(async () => {
+      h.state.execImpl = () => ({
+        error: Object.assign(new Error("cancelled"), { code: ELEVATION_CANCELLED_EXIT }),
+      });
+      const res = await disableBidi("Brother PT-P710BT");
+      expect(res).toEqual({ ok: false, reason: "cancelled" });
+    });
+  });
+
+  it("returns reason 'elevation_unavailable' when the launcher fails and wrote no result file", async () => {
+    await runAsWin32(async () => {
+      h.state.execImpl = () => ({
+        error: Object.assign(new Error("elevation failed"), { code: 1 }),
+      });
+      const res = await disableBidi("Brother PT-P710BT");
+      expect(res).toEqual({ ok: false, reason: "elevation_unavailable" });
+    });
+  });
+
+  onlyOffWin("refuses to run on a non-Windows platform", async () => {
+    await expect(disableBidi("Brother PT-P710BT")).rejects.toThrow(/only supported on Windows/i);
   });
 });

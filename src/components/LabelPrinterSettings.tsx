@@ -46,6 +46,9 @@ export default function LabelPrinterSettings() {
     | { status: "error"; message: string };
   const [state, setState] = useState<State>({ status: "loading" });
   const [testing, setTesting] = useState(false);
+  // Per-device in-flight path for the Windows "Disable bidirectional support"
+  // fix (keyed by device path so each BiDi-on row tracks its own busy state).
+  const [fixingPath, setFixingPath] = useState<string | null>(null);
 
   // Public base URL for URL-mode label QR payloads (Codex P2 on
   // PR #487). Loaded on mount, persisted on blur with main-process
@@ -203,6 +206,47 @@ export default function LabelPrinterSettings() {
     }
   }, [t, toast, format]);
 
+  // Windows-only: disable bidirectional support on the printer's queue via the
+  // elevated helper (UAC), then re-list so the warning + button clear. The IPC
+  // call resolves a structured { ok, reason } so we map outcomes to localized
+  // toasts WITHOUT importing any main-process string (the renderer can't).
+  const handleFixBidi = useCallback(
+    async (path: string) => {
+      if (!window.electronAPI?.labelPrinterDisableBidi) return;
+      setFixingPath(path);
+      try {
+        const res = await window.electronAPI.labelPrinterDisableBidi(path);
+        if (res.ok) {
+          toast(t("settings.labelPrinter.fixBidi.success"), "success");
+          await loadDevices(false);
+        } else if (res.reason === "cancelled") {
+          toast(t("settings.labelPrinter.fixBidi.cancelled"), "info");
+        } else if (res.reason === "not_found") {
+          toast(t("settings.labelPrinter.fixBidi.notFound"), "error");
+        } else if (res.reason === "still_enabled") {
+          toast(t("settings.labelPrinter.fixBidi.stillOn"), "error");
+        } else {
+          toast(
+            t("settings.labelPrinter.fixBidi.failed", {
+              error: res.detail ?? res.reason,
+            }),
+            "error",
+          );
+        }
+      } catch (err) {
+        toast(
+          t("settings.labelPrinter.fixBidi.failed", {
+            error: err instanceof Error ? err.message : String(err),
+          }),
+          "error",
+        );
+      } finally {
+        setFixingPath(null);
+      }
+    },
+    [t, toast, loadDevices],
+  );
+
   if (!isElectron) return null;
 
   return (
@@ -280,9 +324,28 @@ export default function LabelPrinterSettings() {
                     {d.path}
                   </code>
                   {d.bidiEnabled && (
-                    <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
-                      {t("settings.labelPrinter.bidiWarning")}
-                    </p>
+                    <div className="mt-1">
+                      <p className="text-xs text-amber-700 dark:text-amber-400">
+                        {t("settings.labelPrinter.bidiWarning")}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          // Don't let the wrapping <label> also toggle the
+                          // radio (select this device) on a Fix click.
+                          e.preventDefault();
+                          e.stopPropagation();
+                          handleFixBidi(d.path);
+                        }}
+                        disabled={fixingPath === d.path}
+                        title={t("settings.labelPrinter.fixBidi.title")}
+                        className="mt-1.5 px-2.5 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50"
+                      >
+                        {fixingPath === d.path
+                          ? t("settings.labelPrinter.fixBidi.elevating")
+                          : t("settings.labelPrinter.fixBidi")}
+                      </button>
+                    </div>
                   )}
                 </div>
               </label>

@@ -119,6 +119,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
   labelPrinterGetPublicUrl: () => ipcRenderer.invoke("label-printer-get-public-url"),
   labelPrinterSetPublicUrl: (url: string | null) =>
     ipcRenderer.invoke("label-printer-set-public-url", url),
+  labelPrinterDisableBidi: (printerName: string) =>
+    ipcRenderer.invoke("label-printer-disable-bidi", printerName),
 
   // Runtime mode (packaged vs dev). Used by the DevModeBanner to warn
   // when the renderer's data source (next dev's .env.local) doesn't

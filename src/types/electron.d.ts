@@ -92,6 +92,25 @@ interface ElectronAPI {
   /** Throws on validation errors (bad URL shape, non-http(s) scheme,
    *  loopback host). Pass null/empty to clear. */
   labelPrinterSetPublicUrl: (url: string | null) => Promise<{ ok: boolean }>;
+  /** Windows only: disable bidirectional support on the given printer queue via
+   *  an elevated helper (UAC). Resolves a discriminated union — `{ ok: true }`
+   *  on a confirmed disable, `{ ok: false, reason }` for the cancel + known
+   *  failure cases (the renderer maps `reason` to a localized toast); rejects
+   *  only on an unexpected internal error. */
+  labelPrinterDisableBidi: (printerName: string) => Promise<
+    | { ok: true }
+    | {
+        ok: false;
+        reason:
+          | "cancelled"
+          | "not_found"
+          | "ambiguous"
+          | "still_enabled"
+          | "elevation_unavailable"
+          | "error";
+        detail?: string;
+      }
+  >;
 
   /** Runtime-environment flags. Used by the DevModeBanner to warn the
    *  user when their connection-mode wizard selection has no effect on

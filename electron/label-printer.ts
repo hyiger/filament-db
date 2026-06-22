@@ -24,7 +24,7 @@
 
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { writeFile, mkdtemp, rm } from "node:fs/promises";
+import { writeFile, mkdtemp, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 
@@ -278,6 +278,181 @@ async function listWindowsPrinters(): Promise<LabelPrinterDevice[]> {
       // undefined so a failed CIM probe doesn't show a spurious warning.
       bidiEnabled: typeof bidi === "boolean" ? bidi : undefined,
     }));
+}
+
+/** Exit code the unelevated launcher returns when the user dismisses the UAC
+ *  consent dialog (win32 1223 = ERROR_CANCELLED). Detected STRUCTURALLY via the
+ *  .NET Win32Exception.NativeErrorCode — never by scraping the localized error
+ *  message, which differs per Windows display language (the app ships German).
+ *  Exported for the unit test. */
+export const ELEVATION_CANCELLED_EXIT = 10;
+
+/** Whole-round-trip timeout for the elevation. UAC waits on a human, so this is
+ *  deliberately long; the IPC handler must NOT additionally race it (a reject
+ *  there wouldn't cancel the work, and the success signal is the exit code +
+ *  result file, not a wall clock). Exported for the unit test. */
+export const DISABLE_BIDI_TIMEOUT_MS = 120_000;
+
+/** Elevated payload (runs as admin). Disables bidirectional support on exactly
+ *  one Win32_Printer queue, then RE-READS to confirm the write actually took
+ *  (some drivers silently ignore it), and reports the outcome by writing result
+ *  JSON to -ResultPath — a RunAs child's stdout/stderr do NOT cross back to the
+ *  unelevated launcher, only its integer exit code does. The printer name is a
+ *  bound -PrinterName param (never string-interpolated); the WQL Name filter
+ *  escapes single quotes. WriteAllText emits UTF-8 without a BOM. ASCII-only
+ *  (written to disk + re-read under the host code page). Exported for the test. */
+export const WINDOWS_DISABLE_BIDI_PS1 = `param([Parameter(Mandatory=$true)][string]$PrinterName,
+      [Parameter(Mandatory=$true)][string]$ResultPath)
+$ErrorActionPreference = "Stop"
+function Emit($status, $msg) {
+  $json = @{ status = $status; message = $msg } | ConvertTo-Json -Compress
+  [System.IO.File]::WriteAllText($ResultPath, $json)
+}
+try {
+  $q = "Name='" + $PrinterName.Replace("'", "''") + "'"
+  $p = @(Get-CimInstance Win32_Printer -Filter $q)
+  if ($p.Count -eq 0) { Emit "not_found" ("Printer not found: " + $PrinterName); exit 2 }
+  if ($p.Count -gt 1) { Emit "ambiguous" ("Multiple printers match: " + $PrinterName); exit 3 }
+  Set-CimInstance -InputObject $p[0] -Property @{ EnableBIDI = $false }
+  $after = @(Get-CimInstance Win32_Printer -Filter $q)
+  if ($after.Count -gt 0 -and $after[0].EnableBIDI) { Emit "still_enabled" "EnableBIDI is still on after the write"; exit 4 }
+  Emit "ok" ""
+  exit 0
+} catch {
+  Emit "error" ($_.Exception.Message)
+  exit 1
+}
+`;
+
+/** Unelevated launcher. Triggers the UAC prompt via Start-Process -Verb RunAs,
+ *  waits for the elevated child, and surfaces a user-cancel as a dedicated exit
+ *  code (detected by NativeErrorCode, locale-independent). Everything it needs
+ *  is a bound param — including the printer name, which rides into the elevated
+ *  child's -ArgumentList as a single token-array element, never concatenated
+ *  into a command string. ASCII-only. Exported for the unit test. */
+export const WINDOWS_DISABLE_BIDI_LAUNCH_PS1 = `param([Parameter(Mandatory=$true)][string]$PrinterName,
+      [Parameter(Mandatory=$true)][string]$PsExe,
+      [Parameter(Mandatory=$true)][string]$InnerScript,
+      [Parameter(Mandatory=$true)][string]$ResultPath)
+$ErrorActionPreference = "Stop"
+try {
+  $proc = Start-Process -FilePath $PsExe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $InnerScript, "-PrinterName", $PrinterName, "-ResultPath", $ResultPath)
+  exit $proc.ExitCode
+} catch {
+  $ex = $_.Exception
+  $code = $null
+  if ($ex -is [System.ComponentModel.Win32Exception]) { $code = $ex.NativeErrorCode }
+  elseif ($ex.InnerException -is [System.ComponentModel.Win32Exception]) { $code = $ex.InnerException.NativeErrorCode }
+  if ($code -eq 1223) { exit ${ELEVATION_CANCELLED_EXIT} } else { throw }
+}
+`;
+
+/** Outcome of {@link disableBidi}. `{ ok: true }` on a confirmed disable;
+ *  `{ ok: false, reason }` for cancel + known-failure cases (the renderer maps
+ *  `reason` to a localized toast — main-process strings can't cross the bundle
+ *  boundary into the Next.js renderer). Unexpected internal errors reject. */
+export type DisableBidiResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason:
+        | "cancelled"
+        | "not_found"
+        | "ambiguous"
+        | "still_enabled"
+        | "elevation_unavailable"
+        | "error";
+      detail?: string;
+    };
+
+/**
+ * Disable bidirectional support (`EnableBIDI`) on a Windows printer queue by
+ * running an elevated helper through the Windows UAC consent dialog.
+ * Windows-only.
+ *
+ * Some drivers (the Brother PT-P710BT among them) crash the Print Spooler when
+ * the spooler's bidi status query runs at job-schedule time; turning BiDi off
+ * is the fix, but it's a system-level printer-config write that needs admin.
+ * The unelevated app can't do it in-process, so it shells out to an elevated
+ * child via `Start-Process -Verb RunAs`.
+ *
+ * Returns a STRUCTURED result so the renderer can react without matching any
+ * main-process string. The printer name is passed as a bound PowerShell param
+ * at every hop, never interpolated into a command line. The caller MUST have
+ * already validated the name (the IPC handler requires it to be an installed,
+ * BiDi-on queue the user was shown).
+ */
+export async function disableBidi(printerName: string): Promise<DisableBidiResult> {
+  if (process.platform !== "win32") {
+    throw new Error("Disabling bidirectional support is only supported on Windows.");
+  }
+  const psExe = windowsPowershellPath();
+  const dir = await mkdtemp(join(tmpdir(), "fdb-bidi-"));
+  const innerPath = join(dir, "fix-bidi.ps1");
+  const launchPath = join(dir, "launch.ps1");
+  const resultPath = join(dir, "result.json");
+  await writeFile(innerPath, WINDOWS_DISABLE_BIDI_PS1, "utf8");
+  await writeFile(launchPath, WINDOWS_DISABLE_BIDI_LAUNCH_PS1, "utf8");
+  try {
+    let cancelled = false;
+    let launcherFailed = false;
+    try {
+      await execFileP(
+        psExe,
+        [
+          "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+          "-File", launchPath,
+          "-PrinterName", printerName,
+          "-PsExe", psExe,
+          "-InnerScript", innerPath,
+          "-ResultPath", resultPath,
+        ],
+        { timeout: DISABLE_BIDI_TIMEOUT_MS, windowsHide: true },
+      );
+    } catch (err) {
+      // execFile rejects on any non-zero exit. The launcher exits
+      // ELEVATION_CANCELLED_EXIT for a user-cancelled UAC. The inner script's
+      // own 1/2/3/4 exits also surface here, but those wrote a result file we
+      // read below (which wins). A throw with NO result file means the launcher
+      // itself failed (elevation unavailable / policy-blocked / timeout).
+      const code = (err as { code?: unknown }).code;
+      if (code === ELEVATION_CANCELLED_EXIT) cancelled = true;
+      else launcherFailed = true;
+    }
+    if (cancelled) return { ok: false, reason: "cancelled" };
+
+    // The elevated child's outcome crosses the RunAs boundary only via this
+    // file (its console does not). Strip a possible UTF-8 BOM before parsing.
+    let result: { status?: unknown; message?: unknown } | null = null;
+    try {
+      let raw = await readFile(resultPath, "utf8");
+      if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1); // strip a leading UTF-8 BOM
+      result = JSON.parse(raw) as { status?: unknown; message?: unknown };
+    } catch {
+      result = null;
+    }
+    if (result && typeof result.status === "string") {
+      const detail =
+        typeof result.message === "string" && result.message ? result.message : undefined;
+      switch (result.status) {
+        case "ok":
+          return { ok: true };
+        case "not_found":
+          return { ok: false, reason: "not_found", detail };
+        case "ambiguous":
+          return { ok: false, reason: "ambiguous", detail };
+        case "still_enabled":
+          return { ok: false, reason: "still_enabled", detail };
+        default:
+          return { ok: false, reason: "error", detail };
+      }
+    }
+    // No result file: the elevated child never ran to completion.
+    if (launcherFailed) return { ok: false, reason: "elevation_unavailable" };
+    return { ok: false, reason: "error" };
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 /**
