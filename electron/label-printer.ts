@@ -317,7 +317,7 @@ function psSingleQuote(s: string): string {
 export function buildDisableBidiScript(printerName: string): string {
   return `$ErrorActionPreference = "Stop"
 $PrinterName = ${psSingleQuote(printerName)}
-$q = "Name='" + $PrinterName.Replace("'", "''") + "'"
+$q = "Name='" + $PrinterName.Replace('\\', '\\\\').Replace("'", "\\'") + "'"
 try {
   $p = @(Get-CimInstance Win32_Printer -Filter $q)
   if ($p.Count -eq 0) { exit 2 }

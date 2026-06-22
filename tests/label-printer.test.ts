@@ -468,6 +468,10 @@ describe("disableBidi — elevated Windows BiDi-disable helper", () => {
     expect(s).toContain("Set-CimInstance");
     expect(s).toContain("Win32_Printer");
     expect(s).toContain("EnableBIDI = $false");
+    // WQL escaping (about_WQL): backslash is the escape char — double a literal
+    // backslash (shared names like \\server\printer) and use \' for an apostrophe,
+    // NOT SQL-style '' doubling, or the Win32_Printer filter wouldn't match.
+    expect(s).toContain(`.Replace('\\', '\\\\').Replace("'", "\\'")`);
     expect(s).toMatch(/\$after\b/); // re-read so a silent no-op reports still-on
     expect(s).toMatch(/exit 4/); // still_enabled
     expect(s).toMatch(/exit 2/); // not_found
