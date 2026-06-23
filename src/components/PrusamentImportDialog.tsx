@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { formatGrams } from "@/lib/formatWeight";
 
 interface PrusamentScrapeResult {
   spoolId: string;
@@ -327,11 +328,11 @@ export default function PrusamentImportDialog({
                     {spool.diameterStdDev?.toFixed(1) ?? "?"} &micro;m
                   </div>
                   <div className="text-zinc-500">{t("prusament.import.netWeight")}</div>
-                  <div>{spool.netWeight} g</div>
+                  <div>{formatGrams(spool.netWeight)} g</div>
                   <div className="text-zinc-500">{t("prusament.import.spoolWeight")}</div>
-                  <div>{spool.spoolWeight} g</div>
+                  <div>{formatGrams(spool.spoolWeight)} g</div>
                   <div className="text-zinc-500">{t("prusament.import.totalWeight")}</div>
-                  <div className="font-medium">{spool.totalWeight} g</div>
+                  <div className="font-medium">{formatGrams(spool.totalWeight)} g</div>
                   <div className="text-zinc-500">{t("prusament.import.length")}</div>
                   <div>{Math.round(spool.lengthMeters)} m</div>
                   <div className="text-zinc-500">{t("prusament.import.nozzleTemp")}</div>

@@ -51,6 +51,9 @@ interface AggregatedSpool {
   /** #732 Phase 4: the durable per-spool id, surfaced on /inventory. Nullable —
    * a legacy spool not yet backfilled can emit null. */
   instanceId: string | null;
+  /** GH #806: the spool's current location, so /inventory's move-to dropdown
+   * pre-selects it. Null for the synthetic legacy / no-location bucket. */
+  locationId: string | null;
   label: string;
   totalWeight: number | null;
   lotNumber: string | null;
@@ -291,6 +294,11 @@ export async function GET(request: NextRequest) {
               _id: "$spools._id",
               // #732 Phase 4: surface the per-spool id on /inventory.
               instanceId: "$spools.instanceId",
+              // GH #806: per-spool locationId so the /inventory "Move to…"
+              // dropdown can pre-select the spool's current location instead of
+              // always showing the placeholder. Same value as this group's _id
+              // (null for the synthetic legacy / no-location bucket).
+              locationId: "$spools.locationId",
               label: "$spools.label",
               totalWeight: "$spools.totalWeight",
               lotNumber: "$spools.lotNumber",

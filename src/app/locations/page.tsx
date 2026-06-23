@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { formatGrams } from "@/lib/formatWeight";
 
 interface Location {
   _id: string;
@@ -218,7 +219,7 @@ export default function LocationsPage() {
                   </td>
                   <td className="py-2 px-2 text-right text-xs">{l.spoolCount}</td>
                   <td className="py-2 px-2 text-right text-xs text-gray-500">
-                    {l.totalGrams > 0 ? `${Math.round(l.totalGrams)}g` : "—"}
+                    {l.totalGrams > 0 ? `${formatGrams(l.totalGrams)}g` : "—"}
                   </td>
                   <td className="py-2 px-2 text-gray-500 text-xs">{l.notes || "—"}</td>
                   <td className="py-2 px-2 text-right">

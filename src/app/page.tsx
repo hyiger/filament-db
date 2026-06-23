@@ -16,6 +16,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
 import { getRemainingGrams, getRemainingPct, getSpoolCount } from "@/lib/inventoryStats";
+import { formatGrams } from "@/lib/formatWeight";
 import { compareFilaments, nextSortState, type SortKey, type SortDir } from "@/lib/sortFilamentList";
 import { buildFilamentGroups } from "@/lib/groupFilaments";
 
@@ -837,8 +838,26 @@ export default function Home() {
                     {t("filaments.spools.retired")}
                   </span>
                 )}
-                <span className="text-gray-400">
-                  {s.totalWeight != null ? `${Math.round(s.totalWeight)} g` : "—"}
+                {/* GH #804: show remaining filament weight (gross − empty-spool
+                    tare) as subtext under the total, so a glance answers "do I
+                    have enough?" without recalling the empty-spool weight.
+                    GH #805: formatGrams trims float noise to 2 dp. Remaining is
+                    only shown when the tare (filament spoolWeight) is known. */}
+                <span className="text-gray-400 flex flex-col leading-tight">
+                  {s.totalWeight == null ? (
+                    "—"
+                  ) : (
+                    <>
+                      <span>{formatGrams(s.totalWeight)} g</span>
+                      {f.spoolWeight != null && (
+                        <span className="text-[10px] text-gray-500 dark:text-gray-500">
+                          {t("filaments.spools.remainingGrams", {
+                            grams: formatGrams(Math.max(0, s.totalWeight - f.spoolWeight)),
+                          })}
+                        </span>
+                      )}
+                    </>
+                  )}
                 </span>
                 <label className="flex items-center gap-1.5 ml-auto">
                   <span className="text-gray-500">{t("filaments.spools.location")}</span>

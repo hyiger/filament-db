@@ -23,6 +23,7 @@ import { deriveArrangement } from "@/lib/filamentColors";
 import type { FilamentDetail, FilamentCalibration } from "@/types/filament";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { formatDate } from "@/lib/dateFormat";
+import { formatGrams } from "@/lib/formatWeight";
 
 type Filament = FilamentDetail;
 
@@ -1428,7 +1429,7 @@ function FilamentDetail() {
               {hasSpools && (
                 <span className="text-xs text-gray-400">
                   {t("detail.spoolCount", { count: filament.spools.length })}
-                  {aggregatePct != null && ` · ${Math.round(aggregateRemaining)}g ${t("detail.total")} (${aggregatePct}%)`}
+                  {aggregatePct != null && ` · ${formatGrams(aggregateRemaining)}g ${t("detail.total")} (${aggregatePct}%)`}
                 </span>
               )}
             </div>
@@ -1443,7 +1444,7 @@ function FilamentDetail() {
               )}
               {/* Legacy single-spool remaining */}
               {!hasSpools && legacyRemaining && (
-                <InfoCard label={t("detail.field.remaining")} value={`${Math.round(legacyRemaining.remainingWeight)}g${legacyRemaining.pct != null ? ` (${legacyRemaining.pct}%)` : ""}`} />
+                <InfoCard label={t("detail.field.remaining")} value={`${formatGrams(legacyRemaining.remainingWeight)}g${legacyRemaining.pct != null ? ` (${legacyRemaining.pct}%)` : ""}`} />
               )}
               {!hasSpools && legacyRemaining?.lengthMeters != null && (
                 <InfoCard label={t("detail.field.lengthLeft")} value={`${legacyRemaining.lengthMeters.toFixed(1)}m`} />
@@ -2326,13 +2327,13 @@ function SpoolCard({
       {/* Stats row */}
       <div className="flex items-center gap-4 text-sm text-gray-500 mb-2">
         {remaining && (
-          <span>{Math.round(remaining.remainingWeight)}g {t("detail.spool.remaining")}{remaining.pct != null ? ` (${remaining.pct}%)` : ""}</span>
+          <span>{formatGrams(remaining.remainingWeight)}g {t("detail.spool.remaining")}{remaining.pct != null ? ` (${remaining.pct}%)` : ""}</span>
         )}
         {remaining?.lengthMeters != null && (
           <span>{remaining.lengthMeters.toFixed(1)}m {t("detail.spool.left")}</span>
         )}
         {!remaining && spool.totalWeight != null && (
-          <span>{spool.totalWeight}g {t("detail.spool.onScale")}</span>
+          <span>{formatGrams(spool.totalWeight)}g {t("detail.spool.onScale")}</span>
         )}
       </div>
 

@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import FilamentPicker from "@/components/FilamentPicker";
+import { formatGrams } from "@/lib/formatWeight";
 
 interface FilamentOption {
   _id: string;
@@ -219,7 +220,7 @@ function ComparePageInner() {
     },
     {
       label: t("compare.row.onHand"),
-      get: (_f, i) => (totalGrams[i] > 0 ? `${Math.round(totalGrams[i])} g` : "—"),
+      get: (_f, i) => (totalGrams[i] > 0 ? `${formatGrams(totalGrams[i])} g` : "—"),
     },
   ];
 

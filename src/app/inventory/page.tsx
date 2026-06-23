@@ -14,6 +14,7 @@ import {
   type InventorySortKey,
   type InventorySortDir,
 } from "@/lib/inventorySort";
+import { formatGrams } from "@/lib/formatWeight";
 
 /**
  * GH #389 — Spool Inventory page.
@@ -40,6 +41,9 @@ interface SpoolRow {
   _id: string;
   /** #732 Phase 4: the durable per-spool id, surfaced read-only here. */
   instanceId?: string;
+  /** GH #806: the spool's current location, so the move-to dropdown
+   * pre-selects it instead of always showing the "Move to…" placeholder. */
+  locationId: string | null;
   label: string;
   totalWeight: number | null;
   lotNumber: string | null;
@@ -996,8 +1000,8 @@ function SpoolEditRow({
             {t("inventory.legacyBadge")}
           </span>
         </td>
-        <td className="py-2 px-3 text-right">{row.totalWeight != null ? `${row.totalWeight} g` : "—"}</td>
-        <td className="py-2 px-3 text-right">{grams != null ? `${grams} g` : "—"}</td>
+        <td className="py-2 px-3 text-right">{row.totalWeight != null ? `${formatGrams(row.totalWeight)} g` : "—"}</td>
+        <td className="py-2 px-3 text-right">{grams != null ? `${formatGrams(grams)} g` : "—"}</td>
         <td className="py-2 px-3">—</td>
         <td className="py-2 px-3 text-right">
           <Link href={`/filaments/${row.filamentId}`} className="text-xs text-blue-600 hover:underline">
@@ -1170,21 +1174,20 @@ function SpoolEditRow({
       </td>
       <td className="py-2 px-3 text-right">
         <div className="inline-flex items-center gap-1">
+          {/* GH #806: show the spool's CURRENT location selected (not a static
+              "Move to…" placeholder), and let the user change it. Mirrors the
+              home-page spool dropdown: value "" is the "No location" option, so
+              moveTo("") clears the location. Controlled by row.locationId, which
+              refreshes after a successful move. */}
           <select
-            value=""
+            value={row.locationId ?? ""}
             disabled={movePending}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v === "__none") moveTo("");
-              else if (v) moveTo(v);
-              e.target.value = "";
-            }}
-            aria-label={t("inventory.moveTo")}
-            title={t("inventory.moveTo")}
+            onChange={(e) => moveTo(e.target.value)}
+            aria-label={t("inventory.location")}
+            title={t("inventory.location")}
             className="text-xs px-1 py-0.5 border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 disabled:opacity-50"
           >
-            <option value="">{t("inventory.moveTo")}</option>
-            <option value="__none">{t("inventory.noLocation")}</option>
+            <option value="">{t("inventory.noLocation")}</option>
             {locations.map((loc) => (
               <option key={loc._id} value={loc._id}>
                 {loc.name}
