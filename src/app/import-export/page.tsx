@@ -215,7 +215,7 @@ export default function ImportExportPage() {
       <Section title={t("importExport.snapshot")}>
         <p className="text-xs text-gray-500 mb-3">
           {t("importExport.snapshotDesc")}{" "}
-          <Link href="/settings" className="text-blue-600 hover:underline">
+          <Link href="/settings/backup" className="text-blue-600 hover:underline">
             {t("importExport.snapshotInSettings")}
           </Link>
         </p>
