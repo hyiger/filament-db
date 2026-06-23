@@ -7,6 +7,13 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { formatDate } from "@/lib/dateFormat";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
+import {
+  groupAndSortInventory,
+  INVENTORY_NO_GROUP_KEY,
+  type InventoryGroupBy,
+  type InventorySortKey,
+  type InventorySortDir,
+} from "@/lib/inventorySort";
 
 /**
  * GH #389 — Spool Inventory page.
@@ -104,6 +111,52 @@ function remainingPct(row: SpoolRow): number | null {
   return Math.min(100, Math.max(0, Math.round((grams / net) * 100)));
 }
 
+/**
+ * GH #795 — persisted group/sort/filter prefs (localStorage). A single JSON
+ * blob avoids key sprawl; unknown enum values fall back to the default so a
+ * corrupt/old blob can't wedge the page. `includeRetired` rides along since it
+ * also drives the server query.
+ */
+const INVENTORY_PREFS_KEY = "filamentdb-inventory-prefs";
+const GROUP_BY_VALUES: InventoryGroupBy[] = ["location", "type", "vendor", "none"];
+const SORT_KEY_VALUES: InventorySortKey[] = ["remaining", "name", "type", "vendor", "purchase", "opened"];
+
+interface InventoryPrefs {
+  groupBy: InventoryGroupBy;
+  sortKey: InventorySortKey;
+  sortDir: InventorySortDir;
+  includeRetired: boolean;
+}
+const DEFAULT_INVENTORY_PREFS: InventoryPrefs = {
+  groupBy: "location",
+  // #795: default to remaining-weight ascending — surfaces near-empty spools to
+  // reorder, the issue's primary use case.
+  sortKey: "remaining",
+  sortDir: "asc",
+  includeRetired: false,
+};
+
+function loadInventoryPrefs(): InventoryPrefs {
+  if (typeof window === "undefined") return DEFAULT_INVENTORY_PREFS;
+  try {
+    const raw = window.localStorage.getItem(INVENTORY_PREFS_KEY);
+    if (!raw) return DEFAULT_INVENTORY_PREFS;
+    const p = JSON.parse(raw) as Partial<InventoryPrefs>;
+    return {
+      groupBy: GROUP_BY_VALUES.includes(p.groupBy as InventoryGroupBy)
+        ? (p.groupBy as InventoryGroupBy)
+        : DEFAULT_INVENTORY_PREFS.groupBy,
+      sortKey: SORT_KEY_VALUES.includes(p.sortKey as InventorySortKey)
+        ? (p.sortKey as InventorySortKey)
+        : DEFAULT_INVENTORY_PREFS.sortKey,
+      sortDir: p.sortDir === "desc" ? "desc" : "asc",
+      includeRetired: p.includeRetired === true,
+    };
+  } catch {
+    return DEFAULT_INVENTORY_PREFS;
+  }
+}
+
 export default function InventoryPage() {
   const { t } = useTranslation();
   const { toast } = useToast();
@@ -118,7 +171,20 @@ export default function InventoryPage() {
   const [type, setType] = useState("");
   const [vendor, setVendor] = useState("");
   const [search, setSearch] = useState("");
-  const [includeRetired, setIncludeRetired] = useState(false);
+  const [includeRetired, setIncludeRetired] = useState(DEFAULT_INVENTORY_PREFS.includeRetired);
+
+  // GH #795: distinct type/vendor option lists for the filter dropdowns
+  // (mirrors the main filament list). Fetched once on mount.
+  const [types, setTypes] = useState<string[]>([]);
+  const [vendors, setVendors] = useState<string[]>([]);
+
+  // GH #795: grouping + sorting. Persisted in localStorage, but loaded
+  // post-mount (in an effect) so the server and client first paint both use the
+  // defaults — no hydration mismatch on the controls or the group order.
+  const [groupBy, setGroupBy] = useState<InventoryGroupBy>(DEFAULT_INVENTORY_PREFS.groupBy);
+  const [sortKey, setSortKey] = useState<InventorySortKey>(DEFAULT_INVENTORY_PREFS.sortKey);
+  const [sortDir, setSortDir] = useState<InventorySortDir>(DEFAULT_INVENTORY_PREFS.sortDir);
+  const prefsLoaded = useRef(false);
 
   // GH #444: debounce the search input. The filtered-groups memo
   // walks every group + every spool on each keystroke; on a slow
@@ -201,6 +267,47 @@ export default function InventoryPage() {
     return () => ac.abort();
   }, []);
 
+  // GH #795: distinct type + vendor lists for the filter dropdowns.
+  useEffect(() => {
+    const ac = new AbortController();
+    Promise.all([
+      fetch("/api/filaments/types", { signal: ac.signal }).then((r) => (r.ok ? r.json() : [])),
+      fetch("/api/filaments/vendors", { signal: ac.signal }).then((r) => (r.ok ? r.json() : [])),
+    ])
+      .then(([t1, v1]: [string[], string[]]) => {
+        setTypes(Array.isArray(t1) ? t1 : []);
+        setVendors(Array.isArray(v1) ? v1 : []);
+      })
+      .catch(() => {});
+    return () => ac.abort();
+  }, []);
+
+  // GH #795: load persisted group/sort prefs once, after mount, so the first
+  // client paint matches the server HTML (both use the defaults), then adopt
+  // the stored values. The persist effect below is gated on `prefsLoaded` so it
+  // doesn't clobber storage with the defaults before this runs.
+  useEffect(() => {
+    const p = loadInventoryPrefs();
+    setGroupBy(p.groupBy); // eslint-disable-line react-hooks/set-state-in-effect -- persisted prefs
+    setSortKey(p.sortKey);
+    setSortDir(p.sortDir);
+    setIncludeRetired(p.includeRetired);
+    prefsLoaded.current = true;
+  }, []);
+
+  // Persist prefs whenever they change (after the initial load).
+  useEffect(() => {
+    if (!prefsLoaded.current) return;
+    try {
+      window.localStorage.setItem(
+        INVENTORY_PREFS_KEY,
+        JSON.stringify({ groupBy, sortKey, sortDir, includeRetired }),
+      );
+    } catch {
+      /* ignore quota / disabled storage */
+    }
+  }, [groupBy, sortKey, sortDir, includeRetired]);
+
   const toggleCollapse = (key: string) => {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -271,6 +378,16 @@ export default function InventoryPage() {
     };
   }, [data]);
 
+  // GH #795: regroup (location / type / vendor / none) + sort within each
+  // group. Pure transform over the already-search-filtered rows — the
+  // by-location payload carries filamentType / filamentVendor / dates / weights
+  // per row, so switching grouping or sorting needs no server round-trip. Each
+  // group's count + remaining-gram total are recomputed inside the helper.
+  const displayGroups = useMemo(
+    () => groupAndSortInventory(filteredGroups, groupBy, sortKey, sortDir),
+    [filteredGroups, groupBy, sortKey, sortDir],
+  );
+
   // For the inline edit handlers we use the existing per-spool PUT —
   // the same one the SpoolCard component uses on the filament detail
   // page — so retire / move / weight-update semantics stay identical
@@ -308,15 +425,14 @@ export default function InventoryPage() {
   // lossless).
   const visibleSelectedRows = useMemo(() => {
     const out: SpoolRow[] = [];
-    for (const g of filteredGroups) {
-      const key = g.locationId ?? "_none";
-      if (collapsed.has(key)) continue;
+    for (const g of displayGroups) {
+      if (collapsed.has(g.key)) continue;
       for (const s of g.spools) {
         if (selectedKeys.has(spoolKey(s))) out.push(s);
       }
     }
     return out;
-  }, [filteredGroups, selectedKeys, collapsed]);
+  }, [displayGroups, selectedKeys, collapsed]);
 
   // GH #420: run the same PUT for every selected row, sequentially so
   // a transient failure doesn't trigger a thundering-herd of retries.
@@ -447,27 +563,82 @@ export default function InventoryPage() {
           <label htmlFor="inv-type" className="block text-xs text-gray-500 mb-1">
             {t("inventory.filter.type")}
           </label>
-          <input
+          <select
             id="inv-type"
-            type="text"
             value={type}
             onChange={(e) => setType(e.target.value)}
-            placeholder={t("inventory.filter.typePlaceholder")}
-            className="w-32 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
-          />
+            className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+          >
+            <option value="">{t("inventory.filter.allTypes")}</option>
+            {types.map((tp) => (
+              <option key={tp} value={tp}>
+                {tp}
+              </option>
+            ))}
+          </select>
         </div>
         <div>
           <label htmlFor="inv-vendor" className="block text-xs text-gray-500 mb-1">
             {t("inventory.filter.vendor")}
           </label>
-          <input
+          <select
             id="inv-vendor"
-            type="text"
             value={vendor}
             onChange={(e) => setVendor(e.target.value)}
-            placeholder={t("inventory.filter.vendorPlaceholder")}
-            className="w-40 px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
-          />
+            className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+          >
+            <option value="">{t("inventory.filter.allVendors")}</option>
+            {vendors.map((vn) => (
+              <option key={vn} value={vn}>
+                {vn}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="inv-groupby" className="block text-xs text-gray-500 mb-1">
+            {t("inventory.groupBy")}
+          </label>
+          <select
+            id="inv-groupby"
+            value={groupBy}
+            onChange={(e) => setGroupBy(e.target.value as InventoryGroupBy)}
+            className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+          >
+            <option value="location">{t("inventory.groupBy.location")}</option>
+            <option value="type">{t("inventory.groupBy.type")}</option>
+            <option value="vendor">{t("inventory.groupBy.vendor")}</option>
+            <option value="none">{t("inventory.groupBy.none")}</option>
+          </select>
+        </div>
+        <div>
+          <label htmlFor="inv-sortby" className="block text-xs text-gray-500 mb-1">
+            {t("inventory.sortBy")}
+          </label>
+          <div className="flex items-center gap-1">
+            <select
+              id="inv-sortby"
+              value={sortKey}
+              onChange={(e) => setSortKey(e.target.value as InventorySortKey)}
+              className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+            >
+              <option value="remaining">{t("inventory.sort.remaining")}</option>
+              <option value="name">{t("inventory.sort.name")}</option>
+              <option value="type">{t("inventory.sort.type")}</option>
+              <option value="vendor">{t("inventory.sort.vendor")}</option>
+              <option value="purchase">{t("inventory.sort.purchase")}</option>
+              <option value="opened">{t("inventory.sort.opened")}</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
+              aria-label={t(sortDir === "asc" ? "inventory.sort.asc" : "inventory.sort.desc")}
+              title={t(sortDir === "asc" ? "inventory.sort.asc" : "inventory.sort.desc")}
+              className="px-2 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
+            >
+              {sortDir === "asc" ? "↑" : "↓"}
+            </button>
+          </div>
         </div>
         <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 pb-1">
           <input
@@ -565,7 +736,7 @@ export default function InventoryPage() {
             </div>
           ))}
         </SkeletonRegion>
-      ) : filteredGroups.length === 0 ? (
+      ) : displayGroups.length === 0 ? (
         <div className="text-center py-12 border border-dashed border-gray-300 dark:border-gray-700 rounded-lg">
           <p className="text-gray-500 mb-3">{t("inventory.empty")}</p>
           <Link
@@ -577,13 +748,25 @@ export default function InventoryPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {filteredGroups.map((group) => {
-            const key = group.locationId ?? "_none";
+          {displayGroups.map((group) => {
+            const key = group.key;
             const isCollapsed = collapsed.has(key);
-            const name = group.location?.name ?? t("inventory.noLocation");
-            const kindLabel = group.location?.kind
-              ? t(`locations.kind.${group.location.kind}`)
-              : "";
+            // GH #795: the header label depends on the grouping mode — the
+            // location name (+ kind/humidity) when grouped by location, the
+            // type/vendor value otherwise, and a generic label for the
+            // ungrouped / no-value buckets.
+            const name =
+              groupBy === "location"
+                ? (group.location?.name ?? t("inventory.noLocation"))
+                : groupBy === "none"
+                  ? t("inventory.groupAll")
+                  : group.key === INVENTORY_NO_GROUP_KEY
+                    ? t("inventory.groupNone")
+                    : (group.label ?? "");
+            const kindLabel =
+              groupBy === "location" && group.location?.kind
+                ? t(`locations.kind.${group.location.kind}`)
+                : "";
             return (
               <section
                 key={key}
