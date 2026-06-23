@@ -6,6 +6,7 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 import { niceAxisScale } from "@/lib/chartScale";
+import { formatGrams } from "@/lib/formatWeight";
 
 interface AnalyticsData {
   since: string;
@@ -147,7 +148,7 @@ export default function AnalyticsPage() {
         <>
           {/* Totals */}
           <div className="grid grid-cols-3 gap-3 mb-8">
-            <StatBox label={t("analytics.totalGrams")} value={`${data.totals.grams} g`} />
+            <StatBox label={t("analytics.totalGrams")} value={`${formatGrams(data.totals.grams)} g`} />
             <StatBox
               label={t("analytics.totalCost")}
               value={
@@ -225,7 +226,7 @@ export default function AnalyticsPage() {
                           <div
                             key={d.date}
                             className="flex-1 h-full flex flex-col items-center justify-end"
-                            title={`${d.date}: ${d.grams} g`}
+                            title={`${d.date}: ${formatGrams(d.grams)} g`}
                           >
                             <div
                               className={`w-full ${d.grams > 0 ? "bg-blue-500" : "bg-transparent"} rounded-sm`}
@@ -268,7 +269,7 @@ export default function AnalyticsPage() {
                           <span className="text-gray-500 text-xs">{f.vendor}</span>
                         </span>
                         <span className="w-20 text-right text-xs text-gray-500">
-                          {f.grams} g
+                          {formatGrams(f.grams)} g
                         </span>
                         <div className="w-40 bg-gray-200 dark:bg-gray-800 rounded-full h-2 flex-shrink-0">
                           <div
@@ -300,7 +301,7 @@ export default function AnalyticsPage() {
                     >
                       <span className="flex-1 min-w-0 truncate">{v.vendor}</span>
                       <span className="w-20 text-right text-xs text-gray-500">
-                        {v.grams} g
+                        {formatGrams(v.grams)} g
                       </span>
                       <div className="w-40 bg-gray-200 dark:bg-gray-800 rounded-full h-2 flex-shrink-0">
                         <div
@@ -323,7 +324,7 @@ export default function AnalyticsPage() {
                 {data.byPrinter.map((p) => (
                   <li key={p._id} className="flex justify-between px-2 py-1">
                     <span>{p.name}</span>
-                    <span className="text-gray-500">{p.grams} g</span>
+                    <span className="text-gray-500">{formatGrams(p.grams)} g</span>
                   </li>
                 ))}
               </ul>

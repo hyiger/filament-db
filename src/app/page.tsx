@@ -843,14 +843,14 @@ export default function Home() {
                     have enough?" without recalling the empty-spool weight.
                     GH #805: formatGrams trims float noise to 2 dp. Remaining is
                     only shown when the tare (filament spoolWeight) is known. */}
-                <span className="text-gray-400 flex flex-col leading-tight">
+                <span className="text-gray-500 dark:text-gray-400 flex flex-col leading-tight">
                   {s.totalWeight == null ? (
                     "—"
                   ) : (
                     <>
                       <span>{formatGrams(s.totalWeight)} g</span>
                       {f.spoolWeight != null && (
-                        <span className="text-[10px] text-gray-500 dark:text-gray-500">
+                        <span className="text-[10px] text-gray-400 dark:text-gray-500">
                           {t("filaments.spools.remainingGrams", {
                             grams: formatGrams(Math.max(0, s.totalWeight - f.spoolWeight)),
                           })}

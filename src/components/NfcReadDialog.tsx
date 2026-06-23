@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useNfcContext, type NfcTagReadResult } from "./NfcProvider";
 import CopyButton from "./CopyButton";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { formatGrams } from "@/lib/formatWeight";
 
 export default function NfcReadDialog() {
   const router = useRouter();
@@ -384,13 +385,13 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
         <Stat label={t("nfc.readDialog.labelDensity")} value={`${data.density.toFixed(2)} g/cm³`} />
       )}
       {data.weightGrams != null && (
-        <Stat label={t("nfc.readDialog.labelNetWeight")} value={`${data.weightGrams} g`} />
+        <Stat label={t("nfc.readDialog.labelNetWeight")} value={`${formatGrams(data.weightGrams)} g`} />
       )}
       {data.actualWeightGrams != null && data.actualWeightGrams !== data.weightGrams && (
-        <Stat label={t("nfc.readDialog.labelActualRemaining")} value={`${data.actualWeightGrams} g`} />
+        <Stat label={t("nfc.readDialog.labelActualRemaining")} value={`${formatGrams(data.actualWeightGrams)} g`} />
       )}
       {data.emptySpoolWeight != null && (
-        <Stat label={t("nfc.readDialog.labelSpoolWeight")} value={`${data.emptySpoolWeight} g`} />
+        <Stat label={t("nfc.readDialog.labelSpoolWeight")} value={`${formatGrams(data.emptySpoolWeight)} g`} />
       )}
       {data.nozzleTemp != null && (
         <Stat label={t("nfc.readDialog.labelNozzleTemp")} value={`${data.nozzleTempMin ?? "?"}–${data.nozzleTemp}°C`} />

@@ -1437,10 +1437,10 @@ function FilamentDetail() {
             {/* Filament-level info cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
               {filament.netFilamentWeight != null && (
-                <InfoCard label={t("detail.field.netFilament")} value={`${filament.netFilamentWeight}g`} inherited={inherited.has("netFilamentWeight")} />
+                <InfoCard label={t("detail.field.netFilament")} value={`${formatGrams(filament.netFilamentWeight)}g`} inherited={inherited.has("netFilamentWeight")} />
               )}
               {filament.spoolWeight != null && (
-                <InfoCard label={t("detail.field.spoolWeight")} value={`${filament.spoolWeight}g`} inherited={inherited.has("spoolWeight")} />
+                <InfoCard label={t("detail.field.spoolWeight")} value={`${formatGrams(filament.spoolWeight)}g`} inherited={inherited.has("spoolWeight")} />
               )}
               {/* Legacy single-spool remaining */}
               {!hasSpools && legacyRemaining && (
@@ -2687,7 +2687,7 @@ function SpoolCard({
                         {formatDate(u.date, locale)}
                       </span>
                       <span className="font-medium w-14 shrink-0 text-right">
-                        {u.grams}g
+                        {formatGrams(u.grams)}g
                       </span>
                       <span className="flex-1 min-w-0 truncate">
                         {u.jobLabel || t("detail.spool.usageNoLabel")}

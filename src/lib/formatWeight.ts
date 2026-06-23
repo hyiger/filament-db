@@ -16,9 +16,13 @@
  */
 export function formatGrams(value: number | null | undefined, decimals = 2): string {
   if (value == null || !Number.isFinite(value)) return "";
-  const factor = 10 ** decimals;
-  const rounded = Math.round(value * factor) / factor;
-  // `Number(...toFixed())` re-parses to drop trailing zeros: 210.00 → "210",
-  // 210.40 → "210.4". toFixed also tames the binary-float rounding artifacts.
-  return String(Number(rounded.toFixed(decimals)));
+  // A naive `Math.round(value * 10**decimals)` mis-rounds exact .005-type ties
+  // because the binary product lands JUST below the tie (1.005 * 100 ===
+  // 100.4999…, so it would show "1" instead of "1.01"). Shifting the decimal
+  // point through the number parser ("1.005e2" → 100.5 exactly) avoids that, and
+  // `String(Number(...))` drops trailing zeros (210.00 → "210"). (#805 / Codex P3)
+  const rounded = Number(`${Math.round(Number(`${value}e${decimals}`))}e-${decimals}`);
+  // Guard the parser path: a value that stringifies to exponential notation
+  // (absurd for a gram weight) would yield NaN — fall back to the raw value.
+  return Number.isFinite(rounded) ? String(rounded) : String(value);
 }

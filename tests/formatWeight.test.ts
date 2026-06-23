@@ -12,6 +12,15 @@ describe("formatGrams", () => {
     expect(formatGrams(39.455)).toBe("39.46");
   });
 
+  it("rounds exact .005 decimal ties up, not down (Codex P3)", () => {
+    // The binary product (1.005 * 100 === 100.4999…) would round these DOWN
+    // with a naive multiply; the decimal-shift path gets them right.
+    expect(formatGrams(1.005)).toBe("1.01");
+    expect(formatGrams(10.075)).toBe("10.08");
+    expect(formatGrams(2.005)).toBe("2.01");
+    expect(formatGrams(1.0049)).toBe("1"); // genuinely below the tie → stays down
+  });
+
   it("trims trailing zeros (no 210.00 / 39.50)", () => {
     expect(formatGrams(210)).toBe("210");
     expect(formatGrams(210.0)).toBe("210");

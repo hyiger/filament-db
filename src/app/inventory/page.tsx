@@ -1126,7 +1126,7 @@ function SpoolEditRow({
             aria-label={t("inventory.updateWeight")}
             title={t("inventory.updateWeight")}
           >
-            {row.totalWeight != null ? `${row.totalWeight}g` : <span className="text-gray-400">—</span>}
+            {row.totalWeight != null ? `${formatGrams(row.totalWeight)}g` : <span className="text-gray-400">—</span>}
             <span aria-hidden="true" className="text-xs opacity-50">✎</span>
           </button>
         )}
@@ -1143,11 +1143,11 @@ function SpoolEditRow({
               />
             </div>
             <span className="text-xs text-gray-500 w-12 text-right">
-              {grams != null ? `${grams}g` : `${pct}%`}
+              {grams != null ? `${formatGrams(grams)}g` : `${pct}%`}
             </span>
           </div>
         ) : grams != null ? (
-          <span className="text-xs">{grams}g</span>
+          <span className="text-xs">{formatGrams(grams)}g</span>
         ) : (
           <span className="text-gray-400">—</span>
         )}
