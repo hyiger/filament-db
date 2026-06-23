@@ -97,6 +97,7 @@ volumes:
 | `MONGODB_URI` | Yes | MongoDB connection string |
 | `PORT` | No | Server port inside the container (default: `3000`) |
 | `HOSTNAME` | No | Interface the server binds inside the container (default: `0.0.0.0`). Reachability is governed by the `docker run -p` mapping, not this. |
+| `TZ` | No | IANA timezone for the container clock, e.g. `America/Los_Angeles` (defaults to UTC). The image bundles `tzdata`, so a zone name resolves correctly. |
 | `FILAMENTDB_API_KEY` | No | Bearer-token gate on **every** `/api/*` request. See [Securing a network-exposed instance](#securing-a-network-exposed-instance). **Note:** it disables the browser web UI — use it only for non-browser clients (mobile app, slicers, scripts). |
 | `GEMINI_API_KEY` | No | Google Gemini API key for TDS extraction |
 | `ANTHROPIC_API_KEY` | No | Anthropic Claude API key for TDS extraction |

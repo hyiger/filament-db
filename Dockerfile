@@ -19,6 +19,12 @@ ENV NODE_ENV=production
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
+# GH #796: the node:22-alpine base ships no zoneinfo DB, so a `TZ=America/...`
+# env var can't be resolved and musl silently falls back to UTC. Install tzdata
+# (as root, before the USER switch below) so the documented TZ env var works.
+# ~3MB; the container stays UTC unless TZ is set.
+RUN apk add --no-cache tzdata
+
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
