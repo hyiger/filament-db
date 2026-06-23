@@ -136,6 +136,23 @@ describe("groupAndSortInventory — sorting", () => {
     expect(out[0].spools.map((r) => r.id)).toEqual(["full", "mid", "near-empty", "unknown"]);
   });
 
+  it("treats a no-tare row's remaining as unknown — sinks last in sort, but its gross still counts in the total (Codex P2)", () => {
+    const rows: Row[] = [
+      row("with-tare", { totalWeight: 1000, spoolWeight: 200 }), // 800 remaining
+      row("no-tare", { totalWeight: 950, spoolWeight: null, parentSpoolWeight: null }), // unknown
+      row("near-empty", { totalWeight: 250, spoolWeight: 200 }), // 50
+    ];
+    const g: InventorySourceGroup<Row>[] = [
+      { locationId: null, location: null, count: rows.length, totalGrams: 0, spools: rows },
+    ];
+    const out = groupAndSortInventory(g, "none", "remaining", "asc");
+    // no-tare sinks LAST despite a large gross weight; real values ascend before it
+    expect(out[0].spools.map((r) => r.id)).toEqual(["near-empty", "with-tare", "no-tare"]);
+    // ...but the group total still includes the no-tare gross (0g-tare fallback):
+    // 800 + 950 + 50 = 1800
+    expect(out[0].totalGrams).toBe(1800);
+  });
+
   it("sorts by name and by date, nulls last either direction", () => {
     const dated: Row[] = [
       row("c", { purchaseDate: "2026-03-01" }),

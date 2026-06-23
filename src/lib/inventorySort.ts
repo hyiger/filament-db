@@ -78,11 +78,12 @@ function isBlank(v: string | null | undefined): boolean {
 }
 
 /**
- * Net remaining filament grams: gross `totalWeight` minus the empty-spool tare
- * (variant's own `spoolWeight`, else parent's, else a 0g fallback). The 0g
- * fallback matches `/api/spools/by-location`'s own totalGrams math and the
- * page's filtered-group recompute (Codex P2 round 4 on PR #400). `null` when no
- * `totalWeight` — those sort/total as "unknown".
+ * Net remaining filament grams for the group TOTAL: gross `totalWeight` minus
+ * the empty-spool tare (variant's own `spoolWeight`, else parent's, else a 0g
+ * fallback). The 0g fallback matches `/api/spools/by-location`'s own totalGrams
+ * math and the page's filtered-group recompute (Codex P2 round 4 on PR #400), so
+ * a no-tare legacy row still contributes its gross to the shelf total. `null`
+ * only when there's no `totalWeight` at all.
  */
 export function inventoryRemainingGrams(row: InventoryRow): number | null {
   if (row.totalWeight == null) return null;
@@ -90,11 +91,28 @@ export function inventoryRemainingGrams(row: InventoryRow): number | null {
   return Math.max(0, row.totalWeight - tare);
 }
 
+/**
+ * Remaining grams for SORTING — stricter than {@link inventoryRemainingGrams}:
+ * `null` when the tare is unknown (no own or parent `spoolWeight`), matching the
+ * table's `remainingGrams`, which renders such rows as "—". So a no-tare row
+ * sorts as "unknown" and sinks last (the UI + sort contract), rather than its
+ * gross weight being mistaken for a real remaining value and ordered among real
+ * ones — important now that remaining-weight is the default sort (Codex P2).
+ * The group TOTAL still counts the gross via the 0g-tare fallback above; that's
+ * a deliberately separate contract.
+ */
+function remainingForSort(row: InventoryRow): number | null {
+  if (row.totalWeight == null) return null;
+  const tare = row.spoolWeight ?? row.parentSpoolWeight ?? null;
+  if (tare == null) return null;
+  return Math.max(0, row.totalWeight - tare);
+}
+
 /** Comparable value for a sort key, or `null` when blank/unknown (sinks last). */
 function sortValue(row: InventoryRow, key: InventorySortKey): number | string | null {
   switch (key) {
     case "remaining":
-      return inventoryRemainingGrams(row);
+      return remainingForSort(row);
     case "name":
       return isBlank(row.filamentName) ? null : row.filamentName.toLowerCase();
     case "type":
