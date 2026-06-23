@@ -10,6 +10,7 @@ import { snapToStep } from "@/lib/snapToStep";
 import {
   filterColorSuggestions,
   lookupCssNamedColor,
+  isBlankColorHex,
   type ColorSuggestion,
 } from "@/lib/cssNamedColors";
 import {
@@ -1416,9 +1417,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               // can be multiple hexes under the same name (e.g. several
               // brands of "Galaxy Black"); the user must explicitly
               // pick which one they meant via the dropdown.
+              // GH #794: only auto-fill the hex from the name when the hex is
+              // still blank — never clobber a hex the user picked themselves.
               const cssHex = lookupCssNamedColor(form.colorName);
-              if (cssHex && form.color.toUpperCase() !== cssHex) {
-                setForm({ ...form, color: cssHex });
+              if (cssHex && isBlankColorHex(form.color)) {
+                setForm((f) => ({ ...f, color: cssHex }));
               }
             }}
             onKeyDown={(e) => {
@@ -1440,7 +1443,13 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               ) {
                 e.preventDefault();
                 const s = filtered[colorNameHighlight];
-                setForm({ ...form, colorName: s.name, color: s.hex });
+                // GH #794: always set the name; only adopt the suggestion's hex
+                // when the current hex is blank (don't clobber a chosen color).
+                setForm((f) => ({
+                  ...f,
+                  colorName: s.name,
+                  ...(isBlankColorHex(f.color) ? { color: s.hex } : {}),
+                }));
                 setColorNameDropdownOpen(false);
                 setColorNameHighlight(-1);
               } else if (e.key === "Escape") {
@@ -1495,7 +1504,12 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                           // input's onBlur fires first and the dropdown closes
                           // before the click registers.
                           e.preventDefault();
-                          setForm({ ...form, colorName: s.name, color: s.hex });
+                          // GH #794: name always; hex only when currently blank.
+                          setForm((f) => ({
+                            ...f,
+                            colorName: s.name,
+                            ...(isBlankColorHex(f.color) ? { color: s.hex } : {}),
+                          }));
                           setColorNameDropdownOpen(false);
                           setColorNameHighlight(-1);
                         }}

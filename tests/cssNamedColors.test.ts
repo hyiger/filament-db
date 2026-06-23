@@ -3,6 +3,8 @@ import {
   CSS_NAMED_COLOR_LIST,
   filterColorSuggestions,
   lookupCssNamedColor,
+  isBlankColorHex,
+  BLANK_COLOR_HEX,
   type ColorSuggestion,
 } from "@/lib/cssNamedColors";
 
@@ -132,5 +134,27 @@ describe("filterColorSuggestions", () => {
   it("returns an empty list when nothing matches a non-empty query", () => {
     const result = filterColorSuggestions([], "thiscolordoesnotexistanywhere");
     expect(result).toEqual([]);
+  });
+});
+
+describe("isBlankColorHex (GH #794)", () => {
+  it("treats the gray sentinel as blank (any case / surrounding space)", () => {
+    expect(isBlankColorHex(BLANK_COLOR_HEX)).toBe(true);
+    expect(isBlankColorHex("#808080")).toBe(true);
+    expect(isBlankColorHex("#808080".toLowerCase())).toBe(true);
+    expect(isBlankColorHex("  #808080  ")).toBe(true);
+  });
+
+  it("treats null/undefined/empty as blank (defensive — the picker never emits them)", () => {
+    expect(isBlankColorHex(null)).toBe(true);
+    expect(isBlankColorHex(undefined)).toBe(true);
+    expect(isBlankColorHex("")).toBe(true);
+  });
+
+  it("treats a real user-picked hex as NOT blank — a name commit must not clobber it", () => {
+    expect(isBlankColorHex("#FA6E1C")).toBe(false);
+    expect(isBlankColorHex("#000080")).toBe(false);
+    expect(isBlankColorHex("#000000")).toBe(false);
+    expect(isBlankColorHex("#ffffff")).toBe(false);
   });
 });

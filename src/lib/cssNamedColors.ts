@@ -13,6 +13,25 @@
  * lists as aliases.
  */
 
+/**
+ * GH #794: the app-wide "no color chosen" sentinel. `FilamentForm`'s
+ * `<input type="color">` can never hold an empty string, so a fresh filament's
+ * `color` is seeded to this gray. A committed color NAME may fill a blank hex
+ * but must NOT overwrite a hex the user actually picked.
+ */
+export const BLANK_COLOR_HEX = "#808080";
+
+/**
+ * Is this hex "blank" — unset, empty, or the gray sentinel? When true, a
+ * color-name commit is allowed to auto-fill the hex; when false, the name is
+ * just a label and the existing hex is kept (#794). Tolerates null/empty for
+ * safety even though the color picker never produces them.
+ */
+export function isBlankColorHex(hex: string | null | undefined): boolean {
+  if (!hex) return true;
+  return hex.trim().toUpperCase() === BLANK_COLOR_HEX;
+}
+
 const CSS_NAMED_COLORS: Record<string, string> = {
   aliceblue: "#F0F8FF",
   antiquewhite: "#FAEBD7",
