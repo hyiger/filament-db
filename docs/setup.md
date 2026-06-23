@@ -110,7 +110,7 @@ Filament DB's trust model is **localhost / single-user**: by default the API is 
 
 You have two ways to secure an exposed instance, depending on **who** needs to reach it:
 
-- **Non-browser clients only** (the [mobile companion app](mobile.md), PrusaSlicer/OrcaSlicer integrations, scripts) — set `FILAMENTDB_API_KEY` to a strong random value. Every `/api/*` request must then send `Authorization: Bearer <key>`; the mobile app and the slicer integrations support this. **Generate the key once, save it, and reuse that exact value** — your clients need it, and it must stay the same across restarts (don't generate it inline, or it changes every run and nothing can authenticate):
+- **Non-browser clients only** (the [mobile companion app](../packages/mobile/README.md), PrusaSlicer/OrcaSlicer integrations, scripts) — set `FILAMENTDB_API_KEY` to a strong random value. Every `/api/*` request must then send `Authorization: Bearer <key>`; the mobile app and the slicer integrations support this. **Generate the key once, save it, and reuse that exact value** — your clients need it, and it must stay the same across restarts (don't generate it inline, or it changes every run and nothing can authenticate):
 
   ```bash
   # 1. Generate a key once and copy it (paste this into the mobile app / slicer):

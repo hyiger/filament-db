@@ -112,7 +112,7 @@ Das Vertrauensmodell von Filament DB ist **localhost / Einzelnutzer**: Standardm
 
 Es gibt zwei Wege, eine exponierte Instanz abzusichern — je nachdem, **wer** sie erreichen muss:
 
-- **Nur Nicht-Browser-Clients** (die [mobile Begleit-App](mobile.md), PrusaSlicer/OrcaSlicer-Integrationen, Skripte) — setze `FILAMENTDB_API_KEY` auf einen starken Zufallswert. Jede `/api/*`-Anfrage muss dann `Authorization: Bearer <key>` senden; die Mobile-App und die Slicer-Integrationen unterstützen das. **Erzeuge den Schlüssel einmal, speichere ihn und verwende genau diesen Wert wieder** — deine Clients brauchen ihn, und er muss über Neustarts hinweg gleich bleiben (nicht inline erzeugen, sonst ändert er sich bei jedem Start und nichts kann sich mehr authentifizieren):
+- **Nur Nicht-Browser-Clients** (die [mobile Begleit-App](../../packages/mobile/README.md), PrusaSlicer/OrcaSlicer-Integrationen, Skripte) — setze `FILAMENTDB_API_KEY` auf einen starken Zufallswert. Jede `/api/*`-Anfrage muss dann `Authorization: Bearer <key>` senden; die Mobile-App und die Slicer-Integrationen unterstützen das. **Erzeuge den Schlüssel einmal, speichere ihn und verwende genau diesen Wert wieder** — deine Clients brauchen ihn, und er muss über Neustarts hinweg gleich bleiben (nicht inline erzeugen, sonst ändert er sich bei jedem Start und nichts kann sich mehr authentifizieren):
 
   ```bash
   # 1. Schlüssel einmal erzeugen und kopieren (in die Mobile-App / den Slicer einfügen):
