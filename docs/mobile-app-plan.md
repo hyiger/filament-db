@@ -139,8 +139,9 @@ keep on the server. Add an optional **`remainingWeight`** field to the PUT body;
 `totalWeight = remainingWeight + effectiveSpoolWeight` using the same `$lookup` the inventory
 aggregation already uses (`/api/spools/by-location`, `/api/locations?stats=true`).
 
-The existing `POST /api/filaments/{id}/spools/{spoolId}/usage?grams=X` already covers the "I used X
-grams" delta case (with a ledger entry) — use it for relative decrements.
+The existing `POST /api/filaments/{id}/spools/{spoolId}/usage` (JSON body
+`{ grams, jobLabel?, date? }`) already covers the "I used X grams" delta case
+(with a ledger entry) — use it for relative decrements.
 
 ### 4.4 Create-from-decoded-tag (reuse existing mapper)
 
@@ -208,7 +209,7 @@ fall back to QR / manual entry with a clear message.
 | Filament detail + spools | `GET /api/filaments/{id}` | exists |
 | Browse / search list (lightweight) | `GET /api/filaments?search=&type=&vendor=` | exists |
 | Update spool location | `PUT /api/filaments/{id}/spools/{spoolId}` `{locationId}` | exists |
-| Log filament used (delta + ledger) | `POST /api/filaments/{id}/spools/{spoolId}/usage?grams=X` | exists |
+| Log filament used (delta + ledger) | `POST /api/filaments/{id}/spools/{spoolId}/usage` `{grams, jobLabel?, date?}` | exists |
 | Location picker / create | `GET` + `POST /api/locations` | exists |
 | Create from OpenPrintTag slug | `POST /api/openprinttag/import` | exists |
 | Create from Bambu Studio preset | `POST /api/filaments/bambustudio` | exists |

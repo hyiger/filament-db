@@ -928,14 +928,14 @@ Liefert:
       "bed": 60
     },
     "dryingTemperature": 55,
-    "dryingTime": 4,
+    "dryingTime": 240,
     "glassTempTransition": 60,
     "heatDeflectionTemp": 52
   }
 }
 ```
 
-Extrahierte Felder umfassen: Name, Hersteller, Typ, Dichte, Durchmesser, Temperaturen (Düse, Druckbett, Bereiche), Trocknungstemperatur/-zeit, Glasübergang (Tg), Heat Deflection (HDT), Shore-Härte (A/D), volumetrische Geschwindigkeit, Druckgeschwindigkeits-Bereiche und Gewichte. Felder, die im TDS nicht gefunden werden, werden aus der Antwort weggelassen.
+Extrahierte Felder umfassen: Name, Hersteller, Typ, Dichte, Durchmesser, Temperaturen (Düse, Druckbett, Bereiche), Trocknungstemperatur/-zeit, Glasübergang (Tg), Heat Deflection (HDT), Shore-Härte (A/D), volumetrische Geschwindigkeit, Druckgeschwindigkeits-Bereiche und Gewichte. Felder, die im TDS nicht gefunden werden, werden aus der Antwort weggelassen. **`dryingTime` ist in Minuten** (z. B. `240` = 4 Stunden, `480` = 8 Stunden) — die kanonische Einheit der App für dieses Feld.
 
 **SSRF-/Redirect-Handling**: Der URL-Fetcher nutzt den geteilten `assertExternalUrl`-Guard (keine `file:`-/`gopher:`-Schemata; lehnt Loopback-/RFC1918-/Link-Local-/Cloud-Metadata-IPs ab). Redirects werden manuell verfolgt, wobei der gleiche Guard bei jedem Hop erneut angewendet wird, gedeckelt auf 5 Redirects — so kann ein öffentlicher Host nicht per 30x in privaten Raum umleiten (entspricht dem Muster der `embed-check`-Route). Das `tdsUrl`-Feld am `Filament` wird zusätzlich schema-validiert auf http(s) bei Erstellung und auf jedem Update-Pfad.
 

@@ -1009,14 +1009,14 @@ Returns:
       "bed": 60
     },
     "dryingTemperature": 55,
-    "dryingTime": 4,
+    "dryingTime": 240,
     "glassTempTransition": 60,
     "heatDeflectionTemp": 52
   }
 }
 ```
 
-Extracted fields include: name, vendor, type, density, diameter, temperatures (nozzle, bed, ranges), drying temperature/time, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), volumetric speed, print speed ranges, and weights. Fields not found in the TDS are omitted from the response.
+Extracted fields include: name, vendor, type, density, diameter, temperatures (nozzle, bed, ranges), drying temperature/time, glass transition (Tg), heat deflection (HDT), shore hardness (A/D), volumetric speed, print speed ranges, and weights. Fields not found in the TDS are omitted from the response. **`dryingTime` is in minutes** (e.g. `240` = 4 hours, `480` = 8 hours) — the app's canonical unit for that field.
 
 **SSRF / redirect handling**: the URL fetcher uses the shared `assertExternalUrl` guard (no `file:` / `gopher:` schemes; rejects loopback / RFC1918 / link-local / cloud-metadata IPs). Redirects are followed manually with the same guard re-applied on every hop, capped at 5 redirects — so a public host cannot 30x-redirect into private space (matches the `embed-check` route's pattern). The `tdsUrl` field on `Filament` is also schema-validated to http(s) on both create and every update path.
 
