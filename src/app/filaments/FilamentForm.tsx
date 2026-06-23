@@ -376,6 +376,12 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
   const [colorNameSuggestions, setColorNameSuggestions] = useState<ColorSuggestion[]>([]);
   const [colorNameDropdownOpen, setColorNameDropdownOpen] = useState(false);
   const [colorNameHighlight, setColorNameHighlight] = useState(-1);
+  // GH #794 (Codex P2): track whether the current hex was AUTO-FILLED from a
+  // color name vs. picked by the user. A later name commit may replace an
+  // auto-filled hex (so `navy` → `red` updates the swatch), but must never
+  // overwrite a hex the user set via the picker / text field. Cleared whenever
+  // the user edits the hex directly.
+  const [colorHexAutofilled, setColorHexAutofilled] = useState(false);
   const colorNameRef = useRef<HTMLDivElement>(null);
   const nozzleRangeMaxRef = useRef<HTMLInputElement>(null);
   const [fetchErrors, setFetchErrors] = useState<string[]>([]);
@@ -1351,7 +1357,12 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               aria-label={t("form.color")}
               className="h-10 w-12 rounded border border-gray-300 dark:border-gray-600 cursor-pointer bg-transparent flex-shrink-0"
               value={form.color}
-              onChange={(e) => setForm({ ...form, color: e.target.value })}
+              onChange={(e) => {
+                // Manual pick → this hex is now user-owned; a later color name
+                // must not overwrite it (#794).
+                setForm({ ...form, color: e.target.value });
+                setColorHexAutofilled(false);
+              }}
             />
             <input
               type="text"
@@ -1366,6 +1377,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                 let v = raw.startsWith("#") ? raw : `#${raw}`;
                 v = "#" + v.slice(1).replace(/[^0-9a-fA-F]/g, "");
                 setForm({ ...form, color: v.slice(0, 7) });
+                // Manual edit → user-owned hex; don't let a name overwrite it (#794).
+                setColorHexAutofilled(false);
               }}
               onBlur={(e) => {
                 const v = e.target.value.trim();
@@ -1417,11 +1430,13 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               // can be multiple hexes under the same name (e.g. several
               // brands of "Galaxy Black"); the user must explicitly
               // pick which one they meant via the dropdown.
-              // GH #794: only auto-fill the hex from the name when the hex is
-              // still blank — never clobber a hex the user picked themselves.
+              // GH #794: auto-fill the hex from the name only when the hex is
+              // blank OR was itself auto-filled by a prior name — never clobber
+              // a hex the user picked themselves.
               const cssHex = lookupCssNamedColor(form.colorName);
-              if (cssHex && isBlankColorHex(form.color)) {
+              if (cssHex && (isBlankColorHex(form.color) || colorHexAutofilled)) {
                 setForm((f) => ({ ...f, color: cssHex }));
+                setColorHexAutofilled(true);
               }
             }}
             onKeyDown={(e) => {
@@ -1443,13 +1458,16 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               ) {
                 e.preventDefault();
                 const s = filtered[colorNameHighlight];
-                // GH #794: always set the name; only adopt the suggestion's hex
-                // when the current hex is blank (don't clobber a chosen color).
+                // GH #794: always set the name; adopt the suggestion's hex only
+                // when the current hex is blank or was itself auto-filled (don't
+                // clobber a user-picked color).
+                const applyHex = isBlankColorHex(form.color) || colorHexAutofilled;
                 setForm((f) => ({
                   ...f,
                   colorName: s.name,
-                  ...(isBlankColorHex(f.color) ? { color: s.hex } : {}),
+                  ...(applyHex ? { color: s.hex } : {}),
                 }));
+                if (applyHex) setColorHexAutofilled(true);
                 setColorNameDropdownOpen(false);
                 setColorNameHighlight(-1);
               } else if (e.key === "Escape") {
@@ -1504,12 +1522,15 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                           // input's onBlur fires first and the dropdown closes
                           // before the click registers.
                           e.preventDefault();
-                          // GH #794: name always; hex only when currently blank.
+                          // GH #794: name always; hex only when blank or itself
+                          // auto-filled (never clobber a user-picked color).
+                          const applyHex = isBlankColorHex(form.color) || colorHexAutofilled;
                           setForm((f) => ({
                             ...f,
                             colorName: s.name,
-                            ...(isBlankColorHex(f.color) ? { color: s.hex } : {}),
+                            ...(applyHex ? { color: s.hex } : {}),
                           }));
+                          if (applyHex) setColorHexAutofilled(true);
                           setColorNameDropdownOpen(false);
                           setColorNameHighlight(-1);
                         }}

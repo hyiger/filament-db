@@ -151,6 +151,14 @@ describe("isBlankColorHex (GH #794)", () => {
     expect(isBlankColorHex("")).toBe(true);
   });
 
+  it("treats an incomplete/cleared hex as blank — FilamentForm stores '#' when the text field is emptied (Codex P2)", () => {
+    expect(isBlankColorHex("#")).toBe(true); // text field cleared
+    expect(isBlankColorHex("#12")).toBe(true); // mid-typing
+    expect(isBlankColorHex("#1234")).toBe(true);
+    expect(isBlankColorHex("#1234567")).toBe(true); // too long
+    expect(isBlankColorHex("not-a-hex")).toBe(true);
+  });
+
   it("treats a real user-picked hex as NOT blank — a name commit must not clobber it", () => {
     expect(isBlankColorHex("#FA6E1C")).toBe(false);
     expect(isBlankColorHex("#000080")).toBe(false);
