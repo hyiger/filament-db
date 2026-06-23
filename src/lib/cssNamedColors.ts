@@ -22,19 +22,28 @@
 export const BLANK_COLOR_HEX = "#808080";
 
 /**
- * Is this hex "blank" — i.e. safe for a color-name commit to auto-fill? True
- * for unset/empty, the gray sentinel, OR an incomplete value: `FilamentForm`'s
- * hex text input stores a bare `"#"` when cleared (and a partial `"#12"` while
- * typing), which isn't a real color. Treating those as blank means committing a
- * name fills a valid hex instead of leaving an invalid one that trips the
- * `#RRGGBB` model validator (Codex P2 on #794). When false, the name is just a
- * label and the user's chosen hex is kept (#794).
+ * Is this hex INCOMPLETE — empty/null, a bare `"#"` (what `FilamentForm`'s text
+ * input stores when cleared), a partial `"#12"` while typing, or otherwise not a
+ * full `#RRGGBB`? Such a value isn't a real color, so a color-name commit should
+ * fill it rather than leave an invalid value that trips the `#RRGGBB` model
+ * validator (Codex P2 on #794). NOTE: the gray sentinel `#808080` is a VALID
+ * hex and is NOT incomplete — distinguishing "the user picked gray" from "no
+ * color chosen" needs intent tracking in the form, not this predicate.
+ */
+export function isIncompleteColorHex(hex: string | null | undefined): boolean {
+  if (!hex) return true;
+  return !/^#[0-9A-Fa-f]{6}$/.test(hex.trim());
+}
+
+/**
+ * Is this hex "blank" — incomplete (see {@link isIncompleteColorHex}) OR the
+ * gray "no color chosen" sentinel? Used to decide whether a LOADED filament's
+ * color counts as user-owned: a stored real color is owned, a stored sentinel
+ * gray is treated as unchosen so a name can still gap-fill it (#794).
  */
 export function isBlankColorHex(hex: string | null | undefined): boolean {
-  if (!hex) return true;
-  const h = hex.trim();
-  if (!/^#[0-9A-Fa-f]{6}$/.test(h)) return true; // empty, "#", partial, garbage
-  return h.toUpperCase() === BLANK_COLOR_HEX;
+  if (isIncompleteColorHex(hex)) return true;
+  return hex!.trim().toUpperCase() === BLANK_COLOR_HEX;
 }
 
 const CSS_NAMED_COLORS: Record<string, string> = {
