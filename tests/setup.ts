@@ -1,6 +1,7 @@
 import { MongoMemoryServer } from "mongodb-memory-server";
 import mongoose from "mongoose";
 import { beforeAll, afterAll, afterEach } from "vitest";
+import { startWithRetry } from "./mongoRetry";
 
 // Allow a generous startup budget — Windows CI runners have been observed
 // downloading/extracting the mongodb binary and failing the default 10s
@@ -25,9 +26,27 @@ const MONGO_INSTANCE_LAUNCH_TIMEOUT_MS = 60_000;
 let mongoServer: MongoMemoryServer | null = null;
 
 beforeAll(async () => {
-  mongoServer = await MongoMemoryServer.create({
-    instance: { launchTimeout: MONGO_INSTANCE_LAUNCH_TIMEOUT_MS },
-  });
+  // GH #808: mongodb-memory-server picks a random port; if it collides with
+  // another local process it throws "Port … already in use" and fails the
+  // ENTIRE run before any suite executes. Retry with a fresh server (new random
+  // port) on that specific error only — genuine startup failures still surface.
+  // Port collisions fail fast, so a handful of retries fit inside the budget.
+  mongoServer = await startWithRetry(
+    () =>
+      MongoMemoryServer.create({
+        instance: { launchTimeout: MONGO_INSTANCE_LAUNCH_TIMEOUT_MS },
+      }),
+    {
+      maxAttempts: 5,
+      delayMs: 250,
+      onRetry: (attempt, err) =>
+        console.warn(
+          `[tests/setup] MongoMemoryServer port collision (attempt ${attempt}/5); retrying with a fresh port: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        ),
+    },
+  );
   const uri = mongoServer.getUri();
   process.env.MONGODB_URI = uri;
   await mongoose.connect(uri);
