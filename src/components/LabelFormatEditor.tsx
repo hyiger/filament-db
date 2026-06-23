@@ -101,7 +101,7 @@ export default function LabelFormatEditor() {
   const labelCls = "text-xs font-medium text-gray-600 dark:text-gray-400";
 
   return (
-    <div className="mt-6 pt-6 border-t border-gray-200 dark:border-gray-700">
+    <div>
       <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-1">
         {t("settings.labelFormat")}
       </h3>
