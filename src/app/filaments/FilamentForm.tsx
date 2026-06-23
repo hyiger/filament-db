@@ -1442,6 +1442,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               const cssHex = lookupCssNamedColor(form.colorName);
               if (cssHex && (isIncompleteColorHex(form.color) || !colorHexUserSet)) {
                 setForm((f) => ({ ...f, color: cssHex }));
+                // Now name-auto-filled (not user-owned), so a later name can
+                // still replace it — even if the user had just cleared the field,
+                // which set the flag true (Codex P2).
+                setColorHexUserSet(false);
               }
             }}
             onKeyDown={(e) => {
@@ -1472,6 +1476,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                   colorName: s.name,
                   ...(applyHex ? { color: s.hex } : {}),
                 }));
+                // Filling from a name leaves the hex name-owned, so subsequent
+                // names keep updating it (Codex P2).
+                if (applyHex) setColorHexUserSet(false);
                 setColorNameDropdownOpen(false);
                 setColorNameHighlight(-1);
               } else if (e.key === "Escape") {
@@ -1535,6 +1542,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                             colorName: s.name,
                             ...(applyHex ? { color: s.hex } : {}),
                           }));
+                          // Name-owned after a fill, so later names keep updating
+                          // it (Codex P2).
+                          if (applyHex) setColorHexUserSet(false);
                           setColorNameDropdownOpen(false);
                           setColorNameHighlight(-1);
                         }}
