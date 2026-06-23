@@ -877,7 +877,7 @@ function NewFilamentContent() {
                   <p className="text-xs text-gray-500 mt-2">
                     {t("new.tds.aiDescription")}
                     {" "}
-                    <Link href="/settings" className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 underline" onClick={guardLink("/settings")}>
+                    <Link href="/settings/ai" className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 underline" onClick={guardLink("/settings/ai")}>
                       {t("new.tds.configureApiKey")}
                     </Link>
                   </p>
