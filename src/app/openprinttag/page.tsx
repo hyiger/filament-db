@@ -6,6 +6,7 @@ import { List, type RowComponentProps } from "react-window";
 import { useToast } from "@/components/Toast";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { safeHttpUrl } from "@/lib/safeRenderUrl";
+import { formatMinutesAsHm } from "@/lib/formatDuration";
 
 // Row layout constants — the virtualized List needs known heights so it
 // can compute the absolute scroll position of every row without mounting
@@ -213,7 +214,10 @@ function MaterialDetail({ m }: { m: OPTMaterial }) {
               <DetailField label={t("openprinttag.detail.chamberTemp")} value={m.chamberTemp} unit="°C" />
               <DetailField label={t("openprinttag.detail.preheatTemp")} value={m.preheatTemp} unit="°C" />
               <DetailField label={t("openprinttag.detail.dryingTemp")} value={m.dryingTemp} unit="°C" />
-              <DetailField label={t("openprinttag.detail.dryingTime")} value={m.dryingTime} unit="h" />
+              {/* GH #807: dryingTime is stored in MINUTES (OPT spec key
+                  drying_time). Render as "Xh Ym" — was wrongly suffixing the raw
+                  minutes with "h" (480 → "480 h" instead of "8h 0m"). */}
+              <DetailField label={t("openprinttag.detail.dryingTime")} value={formatMinutesAsHm(m.dryingTime)} />
             </>
           ) : (
             <p className="text-xs text-gray-400 dark:text-gray-500 italic py-1">{t("openprinttag.detail.noProperties")}</p>
