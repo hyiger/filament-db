@@ -1,14 +1,17 @@
 {
+  // Type-check-only config for the Electron main/preload/services. The root
+  // tsconfig EXCLUDES electron/ (it's bundled by esbuild, which strips types
+  // without checking), so without this pass the ~5.6k lines of Electron TS ship
+  // unchecked. Extending the root config (rather than hand-rolling module /
+  // moduleResolution) is what lets electron-store's pure-ESM `exports.types`
+  // condition resolve, so its .get/.set typings are present. noEmit keeps this a
+  // pure check that writes nothing; incremental is off so it shares no build
+  // state with the root pass. (#816)
+  "extends": "./tsconfig.json",
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "commonjs",
-    "moduleResolution": "node",
-    "esModuleInterop": true,
-    "strict": true,
-    "outDir": "electron-dist",
-    "rootDir": "electron",
-    "skipLibCheck": true,
-    "resolveJsonModule": true
+    "noEmit": true,
+    "incremental": false
   },
-  "include": ["electron/**/*.ts"]
+  "include": ["electron/**/*.ts"],
+  "exclude": ["node_modules"]
 }

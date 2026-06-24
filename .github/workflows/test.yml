@@ -36,6 +36,12 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
+      # The root tsconfig excludes electron/ (esbuild bundles it without type
+      # checking), so type-check the Electron main/preload/services separately
+      # or ~5.6k lines ship unchecked. (#816)
+      - name: Type check (Electron)
+        run: npm run electron:typecheck
+
       - name: Run tests with coverage
         run: npm run test:coverage
 
