@@ -151,6 +151,11 @@ export class SyncService extends EventEmitter {
   };
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
+  // #823: set by destroy() so an in-flight cycle stops converging both DBs
+  // after the user switches connection mode. Checked before each collection
+  // step and each repair pass; the collection already executing finishes (its
+  // writes were already in flight), but no subsequent collection/repair runs.
+  private aborted = false;
 
   constructor(localUri: string, atlasUri: string) {
     super();
@@ -211,6 +216,7 @@ export class SyncService extends EventEmitter {
   async sync(): Promise<SyncResult[]> {
     if (this.syncing) return [];
     this.syncing = true;
+    this.aborted = false; // fresh cycle — clear any prior abort (#823)
     this.updateStatus({ state: "syncing", error: null, progress: "Connecting to Atlas..." });
 
     const local = new MongoClient(this.localUri);
@@ -251,6 +257,18 @@ export class SyncService extends EventEmitter {
       deps: string[],
       run: () => Promise<SyncResult>,
     ): Promise<SyncResult> => {
+      // #823: a mode switch (destroy()) mid-cycle aborts the rest so we stop
+      // writing to a DB the user just abandoned.
+      if (this.aborted) {
+        return {
+          collection: name,
+          pushed: 0,
+          pulled: 0,
+          updated: 0,
+          deleted: 0,
+          error: "skipped — sync aborted (connection mode changed)",
+        };
+      }
       for (const dep of deps) {
         const depResult = results.find(r => r.collection === dep);
         if (depResult?.error) {
@@ -385,7 +403,7 @@ export class SyncService extends EventEmitter {
       // (documented as best-effort).
       const collectionErrored = (name: string): boolean =>
         results.find(r => r.collection === name)?.error != null;
-      if (!collectionErrored("locations")) {
+      if (!this.aborted && !collectionErrored("locations")) {
         try {
           await this.repairDanglingSpoolLocations(
             localDb, remoteDb, localLocationBySyncId, remoteLocationBySyncId,
@@ -474,7 +492,7 @@ export class SyncService extends EventEmitter {
       // wrap in try/catch — the repair does updateOne writes and a
       // permissions/transient failure would have escaped to the outer
       // catch, discarding the cycle's partial-success results.
-      if (!collectionErrored("filaments")) {
+      if (!this.aborted && !collectionErrored("filaments")) {
         try {
           await this.repairFilamentParentIds(
             localDb, remoteDb,
@@ -510,7 +528,7 @@ export class SyncService extends EventEmitter {
       // freshly-rebuilt filament map (so filaments must be current) and
       // writes to printer documents (so a broken-printer-sync state
       // shouldn't be further mutated).
-      if (!collectionErrored("printers") && !collectionErrored("filaments")) {
+      if (!this.aborted && !collectionErrored("printers") && !collectionErrored("filaments")) {
         try {
           await this.repairPrinterAmsSlots(
             localDb, remoteDb,
@@ -1608,6 +1626,11 @@ export class SyncService extends EventEmitter {
   }
 
   destroy() {
+    // #823: signal an in-flight cycle to stop after its current collection so
+    // it doesn't keep converging a DB the caller is about to abandon (mode
+    // switch / quit). Returns immediately — the running collection's writes
+    // were already issued, but no further collection or repair pass runs.
+    this.aborted = true;
     this.stopPeriodicSync();
     this.removeAllListeners();
   }
