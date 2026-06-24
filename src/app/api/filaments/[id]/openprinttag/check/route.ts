@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import {
@@ -32,6 +33,12 @@ export async function GET(
   try {
     await dbConnect();
     const { id } = await params;
+    // A non-ObjectId id makes Mongoose throw a CastError that the generic
+    // catch maps to 500; reject it up front as a 400 like the sibling routes
+    // (bambustudio, print-history/[id]). (#818)
+    if (!mongoose.isValidObjectId(id)) {
+      return NextResponse.json({ error: "Invalid filament id" }, { status: 400 });
+    }
 
     const filament = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
     if (!filament) {

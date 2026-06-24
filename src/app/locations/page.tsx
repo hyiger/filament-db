@@ -6,6 +6,7 @@ import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { formatGrams } from "@/lib/formatWeight";
+import { isKnownLocationKind } from "@/lib/locationKind";
 
 interface Location {
   _id: string;
@@ -211,7 +212,7 @@ export default function LocationsPage() {
                   <td className="py-2 px-2 font-medium">{l.name}</td>
                   <td className="py-2 px-2">
                     <span className="px-2 py-0.5 bg-gray-200 dark:bg-gray-800 rounded text-xs">
-                      {t(`locations.kind.${l.kind}`) || l.kind}
+                      {isKnownLocationKind(l.kind) ? t(`locations.kind.${l.kind}`) : l.kind}
                     </span>
                   </td>
                   <td className="py-2 px-2 text-right text-xs">
