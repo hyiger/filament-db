@@ -1,6 +1,6 @@
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError, createApi } from '@/lib/api';
@@ -13,7 +13,22 @@ export default function ScanQrScreen() {
   const router = useRouter();
   const c = useColors();
   const handled = useRef(false);
+  // expo-camera fires onBarcodeScanned on every frame a code is visible. On a
+  // failed resolve we must re-arm so a later scan works, but re-arming
+  // synchronously hammers the server with back-to-back match requests while an
+  // unmatched code is held in frame (or the server is down). Re-arm on a
+  // cooldown instead, and dedupe the same code within a window so a held code is
+  // only tried once. (#815)
+  const rearmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastScan = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(
+    () => () => {
+      if (rearmTimer.current) clearTimeout(rearmTimer.current);
+    },
+    [],
+  );
 
   if (!permission) {
     return (
@@ -36,9 +51,24 @@ export default function ScanQrScreen() {
     );
   }
 
+  // Re-arm the scanner after a cooldown so a held unmatched code isn't retried
+  // every frame. Clearing lastScan lets re-scanning the SAME code retry once the
+  // window passes (e.g. after the server comes back). (#815)
+  function rearmAfterCooldown() {
+    if (rearmTimer.current) clearTimeout(rearmTimer.current);
+    rearmTimer.current = setTimeout(() => {
+      handled.current = false;
+      lastScan.current = null;
+      rearmTimer.current = null;
+    }, 1500);
+  }
+
   async function onScanned(data: string) {
-    if (handled.current || !baseUrl) return;
+    const code = data.trim();
+    // Ignore the same code while it's still in frame (it re-fires per frame).
+    if (handled.current || !baseUrl || code === lastScan.current) return;
     handled.current = true;
+    lastScan.current = code;
     setError(null);
     try {
       // Filament DB labels encode either a deep-link URL (/filaments/{id}, with an
@@ -70,7 +100,7 @@ export default function ScanQrScreen() {
         });
         return;
       }
-      const res = await api.matchByInstanceId(data.trim());
+      const res = await api.matchByInstanceId(code);
       if (res.match?._id) {
         // #732: if the code resolved to a specific spool, deep-link to it so the
         // detail screen highlights that spool (older servers omit matchedSpool).
@@ -81,11 +111,11 @@ export default function ScanQrScreen() {
         });
       } else {
         setError('No filament matched that code.');
-        handled.current = false;
+        rearmAfterCooldown();
       }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : (e as Error).message);
-      handled.current = false;
+      rearmAfterCooldown();
     }
   }
 
