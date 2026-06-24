@@ -1,8 +1,8 @@
 /**
  * GH #449 — animated skeleton placeholders for data-heavy pages.
  *
- * Used by the inventory / dashboard / analytics pages during their
- * initial fetch so the layout doesn't reflow when content arrives.
+ * Used by the home list / inventory / dashboard / analytics pages during
+ * their initial fetch so the layout doesn't reflow when content arrives.
  * Single class string (`animate-pulse bg-gray-200 dark:bg-gray-800`)
  * — kept here so a future tweak to the skeleton look only needs one
  * edit.

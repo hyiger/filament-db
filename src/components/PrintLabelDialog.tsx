@@ -359,11 +359,32 @@ export default function PrintLabelDialog({
     }
   }, [labelFilament, format, qrPayload, isElectron, toast, t, onClose, filament.name]);
 
-  /* --- escape + outside click --- */
+  /* --- escape + Tab focus trap (#820) --- */
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onClose();
+        return;
+      }
+      // aria-modal alone doesn't trap Tab — focus escapes to the page behind
+      // the overlay. Cycle within the dialog like the other modals. The
+      // selector includes <select> for the spool picker (broader than
+      // OptResyncDialog/ConfirmDialog, which have no select).
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusables = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusables.length === 0) return;
+      const active = document.activeElement as HTMLElement | null;
+      const idx = active ? focusables.indexOf(active) : -1;
+      e.preventDefault();
+      const dir = e.shiftKey ? -1 : 1;
+      const next = idx < 0 ? 0 : (idx + dir + focusables.length) % focusables.length;
+      focusables[next].focus();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
