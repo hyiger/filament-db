@@ -22,7 +22,14 @@ import { shouldApplyAppCsp } from "./csp-scope";
 // never throws, never blocks startup. Entries are also mirrored to
 // console.log for the dev workflow.
 const LOG_PATH = path.join(app.getPath("userData"), "logs", "main.log");
+// #829: cap the diagnostic log and keep one rotated backup so it can't grow
+// without bound — it mirrors all embedded Next server stdout/stderr, which
+// accumulates over a long-lived install (and the GH #176 support flow asks
+// users to attach this file, so a multi-hundred-MB log is its own problem).
+const LOG_BACKUP_PATH = `${LOG_PATH}.1`;
+const LOG_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
 let logStream: fs.WriteStream | null = null;
+let logBytes = 0;
 let loggerDisabled = false;
 function disableLogger() {
   loggerDisabled = true;
@@ -32,22 +39,58 @@ function disableLogger() {
     logStream = null;
   }
 }
+function openLogStream() {
+  fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
+  const stream = fs.createWriteStream(LOG_PATH, { flags: "a" });
+  // WriteStream errors (perm-denied on roaming profile, AV file lock,
+  // disk-full mid-write) emit asynchronously on the stream; without a
+  // listener Node treats them as uncaught and would kill the main
+  // process — exactly the failure mode the logger is supposed to
+  // help debug, not cause. Absorb and disable further writes.
+  stream.on("error", disableLogger);
+  logStream = stream;
+}
+// Replace any prior backup with the current log and start fresh. Best-effort.
+function rotateLog() {
+  if (logStream) {
+    logStream.removeAllListeners("error");
+    logStream.end();
+    logStream = null;
+  }
+  try {
+    fs.rmSync(LOG_BACKUP_PATH, { force: true });
+    fs.renameSync(LOG_PATH, LOG_BACKUP_PATH);
+  } catch {
+    // main.log may not exist yet, or the rename raced another process —
+    // either way, just carry on with a fresh stream.
+  }
+  logBytes = 0;
+}
 function diag(message: string) {
   console.log(`[diag] ${message}`);
   if (loggerDisabled) return;
   try {
     if (!logStream) {
-      fs.mkdirSync(path.dirname(LOG_PATH), { recursive: true });
-      const stream = fs.createWriteStream(LOG_PATH, { flags: "a" });
-      // WriteStream errors (perm-denied on roaming profile, AV file lock,
-      // disk-full mid-write) emit asynchronously on the stream; without a
-      // listener Node treats them as uncaught and would kill the main
-      // process — exactly the failure mode the logger is supposed to
-      // help debug, not cause. Absorb and disable further writes.
-      stream.on("error", disableLogger);
-      logStream = stream;
+      // First write this process: seed the byte count from the existing file
+      // so append-mode growth is bounded across restarts too, and rotate up
+      // front if it's already at the cap.
+      try {
+        logBytes = fs.statSync(LOG_PATH).size;
+      } catch {
+        logBytes = 0; // ENOENT (no file yet) or stat failed
+      }
+      if (logBytes >= LOG_MAX_BYTES) rotateLog();
+      openLogStream();
+    } else if (logBytes >= LOG_MAX_BYTES) {
+      // Mid-session cap reached — rotate to main.log.1 and reopen.
+      rotateLog();
+      openLogStream();
     }
-    logStream.write(`[${new Date().toISOString()}] ${message}\n`);
+    const line = `[${new Date().toISOString()}] ${message}\n`;
+    if (logStream) {
+      logStream.write(line);
+      logBytes += Buffer.byteLength(line);
+    }
   } catch {
     // Sync errors (mkdirSync, createWriteStream throwing on bad path,
     // write() back-pressure rejection) — same policy: stop trying.
