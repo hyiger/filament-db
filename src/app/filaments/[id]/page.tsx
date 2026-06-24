@@ -2152,9 +2152,13 @@ function SpoolCard({
   const [showUsageHistory, setShowUsageHistory] = useState(false);
   // GH #601: provenance edits. ISO-string fields are sliced to YYYY-MM-DD
   // for the native <input type="date">; null/undefined collapse to "".
-  // Reseeded from props in the patch handler below so a sibling-spool
-  // update doesn't reset half-typed text the way it would for label
-  // (GH #263 has the parallel pattern).
+  // These keep their local state across re-renders (initialized once, only
+  // updated by their own onChange — there is NO reseed-from-props), so a
+  // sibling-spool update doesn't reset half-typed text. That's the opposite
+  // of the label field, which DOES reseed from the prop on edit-open; the
+  // disabled check below compares the draft against fresh props so a saved
+  // value naturally disables the button. (#833 corrected this comment, which
+  // previously claimed a reseed that doesn't exist.)
   const isoToDateInput = (v?: string | null) =>
     v ? new Date(v).toISOString().slice(0, 10) : "";
   const [lotInput, setLotInput] = useState(spool.lotNumber ?? "");

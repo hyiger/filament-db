@@ -42,8 +42,9 @@ interface FilamentFormData {
    *  arrangement was set). */
   color: string;
   /** GH #477: up to 5 additional color hexes (OpenPrintTag spec keys
-   *  20–24). The arrangement radio derived from optTags 28/29 drives
-   *  the swatch rendering — coextruded shows stripes, gradient shows a
+   *  20–24). The arrangement radio derived from optTags (27 = gradient,
+   *  28 = dual_color, 29 = triple_color; GH #507) drives the swatch
+   *  rendering — coextruded (28/29) shows stripes, gradient (27) shows a
    *  linear-gradient. */
   secondaryColors: string[];
   colorName: string;
@@ -2833,9 +2834,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
  * GH #477 — Multi-color editor + arrangement radio.
  *
  * Renders below the primary color picker. The arrangement radio toggles
- * the OpenPrintTag arrangement tags (28 = gradual_color_change, 29 =
- * coextruded) in the user's `optTags` array — there's no separate
- * "arrangement" field on the schema, just bits in the existing tags
+ * the canonical OpenPrintTag arrangement tags (GH #507: 27 = gradient,
+ * 28 = dual_color, 29 = triple_color — both 28 and 29 render coextruded)
+ * in the user's `optTags` array — there's no separate "arrangement" field
+ * on the schema, just bits in the existing tags
  * list. When the user opts into the multi-color treatment we surface
  * 0–5 secondary-color slots; the swatch preview to the right updates
  * live so the user sees what the list / detail page will render.

@@ -370,6 +370,21 @@ Responses:
 - `400` — malformed body, an unknown field, a field OpenPrintTag isn't currently offering (re-run the check), or the filament is not OpenPrintTag-linked.
 - `404` — the slug is no longer in the OpenPrintTag database.
 
+### POST /api/filaments/:id/openprinttag/link
+
+Links an **existing** filament to an OpenPrintTag material so it can use the `check` / `sync` loop above (v1.52, #753). Same-origin guarded. Send a JSON body:
+
+```json
+{ "slug": "prusament-pla-galaxy-black" }
+```
+
+Writes **only** the linkage (`settings.openprinttag_slug` / `_uuid`) and the provenance snapshot (`openprinttagSnapshot`) — it never touches a field value, so linking can't clobber a user-set or inherited value (a diverged field surfaces as a `conflict` on the next `check`, not an auto-revert).
+
+Responses:
+- `{ "linked": true, "slug": "…", "filament": { … } }` — link established + the fresh document.
+- `{ "linked": false, "found": false, "slug": "…" }` — the slug is no longer in the OpenPrintTag database.
+- `400` — missing/invalid `slug` or a non-ObjectId `:id`.
+
 ### POST /api/filaments/:id/spools
 
 Add a new spool to a filament. Send a JSON body:
@@ -378,7 +393,7 @@ Add a new spool to a filament. Send a JSON body:
 { "label": "Spool #2", "totalWeight": 1236 }
 ```
 
-Both fields are optional (`label` defaults to `""`, `totalWeight` defaults to `null`). Returns the updated filament document with the new spool in the `spools` array.
+The body must include **at least one** meaningful spool field — one of `label`, `totalWeight`, `lotNumber`, `purchaseDate`, `openedDate`, `locationId`, `photoDataUrl`, `retired`, or `instanceId`. An empty body is rejected with `400` (the phantom-spool guard, GH #203) so a placeholder 0 g spool can't be created by accident. Individual fields are otherwise optional (`label` defaults to `""`, `totalWeight` to `null`). On success returns `201` with the updated filament document (the new spool in its `spools` array).
 
 ### PUT /api/filaments/:id/spools/:spoolId
 
@@ -751,7 +766,15 @@ Import selected OpenPrintTag materials into Filament DB. Send a JSON body:
 
 Materials are mapped to the Filament DB schema (type, vendor, temperatures, density, hardness, transmission distance, drying specs, OPT tags) and upserted by name. If a filament with the same name already exists under a different vendor, the import is skipped with an informative error (the unique index is on `name` alone).
 
-Returns:
+**Variant mode (`parentId`, v1.52 / #753):** add an optional `parentId` to import exactly **one** slug as a *variant* of an existing filament:
+
+```json
+{ "slugs": ["prusament-pla-prusa-galaxy-black"], "parentId": "<filament _id>" }
+```
+
+The parent must exist, be active, and not itself be a variant. Only the fields that DIFFER from the parent's effective values are written onto the variant (the rest are left to inherit); a name collision with an existing active filament is refused with `409` (it never re-parents another row). Returns the created `filament`. Variant mode requires exactly one slug.
+
+Returns (bulk mode):
 ```json
 {
   "message": "Imported 2 filaments (2 new)",
@@ -1483,6 +1506,7 @@ Response shape:
       "spools": [
         {
           "_id": "…",
+          "instanceId": "2acc21072a",
           "label": "",
           "totalWeight": 850,
           "lotNumber": null,
@@ -1490,6 +1514,8 @@ Response shape:
           "openedDate": null,
           "retired": false,
           "photoDataUrl": null,
+          "locationId": "…",
+          "legacySingleSpool": false,
           "dryCycleCount": 2,
           "lastDryAt": "2026-05-10T14:22:00.000Z",
           "filamentId": "…",
