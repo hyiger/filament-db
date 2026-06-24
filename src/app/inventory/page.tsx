@@ -15,6 +15,7 @@ import {
   type InventorySortDir,
 } from "@/lib/inventorySort";
 import { formatGrams } from "@/lib/formatWeight";
+import { isKnownLocationKind } from "@/lib/locationKind";
 
 /**
  * GH #389 — Spool Inventory page.
@@ -769,7 +770,9 @@ export default function InventoryPage() {
                     : (group.label ?? "");
             const kindLabel =
               groupBy === "location" && group.location?.kind
-                ? t(`locations.kind.${group.location.kind}`)
+                ? isKnownLocationKind(group.location.kind)
+                  ? t(`locations.kind.${group.location.kind}`)
+                  : group.location.kind
                 : "";
             return (
               <section

@@ -5,6 +5,7 @@
 import { describe, it, expect } from "vitest";
 import {
   deriveArrangement,
+  arrangementToOptTag,
   displayColor,
   allColors,
   isMultiColor,
@@ -52,6 +53,34 @@ describe("deriveArrangement", () => {
   it("type-checks to ColorArrangement", () => {
     const result: ColorArrangement = deriveArrangement([28]);
     expect(["solid", "coextruded", "gradient"]).toContain(result);
+  });
+});
+
+describe("arrangementToOptTag", () => {
+  it("maps gradient to tag 27", () => {
+    expect(arrangementToOptTag("gradient", 0)).toBe(27);
+    expect(arrangementToOptTag("gradient", 4)).toBe(27);
+  });
+
+  it("returns null for a solid arrangement", () => {
+    expect(arrangementToOptTag("solid", 0)).toBeNull();
+    expect(arrangementToOptTag("solid", 2)).toBeNull();
+  });
+
+  // GH #817: a coextruded filament persists a null primary, so the color
+  // count equals secondaryColors.length. A 2-color coextruded (2 secondaries)
+  // must be dual_color (28), not triple_color (29).
+  it("maps a 2-secondary coextruded to dual_color (28), not triple", () => {
+    expect(arrangementToOptTag("coextruded", 2)).toBe(28);
+  });
+
+  it("maps a 1-secondary coextruded to dual_color (28)", () => {
+    expect(arrangementToOptTag("coextruded", 1)).toBe(28);
+  });
+
+  it("maps a 3+-secondary coextruded to triple_color (29)", () => {
+    expect(arrangementToOptTag("coextruded", 3)).toBe(29);
+    expect(arrangementToOptTag("coextruded", 5)).toBe(29);
   });
 });
 

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { formatDate, formatDateTime } from "@/lib/dateFormat";
+import { formatGrams } from "@/lib/formatWeight";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 
@@ -259,7 +260,7 @@ export default function DashboardPage() {
                   </p>
                 </div>
                 <span className="text-xs text-gray-500 flex-shrink-0">
-                  {p.totalGrams.toFixed(1)} g
+                  {formatGrams(p.totalGrams)} g
                 </span>
               </li>
             ))}

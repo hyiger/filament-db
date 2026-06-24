@@ -77,9 +77,11 @@ export function arrangementToOptTag(
 ): number | null {
   if (arrangement === "gradient") return TAG_GRADIENT;
   if (arrangement === "coextruded") {
-    // Color count includes the primary, so secondaryColorCount >= 2
-    // means triple+ (primary + 2 secondaries). One secondary = dual.
-    return secondaryColorCount >= 2 ? TAG_TRIPLE_COLOR : TAG_DUAL_COLOR;
+    // A coextruded filament persists a null primary — all colors live in
+    // secondaryColors — so the total color count equals secondaryColorCount:
+    // 3+ secondaries = triple, 2-or-fewer = dual. (#817: the old `>= 2`
+    // tagged a 2-color coextruded as triple_color (29) instead of dual (28).)
+    return secondaryColorCount >= 3 ? TAG_TRIPLE_COLOR : TAG_DUAL_COLOR;
   }
   return null;
 }
