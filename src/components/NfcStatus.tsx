@@ -78,11 +78,18 @@ export default function NfcStatus() {
   // Tooltip surfaces the raw error message when we have one (PR-Q #476)
   // — useful for diagnostics even if the classified hint already
   // explains what to do.
-  const tooltip = status.lastError
+  const baseTooltip = status.lastError
     ? `${label}\n\n${status.lastError.message}`
     : hint
       ? `${label}\n\n${hint}`
       : label;
+  // #847: append the connected reader's name so the user can see WHICH device
+  // the app picked up — invaluable when a non-NFC reader (e.g. a Windows
+  // virtual smart-card reader) is mistaken for a tag source.
+  const tooltip =
+    status.readerConnected && status.readerName
+      ? `${baseTooltip}\n\n${t("nfc.status.readerNameTooltip", { name: status.readerName })}`
+      : baseTooltip;
 
   // GH #451 follow-up (Codex P2 on PR #475): when an NFC scan has
   // landed but the dialog is currently dismissed (either auto-suppressed

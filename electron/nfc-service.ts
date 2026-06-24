@@ -20,6 +20,7 @@ import {
   classifyNfcError as classifyNfcErrorImpl,
   type NfcErrorCode,
 } from "../src/lib/nfcErrorClassify";
+import { isLikelyContactlessReader } from "../src/lib/nfcReaderFilter";
 
 export type { NfcErrorCode };
 /** Re-export the classifier so the existing call-sites in this file
@@ -115,6 +116,16 @@ export class NfcService extends EventEmitter {
     this.pcsc = pcsclite();
 
     this.pcsc.on("reader", (reader: CardReader) => {
+      // GH #847: ignore virtual/system + contact-only PC/SC "readers" the OS
+      // enumerates (Windows Hello / UICC / TPM virtual smart cards, built-in
+      // contact slots). On Windows a virtual card's "present" bit otherwise
+      // drove a false "Tag detected" + an auto-read popup with no NFC hardware
+      // installed. The name is still logged so a misfiltered real reader can be
+      // spotted (and it's surfaced in the status tooltip).
+      if (!isLikelyContactlessReader(reader.name)) {
+        console.log(`[NFC] Ignoring non-contactless reader: ${reader.name}`);
+        return;
+      }
       this.readers.set(reader.name, reader);
       this.lastReaderDiscoveredAt = Date.now();
       console.log(`[NFC] Reader discovered: ${reader.name} (${this.readers.size} total)`);
