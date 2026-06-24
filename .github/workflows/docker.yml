@@ -4,17 +4,25 @@ on:
   push:
     tags:
       - "v*"
+  # GH #845: allow a manual re-run for a given ref without cutting a new tag —
+  # e.g. to re-publish an image whose tag-triggered run hung. Dispatch with
+  # `gh workflow run docker.yml --ref vX.Y.Z` (the semver + `latest` tags below
+  # are gated on a tag ref, so a branch dispatch can't publish `latest`).
+  workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
 
+env:
+  REGISTRY_IMAGE: ghcr.io/${{ github.repository }}
+
 jobs:
-  # GH #641: docker.yml is triggered by the same `v*` tag as release.yml,
-  # but used to go straight checkout → buildx → push with no gate — a tag
-  # cut on a broken commit published a broken `latest` image even while
-  # every release.yml leg failed. Mirror release.yml's lint + test steps
-  # so the image only publishes from a green commit.
+  # GH #641: docker.yml is triggered by the same `v*` tag as release.yml, but
+  # used to go straight checkout → buildx → push with no gate — a tag cut on a
+  # broken commit published a broken `latest` image even while every release.yml
+  # leg failed. Mirror release.yml's lint + test steps so the image only
+  # publishes from a green commit.
   test:
     runs-on: ubuntu-latest
     steps:
@@ -37,29 +45,39 @@ jobs:
       - name: Run tests
         run: npm test
 
-  docker:
-    runs-on: ubuntu-latest
+  # GH #845: build each arch on its NATIVE runner instead of emulating arm64
+  # under QEMU. The emulated arm64 leg of the old single-job multi-arch build
+  # hung indefinitely on v1.57.0 ("Build and push" stuck in_progress, and the
+  # job had no timeout), so no image published and Docker users stayed on the
+  # prior version. Native runners are fast + reliable (free for public repos);
+  # each leg pushes its layers BY DIGEST and the `merge` job stitches them into
+  # a single multi-arch tag. `timeout-minutes` makes any future hang fail fast
+  # (a red, re-runnable run) instead of zombie-ing for the 6-hour default.
+  build:
     needs: test
-
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
     steps:
+      - name: Prepare platform pair
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
-      - name: Docker meta
+      - name: Docker meta (labels)
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+          images: ${{ env.REGISTRY_IMAGE }}
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -68,13 +86,80 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          outputs: type=image,name=${{ env.REGISTRY_IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          # Per-platform cache scope so the two arch builds don't clobber each
+          # other's gha cache.
+          cache-from: type=gha,scope=${{ env.PLATFORM_PAIR }}
+          cache-to: type=gha,mode=max,scope=${{ env.PLATFORM_PAIR }}
+
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # GH #845: combine the per-arch digests into a single multi-arch manifest and
+  # apply the semver + `latest` tags. This is the SOLE writer of the tags, so a
+  # published tag always points at a complete amd64 + arm64 image (never a
+  # half-built one). `latest` is gated on a tag ref so a branch dispatch can't
+  # move it.
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Docker meta (tags)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - name: Create multi-arch manifest and push
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.REGISTRY_IMAGE }}@sha256:%s ' *)
+
+      - name: Inspect published image
+        run: docker buildx imagetools inspect ${{ env.REGISTRY_IMAGE }}:${{ steps.meta.outputs.version }}
