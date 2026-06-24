@@ -236,9 +236,13 @@ export async function POST(
     // on an OrcaSlicer sync (negative cost/density, out-of-range temps) —
     // `context: "query"` matches the Bambu sync route (Codex P2 on #387).
     // The shared helper maps a ValidationError to a JSON 400.
+    // GH #819: also re-filter `_deletedAt: null` on the write so a concurrent
+    // soft-delete in the read→write window can't mutate a now-trashed row —
+    // mirrors the Bambu/OPT sync+link sibling routes.
+    let updateResult: { matchedCount: number };
     try {
-      await Filament.updateOne(
-        { _id: filament._id },
+      updateResult = await Filament.updateOne(
+        { _id: filament._id, _deletedAt: null },
         { $set: update },
         { runValidators: true, context: "query" },
       );
@@ -246,6 +250,12 @@ export async function POST(
       return errorResponseFromCaught(
         validationErr,
         "OrcaSlicer profile contained invalid values",
+      );
+    }
+    if (updateResult.matchedCount === 0) {
+      return NextResponse.json(
+        { error: "Filament was deleted before the sync could complete" },
+        { status: 404 },
       );
     }
 

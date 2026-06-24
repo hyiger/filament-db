@@ -1,11 +1,11 @@
 import { Link, useRouter } from 'expo-router';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { ApiError, createApi } from '@/lib/api';
 import { NFC_ENABLED } from '@/lib/features';
-import { readOpenPrintTag } from '@/lib/nfc';
+import { isNfcAvailable, readOpenPrintTag } from '@/lib/nfc';
 import { setPendingScan } from '@/lib/pendingScan';
 import { useServerConfig } from '@/lib/serverConfig';
 import { useColors } from '@/lib/theme';
@@ -15,6 +15,27 @@ export default function ScanScreen() {
   const router = useRouter();
   const c = useColors();
   const [busy, setBusy] = useState(false);
+  // null = still probing; false short-circuits when the build disabled NFC.
+  // Gate the NFC button on real device capability, not just the build-time
+  // NFC_ENABLED flag, so a device without NFC hardware (or with it switched off)
+  // shows a disabled button + hint instead of a cryptic native error on tap.
+  // (#824)
+  const [nfcAvailable, setNfcAvailable] = useState<boolean | null>(NFC_ENABLED ? null : false);
+
+  useEffect(() => {
+    if (!NFC_ENABLED) return;
+    let active = true;
+    isNfcAvailable()
+      .then((ok) => {
+        if (active) setNfcAvailable(ok);
+      })
+      .catch(() => {
+        if (active) setNfcAvailable(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   if (loading) {
     return (
@@ -43,6 +64,12 @@ export default function ScanScreen() {
   const api = createApi({ baseUrl, apiKey });
 
   async function scanNfc() {
+    // Defense-in-depth: the button is disabled when NFC is unavailable, but
+    // guard the handler too so a stray tap can't reach the native reader. (#824)
+    if (nfcAvailable === false) {
+      Alert.alert('NFC unavailable', 'This device has no NFC, or NFC is turned off in Settings.');
+      return;
+    }
     setBusy(true);
     try {
       const scan = await readOpenPrintTag();
@@ -90,14 +117,20 @@ export default function ScanScreen() {
         </Pressable>
         {NFC_ENABLED && (
           <Pressable
-            style={[styles.bigButton, { backgroundColor: c.tint }, busy && styles.disabled]}
+            style={[
+              styles.bigButton,
+              { backgroundColor: c.tint },
+              (busy || nfcAvailable === false) && styles.disabled,
+            ]}
             onPress={scanNfc}
-            disabled={busy}
+            disabled={busy || nfcAvailable === false}
           >
             <Text style={[styles.bigButtonText, { color: c.onTint }]}>
               {busy ? 'Scanning…' : 'Scan NFC tag'}
             </Text>
-            <Text style={styles.bigButtonHint}>OpenPrintTag</Text>
+            <Text style={styles.bigButtonHint}>
+              {nfcAvailable === false ? 'NFC unavailable on this device' : 'OpenPrintTag'}
+            </Text>
           </Pressable>
         )}
       </View>
