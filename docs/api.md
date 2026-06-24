@@ -383,7 +383,7 @@ Writes **only** the linkage (`settings.openprinttag_slug` / `_uuid`) and the pro
 Responses:
 - `{ "linked": true, "slug": "…", "filament": { … } }` — link established + the fresh document.
 - `{ "linked": false, "found": false, "slug": "…" }` — the slug is no longer in the OpenPrintTag database.
-- `400` — missing/invalid `slug` or a non-ObjectId `:id`.
+- `400` — missing or invalid `slug`.
 
 ### POST /api/filaments/:id/spools
 
@@ -1513,7 +1513,6 @@ Response shape:
           "purchaseDate": "2026-03-12T00:00:00.000Z",
           "openedDate": null,
           "retired": false,
-          "photoDataUrl": null,
           "locationId": "…",
           "legacySingleSpool": false,
           "dryCycleCount": 2,
