@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import {
@@ -37,6 +38,11 @@ export async function POST(
 
   try {
     const { id } = await params;
+    // Reject a non-ObjectId id up front (400) instead of letting Mongoose's
+    // CastError fall to the generic 500, matching the sibling routes. (#818)
+    if (!mongoose.isValidObjectId(id)) {
+      return NextResponse.json({ error: "Invalid filament id" }, { status: 400 });
+    }
 
     let body: unknown;
     try {

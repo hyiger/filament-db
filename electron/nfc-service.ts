@@ -46,8 +46,20 @@ export interface NfcStatus {
 
 type PCSCLite = ReturnType<typeof pcsclite>;
 
-/** Extract the CardReader type from the pcsclite "reader" event listener. */
-type CardReader = Parameters<Extract<Parameters<PCSCLite["on"]>[1], (reader: unknown) => void>>[0];
+/**
+ * Extract the (non-exported) CardReader type from the pcsclite "reader" event
+ * overload. `@pokusew/pcsclite` does `export = pcsc`, so the CardReader
+ * interface isn't importable directly. The previous `Parameters<Extract<…>>`
+ * form collapsed to `never` (the listener overload isn't assignable to
+ * `(reader: unknown) => void` under contravariant parameter checking), which
+ * silently turned every reader access into a `never` — only caught once
+ * electron/ started being type-checked (#816). Infer the parameter from the
+ * specific "reader" overload instead.
+ */
+type CardReader =
+  PCSCLite extends { on(type: "reader", listener: (reader: infer R) => void): unknown }
+    ? R
+    : never;
 
 /** Status payload from CardReader "status" event. */
 interface CardReaderStatus {
