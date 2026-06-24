@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useToast } from "@/components/Toast";
+import FilamentPicker from "@/components/FilamentPicker";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { formatDate } from "@/lib/dateFormat";
 
@@ -308,45 +309,15 @@ export default function SharedCatalogPage() {
         </button>
       </div>
 
-      <ul className="border border-gray-200 dark:border-gray-700 rounded divide-y divide-gray-100 dark:divide-gray-800">
-        {data.payload.filaments.map((f) => (
-          <li key={f._id} className="px-3 py-2 flex items-center gap-3 text-sm">
-            <input
-              id={`share-import-${f._id}`}
-              type="checkbox"
-              checked={selectedIds.has(f._id)}
-              onChange={() => toggleSelect(f._id)}
-              aria-label={t("share.public.selectFilamentForImport", {
-                name: f.name,
-                vendor: f.vendor,
-                type: f.type,
-              })}
-              className="w-4 h-4"
-            />
-            <span
-              className="inline-block w-5 h-5 rounded-full border border-gray-300 flex-shrink-0"
-              style={{ backgroundColor: f.color }}
-              aria-hidden="true"
-            />
-            {/* Codex P3 on PR #480: <label> only allows phrasing
-                content; wrapping <p> tags is invalid HTML. Use a
-                span-based layout with block utility classes so the
-                checkbox association stays intact and validators stop
-                flagging this surface. */}
-            <label
-              htmlFor={`share-import-${f._id}`}
-              className="flex-1 min-w-0 cursor-pointer"
-            >
-              <span className="block font-medium truncate">{f.name}</span>
-              <span className="block text-xs text-gray-500">
-                {f.vendor} · {f.type}
-                {f.temperatures?.nozzle ? ` · ${t("share.nozzleSuffix", { temp: f.temperatures.nozzle })}` : ""}
-                {f.temperatures?.bed ? ` · ${t("share.bedSuffix", { temp: f.temperatures.bed })}` : ""}
-              </span>
-            </label>
-          </li>
-        ))}
-      </ul>
+      {/* #827: reuse the search/type-filter picker the authoring /share and
+          /compare pages use, so a recipient importing from a large catalog
+          isn't stuck unchecking dozens of rows one-by-one. */}
+      <FilamentPicker
+        filaments={data.payload.filaments}
+        selectedIds={selectedIds}
+        onToggle={toggleSelect}
+        ariaLabel={t("share.public.pickerAriaLabel")}
+      />
     </main>
   );
 }

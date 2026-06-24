@@ -12,6 +12,7 @@ import {
   normaliseSymbol,
   type ValidationError,
 } from "@/lib/customCurrency";
+import { useTranslation } from "@/i18n/TranslationProvider";
 
 /**
  * Built-in currencies. v1.12 expanded the list from 4 to 13 to cover the
@@ -100,6 +101,10 @@ function readStoredCurrency(custom: CustomCurrency[]): string {
  * values seed web-mode users via the post-mount sync effect below.
  */
 export function useCurrency() {
+  // GH #821: default the Intl locale to the app's chosen language so currency
+  // grouping/decimals follow it (the GH #447 intent), matching the locale-aware
+  // dateFormat. Callers can still pass an explicit override to format().
+  const { locale } = useTranslation();
   const [customCurrencies, setCustomCurrenciesState] = useState<CustomCurrency[]>([]);
   const [currency, setCurrencyState] = useState<string>(DEFAULT_CURRENCY);
 
@@ -256,11 +261,13 @@ export function useCurrency() {
    * shape rather than throwing into the render.
    */
   const format = useCallback(
-    (value: number, locale?: string): string => {
+    (value: number, localeOverride?: string): string => {
+      // Default to the app's i18n locale; an explicit arg still wins. (#821)
+      const effectiveLocale = localeOverride ?? locale ?? undefined;
       const isBuiltin = CURRENCIES.some((c) => c.code === currency);
       if (isBuiltin) {
         try {
-          return new Intl.NumberFormat(locale ?? undefined, {
+          return new Intl.NumberFormat(effectiveLocale, {
             style: "currency",
             currency,
           }).format(value);
@@ -277,7 +284,7 @@ export function useCurrency() {
       // for the built-in ISO 4217 codes above.
       return `${symbol}${value.toFixed(2)}`;
     },
-    [currency, symbol],
+    [currency, symbol, locale],
   );
 
   return {

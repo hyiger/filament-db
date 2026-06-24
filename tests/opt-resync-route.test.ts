@@ -127,6 +127,21 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     });
   }
 
+  // ── a non-ObjectId id is a 400, not a 500 (GH #818) ──────────────────
+
+  it("check/sync/link reject a non-ObjectId filament id with 400, not 500", async () => {
+    const badId = "not-an-objectid";
+    const checkRes = await checkGET({} as NextRequest, params(badId));
+    expect(checkRes.status).toBe(400);
+    expect((await checkRes.json()).error).toMatch(/invalid filament id/i);
+
+    const syncRes = await syncPOST(syncReq(badId, ["density"]), params(badId));
+    expect(syncRes.status).toBe(400);
+
+    const linkRes = await linkPOST(linkReq(badId, "some-slug"), params(badId));
+    expect(linkRes.status).toBe(400);
+  });
+
   // ── import writes the provenance snapshot (GH #607) ──────────────────
 
   it("import: stamps openprinttagSnapshot so provenance exists day one", async () => {
