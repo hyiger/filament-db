@@ -398,9 +398,9 @@ async function resolveSrvUri(uri: string): Promise<string> {
     await client.connect();
     // Extract the resolved topology from the client's options
     const options = client.options;
-    const hosts = options.hosts.map((h: { host: string; port: number }) =>
-      `${h.host}:${h.port}`
-    ).join(",");
+    // `options.hosts` is the driver's HostAddress[] (host/port optional); let
+    // the element type infer rather than asserting a narrower shape (#816).
+    const hosts = options.hosts.map((h) => `${h.host}:${h.port}`).join(",");
 
     // Parse the original URI to preserve credentials and options
     const parsed = new URL(uri.replace("mongodb+srv://", "http://"));
@@ -1203,7 +1203,7 @@ ipcMain.handle("label-printer-get-device-path", (event) => {
   // the rest of the app uses — see the get-config handler above. Kept
   // as a separate handler so the renderer doesn't have to read the
   // whole config object just to render the Print Label dialog.
-  return (store as Store<Record<string, unknown>>).get("labelPrinterDevicePath", null);
+  return (store as unknown as Store<Record<string, unknown>>).get("labelPrinterDevicePath", null);
 });
 
 ipcMain.handle("label-printer-set-device-path", (event, devicePath: string | null) => {
@@ -1212,7 +1212,7 @@ ipcMain.handle("label-printer-set-device-path", (event, devicePath: string | nul
     throw new Error("devicePath must be a string or null");
   }
   if (devicePath == null) {
-    (store as Store<Record<string, unknown>>).delete("labelPrinterDevicePath");
+    (store as unknown as Store<Record<string, unknown>>).delete("labelPrinterDevicePath");
   } else {
     // GH #623: only accept the shapes listLabelPrinters ever surfaces —
     // a `usb://…` device URI (the one scheme the CUPS lister emits) or an
@@ -1228,7 +1228,7 @@ ipcMain.handle("label-printer-set-device-path", (event, devicePath: string | nul
         "devicePath must be a usb:// device URI or an installed printer/queue name",
       );
     }
-    (store as Store<Record<string, unknown>>).set("labelPrinterDevicePath", devicePath);
+    (store as unknown as Store<Record<string, unknown>>).set("labelPrinterDevicePath", devicePath);
   }
   return { ok: true };
 });
@@ -1244,7 +1244,7 @@ ipcMain.handle("label-printer-set-device-path", (event, devicePath: string | nul
 // otherwise. (Codex P2 on PR #487.)
 ipcMain.handle("label-printer-get-public-url", (event) => {
   assertTrustedSender(event, "label-printer-get-public-url");
-  return (store as Store<Record<string, unknown>>).get("labelPrinterPublicUrl", null);
+  return (store as unknown as Store<Record<string, unknown>>).get("labelPrinterPublicUrl", null);
 });
 
 ipcMain.handle("label-printer-set-public-url", (event, url: string | null) => {
@@ -1253,7 +1253,7 @@ ipcMain.handle("label-printer-set-public-url", (event, url: string | null) => {
     throw new Error("url must be a string or null");
   }
   if (url == null || url.trim() === "") {
-    (store as Store<Record<string, unknown>>).delete("labelPrinterPublicUrl");
+    (store as unknown as Store<Record<string, unknown>>).delete("labelPrinterPublicUrl");
     return { ok: true };
   }
   // Validate shape: must parse + must be http(s) + must not be the
@@ -1292,7 +1292,7 @@ ipcMain.handle("label-printer-set-public-url", (event, url: string | null) => {
   // Strip trailing slash so callers can safely concat `${url}/filaments/...`
   // without producing double slashes.
   const normalized = url.replace(/\/+$/, "");
-  (store as Store<Record<string, unknown>>).set("labelPrinterPublicUrl", normalized);
+  (store as unknown as Store<Record<string, unknown>>).set("labelPrinterPublicUrl", normalized);
   return { ok: true };
 });
 
@@ -1329,7 +1329,7 @@ ipcMain.handle("label-printer-print", async (event, bytes: number[]) => {
       throw new Error("bytes must contain only integers in [0, 255]");
     }
   }
-  const target = (store as Store<Record<string, unknown>>).get(
+  const target = (store as unknown as Store<Record<string, unknown>>).get(
     "labelPrinterDevicePath",
     null,
   ) as string | null;
