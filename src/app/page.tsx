@@ -494,6 +494,12 @@ export default function Home() {
     }).length;
   }, [filaments, inStock]);
 
+  // #847: when NOTHING is in stock (e.g. a catalog with 0 spools), the "all"
+  // view falls back to showing every filament, so the "Show out of stock"
+  // toggle would be a no-op — suppress it unless at least one filament is
+  // actually in stock (i.e. the hide is genuinely hiding something).
+  const hasAnyInStock = useMemo(() => filaments.some(inStock), [filaments, inStock]);
+
   const visibleFilaments = useMemo(() => {
     // The "all" view keeps parents in the dataset so the list renders them as
     // grouping headers above their color variants. By default it hides
@@ -505,7 +511,14 @@ export default function Home() {
     // (Codex P2 on #712).
     if (quickFilter === "all") {
       const filterActive = !!debouncedSearch || !!typeFilter || !!vendorFilter;
-      return showOutOfStock || filterActive ? filaments : filaments.filter(inStock);
+      if (showOutOfStock || filterActive) return filaments;
+      const inStockList = filaments.filter(inStock);
+      // #847: don't let the default out-of-stock hide empty the unfiltered "All"
+      // view. A catalog with nothing in stock (e.g. filaments but 0 spools)
+      // would otherwise render "No filaments match" under "All (N)". Show
+      // everything when there's nothing to declutter to; the #712 hide still
+      // applies whenever at least one filament IS stocked.
+      return inStockList.length === 0 ? filaments : inStockList;
     }
     // #552: "Has spools" resolves against the full list (parents
     // included) because a parent carrying its own spool genuinely has
@@ -1258,7 +1271,7 @@ export default function Home() {
             onChange={setQuickFilter}
             counts={quickFilterCounts}
           />
-          {quickFilter === "all" && !debouncedSearch && !typeFilter && !vendorFilter && outOfStockCount > 0 && (
+          {quickFilter === "all" && !debouncedSearch && !typeFilter && !vendorFilter && outOfStockCount > 0 && hasAnyInStock && (
             <button
               onClick={() => setShowOutOfStock((s) => !s)}
               aria-pressed={showOutOfStock}
