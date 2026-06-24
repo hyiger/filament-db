@@ -10,6 +10,7 @@ import SpoolCsvImportDialog from "@/components/SpoolCsvImportDialog";
 import QuickFilterChips, { type QuickFilter } from "@/components/QuickFilterChips";
 import FilamentSwatch from "@/components/FilamentSwatch";
 import FinishChip from "@/components/FinishChip";
+import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 import { deriveFinish } from "@/lib/filamentFinish";
 import { deriveArrangement } from "@/lib/filamentColors";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -152,6 +153,29 @@ function FilamentStats({ filaments }: { filaments: Filament[] }) {
   );
 }
 
+// #831: persist the home list's sort across reloads (mirrors the /inventory
+// prefs pattern, #795). Only sort is persisted — persisting the type/vendor/
+// quick filters would land a returning user on a filtered subset of their
+// catalog, which reads as "filaments missing". Loaded post-mount so SSR /
+// first paint stay on defaults (no hydration mismatch).
+const HOME_PREFS_KEY = "filamentdb-home-prefs";
+const SORT_KEY_VALUES: SortKey[] = ["name", "vendor", "type", "nozzle", "bed", "cost", "remaining"];
+
+function loadHomePrefs(): { sortKey: SortKey; sortDir: SortDir } {
+  if (typeof window === "undefined") return { sortKey: "name", sortDir: "asc" };
+  try {
+    const raw = window.localStorage.getItem(HOME_PREFS_KEY);
+    if (!raw) return { sortKey: "name", sortDir: "asc" };
+    const p = JSON.parse(raw) as { sortKey?: unknown; sortDir?: unknown };
+    return {
+      sortKey: SORT_KEY_VALUES.includes(p.sortKey as SortKey) ? (p.sortKey as SortKey) : "name",
+      sortDir: p.sortDir === "desc" ? "desc" : "asc",
+    };
+  } catch {
+    return { sortKey: "name", sortDir: "asc" };
+  }
+}
+
 export default function Home() {
   const { t } = useTranslation();
   const { format: formatCurrency } = useCurrency();
@@ -171,6 +195,9 @@ export default function Home() {
   const [showOutOfStock, setShowOutOfStock] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("name");
   const [sortDir, setSortDir] = useState<SortDir>("asc");
+  // #831: gate the persist effect so it doesn't fire on the default state
+  // before the post-mount load runs.
+  const homePrefsLoaded = useRef(false);
   const [importing, setImporting] = useState(false);
   const mounted = useSyncExternalStore(
     () => () => {},
@@ -211,6 +238,23 @@ export default function Home() {
   // gone or race the main list fetch un-cancellably.
   const filterOptionsAcRef = useRef<AbortController | null>(null);
   useEffect(() => () => filterOptionsAcRef.current?.abort(), []);
+
+  // #831: load the persisted sort post-mount (SSR / first paint use defaults to
+  // avoid a hydration mismatch), then persist on change. Mirrors /inventory.
+  useEffect(() => {
+    const p = loadHomePrefs();
+    setSortKey(p.sortKey); // eslint-disable-line react-hooks/set-state-in-effect -- persisted prefs
+    setSortDir(p.sortDir);
+    homePrefsLoaded.current = true;
+  }, []);
+  useEffect(() => {
+    if (!homePrefsLoaded.current) return;
+    try {
+      window.localStorage.setItem(HOME_PREFS_KEY, JSON.stringify({ sortKey, sortDir }));
+    } catch {
+      /* ignore quota / disabled storage */
+    }
+  }, [sortKey, sortDir]);
 
   // #717: load locations for the per-spool "move to" dropdowns. Best-effort —
   // if it fails the panel just shows the ids' current selection with no
@@ -1425,7 +1469,22 @@ export default function Home() {
       </div>{/* end sticky header */}
 
       {loading ? (
-        <p className="text-gray-500">{t("common.loading")}</p>
+        // #830: row-shaped skeletons instead of a one-line loader so the
+        // landing route doesn't reflow when the list lands (matches the
+        // dashboard / inventory / analytics pages, GH #449).
+        <SkeletonRegion label={t("common.loading")} className="space-y-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-3 px-3 py-2 border border-gray-200 dark:border-gray-800 rounded"
+            >
+              <Skeleton className="h-8 w-8 rounded-full flex-shrink-0" />
+              <Skeleton className="h-4 flex-1 rounded" />
+              <Skeleton className="h-4 w-16 rounded flex-shrink-0" />
+              <Skeleton className="h-4 w-12 rounded flex-shrink-0" />
+            </div>
+          ))}
+        </SkeletonRegion>
       ) : filaments.length === 0 ? (
         <p className="text-gray-500">{t("filaments.noResults")}</p>
       ) : groupedFilaments.length === 0 ? (
