@@ -133,6 +133,19 @@ describe("POST /api/nfc/decode", () => {
     expect(res.status).toBe(400);
   });
 
+  it("prefers payload over tagMemory when both are present (precedence, Codex P3)", async () => {
+    // payload = OpenTag3D PETG; tagMemory = an OpenPrintTag (different tag). The
+    // payload (pre-parsed record) must win, matching the pre-#864 order.
+    const optMemory = wrapNdefForTag(generateOpenPrintTagBinary(OPT_INPUT), 320);
+    const res = await decodeTag(
+      decodeReq({ tagType: "opentag3d", payload: b64(OT3D_PAYLOAD), tagMemory: b64(optMemory) }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.decoded.tagSource).toBe("opentag3d"); // payload won, not the OPT tagMemory
+    expect(body.decoded.materialType).toBe("PETG");
+  });
+
   it("attaches a confident DB match for a known filament", async () => {
     await Filament.create({
       name: "Prusament PLA Galaxy Black",

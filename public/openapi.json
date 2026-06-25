@@ -1466,7 +1466,7 @@
           "NFC"
         ],
         "summary": "Decode raw NFC tag bytes and match against the database",
-        "description": "Decodes an OpenPrintTag (ISO 15693 / NFC-V, CBOR) or Bambu Lab (MIFARE Classic) tag from raw bytes a client read on the phone — the mobile scanner app's primary call — and attaches a confident DB match using the same priority order as /api/filaments/match. Decoding runs server-side so clients ship no decoder (the Bambu path needs Node crypto in particular). Read-only: performs no mutation and, like /api/filaments/match, is intentionally NOT behind the same-origin CSRF guard so cross-origin clients can reach it. When FILAMENTDB_API_KEY is set, every /api caller must present the bearer key.",
+        "description": "Decodes an OpenPrintTag (ISO 15693 / NFC-V, CBOR), OpenTag3D (ISO 14443A NTAG or NFC-V SLIX2, fixed binary memory map — #864) or Bambu Lab (MIFARE Classic) tag from raw bytes a client read on the phone — the mobile scanner app's primary call — and attaches a confident DB match using the same priority order as /api/filaments/match. Decoding runs server-side so clients ship no decoder (the Bambu path needs Node crypto in particular). For an NDEF tag, a raw tagMemory dump is auto-detected by NDEF record MIME (application/vnd.openprinttag vs application/opentag3d) regardless of the tagType hint. Read-only: performs no mutation and, like /api/filaments/match, is intentionally NOT behind the same-origin CSRF guard so cross-origin clients can reach it. When FILAMENTDB_API_KEY is set, every /api caller must present the bearer key.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1481,19 +1481,20 @@
                     "type": "string",
                     "enum": [
                       "openprinttag",
+                      "opentag3d",
                       "bambu"
                     ],
-                    "description": "Which decoder to run."
+                    "description": "Which decoder to run. For an NDEF tag (openprinttag / opentag3d) a raw tagMemory dump is auto-detected by NDEF record MIME regardless of this hint; the hint only disambiguates a pre-parsed payload (which has no NDEF framing to sniff)."
                   },
                   "payload": {
                     "type": "string",
                     "format": "byte",
-                    "description": "OpenPrintTag only: base64 of the NDEF record payload (CBOR). Preferred — iOS Core NFC returns parsed NDEF records. Supply this OR tagMemory."
+                    "description": "OpenPrintTag / OpenTag3D: base64 of the pre-parsed NDEF record payload (CBOR for openprinttag, fixed-binary memory map for opentag3d). Preferred — iOS Core NFC returns parsed NDEF records. Takes precedence over tagMemory when both are sent. Supply this OR tagMemory."
                   },
                   "tagMemory": {
                     "type": "string",
                     "format": "byte",
-                    "description": "OpenPrintTag only: base64 of raw tag memory; the server runs the NDEF parser to extract the CBOR payload. Supply this OR payload."
+                    "description": "OpenPrintTag / OpenTag3D: base64 of raw tag memory (Type-5 SLIX2 or Type-2 NTAG); the server parses NDEF, auto-detects the CC position, and auto-sniffs the format by record MIME. Supply this OR payload."
                   },
                   "blocks": {
                     "type": "object",

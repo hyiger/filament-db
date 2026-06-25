@@ -65,18 +65,26 @@ function boundedField(v: string | undefined): string | null {
 /**
  * Decode an NDEF-borne tag (OpenPrintTag or OpenTag3D, #864).
  *
+ * - `payload` (a pre-parsed NDEF record payload — no NDEF framing to sniff): the
+ *   explicit `tagType` selects the codec (default OpenPrintTag). Checked FIRST
+ *   so it keeps precedence over `tagMemory` when a caller sends both, matching
+ *   the pre-#864 order.
  * - `tagMemory` (raw tag memory): parse the NDEF records and AUTO-SNIFF the
  *   format by record MIME via the codec registry — the SAME raw dump decodes
  *   whether it carries an `application/vnd.openprinttag` or an
  *   `application/opentag3d` record, regardless of the `tagType` hint. The CC
  *   position (Type-5 SLIX2 vs Type-2 NTAG) is auto-detected.
- * - `payload` (a pre-parsed NDEF record payload — no NDEF framing to sniff): the
- *   explicit `tagType` selects the codec (default OpenPrintTag for back-compat).
  */
 function decodeNdefTag(
   body: Record<string, unknown>,
   tagType: "openprinttag" | "opentag3d",
 ): DecodedOpenPrintTag {
+  const payload = toBytes(body.payload);
+  if (payload) {
+    return tagType === "opentag3d"
+      ? decodeOpenTag3DTag(payload)
+      : decodeOpenPrintTagBinary(payload);
+  }
   const tagMemory = toBytes(body.tagMemory);
   if (tagMemory) {
     const decoded = decodeFromNdefRecords(parseNdefRecordsAuto(tagMemory));
@@ -84,12 +92,6 @@ function decodeNdefTag(
       throw new Error("No recognized NDEF record (OpenPrintTag or OpenTag3D) found on the tag");
     }
     return decoded;
-  }
-  const payload = toBytes(body.payload);
-  if (payload) {
-    return tagType === "opentag3d"
-      ? decodeOpenTag3DTag(payload)
-      : decodeOpenPrintTagBinary(payload);
   }
   throw new Error(
     "decode requires a base64 'payload' (NDEF record payload) or 'tagMemory' (raw tag memory)",
