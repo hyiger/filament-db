@@ -404,6 +404,43 @@ describe("API route correctness", () => {
     expect(fresh.temperatures?.nozzle ?? null).toBe(null);
   });
 
+  it("#859/PrusaSlicer — EM sync falls back to a UNIQUE global-catalog nozzle when the filament has no compatible nozzles", async () => {
+    const hf = await Nozzle.create({ name: "0.4 HF", diameter: 0.4, type: "brass", highFlow: true });
+    // A same-diameter standard nozzle exists too, so the high_flow filter must disambiguate.
+    await Nozzle.create({ name: "0.4 std", diameter: 0.4, type: "brass", highFlow: false });
+    // compatibleNozzles intentionally empty — the common case for a synced/imported filament.
+    const f = await Filament.create({ name: "No-Compat PCTG", vendor: "CHCKX", type: "PCTG" });
+
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}?nozzle_diameter=0.4&high_flow=1`, {
+        config: { extrusion_multiplier: "1.07" },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(f._id);
+    // Pre-fix: 0 calibrations (the block was skipped on empty compatibleNozzles).
+    expect(fresh.calibrations).toHaveLength(1);
+    expect(fresh.calibrations[0].extrusionMultiplier).toBe(1.07);
+    expect(String(fresh.calibrations[0].nozzle)).toBe(String(hf._id));
+  });
+
+  it("#859/PrusaSlicer — EM fallback does NOT guess when multiple global nozzles match", async () => {
+    await Nozzle.create({ name: "0.4 HF A", diameter: 0.4, type: "brass", highFlow: true });
+    await Nozzle.create({ name: "0.4 HF B", diameter: 0.4, type: "hardened", highFlow: true });
+    const f = await Filament.create({ name: "Ambiguous PCTG", vendor: "X", type: "PCTG" });
+
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}?nozzle_diameter=0.4&high_flow=1`, {
+        config: { extrusion_multiplier: "1.07" },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.calibrations ?? []).toHaveLength(0); // ambiguous → don't guess
+  });
+
   it("#265 — calibration sync on a variant that OVERRIDES calibrations writes to the variant", async () => {
     // Codex P1: a variant with its own non-empty calibrations array
     // owns its calibrations (resolveFilament uses them, not the

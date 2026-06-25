@@ -578,6 +578,33 @@ export async function POST(
             };
           }
         }
+
+        // #859 follow-up: when the filament has no matching COMPATIBLE nozzle
+        // (commonly because `compatibleNozzles` is empty on a filament imported
+        // / synced from Filament DB), fall back to the GLOBAL nozzle catalog and
+        // attach the calibration to the UNIQUE nozzle at this diameter (+
+        // high_flow). Mirrors the Bambu/OrcaSlicer sync routes; only when
+        // EXACTLY ONE catalog nozzle matches, so we never guess. Without this,
+        // PrusaSlicer's EM / pressure-advance edits were silently dropped for any
+        // filament with no compatible nozzles set.
+        if (!calibrationWrite) {
+          const highFlowParam = request.nextUrl.searchParams.get("high_flow");
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const globalQuery: Record<string, any> = {
+            diameter: nozzleDiameter,
+            _deletedAt: null,
+          };
+          if (highFlowParam !== null) {
+            globalQuery.highFlow = highFlowParam === "1";
+          }
+          const globalMatches = await Nozzle.find(globalQuery).limit(2).lean();
+          if (globalMatches.length === 1) {
+            calibrationWrite = {
+              nozzleId: String(globalMatches[0]._id),
+              fields: calFields,
+            };
+          }
+        }
       }
     }
 
