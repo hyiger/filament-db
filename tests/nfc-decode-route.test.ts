@@ -3,7 +3,13 @@ import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as decodeTag } from "@/app/api/nfc/decode/route";
 import { generateOpenPrintTagBinary, type OpenPrintTagInput } from "@/lib/openprinttag";
-import { wrapNdefForTag } from "@/lib/ndef";
+import {
+  wrapNdefForTag,
+  buildMediaNdefRecord,
+  buildNdefMessageTlv,
+  buildType2Cc,
+} from "@/lib/ndef";
+import { encodeOpenTag3D, OPENTAG3D_MIME } from "@/lib/opentag3d";
 
 /**
  * Route-level tests for POST /api/nfc/decode (GH: mobile-scanner Phase 0).
@@ -68,6 +74,63 @@ describe("POST /api/nfc/decode", () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.decoded.materialName).toBe("Prusament PLA Galaxy Black");
+  });
+
+  // ── OpenTag3D (#864) ──
+  const OT3D_PAYLOAD = encodeOpenTag3D({
+    material_base: "PETG",
+    manufacturer: "Polar Filament",
+    color_name: "Sky",
+    color_1: { r: 0, g: 120, b: 255, a: 255 },
+    print_temp: 240,
+    bed_temp: 80,
+    target_diameter: 1.75,
+  });
+
+  /** A Type-2 (NTAG) tag image: 12 header bytes, CC at byte 12, NDEF TLV at byte 16. */
+  function ot3dType2Memory(payload: Uint8Array): Uint8Array {
+    const tlv = buildNdefMessageTlv(buildMediaNdefRecord(OPENTAG3D_MIME, payload));
+    const img = new Uint8Array(16 + tlv.length + 8);
+    img.set(buildType2Cc(504), 12);
+    img.set(tlv, 16);
+    return img;
+  }
+
+  it("auto-sniffs an OpenTag3D tag from raw NTAG (Type-2) memory", async () => {
+    const res = await decodeTag(
+      decodeReq({ tagType: "opentag3d", tagMemory: b64(ot3dType2Memory(OT3D_PAYLOAD)) }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.decoded.tagSource).toBe("opentag3d");
+    expect(body.decoded.materialType).toBe("PETG");
+    expect(body.decoded.brandName).toBe("Polar Filament");
+    expect(body.decoded.nozzleTemp).toBe(240);
+  });
+
+  it("auto-sniffs OpenTag3D even when the caller labels the memory 'openprinttag'", async () => {
+    // The raw bytes are the source of truth — the registry picks the format by
+    // NDEF record MIME, not the tagType hint.
+    const res = await decodeTag(
+      decodeReq({ tagType: "openprinttag", tagMemory: b64(ot3dType2Memory(OT3D_PAYLOAD)) }),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).decoded.tagSource).toBe("opentag3d");
+  });
+
+  it("decodes an OpenTag3D tag from a pre-parsed NDEF record payload", async () => {
+    const res = await decodeTag(
+      decodeReq({ tagType: "opentag3d", payload: b64(OT3D_PAYLOAD) }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.decoded.tagSource).toBe("opentag3d");
+    expect(body.decoded.colorName).toBe("Sky");
+  });
+
+  it("rejects an opentag3d request with neither payload nor tagMemory (400)", async () => {
+    const res = await decodeTag(decodeReq({ tagType: "opentag3d" }));
+    expect(res.status).toBe(400);
   });
 
   it("attaches a confident DB match for a known filament", async () => {

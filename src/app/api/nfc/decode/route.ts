@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import { decodeOpenPrintTagBinary } from "@/lib/openprinttag-decode";
 import type { DecodedOpenPrintTag } from "@/lib/openprinttag-decode";
-import { parseNdefFromTag } from "@/lib/ndef";
+import { parseNdefRecordsAuto } from "@/lib/ndef";
+import { decodeFromNdefRecords } from "@/lib/tagCodecs";
+import { decodeOpenTag3DTag } from "@/lib/opentag3d-decode";
 import { parseBambuBlocks, bambuToDecodedTag } from "@/lib/bambuTag";
 import { matchFilament } from "@/lib/matchFilament";
 import {
@@ -60,17 +62,37 @@ function boundedField(v: string | undefined): string | null {
   return trimmed.length > 0 && trimmed.length <= 128 ? trimmed : null;
 }
 
-function decodeOpenPrintTag(body: Record<string, unknown>): DecodedOpenPrintTag {
-  const payload = toBytes(body.payload);
-  if (payload) {
-    return decodeOpenPrintTagBinary(payload);
-  }
+/**
+ * Decode an NDEF-borne tag (OpenPrintTag or OpenTag3D, #864).
+ *
+ * - `tagMemory` (raw tag memory): parse the NDEF records and AUTO-SNIFF the
+ *   format by record MIME via the codec registry — the SAME raw dump decodes
+ *   whether it carries an `application/vnd.openprinttag` or an
+ *   `application/opentag3d` record, regardless of the `tagType` hint. The CC
+ *   position (Type-5 SLIX2 vs Type-2 NTAG) is auto-detected.
+ * - `payload` (a pre-parsed NDEF record payload — no NDEF framing to sniff): the
+ *   explicit `tagType` selects the codec (default OpenPrintTag for back-compat).
+ */
+function decodeNdefTag(
+  body: Record<string, unknown>,
+  tagType: "openprinttag" | "opentag3d",
+): DecodedOpenPrintTag {
   const tagMemory = toBytes(body.tagMemory);
   if (tagMemory) {
-    return decodeOpenPrintTagBinary(parseNdefFromTag(tagMemory));
+    const decoded = decodeFromNdefRecords(parseNdefRecordsAuto(tagMemory));
+    if (!decoded) {
+      throw new Error("No recognized NDEF record (OpenPrintTag or OpenTag3D) found on the tag");
+    }
+    return decoded;
+  }
+  const payload = toBytes(body.payload);
+  if (payload) {
+    return tagType === "opentag3d"
+      ? decodeOpenTag3DTag(payload)
+      : decodeOpenPrintTagBinary(payload);
   }
   throw new Error(
-    "openprinttag decode requires a base64 'payload' (NDEF record payload) or 'tagMemory' (raw tag memory)",
+    "decode requires a base64 'payload' (NDEF record payload) or 'tagMemory' (raw tag memory)",
   );
 }
 
@@ -136,16 +158,16 @@ export async function POST(request: NextRequest) {
   const b = body as Record<string, unknown>;
 
   const tagType = b.tagType;
-  if (tagType !== "openprinttag" && tagType !== "bambu") {
+  if (tagType !== "openprinttag" && tagType !== "opentag3d" && tagType !== "bambu") {
     return errorResponse(
-      "tagType must be 'openprinttag' or 'bambu'",
+      "tagType must be 'openprinttag', 'opentag3d', or 'bambu'",
       415,
     );
   }
 
   let decoded: DecodedOpenPrintTag;
   try {
-    decoded = tagType === "openprinttag" ? decodeOpenPrintTag(b) : decodeBambu(b);
+    decoded = tagType === "bambu" ? decodeBambu(b) : decodeNdefTag(b, tagType);
   } catch (err) {
     // Bad bytes / wrong-format tag is client input, not a server fault → 400.
     const message = err instanceof Error ? err.message : String(err);

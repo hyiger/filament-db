@@ -234,6 +234,63 @@ export function wrapNdefForTag(
   return tagMemory;
 }
 
+// ── Generic NDEF builders (Type 2 / NTAG dev-write harness, #864) ────
+//
+// These are the minimal, format-agnostic building blocks the OpenTag3D dev
+// write CLI (scripts/write-opentag3d-tag.ts) uses to flash a blank NTAG. They
+// are NOT a product write path — product OpenTag3D write is Phase 2.
+
+/** Build a single media (TNF=0x02) NDEF record with MB=1 and ME=1 (sole record). */
+export function buildMediaNdefRecord(mimeType: string, payload: Uint8Array): Uint8Array {
+  const typeBytes = new TextEncoder().encode(mimeType);
+  const isShort = payload.length <= 255;
+  const headerLen = 2 + (isShort ? 1 : 4); // flags + type_len + payload_len
+  const rec = new Uint8Array(headerLen + typeBytes.length + payload.length);
+  let pos = 0;
+
+  let flags = 0xc2; // MB=1, ME=1, TNF=0x02 (media)
+  if (isShort) flags |= 0x10; // SR
+  rec[pos++] = flags;
+  rec[pos++] = typeBytes.length;
+  if (isShort) {
+    rec[pos++] = payload.length;
+  } else {
+    rec[pos++] = (payload.length >>> 24) & 0xff;
+    rec[pos++] = (payload.length >>> 16) & 0xff;
+    rec[pos++] = (payload.length >>> 8) & 0xff;
+    rec[pos++] = payload.length & 0xff;
+  }
+  rec.set(typeBytes, pos);
+  pos += typeBytes.length;
+  rec.set(payload, pos);
+  return rec;
+}
+
+/** Wrap an NDEF message in an NDEF-message TLV (tag 0x03 … value … 0xFE terminator). */
+export function buildNdefMessageTlv(message: Uint8Array): Uint8Array {
+  const useLong = message.length >= 255;
+  const headerLen = useLong ? 4 : 2;
+  const out = new Uint8Array(headerLen + message.length + 1);
+  let pos = 0;
+  out[pos++] = 0x03; // NDEF Message TLV tag
+  if (useLong) {
+    out[pos++] = 0xff;
+    out[pos++] = (message.length >> 8) & 0xff;
+    out[pos++] = message.length & 0xff;
+  } else {
+    out[pos++] = message.length;
+  }
+  out.set(message, pos);
+  pos += message.length;
+  out[pos++] = 0xfe; // terminator
+  return out;
+}
+
+/** NFC-Forum Type 2 Capability Container (NTAG page 3): `E1 10 <userMem/8> 00`. */
+export function buildType2Cc(userMemoryBytes: number): Uint8Array {
+  return new Uint8Array([0xe1, 0x10, Math.floor(userMemoryBytes / 8) & 0xff, 0x00]);
+}
+
 // ── Read-only (soft lock) via the NFC-Forum Type 5 CC byte ──────────
 //
 // GH #583: a "read-only" tag here is a REVERSIBLE soft lock, not a permanent
@@ -275,26 +332,47 @@ export function setCcByteReadOnly(ccByte1: number, readOnly: boolean): number {
  * @returns The CBOR payload (meta + main maps)
  * @throws If no valid NDEF record with OpenPrintTag MIME type is found
  */
-export function parseNdefFromTag(raw: Uint8Array): Uint8Array {
-  if (raw.length < 8) {
+/** A parsed NDEF record. For media records (TNF=0x02) `type` is the MIME type. */
+export interface NdefRecord {
+  /** TNF (Type Name Format); 0x02 = media / MIME. */
+  tnf: number;
+  /** The decoded TYPE field (the MIME string for a media record). */
+  type: string;
+  payload: Uint8Array;
+}
+
+/**
+ * Parse raw tag memory into all NDEF records of its first NDEF-message TLV.
+ *
+ * @param raw      Raw tag memory (all blocks/pages concatenated).
+ * @param ccOffset Byte offset of the NFC-Forum Capability Container. `0` for an
+ *                 NFC-Forum Type 5 (ISO-15693 / SLIX2) image — the default. `12`
+ *                 for a Type 2 (ISO-14443A / NTAG) image, whose CC lives in page
+ *                 3 (bytes 12–15) with the TLV area starting at byte 16.
+ * @throws On a blank tag / bad CC / truncation / no NDEF TLV — with the same
+ *         messages parseNdefFromTag historically threw (pinned by tests).
+ */
+export function parseNdefRecords(raw: Uint8Array, ccOffset = 0): NdefRecord[] {
+  if (raw.length < ccOffset + 8) {
     throw new Error("Tag data too short");
   }
 
   // Validate CC
-  if (raw[0] !== 0xe1) {
+  const cc = raw[ccOffset];
+  if (cc !== 0xe1) {
     // A blank / unformatted tag reads back all-zero memory, so its CC byte
     // is 0x00. That isn't a wrong-format error the user needs to debug —
     // it's the "write me to initialize" case (the write path at
     // nfc-service.ts treats block0[0] === 0x00 as blank too). Throw a
     // distinguishable message so the caller can surface the friendly
     // empty-tag UI instead of a raw "Invalid CC magic byte" dump (#556).
-    if (raw[0] === 0x00) {
+    if (cc === 0x00) {
       throw new Error("Blank or unformatted NFC tag (no NDEF data)");
     }
-    throw new Error(`Invalid CC magic byte: 0x${raw[0].toString(16)}`);
+    throw new Error(`Invalid CC magic byte: 0x${cc.toString(16)}`);
   }
 
-  let offset = 4; // skip CC
+  let offset = ccOffset + 4; // skip CC
 
   // Find NDEF TLV (tag 0x03)
   while (offset < raw.length - 1) {
@@ -332,8 +410,8 @@ export function parseNdefFromTag(raw: Uint8Array): Uint8Array {
     }
 
     if (tlvTag === 0x03) {
-      // Found NDEF Message TLV — parse the NDEF record inside
-      return parseNdefRecord(raw, offset, tlvLen);
+      // Found NDEF Message TLV — parse all records inside
+      return collectNdefRecords(raw, offset, tlvLen);
     }
 
     // Skip unknown TLV
@@ -344,20 +422,21 @@ export function parseNdefFromTag(raw: Uint8Array): Uint8Array {
 }
 
 /**
- * Parse an NDEF record and extract the payload.
- * Searches for the OpenPrintTag MIME type record.
+ * Walk every NDEF record inside an NDEF-message TLV.
+ *
+ * GH #313: bound every read against the enclosing TLV's end, not the whole tag
+ * image. A crafted record could otherwise declare a payloadLength that fits
+ * inside `data.length` but spills past the NDEF message TLV, pulling in trailing
+ * bytes from outside it. messageEnd is clamped to the buffer as a hard upper
+ * bound on reads.
  */
-function parseNdefRecord(
+function collectNdefRecords(
   data: Uint8Array,
   offset: number,
   messageLen: number,
-): Uint8Array {
-  // GH #313: bound every read against the enclosing TLV's end, not the
-  // whole tag image. A crafted record could otherwise declare a
-  // payloadLength that fits inside `data.length` but spills past the
-  // NDEF message TLV, pulling in trailing bytes from outside it. Clamp
-  // messageEnd to the buffer so it's also a hard upper bound on reads.
+): NdefRecord[] {
   const messageEnd = Math.min(offset + messageLen, data.length);
+  const records: NdefRecord[] = [];
 
   while (offset < messageEnd) {
     if (offset + 2 > messageEnd) {
@@ -395,30 +474,52 @@ function parseNdefRecord(
       throw new Error("NDEF record truncated: type + id + payload exceeds the NDEF message TLV");
     }
 
-    // Read type
     const typeBytes = data.slice(offset, offset + typeLength);
     offset += typeLength;
-
-    // Skip ID
-    offset += idLength;
-
-    // Read payload
+    offset += idLength; // skip ID
     const payload = data.slice(offset, offset + payloadLength);
     offset += payloadLength;
 
-    // Check if this is the OpenPrintTag record (TNF=0x02, media type)
-    if (tnf === 0x02) {
-      const typeStr = new TextDecoder().decode(typeBytes);
-      if (typeStr === NDEF_MIME_TYPE) {
-        return payload;
-      }
-    }
+    records.push({ tnf, type: new TextDecoder().decode(typeBytes), payload });
 
     // If ME (Message End) bit is set, stop
     if (flags & 0x40) break;
   }
 
-  throw new Error(
-    `No NDEF record with type "${NDEF_MIME_TYPE}" found`,
-  );
+  return records;
+}
+
+/**
+ * Parse raw Type-5 tag memory and extract the OpenPrintTag CBOR payload.
+ * Back-compat wrapper over parseNdefRecords for the existing OPT read path.
+ *
+ * @throws If no valid NDEF record with the OpenPrintTag MIME type is found.
+ */
+export function parseNdefFromTag(raw: Uint8Array): Uint8Array {
+  const records = parseNdefRecords(raw, 0);
+  const opt = records.find((r) => r.tnf === 0x02 && r.type === NDEF_MIME_TYPE);
+  if (!opt) {
+    throw new Error(`No NDEF record with type "${NDEF_MIME_TYPE}" found`);
+  }
+  return opt.payload;
+}
+
+/**
+ * Parse NDEF records from raw tag memory, auto-detecting the Capability
+ * Container position: NFC-Forum Type 5 (ISO-15693 / SLIX2 — CC at byte 0) first,
+ * falling back to Type 2 (ISO-14443A / NTAG — CC at byte 12) when byte 0 isn't a
+ * CC magic. The server /api/nfc/decode route uses this because it receives raw
+ * memory without knowing the chip family; the desktop reader knows the chip and
+ * calls parseNdefRecords with the right ccOffset directly.
+ */
+export function parseNdefRecordsAuto(raw: Uint8Array): NdefRecord[] {
+  try {
+    return parseNdefRecords(raw, 0);
+  } catch (err) {
+    // A Type-2 (NTAG) image carries UID/lock bytes at 0–11 and its CC at byte 12.
+    if (raw.length >= 20 && raw[12] === 0xe1) {
+      return parseNdefRecords(raw, 12);
+    }
+    throw err;
+  }
 }

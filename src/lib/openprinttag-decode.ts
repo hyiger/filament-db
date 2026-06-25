@@ -45,6 +45,10 @@ export interface DecodedOpenPrintTag {
   materialType?: string;
   materialTypeRaw?: number;
   color?: string;
+  /** Plain-text color name. OpenPrintTag carries no color-name field, but
+   *  OpenTag3D does (`color_name`, e.g. "Electric Watermelon"), so the
+   *  decoded shape exposes it for the source formats that have it. */
+  colorName?: string;
   /** GH #477: up to 5 secondary color hexes for multi-color filaments
    *  (OpenPrintTag spec keys 20–24). Present only when the tag carries
    *  any of the secondary slots. Each is `#RRGGBB` — alpha bytes from
@@ -70,12 +74,15 @@ export interface DecodedOpenPrintTag {
   transmissionDistance?: number;
   shoreHardnessA?: number;
   shoreHardnessD?: number;
+  /** Max volumetric speed (mm³/s). OpenTag3D carries min/max/target volumetric
+   *  speed in its Extended map; the target lands here. */
+  maxVolumetricSpeed?: number;
   tags?: number[];
   tagNames?: string[];
   consumedWeight?: number;
   aux?: Record<string, unknown>;
   // Tag source identification
-  tagSource?: "openprinttag" | "bambu";
+  tagSource?: "openprinttag" | "bambu" | "opentag3d";
   /** GH #583: soft read-only state. For OpenPrintTags this reflects the
    *  NFC-Forum Type 5 CC byte write-access bits (reversible via Erase /
    *  "Make Writable"); Bambu tags are always read-only. */

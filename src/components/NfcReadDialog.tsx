@@ -353,6 +353,12 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
           {t("nfc.readDialog.readOnly")}
         </div>
       )}
+      {/* #864: OpenTag3D provenance badge (distinct from the OPT/Bambu sources). */}
+      {data.tagSource === "opentag3d" && (
+        <div className="col-span-2 text-xs text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-900/20 px-3 py-1.5 rounded">
+          {t("nfc.readDialog.opentag3dSource")}
+        </div>
+      )}
       {data.materialName && (
         <Stat label={t("nfc.readDialog.labelMaterialName")} value={data.materialName} />
       )}
@@ -377,6 +383,9 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
             <span className="text-gray-900 dark:text-white">{data.color}</span>
           </div>
         </div>
+      )}
+      {data.colorName && (
+        <Stat label={t("nfc.readDialog.labelColorName")} value={data.colorName} />
       )}
       {data.diameter != null && (
         <Stat label={t("nfc.readDialog.labelDiameter")} value={`${data.diameter.toFixed(2)} mm`} />
@@ -426,8 +435,28 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
       {data.productionDate && (
         <Stat label={t("nfc.readDialog.labelProductionDate")} value={data.productionDate.replace(/_/g, "-").replace(/-(\d{2})-(\d{2})$/, " $1:$2")} />
       )}
+      {/* #864: OpenTag3D-only fields with no first-class home (MFI block, spool-
+          core diameter, td, the vso triple, serial, online URL) ride aux so no
+          data is lost; surfaced here as a labelled extras list. */}
+      {data.tagSource === "opentag3d" && data.aux && Object.keys(data.aux).length > 0 && (
+        <div className="col-span-2 mt-1">
+          <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">{t("nfc.readDialog.opentag3dExtras")}</div>
+          <div className="grid grid-cols-2 gap-2">
+            {Object.entries(data.aux).map(([k, v]) => (
+              <Stat key={k} label={humanizeOt3dKey(k)} value={String(v)} />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
+}
+
+/** Humanize an `opentag3d_*` aux key into a short label (not translated — these
+ *  are technical OpenTag3D field names). E.g. `opentag3d_mfi_temp_c` → "Mfi temp c". */
+function humanizeOt3dKey(key: string): string {
+  const s = key.replace(/^opentag3d_/, "").replace(/_/g, " ").trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function Stat({
