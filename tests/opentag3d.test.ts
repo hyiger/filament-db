@@ -184,6 +184,16 @@ describe("opentag3d version policy", () => {
   it("throws on a too-short payload", () => {
     expect(() => decodeOpenTag3D(new Uint8Array([0x03]))).toThrow(/too short/i);
   });
+
+  it("rejects a truncated Core payload that still carries the version bytes (Codex P2)", () => {
+    // 50 bytes: has a valid version (0x03E8 = 1.000) but is shorter than the
+    // 112-byte Core map → must be rejected, not decoded with missing identity.
+    const truncated = new Uint8Array(50);
+    truncated[0] = 0x03;
+    truncated[1] = 0xe8;
+    expect(truncated.length).toBeLessThan(OPENTAG3D_CORE_SIZE);
+    expect(() => decodeOpenTag3D(truncated)).toThrow(/too short/i);
+  });
 });
 
 describe("color helpers", () => {
