@@ -227,8 +227,8 @@ describe("ot3dToDecodedTag mapping → DecodedOpenPrintTag", () => {
   });
 
   it("maps temps/weights/drying onto first-class homes", () => {
-    expect(tag.nozzleTemp).toBe(210);
-    expect(tag.bedTemp).toBe(60);
+    expect(tag.nozzleTemp).toBe(225); // range MAX = max_print_temp, not the recommended 210
+    expect(tag.bedTemp).toBe(60); // max_bed_temp (== recommended here)
     expect(tag.nozzleTempMin).toBe(190);
     expect(tag.bedTempMin).toBe(40);
     expect(tag.diameter as number).toBeCloseTo(1.75, 6);
@@ -238,7 +238,7 @@ describe("ot3dToDecodedTag mapping → DecodedOpenPrintTag", () => {
     expect(tag.actualWeightGrams).toBe(1002);
     expect(tag.dryingTemperature).toBe(55);
     expect(tag.dryingTime).toBe(480); // 8 hours → 480 minutes
-    expect(tag.maxVolumetricSpeed).toBe(80); // target_vso
+    expect(tag.maxVolumetricSpeed).toBe(120); // max_vso (slicer upper limit), not target_vso 80
     expect(tag.filamentLength).toBe(336);
     // td is NOT mapped onto transmissionDistance (different semantics) — aux only.
     expect(tag.transmissionDistance).toBeUndefined();
@@ -255,7 +255,10 @@ describe("ot3dToDecodedTag mapping → DecodedOpenPrintTag", () => {
     expect(tag.aux?.opentag3d_mfi_temp_c).toBe(210);
     expect(tag.aux?.opentag3d_mfi_load_g).toBe(2160);
     expect(tag.aux?.opentag3d_material_modifier).toBe("Silk");
-    expect(tag.aux?.opentag3d_max_print_temp_c).toBe(225);
+    // max_print_temp (225) is now the first-class nozzleTemp range max; the Core
+    // recommended (210) — distinct from the max — is preserved in aux.
+    expect(tag.aux?.opentag3d_max_print_temp_c).toBeUndefined();
+    expect(tag.aux?.opentag3d_recommended_print_temp_c).toBe(210);
     expect(tag.aux?.opentag3d_min_volumetric_speed).toBe(20);
     expect(tag.aux?.opentag3d_max_volumetric_speed).toBe(120);
     expect(tag.aux?.opentag3d_target_volumetric_speed).toBe(80);

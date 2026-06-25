@@ -107,10 +107,19 @@ export function ot3dToDecodedTag(decoded: Ot3dDecoded): DecodedOpenPrintTag {
   const measuredWeight = posNum(f.measured_filament_weight);
   const measuredLength = posNum(f.measured_filament_length);
   if (measuredLength !== undefined) aux.opentag3d_measured_filament_length_m = measuredLength;
+  // Temperature ranges: DecodedOpenPrintTag treats nozzleTemp/bedTemp as the
+  // range MAX (the read dialog + create flow render `min–max`), so the Extended
+  // max_print_temp/max_bed_temp map there (in the tag object below). The Core
+  // RECOMMENDED print_temp/bed_temp has no first-class slot — keep it in aux when
+  // an explicit, distinct max exists so it isn't lost.
+  const recPrintTemp = posNum(f.print_temp);
+  const recBedTemp = posNum(f.bed_temp);
   const maxPrintTemp = posNum(f.max_print_temp);
   const maxBedTemp = posNum(f.max_bed_temp);
-  if (maxPrintTemp !== undefined) aux.opentag3d_max_print_temp_c = maxPrintTemp;
-  if (maxBedTemp !== undefined) aux.opentag3d_max_bed_temp_c = maxBedTemp;
+  if (maxPrintTemp !== undefined && recPrintTemp !== undefined && recPrintTemp !== maxPrintTemp)
+    aux.opentag3d_recommended_print_temp_c = recPrintTemp;
+  if (maxBedTemp !== undefined && recBedTemp !== undefined && recBedTemp !== maxBedTemp)
+    aux.opentag3d_recommended_bed_temp_c = recBedTemp;
   const minVso = posNum(f.min_vso);
   const maxVso = posNum(f.max_vso);
   const targetVso = posNum(f.target_vso);
@@ -137,9 +146,11 @@ export function ot3dToDecodedTag(decoded: Ot3dDecoded): DecodedOpenPrintTag {
     secondaryColors: secondaryColors.length ? secondaryColors : undefined,
     density: posNum(f.density),
     diameter: posNum(f.target_diameter),
-    nozzleTemp: posNum(f.print_temp),
+    // Range MAX = Extended max_*; fall back to the Core recommended when the
+    // tag has no Extended max (Core-only image).
+    nozzleTemp: maxPrintTemp ?? recPrintTemp,
     nozzleTempMin: posNum(f.min_print_temp),
-    bedTemp: posNum(f.bed_temp),
+    bedTemp: maxBedTemp ?? recBedTemp,
     bedTempMin: posNum(f.min_bed_temp),
     weightGrams: posNum(f.target_weight),
     actualWeightGrams: measuredWeight,
@@ -149,7 +160,11 @@ export function ot3dToDecodedTag(decoded: Ot3dDecoded): DecodedOpenPrintTag {
     // OpenTag3D `td` (opaque thickness, mm) is intentionally NOT mapped onto
     // transmissionDistance — that is OpenPrintTag's HueForge TD, a different
     // quantity. The raw mm value is preserved in aux.opentag3d_td_mm instead.
-    maxVolumetricSpeed: targetVso ?? maxVso,
+    //
+    // maxVolumetricSpeed exports as the slicer `filament_max_volumetric_speed`
+    // (an upper limit), so use the OpenTag3D MAX vso, not the target/recommended
+    // one (which would needlessly throttle profiles). target_vso still rides aux.
+    maxVolumetricSpeed: maxVso ?? targetVso,
     filamentLength: measuredLength,
     productionDate,
     aux: Object.keys(aux).length ? aux : undefined,
