@@ -9,8 +9,8 @@
  * Docker / web bundle this committed snapshot as-is.
  */
 
-export const REFERENCE_WIKI_SHA = "7b0cf11";
-export const REFERENCE_SYNCED_AT = "2026-06-09";
+export const REFERENCE_WIKI_SHA = "6c24943";
+export const REFERENCE_SYNCED_AT = "2026-06-12";
 
 /** Chapter id (e.g. "ch6") -> the chapter's markdown, sliced from the wiki.
  *  Imported ONLY by the lazily-loaded ReferenceChapterBody chunk so it never
