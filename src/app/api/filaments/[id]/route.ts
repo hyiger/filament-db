@@ -460,10 +460,18 @@ export async function POST(
     if (config.filament_soluble) update.soluble = config.filament_soluble === "1";
     if (config.filament_abrasive) update.abrasive = config.filament_abrasive === "1";
 
-    // Merge temperatures into existing
-    if (Object.keys(temps).length > 0) {
-      const existing = (filament.temperatures as Record<string, unknown>) || {};
-      update.temperatures = { ...existing, ...temps };
+    // #859: write ONLY the temperature keys PrusaSlicer actually sent, as
+    // dotted paths — never a $set of the whole `temperatures` object. #645 added
+    // `runValidators` to the sync write below; Mongoose update-validators check
+    // every path in the $set, so the previous `{ ...existing, ...temps }` merge
+    // dragged the filament's STORED temps into the validated payload. A single
+    // legacy out-of-range value (e.g. a nozzle temp > 600 saved before the
+    // validators existed) then failed validation and 400'd the ENTIRE sync —
+    // silently dropping EM + maxVolumetricSpeed too ("no longer syncs back").
+    // Dotted paths leave untouched siblings unchanged AND unvalidated, while a
+    // genuinely-bad INCOMING value is still rejected (preserves #645's intent).
+    for (const [key, value] of Object.entries(temps)) {
+      update[`temperatures.${key}`] = value;
     }
 
     // GH #265 / Codex P1: per-nozzle calibration sync must respect

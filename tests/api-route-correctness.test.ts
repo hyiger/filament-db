@@ -350,6 +350,60 @@ describe("API route correctness", () => {
     expect(freshVariant.calibrations ?? []).toHaveLength(0);
   });
 
+  it("#859 — slicer sync persists EM + maxVolumetricSpeed despite a legacy out-of-range stored temp", async () => {
+    const nozzle = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "brass" });
+    // Seed RAW (bypassing Mongoose validators) a filament whose STORED nozzle
+    // temp is out of the schema range (max 600) — legacy data saved before the
+    // #645 sync-write validators existed.
+    const ins = await mongoose.connection.collection("filaments").insertOne({
+      name: "Legacy PETG",
+      vendor: "Prusa",
+      type: "PETG",
+      diameter: 1.75,
+      compatibleNozzles: [nozzle._id],
+      temperatures: { nozzle: 700, bed: 80 }, // 700 > schema max 600
+      calibrations: [],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    const id = ins.insertedId;
+
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${id}?nozzle_diameter=0.4`, {
+        config: {
+          extrusion_multiplier: "1.08",
+          filament_max_volumetric_speed: "15",
+          bed_temperature: "60",
+        },
+      }),
+      { params: Promise.resolve({ id: String(id) }) },
+    );
+    // Pre-#859 the whole-`temperatures` $set re-validated the legacy nozzle:700
+    // and 400'd the ENTIRE sync; now only the incoming `temperatures.bed` is
+    // written + validated, so the sync succeeds and EM + maxVolumetricSpeed land.
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(id);
+    expect(fresh.maxVolumetricSpeed).toBe(15);
+    expect(fresh.temperatures.bed).toBe(60);
+    // The untouched legacy value is preserved (dotted paths don't replace siblings).
+    expect(fresh.temperatures.nozzle).toBe(700);
+    expect(fresh.calibrations).toHaveLength(1);
+    expect(fresh.calibrations[0].extrusionMultiplier).toBe(1.08);
+  });
+
+  it("#859 — a genuinely bad INCOMING temperature is still rejected (preserves #645)", async () => {
+    const f = await Filament.create({ name: "Clean PLA", vendor: "Prusa", type: "PLA" });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        config: { temperature: "700" }, // 700 > max 600, and it's the INCOMING value
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(400);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.temperatures?.nozzle ?? null).toBe(null);
+  });
+
   it("#265 — calibration sync on a variant that OVERRIDES calibrations writes to the variant", async () => {
     // Codex P1: a variant with its own non-empty calibrations array
     // owns its calibrations (resolveFilament uses them, not the
