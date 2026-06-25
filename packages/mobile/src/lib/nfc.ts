@@ -21,6 +21,11 @@ import { bytesToAscii, bytesToBase64 } from './base64';
  */
 
 const OPT_MIME = 'application/vnd.openprinttag';
+// #864: OpenTag3D records (a separate, fixed-binary standard) carry this MIME.
+// On Android (NfcTech.Ndef) this reads OpenTag3D on both NTAG and SLIX2; on iOS
+// the Iso15693IOS session below reads SLIX2 OpenTag3D (NTAG-on-iOS would need an
+// NDEF tag session — a follow-up).
+const OPT3D_MIME = 'application/opentag3d';
 
 let started = false;
 async function ensureStarted(): Promise<void> {
@@ -42,8 +47,10 @@ export async function isNfcAvailable(): Promise<boolean> {
 }
 
 export interface OpenPrintTagScan {
-  tagType: 'openprinttag';
-  /** base64 of the NDEF record payload (CBOR) — the decode endpoint's `payload`. */
+  /** Which NDEF format the record carried — forwarded as the decode endpoint's
+   *  `tagType`. OpenPrintTag is CBOR; OpenTag3D is a fixed binary memory map. */
+  tagType: 'openprinttag' | 'opentag3d';
+  /** base64 of the NDEF record payload — the decode endpoint's `payload`. */
   payload: string;
 }
 
@@ -65,13 +72,23 @@ export async function readOpenPrintTag(): Promise<OpenPrintTagScan> {
     const records = event?.ndefMessage ?? [];
     // nfc-manager types record `type`/`payload` as `string | number[]`; we only
     // handle the byte-array form (what a Type 5 / NDEF read yields).
+    const hasPayload = (r: { payload?: unknown }) =>
+      Array.isArray(r.payload) && r.payload.length > 0;
+    // Prefer OpenPrintTag when both records coexist on one tag (mirrors the
+    // server codec registry's preference). Then fall back to OpenTag3D (#864).
     const opt = records.find(
-      (r) => Array.isArray(r.type) && bytesToAscii(r.type) === OPT_MIME,
+      (r) => Array.isArray(r.type) && bytesToAscii(r.type) === OPT_MIME && hasPayload(r),
     );
-    if (!opt || !Array.isArray(opt.payload) || opt.payload.length === 0) {
-      throw new Error('No OpenPrintTag data on this tag.');
+    if (opt && Array.isArray(opt.payload)) {
+      return { tagType: 'openprinttag', payload: bytesToBase64(opt.payload) };
     }
-    return { tagType: 'openprinttag', payload: bytesToBase64(opt.payload) };
+    const ot3d = records.find(
+      (r) => Array.isArray(r.type) && bytesToAscii(r.type) === OPT3D_MIME && hasPayload(r),
+    );
+    if (ot3d && Array.isArray(ot3d.payload)) {
+      return { tagType: 'opentag3d', payload: bytesToBase64(ot3d.payload) };
+    }
+    throw new Error('No OpenPrintTag or OpenTag3D data on this tag.');
   } finally {
     await NfcManager.cancelTechnologyRequest().catch(() => {});
   }

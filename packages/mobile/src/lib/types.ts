@@ -24,7 +24,7 @@ export interface DecodedOpenPrintTag {
    *  really left on a partial roll; defaults to weightGrams on a full roll. */
   actualWeightGrams?: number;
   spoolUid?: string;
-  tagSource?: 'openprinttag' | 'bambu';
+  tagSource?: 'openprinttag' | 'bambu' | 'opentag3d';
   readOnly?: boolean;
   [k: string]: unknown;
 }

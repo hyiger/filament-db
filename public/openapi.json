@@ -5924,6 +5924,7 @@
             "type": "string",
             "enum": [
               "openprinttag",
+              "opentag3d",
               "bambu"
             ]
           }
