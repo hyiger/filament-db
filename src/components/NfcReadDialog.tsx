@@ -105,6 +105,8 @@ export default function NfcReadDialog() {
     if (data.brandName) params.set("vendor", data.brandName);
     if (data.materialType) params.set("type", data.materialType);
     if (data.color) params.set("color", data.color);
+    // #864: OpenTag3D carries a plain-text color name; keep it on Create New.
+    if (data.colorName) params.set("colorName", data.colorName);
     // GH #477: multi-color tags carry up to 5 additional colors in spec
     // keys 20–24. Join them comma-separated; FilamentForm parses the
     // param on mount and pre-populates the secondary-color slots.
@@ -113,6 +115,10 @@ export default function NfcReadDialog() {
     }
     if (data.density != null) params.set("density", String(data.density));
     if (data.diameter != null) params.set("diameter", String(data.diameter));
+    // #864: OpenTag3D Extended map carries target/max volumetric speed.
+    if (data.maxVolumetricSpeed != null) {
+      params.set("maxVolumetricSpeed", String(data.maxVolumetricSpeed));
+    }
     if (data.nozzleTemp != null) params.set("nozzle", String(data.nozzleTemp));
     if (data.nozzleTempMin != null) params.set("nozzleMin", String(data.nozzleTempMin));
     if (data.bedTemp != null) params.set("bed", String(data.bedTemp));

@@ -46,6 +46,24 @@ describe("decodedTagToFilamentPayload", () => {
     expect(p.transmissionDistance).toBe(3);
     // Decoded `tags` are already numeric OPT_TAG enum values — passed through.
     expect(p.optTags).toEqual([4, 12]);
+    // OpenPrintTag carries neither → null (no-op).
+    expect(p.colorName).toBeNull();
+    expect(p.maxVolumetricSpeed).toBeNull();
+  });
+
+  it("#864: carries OpenTag3D colorName + maxVolumetricSpeed onto the create payload", () => {
+    const p = decodedTagToFilamentPayload(
+      tag({
+        tagSource: "opentag3d",
+        materialName: "PETG",
+        materialType: "PETG",
+        brandName: "Polar Filament",
+        colorName: "Electric Watermelon",
+        maxVolumetricSpeed: 15,
+      }),
+    );
+    expect(p.colorName).toBe("Electric Watermelon");
+    expect(p.maxVolumetricSpeed).toBe(15);
   });
 
   it("derives a name from whatever the tag carries", () => {

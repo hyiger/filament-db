@@ -255,8 +255,12 @@ function NewFilamentContent() {
             ? { spoolWeight: 0 }
             : {}),
         ...(actualWeight != null ? { totalWeight: actualWeight + (emptySpool ?? 0) } : {}),
+        ...(searchParams.get("colorName") ? { colorName: searchParams.get("colorName") } : {}),
         ...(searchParams.get("shoreA") ? { shoreHardnessA: Number(searchParams.get("shoreA")) } : {}),
         ...(searchParams.get("shoreD") ? { shoreHardnessD: Number(searchParams.get("shoreD")) } : {}),
+        ...(searchParams.get("maxVolumetricSpeed")
+          ? { maxVolumetricSpeed: Number(searchParams.get("maxVolumetricSpeed")) }
+          : {}),
         ...(searchParams.get("optTags") ? { optTags: searchParams.get("optTags")!.split(",").map(Number) } : {}),
         settings: {
           ...(searchParams.get("chamber")

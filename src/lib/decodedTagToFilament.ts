@@ -66,6 +66,10 @@ export function decodedTagToFilamentPayload(
     // but no primary) — same posture as mapToFilamentPayload (GH #477). Only
     // fall back to gray when the tag carries no colors at all.
     color: decoded.color || (secondaryColors.length > 0 ? null : "#808080"),
+    // OpenTag3D carries a plain-text color name (color_name); keep it on create
+    // so the saved filament retains the tag's color label (the read dialog shows
+    // it). OpenPrintTag tags don't populate this, so it's a no-op for them.
+    colorName: decoded.colorName?.trim() || null,
     secondaryColors,
     density: decoded.density ?? null,
     // Prefer the tag's own diameter — a physical 2.85mm tag is authoritative —
@@ -85,6 +89,10 @@ export function decodedTagToFilamentPayload(
     shoreHardnessA: decoded.shoreHardnessA ?? null,
     shoreHardnessD: decoded.shoreHardnessD ?? null,
     transmissionDistance: decoded.transmissionDistance ?? null,
+    // OpenTag3D's Extended map carries target/max volumetric speed; keep it so a
+    // filament created from the scan retains the limit (and slicer exports do
+    // too, instead of a null). OpenPrintTag tags don't populate this.
+    maxVolumetricSpeed: decoded.maxVolumetricSpeed ?? null,
     // Nominal roll weight + empty-spool tare as filament-level defaults (NOT a
     // spool subdoc — §4.4 never fabricates spools). spoolWeight feeds the
     // remaining-weight math (totalWeight = remainingWeight + spoolWeight) when
