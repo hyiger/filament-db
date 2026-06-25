@@ -87,7 +87,11 @@ function pickDecoded(value: unknown): ScanEventDecoded {
       out[key] = v;
     }
   }
-  if (value.tagSource === "openprinttag" || value.tagSource === "bambu") {
+  if (
+    value.tagSource === "openprinttag" ||
+    value.tagSource === "bambu" ||
+    value.tagSource === "opentag3d"
+  ) {
     out.tagSource = value.tagSource;
   }
   return out;

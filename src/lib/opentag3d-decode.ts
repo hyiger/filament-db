@@ -9,19 +9,19 @@
  *
  * Mapping rules:
  *   - Fields with a first-class home on DecodedOpenPrintTag reuse it (colors,
- *     temps, density, diameter, weights, drying, TD, brand/material, etc.).
+ *     temps, density, diameter, weights, drying, brand/material, etc.).
  *   - OpenTag3D-only fields with NO existing home (MFI block, spool-core
  *     diameter, measured tolerance, the vso triple, serial, manufacture
- *     timestamp, online URL) are stashed in `aux` under `opentag3d_*` keys so
- *     nothing is lost and the read dialog can surface them. (Per #864 they ride
- *     the Filament `settings` passthrough bag on create — see
- *     decodedTagToFilament.ts — rather than getting first-class schema columns
- *     in this read-only phase.)
+ *     timestamp, online URL, td) are stashed in `aux` under `opentag3d_*` keys
+ *     so nothing is lost and the read dialog can surface them. In this
+ *     read-only phase they are DISPLAY-ONLY (rendered in NfcReadDialog); they
+ *     are not yet threaded into the Filament `settings` bag on create — that,
+ *     plus first-class schema columns, is deferred to the write/create phase.
  *
  * NOTE on TD: OpenTag3D's `td` is "opaque thickness in millimetres" (raw ÷10).
- * It is mapped onto `transmissionDistance` for display continuity, but the unit
- * semantics differ from OpenPrintTag's transmission-distance — flagged here and
- * surfaced verbatim in `aux.opentag3d_td_mm` so the raw mm value is never lost.
+ * It is intentionally NOT mapped onto `transmissionDistance` — that field is
+ * OpenPrintTag's HueForge TD, a different quantity — so the raw mm value is
+ * preserved only in `aux.opentag3d_td_mm`.
  */
 
 import {
@@ -89,8 +89,10 @@ export function ot3dToDecodedTag(decoded: Ot3dDecoded): DecodedOpenPrintTag {
   const serial = str(f.serial);
   if (serial) aux.opentag3d_serial = serial;
   const onlineUrl = str(f.online_data_url);
-  // Stored WITHOUT a scheme to save bytes; surface the raw value (the
-  // create/display path re-prefixes https:// and gates through safeHttpUrl).
+  // Stored WITHOUT a scheme to save bytes. Surfaced as the raw value only — it
+  // is rendered as escaped text in NfcReadDialog (NOT as a clickable link) in
+  // this phase. A future create/link path should re-prefix https:// and gate it
+  // through safeHttpUrl before treating it as a URL.
   if (onlineUrl) aux.opentag3d_online_data_url = onlineUrl;
   const spoolCore = posNum(f.spool_core_diameter);
   if (spoolCore !== undefined) aux.opentag3d_spool_core_diameter_mm = spoolCore;

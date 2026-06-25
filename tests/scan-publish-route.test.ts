@@ -55,6 +55,23 @@ describe("POST /api/scan/publish", () => {
     expect(getLastScan()).toEqual(received[0]);
   });
 
+  it("#864: propagates an opentag3d tagSource through the scan bus", async () => {
+    const received: ScanEvent[] = [];
+    subscribeScans((e) => received.push(e));
+
+    const res = await publish(
+      postJson({
+        filament: { _id: "ot3d1", name: "PETG Sky", vendor: "Polar Filament", type: "PETG" },
+        candidates: [],
+        decoded: { materialName: "PETG", brandName: "Polar Filament", tagSource: "opentag3d" },
+      }),
+    );
+
+    expect(res.status).toBe(202);
+    expect(received).toHaveLength(1);
+    expect(received[0]!.decoded.tagSource).toBe("opentag3d");
+  });
+
   it("round-trips a valid matchedSpool and drops a malformed one (#732)", async () => {
     const received: ScanEvent[] = [];
     subscribeScans((e) => received.push(e));

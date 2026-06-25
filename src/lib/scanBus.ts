@@ -29,7 +29,7 @@ export interface ScanEventDecoded {
   materialType?: string;
   color?: string;
   spoolUid?: string;
-  tagSource?: "openprinttag" | "bambu";
+  tagSource?: "openprinttag" | "bambu" | "opentag3d";
 }
 
 /** #732: the specific spool a scan resolved to, when the tag's spool_uid matched

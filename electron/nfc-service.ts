@@ -14,7 +14,7 @@
 import { EventEmitter } from "events";
 import pcsclite from "@pokusew/pcsclite";
 import { wrapNdefForTag, parseNdefRecords, isCcByteReadOnly, setCcByteReadOnly } from "./ndef";
-import { decodeOpenPrintTagBinary, type DecodedOpenPrintTag } from "../src/lib/openprinttag-decode";
+import { type DecodedOpenPrintTag } from "../src/lib/openprinttag-decode";
 import { decodeFromNdefRecords } from "../src/lib/tagCodecs";
 import { deriveBambuKeys, parseBambuBlocks, bambuToDecodedTag } from "./bambu-tag";
 import {
@@ -694,6 +694,16 @@ export class NfcService extends EventEmitter {
       return null; // READ BINARY not supported here → not an NTAG/Type-2 tag
     }
     if (head.length < NTAG_TLV_OFFSET) return null;
+
+    // Safety guard (no hardware needed): if some ACS readers answer FF B0 for a
+    // 15693 SLIX2 storage tag too, byte 0 of what we read is that tag's NFC-Forum
+    // Type 5 CC magic (0xE1) — NOT an NTAG UID (NTAG page 0 byte 0 is the
+    // manufacturer code, never 0xE1). Treat that as "this is really a 15693 tag"
+    // and defer to the proven ISO-15693 OpenPrintTag path rather than
+    // mis-parsing the Type-5 image as Type-2 (which could mis-throw "Blank or
+    // unformatted" on a valid OPT tag). A genuine NTAG falls through to the
+    // Type-2 CC check below.
+    if (head[0] === 0xe1) return null;
 
     const ccMagic = head[NTAG_CC_OFFSET];
     if (ccMagic === 0x00) {
