@@ -30,6 +30,14 @@ describe("GET /api/filaments/[id]/openprinttag — spool-scoped spool_uid (#732)
     return decodeOpenPrintTagBinary(buf).spoolUid;
   }
 
+  it("returns 400 (not 500) for a malformed filament id (#854)", async () => {
+    const res = await openprinttag(req("not-an-object-id"), {
+      params: Promise.resolve({ id: "not-an-object-id" }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/invalid filament id/i);
+  });
+
   it("defaults to the first non-retired spool's instanceId", async () => {
     const f = await Filament.create({
       name: "Spooled PLA",
