@@ -153,7 +153,7 @@ function writeUintBE(buf: Uint8Array, start: number, length: number, value: numb
 function decodeString(buf: Uint8Array, f: Ot3dField): string {
   const slice = buf.subarray(f.start, f.start + f.length);
   const decoded = new TextDecoder("utf-8").decode(slice);
-  return decoded.split(" ")[0].trim();
+  return decoded.split("\u0000")[0].trim();
 }
 
 // ── decode ──────────────────────────────────────────────────────────
