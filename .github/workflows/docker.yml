@@ -21,29 +21,13 @@ jobs:
   # GH #641: docker.yml is triggered by the same `v*` tag as release.yml, but
   # used to go straight checkout → buildx → push with no gate — a tag cut on a
   # broken commit published a broken `latest` image even while every release.yml
-  # leg failed. Mirror release.yml's lint + test steps so the image only
-  # publishes from a green commit.
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install PC/SC development headers (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libpcsclite-dev
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Lint
-        run: npm run lint
-
-      - name: Run tests
-        run: npm test
+  # leg failed. GH #852: run the FULL CI gate (lint, root + Electron typecheck,
+  # coverage tests, npm audit, build, standalone smoke) via the shared
+  # ci-gate.yml — the same gate test.yml runs on main/PRs — instead of the
+  # earlier partial lint + `npm test`, so the image only publishes from a commit
+  # that would pass branch CI.
+  gate:
+    uses: ./.github/workflows/ci-gate.yml
 
   # GH #845: build each arch on its NATIVE runner instead of emulating arm64
   # under QEMU. The emulated arm64 leg of the old single-job multi-arch build
@@ -54,7 +38,7 @@ jobs:
   # a single multi-arch tag. `timeout-minutes` makes any future hang fail fast
   # (a red, re-runnable run) instead of zombie-ing for the 6-hour default.
   build:
-    needs: test
+    needs: gate
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:

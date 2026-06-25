@@ -1,19 +1,27 @@
-name: Tests
+name: CI Gate
 
+# GH #852 — the full CI gate (lint, root + Electron typecheck, coverage tests,
+# `npm audit`, build, standalone smoke) that must pass before code ships as a
+# release/Docker artifact. Invoked via `uses: ./.github/workflows/ci-gate.yml`
+# by release.yml (before the desktop installer matrix) and docker.yml (before
+# building + pushing GHCR images). Previously those tag-triggered workflows
+# re-implemented only a partial gate (lint + `npm test`), so a `v*` tag could
+# publish from a commit branch CI would reject (missing the typechecks,
+# coverage, audit, and smoke). The gate runs ONCE per release/docker run.
+#
+# KEEP IN SYNC WITH test.yml: these two jobs MIRROR test.yml's `test` + `smoke`
+# jobs. test.yml deliberately stays inline (not a caller of this file) because a
+# reusable-workflow call renames its status checks to `gate / test (20)` etc.,
+# which would no longer satisfy main's branch protection (required contexts
+# `test (20)` / `test (22)` / `smoke`). If you change the gate, change it in
+# BOTH files.
 on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
 
 jobs:
-  # KEEP IN SYNC WITH ci-gate.yml (#852): these `test` + `smoke` jobs are the
-  # canonical gate and stay INLINE here (rather than calling ci-gate.yml)
-  # because a reusable-workflow call would rename the status checks to
-  # `gate / test (20)` etc., which would no longer satisfy main's branch
-  # protection (required contexts `test (20)` / `test (22)` / `smoke`).
-  # ci-gate.yml mirrors these jobs so release.yml + docker.yml run the SAME gate
-  # before publishing — change the gate in BOTH files.
   test:
     runs-on: ubuntu-latest
 

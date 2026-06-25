@@ -9,7 +9,15 @@ permissions:
   contents: write
 
 jobs:
+  # GH #852: run the full CI gate (lint, root + Electron typecheck, coverage
+  # tests, npm audit, build, standalone smoke) ONCE before the platform matrix,
+  # so a `v*` tag can't publish installers from a commit that branch CI would
+  # reject. Same reusable workflow test.yml runs on every PR/main push.
+  gate:
+    uses: ./.github/workflows/ci-gate.yml
+
   build:
+    needs: gate
     strategy:
       fail-fast: false
       matrix:
@@ -80,19 +88,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Run tests
-        run: npm test
-
-      # GH #614 — refresh the bundled FDM Polymers Technical Reference from the
-      # wiki (source of truth) so the release ships the latest content. The
-      # committed snapshot is the fallback: a transient wiki outage shouldn't
-      # block a release, so this is best-effort.
-      - name: Fetch technical reference content
-        continue-on-error: true
-        run: node scripts/fetch-reference.mjs
+      # GH #852: lint + tests now run once in the `gate` job (ci-gate.yml), not
+      # per platform leg. GH #853: the technical-reference content is NO LONGER
+      # fetched per build leg — every leg (and the Docker image) ships the
+      # committed src/content/ snapshot, so a release can't bundle different
+      # reference content (or a different REFERENCE_WIKI_SHA) per platform.
+      # Refresh the snapshot via `npm run fetch:reference` in a PR before tagging
+      # (the scheduled reference-drift.yml flags when it's stale).
 
       - name: Build Next.js and compile Electron
         run: |

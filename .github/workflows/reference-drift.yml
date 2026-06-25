@@ -1,0 +1,42 @@
+name: Reference content drift
+
+# GH #853: the bundled "FDM Polymers — A Technical Reference" snapshot
+# (src/content/referenceContent.ts + referenceIndex.ts) is committed and now
+# ships verbatim in EVERY artifact — the per-build `fetch-reference` step was
+# removed from release.yml so platforms can't diverge on content or
+# REFERENCE_WIKI_SHA. This scheduled job re-runs the generator against the live
+# wiki and FAILS if the committed snapshot has drifted, as a visible signal to
+# refresh it (`npm run fetch:reference`, commit src/content/ in a PR) before the
+# next release. It does NOT gate PRs — a wiki edit shouldn't red unrelated work.
+on:
+  schedule:
+    # Weekly, Mondays 06:00 UTC.
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The generator uses only Node built-ins + `git` (it clones the wiki
+      # itself), so no `npm ci` is needed. The output is deterministic for a
+      # given wiki HEAD (the date stamp is the wiki commit date), so the diff
+      # only fires on real content drift, not on every run.
+      - name: Regenerate the reference snapshot from the wiki
+        run: node scripts/fetch-reference.mjs
+
+      - name: Fail if the committed snapshot is stale
+        run: |
+          if ! git diff --exit-code -- src/content/; then
+            echo "::error::Bundled technical-reference content has drifted from the wiki. Run 'npm run fetch:reference' and commit src/content/ in a PR before the next release."
+            exit 1
+          fi
