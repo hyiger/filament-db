@@ -16,6 +16,8 @@
  *       --brand "Polar Filament" --color "#1E90FF" --name "Sky Blue" \
  *       --print-temp 240 --bed-temp 80 --diameter 1.75
  *   npx tsx scripts/write-opentag3d-tag.ts --core-only   # Core map only (NTAG213-sized)
+ *   npx tsx scripts/write-opentag3d-tag.ts --ntag 215    # required to format a BLANK tag
+ *                                                        # (a pre-formatted tag's CC is reused)
  *
  * Place a blank NTAG on the reader before or after running.
  */
@@ -34,6 +36,9 @@ import {
 } from "../src/lib/ndef";
 import { decodeFromNdefRecords } from "../src/lib/tagCodecs";
 
+// NDEF-usable capacity (bytes) per NTAG family, i.e. CC byte-2 × 8.
+const NTAG_NDEF_BYTES: Record<string, number> = { "213": 144, "215": 496, "216": 872 };
+
 // ── CLI args ──
 const argv = process.argv.slice(2);
 function arg(name: string, fallback?: string): string | undefined {
@@ -41,6 +46,7 @@ function arg(name: string, fallback?: string): string | undefined {
   return i >= 0 && i + 1 < argv.length ? argv[i + 1] : fallback;
 }
 const coreOnly = argv.includes("--core-only");
+const ntagSize = arg("ntag"); // "213" | "215" | "216" — required only to format a BLANK tag
 
 // Build the OpenTag3D field set from flags, with a complete sample default so a
 // bare run still writes a meaningful, multi-field tag.
@@ -131,10 +137,27 @@ async function writeTag(reader: CardReader, protocol: number): Promise<void> {
   const head = await readPages(reader, protocol, 0);
   let ccSizeByte = head[14];
   if (head[12] !== 0xe1 || !ccSizeByte) {
-    // Blank / unformatted → write a fresh NTAG215 CC (E1 10 3E 00 = 496 bytes).
-    console.log("  CC missing → writing a fresh NTAG215 capability container");
-    await writePage(reader, protocol, 3, Buffer.from(buildType2Cc(496)));
-    ccSizeByte = 0x3e;
+    // Blank / unformatted tag has no CC telling us the chip size. Do NOT assume
+    // NTAG215 — a smaller NTAG213 would get a too-large CC and the capacity
+    // check below would pass, letting us write past the end of the chip. Require
+    // the caller to declare the size with --ntag.
+    const ndefBytes = ntagSize ? NTAG_NDEF_BYTES[ntagSize] : undefined;
+    if (!ndefBytes) {
+      throw new Error(
+        "Blank/unformatted tag has no capability container — re-run with --ntag 213|215|216 to declare the chip size (or pre-format the tag).",
+      );
+    }
+    ccSizeByte = Math.floor(ndefBytes / 8);
+    console.log(
+      `  Blank tag → writing an NTAG${ntagSize} capability container ` +
+        `(E1 10 ${ccSizeByte.toString(16).padStart(2, "0")} 00, ${ndefBytes} NDEF bytes)`,
+    );
+    const cc = buildType2Cc(ndefBytes);
+    await writePage(reader, protocol, 3, Buffer.from(cc));
+    // Patch the in-memory head so the verification read below sees the NEW CC,
+    // not the stale pre-format zero bytes (a false "Blank or unformatted"
+    // verification failure otherwise) — Codex P2.
+    Buffer.from(cc).copy(head, 12);
   } else {
     console.log(`  Existing CC: E1 10 ${ccSizeByte.toString(16).padStart(2, "0")} 00 (${ccSizeByte * 8} NDEF bytes)`);
   }
