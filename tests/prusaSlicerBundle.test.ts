@@ -43,6 +43,22 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.filament_settings_id).toBe("Generic PLA");
   });
 
+  it("#867 — emits filamentdb_id (the _id) so the sync-back can match by id", () => {
+    const keys = filamentToSlicerKeys({
+      _id: "6a1a7bef677d648e9ba9cd3a",
+      name: "Fibreheart PPA",
+      vendor: "Siraya Tech",
+      type: "PPA",
+      settings: {},
+    });
+    expect(keys.filamentdb_id).toBe("6a1a7bef677d648e9ba9cd3a");
+  });
+
+  it("#867 — omits filamentdb_id when the doc has no _id (graceful)", () => {
+    const keys = filamentToSlicerKeys({ name: "X", vendor: "V", type: "PLA", settings: {} });
+    expect("filamentdb_id" in keys).toBe(false);
+  });
+
   it("preserves settings bag keys not in the schema", () => {
     const filament = {
       name: "Test",

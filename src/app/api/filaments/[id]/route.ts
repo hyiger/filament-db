@@ -419,18 +419,39 @@ export async function POST(
       return errorResponse("No config provided", 400);
     }
 
-    // Find by name first (slicers address filaments by name), then ObjectId.
+    // #867: match by the STABLE Filament DB id FIRST when the preset carries it
+    // (`filamentdb_id`, round-tripped through the PrusaSlicer export). Without
+    // this, the sync keys on the mutable preset NAME, so a renamed preset no
+    // longer matches its filament and the fork's create-on-404 path silently
+    // spawns an orphan record that swallows every later edit. Resolution order:
+    // filamentdb_id → name → URL-param ObjectId (back-compat). The id falls back
+    // gracefully when absent/stale (it's DB-instance-specific).
+    //
     // `params.id` is ALREADY URL-decoded — re-decoding throws URIError on a
     // name with a literal `%` ("ABS 100%") and 500s the sync (#671).
     const decodedName = id;
-    let filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
+    const sentId = typeof config.filamentdb_id === "string" ? config.filamentdb_id.trim() : "";
+    let filament = /^[a-f0-9]{24}$/i.test(sentId)
+      ? await Filament.findOne({ _id: sentId, _deletedAt: null })
+      : null;
+    let matchedBy: "id" | "name" | null = filament ? "id" : null;
+    if (!filament) {
+      filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
+      if (filament) matchedBy = "name";
+    }
     if (!filament && /^[a-f0-9]{24}$/i.test(id)) {
       filament = await Filament.findOne({ _id: id, _deletedAt: null });
+      if (filament) matchedBy = "id";
     }
 
     if (!filament) {
       return errorResponse(`Filament not found: ${decodedName}`, 404);
     }
+
+    // #867: id matched but the preset's name differs from the stored name —
+    // surface it so the fork can offer to reconcile the names (Phase 2) instead
+    // of letting them silently diverge.
+    const nameMismatch = matchedBy === "id" && filament.name !== decodedName;
 
     // Reverse-map PrusaSlicer INI keys → structured DB fields
     const update: Record<string, unknown> = {};
@@ -618,6 +639,10 @@ export async function POST(
       "bed_temperature", "first_layer_bed_temperature",
       "filament_shrinkage_compensation_xy", "filament_shrinkage_compensation_z",
       "filament_soluble", "filament_abrasive", "filament_settings_id",
+      // #867: a routing hint, not filament data — consumed for id-first matching
+      // above and re-emitted from the row's _id on export, so never stored in
+      // the settings bag (avoids a stale duplicate of the canonical _id).
+      "filamentdb_id",
     ]);
     const merge = mergeSlicerSettings(
       (filament.settings as Record<string, unknown>) || {},
@@ -695,6 +720,12 @@ export async function POST(
     return NextResponse.json({
       message: `Synced ${Object.keys(config).length} settings for "${decodedName}"`,
       filamentId: filament._id,
+      // #867: how the filament was resolved + the canonical id/name, so the fork
+      // can (Phase 2) prompt to reconcile a name divergence and re-stamp the id
+      // into the preset when it matched by name (stale/absent id recovery).
+      matchedBy,
+      matchedName: filament.name,
+      nameMismatch,
     });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to sync filament");

@@ -97,6 +97,15 @@ export function filamentToSlicerKeys(
     keys.filament_settings_id = filament.name || "";
   }
 
+  // #867: round-trip the STABLE Filament DB id so the sync-back can match by id
+  // (resilient to a renamed preset) instead of only by the mutable name. The
+  // fork registers `filamentdb_id` as a config option — PrusaSlicer drops
+  // unknown keys on load, so this only "sticks" with the FilamentDB fork. Always
+  // emitted (the _id is canonical); harmless to stock PrusaSlicer, which ignores it.
+  if (filament._id != null) {
+    keys.filamentdb_id = String(filament._id);
+  }
+
   // Notes — preserve existing, or use Filament DB notes
   if (!keys.filament_notes && filament.notes) {
     keys.filament_notes = filament.notes;

@@ -352,7 +352,7 @@
           "Filaments"
         ],
         "summary": "Sync filament from PrusaSlicer",
-        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields. When nozzle_diameter and high_flow are provided, calibration-related keys (extrusion_multiplier, pressure_advance, retract settings) are written to the matching per-nozzle calibration entry.",
+        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields. When nozzle_diameter and high_flow are provided, calibration-related keys (extrusion_multiplier, pressure_advance, retract settings) are written to the matching per-nozzle calibration entry. #867: when the config carries a `filamentdb_id` (the filament's _id, round-tripped from the export), the filament is resolved by that STABLE id first — so a renamed preset still updates the right record instead of orphaning — then by name, then by the URL-param ObjectId.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -393,7 +393,7 @@
                     "additionalProperties": {
                       "type": "string"
                     },
-                    "description": "PrusaSlicer INI key-value pairs to sync back (e.g. filament_type, temperature, bed_temperature)"
+                    "description": "PrusaSlicer INI key-value pairs to sync back (e.g. filament_type, temperature, bed_temperature). An optional `filamentdb_id` key (the filament's _id) routes the update to that filament by id first (#867); it is consumed for routing and never stored in the settings bag."
                   }
                 }
               }
@@ -414,6 +414,24 @@
                     },
                     "filamentId": {
                       "type": "string"
+                    },
+                    "matchedBy": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": [
+                        "id",
+                        "name",
+                        null
+                      ],
+                      "description": "#867: how the filament was resolved — `id` (filamentdb_id), `name`, or null."
+                    },
+                    "matchedName": {
+                      "type": "string",
+                      "description": "#867: the stored name of the matched filament (so the fork can re-stamp/reconcile)."
+                    },
+                    "nameMismatch": {
+                      "type": "boolean",
+                      "description": "#867: true when matched by id but the sent preset name differs from the stored name — the fork can prompt to reconcile."
                     }
                   }
                 }

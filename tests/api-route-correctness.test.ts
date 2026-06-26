@@ -441,6 +441,65 @@ describe("API route correctness", () => {
     expect(fresh.calibrations ?? []).toHaveLength(0); // ambiguous → don't guess
   });
 
+  it("#867 — matches by filamentdb_id even when the preset name differs (no orphan)", async () => {
+    const f = await Filament.create({ name: "Fibreheart PPA", vendor: "Siraya Tech", type: "PPA" });
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/SirayaTech%20Fibreheart%20PPA", {
+        config: { filamentdb_id: String(f._id), filament_shrinkage_compensation_xy: "0.36%" },
+      }),
+      { params: Promise.resolve({ id: "SirayaTech Fibreheart PPA" }) }, // a DIFFERENT name
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.filamentId).toBe(String(f._id)); // the real record, not an orphan
+    expect(body.matchedBy).toBe("id");
+    expect(body.nameMismatch).toBe(true);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.shrinkageXY).toBe(0.36); // synced to the right record
+    expect(await Filament.countDocuments({ _deletedAt: null })).toBe(1); // no orphan created
+  });
+
+  it("#867 — falls back to the name match when no filamentdb_id is sent", async () => {
+    const f = await Filament.create({ name: "PLA Basic", vendor: "X", type: "PLA" });
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/PLA%20Basic", { config: { filament_density: "1.24" } }),
+      { params: Promise.resolve({ id: "PLA Basic" }) },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.matchedBy).toBe("name");
+    expect(body.nameMismatch).toBe(false);
+    expect(body.filamentId).toBe(String(f._id));
+  });
+
+  it("#867 — a stale filamentdb_id gracefully falls back to the name match", async () => {
+    const f = await Filament.create({ name: "PETG Pro", vendor: "X", type: "PETG" });
+    const staleId = new mongoose.Types.ObjectId().toString(); // valid ObjectId, no such doc
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/PETG%20Pro", {
+        config: { filamentdb_id: staleId, filament_density: "1.27" },
+      }),
+      { params: Promise.resolve({ id: "PETG Pro" }) },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.matchedBy).toBe("name");
+    expect(body.filamentId).toBe(String(f._id));
+  });
+
+  it("#867 — filamentdb_id is consumed for routing, not stored in the settings bag", async () => {
+    const f = await Filament.create({ name: "ABS X", vendor: "X", type: "ABS" });
+    await slicerSync(
+      jsonReq("http://localhost/api/filaments/ABS%20X", {
+        config: { filamentdb_id: String(f._id), some_passthrough_key: "v" },
+      }),
+      { params: Promise.resolve({ id: "ABS X" }) },
+    );
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.settings?.filamentdb_id).toBeUndefined(); // routing hint, not persisted
+    expect(fresh.settings?.some_passthrough_key).toBe("v"); // real passthrough keys still stored
+  });
+
   it("#265 — calibration sync on a variant that OVERRIDES calibrations writes to the variant", async () => {
     // Codex P1: a variant with its own non-empty calibrations array
     // owns its calibrations (resolveFilament uses them, not the
