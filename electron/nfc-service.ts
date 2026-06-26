@@ -15,7 +15,7 @@ import { EventEmitter } from "events";
 import pcsclite from "@pokusew/pcsclite";
 import { wrapNdefForTag, parseNdefRecords, isCcByteReadOnly, setCcByteReadOnly } from "./ndef";
 import { type DecodedOpenPrintTag } from "../src/lib/openprinttag-decode";
-import { decodeFromNdefRecords } from "../src/lib/tagCodecs";
+import { decodeFromNdefRecords, OPENPRINTTAG_MIME } from "../src/lib/tagCodecs";
 import { deriveBambuKeys, parseBambuBlocks, bambuToDecodedTag } from "./bambu-tag";
 import {
   classifyNfcError as classifyNfcErrorImpl,
@@ -625,7 +625,8 @@ export class NfcService extends EventEmitter {
    * decodes (OpenTag3D ships on both SLIX2 and NTAG). An OpenPrintTag record
    * still decodes exactly as before.
    */
-  private async readOpenPrintTag(protocol: number): Promise<DecodedOpenPrintTag> {
+  /** Assemble the full NFC-V / ISO-15693 (SLIX2) tag image (CC at byte 0). */
+  private async readNfcVImage(protocol: number): Promise<Buffer> {
     const block0 = await this.readBlock(protocol, 0);
     const mlen = sanitizeMlen(block0[2]);
     const numBlocks = Math.min(Math.ceil((mlen * 8) / BLOCK_SIZE), DEFAULT_BLOCK_COUNT);
@@ -648,7 +649,11 @@ export class NfcService extends EventEmitter {
         }
       }
     }
+    return allData;
+  }
 
+  private async readOpenPrintTag(protocol: number): Promise<DecodedOpenPrintTag> {
+    const allData = await this.readNfcVImage(protocol);
     // parseNdefRecords throws the friendly "Blank or unformatted" / CC errors
     // (Type-5 CC at offset 0), preserved verbatim for the renderer's empty-tag UI.
     const records = parseNdefRecords(allData, 0);
@@ -660,7 +665,7 @@ export class NfcService extends EventEmitter {
     }
     // GH #583: surface the soft read-only state (CC byte 1 write-access bits)
     // so the renderer can show a lock badge and the write probe can refuse it.
-    decoded.readOnly = isCcByteReadOnly(block0[1]);
+    decoded.readOnly = isCcByteReadOnly(allData[1]);
     return decoded;
   }
 
@@ -960,8 +965,14 @@ export class NfcService extends EventEmitter {
       // pass it and we'd flip ITS write-access bits, marking an unrelated tag
       // read-only. Fully parse the tag and confirm it carries an OpenPrintTag
       // record before touching block 0; only OpenPrintTags are ours to lock.
+      //
+      // #864: confirm the OpenPrintTag MIME record SPECIFICALLY — readOpenPrintTag
+      // now decodes any registered codec (incl. OpenTag3D via the registry), so
+      // checking it alone would let us flip the CC of a third-party OpenTag3D
+      // SLIX2 tag (read-only this phase — never ours to lock).
+      let records;
       try {
-        await this.readOpenPrintTag(protocol);
+        records = parseNdefRecords(await this.readNfcVImage(protocol), 0);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // Definitive "this isn't an OpenPrintTag" signals from ndef.ts → tell
@@ -980,6 +991,11 @@ export class NfcService extends EventEmitter {
           );
         }
         throw err;
+      }
+      if (!records.some((r) => r.tnf === 0x02 && r.type === OPENPRINTTAG_MIME)) {
+        throw new Error(
+          "TAG_NOT_FORMATTED: This tag has no OpenPrintTag data to lock — write a filament to it first.",
+        );
       }
 
       const block0 = await this.readBlock(protocol, 0);
