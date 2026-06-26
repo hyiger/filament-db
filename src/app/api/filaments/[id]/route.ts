@@ -444,7 +444,12 @@ export async function POST(
     // True only for a config-filamentdb_id match on a NAME-addressed sync — the
     // sole case where a name divergence is meaningful (the URL holds a real name).
     let matchedByConfigId = false;
-    if (!urlIsObjectId) {
+    // Fall through whenever the ObjectId lookup matched NOTHING — either the URL
+    // is a real name, OR it's an ObjectId-SHAPED string that is no filament's id
+    // (e.g. a preset legitimately named with 24 hex chars); both must still
+    // resolve by filamentdb_id → name (Codex P2). A *found* ObjectId stays
+    // authoritative (the block above already set `filament`).
+    if (!filament) {
       if (/^[a-f0-9]{24}$/i.test(sentId)) {
         filament = await Filament.findOne({ _id: sentId, _deletedAt: null });
         if (filament) {

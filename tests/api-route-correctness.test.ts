@@ -542,6 +542,19 @@ describe("API route correctness", () => {
     expect((await Filament.findById(other._id)).density ?? null).toBeNull(); // other untouched
   });
 
+  it("#867 — a preset NAME that looks like an ObjectId still falls back to the name match (Codex P2)", async () => {
+    const hexName = "abcdef012345678901234567"; // 24 hex chars, but not any filament's _id
+    const f = await Filament.create({ name: hexName, vendor: "X", type: "PLA" });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${hexName}`, { config: { filament_density: "1.3" } }),
+      { params: Promise.resolve({ id: hexName }) },
+    );
+    expect(res.status).toBe(200); // not a 404 — the ObjectId lookup missed, name matched
+    const body = await res.json();
+    expect(body.filamentId).toBe(String(f._id));
+    expect(body.matchedBy).toBe("name");
+  });
+
   it("#265 — calibration sync on a variant that OVERRIDES calibrations writes to the variant", async () => {
     // Codex P1: a variant with its own non-empty calibrations array
     // owns its calibrations (resolveFilament uses them, not the
