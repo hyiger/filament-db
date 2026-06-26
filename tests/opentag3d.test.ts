@@ -215,8 +215,9 @@ describe("ot3dToDecodedTag mapping → DecodedOpenPrintTag", () => {
 
   it("stamps the opentag3d source and identity fields", () => {
     expect(tag.tagSource).toBe("opentag3d");
-    expect(tag.materialType).toBe("PLA");
-    expect(tag.materialName).toBe("PLA Silk");
+    expect(tag.materialType).toBe("PLA"); // bare base material
+    // color folded into the name so colors don't collide on the unique name key
+    expect(tag.materialName).toBe("PLA Silk Electric Watermelon");
     expect(tag.brandName).toBe("Polar Filament");
     expect(tag.colorName).toBe("Electric Watermelon");
   });
@@ -224,6 +225,19 @@ describe("ot3dToDecodedTag mapping → DecodedOpenPrintTag", () => {
   it("maps colors to hex", () => {
     expect(tag.color).toBe("#FFA64D");
     expect(tag.secondaryColors).toEqual(["#0000FF"]);
+  });
+
+  it("gives two colors of the same material DISTINCT default names (Codex P2)", () => {
+    const red = decodeOpenTag3DTag(
+      encodeOpenTag3D({ material_base: "PLA", color_name: "Red", color_1: { r: 255, g: 0, b: 0, a: 255 } }),
+    );
+    const blue = decodeOpenTag3DTag(
+      encodeOpenTag3D({ material_base: "PLA", color_name: "Blue", color_1: { r: 0, g: 0, b: 255, a: 255 } }),
+    );
+    expect(red.materialName).toBe("PLA Red");
+    expect(blue.materialName).toBe("PLA Blue");
+    expect(red.materialName).not.toBe(blue.materialName); // no unique-name collision
+    expect(red.materialType).toBe("PLA"); // type stays the bare base
   });
 
   it("maps temps/weights/drying onto first-class homes", () => {

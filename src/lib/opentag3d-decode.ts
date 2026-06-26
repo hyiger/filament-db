@@ -64,8 +64,14 @@ export function ot3dToDecodedTag(decoded: Ot3dDecoded): DecodedOpenPrintTag {
   // ── identity / material ──
   const base = str(f.material_base);
   const mod = str(f.material_mod);
-  const materialType = base;
-  const materialName = base ? (mod ? `${base} ${mod}` : base) : undefined;
+  const colorNameStr = str(f.color_name);
+  const materialType = base; // bare base material (e.g. "PLA") — the typed field
+  // Fold the color into the display/default NAME so two colors of the same
+  // brand+material don't both default to the same (unique-constrained) filament
+  // name on create — otherwise every Polar Filament PLA color decodes to "PLA"
+  // and the second scan hits a duplicate-name failure (Codex P2). materialType
+  // stays the bare base.
+  const materialName = [base, mod, colorNameStr].filter(Boolean).join(" ") || undefined;
   if (mod) aux.opentag3d_material_modifier = mod;
 
   // ── colors ──
@@ -141,7 +147,7 @@ export function ot3dToDecodedTag(decoded: Ot3dDecoded): DecodedOpenPrintTag {
     materialName,
     materialAbbreviation: base,
     brandName: str(f.manufacturer),
-    colorName: str(f.color_name),
+    colorName: colorNameStr,
     color,
     secondaryColors: secondaryColors.length ? secondaryColors : undefined,
     density: posNum(f.density),
