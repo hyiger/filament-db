@@ -434,6 +434,11 @@ export async function POST(
     let filament = /^[a-f0-9]{24}$/i.test(sentId)
       ? await Filament.findOne({ _id: sentId, _deletedAt: null })
       : null;
+    // Whether the match came from the config `filamentdb_id` specifically — the
+    // ONLY case where the URL param is a real preset NAME, so the only case
+    // where a name divergence is meaningful (the URL-param ObjectId fallback
+    // below also sets matchedBy:"id", but there decodedName is the id string).
+    const matchedByConfigId = !!filament;
     let matchedBy: "id" | "name" | null = filament ? "id" : null;
     if (!filament) {
       filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
@@ -448,10 +453,12 @@ export async function POST(
       return errorResponse(`Filament not found: ${decodedName}`, 404);
     }
 
-    // #867: id matched but the preset's name differs from the stored name —
-    // surface it so the fork can offer to reconcile the names (Phase 2) instead
-    // of letting them silently diverge.
-    const nameMismatch = matchedBy === "id" && filament.name !== decodedName;
+    // #867: the config filamentdb_id matched but the preset's name differs from
+    // the stored name — surface it so the fork can offer to reconcile (Phase 2)
+    // instead of letting them silently diverge. Gated on matchedByConfigId so the
+    // documented ObjectId-URL fallback (decodedName = the id string, not a name)
+    // doesn't produce a false rename signal (Codex P2).
+    const nameMismatch = matchedByConfigId && filament.name !== decodedName;
 
     // Reverse-map PrusaSlicer INI keys → structured DB fields
     const update: Record<string, unknown> = {};
