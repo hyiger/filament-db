@@ -455,10 +455,16 @@ export async function POST(
 
     // #867: the config filamentdb_id matched but the preset's name differs from
     // the stored name — surface it so the fork can offer to reconcile (Phase 2)
-    // instead of letting them silently diverge. Gated on matchedByConfigId so the
-    // documented ObjectId-URL fallback (decodedName = the id string, not a name)
-    // doesn't produce a false rename signal (Codex P2).
-    const nameMismatch = matchedByConfigId && filament.name !== decodedName;
+    // instead of letting them silently diverge. Gated so it ONLY fires when the
+    // URL param is a real preset NAME: (a) matchedByConfigId — a name-route +
+    // filamentdb_id; AND (b) the URL param isn't itself an ObjectId. Either the
+    // ObjectId-URL fallback OR the documented ObjectId addressing form (even with
+    // a matching filamentdb_id) has decodedName = the id string, not a name, so
+    // it must never be read as a rename (Codex P2 x2).
+    const nameMismatch =
+      matchedByConfigId &&
+      !/^[a-f0-9]{24}$/i.test(decodedName) &&
+      filament.name !== decodedName;
 
     // Reverse-map PrusaSlicer INI keys → structured DB fields
     const update: Record<string, unknown> = {};

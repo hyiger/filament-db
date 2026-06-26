@@ -512,6 +512,20 @@ describe("API route correctness", () => {
     expect(body.nameMismatch).toBe(false); // but NOT a rename — decodedName was the id, not a name
   });
 
+  it("#867 — an ObjectId URL WITH a matching filamentdb_id still reports no nameMismatch (Codex P2)", async () => {
+    const f = await Filament.create({ name: "Real Name", vendor: "X", type: "PLA" });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        config: { filamentdb_id: String(f._id), filament_density: "1.24" },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) }, // ObjectId addressing form
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.matchedBy).toBe("id");
+    expect(body.nameMismatch).toBe(false); // id addressing, not a rename — even with filamentdb_id
+  });
+
   it("#265 — calibration sync on a variant that OVERRIDES calibrations writes to the variant", async () => {
     // Codex P1: a variant with its own non-empty calibrations array
     // owns its calibrations (resolveFilament uses them, not the
