@@ -692,6 +692,40 @@ export async function POST(
     }
     update.settings = merge.settings;
 
+    // #867 Phase 2 companion: on the AUTHORITATIVE ObjectId path, honor a renamed
+    // preset by applying the sent body name to the record. This is what makes the
+    // fork's "Update anyway" reconcile actually STICK — otherwise the record keeps
+    // its old name and every later name-addressed sync hits name_id_mismatch again.
+    // The NAME-addressed path deliberately never renames (the name is its addressing
+    // key, and a body.name there is ignored); only an explicit, user-confirmed
+    // id-addressed sync may rename the record.
+    if (urlIsObjectId && typeof body.name === "string") {
+      const sentName = body.name.trim();
+      if (sentName && sentName !== filament.name) {
+        // Refuse if another ACTIVE filament already owns that name. The unique-on-
+        // non-deleted index would E11000 on the write anyway; the pre-check turns it
+        // into a friendly, actionable 409 (a TOCTOU race still falls back to the
+        // E11000 handler below).
+        const clash = await Filament.findOne({
+          name: sentName,
+          _deletedAt: null,
+          _id: { $ne: filament._id },
+        });
+        if (clash) {
+          return NextResponse.json(
+            {
+              error: "name_taken",
+              message: `Cannot rename to "${sentName}" — another filament already has that name.`,
+              conflictId: String(clash._id),
+            },
+            { status: 409 },
+          );
+        }
+        update.name = sentName;
+        filament.name = sentName; // keep the 200 response's matchedName accurate
+      }
+    }
+
     // GH #618: `runValidators` so the numeric range validators (#337)
     // actually fire on a PrusaSlicer sync — without it a config like
     // `filament_cost = -3` parses clean and persists a negative cost the

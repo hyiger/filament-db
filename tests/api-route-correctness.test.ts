@@ -565,6 +565,47 @@ describe("API route correctness", () => {
     expect(body.matchedBy).toBe("name");
   });
 
+  it("#867 Phase 2 — an ObjectId-URL sync renames the record to the sent body.name", async () => {
+    const f = await Filament.create({ name: "Old Name", vendor: "X", type: "PLA" });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        name: "My Renamed Preset",
+        config: { filament_density: "1.3" },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) }, // authoritative ObjectId form
+    );
+    expect(res.status).toBe(200);
+    expect((await Filament.findById(f._id)).name).toBe("My Renamed Preset"); // "Update anyway" sticks
+  });
+
+  it("#867 Phase 2 — a NAME-addressed sync never renames the record", async () => {
+    const f = await Filament.create({ name: "Keeper", vendor: "X", type: "PLA" });
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/Keeper", {
+        name: "Should Not Apply", // body.name is ignored on the name-addressed path
+        config: { filament_density: "1.3" },
+      }),
+      { params: Promise.resolve({ id: "Keeper" }) },
+    );
+    expect(res.status).toBe(200);
+    expect((await Filament.findById(f._id)).name).toBe("Keeper"); // name is the addressing key — unchanged
+  });
+
+  it("#867 Phase 2 — an ObjectId-URL rename to a TAKEN name returns 409 name_taken and does NOT rename", async () => {
+    const a = await Filament.create({ name: "Alpha", vendor: "X", type: "PLA" });
+    await Filament.create({ name: "Beta", vendor: "X", type: "PLA" });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${a._id}`, {
+        name: "Beta", // collides with the other active filament
+        config: { filament_density: "1.3" },
+      }),
+      { params: Promise.resolve({ id: String(a._id) }) },
+    );
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("name_taken");
+    expect((await Filament.findById(a._id)).name).toBe("Alpha"); // not renamed
+  });
+
   it("#265 — calibration sync on a variant that OVERRIDES calibrations writes to the variant", async () => {
     // Codex P1: a variant with its own non-empty calibrations array
     // owns its calibrations (resolveFilament uses them, not the
