@@ -36,8 +36,8 @@ const FULL: Record<string, Ot3dValue> = {
   mfg_time: { hour: 10, minute: 30, second: 45 },
   spool_core_diameter: 100,
   mfi_temp: 210,
-  mfi_load: 2160, // grams (raw 216 × scaling 10)
-  mfi_value: 630,
+  mfi_load: 2160, // grams (raw 216 × scaling 10 = the 2.16 kg ASTM test load)
+  mfi_value: 6.3, // g/10min, tenths (raw 63 × scaling 0.1) — see the spec-bug note
   measured_tolerance: 20,
   empty_spool_weight: 105,
   measured_filament_weight: 1002,
@@ -254,6 +254,7 @@ describe("ot3dToDecodedTag mapping → DecodedOpenPrintTag", () => {
     expect(tag.aux?.opentag3d_spool_core_diameter_mm).toBe(100);
     expect(tag.aux?.opentag3d_mfi_temp_c).toBe(210);
     expect(tag.aux?.opentag3d_mfi_load_g).toBe(2160);
+    expect(tag.aux?.opentag3d_mfi_value as number).toBeCloseTo(6.3, 6); // tenths, not 630
     expect(tag.aux?.opentag3d_material_modifier).toBe("Silk");
     // max_print_temp (225) is now the first-class nozzleTemp range max; the Core
     // recommended (210) — distinct from the max — is preserved in aux.

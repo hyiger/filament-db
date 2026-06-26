@@ -104,7 +104,12 @@ export const OPENTAG3D_FIELDS: readonly Ot3dField[] = [
   { id: "spool_core_diameter", start: 0xa7, length: 1, type: "int", scaling: null, section: "extended" },
   { id: "mfi_temp", start: 0xa8, length: 1, type: "int", scaling: 5, section: "extended" },
   { id: "mfi_load", start: 0xa9, length: 1, type: "int", scaling: 10, section: "extended" },
-  { id: "mfi_value", start: 0xaa, length: 1, type: "int", scaling: 10, section: "extended" },
+  // spec.json lists scaling 10 for mfi_value, but that is an upstream spec bug:
+  // raw×10 yields g/10min values ~100× a plausible MFI (e.g. raw 63 → 630, vs
+  // PLA's ~6 g/10min). The field is "divided by 10" with a g/10min unit, i.e.
+  // tenths — so raw 63 = 6.3. We decode tenths (scaling 0.1). (mfi_load's ×10 is
+  // correct: raw 216 → 2160 g = the standard 2.16 kg ASTM test load.)
+  { id: "mfi_value", start: 0xaa, length: 1, type: "int", scaling: 0.1, section: "extended" },
   { id: "measured_tolerance", start: 0xab, length: 1, type: "int", scaling: null, section: "extended" },
   { id: "empty_spool_weight", start: 0xac, length: 2, type: "int", scaling: null, section: "extended" },
   { id: "measured_filament_weight", start: 0xae, length: 2, type: "int", scaling: null, section: "extended" },
