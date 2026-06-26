@@ -352,7 +352,7 @@
           "Filaments"
         ],
         "summary": "Sync filament from PrusaSlicer",
-        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields. When nozzle_diameter and high_flow are provided, calibration-related keys (extrusion_multiplier, pressure_advance, retract settings) are written to the matching per-nozzle calibration entry. #867: when the config carries a `filamentdb_id` (the filament's _id, round-tripped from the export), the filament is resolved by that STABLE id first — so a renamed preset still updates the right record instead of orphaning — then by name, then by the URL-param ObjectId.",
+        "description": "Sync a filament preset back from PrusaSlicer. The {id} param can be a URL-encoded preset name or a MongoDB ObjectId. Reverse-maps PrusaSlicer INI keys to structured DB fields. When nozzle_diameter and high_flow are provided, calibration-related keys (extrusion_multiplier, pressure_advance, retract settings) are written to the matching per-nozzle calibration entry. #867: for a NAME-addressed sync, when the config carries a `filamentdb_id` (the filament's _id, round-tripped from the export), the filament is resolved by that STABLE id first — so a renamed preset isn't orphaned — then by name. If the id resolves to a filament whose stored name differs from the preset name (a rename OR a copied/cloned id), the update is NOT applied and a 409 is returned so the fork can prompt. An ObjectId URL is authoritative — a carried filamentdb_id never overrides it.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -427,11 +427,7 @@
                     },
                     "matchedName": {
                       "type": "string",
-                      "description": "#867: the stored name of the matched filament (so the fork can re-stamp/reconcile)."
-                    },
-                    "nameMismatch": {
-                      "type": "boolean",
-                      "description": "#867: true when matched by id but the sent preset name differs from the stored name — the fork can prompt to reconcile."
+                      "description": "#867: the stored name of the matched filament (so the fork can re-stamp the id into a name-matched preset). A 200 always means the update WAS applied — a name/id mismatch returns 409 without mutating."
                     }
                   }
                 }
@@ -454,6 +450,24 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "#867: a name-addressed sync carried a `filamentdb_id` that resolves to a filament whose stored name differs from the preset name (a renamed preset OR a copied/cloned id). The update is NOT applied — the fork should prompt the user; to update the resolved filament anyway, re-sync addressing it by id (POST /api/filaments/{_id}, the authoritative ObjectId form).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": { "type": "string", "example": "name_id_mismatch" },
+                    "message": { "type": "string" },
+                    "matchedBy": { "type": "string", "example": "id" },
+                    "filamentId": { "type": "string", "description": "The _id the filamentdb_id resolved to." },
+                    "matchedName": { "type": "string", "description": "The stored name of that filament." },
+                    "sentName": { "type": "string", "description": "The preset name from the URL." }
+                  }
                 }
               }
             }

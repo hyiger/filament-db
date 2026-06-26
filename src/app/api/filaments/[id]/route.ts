@@ -467,11 +467,29 @@ export async function POST(
       return errorResponse(`Filament not found: ${decodedName}`, 404);
     }
 
-    // #867: the config filamentdb_id matched a filament whose stored name differs
-    // from the preset name in the URL — surface it so the fork can offer to
-    // reconcile (Phase 2). Only the name-addressed config-id match sets
-    // matchedByConfigId, so the ObjectId-URL forms never produce a false rename.
-    const nameMismatch = matchedByConfigId && filament.name !== decodedName;
+    // #867 / Codex P1: the config filamentdb_id resolves to a filament whose
+    // stored name differs from the preset name in the URL. This is EITHER a
+    // renamed preset (id is right) OR a copied/cloned id (a Save-As that kept the
+    // source preset's id, so the id points at the WRONG filament) — and the two
+    // are indistinguishable server-side. So DO NOT mutate: a copied id would
+    // otherwise silently overwrite the source filament with the clone's settings.
+    // Return 409 with the conflict so the fork can prompt; to update the resolved
+    // filament anyway, re-sync addressing it by id (POST /api/filaments/{_id}),
+    // which is the authoritative ObjectId form. (matchedByConfigId is only set on
+    // a name-addressed config-id match, so ObjectId-URL syncs never reach here.)
+    if (matchedByConfigId && filament.name !== decodedName) {
+      return NextResponse.json(
+        {
+          error: "name_id_mismatch",
+          message: `filamentdb_id resolves to "${filament.name}", but the preset is named "${decodedName}". Not updated — confirm before the id wins (re-sync by id to apply).`,
+          matchedBy: "id",
+          filamentId: String(filament._id),
+          matchedName: filament.name,
+          sentName: decodedName,
+        },
+        { status: 409 },
+      );
+    }
 
     // Reverse-map PrusaSlicer INI keys → structured DB fields
     const update: Record<string, unknown> = {};
@@ -740,12 +758,12 @@ export async function POST(
     return NextResponse.json({
       message: `Synced ${Object.keys(config).length} settings for "${decodedName}"`,
       filamentId: filament._id,
-      // #867: how the filament was resolved + the canonical id/name, so the fork
-      // can (Phase 2) prompt to reconcile a name divergence and re-stamp the id
-      // into the preset when it matched by name (stale/absent id recovery).
+      // #867: how the filament was resolved + the canonical name, so the fork can
+      // re-stamp the id into the preset when it matched by name (stale/absent id
+      // recovery). A 200 always means the update WAS applied — a name/id mismatch
+      // returns 409 above without mutating, so it never reaches here.
       matchedBy,
       matchedName: filament.name,
-      nameMismatch,
     });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to sync filament");
