@@ -526,6 +526,22 @@ describe("API route correctness", () => {
     expect(body.nameMismatch).toBe(false); // id addressing, not a rename — even with filamentdb_id
   });
 
+  it("#867 — an ObjectId URL is authoritative; a conflicting filamentdb_id does NOT redirect the write (Codex P2)", async () => {
+    const target = await Filament.create({ name: "Target", vendor: "X", type: "PLA" });
+    const other = await Filament.create({ name: "Other", vendor: "X", type: "PLA" });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${target._id}`, {
+        // a copied/stale id pointing at a DIFFERENT filament — must not hijack the write
+        config: { filamentdb_id: String(other._id), filament_density: "1.5" },
+      }),
+      { params: Promise.resolve({ id: String(target._id) }) }, // URL pins the target
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).filamentId).toBe(String(target._id)); // wrote to the URL target
+    expect((await Filament.findById(target._id)).density).toBe(1.5); // target updated
+    expect((await Filament.findById(other._id)).density ?? null).toBeNull(); // other untouched
+  });
+
   it("#265 — calibration sync on a variant that OVERRIDES calibrations writes to the variant", async () => {
     // Codex P1: a variant with its own non-empty calibrations array
     // owns its calibrations (resolveFilament uses them, not the

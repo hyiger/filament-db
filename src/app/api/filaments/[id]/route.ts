@@ -419,52 +419,54 @@ export async function POST(
       return errorResponse("No config provided", 400);
     }
 
-    // #867: match by the STABLE Filament DB id FIRST when the preset carries it
-    // (`filamentdb_id`, round-tripped through the PrusaSlicer export). Without
-    // this, the sync keys on the mutable preset NAME, so a renamed preset no
-    // longer matches its filament and the fork's create-on-404 path silently
-    // spawns an orphan record that swallows every later edit. Resolution order:
-    // filamentdb_id → name → URL-param ObjectId (back-compat). The id falls back
+    // #867: resolve the target filament. The fork's normal sync addresses by the
+    // mutable preset NAME, so for a NAME url we match the STABLE config
+    // `filamentdb_id` FIRST (round-tripped through the export) — resilient to a
+    // renamed preset, which otherwise hits the create-on-404 path and silently
+    // spawns an orphan that swallows every later edit. The id falls back
     // gracefully when absent/stale (it's DB-instance-specific).
+    //
+    // An ObjectId URL (POST /api/filaments/{ObjectId}) is EXPLICIT addressing —
+    // the URL id is authoritative and a carried filamentdb_id must NOT override
+    // it, or a copied/stale id in the config would redirect the write to a
+    // different row (Codex P2).
     //
     // `params.id` is ALREADY URL-decoded — re-decoding throws URIError on a
     // name with a literal `%` ("ABS 100%") and 500s the sync (#671).
     const decodedName = id;
+    const urlIsObjectId = /^[a-f0-9]{24}$/i.test(id);
     const sentId = typeof config.filamentdb_id === "string" ? config.filamentdb_id.trim() : "";
-    let filament = /^[a-f0-9]{24}$/i.test(sentId)
-      ? await Filament.findOne({ _id: sentId, _deletedAt: null })
+
+    let filament = urlIsObjectId
+      ? await Filament.findOne({ _id: id, _deletedAt: null })
       : null;
-    // Whether the match came from the config `filamentdb_id` specifically — the
-    // ONLY case where the URL param is a real preset NAME, so the only case
-    // where a name divergence is meaningful (the URL-param ObjectId fallback
-    // below also sets matchedBy:"id", but there decodedName is the id string).
-    const matchedByConfigId = !!filament;
     let matchedBy: "id" | "name" | null = filament ? "id" : null;
-    if (!filament) {
-      filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
-      if (filament) matchedBy = "name";
-    }
-    if (!filament && /^[a-f0-9]{24}$/i.test(id)) {
-      filament = await Filament.findOne({ _id: id, _deletedAt: null });
-      if (filament) matchedBy = "id";
+    // True only for a config-filamentdb_id match on a NAME-addressed sync — the
+    // sole case where a name divergence is meaningful (the URL holds a real name).
+    let matchedByConfigId = false;
+    if (!urlIsObjectId) {
+      if (/^[a-f0-9]{24}$/i.test(sentId)) {
+        filament = await Filament.findOne({ _id: sentId, _deletedAt: null });
+        if (filament) {
+          matchedBy = "id";
+          matchedByConfigId = true;
+        }
+      }
+      if (!filament) {
+        filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
+        if (filament) matchedBy = "name";
+      }
     }
 
     if (!filament) {
       return errorResponse(`Filament not found: ${decodedName}`, 404);
     }
 
-    // #867: the config filamentdb_id matched but the preset's name differs from
-    // the stored name — surface it so the fork can offer to reconcile (Phase 2)
-    // instead of letting them silently diverge. Gated so it ONLY fires when the
-    // URL param is a real preset NAME: (a) matchedByConfigId — a name-route +
-    // filamentdb_id; AND (b) the URL param isn't itself an ObjectId. Either the
-    // ObjectId-URL fallback OR the documented ObjectId addressing form (even with
-    // a matching filamentdb_id) has decodedName = the id string, not a name, so
-    // it must never be read as a rename (Codex P2 x2).
-    const nameMismatch =
-      matchedByConfigId &&
-      !/^[a-f0-9]{24}$/i.test(decodedName) &&
-      filament.name !== decodedName;
+    // #867: the config filamentdb_id matched a filament whose stored name differs
+    // from the preset name in the URL — surface it so the fork can offer to
+    // reconcile (Phase 2). Only the name-addressed config-id match sets
+    // matchedByConfigId, so the ObjectId-URL forms never produce a false rename.
+    const nameMismatch = matchedByConfigId && filament.name !== decodedName;
 
     // Reverse-map PrusaSlicer INI keys → structured DB fields
     const update: Record<string, unknown> = {};
