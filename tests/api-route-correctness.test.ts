@@ -606,6 +606,22 @@ describe("API route correctness", () => {
     expect((await Filament.findById(a._id)).name).toBe("Alpha"); // not renamed
   });
 
+  it("#867 Phase 2 — a hex-NAMED preset (ObjectId-shaped URL, name match) is NOT renamed by body.name", async () => {
+    const hexName = "abcdef012345678901234567"; // 24 hex chars, but a NAME, not any _id
+    const f = await Filament.create({ name: hexName, vendor: "X", type: "PLA" });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${hexName}`, {
+        name: "Renamed?",
+        config: { filament_density: "1.3" },
+      }),
+      { params: Promise.resolve({ id: hexName }) },
+    );
+    expect(res.status).toBe(200);
+    // urlIsObjectId is true (hex shape) but the _id lookup missed → matched by NAME,
+    // so the rename must NOT fire (it's name-addressed semantics).
+    expect((await Filament.findById(f._id)).name).toBe(hexName);
+  });
+
   it("#265 — calibration sync on a variant that OVERRIDES calibrations writes to the variant", async () => {
     // Codex P1: a variant with its own non-empty calibrations array
     // owns its calibrations (resolveFilament uses them, not the

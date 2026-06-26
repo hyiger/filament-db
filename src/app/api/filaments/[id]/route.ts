@@ -440,6 +440,11 @@ export async function POST(
     let filament = urlIsObjectId
       ? await Filament.findOne({ _id: id, _deletedAt: null })
       : null;
+    // True ONLY when the URL ObjectId itself resolved the record (the authoritative
+    // form). NOT the same as urlIsObjectId: a 24-hex URL whose _id misses falls
+    // through to name/config-id matching below, and renaming THERE (a name-addressed
+    // semantic) would be wrong (Codex P2). This is the precise gate for the rename.
+    const matchedByUrlObjectId = !!filament;
     let matchedBy: "id" | "name" | null = filament ? "id" : null;
     // True only for a config-filamentdb_id match on a NAME-addressed sync — the
     // sole case where a name divergence is meaningful (the URL holds a real name).
@@ -699,7 +704,7 @@ export async function POST(
     // The NAME-addressed path deliberately never renames (the name is its addressing
     // key, and a body.name there is ignored); only an explicit, user-confirmed
     // id-addressed sync may rename the record.
-    if (urlIsObjectId && typeof body.name === "string") {
+    if (matchedByUrlObjectId && typeof body.name === "string") {
       const sentName = body.name.trim();
       if (sentName && sentName !== filament.name) {
         // Refuse if another ACTIVE filament already owns that name. The unique-on-
