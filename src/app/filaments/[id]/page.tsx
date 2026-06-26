@@ -1391,7 +1391,13 @@ function FilamentDetail() {
         <InfoCard label={t("detail.field.cost")} value={filament.cost != null ? `${formatCurrency(filament.cost)}/kg` : "—"} inherited={inherited.has("cost")} />
         <InfoCard label={t("detail.field.density")} value={filament.density ? `${filament.density.toFixed(2)} g/cm³` : "—"} inherited={inherited.has("density")} />
         <InfoCard label={t("detail.field.diameter")} value={filament.diameter != null ? `${filament.diameter.toFixed(2)} mm` : "—"} inherited={inherited.has("diameter")} />
-        <InfoCard label={t("detail.field.maxVolSpeed")} value={filament.maxVolumetricSpeed ? `${filament.maxVolumetricSpeed} mm³/s` : "—"} inherited={inherited.has("maxVolumetricSpeed")} />
+        {/* #872: Max Vol. Speed removed from the top tiles — it is nozzle-specific
+            and shown per-nozzle in the Calibrations table below. Min/Max print speed
+            + Min/Max fan speed shown here instead (fan values ride the settings bag). */}
+        <InfoCard label={t("detail.field.minPrintSpeed")} value={filament.minPrintSpeed != null ? `${filament.minPrintSpeed} mm/s` : "—"} inherited={inherited.has("minPrintSpeed")} />
+        <InfoCard label={t("detail.field.maxPrintSpeed")} value={filament.maxPrintSpeed != null ? `${filament.maxPrintSpeed} mm/s` : "—"} inherited={inherited.has("maxPrintSpeed")} />
+        <InfoCard label={t("detail.field.minFanSpeed")} value={filament.settings?.min_fan_speed ? `${filament.settings.min_fan_speed}%` : "—"} />
+        <InfoCard label={t("detail.field.maxFanSpeed")} value={filament.settings?.max_fan_speed ? `${filament.settings.max_fan_speed}%` : "—"} />
       </div>
 
       {/* Spool Tracker — always rendered. Pre-fix the outer gate hid the
