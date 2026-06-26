@@ -749,10 +749,14 @@ export async function POST(
       // key error — report it as the SAME name_taken 409 as the pre-check, not a
       // generic 400, so the client sees one consistent contract.
       if (update.name != null && isDuplicateKeyError(validationErr)) {
+        // Look up the winner so the race fallback returns the SAME shape as the
+        // pre-check (incl. conflictId); the rename didn't apply.
+        const clash = await Filament.findOne({ name: update.name, _deletedAt: null });
         return NextResponse.json(
           {
             error: "name_taken",
             message: `Cannot rename to "${String(update.name)}" — another filament already has that name.`,
+            ...(clash ? { conflictId: String(clash._id) } : {}),
           },
           { status: 409 },
         );
