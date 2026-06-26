@@ -388,6 +388,10 @@
                   "config"
                 ],
                 "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "The preset name. On the AUTHORITATIVE ObjectId path (POST /api/filaments/{ObjectId}) a `name` differing from the stored name renames the record (#867 Phase 2), so the fork's 'Update anyway' reconcile sticks; a collision returns 409 `name_taken`. On the name-addressed path it is ignored (the URL name is the addressing key)."
+                  },
                   "config": {
                     "type": "object",
                     "additionalProperties": {

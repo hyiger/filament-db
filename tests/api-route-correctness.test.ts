@@ -620,6 +620,11 @@ describe("API route correctness", () => {
     // urlIsObjectId is true (hex shape) but the _id lookup missed → matched by NAME,
     // so the rename must NOT fire (it's name-addressed semantics).
     expect((await Filament.findById(f._id)).name).toBe(hexName);
+    // NOTE: the E11000 rename-race fallback (pre-check passes, the unique index
+    // rejects a concurrent write → 409 name_taken) is covered by inspection + the
+    // tested isDuplicateKeyError helper; it isn't unit-tested here because the only
+    // way to trigger it deterministically is mocking findByIdAndUpdate, which is
+    // fragile against this suite's between-test model re-registration.
   });
 
   it("#265 — calibration sync on a variant that OVERRIDES calibrations writes to the variant", async () => {

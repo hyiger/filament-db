@@ -5,7 +5,7 @@ import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
-import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
@@ -744,6 +744,19 @@ export async function POST(
         { runValidators: true, context: "query" },
       );
     } catch (validationErr) {
+      // #867 Phase 2: a rename that lost a TOCTOU race against a concurrent rename
+      // to the same name slips past the pre-check and surfaces here as a duplicate-
+      // key error — report it as the SAME name_taken 409 as the pre-check, not a
+      // generic 400, so the client sees one consistent contract.
+      if (update.name != null && isDuplicateKeyError(validationErr)) {
+        return NextResponse.json(
+          {
+            error: "name_taken",
+            message: `Cannot rename to "${String(update.name)}" — another filament already has that name.`,
+          },
+          { status: 409 },
+        );
+      }
       return errorResponseFromCaught(
         validationErr,
         "PrusaSlicer config contained invalid values",
