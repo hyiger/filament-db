@@ -7,6 +7,7 @@ import CollapsibleSection, { expandAndScrollToSection } from "@/components/Colla
 import FormToc, { FormTocMobileButton, type TocEntry } from "@/components/FormToc";
 import FilamentSwatch from "@/components/FilamentSwatch";
 import { snapToStep } from "@/lib/snapToStep";
+import { nozzleTypeLabel } from "@/lib/nozzleTypes";
 import {
   filterColorSuggestions,
   lookupCssNamedColor,
@@ -137,6 +138,7 @@ interface NozzleOption {
   diameter: number;
   type: string;
   highFlow: boolean;
+  hardened: boolean;
   printers?: { _id: string; name: string }[];
 }
 
@@ -616,6 +618,16 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     }
     return printers.filter((p) => relevantIds.has(p._id));
   }, [printers, nozzles, form.compatibleNozzles]);
+
+  // #872: an abrasive filament needs a hardened nozzle, so the compatible-nozzle
+  // picker hard-filters to hardened ones when `abrasive` is set. Already-selected
+  // nozzles stay visible (even if soft) so the user can still deselect them —
+  // they're flagged in the list; only NEW soft nozzles are hidden.
+  const visibleNozzles = useMemo(() => {
+    if (!form.abrasive) return nozzles;
+    return nozzles.filter((n) => n.hardened || form.compatibleNozzles.includes(n._id));
+  }, [nozzles, form.abrasive, form.compatibleNozzles]);
+  const hiddenSoftNozzleCount = form.abrasive ? nozzles.length - visibleNozzles.length : 0;
 
   // Derive the effective selection rather than syncing it via an effect.
   // When the user removes a compatible nozzle that was the only reason
@@ -2254,7 +2266,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           <div className="flex gap-2 mb-2">
             <button
               type="button"
-              onClick={() => setForm({ ...form, compatibleNozzles: nozzles.map((n) => n._id) })}
+              onClick={() => setForm({ ...form, compatibleNozzles: visibleNozzles.map((n) => n._id) })}
               className="text-xs text-blue-600 hover:underline"
             >
               {t("form.selectAll")}
@@ -2273,9 +2285,15 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             {t("form.noNozzlesDefined")} <a href="/nozzles/new" className="text-blue-600 hover:underline">{t("form.addOneFirst")}</a>
           </p>
         )}
+        {/* #872: when abrasive hides soft nozzles, say so (and why). */}
+        {hiddenSoftNozzleCount > 0 && (
+          <p className="text-xs text-amber-700 dark:text-amber-300 mb-2">
+            {t("form.nozzle.hardenedOnly", { count: hiddenSoftNozzleCount })}
+          </p>
+        )}
         {nozzles.length > 0 && (
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {nozzles.map((n) => (
+            {visibleNozzles.map((n) => (
               <label
                 key={n._id}
                 className={`flex items-center gap-2 p-2 rounded border cursor-pointer text-sm ${
@@ -2292,9 +2310,22 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                 />
                 <span>
                   {n.name}
+                  {/* #872: always show diameter + type so same-diameter nozzles
+                      (e.g. 0.4 Brass vs 0.4 Diamondback) are distinguishable
+                      regardless of how the nozzle was named. */}
+                  <span className="ml-1 text-xs text-gray-500 dark:text-gray-400">
+                    · {n.diameter}mm{nozzleTypeLabel(n.type, t) ? ` ${nozzleTypeLabel(n.type, t)}` : ""}
+                  </span>
                   {n.highFlow && (
                     <span className="ml-1 px-1.5 py-0.5 bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200 rounded text-xs">
                       HF
+                    </span>
+                  )}
+                  {/* #872: a soft nozzle that is still selected on an abrasive
+                      filament is flagged so the user knows to swap it out. */}
+                  {form.abrasive && !n.hardened && (
+                    <span className="ml-1 px-1.5 py-0.5 bg-red-200 dark:bg-red-900 text-red-800 dark:text-red-200 rounded text-xs">
+                      {t("form.nozzle.notHardened")}
                     </span>
                   )}
                   {n.printers && n.printers.length > 0 && (
