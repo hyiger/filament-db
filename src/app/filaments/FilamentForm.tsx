@@ -1006,6 +1006,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
   const tocEntries: TocEntry[] = useMemo(() => {
     const all: { id: string; label: string; show: boolean }[] = [
       { id: "spool-weight", label: t("form.section.spoolWeight"), show: true },
+      { id: "print-speed", label: t("form.section.printSpeed"), show: true },
       { id: "temperatures", label: t("form.section.temperatures"), show: true },
       { id: "shrinkage", label: t("form.section.shrinkage"), show: showAdvanced },
       { id: "fan", label: t("form.section.fan"), show: showAdvanced },
@@ -1688,8 +1689,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         </div>
       </CollapsibleSection>
 
-      {/* EM, PA, and Max Vol. Speed are nozzle-specific — they belong in the
-          Calibrations section below, not here at the top level. */}
+      {/* #872: framed "Print Speed" section. These three fields used to be an
+          unframed orphan grid between sections, so they didn't align with the
+          other (bordered) groups. */}
+      <CollapsibleSection id="print-speed" title={t("form.section.printSpeed")} defaultOpen>
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         <div>
           <label htmlFor="filament-min-print-speed" className={labelClass}>{t("form.minPrintSpeed")}</label>
@@ -1716,6 +1719,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           />
         </div>
       </div>
+      </CollapsibleSection>
 
       <CollapsibleSection
         id="temperatures"

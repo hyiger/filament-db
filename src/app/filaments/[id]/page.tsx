@@ -1391,7 +1391,42 @@ function FilamentDetail() {
         <InfoCard label={t("detail.field.cost")} value={filament.cost != null ? `${formatCurrency(filament.cost)}/kg` : "—"} inherited={inherited.has("cost")} />
         <InfoCard label={t("detail.field.density")} value={filament.density ? `${filament.density.toFixed(2)} g/cm³` : "—"} inherited={inherited.has("density")} />
         <InfoCard label={t("detail.field.diameter")} value={filament.diameter != null ? `${filament.diameter.toFixed(2)} mm` : "—"} inherited={inherited.has("diameter")} />
-        <InfoCard label={t("detail.field.maxVolSpeed")} value={filament.maxVolumetricSpeed ? `${filament.maxVolumetricSpeed} mm³/s` : "—"} inherited={inherited.has("maxVolumetricSpeed")} />
+        {/* #872: Max Vol. Speed removed from the top tiles — it is nozzle-specific
+            and shown per-nozzle in the Calibrations table below. Min/Max print speed
+            + Min/Max fan speed shown here instead (fan values ride the settings bag). */}
+        <InfoCard label={t("detail.field.minPrintSpeed")} value={filament.minPrintSpeed != null ? `${filament.minPrintSpeed} mm/s` : "—"} inherited={inherited.has("minPrintSpeed")} />
+        <InfoCard label={t("detail.field.maxPrintSpeed")} value={filament.maxPrintSpeed != null ? `${filament.maxPrintSpeed} mm/s` : "—"} inherited={inherited.has("maxPrintSpeed")} />
+        {/* #872: fan speeds live in the settings bag. Per-KEY settings-inheritance
+            provenance isn't plumbed to the detail page (only the coarse "settings"
+            marker + the parent's {_id,name}), so unlike the first-class print-speed
+            tiles these intentionally carry NO inherited badge — a coarse badge would
+            mis-mark (flag "—"/unrelated values, or miss a genuinely-inherited fan
+            value when the child has any other setting override) (Codex P3). */}
+        {/* #872 / Codex P2: a JSON sync path (e.g. OrcaSlicer update) can store a
+            valid fan speed as the NUMBER 0, which is falsy — check null/empty so a
+            real 0% renders as "0%", not "—". */}
+        <InfoCard label={t("detail.field.minFanSpeed")} value={filament.settings?.min_fan_speed != null && filament.settings.min_fan_speed !== "" ? `${filament.settings.min_fan_speed}%` : "—"} />
+        <InfoCard label={t("detail.field.maxFanSpeed")} value={filament.settings?.max_fan_speed != null && filament.settings.max_fan_speed !== "" ? `${filament.settings.max_fan_speed}%` : "—"} />
+        {/* #872 / Codex P2: Max Vol. Speed is kept OUT of the top tiles because it's
+            nozzle-specific (shown per-nozzle in the Calibrations table). But show it
+            here as a fallback whenever the value isn't ACTUALLY visible in that table
+            — i.e. unless the Calibrations section is rendered (gated on
+            compatibleNozzles, line ~1746) AND a calibration carries a maxVol. So a
+            filament with a top-level-only value, or with calibrations but no
+            compatible nozzles (the global-nozzle-fallback sync case), still shows it. */}
+        {filament.maxVolumetricSpeed != null &&
+          !(
+            (filament.compatibleNozzles?.length ?? 0) > 0 &&
+            filament.calibrations?.some(
+              (c) => (c as FilamentCalibration).maxVolumetricSpeed != null,
+            )
+          ) && (
+            <InfoCard
+              label={t("detail.field.maxVolSpeed")}
+              value={`${filament.maxVolumetricSpeed} mm³/s`}
+              inherited={inherited.has("maxVolumetricSpeed")}
+            />
+          )}
       </div>
 
       {/* Spool Tracker — always rendered. Pre-fix the outer gate hid the
