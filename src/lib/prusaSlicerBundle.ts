@@ -146,13 +146,14 @@ export function filamentToSlicerKeys(
   // round-tripped user-pinned condition (already in the settings bag) wins, and
   // only applied when we actually have populated diameters — otherwise the empty
   // "no restriction" default below still applies.
-  // An EMPTY string counts as "no restriction" (the default), NOT a user pin —
-  // round-tripped PrusaSlicer imports store `compatible_printers_condition = ` as
-  // "" in the settings bag, so deriving must override it. Only a NON-EMPTY value
-  // is treated as a user-pinned restriction to preserve (Codex P2).
-  const pinnedCondition = keys.compatible_printers_condition;
+  // Derive only when the key is ABSENT or an EMPTY STRING — both mean "no
+  // restriction" (a round-tripped `compatible_printers_condition = ` stores "").
+  // A NON-EMPTY string is a user pin, and `null` is PrusaSlicer's `nil`
+  // inheritance marker (parseIniFilaments → null, writeSection re-emits it as
+  // `nil`) — BOTH must be preserved, not overwritten by the derivation (Codex P2).
   if (
-    (pinnedCondition == null || pinnedCondition === "") &&
+    (!("compatible_printers_condition" in keys) ||
+      keys.compatible_printers_condition === "") &&
     Array.isArray(filament.compatibleNozzles)
   ) {
     const diameters = Array.from(

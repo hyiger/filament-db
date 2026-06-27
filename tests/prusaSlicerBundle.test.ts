@@ -199,6 +199,20 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
   });
 
+  it("#872: a NULL (nil/inherit) settings condition is preserved, not derived over", () => {
+    const keys = filamentToSlicerKeys({
+      name: "Inherited",
+      vendor: "X",
+      type: "PLA",
+      diameter: 1.75,
+      temperatures: {},
+      // PrusaSlicer `nil` round-trips through parseIniFilaments as null (inherit).
+      settings: { compatible_printers_condition: null },
+      compatibleNozzles: [{ diameter: 0.4 }],
+    });
+    expect(keys.compatible_printers_condition).toBeNull();
+  });
+
   it("#872: no compatible nozzles → empty condition (no restriction)", () => {
     const keys = filamentToSlicerKeys({
       name: "Bare",
