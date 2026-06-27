@@ -857,6 +857,16 @@ describe("collapsePerNozzleImportSections (#872)", () => {
     expect(base.type).toBe("PLA");
   });
 
+  it("omits vendor/type a collapsed section did NOT supply (no clobber of base identity)", () => {
+    // Only the routing hint present — parseIni would default vendor/type to "Unknown".
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilamentdb_nozzle = 0.4 Brass\nfilamentdb_id = 64b000000000000000000004\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    expect("vendor" in base).toBe(false);
+    expect("type" in base).toBe(false);
+  });
+
   it("carries a shared scalar a collapsed section DID supply (normal export bakes them from the base)", () => {
     const parsed = parseIniFilaments(
       `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilament_colour = #112233\nfilament_cost = 25\nfilament_density = 1.24\nfilament_diameter = 1.75\nfilamentdb_nozzle = 0.4 Brass\n`,

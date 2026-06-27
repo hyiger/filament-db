@@ -174,69 +174,81 @@ export async function POST(request: NextRequest) {
     let created = 0;
     let updated = 0;
     const names: string[] = [];
+    const errors: string[] = [];
 
     for (const f of parsed) {
       // Skip internal/abstract presets (PrusaSlicer uses *name* convention)
       if (f.name.startsWith("*") && f.name.endsWith("*")) continue;
 
-      // #872: CollapsedFilamentData maps 1:1 to Filament fields. Spreading means a
-      // key a collapsed per-nozzle section OMITS — temps / max-vol (baked per nozzle)
-      // and any shared scalar the suffixed section didn't supply — is simply not
-      // $set, so a round-trip re-import preserves the base filament's value instead
-      // of clobbering it with one nozzle's baked value or a parse default (Codex P3).
-      // Matches the /api/filaments/import update path's `$set: rest`.
-      const doc = { ...f };
+      // GH #872 (Codex P2): wrap each row so one bad section degrades to a per-row
+      // error instead of 500-ing the whole bundle — e.g. a partial per-nozzle
+      // section collapsed without its required vendor/type fails create validation.
+      // Mirrors the /api/filaments/import route's per-row resilience.
+      try {
+        // #872: CollapsedFilamentData maps 1:1 to Filament fields. Spreading means a
+        // key a collapsed per-nozzle section OMITS — temps / max-vol (baked per nozzle)
+        // and any shared scalar the suffixed section didn't supply — is simply not
+        // $set, so a round-trip re-import preserves the base filament's value instead
+        // of clobbering it with one nozzle's baked value or a parse default (Codex P3).
+        // Matches the /api/filaments/import update path's `$set: rest`.
+        const doc = { ...f };
 
-      // GH #327 (Codex): each branch is a single atomic operation so
-      // there is no findOne→write window for a concurrent soft-delete
-      // or insert to slip through.
+        // GH #327 (Codex): each branch is a single atomic operation so
+        // there is no findOne→write window for a concurrent soft-delete
+        // or insert to slip through.
 
-      // 1) Update an existing ACTIVE filament with this name.
-      const activeUpdated = await Filament.findOneAndUpdate(
-        { name: f.name, _deletedAt: null },
-        { $set: doc },
-        { runValidators: true, context: "query", returnDocument: "after" },
-      );
-      if (activeUpdated) {
-        updated++;
-      } else {
-        // 2) GH #297: a trashed (non-purged) filament owning this name
-        // is resurrected-and-updated rather than shadowed by a duplicate
-        // active row — a duplicate would strand the trashed one (its
-        // restore would 409 forever on the name conflict).
-        const trashedResurrected = await Filament.findOneAndUpdate(
-          { name: f.name, _deletedAt: { $ne: null }, _purged: { $ne: true } },
-          { $set: { ...doc, _deletedAt: null } },
+        // 1) Update an existing ACTIVE filament with this name.
+        const activeUpdated = await Filament.findOneAndUpdate(
+          { name: f.name, _deletedAt: null },
+          { $set: doc },
           { runValidators: true, context: "query", returnDocument: "after" },
         );
-        if (trashedResurrected) {
+        if (activeUpdated) {
           updated++;
         } else {
-          // 3) Create; retry-on-duplicate. Two concurrent imports of the
-          // same new name can both pass the lookups above and race into
-          // create(); the partial-unique index throws E11000 for the
-          // loser. Resolve that as an update so parallel identical
-          // imports stay idempotent instead of 500-ing.
-          try {
-            await Filament.create(doc);
-            created++;
-          } catch (createErr) {
-            if (!isDuplicateKeyError(createErr)) throw createErr;
-            const raced = await Filament.findOneAndUpdate(
-              { name: f.name, _deletedAt: null },
-              { $set: doc },
-              { runValidators: true, context: "query", returnDocument: "after" },
-            );
-            if (!raced) throw createErr;
+          // 2) GH #297: a trashed (non-purged) filament owning this name
+          // is resurrected-and-updated rather than shadowed by a duplicate
+          // active row — a duplicate would strand the trashed one (its
+          // restore would 409 forever on the name conflict).
+          const trashedResurrected = await Filament.findOneAndUpdate(
+            { name: f.name, _deletedAt: { $ne: null }, _purged: { $ne: true } },
+            { $set: { ...doc, _deletedAt: null } },
+            { runValidators: true, context: "query", returnDocument: "after" },
+          );
+          if (trashedResurrected) {
             updated++;
+          } else {
+            // 3) Create; retry-on-duplicate. Two concurrent imports of the
+            // same new name can both pass the lookups above and race into
+            // create(); the partial-unique index throws E11000 for the
+            // loser. Resolve that as an update so parallel identical
+            // imports stay idempotent instead of 500-ing.
+            try {
+              await Filament.create(doc);
+              created++;
+            } catch (createErr) {
+              if (!isDuplicateKeyError(createErr)) throw createErr;
+              const raced = await Filament.findOneAndUpdate(
+                { name: f.name, _deletedAt: null },
+                { $set: doc },
+                { runValidators: true, context: "query", returnDocument: "after" },
+              );
+              if (!raced) throw createErr;
+              updated++;
+            }
           }
         }
-      }
 
-      names.push(f.name);
+        names.push(f.name);
+      } catch (rowErr) {
+        const msg = rowErr instanceof Error ? rowErr.message : String(rowErr);
+        errors.push(`${f.name}: ${msg}`);
+      }
     }
 
-    return NextResponse.json({ created, updated, filaments: names });
+    const result: Record<string, unknown> = { created, updated, filaments: names };
+    if (errors.length > 0) result.errors = errors;
+    return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return NextResponse.json(

@@ -96,7 +96,7 @@ const IMPORT_ROUTING_HINT_KEYS = ["filamentdb_id", "filamentdb_nozzle"];
  */
 export type CollapsedFilamentData = Omit<
   import("./parseIni").FilamentData,
-  "temperatures" | "maxVolumetricSpeed" | "cost" | "density" | "diameter" | "color"
+  "temperatures" | "maxVolumetricSpeed" | "cost" | "density" | "diameter" | "color" | "vendor" | "type"
 > & {
   temperatures?: import("./parseIni").FilamentData["temperatures"];
   maxVolumetricSpeed?: number | null;
@@ -104,6 +104,8 @@ export type CollapsedFilamentData = Omit<
   density?: number | null;
   diameter?: number;
   color?: string;
+  vendor?: string;
+  type?: string;
 };
 
 /**
@@ -146,19 +148,23 @@ export function collapsePerNozzleImportSections(
     }
     // Drop temperatures + maxVolumetricSpeed (baked per-nozzle): omitting the keys
     // means the importer's $set never overwrites the base filament's shared values.
-    const { temperatures, maxVolumetricSpeed, cost, density, diameter, color, ...sharedFields } = f;
+    const { temperatures, maxVolumetricSpeed, cost, density, diameter, color, vendor, type, ...sharedFields } = f;
     void temperatures;
     void maxVolumetricSpeed;
     const collapsed: CollapsedFilamentData = { ...sharedFields, name: baseName, settings };
-    // Carry the shared scalars ONLY when the suffixed section actually SUPPLIED them
-    // (the source INI key is present) — otherwise parseIni's null / "#808080" / 1.75
-    // defaults would $set over the base filament's real cost/density/color/diameter
-    // on an update (Codex P3). The normal export bakes these from the base, so they
-    // still round-trip; only a partial/hand-crafted section drops them.
+    // Carry a shared field ONLY when the suffixed section actually SUPPLIED it (the
+    // source INI key is present) — otherwise parseIni's defaults (null / "#808080" /
+    // 1.75 / "Unknown") would $set over the base filament's real cost/density/color/
+    // diameter/vendor/type on an update (Codex P3). The normal export bakes all of
+    // these from the base, so they still round-trip; only a partial/hand-crafted
+    // section drops them (its fresh-create then fails the required-field validation,
+    // surfaced as a per-row error rather than persisting an "Unknown" record).
     if ("filament_cost" in f.settings) collapsed.cost = cost;
     if ("filament_density" in f.settings) collapsed.density = density;
     if ("filament_diameter" in f.settings) collapsed.diameter = diameter;
     if ("filament_colour" in f.settings) collapsed.color = color;
+    if ("filament_vendor" in f.settings) collapsed.vendor = vendor;
+    if ("filament_type" in f.settings) collapsed.type = type;
     out.push(collapsed);
   }
   return out;

@@ -788,6 +788,53 @@ describe("API route correctness", () => {
     expect(fresh.settings?.filament_retract_length).toBeUndefined();
   });
 
+  it("#872 — a per-nozzle sync with an out-of-range baked calibration value is rejected with 400 (nothing persisted)", async () => {
+    const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+    const f = await Filament.create({
+      name: "PLA",
+      vendor: "X",
+      type: "PLA",
+      temperatures: { nozzle: 210 },
+      compatibleNozzles: [brass._id],
+    });
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/PLA%200.4%20Brass", {
+        config: {
+          filamentdb_id: String(f._id),
+          filamentdb_nozzle: "0.4 Brass",
+          temperature: "900", // schema max for calibration nozzleTemp is 600
+        },
+      }),
+      { params: Promise.resolve({ id: "PLA 0.4 Brass" }) },
+    );
+    expect(res.status).toBe(400);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.calibrations ?? []).toHaveLength(0); // nothing written
+    expect(fresh.temperatures.nozzle).toBe(210); // top-level untouched too
+  });
+
+  it("#872 — an out-of-range baked FAN value is rejected with 400 (calibration validators fire)", async () => {
+    const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+    const f = await Filament.create({
+      name: "PETG",
+      vendor: "X",
+      type: "PETG",
+      compatibleNozzles: [brass._id],
+    });
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/PETG%200.4%20Brass", {
+        config: {
+          filamentdb_id: String(f._id),
+          filamentdb_nozzle: "0.4 Brass",
+          max_fan_speed: "150", // schema max for calibration fanMaxSpeed is 100
+        },
+      }),
+      { params: Promise.resolve({ id: "PETG 0.4 Brass" }) },
+    );
+    expect(res.status).toBe(400);
+    expect((await Filament.findById(f._id)).calibrations ?? []).toHaveLength(0);
+  });
+
   it("#872 — sync-back nozzle-type match is case-INSENSITIVE (symmetric with the read path)", async () => {
     // Stored nozzle is "Diamondback"; the hint is lowercased "0.4 diamondback"
     // (a user-edited / case-normalized preset name). The match must still resolve.

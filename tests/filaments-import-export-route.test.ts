@@ -229,7 +229,7 @@ filamentdb_nozzle = 0.6 Brass
       expect(fresh.temperatures.nozzle).toBe(240); // not clobbered by 235/245
     });
 
-    it("#872: a collapsed section missing a scalar does NOT clobber the base's cost/density/color", async () => {
+    it("#872: a hint-only collapsed section does NOT clobber the base's vendor/type/cost/density/color", async () => {
       const base = await Filament.create({
         name: "ABS",
         vendor: "Generic",
@@ -238,10 +238,8 @@ filamentdb_nozzle = 0.6 Brass
         cost: 30,
         density: 1.04,
       });
-      // A hint-only suffixed section that omits filament_cost/density/colour.
+      // A fully partial suffixed section: only the routing hints, NO shared fields.
       const ini = `[filament:ABS 0.4 Brass]
-filament_type = ABS
-filament_vendor = Generic
 filamentdb_id = ${base._id}
 filamentdb_nozzle = 0.4 Brass
 `;
@@ -254,9 +252,38 @@ filamentdb_nozzle = 0.4 Brass
       );
       expect(res.status).toBe(200);
       const fresh = await Filament.findById(base._id);
+      expect(fresh.vendor).toBe("Generic"); // not clobbered to "Unknown"
+      expect(fresh.type).toBe("ABS"); // not clobbered to "Unknown"
       expect(fresh.color).toBe("#1a2b3c"); // not clobbered to #808080
       expect(fresh.cost).toBe(30); // not nulled
       expect(fresh.density).toBe(1.04); // not nulled
+    });
+
+    it("#872: a bad partial section degrades to a per-row error (200 + errors[]), not a whole-bundle 500", async () => {
+      // One valid section + one partial per-nozzle section that collapses to a NEW
+      // base "Ghost" with no vendor/type → create fails the required-field validation.
+      const ini = `[filament:Good PLA]
+filament_type = PLA
+filament_vendor = Acme
+temperature = 210
+
+[filament:Ghost 0.4 Brass]
+filamentdb_nozzle = 0.4 Brass
+`;
+      const res = await prusaImport(
+        new NextRequest("http://localhost/api/filaments/prusaslicer", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: ini,
+        }),
+      );
+      expect(res.status).toBe(200); // NOT 500 — the bad row is isolated
+      const body = await res.json();
+      expect(body.created).toBe(1); // Good PLA still created
+      expect(body.errors).toHaveLength(1);
+      expect(body.errors[0]).toMatch(/Ghost/);
+      expect(await Filament.findOne({ name: "Good PLA" })).toBeTruthy();
+      expect(await Filament.findOne({ name: "Ghost" })).toBeNull();
     });
   });
 

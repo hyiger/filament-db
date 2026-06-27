@@ -861,6 +861,31 @@ export async function POST(
       }
     }
 
+    // #872 (Codex P2): the per-nozzle calibration writes below are atomic
+    // $set/$push updateOne calls that do NOT run schema validators, so a baked
+    // out-of-range value (e.g. temperature=900, max_fan_speed=150) would persist
+    // unchecked — unlike the validated top-level path. Validate the calibration
+    // sub-document UP-FRONT against the schema so an invalid value rejects the
+    // WHOLE sync with 400 and nothing is written (atomic, symmetric with below).
+    if (calibrationWrite) {
+      const probe = new Filament({
+        name: filament.name,
+        vendor: filament.vendor,
+        type: filament.type,
+        calibrations: [
+          { nozzle: calibrationWrite.nozzleId, printer: null, ...calibrationWrite.fields },
+        ],
+      });
+      try {
+        await probe.validate(["calibrations"]);
+      } catch (calValidationErr) {
+        return errorResponseFromCaught(
+          calValidationErr,
+          "PrusaSlicer config contained invalid values",
+        );
+      }
+    }
+
     // GH #618: `runValidators` so the numeric range validators (#337)
     // actually fire on a PrusaSlicer sync — without it a config like
     // `filament_cost = -3` parses clean and persists a negative cost the
