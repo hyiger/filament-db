@@ -185,6 +185,20 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.compatible_printers_condition).toBe("printer_model==MK4");
   });
 
+  it("#872: an EMPTY settings condition (round-tripped default) is overridden by the nozzle derivation", () => {
+    const keys = filamentToSlicerKeys({
+      name: "RoundTripped",
+      vendor: "X",
+      type: "PLA",
+      diameter: 1.75,
+      temperatures: {},
+      // PrusaSlicer round-trip stores `compatible_printers_condition = ` as "".
+      settings: { compatible_printers_condition: "" },
+      compatibleNozzles: [{ diameter: 0.4 }],
+    });
+    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+  });
+
   it("#872: no compatible nozzles → empty condition (no restriction)", () => {
     const keys = filamentToSlicerKeys({
       name: "Bare",
