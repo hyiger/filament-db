@@ -47,6 +47,11 @@ function slicerExportColor(filament: FilamentDoc): string | null {
  */
 export function filamentToSlicerKeys(
   filament: FilamentDoc,
+  // #872: when present, BAKE this per-nozzle calibration's filament-level values
+  // into the preset (for a multi-nozzle filament exported as N flat presets, since
+  // PrusaSlicer has no parent/child for user presets). Pressure advance is
+  // printer-scoped and stays dynamic via the /calibration endpoint — not baked.
+  calibration?: FilamentDoc,
 ): Record<string, string | null> {
   // Start with the settings bag as the base — these are passthrough
   // PrusaSlicer keys preserved from a previous import
@@ -124,6 +129,31 @@ export function filamentToSlicerKeys(
   // Inherits (PrusaSlicer preset inheritance)
   if (filament.inherits) {
     keys.inherits = filament.inherits;
+  }
+
+  // #872: bake the per-nozzle calibration's FILAMENT-LEVEL values into this preset
+  // (multi-nozzle export). Only filament-scoped keys are baked; pressure_advance is
+  // a PRINTER setting and stays dynamic via the fork's /calibration endpoint. The
+  // explicit nozzle-diameter condition + filamentdb_nozzle hint scope the preset and
+  // let the sync-back route updates to the right calibration entry.
+  if (calibration) {
+    set("extrusion_multiplier", calibration.extrusionMultiplier);
+    set("filament_max_volumetric_speed", calibration.maxVolumetricSpeed);
+    set("filament_retract_length", calibration.retractLength);
+    set("filament_retract_speed", calibration.retractSpeed);
+    set("filament_retract_lift", calibration.retractLift);
+    set("temperature", calibration.nozzleTemp);
+    set("first_layer_temperature", calibration.nozzleTempFirstLayer);
+    set("bed_temperature", calibration.bedTemp);
+    set("first_layer_bed_temperature", calibration.bedTempFirstLayer);
+    set("min_fan_speed", calibration.fanMinSpeed);
+    set("max_fan_speed", calibration.fanMaxSpeed);
+    set("bridge_fan_speed", calibration.fanBridgeSpeed);
+    const nz = calibration.nozzle;
+    if (nz && typeof nz === "object" && nz.diameter != null) {
+      keys.compatible_printers_condition = `nozzle_diameter[0]==${nz.diameter}`;
+      keys.filamentdb_nozzle = `${nz.diameter} ${nz.type ?? ""}`.trim();
+    }
   }
 
   // Filaments synced from Filament DB are intended to be usable on every
@@ -231,12 +261,41 @@ export function generatePrusaSlicerBundle(filaments: FilamentDoc[]): string {
   lines.push("");
 
   for (const filament of filaments) {
-    const slicerKeys = filamentToSlicerKeys(filament);
+    // #872: group calibrations by DISTINCT nozzle (diameter + type), preferring the
+    // any-printer/any-bed "default" entry as each nozzle's representative.
+    const byNozzle = new Map<string, FilamentDoc>();
+    for (const cal of Array.isArray(filament.calibrations) ? filament.calibrations : []) {
+      const nz = cal?.nozzle;
+      if (!nz || typeof nz !== "object" || nz.diameter == null) continue;
+      const key = `${nz.diameter}|${nz.type ?? ""}`;
+      const existing = byNozzle.get(key);
+      const isDefault = cal.printer == null && cal.bedType == null;
+      const existingIsDefault =
+        existing && existing.printer == null && existing.bedType == null;
+      if (!existing || (isDefault && !existingIsDefault)) byNozzle.set(key, cal);
+    }
 
-    // Output one preset per filament — nozzle-specific calibration data
-    // is applied dynamically by PrusaSlicer when the printer changes
-    // (via the /api/filaments/{name}/calibration endpoint).
-    writeSection(lines, filament.name, slicerKeys);
+    if (byNozzle.size >= 2) {
+      // Multiple nozzle profiles → one FLAT preset per nozzle, name suffixed with the
+      // nozzle (e.g. "Inslogic PA12-CF 0.4 Diamondback") because PrusaSlicer has no
+      // parent/child for USER filament presets. Each bakes its nozzle's filament-level
+      // calibration; all share one filamentdb_id and carry a filamentdb_nozzle hint
+      // so the sync-back routes updates to the right per-nozzle calibration entry.
+      for (const cal of byNozzle.values()) {
+        const nz = cal.nozzle;
+        const suffix = `${nz.diameter} ${nz.type ?? ""}`.trim();
+        writeSection(
+          lines,
+          `${filament.name} ${suffix}`,
+          filamentToSlicerKeys(filament, cal),
+        );
+      }
+    } else {
+      // 0 or 1 distinct nozzle → a single preset (unchanged). Any per-nozzle
+      // calibration is applied dynamically by the fork when the printer changes
+      // (GET /api/filaments/{name}/calibration).
+      writeSection(lines, filament.name, filamentToSlicerKeys(filament));
+    }
   }
 
   return lines.join("\n");

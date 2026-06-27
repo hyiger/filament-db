@@ -494,7 +494,7 @@ describe("generatePrusaSlicerBundle", () => {
     expect(bundle).toContain("fan_always_on = 1");
   });
 
-  it("ignores calibrations (applied dynamically via API)", () => {
+  it("#872: expands a MULTI-nozzle filament into one suffixed preset per nozzle, baking calibration", () => {
     const filaments = [
       {
         name: "PLA",
@@ -506,13 +506,13 @@ describe("generatePrusaSlicerBundle", () => {
         settings: {},
         calibrations: [
           {
-            nozzle: { name: "0.4mm Brass", diameter: 0.4 },
+            nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" },
             printer: { name: "MK3S+" },
             extrusionMultiplier: 0.95,
             retractLength: 0.8,
           },
           {
-            nozzle: { name: "0.6mm Brass", diameter: 0.6 },
+            nozzle: { name: "0.6 Brass", diameter: 0.6, type: "Brass" },
             printer: null,
             maxVolumetricSpeed: 20,
           },
@@ -522,16 +522,50 @@ describe("generatePrusaSlicerBundle", () => {
 
     const bundle = generatePrusaSlicerBundle(filaments);
 
-    // Calibrations are not expanded into separate sections — they are
-    // applied dynamically by PrusaSlicer via the calibration API endpoint.
-    // Only the base filament section should be generated.
-    expect(bundle).toContain("[filament:PLA]");
-    expect(bundle).not.toContain("[filament:PLA MK3S+ 0.4mm Brass]");
-    expect(bundle).not.toContain("[filament:PLA 0.6mm Brass]");
-
-    // Base filament values present
+    // Two distinct nozzles → two flat, suffixed sections (no bare base section).
+    expect(bundle).toContain("[filament:PLA 0.4 Brass]");
+    expect(bundle).toContain("[filament:PLA 0.6 Brass]");
+    expect(bundle).not.toContain("[filament:PLA]");
+    // Each bakes its nozzle's filament-level calibration + a nozzle-scoped condition.
+    expect(bundle).toContain("extrusion_multiplier = 0.95");
+    expect(bundle).toContain("filament_retract_length = 0.8");
+    expect(bundle).toContain("filament_max_volumetric_speed = 20");
+    expect(bundle).toContain("compatible_printers_condition = nozzle_diameter[0]==0.4");
+    expect(bundle).toContain("compatible_printers_condition = nozzle_diameter[0]==0.6");
+    // Nozzle hint for sync-back routing.
+    expect(bundle).toContain("filamentdb_nozzle = 0.4 Brass");
+    // Base filament temps still carried in each preset.
     expect(bundle).toContain("temperature = 210");
-    expect(bundle).toContain("bed_temperature = 60");
+  });
+
+  it("#872: a SINGLE-nozzle filament stays one preset (calibration applied dynamically)", () => {
+    const filaments = [
+      {
+        name: "PETG",
+        vendor: "Generic",
+        type: "PETG",
+        color: "#DDDDDD",
+        diameter: 1.75,
+        temperatures: { nozzle: 240 },
+        settings: {},
+        calibrations: [
+          {
+            nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" },
+            printer: null,
+            extrusionMultiplier: 0.98,
+          },
+        ],
+      },
+    ];
+
+    const bundle = generatePrusaSlicerBundle(filaments);
+
+    // One distinct nozzle → single base section, NOT expanded/suffixed.
+    expect(bundle).toContain("[filament:PETG]");
+    expect(bundle).not.toContain("[filament:PETG 0.4 Brass]");
+    // Calibration is NOT baked in the single-nozzle path (stays dynamic).
+    expect(bundle).not.toContain("extrusion_multiplier = 0.98");
+    expect(bundle).not.toContain("filamentdb_nozzle");
   });
 
   it("ignores presets (single section per filament)", () => {
