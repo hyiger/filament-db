@@ -701,6 +701,8 @@ describe("API route correctness", () => {
           bed_temperature: "65",
           min_fan_speed: "40",
           max_fan_speed: "100",
+          extrusion_multiplier: "1.05",
+          filament_retract_length: "1.2",
         },
       }),
       { params: Promise.resolve({ id: "PLA 0.6 Brass" }) },
@@ -712,6 +714,11 @@ describe("API route correctness", () => {
     expect(fresh.temperatures.nozzle).toBe(210);
     expect(fresh.temperatures.bed).toBe(60);
     expect(fresh.settings?.min_fan_speed).toBeUndefined(); // fan didn't leak into the settings bag
+    // Codex P2: EM/retraction were captured into the calibration entry below, so they
+    // must NOT also leak into the shared settings bag (which would make this nozzle's
+    // values the default for the base filament + every other preset).
+    expect(fresh.settings?.extrusion_multiplier).toBeUndefined();
+    expect(fresh.settings?.filament_retract_length).toBeUndefined();
     // The per-nozzle calibration entry carries them instead.
     expect(fresh.calibrations).toHaveLength(1);
     const cal = fresh.calibrations[0];
@@ -720,6 +727,8 @@ describe("API route correctness", () => {
     expect(cal.bedTemp).toBe(65);
     expect(cal.fanMinSpeed).toBe(40);
     expect(cal.fanMaxSpeed).toBe(100);
+    expect(cal.extrusionMultiplier).toBe(1.05);
+    expect(cal.retractLength).toBe(1.2);
   });
 
   it("#872 — an id-addressed per-nozzle sync routes calibration via the hint (no nozzle_diameter query) (Codex P2)", async () => {

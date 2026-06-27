@@ -788,14 +788,23 @@ export async function POST(
       // calibration to the right nozzle, never stored.
       "filamentdb_nozzle",
     ]);
-    // #872: a per-nozzle preset's fan speeds were captured into the calibration
-    // entry above — exclude them from the filament-wide settings bag so the
-    // per-nozzle value doesn't also become the shared default. Only when a
-    // calibration actually resolved; otherwise fan has no home and stays in settings.
+    // #872: a per-nozzle preset's nozzle-specific keys were captured into the
+    // calibration entry above (fan, AND the EM / pressure-advance / retraction
+    // that `calFields` always pulls in) — exclude them from the filament-wide
+    // settings bag so a per-nozzle value (e.g. the 0.6 preset's EM/retraction)
+    // doesn't also become the shared default for the base filament and every
+    // other preset. Only when a calibration actually resolved; otherwise these
+    // keys have no calibration home and must stay in settings.
     if (routeToCalibration && calibrationWrite) {
       STRUCTURED_KEYS.add("min_fan_speed");
       STRUCTURED_KEYS.add("max_fan_speed");
       STRUCTURED_KEYS.add("bridge_fan_speed");
+      STRUCTURED_KEYS.add("extrusion_multiplier");
+      STRUCTURED_KEYS.add("pressure_advance");
+      STRUCTURED_KEYS.add("pressure_advance_value");
+      STRUCTURED_KEYS.add("filament_retract_length");
+      STRUCTURED_KEYS.add("filament_retract_speed");
+      STRUCTURED_KEYS.add("filament_retract_lift");
     }
     const merge = mergeSlicerSettings(
       (filament.settings as Record<string, unknown>) || {},
