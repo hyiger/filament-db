@@ -8,6 +8,7 @@ import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
+import { escapeRegex } from "@/lib/matchFilament";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import {
   isInvertedNozzleRange,
@@ -697,8 +698,11 @@ export async function POST(
           }
           // #872: disambiguate same-diameter nozzles (e.g. Brass vs Diamondback) by
           // the type carried in the per-nozzle preset's filamentdb_nozzle hint.
+          // Case-INSENSITIVE (anchored regex) so it agrees with the /calibration
+          // read path's type match — a lowercased/user-edited preset-name hint
+          // (e.g. "0.4 diamondback") must resolve the same nozzle on both sides.
           if (isPerNozzlePreset && hintType) {
-            nozzleQuery.type = hintType;
+            nozzleQuery.type = { $regex: `^${escapeRegex(hintType)}$`, $options: "i" };
           }
           const matchingNozzle = await Nozzle.findOne(nozzleQuery).lean();
 
@@ -741,8 +745,9 @@ export async function POST(
           // #872: the per-nozzle hint's type narrows same-diameter catalog
           // nozzles, so "0.4 Diamondback" resolves even when both a Brass and a
           // Diamondback 0.4 exist (the bare-diameter query would punt as >1).
+          // Case-insensitive (anchored regex), symmetric with the read path.
           if (isPerNozzlePreset && hintType) {
-            globalQuery.type = hintType;
+            globalQuery.type = { $regex: `^${escapeRegex(hintType)}$`, $options: "i" };
           }
           const globalMatches = await Nozzle.find(globalQuery).limit(2).lean();
           if (globalMatches.length === 1) {
@@ -788,14 +793,16 @@ export async function POST(
       // calibration to the right nozzle, never stored.
       "filamentdb_nozzle",
     ]);
-    // #872: a per-nozzle preset's nozzle-specific keys were captured into the
-    // calibration entry above (fan, AND the EM / pressure-advance / retraction
-    // that `calFields` always pulls in) — exclude them from the filament-wide
-    // settings bag so a per-nozzle value (e.g. the 0.6 preset's EM/retraction)
-    // doesn't also become the shared default for the base filament and every
-    // other preset. Only when a calibration actually resolved; otherwise these
-    // keys have no calibration home and must stay in settings.
-    if (routeToCalibration && calibrationWrite) {
+    // #872: a per-nozzle preset's nozzle-specific keys (fan, AND the EM /
+    // pressure-advance / retraction that `calFields` always pulls in) must NOT
+    // land in the filament-wide settings bag — otherwise one nozzle's value
+    // (e.g. the 0.6 preset's EM/retraction) becomes the shared default for the
+    // base filament and every other preset. Gated on `routeToCalibration` alone
+    // (NOT calibrationWrite): when a nozzle resolved they ride the calibration
+    // entry; when it did NOT, these keys have no top-level home (unlike max-vol /
+    // temps, which the fallback above writes back) so they are simply dropped
+    // rather than allowed to pollute the shared bag (Codex P2 round 3).
+    if (routeToCalibration) {
       STRUCTURED_KEYS.add("min_fan_speed");
       STRUCTURED_KEYS.add("max_fan_speed");
       STRUCTURED_KEYS.add("bridge_fan_speed");

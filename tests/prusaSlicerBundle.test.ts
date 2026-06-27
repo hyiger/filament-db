@@ -538,6 +538,32 @@ describe("generatePrusaSlicerBundle", () => {
     expect(bundle).toContain("temperature = 210");
   });
 
+  it("#872: same-diameter nozzles differing only in type CASING collapse into ONE preset", () => {
+    // "Brass" vs "brass" at the same Ø+HF are the same physical nozzle; the
+    // grouping key case-folds the type so they don't split into two presets that
+    // would both resolve to the same calibration on the case-insensitive read/sync.
+    const filaments = [
+      {
+        name: "PLA",
+        vendor: "Generic",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: { nozzle: 210 },
+        settings: {},
+        calibrations: [
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95 },
+          { nozzle: { name: "0.4 brass", diameter: 0.4, type: "brass" }, printer: { name: "MK4" }, extrusionMultiplier: 0.97 },
+        ],
+      },
+    ];
+    const bundle = generatePrusaSlicerBundle(filaments);
+    // Only ONE distinct nozzle after case-folding → a single, unsuffixed preset.
+    const sectionCount = (bundle.match(/^\[filament:/gm) || []).length;
+    expect(sectionCount).toBe(1);
+    expect(bundle).toContain("[filament:PLA]");
+    expect(bundle).not.toContain("[filament:PLA 0.4 Brass]");
+  });
+
   it("#872: a SINGLE-nozzle filament stays one preset (calibration applied dynamically)", () => {
     const filaments = [
       {

@@ -769,6 +769,8 @@ describe("API route correctness", () => {
           filamentdb_nozzle: "0.4 Carbide",
           filament_max_volumetric_speed: "20",
           temperature: "230",
+          extrusion_multiplier: "1.09",
+          filament_retract_length: "1.5",
         },
       }),
       { params: Promise.resolve({ id: "PLA 0.4 Carbide" }) },
@@ -776,9 +778,42 @@ describe("API route correctness", () => {
     expect(res.status).toBe(200);
     const fresh = await Filament.findById(f._id);
     expect(fresh.calibrations ?? []).toHaveLength(0); // no nozzle resolved → no calibration entry
-    // The values are NOT lost — they fall back to the filament-wide top level.
+    // The top-level-homed values are NOT lost — they fall back to the filament-wide fields.
     expect(fresh.maxVolumetricSpeed).toBe(20);
     expect(fresh.temperatures.nozzle).toBe(230);
+    // Codex P2 round 3: EM/retraction have NO top-level home; for a per-nozzle preset
+    // they must be DROPPED (not leaked into the shared settings bag) even when no
+    // nozzle resolves — else one nozzle's EM becomes the base filament's default.
+    expect(fresh.settings?.extrusion_multiplier).toBeUndefined();
+    expect(fresh.settings?.filament_retract_length).toBeUndefined();
+  });
+
+  it("#872 — sync-back nozzle-type match is case-INSENSITIVE (symmetric with the read path)", async () => {
+    // Stored nozzle is "Diamondback"; the hint is lowercased "0.4 diamondback"
+    // (a user-edited / case-normalized preset name). The match must still resolve.
+    const diamond = await Nozzle.create({ name: "0.4 DB", diameter: 0.4, type: "Diamondback" });
+    const f = await Filament.create({
+      name: "PA12-CF",
+      vendor: "X",
+      type: "PA12-CF",
+      compatibleNozzles: [diamond._id],
+    });
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/PA12-CF%200.4%20diamondback", {
+        config: {
+          filamentdb_id: String(f._id),
+          filamentdb_nozzle: "0.4 diamondback", // lowercased type
+          extrusion_multiplier: "1.06",
+        },
+      }),
+      { params: Promise.resolve({ id: "PA12-CF 0.4 diamondback" }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.calibrations).toHaveLength(1); // resolved despite the case mismatch
+    expect(String(fresh.calibrations[0].nozzle)).toBe(String(diamond._id));
+    expect(fresh.calibrations[0].extrusionMultiplier).toBe(1.06);
+    expect(fresh.settings?.extrusion_multiplier).toBeUndefined(); // routed, not leaked
   });
 
   it("#867 Phase 2 — an ObjectId-URL rename to a TAKEN name returns 409 name_taken and does NOT rename", async () => {

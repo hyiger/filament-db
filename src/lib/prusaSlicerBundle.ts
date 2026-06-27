@@ -286,7 +286,11 @@ export function generatePrusaSlicerBundle(filaments: FilamentDoc[]): string {
       // #872: a standard and a high-flow nozzle of the same Ø+type are DISTINCT
       // physical nozzles (the sync route disambiguates them via ?high_flow=), so
       // key on highFlow too — otherwise they'd collapse into one preset.
-      const key = `${nz.diameter}|${nz.type ?? ""}|${nz.highFlow ? "HF" : ""}`;
+      // Case-fold the type in the grouping key so a casing variant ("Brass" vs
+      // "brass") collapses into ONE preset, agreeing with the case-insensitive
+      // type match on the sync-back + /calibration read paths (the human-readable
+      // suffix/hint still uses the representative nozzle's original-cased type).
+      const key = `${nz.diameter}|${(nz.type ?? "").trim().toLowerCase()}|${nz.highFlow ? "HF" : ""}`;
       const existing = byNozzle.get(key);
       const isDefault = cal.printer == null && cal.bedType == null;
       const existingIsDefault =

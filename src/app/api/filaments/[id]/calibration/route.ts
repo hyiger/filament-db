@@ -14,6 +14,12 @@ import { calibrationToOrcaSlicerKeys } from "@/lib/orcaSlicerBundle";
  * Looks up the filament by name (URL-encoded) or ObjectId, then finds
  * the calibration entry whose nozzle diameter matches the query param.
  *
+ * Optional high_flow=0|1 disambiguates standard vs high-flow nozzles at the
+ * same diameter. Optional nozzle_type (e.g. ?nozzle_type=Diamondback) further
+ * disambiguates same-diameter nozzles of different type — symmetric with the
+ * sync-back route's filamentdb_nozzle hint, so a multi-nozzle filament's
+ * suffixed per-nozzle preset reads back ITS nozzle's pressure_advance (#872).
+ *
  * Optional bed_type param filters by bed type name or ID.
  * Falls back to a calibration without bed type if no bed-type-specific match.
  *
@@ -78,7 +84,7 @@ export async function GET(
 
     // Find calibration matching the nozzle diameter
     const calibrations = ((filament as NonNullable<typeof filament>).calibrations || []) as Array<{
-      nozzle?: { diameter?: number; name?: string; highFlow?: boolean };
+      nozzle?: { diameter?: number; name?: string; type?: string; highFlow?: boolean };
       printer?: { name?: string };
       bedType?: { _id?: string; name?: string; material?: string } | null;
       extrusionMultiplier?: number;
@@ -97,8 +103,10 @@ export async function GET(
       fanBridgeSpeed?: number;
     }>;
 
-    // Find best match: exact diameter match, optionally filtered by high_flow and bed_type
+    // Find best match: exact diameter match, optionally filtered by high_flow,
+    // nozzle type, and bed_type
     const highFlowParam = searchParams.get("high_flow");
+    const nozzleTypeParam = searchParams.get("nozzle_type");
     const bedTypeParam = searchParams.get("bed_type");
 
     const diameterMatches = calibrations.filter((cal) => {
@@ -109,11 +117,32 @@ export async function GET(
       return true;
     });
 
-    let match = diameterMatches[0];
+    // #872: disambiguate same-diameter nozzles of different TYPE (e.g. 0.4 Brass
+    // vs 0.4 Diamondback) — symmetric with the sync-back route's filamentdb_nozzle
+    // type hint. The fork sends nozzle_type when loading a suffixed per-nozzle
+    // preset so it gets THAT nozzle's pressure_advance (PA is printer-scoped, so it
+    // stays dynamic via this endpoint rather than baked into the flat preset).
+    // The type compare is case-insensitive, matching the sync route's anchored
+    // case-insensitive type query (route.ts). Soft filter: a type match wins, else
+    // fall back to the diameter matches so a type/data mismatch never regresses to
+    // a 404. NOTE this fallback intentionally DIVERGES from sync-back: on a type
+    // miss the read returns a same-diameter (possibly other-type) calibration as a
+    // best effort, whereas sync-back writes nothing per-nozzle (it has no nozzle to
+    // attach to) and lets max-vol/temps fall through to the top-level fields.
+    let scopedMatches = diameterMatches;
+    if (nozzleTypeParam) {
+      const wanted = nozzleTypeParam.trim().toLowerCase();
+      const typeMatches = diameterMatches.filter(
+        (cal) => (cal.nozzle?.type ?? "").trim().toLowerCase() === wanted,
+      );
+      if (typeMatches.length > 0) scopedMatches = typeMatches;
+    }
+
+    let match = scopedMatches[0];
 
     if (bedTypeParam) {
       // Try to find a bed-type-specific match first
-      const bedTypeMatch = diameterMatches.find((cal) => {
+      const bedTypeMatch = scopedMatches.find((cal) => {
         if (!cal.bedType) return false;
         return cal.bedType.name === bedTypeParam || cal.bedType._id?.toString() === bedTypeParam;
       });
@@ -121,11 +150,11 @@ export async function GET(
         match = bedTypeMatch;
       } else {
         // Fall back to a calibration without bed type
-        match = diameterMatches.find((cal) => !cal.bedType) || match;
+        match = scopedMatches.find((cal) => !cal.bedType) || match;
       }
     } else {
       // No bed_type specified — prefer entries without bed type
-      match = diameterMatches.find((cal) => !cal.bedType) || match;
+      match = scopedMatches.find((cal) => !cal.bedType) || match;
     }
 
     if (!match) {
@@ -137,6 +166,8 @@ export async function GET(
             .map((cal) => ({
               diameter: cal.nozzle!.diameter,
               name: cal.nozzle!.name,
+              type: cal.nozzle!.type,
+              highFlow: cal.nozzle!.highFlow,
             })),
         },
         { status: 404 }
