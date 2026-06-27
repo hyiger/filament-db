@@ -1404,6 +1404,21 @@ function FilamentDetail() {
             value when the child has any other setting override) (Codex P3). */}
         <InfoCard label={t("detail.field.minFanSpeed")} value={filament.settings?.min_fan_speed ? `${filament.settings.min_fan_speed}%` : "—"} />
         <InfoCard label={t("detail.field.maxFanSpeed")} value={filament.settings?.max_fan_speed ? `${filament.settings.max_fan_speed}%` : "—"} />
+        {/* #872 / Codex P2: Max Vol. Speed is kept OUT of the top tiles because it's
+            nozzle-specific (shown per-nozzle in the Calibrations table). But for a
+            filament whose value lives ONLY top-level — no per-nozzle calibration
+            carries one (e.g. a PrusaSlicer/CSV/NFC import) — show it here as a
+            fallback so it isn't invisible everywhere on the page. */}
+        {filament.maxVolumetricSpeed != null &&
+          !filament.calibrations?.some(
+            (c) => (c as FilamentCalibration).maxVolumetricSpeed != null,
+          ) && (
+            <InfoCard
+              label={t("detail.field.maxVolSpeed")}
+              value={`${filament.maxVolumetricSpeed} mm³/s`}
+              inherited={inherited.has("maxVolumetricSpeed")}
+            />
+          )}
       </div>
 
       {/* Spool Tracker — always rendered. Pre-fix the outer gate hid the
