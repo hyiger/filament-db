@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { parseIniFilaments } from "@/lib/parseIni";
+import { collapsePerNozzleImportSections } from "@/lib/prusaSlicerBundle";
 import { assertMultipartFormData, checkFileSize } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
@@ -22,7 +23,10 @@ export async function POST(request: NextRequest) {
     if (sizeError) return sizeError;
 
     const content = await file.text();
-    const filaments = parseIniFilaments(content);
+    // #872: fold Filament DB's own per-nozzle suffixed sections back into their
+    // base so the new-filament prefill shows the base name (not "PLA 0.4 Brass")
+    // and doesn't carry one nozzle's baked values into the form (Codex P2).
+    const filaments = collapsePerNozzleImportSections(parseIniFilaments(content));
 
     if (filaments.length === 0) {
       return NextResponse.json(

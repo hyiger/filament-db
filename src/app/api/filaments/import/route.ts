@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { parseIniFilaments } from "@/lib/parseIni";
+import { collapsePerNozzleImportSections } from "@/lib/prusaSlicerBundle";
 import { assertMultipartFormData, checkFileSize, isDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
@@ -24,7 +25,13 @@ export async function POST(request: NextRequest) {
     if (sizeError) return sizeError;
 
     const content = await file.text();
-    const filaments = parseIniFilaments(content);
+    // #872: fold Filament DB's own per-nozzle suffixed sections back into their
+    // base filament so a bundle round-trip updates the original instead of
+    // spawning "<base> <Ø> <type>" orphan records (Codex P2). NOTE the per-nozzle
+    // calibration model is NOT reconstructed from a flat bundle — a fresh import of
+    // a multi-nozzle export lands the base filament without its baked temps /
+    // calibrations by design; Settings → Backup & Restore is the lossless path.
+    const filaments = collapsePerNozzleImportSections(parseIniFilaments(content));
 
     if (filaments.length === 0) {
       return NextResponse.json(

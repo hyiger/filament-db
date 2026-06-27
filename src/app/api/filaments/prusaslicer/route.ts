@@ -5,7 +5,7 @@ import "@/models/Nozzle";
 import "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
-import { generatePrusaSlicerBundle } from "@/lib/prusaSlicerBundle";
+import { generatePrusaSlicerBundle, collapsePerNozzleImportSections } from "@/lib/prusaSlicerBundle";
 import { parseIniFilaments } from "@/lib/parseIni";
 import { isDuplicateKeyError, checkContentLength, errorResponse, MAX_UPLOAD_SIZE } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
@@ -145,7 +145,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Empty request body" }, { status: 400 });
     }
 
-    const parsed = parseIniFilaments(body);
+    // #872: fold Filament DB's own per-nozzle suffixed sections back into their
+    // base filament so a bundle round-trip updates the original instead of
+    // spawning "<base> <Ø> <type>" orphan records (Codex P2). NOTE the per-nozzle
+    // calibration model is NOT reconstructed from a flat bundle — a fresh import of
+    // a multi-nozzle export lands the base filament without its baked temps /
+    // calibrations by design; Settings → Backup & Restore is the lossless path.
+    const parsed = collapsePerNozzleImportSections(parseIniFilaments(body));
     if (parsed.length === 0) {
       return NextResponse.json(
         { error: "No [filament:...] sections found" },
@@ -173,19 +179,13 @@ export async function POST(request: NextRequest) {
       // Skip internal/abstract presets (PrusaSlicer uses *name* convention)
       if (f.name.startsWith("*") && f.name.endsWith("*")) continue;
 
-      const doc = {
-        name: f.name,
-        vendor: f.vendor,
-        type: f.type,
-        color: f.color,
-        cost: f.cost,
-        density: f.density,
-        diameter: f.diameter,
-        temperatures: f.temperatures,
-        maxVolumetricSpeed: f.maxVolumetricSpeed,
-        inherits: f.inherits,
-        settings: f.settings,
-      };
+      // #872: CollapsedFilamentData maps 1:1 to Filament fields. Spreading means a
+      // key a collapsed per-nozzle section OMITS — temps / max-vol (baked per nozzle)
+      // and any shared scalar the suffixed section didn't supply — is simply not
+      // $set, so a round-trip re-import preserves the base filament's value instead
+      // of clobbering it with one nozzle's baked value or a parse default (Codex P3).
+      // Matches the /api/filaments/import update path's `$set: rest`.
+      const doc = { ...f };
 
       // GH #327 (Codex): each branch is a single atomic operation so
       // there is no findOne→write window for a concurrent soft-delete

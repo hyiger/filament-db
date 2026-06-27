@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as importFilaments } from "@/app/api/filaments/import/route";
+import { POST as prusaImport } from "@/app/api/filaments/prusaslicer/route";
+import { POST as parseIni } from "@/app/api/filaments/parse-ini/route";
 import { POST as importCsv } from "@/app/api/filaments/import-csv/route";
 import { GET as exportFilaments } from "@/app/api/filaments/export/route";
 import { GET as exportCsv } from "@/app/api/filaments/export-csv/route";
@@ -140,6 +142,149 @@ filament_vendor = New
       expect(String(all[0]._id)).toBe(String(trashed._id));
       expect(all[0]._deletedAt).toBeNull();
       expect(all[0].vendor).toBe("New");
+    });
+
+    it("#872: a multi-nozzle bundle round-trip updates the base filament, not orphan suffixed rows", async () => {
+      const base = await Filament.create({
+        name: "PLA",
+        vendor: "Generic",
+        type: "PLA",
+        temperatures: { nozzle: 210, bed: 60 },
+      });
+      // What a Filament DB multi-nozzle export emits: two suffixed sections that
+      // share one filamentdb_id, each with a filamentdb_nozzle hint + baked temps.
+      const ini = `[filament:PLA 0.4 Brass]
+filament_type = PLA
+filament_vendor = Generic
+temperature = 205
+filamentdb_id = ${base._id}
+filamentdb_nozzle = 0.4 Brass
+extrusion_multiplier = 0.95
+
+[filament:PLA 0.6 Brass]
+filament_type = PLA
+filament_vendor = Generic
+temperature = 215
+filamentdb_id = ${base._id}
+filamentdb_nozzle = 0.6 Brass
+filament_max_volumetric_speed = 20
+`;
+      const file = new File([ini], "bundle.ini", { type: "text/plain" });
+      const res = await importFilaments(
+        multipartReq("http://localhost/api/filaments/import", file),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // Collapsed to ONE base filament — no orphan suffixed records created.
+      expect(body.created).toBe(0);
+      expect(body.updated).toBe(1);
+      expect(await Filament.findOne({ name: "PLA 0.4 Brass" })).toBeNull();
+      expect(await Filament.findOne({ name: "PLA 0.6 Brass" })).toBeNull();
+      const fresh = await Filament.findById(base._id);
+      // Base temps are NOT clobbered by either nozzle's baked value, and the
+      // routing hints / baked per-nozzle keys never land in the settings bag.
+      expect(fresh.temperatures.nozzle).toBe(210);
+      expect(fresh.settings?.filamentdb_id).toBeUndefined();
+      expect(fresh.settings?.filamentdb_nozzle).toBeUndefined();
+      expect(fresh.settings?.extrusion_multiplier).toBeUndefined();
+    });
+  });
+
+  describe("POST /api/filaments/prusaslicer (bundle import)", () => {
+    it("#872: collapses suffixed sections back to the base on a bundle round-trip", async () => {
+      const base = await Filament.create({
+        name: "PETG",
+        vendor: "Generic",
+        type: "PETG",
+        temperatures: { nozzle: 240 },
+      });
+      const ini = `[filament:PETG 0.4 Brass]
+filament_type = PETG
+filament_vendor = Generic
+temperature = 235
+filamentdb_id = ${base._id}
+filamentdb_nozzle = 0.4 Brass
+
+[filament:PETG 0.6 Brass]
+filament_type = PETG
+filament_vendor = Generic
+temperature = 245
+filamentdb_id = ${base._id}
+filamentdb_nozzle = 0.6 Brass
+`;
+      const res = await prusaImport(
+        new NextRequest("http://localhost/api/filaments/prusaslicer", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: ini,
+        }),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.created).toBe(0);
+      expect(body.updated).toBe(1);
+      expect(await Filament.findOne({ name: "PETG 0.4 Brass" })).toBeNull();
+      expect(await Filament.findOne({ name: "PETG 0.6 Brass" })).toBeNull();
+      const fresh = await Filament.findById(base._id);
+      expect(fresh.temperatures.nozzle).toBe(240); // not clobbered by 235/245
+    });
+
+    it("#872: a collapsed section missing a scalar does NOT clobber the base's cost/density/color", async () => {
+      const base = await Filament.create({
+        name: "ABS",
+        vendor: "Generic",
+        type: "ABS",
+        color: "#1a2b3c",
+        cost: 30,
+        density: 1.04,
+      });
+      // A hint-only suffixed section that omits filament_cost/density/colour.
+      const ini = `[filament:ABS 0.4 Brass]
+filament_type = ABS
+filament_vendor = Generic
+filamentdb_id = ${base._id}
+filamentdb_nozzle = 0.4 Brass
+`;
+      const res = await prusaImport(
+        new NextRequest("http://localhost/api/filaments/prusaslicer", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: ini,
+        }),
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(base._id);
+      expect(fresh.color).toBe("#1a2b3c"); // not clobbered to #808080
+      expect(fresh.cost).toBe(30); // not nulled
+      expect(fresh.density).toBe(1.04); // not nulled
+    });
+  });
+
+  describe("POST /api/filaments/parse-ini (#872 prefill)", () => {
+    it("collapses suffixed sections so the prefill shows the base name, no baked keys", async () => {
+      const ini = `[filament:PLA 0.4 Brass]
+filament_type = PLA
+filament_vendor = Generic
+temperature = 205
+filamentdb_id = 64b000000000000000000003
+filamentdb_nozzle = 0.4 Brass
+extrusion_multiplier = 0.95
+
+[filament:PLA 0.6 Brass]
+filament_type = PLA
+filament_vendor = Generic
+temperature = 215
+filamentdb_id = 64b000000000000000000003
+filamentdb_nozzle = 0.6 Brass
+`;
+      const file = new File([ini], "export.ini", { type: "text/plain" });
+      const res = await parseIni(multipartReq("http://localhost/api/filaments/parse-ini", file));
+      expect(res.status).toBe(200);
+      const { filaments } = await res.json();
+      expect(filaments).toHaveLength(1); // collapsed
+      expect(filaments[0].name).toBe("PLA"); // de-suffixed, not "PLA 0.4 Brass"
+      expect(filaments[0].settings.filamentdb_nozzle).toBeUndefined();
+      expect(filaments[0].settings.extrusion_multiplier).toBeUndefined();
     });
   });
 

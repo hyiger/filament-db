@@ -61,6 +61,109 @@ export function nozzleSuffix(
     .trim();
 }
 
+/**
+ * #872: keys an export BAKES into a per-nozzle suffixed section. They are
+ * nozzle-specific (NOT the base filament's shared identity), so they are
+ * stripped when a round-tripped suffixed section is collapsed back to its base
+ * on bulk import — otherwise one nozzle's baked value would pollute the base
+ * filament's settings bag (and `compatible_printers_condition` would carry one
+ * nozzle's scope). `temperature`/`filament_max_volumetric_speed` are handled
+ * separately (the keys are omitted entirely so an UPDATE can't clobber the base).
+ */
+const PER_NOZZLE_BAKED_SETTING_KEYS = [
+  "extrusion_multiplier",
+  "filament_retract_length",
+  "filament_retract_speed",
+  "filament_retract_lift",
+  "min_fan_speed",
+  "max_fan_speed",
+  "bridge_fan_speed",
+  "temperature",
+  "first_layer_temperature",
+  "bed_temperature",
+  "first_layer_bed_temperature",
+  "filament_max_volumetric_speed",
+  "compatible_printers_condition",
+];
+
+/** Routing hints an export emits; consumed for matching, never stored as data. */
+const IMPORT_ROUTING_HINT_KEYS = ["filamentdb_id", "filamentdb_nozzle"];
+
+/**
+ * A parsed INI section after collapsing. `temperatures`/`maxVolumetricSpeed` are
+ * OPTIONAL because a collapsed per-nozzle section omits them (they were baked
+ * per-nozzle, so an UPDATE must not overwrite the base filament's shared values).
+ */
+export type CollapsedFilamentData = Omit<
+  import("./parseIni").FilamentData,
+  "temperatures" | "maxVolumetricSpeed" | "cost" | "density" | "diameter" | "color"
+> & {
+  temperatures?: import("./parseIni").FilamentData["temperatures"];
+  maxVolumetricSpeed?: number | null;
+  cost?: number | null;
+  density?: number | null;
+  diameter?: number;
+  color?: string;
+};
+
+/**
+ * #872: collapse Filament DB's OWN per-nozzle suffixed sections back to their
+ * base filament so a bundle round-trip (export → bulk import) UPDATES the
+ * original filament instead of spawning suffixed orphan records ("PLA 0.4 Brass",
+ * "PLA 0.6 Brass"). A section is a per-nozzle export iff it carries a
+ * `filamentdb_nozzle` hint; siblings share one `filamentdb_id`. The collapsed
+ * base drops the nozzle-specific baked keys + routing hints and OMITS temps /
+ * max-vol (so an update can't clobber the base's shared values). The per-nozzle
+ * calibration model is deliberately NOT reconstructed here — snapshot/restore is
+ * the lossless round-trip; this only prevents the orphan-duplication regression.
+ * Non-hinted sections pass through with the routing hints stripped.
+ */
+export function collapsePerNozzleImportSections(
+  filaments: import("./parseIni").FilamentData[],
+): CollapsedFilamentData[] {
+  const out: CollapsedFilamentData[] = [];
+  const seenGroups = new Set<string>();
+  for (const f of filaments) {
+    const hint = (f.settings.filamentdb_nozzle ?? "").trim();
+    if (!hint) {
+      // Pass through, but never persist routing hints as settings data.
+      const settings = { ...f.settings };
+      for (const k of IMPORT_ROUTING_HINT_KEYS) delete settings[k];
+      out.push({ ...f, settings });
+      continue;
+    }
+    // Per-nozzle suffixed section → fold back into its base filament.
+    const baseName = f.name.endsWith(` ${hint}`)
+      ? f.name.slice(0, f.name.length - hint.length - 1).trim()
+      : f.name;
+    const id = (f.settings.filamentdb_id ?? "").trim();
+    const groupKey = id ? `id:${id}` : `name:${baseName.toLowerCase()}`;
+    if (seenGroups.has(groupKey)) continue; // a sibling already represents the base
+    seenGroups.add(groupKey);
+    const settings = { ...f.settings };
+    for (const k of [...PER_NOZZLE_BAKED_SETTING_KEYS, ...IMPORT_ROUTING_HINT_KEYS]) {
+      delete settings[k];
+    }
+    // Drop temperatures + maxVolumetricSpeed (baked per-nozzle): omitting the keys
+    // means the importer's $set never overwrites the base filament's shared values.
+    const { temperatures, maxVolumetricSpeed, cost, density, diameter, color, ...sharedFields } = f;
+    void temperatures;
+    void maxVolumetricSpeed;
+    const collapsed: CollapsedFilamentData = { ...sharedFields, name: baseName, settings };
+    // Carry the shared scalars ONLY when the suffixed section actually SUPPLIED them
+    // (the source INI key is present) — otherwise parseIni's null / "#808080" / 1.75
+    // defaults would $set over the base filament's real cost/density/color/diameter
+    // on an update (Codex P3). The normal export bakes these from the base, so they
+    // still round-trip; only a partial/hand-crafted section drops them.
+    if ("filament_cost" in f.settings) collapsed.cost = cost;
+    if ("filament_density" in f.settings) collapsed.density = density;
+    if ("filament_diameter" in f.settings) collapsed.diameter = diameter;
+    if ("filament_colour" in f.settings) collapsed.color = color;
+    out.push(collapsed);
+  }
+  return out;
+}
+
 export function filamentToSlicerKeys(
   filament: FilamentDoc,
   // #872: when present, BAKE this per-nozzle calibration's filament-level values
