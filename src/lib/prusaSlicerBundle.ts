@@ -140,6 +140,42 @@ export function filamentToSlicerKeys(
   if (!("compatible_printers" in keys)) {
     keys.compatible_printers = "";
   }
+  // #872: derive compatible_printers_condition from the filament's compatible
+  // nozzle diameters, e.g. `nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6`,
+  // so a synced preset only shows up for printers whose nozzle matches. Gated so a
+  // round-tripped user-pinned condition (already in the settings bag) wins, and
+  // only applied when we actually have populated diameters — otherwise the empty
+  // "no restriction" default below still applies.
+  // Derive only when the key is ABSENT or an EMPTY STRING — both mean "no
+  // restriction" (a round-tripped `compatible_printers_condition = ` stores "").
+  // A NON-EMPTY string is a user pin, and `null` is PrusaSlicer's `nil`
+  // inheritance marker (parseIniFilaments → null, writeSection re-emits it as
+  // `nil`) — BOTH must be preserved, not overwritten by the derivation (Codex P2).
+  if (
+    (!("compatible_printers_condition" in keys) ||
+      keys.compatible_printers_condition === "") &&
+    Array.isArray(filament.compatibleNozzles)
+  ) {
+    const diameters = Array.from(
+      new Set(
+        filament.compatibleNozzles
+          .map((n: unknown) =>
+            n != null &&
+            typeof n === "object" &&
+            typeof (n as { diameter?: unknown }).diameter === "number"
+              ? (n as { diameter: number }).diameter
+              : null,
+          )
+          .filter((d): d is number => typeof d === "number" && d > 0),
+      ),
+    ).sort((a, b) => a - b);
+    if (diameters.length > 0) {
+      keys.compatible_printers_condition = diameters
+        .map((d) => `nozzle_diameter[0]==${d}`)
+        .join(" or ");
+    }
+  }
+
   if (!("compatible_printers_condition" in keys)) {
     keys.compatible_printers_condition = "";
   }

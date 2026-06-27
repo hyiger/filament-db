@@ -56,6 +56,7 @@ export async function GET(request: NextRequest) {
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")
       .populate("calibrations.bedType")
+      .populate("compatibleNozzles") // #872: diameters for compatible_printers_condition
       .lean();
 
     // Build parent lookup for resolving variants
@@ -82,6 +83,7 @@ export async function GET(request: NextRequest) {
         .populate("calibrations.nozzle")
         .populate("calibrations.printer")
         .populate("calibrations.bedType")
+        .populate("compatibleNozzles") // #872
         .lean();
       for (const parent of missingParents) {
         parentMap.set(parent._id.toString(), parent);

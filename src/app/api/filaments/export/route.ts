@@ -15,6 +15,7 @@ export async function GET() {
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")
       .populate("calibrations.bedType")
+      .populate("compatibleNozzles") // #872: diameters for compatible_printers_condition
       .lean();
 
     // Build a parent lookup for resolving variants
