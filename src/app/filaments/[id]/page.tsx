@@ -1402,8 +1402,11 @@ function FilamentDetail() {
             tiles these intentionally carry NO inherited badge — a coarse badge would
             mis-mark (flag "—"/unrelated values, or miss a genuinely-inherited fan
             value when the child has any other setting override) (Codex P3). */}
-        <InfoCard label={t("detail.field.minFanSpeed")} value={filament.settings?.min_fan_speed ? `${filament.settings.min_fan_speed}%` : "—"} />
-        <InfoCard label={t("detail.field.maxFanSpeed")} value={filament.settings?.max_fan_speed ? `${filament.settings.max_fan_speed}%` : "—"} />
+        {/* #872 / Codex P2: a JSON sync path (e.g. OrcaSlicer update) can store a
+            valid fan speed as the NUMBER 0, which is falsy — check null/empty so a
+            real 0% renders as "0%", not "—". */}
+        <InfoCard label={t("detail.field.minFanSpeed")} value={filament.settings?.min_fan_speed != null && filament.settings.min_fan_speed !== "" ? `${filament.settings.min_fan_speed}%` : "—"} />
+        <InfoCard label={t("detail.field.maxFanSpeed")} value={filament.settings?.max_fan_speed != null && filament.settings.max_fan_speed !== "" ? `${filament.settings.max_fan_speed}%` : "—"} />
         {/* #872 / Codex P2: Max Vol. Speed is kept OUT of the top tiles because it's
             nozzle-specific (shown per-nozzle in the Calibrations table). But for a
             filament whose value lives ONLY top-level — no per-nozzle calibration
