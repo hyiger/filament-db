@@ -1338,6 +1338,8 @@
   "form.tag.biodegradable": "Biologisch abbaubar",
   "form.tag.foodSafe": "Lebensmittelecht",
   "form.section.compatibleNozzles": "Kompatible Düsen",
+  "form.nozzle.hardenedOnly": "Abrasives Filament — nur gehärtete Düsen werden angezeigt ({count} ausgeblendet).",
+  "form.nozzle.notHardened": "nicht gehärtet",
   "form.loadingNozzles": "Düsen werden geladen…",
   "form.selectAll": "Alle auswählen",
   "form.clearAll": "Alle leeren",

@@ -1338,6 +1338,8 @@
   "form.tag.biodegradable": "Biodegradable",
   "form.tag.foodSafe": "Food Safe",
   "form.section.compatibleNozzles": "Compatible Nozzles",
+  "form.nozzle.hardenedOnly": "Abrasive filament — showing hardened nozzles only ({count} hidden).",
+  "form.nozzle.notHardened": "not hardened",
   "form.loadingNozzles": "Loading nozzles...",
   "form.selectAll": "Select All",
   "form.clearAll": "Clear All",
