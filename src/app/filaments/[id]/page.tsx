@@ -1408,13 +1408,18 @@ function FilamentDetail() {
         <InfoCard label={t("detail.field.minFanSpeed")} value={filament.settings?.min_fan_speed != null && filament.settings.min_fan_speed !== "" ? `${filament.settings.min_fan_speed}%` : "—"} />
         <InfoCard label={t("detail.field.maxFanSpeed")} value={filament.settings?.max_fan_speed != null && filament.settings.max_fan_speed !== "" ? `${filament.settings.max_fan_speed}%` : "—"} />
         {/* #872 / Codex P2: Max Vol. Speed is kept OUT of the top tiles because it's
-            nozzle-specific (shown per-nozzle in the Calibrations table). But for a
-            filament whose value lives ONLY top-level — no per-nozzle calibration
-            carries one (e.g. a PrusaSlicer/CSV/NFC import) — show it here as a
-            fallback so it isn't invisible everywhere on the page. */}
+            nozzle-specific (shown per-nozzle in the Calibrations table). But show it
+            here as a fallback whenever the value isn't ACTUALLY visible in that table
+            — i.e. unless the Calibrations section is rendered (gated on
+            compatibleNozzles, line ~1746) AND a calibration carries a maxVol. So a
+            filament with a top-level-only value, or with calibrations but no
+            compatible nozzles (the global-nozzle-fallback sync case), still shows it. */}
         {filament.maxVolumetricSpeed != null &&
-          !filament.calibrations?.some(
-            (c) => (c as FilamentCalibration).maxVolumetricSpeed != null,
+          !(
+            (filament.compatibleNozzles?.length ?? 0) > 0 &&
+            filament.calibrations?.some(
+              (c) => (c as FilamentCalibration).maxVolumetricSpeed != null,
+            )
           ) && (
             <InfoCard
               label={t("detail.field.maxVolSpeed")}
