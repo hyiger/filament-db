@@ -157,6 +157,47 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.compatible_printers_condition).toBe("");
   });
 
+  it("#872: derives compatible_printers_condition from compatible nozzle diameters (deduped + sorted)", () => {
+    const keys = filamentToSlicerKeys({
+      name: "PA12-CF",
+      vendor: "X",
+      type: "PA",
+      diameter: 1.75,
+      temperatures: {},
+      settings: {},
+      compatibleNozzles: [{ diameter: 0.6 }, { diameter: 0.4 }, { diameter: 0.4 }],
+    });
+    expect(keys.compatible_printers_condition).toBe(
+      "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6",
+    );
+  });
+
+  it("#872: a user-pinned compatible_printers_condition wins over the nozzle-diameter derivation", () => {
+    const keys = filamentToSlicerKeys({
+      name: "Pinned",
+      vendor: "X",
+      type: "PLA",
+      diameter: 1.75,
+      temperatures: {},
+      settings: { compatible_printers_condition: "printer_model==MK4" },
+      compatibleNozzles: [{ diameter: 0.4 }],
+    });
+    expect(keys.compatible_printers_condition).toBe("printer_model==MK4");
+  });
+
+  it("#872: no compatible nozzles → empty condition (no restriction)", () => {
+    const keys = filamentToSlicerKeys({
+      name: "Bare",
+      vendor: "X",
+      type: "PLA",
+      diameter: 1.75,
+      temperatures: {},
+      settings: {},
+      compatibleNozzles: [],
+    });
+    expect(keys.compatible_printers_condition).toBe("");
+  });
+
   it("preserves a user-set compatible_printers from the settings bag", () => {
     // If a previous import (or hand-edit) pinned the preset to a
     // specific printer, the default-blanking must NOT clobber that.

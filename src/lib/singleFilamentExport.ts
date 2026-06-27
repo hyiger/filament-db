@@ -26,6 +26,9 @@ const POPULATE_PATHS = [
   "calibrations.nozzle",
   "calibrations.printer",
   "calibrations.bedType",
+  // #872: needed so the PrusaSlicer export can build a
+  // compatible_printers_condition from the compatible nozzle diameters.
+  "compatibleNozzles",
 ] as const;
 
 /**
