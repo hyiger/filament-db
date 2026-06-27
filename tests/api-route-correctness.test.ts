@@ -565,6 +565,73 @@ describe("API route correctness", () => {
     expect(body.matchedBy).toBe("name");
   });
 
+  it("#872 — a per-nozzle preset sync (filamentdb_nozzle) is NOT a name mismatch and routes calibration to that nozzle", async () => {
+    const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+    const f = await Filament.create({
+      name: "PLA",
+      vendor: "X",
+      type: "PLA",
+      compatibleNozzles: [brass._id],
+    });
+    // The export names a multi-nozzle preset "<base> <Ø type>" but carries the
+    // base filamentdb_id — without the hint this would 409 as a name mismatch.
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/PLA%200.4%20Brass", {
+        config: {
+          filamentdb_id: String(f._id),
+          filamentdb_nozzle: "0.4 Brass",
+          extrusion_multiplier: "1.05",
+        },
+      }),
+      { params: Promise.resolve({ id: "PLA 0.4 Brass" }) },
+    );
+    expect(res.status).toBe(200); // suffixed name is the EXPECTED per-nozzle export, not a rename
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.name).toBe("PLA"); // base name untouched (no rename from a suffixed preset)
+    expect(fresh.calibrations).toHaveLength(1);
+    expect(fresh.calibrations[0].extrusionMultiplier).toBe(1.05);
+    expect(String(fresh.calibrations[0].nozzle)).toBe(String(brass._id));
+    expect(fresh.settings?.filamentdb_nozzle).toBeUndefined(); // routing hint, not stored
+  });
+
+  it("#872 — a per-nozzle preset disambiguates same-diameter nozzles by type", async () => {
+    const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+    const diamond = await Nozzle.create({ name: "0.4 Diamondback", diameter: 0.4, type: "Diamondback" });
+    const f = await Filament.create({
+      name: "PA-CF",
+      vendor: "X",
+      type: "PA",
+      compatibleNozzles: [brass._id, diamond._id],
+    });
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/PA-CF%200.4%20Diamondback", {
+        config: {
+          filamentdb_id: String(f._id),
+          filamentdb_nozzle: "0.4 Diamondback",
+          extrusion_multiplier: "0.97",
+        },
+      }),
+      { params: Promise.resolve({ id: "PA-CF 0.4 Diamondback" }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.calibrations).toHaveLength(1);
+    expect(String(fresh.calibrations[0].nozzle)).toBe(String(diamond._id)); // Diamondback, not Brass
+  });
+
+  it("#872 — a suffixed-LOOKING name WITHOUT a filamentdb_nozzle hint still 409s (suppression is hint-gated)", async () => {
+    const f = await Filament.create({ name: "PLA", vendor: "X", type: "PLA" });
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/PLA%200.4%20Brass", {
+        // no filamentdb_nozzle → can't prove it's a per-nozzle export → stays a #867 mismatch
+        config: { filamentdb_id: String(f._id), filament_density: "1.24" },
+      }),
+      { params: Promise.resolve({ id: "PLA 0.4 Brass" }) },
+    );
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("name_id_mismatch");
+  });
+
   it("#867 Phase 2 — an ObjectId-URL sync renames the record to the sent body.name", async () => {
     const f = await Filament.create({ name: "Old Name", vendor: "X", type: "PLA" });
     const res = await slicerSync(
@@ -589,6 +656,29 @@ describe("API route correctness", () => {
     );
     expect(res.status).toBe(200);
     expect((await Filament.findById(f._id)).name).toBe("Keeper"); // name is the addressing key — unchanged
+  });
+
+  it("#872 — an id-addressed per-nozzle sync does NOT rename the base filament to the suffixed name", async () => {
+    const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+    const f = await Filament.create({
+      name: "PLA",
+      vendor: "X",
+      type: "PLA",
+      compatibleNozzles: [brass._id],
+    });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        name: "PLA 0.4 Brass", // the derived suffixed name — must NOT overwrite the base name
+        config: {
+          filamentdb_id: String(f._id),
+          filamentdb_nozzle: "0.4 Brass",
+          extrusion_multiplier: "1.02",
+        },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    expect((await Filament.findById(f._id)).name).toBe("PLA"); // a filamentdb_nozzle hint suppresses the rename
   });
 
   it("#867 Phase 2 — an ObjectId-URL rename to a TAKEN name returns 409 name_taken and does NOT rename", async () => {

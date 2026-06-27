@@ -45,6 +45,22 @@ function slicerExportColor(filament: FilamentDoc): string | null {
  * Structured DB fields are mapped to their PrusaSlicer equivalents.
  * The `settings` bag is merged underneath (DB fields win on conflict).
  */
+/**
+ * #872: the canonical "<Ø> <type> [HF]" suffix that distinguishes a per-nozzle
+ * preset — e.g. "0.4 Diamondback", "0.4 Brass HF". Used to NAME the exported preset
+ * (`<base> <suffix>`) AND as the `filamentdb_nozzle` hint, and re-derived on the
+ * sync-back so a per-nozzle preset is recognized and its calibration routed.
+ * Returns "" for a nozzle with no diameter (caller emits the base preset instead).
+ */
+export function nozzleSuffix(
+  nozzle: { diameter?: number; type?: string; highFlow?: boolean } | null | undefined,
+): string {
+  if (!nozzle || nozzle.diameter == null) return "";
+  return `${nozzle.diameter} ${nozzle.type ?? ""}${nozzle.highFlow ? " HF" : ""}`
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function filamentToSlicerKeys(
   filament: FilamentDoc,
   // #872: when present, BAKE this per-nozzle calibration's filament-level values
@@ -152,7 +168,7 @@ export function filamentToSlicerKeys(
     const nz = calibration.nozzle;
     if (nz && typeof nz === "object" && nz.diameter != null) {
       keys.compatible_printers_condition = `nozzle_diameter[0]==${nz.diameter}`;
-      keys.filamentdb_nozzle = `${nz.diameter} ${nz.type ?? ""}`.trim();
+      keys.filamentdb_nozzle = nozzleSuffix(nz);
     }
   }
 
@@ -267,7 +283,10 @@ export function generatePrusaSlicerBundle(filaments: FilamentDoc[]): string {
     for (const cal of Array.isArray(filament.calibrations) ? filament.calibrations : []) {
       const nz = cal?.nozzle;
       if (!nz || typeof nz !== "object" || nz.diameter == null) continue;
-      const key = `${nz.diameter}|${nz.type ?? ""}`;
+      // #872: a standard and a high-flow nozzle of the same Ø+type are DISTINCT
+      // physical nozzles (the sync route disambiguates them via ?high_flow=), so
+      // key on highFlow too — otherwise they'd collapse into one preset.
+      const key = `${nz.diameter}|${nz.type ?? ""}|${nz.highFlow ? "HF" : ""}`;
       const existing = byNozzle.get(key);
       const isDefault = cal.printer == null && cal.bedType == null;
       const existingIsDefault =
@@ -282,11 +301,9 @@ export function generatePrusaSlicerBundle(filaments: FilamentDoc[]): string {
       // calibration; all share one filamentdb_id and carry a filamentdb_nozzle hint
       // so the sync-back routes updates to the right per-nozzle calibration entry.
       for (const cal of byNozzle.values()) {
-        const nz = cal.nozzle;
-        const suffix = `${nz.diameter} ${nz.type ?? ""}`.trim();
         writeSection(
           lines,
-          `${filament.name} ${suffix}`,
+          `${filament.name} ${nozzleSuffix(cal.nozzle)}`,
           filamentToSlicerKeys(filament, cal),
         );
       }

@@ -472,6 +472,22 @@ export async function POST(
       return errorResponse(`Filament not found: ${decodedName}`, 404);
     }
 
+    // #872: a multi-nozzle filament exports as N flat presets named
+    // "<base> <Ø type [HF]>", all carrying the base filamentdb_id plus a
+    // filamentdb_nozzle hint (e.g. "0.4 Diamondback", "0.4 Brass HF"). Recognize a
+    // per-nozzle preset so (a) its suffixed name isn't read as a rename mismatch
+    // below, and (b) its calibration routes to the matching per-nozzle entry even
+    // without an explicit ?nozzle_diameter= query param (parsed from the hint).
+    const perNozzleHint =
+      typeof config.filamentdb_nozzle === "string" ? config.filamentdb_nozzle.trim() : "";
+    const isPerNozzlePreset =
+      perNozzleHint !== "" && decodedName === `${filament.name} ${perNozzleHint}`;
+    const hintHighFlow = / HF$/i.test(perNozzleHint);
+    const hintCore = perNozzleHint.replace(/ HF$/i, "").trim();
+    const hintSpace = hintCore.indexOf(" ");
+    const hintDiameter = hintSpace > 0 ? parseFloat(hintCore.slice(0, hintSpace)) : NaN;
+    const hintType = hintSpace > 0 ? hintCore.slice(hintSpace + 1).trim() : "";
+
     // #867 / Codex P1: the config filamentdb_id resolves to a filament whose
     // stored name differs from the preset name in the URL. This is EITHER a
     // renamed preset (id is right) OR a copied/cloned id (a Save-As that kept the
@@ -482,7 +498,9 @@ export async function POST(
     // filament anyway, re-sync addressing it by id (POST /api/filaments/{_id}),
     // which is the authoritative ObjectId form. (matchedByConfigId is only set on
     // a name-addressed config-id match, so ObjectId-URL syncs never reach here.)
-    if (matchedByConfigId && filament.name !== decodedName) {
+    // #872: a recognized per-nozzle preset's suffixed name is EXPECTED, not a
+    // rename — don't treat it as a mismatch.
+    if (matchedByConfigId && filament.name !== decodedName && !isPerNozzlePreset) {
       return NextResponse.json(
         {
           error: "name_id_mismatch",
@@ -581,7 +599,13 @@ export async function POST(
     // knows which calibration entry to update with EM, PA, retraction, etc.
     // The high_flow flag disambiguates e.g. 0.4mm standard vs 0.4mm HF.
     const nozzleDiameterParam = request.nextUrl.searchParams.get("nozzle_diameter");
-    const nozzleDiameter = nozzleDiameterParam ? parseFloat(nozzleDiameterParam) : NaN;
+    // #872: a per-nozzle preset carries the nozzle in filamentdb_nozzle, so fall
+    // back to the parsed hint diameter when there's no explicit query param.
+    const nozzleDiameter = nozzleDiameterParam
+      ? parseFloat(nozzleDiameterParam)
+      : isPerNozzlePreset
+        ? hintDiameter
+        : NaN;
     if (!isNaN(nozzleDiameter) && nozzleDiameter > 0) {
       const calFields: Record<string, number | null> = {};
       if (config.extrusion_multiplier) {
@@ -621,9 +645,19 @@ export async function POST(
             diameter: nozzleDiameter,
             _deletedAt: null,
           };
-          // Only filter by highFlow when the param is explicitly provided
+          // Only filter by highFlow when the param is explicitly provided, else
+          // fall back to the per-nozzle hint's HF flag (#872). A non-HF hint
+          // matches `{ $ne: true }` (false OR unset) so a legacy nozzle without
+          // the field still resolves; an HF hint requires true.
           if (highFlowParam !== null) {
             nozzleQuery.highFlow = highFlowParam === "1";
+          } else if (isPerNozzlePreset) {
+            nozzleQuery.highFlow = hintHighFlow ? true : { $ne: true };
+          }
+          // #872: disambiguate same-diameter nozzles (e.g. Brass vs Diamondback) by
+          // the type carried in the per-nozzle preset's filamentdb_nozzle hint.
+          if (isPerNozzlePreset && hintType) {
+            nozzleQuery.type = hintType;
           }
           const matchingNozzle = await Nozzle.findOne(nozzleQuery).lean();
 
@@ -660,6 +694,14 @@ export async function POST(
           };
           if (highFlowParam !== null) {
             globalQuery.highFlow = highFlowParam === "1";
+          } else if (isPerNozzlePreset) {
+            globalQuery.highFlow = hintHighFlow ? true : { $ne: true };
+          }
+          // #872: the per-nozzle hint's type narrows same-diameter catalog
+          // nozzles, so "0.4 Diamondback" resolves even when both a Brass and a
+          // Diamondback 0.4 exist (the bare-diameter query would punt as >1).
+          if (isPerNozzlePreset && hintType) {
+            globalQuery.type = hintType;
           }
           const globalMatches = await Nozzle.find(globalQuery).limit(2).lean();
           if (globalMatches.length === 1) {
@@ -686,6 +728,10 @@ export async function POST(
       // above and re-emitted from the row's _id on export, so never stored in
       // the settings bag (avoids a stale duplicate of the canonical _id).
       "filamentdb_id",
+      // #872: routing hint for a multi-nozzle preset (the "<Ø> <type> [HF]" the
+      // export baked into the preset name) — consumed below to route the
+      // calibration to the right nozzle, never stored.
+      "filamentdb_nozzle",
     ]);
     const merge = mergeSlicerSettings(
       (filament.settings as Record<string, unknown>) || {},
@@ -704,7 +750,11 @@ export async function POST(
     // The NAME-addressed path deliberately never renames (the name is its addressing
     // key, and a body.name there is ignored); only an explicit, user-confirmed
     // id-addressed sync may rename the record.
-    if (matchedByUrlObjectId && typeof body.name === "string") {
+    // #872: a per-nozzle preset's name is the DERIVED "<base> <Ø type>" suffix, never
+    // a user rename — so when the sync carries a filamentdb_nozzle hint, suppress the
+    // rename. Otherwise an id-addressed per-nozzle sync would overwrite the base
+    // filament's name with the suffixed preset name.
+    if (matchedByUrlObjectId && typeof body.name === "string" && perNozzleHint === "") {
       const sentName = body.name.trim();
       if (sentName && sentName !== filament.name) {
         // Refuse if another ACTIVE filament already owns that name. The unique-on-
