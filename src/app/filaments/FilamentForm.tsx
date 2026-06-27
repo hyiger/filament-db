@@ -620,14 +620,19 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
   }, [printers, nozzles, form.compatibleNozzles]);
 
   // #872: an abrasive filament needs a hardened nozzle, so the compatible-nozzle
-  // picker hard-filters to hardened ones when `abrasive` is set. Already-selected
-  // nozzles stay visible (even if soft) so the user can still deselect them —
-  // they're flagged in the list; only NEW soft nozzles are hidden.
+  // picker hard-filters to hardened ones when abrasive. The abrasive marker can
+  // come from EITHER the form boolean (settings.filament_abrasive) OR optTags tag 4
+  // (e.g. OpenPrintTag/Atlas data) — mirror the Material Tags checkbox's effective
+  // state (form.optTags.includes(4) || form.abrasive) so the gate isn't silently
+  // bypassed when only the tag is set (Codex P2). Already-selected nozzles stay
+  // visible (even if soft) so the user can still deselect them — they're flagged;
+  // only NEW soft nozzles are hidden.
+  const isAbrasive = form.abrasive || form.optTags.includes(4);
   const visibleNozzles = useMemo(() => {
-    if (!form.abrasive) return nozzles;
+    if (!isAbrasive) return nozzles;
     return nozzles.filter((n) => n.hardened || form.compatibleNozzles.includes(n._id));
-  }, [nozzles, form.abrasive, form.compatibleNozzles]);
-  const hiddenSoftNozzleCount = form.abrasive ? nozzles.length - visibleNozzles.length : 0;
+  }, [nozzles, isAbrasive, form.compatibleNozzles]);
+  const hiddenSoftNozzleCount = isAbrasive ? nozzles.length - visibleNozzles.length : 0;
 
   // Derive the effective selection rather than syncing it via an effect.
   // When the user removes a compatible nozzle that was the only reason
@@ -2323,7 +2328,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
                   )}
                   {/* #872: a soft nozzle that is still selected on an abrasive
                       filament is flagged so the user knows to swap it out. */}
-                  {form.abrasive && !n.hardened && (
+                  {isAbrasive && !n.hardened && (
                     <span className="ml-1 px-1.5 py-0.5 bg-red-200 dark:bg-red-900 text-red-800 dark:text-red-200 rounded text-xs">
                       {t("form.nozzle.notHardened")}
                     </span>
