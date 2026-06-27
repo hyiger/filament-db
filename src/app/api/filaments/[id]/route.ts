@@ -480,13 +480,30 @@ export async function POST(
     // without an explicit ?nozzle_diameter= query param (parsed from the hint).
     const perNozzleHint =
       typeof config.filamentdb_nozzle === "string" ? config.filamentdb_nozzle.trim() : "";
+    // Recognized for BOTH addressing modes: a name-addressed sync whose URL name is
+    // exactly "<base> <hint>", AND an id-addressed sync (the ObjectId URL) that
+    // carries the hint — the fork's re-stamped per-nozzle preset (Codex P2).
     const isPerNozzlePreset =
-      perNozzleHint !== "" && decodedName === `${filament.name} ${perNozzleHint}`;
+      perNozzleHint !== "" &&
+      (matchedByUrlObjectId || decodedName === `${filament.name} ${perNozzleHint}`);
     const hintHighFlow = / HF$/i.test(perNozzleHint);
     const hintCore = perNozzleHint.replace(/ HF$/i, "").trim();
     const hintSpace = hintCore.indexOf(" ");
     const hintDiameter = hintSpace > 0 ? parseFloat(hintCore.slice(0, hintSpace)) : NaN;
     const hintType = hintSpace > 0 ? hintCore.slice(hintSpace + 1).trim() : "";
+    // #872: the calibration target diameter — the explicit ?nozzle_diameter= query
+    // when present, else the per-nozzle hint's diameter. `routeToCalibration` gates
+    // whether the preset's baked NOZZLE-SPECIFIC keys (max-vol / temps / fan) land
+    // on the matching calibration entry instead of the filament-wide top level
+    // (Codex P1 — otherwise one nozzle's value overwrites the shared default).
+    const nozzleDiameterParam = request.nextUrl.searchParams.get("nozzle_diameter");
+    const nozzleDiameter = nozzleDiameterParam
+      ? parseFloat(nozzleDiameterParam)
+      : isPerNozzlePreset
+        ? hintDiameter
+        : NaN;
+    const routeToCalibration =
+      isPerNozzlePreset && !isNaN(nozzleDiameter) && nozzleDiameter > 0;
 
     // #867 / Codex P1: the config filamentdb_id resolves to a filament whose
     // stored name differs from the preset name in the URL. This is EITHER a
@@ -526,13 +543,19 @@ export async function POST(
     if (config.filament_density) { const v = parseFloat(config.filament_density); if (!isNaN(v)) update.density = v; }
     if (config.filament_cost) { const v = parseFloat(config.filament_cost); if (!isNaN(v)) update.cost = v; }
     if (config.filament_spool_weight) { const v = parseFloat(config.filament_spool_weight); if (!isNaN(v)) update.spoolWeight = v; }
-    if (config.filament_max_volumetric_speed) { const v = parseFloat(config.filament_max_volumetric_speed); if (!isNaN(v)) update.maxVolumetricSpeed = v; }
+    // #872: when routing to a per-nozzle calibration entry, these baked
+    // nozzle-specific values must NOT also overwrite the filament-wide top level —
+    // they are added to the calibration `calFields` below instead (with a top-level
+    // fallback if no calibration target resolves, so nothing is lost).
+    if (config.filament_max_volumetric_speed && !routeToCalibration) { const v = parseFloat(config.filament_max_volumetric_speed); if (!isNaN(v)) update.maxVolumetricSpeed = v; }
 
     // Temperatures
-    if (config.temperature) { const v = parseInt(config.temperature); if (!isNaN(v)) temps.nozzle = v; }
-    if (config.first_layer_temperature) { const v = parseInt(config.first_layer_temperature); if (!isNaN(v)) temps.nozzleFirstLayer = v; }
-    if (config.bed_temperature) { const v = parseInt(config.bed_temperature); if (!isNaN(v)) temps.bed = v; }
-    if (config.first_layer_bed_temperature) { const v = parseInt(config.first_layer_bed_temperature); if (!isNaN(v)) temps.bedFirstLayer = v; }
+    if (!routeToCalibration) {
+      if (config.temperature) { const v = parseInt(config.temperature); if (!isNaN(v)) temps.nozzle = v; }
+      if (config.first_layer_temperature) { const v = parseInt(config.first_layer_temperature); if (!isNaN(v)) temps.nozzleFirstLayer = v; }
+      if (config.bed_temperature) { const v = parseInt(config.bed_temperature); if (!isNaN(v)) temps.bed = v; }
+      if (config.first_layer_bed_temperature) { const v = parseInt(config.first_layer_bed_temperature); if (!isNaN(v)) temps.bedFirstLayer = v; }
+    }
 
     // Shrinkage
     if (config.filament_shrinkage_compensation_xy) { const v = parseFloat(config.filament_shrinkage_compensation_xy); if (!isNaN(v)) update.shrinkageXY = v; }
@@ -594,18 +617,11 @@ export async function POST(
       | { nozzleId: string; fields: Record<string, number | null> }
       | null = null;
 
-    // Update per-nozzle calibration data when nozzle_diameter is provided.
+    // Update per-nozzle calibration data when a nozzle is resolvable.
     // PrusaSlicer passes ?nozzle_diameter=0.4&high_flow=0|1 so the API
     // knows which calibration entry to update with EM, PA, retraction, etc.
     // The high_flow flag disambiguates e.g. 0.4mm standard vs 0.4mm HF.
-    const nozzleDiameterParam = request.nextUrl.searchParams.get("nozzle_diameter");
-    // #872: a per-nozzle preset carries the nozzle in filamentdb_nozzle, so fall
-    // back to the parsed hint diameter when there's no explicit query param.
-    const nozzleDiameter = nozzleDiameterParam
-      ? parseFloat(nozzleDiameterParam)
-      : isPerNozzlePreset
-        ? hintDiameter
-        : NaN;
+    // (`nozzleDiameter` is computed up-front — it also gates `routeToCalibration`.)
     if (!isNaN(nozzleDiameter) && nozzleDiameter > 0) {
       const calFields: Record<string, number | null> = {};
       if (config.extrusion_multiplier) {
@@ -628,6 +644,31 @@ export async function POST(
       if (config.filament_retract_lift) {
         const v = config.filament_retract_lift === "nil" ? null : parseFloat(config.filament_retract_lift);
         calFields.retractLift = v !== null && !isNaN(v) ? v : null;
+      }
+
+      // #872: for a per-nozzle preset, the baked nozzle-specific temps / max-vol /
+      // fan belong on THIS calibration entry (they were skipped at the top level
+      // above). The same numeric parse the top-level path used.
+      if (routeToCalibration) {
+        const numFromConfig = (raw: string | undefined) => {
+          if (!raw) return undefined;
+          const v = parseFloat(raw);
+          return isNaN(v) ? undefined : v;
+        };
+        const calMap: Record<string, string> = {
+          filament_max_volumetric_speed: "maxVolumetricSpeed",
+          temperature: "nozzleTemp",
+          first_layer_temperature: "nozzleTempFirstLayer",
+          bed_temperature: "bedTemp",
+          first_layer_bed_temperature: "bedTempFirstLayer",
+          min_fan_speed: "fanMinSpeed",
+          max_fan_speed: "fanMaxSpeed",
+          bridge_fan_speed: "fanBridgeSpeed",
+        };
+        for (const [cfgKey, calKey] of Object.entries(calMap)) {
+          const v = numFromConfig(config[cfgKey]);
+          if (v !== undefined) calFields[calKey] = v;
+        }
       }
 
       if (Object.keys(calFields).length > 0) {
@@ -711,6 +752,20 @@ export async function POST(
             };
           }
         }
+
+        // #872: a per-nozzle preset's baked nozzle-specific values were skipped at
+        // the top level (routeToCalibration) on the assumption they'd land on a
+        // calibration entry. If NO nozzle resolved, don't lose them — write the
+        // top-level-homed ones (max-vol + temps) back to the filament-wide fields.
+        // Fan has no top-level home; it stays in the settings bag (the STRUCTURED_KEYS
+        // fan exclusion below is gated on a resolved calibrationWrite).
+        if (routeToCalibration && !calibrationWrite) {
+          if (calFields.maxVolumetricSpeed != null) update.maxVolumetricSpeed = calFields.maxVolumetricSpeed;
+          if (calFields.nozzleTemp != null) update["temperatures.nozzle"] = calFields.nozzleTemp;
+          if (calFields.nozzleTempFirstLayer != null) update["temperatures.nozzleFirstLayer"] = calFields.nozzleTempFirstLayer;
+          if (calFields.bedTemp != null) update["temperatures.bed"] = calFields.bedTemp;
+          if (calFields.bedTempFirstLayer != null) update["temperatures.bedFirstLayer"] = calFields.bedTempFirstLayer;
+        }
       }
     }
 
@@ -733,6 +788,15 @@ export async function POST(
       // calibration to the right nozzle, never stored.
       "filamentdb_nozzle",
     ]);
+    // #872: a per-nozzle preset's fan speeds were captured into the calibration
+    // entry above — exclude them from the filament-wide settings bag so the
+    // per-nozzle value doesn't also become the shared default. Only when a
+    // calibration actually resolved; otherwise fan has no home and stays in settings.
+    if (routeToCalibration && calibrationWrite) {
+      STRUCTURED_KEYS.add("min_fan_speed");
+      STRUCTURED_KEYS.add("max_fan_speed");
+      STRUCTURED_KEYS.add("bridge_fan_speed");
+    }
     const merge = mergeSlicerSettings(
       (filament.settings as Record<string, unknown>) || {},
       config,

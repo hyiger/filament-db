@@ -681,6 +681,97 @@ describe("API route correctness", () => {
     expect((await Filament.findById(f._id)).name).toBe("PLA"); // a filamentdb_nozzle hint suppresses the rename
   });
 
+  it("#872 — a per-nozzle sync routes max-vol/temps/fan to the CALIBRATION entry, not the filament-wide top level", async () => {
+    const brass = await Nozzle.create({ name: "0.6 Brass", diameter: 0.6, type: "Brass" });
+    const f = await Filament.create({
+      name: "PLA",
+      vendor: "X",
+      type: "PLA",
+      maxVolumetricSpeed: 12, // filament-wide default — must survive
+      temperatures: { nozzle: 210, bed: 60 },
+      compatibleNozzles: [brass._id],
+    });
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/PLA%200.6%20Brass", {
+        config: {
+          filamentdb_id: String(f._id),
+          filamentdb_nozzle: "0.6 Brass",
+          filament_max_volumetric_speed: "25",
+          temperature: "215",
+          bed_temperature: "65",
+          min_fan_speed: "40",
+          max_fan_speed: "100",
+        },
+      }),
+      { params: Promise.resolve({ id: "PLA 0.6 Brass" }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(f._id);
+    // Filament-wide values UNTOUCHED — one nozzle's preset must not clobber the default.
+    expect(fresh.maxVolumetricSpeed).toBe(12);
+    expect(fresh.temperatures.nozzle).toBe(210);
+    expect(fresh.temperatures.bed).toBe(60);
+    expect(fresh.settings?.min_fan_speed).toBeUndefined(); // fan didn't leak into the settings bag
+    // The per-nozzle calibration entry carries them instead.
+    expect(fresh.calibrations).toHaveLength(1);
+    const cal = fresh.calibrations[0];
+    expect(cal.maxVolumetricSpeed).toBe(25);
+    expect(cal.nozzleTemp).toBe(215);
+    expect(cal.bedTemp).toBe(65);
+    expect(cal.fanMinSpeed).toBe(40);
+    expect(cal.fanMaxSpeed).toBe(100);
+  });
+
+  it("#872 — an id-addressed per-nozzle sync routes calibration via the hint (no nozzle_diameter query) (Codex P2)", async () => {
+    const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+    const f = await Filament.create({
+      name: "PLA",
+      vendor: "X",
+      type: "PLA",
+      compatibleNozzles: [brass._id],
+    });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        // ObjectId URL (decodedName is the id, not the suffix) + a hint → still per-nozzle
+        config: {
+          filamentdb_id: String(f._id),
+          filamentdb_nozzle: "0.4 Brass",
+          extrusion_multiplier: "1.04",
+        },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.calibrations).toHaveLength(1);
+    expect(fresh.calibrations[0].extrusionMultiplier).toBe(1.04);
+    expect(String(fresh.calibrations[0].nozzle)).toBe(String(brass._id));
+  });
+
+  it("#872 — a per-nozzle sync with NO resolvable nozzle falls back to the top level (no data loss)", async () => {
+    // A 0.4 Brass exists, but the hint is "0.4 Carbide" — the type filter finds no
+    // match (compatibleNozzles empty + global), so no calibration entry resolves.
+    await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+    const f = await Filament.create({ name: "PLA", vendor: "X", type: "PLA", maxVolumetricSpeed: 10 });
+    const res = await slicerSync(
+      jsonReq("http://localhost/api/filaments/PLA%200.4%20Carbide", {
+        config: {
+          filamentdb_id: String(f._id),
+          filamentdb_nozzle: "0.4 Carbide",
+          filament_max_volumetric_speed: "20",
+          temperature: "230",
+        },
+      }),
+      { params: Promise.resolve({ id: "PLA 0.4 Carbide" }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.calibrations ?? []).toHaveLength(0); // no nozzle resolved → no calibration entry
+    // The values are NOT lost — they fall back to the filament-wide top level.
+    expect(fresh.maxVolumetricSpeed).toBe(20);
+    expect(fresh.temperatures.nozzle).toBe(230);
+  });
+
   it("#867 Phase 2 — an ObjectId-URL rename to a TAKEN name returns 409 name_taken and does NOT rename", async () => {
     const a = await Filament.create({ name: "Alpha", vendor: "X", type: "PLA" });
     await Filament.create({ name: "Beta", vendor: "X", type: "PLA" });
