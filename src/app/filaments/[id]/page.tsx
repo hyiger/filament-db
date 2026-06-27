@@ -1396,11 +1396,14 @@ function FilamentDetail() {
             + Min/Max fan speed shown here instead (fan values ride the settings bag). */}
         <InfoCard label={t("detail.field.minPrintSpeed")} value={filament.minPrintSpeed != null ? `${filament.minPrintSpeed} mm/s` : "—"} inherited={inherited.has("minPrintSpeed")} />
         <InfoCard label={t("detail.field.maxPrintSpeed")} value={filament.maxPrintSpeed != null ? `${filament.maxPrintSpeed} mm/s` : "—"} inherited={inherited.has("maxPrintSpeed")} />
-        {/* #872 / Codex P3: fan speeds live in the settings bag; a variant that
-            inherits the parent's settings has "settings" in _inherited, so mark
-            these tiles inherited for the same provenance signal as the others. */}
-        <InfoCard label={t("detail.field.minFanSpeed")} value={filament.settings?.min_fan_speed ? `${filament.settings.min_fan_speed}%` : "—"} inherited={inherited.has("settings")} />
-        <InfoCard label={t("detail.field.maxFanSpeed")} value={filament.settings?.max_fan_speed ? `${filament.settings.max_fan_speed}%` : "—"} inherited={inherited.has("settings")} />
+        {/* #872: fan speeds live in the settings bag. Per-KEY settings-inheritance
+            provenance isn't plumbed to the detail page (only the coarse "settings"
+            marker + the parent's {_id,name}), so unlike the first-class print-speed
+            tiles these intentionally carry NO inherited badge — a coarse badge would
+            mis-mark (flag "—"/unrelated values, or miss a genuinely-inherited fan
+            value when the child has any other setting override) (Codex P3). */}
+        <InfoCard label={t("detail.field.minFanSpeed")} value={filament.settings?.min_fan_speed ? `${filament.settings.min_fan_speed}%` : "—"} />
+        <InfoCard label={t("detail.field.maxFanSpeed")} value={filament.settings?.max_fan_speed ? `${filament.settings.max_fan_speed}%` : "—"} />
       </div>
 
       {/* Spool Tracker — always rendered. Pre-fix the outer gate hid the
