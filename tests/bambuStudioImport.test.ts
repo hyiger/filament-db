@@ -243,11 +243,15 @@ describe("parseBambuStudioProfile", () => {
       // though the importer side declared it in CALIBRATION_KEYS, so
       // every export → calibrate → re-import cycle silently dropped it.
       fanBridgeSpeed: 70,
+      // GH #891: chamber temp must round-trip too — pre-fix the exported
+      // chamber_temperature fell into the settings bag instead of the
+      // calibration row.
+      chamberTemp: 45,
     };
     const exported = calibrationToOrcaSlicerKeys(original);
     // Stamp a minimum identifier so the parser accepts the payload.
     const profile = { name: ["X"], ...exported };
-    const { calibrationHints } = parseBambuStudioProfile(profile);
+    const { calibrationHints, filament } = parseBambuStudioProfile(profile);
     expect(calibrationHints.extrusionMultiplier).toBe(original.extrusionMultiplier);
     expect(calibrationHints.maxVolumetricSpeed).toBe(original.maxVolumetricSpeed);
     expect(calibrationHints.pressureAdvance).toBe(original.pressureAdvance);
@@ -257,6 +261,11 @@ describe("parseBambuStudioProfile", () => {
     expect(calibrationHints.fanMinSpeed).toBe(original.fanMinSpeed);
     expect(calibrationHints.fanMaxSpeed).toBe(original.fanMaxSpeed);
     expect(calibrationHints.fanBridgeSpeed).toBe(original.fanBridgeSpeed);
+    expect(calibrationHints.chamberTemp).toBe(original.chamberTemp);
+    // #891: chamber keys must NOT leak into the settings passthrough bag
+    // (that would double-write on the next export).
+    expect(filament.settings.chamber_temperature).toBeUndefined();
+    expect(filament.settings.activate_chamber_temp_control).toBeUndefined();
   });
 
   it("stashes unknown keys in the settings passthrough bag", () => {

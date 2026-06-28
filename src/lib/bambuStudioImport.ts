@@ -148,6 +148,14 @@ const CALIBRATION_KEYS = new Set<string>([
   "fan_min_speed",
   "fan_max_speed",
   "bridge_fan_speed",
+  // GH #891: the exporter emits chamber temp under these keys; pull them out of
+  // the settings bag so the round-trip lands chamberTemp on the calibration row.
+  "chamber_temperature",
+  // `activate_chamber_temp_control` is the ONE documented exception to the
+  // "every member maps to a hint" invariant above: it's a derived enable flag
+  // (no independent datum) that the exporter re-emits from chamberTemp, so it's
+  // dropped from settings on import and regenerated on the next export.
+  "activate_chamber_temp_control",
 ]);
 
 /**
@@ -230,6 +238,8 @@ export interface CalibrationHints {
   fanMinSpeed?: number;
   fanMaxSpeed?: number;
   fanBridgeSpeed?: number;
+  /** Chamber temp (chamber_temperature) → calibrations[].chamberTemp (#891). */
+  chamberTemp?: number;
   /** True when at least one calibration-relevant value was present. The
    * route uses this to decide whether to upsert a calibrations[] row vs
    * leave the filament's calibration data alone. */
@@ -337,6 +347,9 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     fanMaxSpeed:
       num(json.additional_cooling_fan_speed) ?? num(json.fan_max_speed),
     fanBridgeSpeed: num(json.bridge_fan_speed),
+    // GH #891: round-trips the exporter's chamber_temperature back onto the
+    // calibration row instead of dropping it into the settings bag.
+    chamberTemp: num(json.chamber_temperature),
     hasAnyHint: false,
   };
   // Codex P3 on PR #387 round 6: `maxVolumetricSpeed` is the ONE
@@ -356,7 +369,8 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     calibrationHints.retractLift != null ||
     calibrationHints.fanMinSpeed != null ||
     calibrationHints.fanMaxSpeed != null ||
-    calibrationHints.fanBridgeSpeed != null;
+    calibrationHints.fanBridgeSpeed != null ||
+    calibrationHints.chamberTemp != null;
 
   // ── Settings bag passthrough ────────────────────────────────────────
   // Anything we didn't pluck into a structured field OR a calibration
