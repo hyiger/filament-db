@@ -92,4 +92,31 @@ describe("POST /api/tds — SSRF / scheme rejections return 400, real upstream f
     const res = await POST(jsonReq({ url: "https://example.com/tds.pdf", apiKey: "fake-key", provider: "gemini" }));
     expect(res.status).toBe(502);
   });
+
+  it("#916: targets a current (non-retired) Gemini model", async () => {
+    // gemini-2.0-flash was permanently retired 2026-06-01; pin the request URL
+    // to a current model so a future EOL regression is caught at test time.
+    let geminiUrl = "";
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+      if (url.includes("generativelanguage.googleapis.com")) {
+        geminiUrl = url;
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: () => Promise.resolve({ candidates: [{ content: { parts: [{ text: "{}" }] } }] }),
+        } as unknown as Response);
+      }
+      return Promise.resolve({
+        status: 200,
+        ok: true,
+        url: "https://example.com/tds.pdf",
+        headers: new Headers({ "content-type": "application/pdf" }),
+        arrayBuffer: () => Promise.resolve(new Uint8Array([0x25, 0x50, 0x44, 0x46]).buffer),
+      } as unknown as Response);
+    }));
+    const { POST } = await import("@/app/api/tds/route");
+    await POST(jsonReq({ url: "https://example.com/tds.pdf", apiKey: "fake-key", provider: "gemini" }));
+    expect(geminiUrl).not.toContain("gemini-2.0-flash");
+    expect(geminiUrl).toMatch(/models\/gemini-[0-9.]+-flash/);
+  });
 });
