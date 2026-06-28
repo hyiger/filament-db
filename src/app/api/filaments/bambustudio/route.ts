@@ -5,7 +5,7 @@ import {
   parseBambuStudioProfile,
   type BambuParseResult,
 } from "@/lib/bambuStudioImport";
-import { prepareBambuUpdate } from "@/lib/bambuStudioApply";
+import { prepareBambuUpdate, type BambuUpdatePayload } from "@/lib/bambuStudioApply";
 import {
   assertMultipartFormData,
   checkFileSize,
@@ -14,6 +14,26 @@ import {
   isDuplicateKeyError,
 } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+
+/**
+ * Per-phase validation gate for a prepared Bambu update: the settings-bag
+ * size-cap error AND the GH #892 inverted-nozzle-range guard (min > max, which
+ * the per-field 0–600 schema validators can't express — matching the OrcaSlicer
+ * sync route). Returns a 400 response, or null when the payload is clean. Used
+ * at every upsert phase so the guard can't be dropped from one of them.
+ */
+function bambuPayloadError(payload: BambuUpdatePayload): NextResponse | null {
+  if (payload.settingsResult.error) {
+    return errorResponse(payload.settingsResult.error, 400);
+  }
+  if (payload.nozzleRangeInverted) {
+    return errorResponse(
+      "Nozzle range minimum temperature must be less than or equal to the maximum",
+      400,
+    );
+  }
+  return null;
+}
 
 /**
  * POST /api/filaments/bambustudio
@@ -134,9 +154,8 @@ export async function POST(request: NextRequest) {
         parsed,
         await augmentExistingWithParent(existingActive),
       );
-      if (payload.settingsResult.error) {
-        return errorResponse(payload.settingsResult.error, 400);
-      }
+      const payloadError = bambuPayloadError(payload);
+      if (payloadError) return payloadError;
       delete (payload.update as Record<string, unknown>).spools;
       try {
         const updated = await Filament.findOneAndUpdate(
@@ -171,9 +190,8 @@ export async function POST(request: NextRequest) {
         parsed,
         await augmentExistingWithParent(existingTrashed),
       );
-      if (payload.settingsResult.error) {
-        return errorResponse(payload.settingsResult.error, 400);
-      }
+      const payloadError = bambuPayloadError(payload);
+      if (payloadError) return payloadError;
       delete (payload.update as Record<string, unknown>).spools;
       try {
         // Splice `_deletedAt: null` into the $set body so the resurrect
@@ -222,9 +240,8 @@ export async function POST(request: NextRequest) {
     }
 
     const createPayload = await prepareBambuUpdate(parsed, null);
-    if (createPayload.settingsResult.error) {
-      return errorResponse(createPayload.settingsResult.error, 400);
-    }
+    const createPayloadError = bambuPayloadError(createPayload);
+    if (createPayloadError) return createPayloadError;
     try {
       const created = await Filament.create({
         name,
@@ -250,9 +267,8 @@ export async function POST(request: NextRequest) {
         parsed,
         await augmentExistingWithParent(racing),
       );
-      if (racePayload.settingsResult.error) {
-        return errorResponse(racePayload.settingsResult.error, 400);
-      }
+      const racePayloadError = bambuPayloadError(racePayload);
+      if (racePayloadError) return racePayloadError;
       delete (racePayload.update as Record<string, unknown>).spools;
       try {
         const merged = await Filament.findOneAndUpdate(

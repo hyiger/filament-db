@@ -84,6 +84,22 @@ describe("Bambu Studio importer routes", () => {
       expect(stored.temperatures.bed).toBe(60);
     });
 
+    it("#892: rejects an inverted nozzle range (min > max) on create with 400", async () => {
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            filament_settings_id: ["Inverted Range PLA"],
+            nozzle_temperature_range_low: ["300"],
+            nozzle_temperature_range_high: ["200"],
+          }),
+        ),
+      );
+      expect(res.status).toBe(400);
+      expect(await Filament.findOne({ name: "Inverted Range PLA" })).toBeNull(); // not created
+    });
+
     it("updates an existing filament when the name matches (raw JSON body)", async () => {
       await Filament.create({
         name: "QA Bambu PLA",
@@ -540,6 +556,30 @@ describe("Bambu Studio importer routes", () => {
         { params: Promise.resolve({ id: "not-an-id" }) },
       );
       expect(res.status).toBe(400);
+    });
+
+    it("#892: rejects an inverted nozzle range (min > max) with 400, nothing persisted", async () => {
+      const target = await Filament.create({
+        name: "Range Target",
+        vendor: "QA",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: { nozzle: 210 },
+      });
+      const { POST } = await import("@/app/api/filaments/[id]/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          `http://localhost/api/filaments/${target._id}/bambustudio`,
+          minimalProfile({
+            nozzle_temperature_range_low: ["300"],
+            nozzle_temperature_range_high: ["200"],
+          }),
+        ),
+        { params: Promise.resolve({ id: String(target._id) }) },
+      );
+      expect(res.status).toBe(400);
+      const stored = await Filament.findById(target._id);
+      expect(stored.temperatures?.nozzleRangeMin ?? null).toBeNull(); // not written
     });
 
     it("returns 404 if the filament is soft-deleted between findOne and updateOne (Codex P2 #387 r6)", async () => {

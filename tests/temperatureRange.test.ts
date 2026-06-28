@@ -3,6 +3,7 @@ import {
   isInvertedNozzleRange,
   effectiveNozzleRangeForUpdate,
   inheritNozzleRangeFromParent,
+  isUpdateNozzleRangeInverted,
 } from "@/lib/temperatureRange";
 
 describe("isInvertedNozzleRange", () => {
@@ -122,5 +123,28 @@ describe("inheritNozzleRangeFromParent (Codex P2 r3 on #577)", () => {
 
   it("returns null when neither own nor parent carries a range", () => {
     expect(inheritNozzleRangeFromParent(null, null)).toBe(null);
+  });
+});
+
+describe("isUpdateNozzleRangeInverted (#892 — shared slicer-sync guard)", () => {
+  it("flags a full temperatures replace whose own range is inverted", () => {
+    const update = { temperatures: { nozzleRangeMin: 300, nozzleRangeMax: 200 } };
+    expect(isUpdateNozzleRangeInverted(update, undefined, null)).toBe(true);
+  });
+
+  it("passes a valid own range", () => {
+    const update = { temperatures: { nozzleRangeMin: 200, nozzleRangeMax: 260 } };
+    expect(isUpdateNozzleRangeInverted(update, undefined, null)).toBe(false);
+  });
+
+  it("returns false when the update touches neither endpoint (unrelated sync)", () => {
+    const update = { temperatures: { nozzle: 210 } };
+    expect(isUpdateNozzleRangeInverted(update, { nozzleRangeMin: 300, nozzleRangeMax: 100 }, null)).toBe(false);
+  });
+
+  it("flags an inversion that only emerges after inheriting the parent's endpoint", () => {
+    // Variant sets only min=300; inherits parent max=200 → effective 300>200.
+    const update = { temperatures: { nozzleRangeMin: 300 } };
+    expect(isUpdateNozzleRangeInverted(update, undefined, { nozzleRangeMax: 200 })).toBe(true);
   });
 });

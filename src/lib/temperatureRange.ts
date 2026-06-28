@@ -128,3 +128,26 @@ export function inheritNozzleRangeFromParent(
     nozzleRangeMax: o.nozzleRangeMax ?? parent?.nozzleRangeMax ?? null,
   };
 }
+
+/**
+ * GH #892: the full inverted-range guard the slicer-sync routes run, in one
+ * pure call so the three paths (OrcaSlicer sync + both Bambu import routes)
+ * can't drift. Combines the three steps:
+ *   1. compute the update's EFFECTIVE own range (`effectiveNozzleRangeForUpdate`);
+ *   2. inherit any endpoint the variant leaves null from its parent
+ *      (`inheritNozzleRangeFromParent` — pass `parentTemps = null/undefined`
+ *      for a standalone or non-variant);
+ *   3. test for inversion (`isInvertedNozzleRange`).
+ * Returns false when the update touches neither endpoint, so pre-existing bad
+ * data on an unrelated sync can't trip it. The caller loads the parent's
+ * temperatures (or passes null); this stays DB-free.
+ */
+export function isUpdateNozzleRangeInverted(
+  body: Record<string, unknown>,
+  storedTemps: NozzleTemperatureRange | null | undefined,
+  parentTemps: NozzleTemperatureRange | null | undefined,
+): boolean {
+  const own = effectiveNozzleRangeForUpdate(body, storedTemps);
+  if (own === null) return false;
+  return isInvertedNozzleRange(inheritNozzleRangeFromParent(own, parentTemps));
+}
