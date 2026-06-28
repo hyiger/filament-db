@@ -95,6 +95,36 @@ describe("GET /api/spools/by-location", () => {
     expect(shelfGroup.spools[0].instanceId).toMatch(/^[0-9a-f]{10}$/);
   });
 
+  it("#887: lastDryAt is the MAX dryCycles date, not the last-appended (backdated cycle)", async () => {
+    const shelf = await Location.create({ name: "Shelf", kind: "shelf" });
+    await Filament.create({
+      name: "Dried PLA",
+      vendor: "QA",
+      type: "PLA",
+      diameter: 1.75,
+      spools: [
+        {
+          label: "S1",
+          totalWeight: 1000,
+          locationId: shelf._id,
+          // Stored OUT of chronological order: the newest cycle is first, an
+          // older backdated cycle is appended last (what the no-$sort $push
+          // produces when a user backfills a past dry).
+          dryCycles: [
+            { date: new Date("2026-06-01T00:00:00Z"), temperature: 55, durationHours: 6 },
+            { date: new Date("2026-01-15T00:00:00Z"), temperature: 55, durationHours: 6 },
+          ],
+        },
+      ],
+    });
+
+    const { GET } = await import("@/app/api/spools/by-location/route");
+    const body = await (await GET(req())).json();
+    const spool = body.groups.flatMap((g: { spools: { label: string; lastDryAt: string }[] }) => g.spools)
+      .find((s: { label: string }) => s.label === "S1");
+    expect(new Date(spool.lastDryAt).toISOString()).toBe("2026-06-01T00:00:00.000Z");
+  });
+
   it("totalGrams subtracts INHERITED parent tare for variant spools (Codex P2 #391)", async () => {
     // Regression test for the over-report: when a variant has no
     // spoolWeight of its own but its parent does, the aggregation
