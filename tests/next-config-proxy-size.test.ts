@@ -46,12 +46,20 @@ function snapshotRouteCapBytes(): number {
   return expr.split("*").reduce((acc, part) => acc * parseFloat(part.trim()), 1);
 }
 
-describe("#878 — proxy body limit covers the largest API route body", () => {
-  it("experimental.proxyClientMaxBodySize is set and >= the snapshot route's MAX_SNAPSHOT_SIZE", () => {
+// The backup UI restores via multipart/form-data, so the proxy buffer must hold
+// MAX_SNAPSHOT_SIZE PLUS the multipart envelope (boundary + part headers — well
+// under a few KB for a single file field). Require a clear margin above the route
+// cap rather than allowing equality, so a near-limit snapshot can't be truncated
+// and a future proxyCap == routeCap (or a route-cap raised to match the proxy
+// cap) fails this test instead of silently reintroducing #878 (Codex P3).
+const MULTIPART_HEADROOM = 1024 * 1024; // 1 MiB — generous vs the real envelope
+
+describe("#878 — proxy body limit covers the largest API route body + multipart overhead", () => {
+  it("experimental.proxyClientMaxBodySize exceeds the snapshot route's MAX_SNAPSHOT_SIZE with headroom", () => {
     const experimental = nextConfig.experimental as Record<string, unknown> | undefined;
     const proxyCap = parseSize(experimental?.proxyClientMaxBodySize);
     const routeCap = snapshotRouteCapBytes();
     expect(routeCap).toBeGreaterThan(0); // sanity: the derivation actually parsed
-    expect(proxyCap).toBeGreaterThanOrEqual(routeCap);
+    expect(proxyCap).toBeGreaterThanOrEqual(routeCap + MULTIPART_HEADROOM);
   });
 });
