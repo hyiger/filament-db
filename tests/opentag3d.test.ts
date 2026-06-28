@@ -227,6 +227,25 @@ describe("ot3dToDecodedTag mapping → DecodedOpenPrintTag", () => {
     expect(tag.secondaryColors).toEqual(["#0000FF"]);
   });
 
+  it("#895: a transparent-black primary maps to NO color, not phantom #000000", () => {
+    const coex = decodeOpenTag3DTag(
+      encodeOpenTag3D({
+        material_base: "PLA",
+        color_name: "Coextruded",
+        color_1: { r: 0, g: 0, b: 0, a: 0 }, // spec "unused color" sentinel
+        color_2: { r: 17, g: 34, b: 51, a: 255 },
+      }),
+    );
+    expect(coex.color).toBeUndefined(); // NOT "#000000"
+    expect(coex.secondaryColors).toEqual(["#112233"]);
+
+    // Regression: a real OPAQUE-black primary (a=255) still maps to #000000.
+    const black = decodeOpenTag3DTag(
+      encodeOpenTag3D({ material_base: "PLA", color_name: "Black", color_1: { r: 0, g: 0, b: 0, a: 255 } }),
+    );
+    expect(black.color).toBe("#000000");
+  });
+
   it("gives two colors of the same material DISTINCT default names (Codex P2)", () => {
     const red = decodeOpenTag3DTag(
       encodeOpenTag3D({ material_base: "PLA", color_name: "Red", color_1: { r: 255, g: 0, b: 0, a: 255 } }),
