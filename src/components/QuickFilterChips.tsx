@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 export type QuickFilter = "all" | "lowStock" | "hasSpools" | "noCalibration";
@@ -8,6 +9,13 @@ interface Props {
   active: QuickFilter;
   onChange: (f: QuickFilter) => void;
   counts?: Partial<Record<QuickFilter, number>>;
+  /**
+   * Extra control(s) rendered inline at the END of the chip row (e.g. the
+   * "show out of stock" toggle). Kept inside this flex row — rather than as a
+   * sibling next to the component — so the control shares the chips' size,
+   * gap, and vertical baseline instead of misaligning against the row's margin.
+   */
+  trailing?: ReactNode;
 }
 
 const FILTERS: { key: QuickFilter; labelKey: string }[] = [
@@ -22,10 +30,10 @@ const FILTERS: { key: QuickFilter; labelKey: string }[] = [
  * dedicated component so the main list file stays readable and the chips
  * can be reused on the dashboard later.
  */
-export default function QuickFilterChips({ active, onChange, counts }: Props) {
+export default function QuickFilterChips({ active, onChange, counts, trailing }: Props) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-wrap gap-1.5 mb-2" role="tablist" aria-label={t("filter.aria.quick")}>
+    <div className="flex flex-wrap items-center gap-1.5 mb-2" role="tablist" aria-label={t("filter.aria.quick")}>
       {FILTERS.map((f) => {
         const isActive = active === f.key;
         const count = counts?.[f.key];
@@ -55,6 +63,7 @@ export default function QuickFilterChips({ active, onChange, counts }: Props) {
           </button>
         );
       })}
+      {trailing}
     </div>
   );
 }

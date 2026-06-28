@@ -1265,28 +1265,28 @@ export default function Home() {
       )}
 
       <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
-        <div className="flex items-center gap-2 flex-wrap">
-          <QuickFilterChips
-            active={quickFilter}
-            onChange={setQuickFilter}
-            counts={quickFilterCounts}
-          />
-          {quickFilter === "all" && !debouncedSearch && !typeFilter && !vendorFilter && outOfStockCount > 0 && hasAnyInStock && (
-            <button
-              onClick={() => setShowOutOfStock((s) => !s)}
-              aria-pressed={showOutOfStock}
-              className={`px-3 py-1 rounded-full text-sm border transition-colors ${
-                showOutOfStock
-                  ? "bg-gray-700 text-white border-gray-700 dark:bg-gray-200 dark:text-gray-900 dark:border-gray-200"
-                  : "bg-transparent text-gray-600 border-gray-300 hover:bg-gray-100 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700"
-              }`}
-            >
-              {showOutOfStock
-                ? t("filaments.hideOutOfStock")
-                : t("filaments.showOutOfStock", { count: outOfStockCount })}
-            </button>
-          )}
-        </div>
+        <QuickFilterChips
+          active={quickFilter}
+          onChange={setQuickFilter}
+          counts={quickFilterCounts}
+          trailing={
+            quickFilter === "all" && !debouncedSearch && !typeFilter && !vendorFilter && outOfStockCount > 0 && hasAnyInStock ? (
+              <button
+                onClick={() => setShowOutOfStock((s) => !s)}
+                aria-pressed={showOutOfStock}
+                className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                  showOutOfStock
+                    ? "bg-gray-700 text-white border-gray-700 dark:bg-gray-200 dark:text-gray-900 dark:border-gray-200"
+                    : "bg-transparent text-gray-600 border-gray-300 hover:bg-gray-100 dark:text-gray-300 dark:border-gray-600 dark:hover:bg-gray-700"
+                }`}
+              >
+                {showOutOfStock
+                  ? t("filaments.hideOutOfStock")
+                  : t("filaments.showOutOfStock", { count: outOfStockCount })}
+              </button>
+            ) : null
+          }
+        />
         <div className="flex gap-2 shrink-0">
           {/* Import / Export dropdown */}
           <div className="relative" ref={importExportRef}>
