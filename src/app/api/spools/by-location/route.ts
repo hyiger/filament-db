@@ -312,9 +312,18 @@ export async function GET(request: NextRequest) {
               // GH #887: the MAX date over dryCycles, NOT the last element.
               // The POST honors an arbitrary client `date` and $pushes with no
               // $sort, so a backdated cycle lands last — taking the last element
-              // would report that older date as "last dried". $max over an
-              // empty/missing array yields null.
-              lastDryAt: { $max: "$spools.dryCycles.date" },
+              // would report that older date as "last dried". A $reduce makes
+              // the per-document array traversal unambiguous (this is an
+              // EXPRESSION nested in $push, not a $group accumulator): $max with
+              // two scalar args ignores the null seed, so an empty/missing array
+              // yields null.
+              lastDryAt: {
+                $reduce: {
+                  input: { $ifNull: ["$spools.dryCycles", []] },
+                  initialValue: null,
+                  in: { $max: ["$$value", "$$this.date"] },
+                },
+              },
               filamentId: "$_id",
               filamentName: "$name",
               // Use the same EFFECTIVE values the filter stages used so
