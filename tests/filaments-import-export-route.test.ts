@@ -338,6 +338,50 @@ filamentdb_nozzle = 0.6 Brass
       expect(created).toBeTruthy();
       expect(created.color).toBe("#ff0000");
     });
+
+    it("#888: handles a quoted cell with an embedded newline without shredding the next row", async () => {
+      // The middle cell spans two physical lines; a row follows it. The old
+      // parser split on \n before quote-parsing → it shredded this into bogus
+      // rows. parseCsv keeps the quoted newline intact.
+      const csv =
+        'name,vendor,type,colorName\r\n' +
+        '"Multi PLA",MyVendor,PLA,"Galaxy\r\nBlack"\r\n' +
+        '"Second PLA",MyVendor,PETG,Red\r\n';
+      const file = new File([csv], "filaments.csv", { type: "text/csv" });
+      const res = await importCsv(
+        multipartReq("http://localhost/api/filaments/import-csv", file),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.created).toBe(2); // exactly two rows, not a shredded extra
+
+      const multi = await Filament.findOne({ name: "Multi PLA" });
+      expect(multi).toBeTruthy();
+      expect(multi.colorName).toContain("Galaxy");
+      expect(multi.colorName).toContain("Black"); // embedded newline preserved
+      const second = await Filament.findOne({ name: "Second PLA" });
+      expect(second).toBeTruthy();
+      expect(second.type).toBe("PETG"); // the row after the multi-line cell is intact
+      // No junk filament from a shredded fragment.
+      expect(await Filament.findOne({ name: 'Black"' })).toBeNull();
+    });
+
+    it("#888: a trailing blank/separator line does not count toward the data-row cap", async () => {
+      // Codex P2: the data-row cap applies AFTER blanks are filtered, so a valid
+      // file with a trailing blank line isn't falsely rejected as "too large".
+      const csv =
+        "name,vendor,type\r\n" +
+        '"Blank Tail PLA",MyVendor,PLA\r\n' +
+        "\r\n"; // trailing blank line
+      const file = new File([csv], "filaments.csv", { type: "text/csv" });
+      const res = await importCsv(
+        multipartReq("http://localhost/api/filaments/import-csv", file),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.created).toBe(1);
+      expect(await Filament.findOne({ name: "Blank Tail PLA" })).toBeTruthy();
+    });
   });
 
   describe("GET /api/filaments/export (INI bundle)", () => {
