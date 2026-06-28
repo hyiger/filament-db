@@ -828,6 +828,83 @@ describe("API route correctness", () => {
     expect((await Filament.findById(f._id)).color).toBe("#ff0000"); // real edit applied
   });
 
+  it("#885 — sync-back of a changed color clears the stale colorName", async () => {
+    const f = await Filament.create({
+      name: "Galaxy PLA",
+      vendor: "X",
+      type: "PLA",
+      color: "#101010",
+      colorName: "Galaxy Black",
+    });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        config: { filamentdb_id: String(f._id), filament_colour: "#ff0000" },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.color).toBe("#ff0000");
+    expect(fresh.colorName ?? null).toBeNull(); // stale name cleared, not left as "Galaxy Black"
+  });
+
+  it("#885 — sync-back of the SAME color keeps the colorName", async () => {
+    const f = await Filament.create({
+      name: "Galaxy PLA 2",
+      vendor: "X",
+      type: "PLA",
+      color: "#101010",
+      colorName: "Galaxy Black",
+    });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        config: { filamentdb_id: String(f._id), filament_colour: "#101010" },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    expect((await Filament.findById(f._id)).colorName).toBe("Galaxy Black"); // no-op, name preserved
+  });
+
+  it("#885/#918 — a case-only hex difference is NOT a change; colorName preserved", async () => {
+    const f = await Filament.create({
+      name: "Case PLA",
+      vendor: "X",
+      type: "PLA",
+      color: "#ff0000",
+      colorName: "Red",
+    });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        config: { filamentdb_id: String(f._id), filament_colour: "#FF0000" },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    expect((await Filament.findById(f._id)).colorName).toBe("Red"); // no-op, name kept
+  });
+
+  it("#885 — coextruded echo suppression leaves colorName untouched", async () => {
+    const f = await Filament.create({
+      name: "Coex named",
+      vendor: "X",
+      type: "PLA",
+      color: null,
+      colorName: "Rainbow",
+      secondaryColors: ["#112233", "#445566"],
+    });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        config: { filamentdb_id: String(f._id), filament_colour: "#112233" },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.color).toBeNull(); // echo suppressed (resolvedColor undefined)
+    expect(fresh.colorName).toBe("Rainbow"); // so name is NOT cleared
+  });
+
   it("#872 — a per-nozzle sync with an out-of-range baked calibration value is rejected with 400 (nothing persisted)", async () => {
     const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
     const f = await Filament.create({
