@@ -11,6 +11,20 @@ const nextConfig: NextConfig = {
   env: {
     APP_VERSION: pkg.version,
   },
+  experimental: {
+    // GH #878: `src/proxy.ts` runs on every `/api/*` request, and Next buffers
+    // the request body so it can be read in both the proxy and the route. That
+    // buffer defaults to 10MB — over which Next silently keeps only the first
+    // 10MB and lets the request continue with a PARTIAL body (it does not error).
+    // `POST /api/snapshot` accepts up to 50MB (MAX_SNAPSHOT_SIZE), so a valid
+    // 10–50MB backup was truncated before the handler, parsed as partial JSON,
+    // and rejected with a misleading "Invalid JSON in snapshot file" instead of
+    // restoring (or returning the route's real 413). Raise the cap above the
+    // largest accepted route body (50MB) with headroom for the multipart
+    // envelope, so legitimate bodies reach the handler and the route's own size
+    // guard stays authoritative. Keep this >= MAX_SNAPSHOT_SIZE.
+    proxyClientMaxBodySize: "52mb",
+  },
   async headers() {
     // GH #225 — Content-Security-Policy:
     //
