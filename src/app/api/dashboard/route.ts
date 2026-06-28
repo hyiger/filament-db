@@ -179,8 +179,18 @@ export async function GET() {
       for (const s of f.spools || []) {
         if (s.retired) continue;
         const cycles = s.dryCycles || [];
-        const lastCycle = cycles.length > 0 ? cycles[cycles.length - 1].date : null;
-        const lastCycleMs = lastCycle ? new Date(lastCycle).getTime() : 0;
+        // GH #887: take the MAX date, not the last element — the dry-cycle POST
+        // honors an arbitrary client `date` and appends with no sort, so a
+        // backdated cycle would otherwise be read as the most-recent dry.
+        let lastCycleMs = 0;
+        let lastCycle: typeof cycles[number]["date"] | null = null;
+        for (const c of cycles) {
+          const t = c.date ? new Date(c.date).getTime() : 0;
+          if (t > lastCycleMs) {
+            lastCycleMs = t;
+            lastCycle = c.date;
+          }
+        }
         if (now - lastCycleMs > dryThresholdMs) {
           dryDue.push({
             filamentId: String(f._id),

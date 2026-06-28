@@ -309,18 +309,19 @@ export async function GET(request: NextRequest) {
               // AggregatedSpool field comment above. The /inventory page
               // lazy-loads photos when expanding a row.
               dryCycleCount: { $size: { $ifNull: ["$spools.dryCycles", []] } },
+              // GH #887: the MAX date over dryCycles, NOT the last element.
+              // The POST honors an arbitrary client `date` and $pushes with no
+              // $sort, so a backdated cycle lands last — taking the last element
+              // would report that older date as "last dried". A $reduce makes
+              // the per-document array traversal unambiguous (this is an
+              // EXPRESSION nested in $push, not a $group accumulator): $max with
+              // two scalar args ignores the null seed, so an empty/missing array
+              // yields null.
               lastDryAt: {
-                // Latest dryCycles[].date if any. Subdocs are appended
-                // chronologically; the last element is the newest.
-                $let: {
-                  vars: { cycles: { $ifNull: ["$spools.dryCycles", []] } },
-                  in: {
-                    $cond: [
-                      { $gt: [{ $size: "$$cycles" }, 0] },
-                      { $arrayElemAt: ["$$cycles.date", -1] },
-                      null,
-                    ],
-                  },
+                $reduce: {
+                  input: { $ifNull: ["$spools.dryCycles", []] },
+                  initialValue: null,
+                  in: { $max: ["$$value", "$$this.date"] },
                 },
               },
               filamentId: "$_id",
