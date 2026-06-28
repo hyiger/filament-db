@@ -5,6 +5,15 @@ import { assertMultipartFormData, getErrorMessage, errorResponse, checkFileSize 
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 const MAX_IMPORT_ROWS = 10_000;
+// GH #888 (Codex P2): in non-header mode parseCsv counts EVERY parsed row —
+// header + blank/separator lines — toward its cap, before this route filters
+// blanks. So the parse-time cap must be a generous PHYSICAL/DoS bound, not the
+// business data-row limit; the strict MAX_IMPORT_ROWS DATA-row cap is enforced
+// below after blanks are filtered (the old parser allowed unlimited blank lines,
+// bounded only by the 10 MB file-size check that still applies). 2× leaves ample
+// headroom for the header + realistic separator blanks while parseCsv's own
+// physicalRowCap (rawRowCap + maxRows) still bounds a blank-line flood.
+const MAX_PHYSICAL_ROWS = MAX_IMPORT_ROWS * 2;
 
 export async function POST(request: NextRequest) {
   const guard = assertSameOriginRequest(request);
@@ -39,7 +48,7 @@ export async function POST(request: NextRequest) {
     // the object-key __proto__ vector (keys come from `mapping`, not the file).
     let parsedRaw: string[][];
     try {
-      parsedRaw = parseCsv(content, { header: false, maxRows: MAX_IMPORT_ROWS + 1 }) as string[][];
+      parsedRaw = parseCsv(content, { header: false, maxRows: MAX_PHYSICAL_ROWS }) as string[][];
     } catch (err) {
       if (err instanceof CsvRowLimitExceededError) {
         return errorResponse(`Import too large: exceeds the ${MAX_IMPORT_ROWS} row limit.`, 400);
@@ -58,8 +67,9 @@ export async function POST(request: NextRequest) {
         400,
       );
     }
-    // We allowed maxRows+1 (header counts toward the cap in non-header mode);
-    // enforce the DATA-row cap explicitly so the message matches the INI importer.
+    // Enforce the business DATA-row cap AFTER filtering blanks (parseCsv's
+    // parse-time cap is the generous physical/DoS bound above) so a capped
+    // export with a trailing blank line isn't falsely rejected (Codex P2 on #888).
     if (parsed.length - 1 > MAX_IMPORT_ROWS) {
       return errorResponse(
         `Import too large: ${parsed.length - 1} rows exceeds the ${MAX_IMPORT_ROWS} limit.`,

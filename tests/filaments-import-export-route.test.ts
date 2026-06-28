@@ -365,6 +365,23 @@ filamentdb_nozzle = 0.6 Brass
       // No junk filament from a shredded fragment.
       expect(await Filament.findOne({ name: 'Black"' })).toBeNull();
     });
+
+    it("#888: a trailing blank/separator line does not count toward the data-row cap", async () => {
+      // Codex P2: the data-row cap applies AFTER blanks are filtered, so a valid
+      // file with a trailing blank line isn't falsely rejected as "too large".
+      const csv =
+        "name,vendor,type\r\n" +
+        '"Blank Tail PLA",MyVendor,PLA\r\n' +
+        "\r\n"; // trailing blank line
+      const file = new File([csv], "filaments.csv", { type: "text/csv" });
+      const res = await importCsv(
+        multipartReq("http://localhost/api/filaments/import-csv", file),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.created).toBe(1);
+      expect(await Filament.findOne({ name: "Blank Tail PLA" })).toBeTruthy();
+    });
   });
 
   describe("GET /api/filaments/export (INI bundle)", () => {
