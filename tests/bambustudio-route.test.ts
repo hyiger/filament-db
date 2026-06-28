@@ -558,6 +558,29 @@ describe("Bambu Studio importer routes", () => {
       expect(res.status).toBe(400);
     });
 
+    it("#921: an unrelated sync (no range fields) does NOT 400 on a filament with a pre-existing inverted range", async () => {
+      // Per-field validators allow min/max individually, so legacy data can hold
+      // an inverted range. A profile that only updates nozzle_temperature must
+      // still apply — the range guard only fires on actual range input.
+      const target = await Filament.create({
+        name: "Legacy Bad Range",
+        vendor: "QA",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: { nozzle: 200, nozzleRangeMin: 300, nozzleRangeMax: 200 },
+      });
+      const { POST } = await import("@/app/api/filaments/[id]/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          `http://localhost/api/filaments/${target._id}/bambustudio`,
+          minimalProfile({ nozzle_temperature: ["215"] }), // no range fields
+        ),
+        { params: Promise.resolve({ id: String(target._id) }) },
+      );
+      expect(res.status).toBe(200);
+      expect((await Filament.findById(target._id)).temperatures.nozzle).toBe(215);
+    });
+
     it("#892: rejects an inverted nozzle range (min > max) with 400, nothing persisted", async () => {
       const target = await Filament.create({
         name: "Range Target",

@@ -163,11 +163,23 @@ export async function prepareBambuUpdate(
   // route. `update.temperatures` is a full replace (built from existing +
   // parsed), so it IS the effective own range; the variant inherits any null
   // endpoint from its already-resolved parent. The caller maps true → 400.
-  const nozzleRangeInverted = isUpdateNozzleRangeInverted(
-    update,
-    existing?.temperatures as NozzleTemperatureRange | undefined,
-    (existing?.parent?.temperatures as NozzleTemperatureRange | undefined) ?? null,
-  );
+  //
+  // Codex P2 (#921): gate on whether THIS profile actually carried a range
+  // endpoint. buildStructuredUpdate copies the stored endpoints into
+  // update.temperatures even when the profile only set e.g. nozzle_temperature,
+  // so without this gate an unrelated sync against legacy data that already has
+  // an inverted (own or inherited) range would 400. Matches the OrcaSlicer
+  // route's `touchesNozzleRange` gate (validate only on actual range input).
+  const incoming = parsed.filament.temperatures;
+  const rangeTouched =
+    incoming?.nozzleRangeMin != null || incoming?.nozzleRangeMax != null;
+  const nozzleRangeInverted =
+    rangeTouched &&
+    isUpdateNozzleRangeInverted(
+      update,
+      existing?.temperatures as NozzleTemperatureRange | undefined,
+      (existing?.parent?.temperatures as NozzleTemperatureRange | undefined) ?? null,
+    );
 
   return { update, unsetKeys, settingsResult, calibrationOutcome, nozzleRangeInverted };
 }
