@@ -69,7 +69,7 @@ export async function PUT(
     // payload) isn't falsely rejected; it still targets ONE unique printer and
     // the $addToSet is idempotent. Mirrors the printer routes' ref-array dedup.
     const printerIds: string[] | undefined = Array.isArray(body.printerIds)
-      ? [...new Set(body.printerIds.map(String))]
+      ? [...new Set((body.printerIds as unknown[]).map((p): string => String(p)))]
       : undefined;
 
     // GH #424: replace the "delete each known leak field + spread the rest"
