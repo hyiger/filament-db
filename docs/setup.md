@@ -127,6 +127,8 @@ You have two ways to secure an exposed instance, depending on **who** needs to r
 
 - **Browser web-UI access over the LAN** — do **not** rely on `FILAMENTDB_API_KEY` (it breaks the UI, above). Instead either keep the port on loopback and use the desktop app, or put Filament DB behind an **authenticating reverse proxy** (nginx/Caddy/Authelia with basic-auth, SSO, or mTLS) that terminates auth before the request reaches the app. When you use a reverse proxy, **bind Filament DB itself to loopback** (`-p 127.0.0.1:3456:3000` for Docker, `HOSTNAME=127.0.0.1` for the systemd service) or firewall its direct port — otherwise the app stays reachable at `http://<host>:3456` and browser users bypass the proxy straight to the unauthenticated API. The proxy must be the only way in.
 
+  > **Configure the proxy to preserve the original `Host` header.** The app's CSRF guard compares a request's `Origin` against its `Host`. A proxy that rewrites `Host` to the upstream address (e.g. nginx's bare `proxy_pass`, which sends `Host: 127.0.0.1:3000`) makes some clients' requests look cross-origin, so they're rejected with a `403`. For nginx add `proxy_set_header Host $host;` (and `proxy_set_header X-Forwarded-Proto $scheme;`); Caddy's `reverse_proxy` preserves `Host` by default. Modern browsers send `Sec-Fetch` metadata and are unaffected either way — this only matters for older browsers / embedded webviews that fall back to the `Origin`-vs-`Host` check.
+
 ### Building from Source
 
 ```bash

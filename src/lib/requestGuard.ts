@@ -82,7 +82,17 @@ export function assertSameOriginRequest(request: NextRequest): NextResponse | nu
     // different port would otherwise slip through (Codex review).
     // Ports are normalised against the Origin's scheme default, so an
     // explicit `:443`/`:80` on one side and an omitted default on the
-    // other still compare equal — no false-reject behind a proxy.
+    // other still compare equal — no false-reject on the PORT behind a
+    // proxy. GH #899: this normalisation only covers the port. The HOST is
+    // compared against the raw `Host` header and `X-Forwarded-Host` is NOT
+    // consulted, so a reverse proxy that rewrites Host to the upstream
+    // address (e.g. nginx's bare `proxy_pass`) will 403 the `Origin`-only
+    // fallback path (non-Fetch-Metadata clients). The proxy MUST preserve
+    // the original Host (`proxy_set_header Host $host`; Caddy does by
+    // default) — documented in docs/setup.md. Forwarded headers are
+    // deliberately not trusted here: they're spoofable by a direct
+    // (non-proxied) client, and the only safe deployment already requires
+    // the app to be loopback-bound with the proxy as the sole ingress.
     const defaultPort = originUrl.protocol === "https:" ? "443" : "80";
     const originHostname = originUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
     const originPort = originUrl.port || defaultPort;
