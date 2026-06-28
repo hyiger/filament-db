@@ -560,7 +560,15 @@ export async function POST(
         // because an arbitrary slicer hex won't reliably map to a named colour.
         // Gated on resolvedColor !== undefined above so the coextruded-echo
         // suppression path (which leaves color untouched) doesn't clear it.
-        if (resolvedColor !== filament.color) update.colorName = null;
+        // Codex P2 (#918): compare case-insensitively — the schema accepts
+        // mixed-case hex, so a `#ff0000` → `#FF0000` sync isn't a real colour
+        // change and must NOT drop the name.
+        if (
+          typeof filament.color !== "string" ||
+          resolvedColor.toLowerCase() !== filament.color.toLowerCase()
+        ) {
+          update.colorName = null;
+        }
       }
     }
     if (config.filament_diameter) { const v = parseFloat(config.filament_diameter); if (!isNaN(v)) update.diameter = v; }

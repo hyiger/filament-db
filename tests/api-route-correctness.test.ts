@@ -866,6 +866,24 @@ describe("API route correctness", () => {
     expect((await Filament.findById(f._id)).colorName).toBe("Galaxy Black"); // no-op, name preserved
   });
 
+  it("#885/#918 — a case-only hex difference is NOT a change; colorName preserved", async () => {
+    const f = await Filament.create({
+      name: "Case PLA",
+      vendor: "X",
+      type: "PLA",
+      color: "#ff0000",
+      colorName: "Red",
+    });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        config: { filamentdb_id: String(f._id), filament_colour: "#FF0000" },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    expect((await Filament.findById(f._id)).colorName).toBe("Red"); // no-op, name kept
+  });
+
   it("#885 — coextruded echo suppression leaves colorName untouched", async () => {
     const f = await Filament.create({
       name: "Coex named",
