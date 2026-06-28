@@ -194,10 +194,16 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
   }
 
   // 2. Vendor + type match. A confident auto-match requires BOTH to agree.
+  // GH #896: anchor the vendor regex to a full-string match (`^…$`), matching
+  // the name + type tiers. Unanchored, a scanned vendor was a SUBSTRING match
+  // ("Sun" → "Sunlu"), so a substring collision yielding a single vendor+type
+  // hit silently auto-resolved to a DIFFERENT vendor's filament with no chooser.
+  // (The vendor-ONLY suggestions tier below stays unanchored — it only ever
+  // returns `candidates`, so substring there is harmless.)
   const vendorTypeMatches =
     vendor && type
       ? await Filament.find({
-          vendor: { $regex: escapeRegex(vendor), $options: "i" },
+          vendor: { $regex: `^${escapeRegex(vendor)}$`, $options: "i" },
           type: { $regex: `^${escapeRegex(type)}$`, $options: "i" },
           _deletedAt: null,
         })
