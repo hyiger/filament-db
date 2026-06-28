@@ -4,6 +4,10 @@ interface MongooseCache {
   conn: typeof mongoose | null;
   promise: Promise<typeof mongoose> | null;
   uri: string | null;
+  /** GH #898 — the in-flight migration run, so two concurrent first-connects
+   *  can't both execute the migration block (the nozzle-split pass would mint
+   *  duplicate clones). Null when no run is in progress. */
+  migrationsPromise: Promise<void> | null;
   /** Per-migration completion flags. Each migration only runs until it
    * succeeds — a transient failure (network blip, MongoDB busy) won't
    * permanently mark the migration done, so the next request will retry
@@ -50,6 +54,7 @@ export default async function dbConnect() {
     conn: null,
     promise: null,
     uri: null,
+    migrationsPromise: null,
     migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
   };
 
@@ -64,6 +69,7 @@ export default async function dbConnect() {
     cached.conn = null;
     cached.promise = null;
     cached.uri = null;
+    cached.migrationsPromise = null;
     cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
   }
 
@@ -103,6 +109,19 @@ export default async function dbConnect() {
     cached.conn = await cached.promise;
   }
 
+  // GH #898: serialize the migration block behind ONE in-flight promise so two
+  // concurrent first-connects can't both run it. The GH#232 nozzle-split pass
+  // reads the duplicate set and mints clones; running it twice in parallel
+  // creates duplicate "Name #N" clones. The per-migration flags below still make
+  // each step idempotent + independently retryable — this only collapses
+  // concurrent runs into one. In-process only; a multi-process deployment (two
+  // desktops / desktop + Docker on one Atlas DB) would still need a DB-level
+  // lock, which is out of scope for #898.
+  if (cached.migrationsPromise) {
+    await cached.migrationsPromise;
+    return cached.conn;
+  }
+  const runMigrations = async (): Promise<void> => {
   // GH #732 — the 5-byte hex identity is moving from the filament to the
   // spool. Backfill a per-spool `instanceId` onto every spool that lacks one
   // so existing installs converge on first connect after upgrade. The first
@@ -373,6 +392,17 @@ export default async function dbConnect() {
         err,
       );
     }
+  }
+  }; // end runMigrations
+
+  cached.migrationsPromise = runMigrations();
+  try {
+    await cached.migrationsPromise;
+  } finally {
+    // Clear the in-flight handle so a future connect can re-attempt any
+    // migration whose flag didn't flip (each step's own try/catch leaves its
+    // flag false on failure); completed steps short-circuit on the retry.
+    cached.migrationsPromise = null;
   }
 
   return cached.conn;

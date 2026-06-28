@@ -340,4 +340,36 @@ describe("dbConnect", () => {
       syncIndexesSpy.mockRestore();
     }
   });
+
+  it("#898: concurrent first-connects run the nozzle-split migration once (no duplicate clones)", async () => {
+    await dbConnect();
+    const Nozzle = mongoose.models.Nozzle || (await import("@/models/Nozzle")).default;
+    const Printer = mongoose.models.Printer || (await import("@/models/Printer")).default;
+    await Nozzle.deleteMany({});
+    await Printer.collection.deleteMany({});
+
+    // One nozzle installed on TWO printers → the #232 split should clone it
+    // EXACTLY once (keep printer 1's ref, mint one clone for printer 2).
+    const noz = await Nozzle.create({ name: "Brass", diameter: 0.4, type: "Brass" });
+    await Printer.collection.insertMany([
+      { name: "P1", installedNozzles: [noz._id], _deletedAt: null },
+      { name: "P2", installedNozzles: [noz._id], _deletedAt: null },
+    ]);
+
+    // Re-arm the split migration and clear any in-flight handle.
+    const cached = (global as Record<string, unknown>).mongoose as {
+      migrations: { nozzlePhysicalInstances: boolean };
+      migrationsPromise: Promise<void> | null;
+    };
+    cached.migrations.nozzlePhysicalInstances = false;
+    cached.migrationsPromise = null;
+
+    // Fire two connects concurrently. Pre-fix both ran the split and each
+    // minted a clone (2 clones); the #898 serialization runs it once.
+    await Promise.all([dbConnect(), dbConnect()]);
+
+    const nozzles = await Nozzle.find({ _deletedAt: null });
+    expect(nozzles).toHaveLength(2); // original + exactly ONE clone
+    expect(cached.migrations.nozzlePhysicalInstances).toBe(true);
+  });
 });
