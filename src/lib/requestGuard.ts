@@ -83,16 +83,19 @@ export function assertSameOriginRequest(request: NextRequest): NextResponse | nu
     // Ports are normalised against the Origin's scheme default, so an
     // explicit `:443`/`:80` on one side and an omitted default on the
     // other still compare equal — no false-reject on the PORT behind a
-    // proxy. GH #899: this normalisation only covers the port. The HOST is
-    // compared against the raw `Host` header and `X-Forwarded-Host` is NOT
-    // consulted, so a reverse proxy that rewrites Host to the upstream
-    // address (e.g. nginx's bare `proxy_pass`) will 403 the `Origin`-only
-    // fallback path (non-Fetch-Metadata clients). The proxy MUST preserve
-    // the original Host (`proxy_set_header Host $host`; Caddy does by
-    // default) — documented in docs/setup.md. Forwarded headers are
-    // deliberately not trusted here: they're spoofable by a direct
-    // (non-proxied) client, and the only safe deployment already requires
-    // the app to be loopback-bound with the proxy as the sole ingress.
+    // proxy. GH #899/#924: this normalisation only covers the port. The HOST
+    // is compared against the raw `Host` header and `X-Forwarded-Host` is NOT
+    // consulted. This check runs even when `Sec-Fetch-Site` was accepted above
+    // (the function doesn't early-return), and browsers DO send `Origin` on
+    // same-origin mutating requests (POST/PUT/PATCH/DELETE) — so a reverse
+    // proxy that rewrites Host to the upstream address (e.g. nginx's bare
+    // `proxy_pass`) makes EVERY browser mutation through it look cross-origin
+    // and 403, not just non-Fetch-Metadata clients. The proxy MUST preserve
+    // the original Host authority INCLUDING port (`proxy_set_header Host
+    // $http_host`; Caddy does by default) — documented in docs/setup.md.
+    // Forwarded headers are deliberately not trusted here: spoofable by a
+    // direct (non-proxied) client, and the only safe deployment already
+    // requires the app to be loopback-bound with the proxy as the sole ingress.
     const defaultPort = originUrl.protocol === "https:" ? "443" : "80";
     const originHostname = originUrl.hostname.replace(/^\[|\]$/g, "").toLowerCase();
     const originPort = originUrl.port || defaultPort;
