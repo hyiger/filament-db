@@ -118,6 +118,33 @@ describe("/api/dashboard — dry-cycle inheritance", () => {
       .map((d) => d.filamentId);
     expect(ids).not.toContain(String(variant._id));
   });
+
+  it("#887: uses the MAX dryCycles date, so a recent dry stored before a backdated one is not 'due'", async () => {
+    const f = await Filament.create({
+      name: "Backdated dry PA",
+      vendor: "Test",
+      type: "PA",
+      dryingTemperature: 80,
+      dryingTime: 480,
+      spools: [
+        {
+          label: "Out of order",
+          totalWeight: 1000,
+          // Recent dry stored FIRST, an older backdated cycle appended LAST.
+          // Taking the last element (the old date) would wrongly mark this due.
+          dryCycles: [
+            { date: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), tempC: 80, durationMin: 480, notes: "" },
+            { date: new Date(Date.now() - 200 * 24 * 60 * 60 * 1000), tempC: 80, durationMin: 480, notes: "" },
+          ],
+        },
+      ],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const ids = (body.dryDue as { filamentId: string }[]).map((d) => d.filamentId);
+    expect(ids).not.toContain(String(f._id)); // newest dry is 3 days ago → not due
+  });
 });
 
 /**
