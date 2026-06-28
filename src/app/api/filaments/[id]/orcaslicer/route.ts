@@ -10,11 +10,7 @@ import {
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
-import {
-  isInvertedNozzleRange,
-  effectiveNozzleRangeForUpdate,
-  inheritNozzleRangeFromParent,
-} from "@/lib/temperatureRange";
+import { isUpdateNozzleRangeInverted } from "@/lib/temperatureRange";
 
 /**
  * Top-level body keys that map to structured Filament DB fields.
@@ -211,15 +207,16 @@ export async function POST(
     // it leaves null from its parent (resolveFilament: own ?? parent), so
     // resolve the parent's endpoints in before checking (#577).
     if (touchesNozzleRange) {
-      const own = effectiveNozzleRangeForUpdate(update, filament.temperatures);
-      let effRange = own;
+      // GH #892: shared combinator (same guard the Bambu routes use) — own
+      // effective range + parent inheritance + inversion test in one call.
+      let parentTemps = null;
       if (filament.parentId) {
         const parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
           .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
           .lean();
-        effRange = inheritNozzleRangeFromParent(own, parent?.temperatures);
+        parentTemps = parent?.temperatures ?? null;
       }
-      if (isInvertedNozzleRange(effRange)) {
+      if (isUpdateNozzleRangeInverted(update, filament.temperatures, parentTemps)) {
         return errorResponse(
           "Nozzle range minimum temperature must be less than or equal to the maximum",
           400,

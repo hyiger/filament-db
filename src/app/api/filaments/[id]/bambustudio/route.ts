@@ -11,10 +11,7 @@ import {
   parseBambuStudioProfile,
   type BambuParseResult,
 } from "@/lib/bambuStudioImport";
-import {
-  buildStructuredUpdate,
-  resolveAndApplyCalibration,
-} from "@/lib/bambuStudioApply";
+import { prepareBambuUpdate } from "@/lib/bambuStudioApply";
 import {
   assertMultipartFormData,
   checkFileSize,
@@ -22,7 +19,6 @@ import {
   errorResponseFromCaught,
 } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
-import { mergeSlicerSettings } from "@/lib/slicerSettings";
 
 /**
  * GET /api/filaments/{id}/bambustudio
@@ -204,29 +200,22 @@ export async function POST(
       parent,
     };
 
-    const { set: update, unset: unsetKeys } = buildStructuredUpdate(
-      parsed.filament,
-      existingWithParent,
-    );
-
-    const settingsResult = mergeSlicerSettings(
-      (existing.settings as Record<string, unknown>) || {},
-      parsed.filament.settings,
-      new Set(Object.keys(parsed.filament.settings).filter(() => false)),
-    );
+    // GH #893: use the shared prepareBambuUpdate (structured projection +
+    // settings merge + calibration resolve) instead of re-inlining the pipeline,
+    // so this route can't drift from the bulk route / helper.
+    const { update, unsetKeys, settingsResult, calibrationOutcome, nozzleRangeInverted } =
+      await prepareBambuUpdate(parsed, existingWithParent);
     if (settingsResult.error) {
       return errorResponse(settingsResult.error, 400);
     }
-    if (settingsResult.added.length > 0) {
-      update.settings = settingsResult.settings;
+    // GH #892: reject an inverted nozzle range (min > max) the way the
+    // OrcaSlicer sync route does — the per-field 0–600 validators can't.
+    if (nozzleRangeInverted) {
+      return errorResponse(
+        "Nozzle range minimum temperature must be less than or equal to the maximum",
+        400,
+      );
     }
-
-    const calibrationOutcome = await resolveAndApplyCalibration(
-      parsed.filament,
-      parsed.calibrationHints,
-      update,
-      existing,
-    );
 
     // Never touch spool subdocs on a sync — that's strictly inventory
     // state and not in the Bambu file.

@@ -25,6 +25,7 @@ import {
   type SettingsMergeResult,
 } from "@/lib/slicerSettings";
 import { resolveSyncBackColor } from "@/lib/prusaSlicerBundle";
+import { isUpdateNozzleRangeInverted, type NozzleTemperatureRange } from "@/lib/temperatureRange";
 import type {
   BambuParseResult,
   CalibrationHints,
@@ -97,6 +98,12 @@ export interface BambuUpdatePayload {
    * UI can show "applied to printer X / nozzle Y" or the unresolved
    * nudge. */
   calibrationOutcome: CalibrationOutcome;
+  /** GH #892: true when the resulting EFFECTIVE nozzle range (this update's
+   * own range, with endpoints the variant leaves null inherited from its
+   * parent) is inverted (min > max). The per-field 0–600 schema validators
+   * can't express the cross-field relationship, so both Bambu routes reject
+   * with 400 when this is set — matching the OrcaSlicer sync route. */
+  nozzleRangeInverted: boolean;
 }
 
 /** Structured-projection result. `set` is the `$set` body; `unset` lists
@@ -152,7 +159,29 @@ export async function prepareBambuUpdate(
     existing,
   );
 
-  return { update, unsetKeys, settingsResult, calibrationOutcome };
+  // GH #892: reject an inverted nozzle range, mirroring the OrcaSlicer sync
+  // route. `update.temperatures` is a full replace (built from existing +
+  // parsed), so it IS the effective own range; the variant inherits any null
+  // endpoint from its already-resolved parent. The caller maps true → 400.
+  //
+  // Codex P2 (#921): gate on whether THIS profile actually carried a range
+  // endpoint. buildStructuredUpdate copies the stored endpoints into
+  // update.temperatures even when the profile only set e.g. nozzle_temperature,
+  // so without this gate an unrelated sync against legacy data that already has
+  // an inverted (own or inherited) range would 400. Matches the OrcaSlicer
+  // route's `touchesNozzleRange` gate (validate only on actual range input).
+  const incoming = parsed.filament.temperatures;
+  const rangeTouched =
+    incoming?.nozzleRangeMin != null || incoming?.nozzleRangeMax != null;
+  const nozzleRangeInverted =
+    rangeTouched &&
+    isUpdateNozzleRangeInverted(
+      update,
+      existing?.temperatures as NozzleTemperatureRange | undefined,
+      (existing?.parent?.temperatures as NozzleTemperatureRange | undefined) ?? null,
+    );
+
+  return { update, unsetKeys, settingsResult, calibrationOutcome, nozzleRangeInverted };
 }
 
 export function buildStructuredUpdate(
