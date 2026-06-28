@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { checkContentLength } from "@/lib/apiErrorHandler";
 import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
@@ -30,6 +31,15 @@ const OID_FIELDS = new Set([
   "filamentId",
   "spoolId",
 ]);
+/**
+ * GH #890: the ObjectId-array fields. The array branch of restoreTypes must
+ * coerce a 24-hex string element to an ObjectId ONLY for these keys — mirroring
+ * the field-gated scalar path (OID_FIELDS). Without this gate it coerced EVERY
+ * 24-hex array element regardless of field name, so a future string-array field
+ * whose values happened to be 24 hex chars would have its type silently changed
+ * on restore. The only ObjectId arrays in the schema are the two nozzle arrays.
+ */
+const OID_ARRAY_FIELDS = new Set(["compatibleNozzles", "installedNozzles"]);
 const DATE_FIELDS = new Set([
   "createdAt",
   "updatedAt",
@@ -43,8 +53,11 @@ const DATE_FIELDS = new Set([
 
 /**
  * Recursively restore ObjectId and Date fields that were serialized as strings.
- * Handles _id, parentId, array elements in compatibleNozzles/installedNozzles,
- * nested refs in calibrations/spools, and timestamp fields.
+ * Handles _id, parentId, ObjectId-array elements (only the keys in
+ * OID_ARRAY_FIELDS — compatibleNozzles/installedNozzles), nested refs in
+ * calibrations/spools, and timestamp fields. Array-element ObjectId coercion is
+ * field-gated (GH #890) so a non-ObjectId 24-hex string in any other array
+ * round-trips as a string.
  */
 function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
   for (const [key, val] of Object.entries(doc)) {
@@ -58,7 +71,9 @@ function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
       }
     } else if (Array.isArray(val)) {
       doc[key] = val.map((item) => {
-        if (typeof item === "string" && OID_RE.test(item)) {
+        // GH #890: gate on the key, mirroring the scalar path — only coerce
+        // 24-hex elements of the known ObjectId arrays, never any 24-hex string.
+        if (typeof item === "string" && OID_RE.test(item) && OID_ARRAY_FIELDS.has(key)) {
           return new mongoose.Types.ObjectId(item);
         }
         if (typeof item === "object" && item !== null && !Array.isArray(item)) {
@@ -222,8 +237,18 @@ async function restoreSnapshot(request: NextRequest) {
       const text = await file.text();
       snapshot = JSON.parse(text);
     } else {
+      // GH #889: cap the raw body via Content-Length BEFORE buffering it, so a
+      // multi-GB body can't force full allocation before the post-buffer guard
+      // fires (the sibling raw-body routes — prusaslicer, nfc/decode — do this).
+      const lenError = checkContentLength(request, MAX_SNAPSHOT_SIZE);
+      if (lenError) return lenError;
       const text = await request.text();
-      if (text.length > MAX_SNAPSHOT_SIZE) {
+      // Codex P2 (#890→#920): measure BYTES, not UTF-16 code units. When the
+      // Content-Length header is missing/wrong the preflight above doesn't fire,
+      // so this belt-and-suspenders check is the only byte cap — and multi-byte
+      // text would slip past a `text.length` (code-unit) comparison. Matches the
+      // sibling raw-body routes' `Buffer.byteLength(body, "utf8")`.
+      if (Buffer.byteLength(text, "utf8") > MAX_SNAPSHOT_SIZE) {
         return NextResponse.json(
           { error: `Snapshot too large (max ${MAX_SNAPSHOT_SIZE / 1024 / 1024}MB)` },
           { status: 413 },
