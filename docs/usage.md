@@ -346,7 +346,7 @@ The TDS URL is also saved to the filament's `tdsUrl` field for future reference.
 
 | Provider | Model | Free Tier | PDF Support |
 |----------|-------|-----------|-------------|
-| Google Gemini | gemini-2.0-flash | 15 requests/minute | Native |
+| Google Gemini | gemini-2.5-flash | 15 requests/minute | Native |
 | Anthropic Claude | claude-sonnet-4-20250514 | Pay-per-use | Native |
 | OpenAI ChatGPT | gpt-4o-mini | Pay-per-use | Text extraction |
 

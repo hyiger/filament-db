@@ -51,6 +51,22 @@ describe("/api/filaments/match", () => {
     expect(body.candidates).toEqual([]);
   });
 
+  it("#896: does NOT confidently match when the scanned vendor is only a SUBSTRING of the stored vendor", async () => {
+    // "Sun" must not auto-resolve to "Sunlu" — the vendor regex is anchored, so
+    // a substring brand can't silently select a different vendor's filament.
+    await Filament.create({ name: "Sunlu PLA Meta", vendor: "Sunlu", type: "PLA" });
+    const res = await matchFilaments(
+      matchReq({ name: "Some Tag", vendor: "Sun", type: "PLA" }),
+    );
+    const body = await res.json();
+    expect(body.match).toBeNull(); // no confident substring match
+    // exact vendor still resolves confidently
+    const exact = await matchFilaments(
+      matchReq({ name: "Some Tag", vendor: "Sunlu", type: "PLA" }),
+    );
+    expect((await exact.json()).match?.name).toBe("Sunlu PLA Meta");
+  });
+
   it("returns multiple vendor+type hits as candidates, with no auto-match", async () => {
     await Filament.create({ name: "Bambu PC Black", vendor: "Bambu Lab", type: "PC" });
     await Filament.create({ name: "Bambu PC Clear", vendor: "Bambu Lab", type: "PC" });

@@ -236,6 +236,18 @@ const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 5_000; // 5 seconds initial wait
 
 /**
+ * Gemini model used for TDS extraction (GH #916). The previous hard-coded
+ * `gemini-2.0-flash` was permanently retired by Google on 2026-06-01, so every
+ * extraction failed with a 429 that surfaced as a misleading "rate limit
+ * exceeded". `gemini-2.5-flash` is the conservative, broadly-available
+ * replacement. Google's guidance is to migrate to a 3.x model
+ * (`gemini-3.1-flash` / `gemini-3.1-flash-lite`); this single constant makes
+ * that a one-line bump once the target model is confirmed on the deployment's
+ * API tier. Keep the docs model table (docs/usage.md) in sync when changing it.
+ */
+const GEMINI_MODEL = "gemini-2.5-flash";
+
+/**
  * Retry a provider call with exponential backoff on rate-limit errors.
  */
 async function withRetry(
@@ -285,7 +297,7 @@ async function callGemini(
   }
 
   const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

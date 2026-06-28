@@ -75,7 +75,17 @@ export function ot3dToDecodedTag(decoded: Ot3dDecoded): DecodedOpenPrintTag {
   if (mod) aux.opentag3d_material_modifier = mod;
 
   // ── colors ──
-  const color = f.color_1 ? rgbaToHex(f.color_1 as Ot3dRgba) : undefined;
+  // GH #895: treat a transparent-black primary (r=g=b=a=0, the spec's "unused
+  // color" sentinel) as NO primary, matching the secondary-slot loop below.
+  // The decoder keeps color_1 even when transparent-black; mapping it by
+  // truthiness alone yielded a phantom "#000000" primary (rgbaToHex drops
+  // alpha) that broke the coextruded null-primary invariant in
+  // decodedTagToFilament. A real opaque-black tag has a=255, so isTransparentBlack
+  // distinguishes it and it is unaffected.
+  const color =
+    f.color_1 && !isTransparentBlack(f.color_1 as Ot3dRgba)
+      ? rgbaToHex(f.color_1 as Ot3dRgba)
+      : undefined;
   const secondaryColors: string[] = [];
   for (const id of ["color_2", "color_3", "color_4"]) {
     const c = f[id] as Ot3dRgba | undefined;
