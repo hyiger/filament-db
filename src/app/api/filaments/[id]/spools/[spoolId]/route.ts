@@ -119,6 +119,17 @@ export async function PUT(
       );
     }
 
+    // GH #268: retiring a spool excludes it from inventory, so it must not stay
+    // loaded in a printer AMS slot (the assignment route already refuses to
+    // *assign* a retired spool). GH #886: clear it BEFORE the retire write — the
+    // same clear-before ordering as DELETE — so a slot-clear failure leaves the
+    // spool active and the op retryable rather than retired-but-still-slotted.
+    // The clear is an idempotent no-match-safe updateMany, so pre-clearing for a
+    // spool that turns out not to exist (the 404 below) is harmless.
+    if (validation.retired === true) {
+      await assignSpoolToSlot(Printer, spoolId, null);
+    }
+
     const filament = await Filament.findOneAndUpdate(
       { _id: id, _deletedAt: null, "spools._id": spoolId },
       { $set: update },
@@ -127,14 +138,6 @@ export async function PUT(
 
     if (!filament) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-
-    // GH #268: retiring a spool excludes it from inventory, so it must
-    // not stay loaded in a printer AMS slot — the assignment route
-    // already refuses to *assign* a retired spool. Clear it from every
-    // slot, the same way the spool DELETE handler does.
-    if (validation.retired === true) {
-      await assignSpoolToSlot(Printer, spoolId, null);
     }
 
     return NextResponse.json(filament);
@@ -160,9 +163,29 @@ export async function DELETE(
       return errorResponse("Invalid filament or spool id", 400);
     }
 
-    // Require the spool to exist on the filament. Without this guard, a
-    // $pull with a missing spoolId is a silent no-op — the client gets a
-    // 200 and can't tell whether the delete actually happened.
+    // GH #886: clear the spool from AMS slots BEFORE removing it, mirroring the
+    // filament-level clear-BEFORE-delete ordering (#261/#333). If the slot-clear
+    // threw AFTER the $pull, the spool would be gone but Printer.amsSlots[] would
+    // still reference it — and every retry 404s before reaching the clear (the
+    // `spools._id` filter no longer matches), leaving a dangling, uncleanable
+    // ref. A precondition read keeps the 404 contract for a genuinely missing
+    // spool without clearing slots for one that doesn't exist.
+    const exists = await Filament.exists({
+      _id: id,
+      _deletedAt: null,
+      "spools._id": spoolId,
+    });
+    if (!exists) {
+      return NextResponse.json(
+        { error: "Filament or spool not found" },
+        { status: 404 },
+      );
+    }
+    // GH #242 — a deleted spool must not linger in a printer AMS slot.
+    // assignSpoolToSlot(..., null) is an idempotent, no-match-safe updateMany,
+    // so a failure here leaves the spool present and the whole op retryable.
+    await assignSpoolToSlot(Printer, spoolId, null);
+
     const filament = await Filament.findOneAndUpdate(
       { _id: id, _deletedAt: null, "spools._id": spoolId },
       { $pull: { spools: { _id: spoolId } } },
@@ -170,14 +193,13 @@ export async function DELETE(
     ).lean();
 
     if (!filament) {
+      // A concurrent delete removed the spool between the precondition read and
+      // the $pull. The slot is already cleared; just report not-found.
       return NextResponse.json(
         { error: "Filament or spool not found" },
         { status: 404 },
       );
     }
-
-    // GH #242 — a deleted spool must not linger in a printer AMS slot.
-    await assignSpoolToSlot(Printer, spoolId, null);
 
     return NextResponse.json(filament);
   } catch (err) {
