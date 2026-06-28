@@ -243,7 +243,12 @@ async function restoreSnapshot(request: NextRequest) {
       const lenError = checkContentLength(request, MAX_SNAPSHOT_SIZE);
       if (lenError) return lenError;
       const text = await request.text();
-      if (text.length > MAX_SNAPSHOT_SIZE) {
+      // Codex P2 (#890→#920): measure BYTES, not UTF-16 code units. When the
+      // Content-Length header is missing/wrong the preflight above doesn't fire,
+      // so this belt-and-suspenders check is the only byte cap — and multi-byte
+      // text would slip past a `text.length` (code-unit) comparison. Matches the
+      // sibling raw-body routes' `Buffer.byteLength(body, "utf8")`.
+      if (Buffer.byteLength(text, "utf8") > MAX_SNAPSHOT_SIZE) {
         return NextResponse.json(
           { error: `Snapshot too large (max ${MAX_SNAPSHOT_SIZE / 1024 / 1024}MB)` },
           { status: 413 },
