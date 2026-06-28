@@ -130,8 +130,26 @@ export class NfcService extends EventEmitter {
    */
   private txChain: Promise<unknown> = Promise.resolve();
 
-  private runExclusive<T>(op: () => Promise<T>): Promise<T> {
-    const run = this.txChain.then(op, op);
+  /**
+   * Run `op` after all prior transport ops settle. When a `signal` is passed
+   * (from the IPC-timeout AbortController in main.ts), it is checked at DEQUEUE
+   * — the moment this op reaches the front of the queue — so a mutation whose
+   * 15s IPC timeout already fired WHILE QUEUED is dropped before it touches the
+   * tag (GH #915: otherwise a queued write/format runs later against whatever
+   * tag is now present, after the user saw failure and may have swapped tags).
+   * An op already in progress when the timeout fires is left to finish (the
+   * hazard is the still-queued one, not the in-flight one).
+   */
+  private runExclusive<T>(op: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const guarded = () => {
+      if (signal?.aborted) {
+        throw new Error(
+          "NFC operation aborted — the reader was busy too long; remove the tag and try again.",
+        );
+      }
+      return op();
+    };
+    const run = this.txChain.then(guarded, guarded);
     this.txChain = run.then(
       () => undefined,
       () => undefined,
@@ -782,8 +800,8 @@ export class NfcService extends EventEmitter {
    *      blank/unrecognized content so its friendly message surfaces.
    *   3. ISO 15693 / NFC-V (SLIX2) — OpenPrintTag, or OpenTag3D on SLIX2.
    */
-  async readTag(): Promise<DecodedOpenPrintTag> {
-    return this.runExclusive(() => this.readTagImpl()); // GH #903: serialize
+  async readTag(signal?: AbortSignal): Promise<DecodedOpenPrintTag> {
+    return this.runExclusive(() => this.readTagImpl(), signal); // GH #903/#915
   }
 
   private async readTagImpl(): Promise<DecodedOpenPrintTag> {
@@ -811,8 +829,8 @@ export class NfcService extends EventEmitter {
     });
   }
 
-  async writeTag(cborPayload: Uint8Array, productUrl?: string): Promise<void> {
-    return this.runExclusive(() => this.writeTagImpl(cborPayload, productUrl)); // GH #903
+  async writeTag(cborPayload: Uint8Array, productUrl?: string, signal?: AbortSignal): Promise<void> {
+    return this.runExclusive(() => this.writeTagImpl(cborPayload, productUrl), signal); // GH #903/#915
   }
 
   private async writeTagImpl(cborPayload: Uint8Array, productUrl?: string): Promise<void> {
@@ -890,8 +908,8 @@ export class NfcService extends EventEmitter {
     });
   }
 
-  async formatTag(): Promise<void> {
-    return this.runExclusive(() => this.formatTagImpl()); // GH #903: serialize
+  async formatTag(signal?: AbortSignal): Promise<void> {
+    return this.runExclusive(() => this.formatTagImpl(), signal); // GH #903/#915
   }
 
   private async formatTagImpl(): Promise<void> {
@@ -976,8 +994,8 @@ export class NfcService extends EventEmitter {
    * a blank/foreign tag has no CC to lock, so both are refused with a typed
    * message the renderer maps to friendly copy.
    */
-  async setReadOnly(readOnly: boolean): Promise<void> {
-    return this.runExclusive(() => this.setReadOnlyImpl(readOnly)); // GH #903
+  async setReadOnly(readOnly: boolean, signal?: AbortSignal): Promise<void> {
+    return this.runExclusive(() => this.setReadOnlyImpl(readOnly), signal); // GH #903/#915
   }
 
   private async setReadOnlyImpl(readOnly: boolean): Promise<void> {

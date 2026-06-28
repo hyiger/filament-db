@@ -643,13 +643,25 @@ const MAX_NFC_PAYLOAD_BYTES = 4096;
  * operations should report progress through their own status channel
  * instead.
  */
-function withIpcTimeout<T>(fn: () => Promise<T>, label: string, timeoutMs: number = IPC_TIMEOUT_MS): Promise<T> {
-  return Promise.race([
-    fn(),
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`IPC timeout: ${label} took longer than ${timeoutMs}ms`)), timeoutMs)
-    ),
-  ]);
+function withIpcTimeout<T>(
+  fn: (signal: AbortSignal) => Promise<T>,
+  label: string,
+  timeoutMs: number = IPC_TIMEOUT_MS,
+): Promise<T> {
+  // GH #915: abort on timeout so an operation that's still QUEUED behind a stuck
+  // op (e.g. an NFC write waiting on a stalled auto-read) can be dropped before
+  // it runs — without this the renderer promise rejects but the queued work
+  // still executes later, possibly against a different tag. Callers that don't
+  // need cancellation simply ignore the signal arg.
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(`IPC timeout: ${label} took longer than ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  return Promise.race([fn(controller.signal), timeout]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -1158,7 +1170,7 @@ ipcMain.handle("nfc-get-status", (event) => {
 ipcMain.handle("nfc-read-tag", async (event) => {
   assertTrustedSender(event, "nfc-read-tag");
   if (!nfcService) throw new Error("NFC not initialized");
-  return withIpcTimeout(() => nfcService!.readTag(), "nfc-read-tag");
+  return withIpcTimeout((signal) => nfcService!.readTag(signal), "nfc-read-tag");
 });
 
 ipcMain.handle("nfc-write-tag", async (event, payload: number[], productUrl?: string) => {
@@ -1186,7 +1198,7 @@ ipcMain.handle("nfc-write-tag", async (event, payload: number[], productUrl?: st
     throw new Error("nfc-write-tag: productUrl must be an http(s) URL");
   }
 
-  await withIpcTimeout(() => nfcService!.writeTag(new Uint8Array(payload), productUrl), "nfc-write-tag");
+  await withIpcTimeout((signal) => nfcService!.writeTag(new Uint8Array(payload), productUrl, signal), "nfc-write-tag");
 
   // After a successful write, schedule a delayed read-back so the UI shows
   // the updated tag data. We delay to let the disconnect settle — reading
@@ -1206,7 +1218,7 @@ ipcMain.handle("nfc-write-tag", async (event, payload: number[], productUrl?: st
 ipcMain.handle("nfc-format-tag", async (event) => {
   assertTrustedSender(event, "nfc-format-tag");
   if (!nfcService) throw new Error("NFC not initialized");
-  await withIpcTimeout(() => nfcService!.formatTag(), "nfc-format-tag");
+  await withIpcTimeout((signal) => nfcService!.formatTag(signal), "nfc-format-tag");
   return { success: true };
 });
 
@@ -1218,7 +1230,7 @@ ipcMain.handle("nfc-set-readonly", async (event, readOnly: unknown) => {
   if (typeof readOnly !== "boolean") {
     throw new Error("nfc-set-readonly: readOnly must be a boolean");
   }
-  await withIpcTimeout(() => nfcService!.setReadOnly(readOnly), "nfc-set-readonly");
+  await withIpcTimeout((signal) => nfcService!.setReadOnly(readOnly, signal), "nfc-set-readonly");
   return { success: true };
 });
 
