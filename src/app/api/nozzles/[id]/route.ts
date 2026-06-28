@@ -64,8 +64,12 @@ export async function PUT(
     // currently has it installed gets it removed. This lets the nozzle edit
     // form manage the assignment from the nozzle side while the Printer form
     // continues to manage it from the printer side.
+    // GH #912 (Codex P3): dedupe before the one-printer check so a client that
+    // sends the same printer twice (`[id, id]` — a duplicated selection / retry
+    // payload) isn't falsely rejected; it still targets ONE unique printer and
+    // the $addToSet is idempotent. Mirrors the printer routes' ref-array dedup.
     const printerIds: string[] | undefined = Array.isArray(body.printerIds)
-      ? body.printerIds
+      ? [...new Set(body.printerIds.map(String))]
       : undefined;
 
     // GH #424: replace the "delete each known leak field + spread the rest"

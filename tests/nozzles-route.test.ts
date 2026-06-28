@@ -372,6 +372,21 @@ describe("/api/nozzles", () => {
       expect(res.status).toBe(404);
     });
 
+    it("#912: a duplicated single printer in printerIds is deduped, not rejected", async () => {
+      const noz = await Nozzle.create({ name: "Dup OK", diameter: 0.4, type: "Brass" });
+      const a = await Printer.create({ name: "PDup", manufacturer: "X", printerModel: "1" });
+      const res = await updateNozzle(
+        jsonReq(
+          `http://localhost/api/nozzles/${noz._id}`,
+          { printerIds: [String(a._id), String(a._id)] }, // same printer twice
+          "PUT",
+        ),
+        { params: Promise.resolve({ id: String(noz._id) }) },
+      );
+      expect(res.status).toBe(200); // one unique printer → not a multi-printer reject
+      expect((await Printer.findById(a._id)).installedNozzles.map(String)).toContain(String(noz._id));
+    });
+
     it("#912: a rejected printerIds assignment does NOT partially update the nozzle", async () => {
       const noz = await Nozzle.create({ name: "Keep Me", diameter: 0.4, type: "Brass" });
       const a = await Printer.create({ name: "PA", manufacturer: "X", printerModel: "1" });
