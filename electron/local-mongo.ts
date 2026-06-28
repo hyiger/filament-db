@@ -86,6 +86,19 @@ async function doStartLocalMongo(): Promise<string> {
  * Stop the embedded MongoDB instance.
  */
 export async function stopLocalMongo(): Promise<void> {
+  // #900: if a start is still in flight, `mongod` hasn't been assigned yet —
+  // returning here would let MongoMemoryServer.create() resolve AFTER we return,
+  // orphaning a mongod that holds the dbPath lock with no handle to stop it
+  // (the app quitting mid-boot). Wait for the in-flight start to settle first,
+  // then stop whatever it produced. A failed start rolls `mongod` back to null
+  // in doStartLocalMongo's catch, so there's simply nothing left to stop.
+  if (starting) {
+    try {
+      await starting;
+    } catch {
+      // start failed — nothing was left running to stop.
+    }
+  }
   if (mongod) {
     await mongod.stop();
     mongod = null;
