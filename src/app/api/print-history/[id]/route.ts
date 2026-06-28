@@ -311,7 +311,9 @@ export async function DELETE(
           spool.totalWeight = refunded;
         }
       }
-      await filament.save();
+      // GH #905: a refund only mutates spool weight — validate modified paths
+      // only so a legacy out-of-range field elsewhere can't block the refund.
+      await filament.save({ validateModifiedOnly: true });
     }
 
     // Soft-delete by setting _deletedAt. Hard `deleteOne` would let a peer

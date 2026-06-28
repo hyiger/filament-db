@@ -152,6 +152,26 @@ function valuesEqual(a: OptValue, b: OptValue): boolean {
   return a === b;
 }
 
+/** The managed fields whose values are hex colors. Hex is case-insensitive
+ *  (`#AABBCC` === `#aabbcc`), so comparing them with raw `===` (GH #894) made
+ *  a casing-only difference look like a real change → a permanent spurious
+ *  `conflict` re-surfaced on every re-check. Compare these case-folded. */
+const COLOR_FIELDS: ReadonlySet<string> = new Set(["color", "secondaryColors"]);
+
+/** Lower-case a hex color value (string or array of strings) for comparison;
+ *  pass anything else through unchanged. */
+function canonicalizeColor(v: OptValue): OptValue {
+  if (typeof v === "string") return v.toLowerCase();
+  if (Array.isArray(v)) return v.map((x) => (typeof x === "string" ? x.toLowerCase() : x)) as string[];
+  return v;
+}
+
+/** `valuesEqual`, but case-insensitive for hex-color fields (GH #894). */
+function valuesEqualForField(field: string, a: OptValue, b: OptValue): boolean {
+  if (COLOR_FIELDS.has(field)) return valuesEqual(canonicalizeColor(a), canonicalizeColor(b));
+  return valuesEqual(a, b);
+}
+
 /** Does OPT actually offer a value for this field? (null / empty array = no.) */
 function hasIncoming(v: OptValue): boolean {
   if (v == null) return false;
@@ -178,7 +198,10 @@ export function buildOptSnapshot(payload: Record<string, unknown>): Record<strin
     // correctly, and the diff itself (not the snapshot) is what surfaces an
     // explicit upstream clear.
     if (!hasIncoming(v)) continue;
-    snap[optSnapshotKey(field)] = v;
+    // GH #894: store hex colors canonicalized (lower-case) so the recorded
+    // upstream offer is in a stable case; the diff also case-folds, so even a
+    // pre-existing mixed-case snapshot compares correctly without a backfill.
+    snap[optSnapshotKey(field)] = COLOR_FIELDS.has(field) ? canonicalizeColor(v) : v;
   }
   return snap;
 }
@@ -187,15 +210,18 @@ function classify(
   current: OptValue,
   snapshotVal: OptValue | undefined,
   hasSnapshotEntry: boolean,
-  isColor: boolean,
+  field: string,
 ): OptChangeKind {
-  const sentinel = isColor && current === COLOR_SENTINEL;
+  // The gray sentinel ("OPT has no real color") applies to the primary color only.
+  const sentinel = field === "color" && current === COLOR_SENTINEL;
   // A null OR empty-array local value is "the user never set this" — a
   // gap-fill, safe to adopt (covers OPT newly providing secondaries/tags).
   const empty = current == null || (Array.isArray(current) && current.length === 0);
   if (empty || sentinel) return "adopt";
   if (hasSnapshotEntry) {
-    return valuesEqual(current, snapshotVal ?? null) ? "adopt" : "conflict";
+    // GH #894: case-fold hex colors so a casing-only difference vs the stored
+    // snapshot classifies as `adopt` (unchanged), not a permanent `conflict`.
+    return valuesEqualForField(field, current, snapshotVal ?? null) ? "adopt" : "conflict";
   }
   return "conflict";
 }
@@ -250,11 +276,13 @@ export function diffOptFields(
       continue;
     }
     const current = getPath(filament, field);
-    if (valuesEqual(current, incoming)) continue;
+    // GH #894: hex colors compare case-insensitively, so `#AABBCC` already
+    // stored vs an `#aabbcc` upstream offer isn't surfaced as a spurious change.
+    if (valuesEqualForField(field, current, incoming)) continue;
     const snapKey = optSnapshotKey(field);
     const hasSnapshotEntry = !!snapshot && Object.prototype.hasOwnProperty.call(snapshot, snapKey);
     const snapshotVal = hasSnapshotEntry ? getPath(snapshot as Record<string, unknown>, snapKey) : undefined;
-    const kind = classify(current, snapshotVal, hasSnapshotEntry, !!isColor);
+    const kind = classify(current, snapshotVal, hasSnapshotEntry, field);
     changes.push({ field, labelKey, current, incoming, kind });
   }
   return changes;

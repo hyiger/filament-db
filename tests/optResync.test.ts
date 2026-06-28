@@ -130,6 +130,48 @@ describe("diffOptFields", () => {
     expect(c!.kind).toBe("adopt");
   });
 
+  it("#894: a casing-only color difference is NOT a change (case-insensitive hex)", () => {
+    // Stored color is the same hue as OPT but upper-cased; must not surface.
+    const stored = {
+      color: "#3D3E3D",
+      secondaryColors: [],
+      density: 1.24,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    };
+    const changes = diffOptFields(stored, payload(), null);
+    expect(changes.find((c) => c.field === "color")).toBeUndefined();
+  });
+
+  it("#894: a casing-only secondaryColors difference is NOT a change", () => {
+    const stored = {
+      color: null,
+      secondaryColors: ["#000000", "#98282F"],
+      density: 1.24,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    };
+    const p = payload({ color: null, secondaryColors: ["#000000", "#98282f"] });
+    const changes = diffOptFields(stored, p, null);
+    expect(changes.find((c) => c.field === "secondaryColors")).toBeUndefined();
+  });
+
+  it("#894: an upper-cased local color equal to a lower-cased snapshot classifies as adopt, not conflict", () => {
+    // Provenance snapshot recorded the OPT offer; the user's stored value is the
+    // same hue in different case. Pre-fix this was a permanent spurious conflict.
+    const stored = { color: "#3D3E3D", density: 1.24, temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 }, shoreHardnessD: 81, transmissionDistance: 0.2 };
+    const snapshot = buildOptSnapshot(payload({ color: "#3d3e3d" }));
+    // OPT now offers a different color, so `color` IS surfaced — but as the
+    // user-unedited (snapshot-matched) case it must be adopt, never conflict.
+    const p = payload({ color: "#aabbcc" });
+    const changes = diffOptFields(stored, p, snapshot);
+    const c = changes.find((x) => x.field === "color");
+    expect(c).toBeDefined();
+    expect(c!.kind).toBe("adopt");
+  });
+
   it("classifies an edited field with no snapshot as conflict", () => {
     // User set nozzle 215; OPT says 225; no provenance to prove safe.
     const stored = { color: "#3d3e3d", density: 1.24, temperatures: { nozzle: 215, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 }, shoreHardnessD: 81, transmissionDistance: 0.2 };

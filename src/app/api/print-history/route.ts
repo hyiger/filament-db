@@ -285,7 +285,14 @@ export async function POST(request: NextRequest) {
       try {
         await session.withTransaction(async () => {
           for (const f of filaments) {
-            await f.save({ session });
+            // GH #905: this job only mutates spool weight + usageHistory. Validate
+            // ONLY modified paths so a legacy out-of-range field elsewhere on the
+            // filament (e.g. a temperature stored before the numeric validators
+            // existed) can't throw a ValidationError and block the spool debit.
+            // Safe here because `f` was loaded from the DB with all required
+            // fields present (unlike a create, where omitted required fields must
+            // still be caught — which is why this is per-save, not schema-wide).
+            await f.save({ session, validateModifiedOnly: true });
           }
           const created = await PrintHistory.create(
             [{
@@ -333,7 +340,7 @@ export async function POST(request: NextRequest) {
       const savedFilaments: typeof filaments = [];
       try {
         for (const f of filaments) {
-          await f.save();
+          await f.save({ validateModifiedOnly: true }); // GH #905 (see above)
           savedFilaments.push(f);
         }
         history = await PrintHistory.create({
@@ -370,7 +377,7 @@ export async function POST(request: NextRequest) {
                 );
               }
             }
-            await fresh.save();
+            await fresh.save({ validateModifiedOnly: true }); // GH #905 (rollback debit)
           } catch {
             // Best-effort rollback — if a save errors here, log via
             // the wrapper and continue. Manual reconciliation is
