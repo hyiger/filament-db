@@ -346,7 +346,7 @@ Die TDS-URL wird zusätzlich im `tdsUrl`-Feld des Filaments für spätere Refere
 
 | Anbieter | Modell | Kostenlose Stufe | PDF-Unterstützung |
 |----------|--------|------------------|-------------------|
-| Google Gemini | gemini-2.0-flash | 15 Anfragen/Min | Nativ |
+| Google Gemini | gemini-2.5-flash | 15 Anfragen/Min | Nativ |
 | Anthropic Claude | claude-sonnet-4-20250514 | Pay-per-use | Nativ |
 | OpenAI ChatGPT | gpt-4o-mini | Pay-per-use | Textextraktion |
 
