@@ -59,19 +59,26 @@ function slicerExportColor(filament: FilamentDoc): string | null {
  *
  * Returns `undefined` to mean "leave `color` unchanged".
  *
- * Known limitation (tracked as a follow-up): a VARIANT that INHERITS its
- * parent's coextruded colors has its OWN `color` null and OWN `secondaryColors`
- * empty, so it isn't detected as coextruded here and an echoed hex would be
- * written onto the variant. Resolving effective (parent-merged) values first
- * would close that; out of scope for this fix.
+ * GH #913 (Codex P2): a VARIANT that INHERITS its parent's coextruded colors has
+ * its OWN `secondaryColors` empty (array-fallback inheritance, #477/#106) — the
+ * export resolves the parent first, so the slicer gets the PARENT's
+ * `secondaryColors[0]`. Pass the resolved `parent` so the guard compares against
+ * the EFFECTIVE secondaries and recognizes the inherited-coextruded case too.
  */
 export function resolveSyncBackColor(
   stored: { color?: string | null; secondaryColors?: string[] | null } | null | undefined,
   incomingHex: string | null | undefined,
+  parent?: { secondaryColors?: string[] | null } | null,
 ): string | undefined {
   if (incomingHex == null || incomingHex === "") return undefined;
   const primary = stored?.color;
-  const secondaries = stored?.secondaryColors;
+  // secondaryColors is array-fallback inheritable: a variant with an empty own
+  // array inherits the parent's. Resolve the EFFECTIVE secondaries so an
+  // inherited-coextruded variant is detected (Codex P2 #913).
+  let secondaries = stored?.secondaryColors;
+  if ((!Array.isArray(secondaries) || secondaries.length === 0) && parent) {
+    secondaries = parent.secondaryColors;
+  }
   const isCoextruded =
     (primary == null || primary === "") &&
     Array.isArray(secondaries) &&

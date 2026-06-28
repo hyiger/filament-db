@@ -231,7 +231,12 @@ export function buildStructuredUpdate(
   // secondaries) the export echoes secondaryColors[0] as the single color, so
   // suppress writing that echo back onto the null primary; undefined = leave it.
   if (parsed.color != null) {
-    const resolvedColor = resolveSyncBackColor(existing, parsed.color);
+    // GH #913: pass the parent so an inherited-coextruded variant is detected.
+    const resolvedColor = resolveSyncBackColor(
+      existing,
+      parsed.color,
+      parent as { secondaryColors?: string[] | null } | null,
+    );
     if (resolvedColor !== undefined) u.color = resolvedColor;
   }
   setIfNotInherited("diameter", parsed.diameter);

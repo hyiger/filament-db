@@ -542,9 +542,14 @@ export async function POST(
     if (config.filament_vendor) update.vendor = config.filament_vendor;
     // GH #883: a coextruded filament exports secondaryColors[0] as its single
     // colour key; suppress writing that echo back onto the null primary so the
-    // round-trip doesn't corrupt the spec-pure coextruded shape.
+    // round-trip doesn't corrupt the spec-pure coextruded shape. GH #913: for a
+    // variant that inherits its parent's coextruded colors, resolve the parent's
+    // secondaryColors so the inherited-coextruded case is detected too.
     if (config.filament_colour) {
-      const resolvedColor = resolveSyncBackColor(filament, config.filament_colour);
+      const colorParent = filament.parentId
+        ? await Filament.findById(filament.parentId, { secondaryColors: 1 }).lean<{ secondaryColors?: string[] | null } | null>()
+        : null;
+      const resolvedColor = resolveSyncBackColor(filament, config.filament_colour, colorParent);
       if (resolvedColor !== undefined) update.color = resolvedColor;
     }
     if (config.filament_diameter) { const v = parseFloat(config.filament_diameter); if (!isNaN(v)) update.diameter = v; }

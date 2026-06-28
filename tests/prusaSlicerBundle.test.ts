@@ -903,6 +903,20 @@ describe("resolveSyncBackColor (#883)", () => {
     expect(resolveSyncBackColor(null, "#123456")).toBe("#123456");
   });
 
+  it("#913: suppresses the echo for a variant that INHERITS the parent's coextruded secondaries", () => {
+    // Variant's own color null + own secondaryColors empty → inherits parent's.
+    const variant = { color: null, secondaryColors: [] };
+    const parent = { secondaryColors: ["#112233", "#445566"] };
+    // The export gave the slicer the PARENT's secondaryColors[0]; the echo must
+    // not be written onto the variant's primary.
+    expect(resolveSyncBackColor(variant, "#112233", parent)).toBeUndefined();
+    expect(resolveSyncBackColor(variant, "#112233".toUpperCase(), parent)).toBeUndefined();
+    // A genuinely different incoming color is still written.
+    expect(resolveSyncBackColor(variant, "#ff0000", parent)).toBe("#ff0000");
+    // A variant that OWNS its secondaries uses those, not the parent's.
+    expect(resolveSyncBackColor({ color: null, secondaryColors: ["#abcabc"] }, "#abcabc", parent)).toBeUndefined();
+  });
+
   it("returns undefined for an absent incoming color", () => {
     expect(resolveSyncBackColor({ color: null, secondaryColors: ["#112233"] }, null)).toBeUndefined();
     expect(resolveSyncBackColor({ color: "#000000" }, "")).toBeUndefined();
