@@ -550,7 +550,26 @@ export async function POST(
         ? await Filament.findById(filament.parentId, { secondaryColors: 1 }).lean<{ secondaryColors?: string[] | null } | null>()
         : null;
       const resolvedColor = resolveSyncBackColor(filament, config.filament_colour, colorParent);
-      if (resolvedColor !== undefined) update.color = resolvedColor;
+      if (resolvedColor !== undefined) {
+        update.color = resolvedColor;
+        // GH #885: colorName + color are kept paired everywhere else (the
+        // edit-form typeahead sets both together), but the slicer sends only a
+        // hex. When the synced hex actually changes the colour, clear the stale
+        // human-readable name so it can't keep describing the old colour (in the
+        // name chip + CSV/XLSX exports). Cleared rather than reverse-looked-up
+        // because an arbitrary slicer hex won't reliably map to a named colour.
+        // Gated on resolvedColor !== undefined above so the coextruded-echo
+        // suppression path (which leaves color untouched) doesn't clear it.
+        // Codex P2 (#918): compare case-insensitively — the schema accepts
+        // mixed-case hex, so a `#ff0000` → `#FF0000` sync isn't a real colour
+        // change and must NOT drop the name.
+        if (
+          typeof filament.color !== "string" ||
+          resolvedColor.toLowerCase() !== filament.color.toLowerCase()
+        ) {
+          update.colorName = null;
+        }
+      }
     }
     if (config.filament_diameter) { const v = parseFloat(config.filament_diameter); if (!isNaN(v)) update.diameter = v; }
     if (config.filament_density) { const v = parseFloat(config.filament_density); if (!isNaN(v)) update.density = v; }
@@ -1026,19 +1045,22 @@ export async function DELETE(
           400,
         );
       }
-      // Variant guard still applies — although a parent in trash can't
-      // have active variants (the original soft-delete refused), it could
-      // theoretically have other trashed variants pointing at it.
-      // Permanently deleting the parent would orphan them, so block. Only
-      // count variants that are themselves still in the trash and not yet
-      // purged — already-purged variant tombstones are dead weight.
+      // Variant guard still applies — permanently deleting a parent would
+      // orphan its variants. GH #884: this query counts ALL non-purged variants
+      // (active OR trashed), NOT only trashed ones — there is deliberately no
+      // `_deletedAt` clause. A parent in trash normally can't have active
+      // variants (the soft-delete path refuses, via hasVariants), but counting
+      // them anyway also blocks the should-not-happen case of an active variant
+      // under a trashed parent. The broader query is the safe choice; do NOT
+      // narrow it to trashed-only to "match intent" — that would let a purge
+      // orphan an active variant. Already-purged tombstones don't count.
       const variantCount = await Filament.countDocuments({
         parentId: id,
         _purged: { $ne: true },
       });
       if (variantCount > 0) {
         return errorResponse(
-          "Cannot permanently delete a filament that still has variants in the trash. Permanently delete those first.",
+          "Cannot permanently delete a filament that still has variants. Permanently delete (or re-parent) those first.",
           400,
         );
       }

@@ -252,7 +252,9 @@ describe("Filament trash workflow", () => {
     const res = await permanentDelete(String(parent._id));
     expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body.error).toMatch(/variants in the trash/i);
+    // GH #884: error reworded to "still has variants" (the guard counts ALL
+    // non-purged variants — active or trashed — not just trashed ones).
+    expect(body.error).toMatch(/still has variants/i);
 
     // Permanently delete the variant first → parent purge then succeeds.
     // After variant purge the variant is a `_purged` tombstone, which the
