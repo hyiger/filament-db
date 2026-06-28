@@ -3,6 +3,7 @@ import {
   filamentToSlicerKeys,
   generatePrusaSlicerBundle,
   collapsePerNozzleImportSections,
+  resolveSyncBackColor,
 } from "@/lib/prusaSlicerBundle";
 import { parseIniFilaments } from "@/lib/parseIni";
 
@@ -876,5 +877,34 @@ describe("collapsePerNozzleImportSections (#872)", () => {
     expect(base.cost).toBe(25);
     expect(base.density).toBe(1.24);
     expect(base.diameter).toBe(1.75);
+  });
+});
+
+describe("resolveSyncBackColor (#883)", () => {
+  it("suppresses the echoed secondary on a coextruded filament (keeps null primary)", () => {
+    const stored = { color: null, secondaryColors: ["#112233", "#445566"] };
+    // The slicer echoes secondaryColors[0]; must NOT be written onto the primary.
+    expect(resolveSyncBackColor(stored, "#112233")).toBeUndefined();
+    // Case-insensitive — the slicer may upper-case it.
+    expect(resolveSyncBackColor(stored, "#112233".toUpperCase())).toBeUndefined();
+  });
+
+  it("writes a genuinely different incoming color on a coextruded filament", () => {
+    const stored = { color: null, secondaryColors: ["#112233"] };
+    expect(resolveSyncBackColor(stored, "#ff0000")).toBe("#ff0000");
+  });
+
+  it("writes the incoming color for a normal single-color filament", () => {
+    expect(resolveSyncBackColor({ color: "#000000", secondaryColors: [] }, "#ff0000")).toBe("#ff0000");
+    expect(resolveSyncBackColor({ color: "#000000" }, "#abcdef")).toBe("#abcdef");
+  });
+
+  it("writes the incoming color when there is no stored doc (create branch)", () => {
+    expect(resolveSyncBackColor(null, "#123456")).toBe("#123456");
+  });
+
+  it("returns undefined for an absent incoming color", () => {
+    expect(resolveSyncBackColor({ color: null, secondaryColors: ["#112233"] }, null)).toBeUndefined();
+    expect(resolveSyncBackColor({ color: "#000000" }, "")).toBeUndefined();
   });
 });

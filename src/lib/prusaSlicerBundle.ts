@@ -41,6 +41,51 @@ function slicerExportColor(filament: FilamentDoc): string | null {
 }
 
 /**
+ * GH #883: the inverse guard for `slicerExportColor` on a slicer SYNC-BACK.
+ *
+ * A coextruded / multi-color filament is stored spec-pure as `color: null` +
+ * a populated `secondaryColors[]`. The export above gives the slicer ONE
+ * representative color — `secondaryColors[0]` — under the single colour key.
+ * On sync-back the slicer echoes that hex back, and a naïve mapping would write
+ * it onto the null primary, leaving a hybrid (real primary + secondaries) that
+ * no longer matches the user's coextruded shape.
+ *
+ * Decide what (if anything) to write to `color` from an incoming slicer hex:
+ *   - no incoming hex                                   → undefined (don't write)
+ *   - stored is coextruded AND incoming == secondaries[0] (case-insensitive)
+ *       → undefined: it's the exported echo, preserve the null primary
+ *   - otherwise                                         → the incoming hex
+ *       (a genuine user edit, OR a normal single-color filament — write it)
+ *
+ * Returns `undefined` to mean "leave `color` unchanged".
+ *
+ * Known limitation (tracked as a follow-up): a VARIANT that INHERITS its
+ * parent's coextruded colors has its OWN `color` null and OWN `secondaryColors`
+ * empty, so it isn't detected as coextruded here and an echoed hex would be
+ * written onto the variant. Resolving effective (parent-merged) values first
+ * would close that; out of scope for this fix.
+ */
+export function resolveSyncBackColor(
+  stored: { color?: string | null; secondaryColors?: string[] | null } | null | undefined,
+  incomingHex: string | null | undefined,
+): string | undefined {
+  if (incomingHex == null || incomingHex === "") return undefined;
+  const primary = stored?.color;
+  const secondaries = stored?.secondaryColors;
+  const isCoextruded =
+    (primary == null || primary === "") &&
+    Array.isArray(secondaries) &&
+    secondaries.length > 0;
+  if (isCoextruded) {
+    const echo = secondaries![0];
+    if (typeof echo === "string" && echo.toLowerCase() === incomingHex.toLowerCase()) {
+      return undefined; // the exported representative color — keep null primary
+    }
+  }
+  return incomingHex;
+}
+
+/**
  * Map a resolved Filament DB document to PrusaSlicer INI key-value pairs.
  * Structured DB fields are mapped to their PrusaSlicer equivalents.
  * The `settings` bag is merged underneath (DB fields win on conflict).

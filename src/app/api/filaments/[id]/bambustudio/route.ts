@@ -186,6 +186,10 @@ export async function POST(
       // the unset branch unreachable in this route.
       type: existing.type ?? null,
       vendor: existing.vendor ?? null,
+      // GH #883: color + secondaryColors let resolveSyncBackColor detect the
+      // coextruded shape and suppress the exported-secondary echo on sync-back.
+      color: existing.color ?? null,
+      secondaryColors: existing.secondaryColors ?? null,
       diameter: existing.diameter ?? null,
       density: existing.density ?? null,
       cost: existing.cost ?? null,

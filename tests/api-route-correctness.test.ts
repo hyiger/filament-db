@@ -788,6 +788,46 @@ describe("API route correctness", () => {
     expect(fresh.settings?.filament_retract_length).toBeUndefined();
   });
 
+  it("#883 — PrusaSlicer sync-back doesn't clobber a coextruded filament's null primary with the echoed secondary", async () => {
+    const f = await Filament.create({
+      name: "Coex PLA",
+      vendor: "X",
+      type: "PLA",
+      color: null,
+      secondaryColors: ["#112233", "#445566"],
+    });
+    // The export gives the slicer secondaryColors[0] as the single colour; the
+    // slicer echoes it back (upper-cased). It must NOT become the primary.
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        config: { filamentdb_id: String(f._id), filament_colour: "#112233".toUpperCase() },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.color).toBeNull(); // null primary preserved
+    expect(fresh.secondaryColors).toEqual(["#112233", "#445566"]); // untouched
+  });
+
+  it("#883 — a genuinely new color from the slicer IS written to a coextruded filament", async () => {
+    const f = await Filament.create({
+      name: "Coex PETG",
+      vendor: "X",
+      type: "PETG",
+      color: null,
+      secondaryColors: ["#112233"],
+    });
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}`, {
+        config: { filamentdb_id: String(f._id), filament_colour: "#ff0000" },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    expect((await Filament.findById(f._id)).color).toBe("#ff0000"); // real edit applied
+  });
+
   it("#872 — a per-nozzle sync with an out-of-range baked calibration value is rejected with 400 (nothing persisted)", async () => {
     const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
     const f = await Filament.create({
