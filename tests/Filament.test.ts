@@ -1312,4 +1312,33 @@ describe("Filament Model — v1.11 spool fields", () => {
       expect(f.secondaryColors).toEqual([]);
     });
   });
+
+  describe("#905 — spool-mutation save() validates modified paths only", () => {
+    it("a spool debit via save({validateModifiedOnly:true}) succeeds despite a legacy out-of-range field", async () => {
+      const f = await Filament.create({
+        name: "Legacy PLA",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ totalWeight: 1000 }],
+      });
+      // Inject a value that predates the numeric validators, bypassing Mongoose.
+      await Filament.collection.updateOne(
+        { _id: f._id },
+        { $set: { "temperatures.nozzle": 999 } }, // schema max is 600
+      );
+      const reloaded = await Filament.findById(f._id);
+      reloaded.spools[0].totalWeight = 800; // the print-history debit shape
+      // Without the option this throws on the legacy 999; with it, only the
+      // modified spool path is validated (the route-scoped #905 fix).
+      await expect(reloaded.save({ validateModifiedOnly: true })).resolves.toBeTruthy();
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools[0].totalWeight).toBe(800);
+    });
+
+    it("still rejects a MODIFIED out-of-range field even with validateModifiedOnly", async () => {
+      const f = await Filament.create({ name: "Edit Me", vendor: "Test", type: "PLA" });
+      f.temperatures.nozzle = 999; // this path IS modified → must still throw
+      await expect(f.save({ validateModifiedOnly: true })).rejects.toThrow();
+    });
+  });
 });

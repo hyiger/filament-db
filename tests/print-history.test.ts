@@ -78,6 +78,35 @@ describe("print-history POST", () => {
     expect(updated.spools[0].totalWeight).toBe(1175);
   });
 
+  it("#905: debits a spool even when the filament carries a legacy out-of-range field", async () => {
+    const f = await Filament.create({
+      name: "Legacy Field PLA",
+      vendor: "Test",
+      type: "PLA",
+      spools: [{ label: "", totalWeight: 1000 }],
+    });
+    // Inject a value that predates the numeric validators (bypasses Mongoose),
+    // e.g. a temperature stored before the max-600 validator existed.
+    await Filament.collection.updateOne(
+      { _id: f._id },
+      { $set: { "temperatures.nozzle": 999 } },
+    );
+
+    const res = await postPrintHistory(
+      makeReq({
+        jobLabel: "legacy.gcode",
+        source: "manual",
+        usage: [{ filamentId: String(f._id), grams: 50 }],
+      }),
+    );
+    // Pre-fix: full-document save() validation threw on the legacy 999 and the
+    // debit failed (5xx). Now the debit validates only modified paths.
+    expect(res.status).toBe(201);
+    const updated = await Filament.findById(f._id);
+    expect(updated.spools[0].totalWeight).toBe(950);
+    expect(updated.spools[0].usageHistory).toHaveLength(1);
+  });
+
   it("aborts with 404 on missing filament without mutating earlier filaments", async () => {
     const a = await Filament.create({
       name: "Atomic A",

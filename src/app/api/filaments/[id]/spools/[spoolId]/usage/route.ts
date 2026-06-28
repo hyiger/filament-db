@@ -91,7 +91,9 @@ export async function POST(
     if (spool.usageHistory.length > MAX_SPOOL_HISTORY) {
       spool.usageHistory = spool.usageHistory.slice(-MAX_SPOOL_HISTORY);
     }
-    await filament.save();
+    // GH #905: usage logging only mutates this spool — validate modified paths
+    // only so a legacy out-of-range field elsewhere can't block the log/debit.
+    await filament.save({ validateModifiedOnly: true });
     return NextResponse.json(filament.toObject(), { status: 201 });
   } catch (err) {
     // GH #504: surface optimistic-concurrency conflicts as 409 with a
