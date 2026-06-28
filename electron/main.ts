@@ -131,6 +131,14 @@ let serverProcess: UtilityProcess | null = null;
  * server can't tight-loop forever. */
 let serverRestartCount = 0;
 const MAX_SERVER_RESTARTS = 5;
+/** GH #901: true while an INTENTIONAL stop+restart is in flight (a save-config
+ * connection change or a LAN-share toggle). The crash-restart `exit` handler
+ * bails when it's set, so a freshly-forked server that fails to start during an
+ * intentional restart doesn't ALSO burn a crash-restart attempt + schedule a
+ * background respawn that races the caller's own error handling. The caller
+ * already owns the failure (it surfaces it to the renderer). Cleared once the
+ * intentional restart settles. */
+let intentionalServerRestart = false;
 let nfcService: NfcService | null = null;
 /** GH #505: when resolveMongoUri()'s Atlas-to-local fallback fires at
  *  cold-boot, mainWindow is still null (resolveMongoUri runs before
@@ -321,29 +329,13 @@ function createWindow(urlPath = "/") {
   // Start the auto-updater bound to this window. No-ops in dev.
   initAutoUpdater(mainWindow);
 
-  mainWindow.webContents.on("will-navigate", (event, url) => {
-    const appUrl = getAppURL();
-    if (!url.startsWith(appUrl)) {
-      event.preventDefault();
-    }
-  });
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    // Only forward http(s) targets to the OS shell. Anything else
-    // (file:, javascript:, data:, custom protocol handlers) could be
-    // used by injected/imported content to launch local apps or
-    // exfiltrate data via a registered handler.
-    try {
-      const proto = new URL(url).protocol;
-      if (proto === "http:" || proto === "https:") {
-        shell.openExternal(url);
-      } else {
-        console.warn(`Refused to open external URL with disallowed scheme: ${proto}`);
-      }
-    } catch {
-      console.warn(`Refused to open malformed external URL: ${url}`);
-    }
-    return { action: "deny" };
-  });
+  // GH #902: the `will-navigate` + `setWindowOpenHandler` guards are NOT
+  // installed per-window here. The global `app.on("web-contents-created")`
+  // handler above already installs identical http(s)-only guards on EVERY
+  // WebContents (it's registered at module load, before this runs), so the
+  // main window is covered by it. Re-installing here only duplicated the
+  // will-navigate listener and overwrote the single-slot window-open handler
+  // with an identical one — dead weight that risked the two copies drifting.
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -570,8 +562,14 @@ async function startProductionServer(mongoUri?: string): Promise<void> {
       //   - this exited process is no longer the current one — it was
       //     replaced by an intentional stopServer() + restart (e.g. a
       //     save-config connection change), so restarting it would
-      //     spawn a duplicate server.
-      if (isQuitting || thisProc !== serverProcess) return;
+      //     spawn a duplicate server, OR
+      //   - GH #901: an intentional restart is in flight and THIS is the
+      //     freshly-forked process that failed to start — the caller owns
+      //     that failure, so we must not also crash-restart it (which would
+      //     burn an attempt + schedule a background respawn racing the
+      //     caller). `thisProc !== serverProcess` doesn't catch this case
+      //     because the failed fork IS still the current serverProcess.
+      if (isQuitting || intentionalServerRestart || thisProc !== serverProcess) return;
       if (code === 0 || code === null) return; // clean exit, not a crash
 
       // The current server crashed unexpectedly. Stop advertising it over mDNS
@@ -963,14 +961,19 @@ ipcMain.handle("save-config", async (event, config: {
     }
 
     if (!isDev) {
-      // Restart the production server with the new URI
-      await stopServer();
+      // Restart the production server with the new URI. GH #901: flag the
+      // intentional restart so a failed start doesn't trip the crash-restart
+      // path on top of the error we already surface below.
+      intentionalServerRestart = true;
       let serverRestarted = false;
       try {
+        await stopServer();
         await startProductionServer(uri || undefined);
         serverRestarted = true;
       } catch (err) {
         console.error("Failed to start server after config save:", err);
+      } finally {
+        intentionalServerRestart = false;
       }
       // Refresh LAN auto-discovery so a stale advert doesn't point at a server
       // that just restarted (or failed to). syncMdnsAdvertisement() no-ops when
@@ -1005,29 +1008,37 @@ ipcMain.handle("save-config", async (event, config: {
     // re-initialised) and no window reload (the renderer talks to localhost
     // either way). The await means this resolves only once the server is back
     // up, so the renderer's "applying…" state reflects real readiness.
-    await stopServer();
+    // GH #901: flag the intentional restart (incl. the recovery restarts) so a
+    // failed start doesn't ALSO trip the crash-restart path; the finally clears
+    // it on every exit, including the `return { success: false }` below.
+    intentionalServerRestart = true;
     try {
-      await startProductionServer((store.get("mongodbUri") as string) || undefined);
-    } catch (err) {
-      console.error("Failed to restart server after LAN-share toggle:", err);
-      // The new bind failed and stopServer() already tore the old server
-      // down, so the app currently has NO embedded server. Revert the
-      // persisted flag (keep the store consistent with the actual bind) and
-      // try to bring the server back on the previous binding so the user
-      // isn't left with a dead window. Either way return failure so the
-      // renderer's error path fires and the toggle doesn't show as applied.
-      store.set("exposeToLan", !config.exposeToLan);
-      // Clear any half-spawned/failed process before the recovery start so it
-      // doesn't collide with the retry.
       await stopServer();
       try {
         await startProductionServer((store.get("mongodbUri") as string) || undefined);
-      } catch (recoveryErr) {
-        console.error("Failed to restore server after LAN-share toggle failure:", recoveryErr);
+      } catch (err) {
+        console.error("Failed to restart server after LAN-share toggle:", err);
+        // The new bind failed and stopServer() already tore the old server
+        // down, so the app currently has NO embedded server. Revert the
+        // persisted flag (keep the store consistent with the actual bind) and
+        // try to bring the server back on the previous binding so the user
+        // isn't left with a dead window. Either way return failure so the
+        // renderer's error path fires and the toggle doesn't show as applied.
+        store.set("exposeToLan", !config.exposeToLan);
+        // Clear any half-spawned/failed process before the recovery start so it
+        // doesn't collide with the retry.
+        await stopServer();
+        try {
+          await startProductionServer((store.get("mongodbUri") as string) || undefined);
+        } catch (recoveryErr) {
+          console.error("Failed to restore server after LAN-share toggle failure:", recoveryErr);
+        }
+        // Reflect the reverted bind state in the mDNS advertisement too.
+        syncMdnsAdvertisement();
+        return { success: false };
       }
-      // Reflect the reverted bind state in the mDNS advertisement too.
-      syncMdnsAdvertisement();
-      return { success: false };
+    } finally {
+      intentionalServerRestart = false;
     }
   }
 
