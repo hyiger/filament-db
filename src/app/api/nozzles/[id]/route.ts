@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Nozzle from "@/models/Nozzle";
 import Filament from "@/models/Filament";
@@ -89,14 +90,41 @@ export async function PUT(
     }
 
     if (printerIds !== undefined) {
-      // Add this nozzle to every printer in the list (idempotent)
-      if (printerIds.length > 0) {
-        await Printer.updateMany(
-          { _id: { $in: printerIds }, _deletedAt: null },
-          { $addToSet: { installedNozzles: id } }
+      // GH #897: a single physical nozzle lives in at most ONE printer (#232).
+      // The nozzle-side assignment is AUTHORITATIVE (auto-move): the $pull below
+      // removes this nozzle from every other printer, so reassigning displaces
+      // the previous claim without a conflict prompt. But one nozzle cannot be
+      // in TWO printers at once — reject a multi-printer set rather than letting
+      // the $addToSet loop corrupt the one-printer-per-nozzle invariant (which
+      // the printer-side routes enforce via findNozzleConflicts).
+      if (printerIds.length > 1) {
+        return errorResponse(
+          "A nozzle can be installed in at most one printer at a time.",
+          400,
         );
       }
-      // Remove this nozzle from any other printer that currently has it
+      if (printerIds.length === 1) {
+        const targetId = printerIds[0];
+        if (typeof targetId !== "string" || !mongoose.isValidObjectId(targetId)) {
+          return errorResponse("printerIds must contain a valid printer id", 400);
+        }
+        // Validate the target exists + is active (mirrors the printer routes'
+        // existence check) so the assignment can't silently no-op while the
+        // $pull below still strips the nozzle from its current printer.
+        const target = await Printer.findOne(
+          { _id: targetId, _deletedAt: null },
+          { _id: 1 },
+        ).lean();
+        if (!target) {
+          return errorResponse("Target printer not found", 400);
+        }
+        await Printer.updateMany(
+          { _id: targetId, _deletedAt: null },
+          { $addToSet: { installedNozzles: id } },
+        );
+      }
+      // Auto-move: remove this nozzle from every OTHER printer that has it
+      // (one-printer-per-nozzle). An empty printerIds clears the assignment.
       await Printer.updateMany(
         { _id: { $nin: printerIds }, _deletedAt: null, installedNozzles: id },
         { $pull: { installedNozzles: id } }
