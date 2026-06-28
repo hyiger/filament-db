@@ -327,7 +327,10 @@ export class SyncService extends EventEmitter {
       // duplicate names on first sync would E11000 the cycle. Reconcile
       // by name first to unify the syncIds.
       this.updateStatus({ progress: "Syncing bed types..." });
-      await this.reconcileBedTypesByName(localDb, remoteDb);
+      // GH #904: gate the inline reconcile on the abort flag, like trySync and
+      // the repair passes — after a #823 abort it must stop writing syncId
+      // metadata to the about-to-be-abandoned DB.
+      if (!this.aborted) await this.reconcileBedTypesByName(localDb, remoteDb);
       results.push(await trySync("bedtypes", [], () =>
         this.syncCollection(localDb, remoteDb, "bedtypes"),
       ));
@@ -372,7 +375,7 @@ export class SyncService extends EventEmitter {
       // the entire sync cycle. Pairing matching-name rows and unifying their
       // syncIds turns the duplicates into a no-op last-write-wins merge.
       this.updateStatus({ progress: "Syncing locations..." });
-      await this.reconcileLocationsByName(localDb, remoteDb);
+      if (!this.aborted) await this.reconcileLocationsByName(localDb, remoteDb); // GH #904
       results.push(await trySync("locations", [], () =>
         this.syncCollection(localDb, remoteDb, "locations"),
       ));
@@ -414,8 +417,11 @@ export class SyncService extends EventEmitter {
       }
 
       // Backfill filament syncIds before building maps (syncCollection does this too, but we need maps first)
-      await this.backfillSyncIds(localDb.collection("filaments"));
-      await this.backfillSyncIds(remoteDb.collection("filaments"));
+      // GH #904: skip the inline backfill writes after an abort.
+      if (!this.aborted) {
+        await this.backfillSyncIds(localDb.collection("filaments"));
+        await this.backfillSyncIds(remoteDb.collection("filaments"));
+      }
 
       // Reconcile same-name filaments across DBs before building the
       // syncId maps. Same first-sync trap as locations + bedtypes — two
@@ -428,7 +434,7 @@ export class SyncService extends EventEmitter {
       // present and only mints when both sides are missing one) and
       // BEFORE the maps below so parentId remapping sees the unified
       // syncId on both sides.
-      await this.reconcileFilamentsByName(localDb, remoteDb);
+      if (!this.aborted) await this.reconcileFilamentsByName(localDb, remoteDb); // GH #904
 
       // Build filament syncId→ID maps for parentId remapping.
       // GH #511: project to {_id, syncId, updatedAt} — filament rows carry
