@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { generateOrcaSlicerProfiles } from "@/lib/orcaSlicerBundle";
+import { resolveSyncBackColor } from "@/lib/prusaSlicerBundle";
 import {
   resolveFilamentForExport,
   exportFilenameStem,
@@ -155,7 +156,17 @@ export async function POST(
 
     if (body.type != null) update.type = body.type;
     if (body.vendor != null) update.vendor = body.vendor;
-    if (body.color != null) update.color = body.color;
+    // GH #883: don't write a coextruded filament's exported secondary back onto
+    // its null primary (see resolveSyncBackColor). undefined = leave color alone.
+    // GH #913: pass the parent's secondaryColors so an inherited-coextruded
+    // variant is detected too.
+    if (typeof body.color === "string") {
+      const colorParent = filament.parentId
+        ? await Filament.findById(filament.parentId, { secondaryColors: 1 }).lean<{ secondaryColors?: string[] | null } | null>()
+        : null;
+      const resolvedColor = resolveSyncBackColor(filament, body.color, colorParent);
+      if (resolvedColor !== undefined) update.color = resolvedColor;
+    }
 
     // GH #618: numeric fields must coerce to finite numbers (numeric
     // strings are accepted, matching the cast Mongoose applies on save).

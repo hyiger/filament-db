@@ -302,6 +302,10 @@ async function augmentExistingWithParent(existing: {
     // shape.
     type: existing.type ?? null,
     vendor: existing.vendor ?? null,
+    // GH #883: ride color + secondaryColors along so resolveSyncBackColor can
+    // detect the coextruded shape and suppress the exported-secondary echo.
+    color: existing.color ?? null,
+    secondaryColors: existing.secondaryColors ?? null,
     diameter: existing.diameter ?? null,
     density: existing.density ?? null,
     cost: existing.cost ?? null,

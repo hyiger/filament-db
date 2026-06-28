@@ -41,6 +41,58 @@ function slicerExportColor(filament: FilamentDoc): string | null {
 }
 
 /**
+ * GH #883: the inverse guard for `slicerExportColor` on a slicer SYNC-BACK.
+ *
+ * A coextruded / multi-color filament is stored spec-pure as `color: null` +
+ * a populated `secondaryColors[]`. The export above gives the slicer ONE
+ * representative color — `secondaryColors[0]` — under the single colour key.
+ * On sync-back the slicer echoes that hex back, and a naïve mapping would write
+ * it onto the null primary, leaving a hybrid (real primary + secondaries) that
+ * no longer matches the user's coextruded shape.
+ *
+ * Decide what (if anything) to write to `color` from an incoming slicer hex:
+ *   - no incoming hex                                   → undefined (don't write)
+ *   - stored is coextruded AND incoming == secondaries[0] (case-insensitive)
+ *       → undefined: it's the exported echo, preserve the null primary
+ *   - otherwise                                         → the incoming hex
+ *       (a genuine user edit, OR a normal single-color filament — write it)
+ *
+ * Returns `undefined` to mean "leave `color` unchanged".
+ *
+ * GH #913 (Codex P2): a VARIANT that INHERITS its parent's coextruded colors has
+ * its OWN `secondaryColors` empty (array-fallback inheritance, #477/#106) — the
+ * export resolves the parent first, so the slicer gets the PARENT's
+ * `secondaryColors[0]`. Pass the resolved `parent` so the guard compares against
+ * the EFFECTIVE secondaries and recognizes the inherited-coextruded case too.
+ */
+export function resolveSyncBackColor(
+  stored: { color?: string | null; secondaryColors?: string[] | null } | null | undefined,
+  incomingHex: string | null | undefined,
+  parent?: { secondaryColors?: string[] | null } | null,
+): string | undefined {
+  if (incomingHex == null || incomingHex === "") return undefined;
+  const primary = stored?.color;
+  // secondaryColors is array-fallback inheritable: a variant with an empty own
+  // array inherits the parent's. Resolve the EFFECTIVE secondaries so an
+  // inherited-coextruded variant is detected (Codex P2 #913).
+  let secondaries = stored?.secondaryColors;
+  if ((!Array.isArray(secondaries) || secondaries.length === 0) && parent) {
+    secondaries = parent.secondaryColors;
+  }
+  const isCoextruded =
+    (primary == null || primary === "") &&
+    Array.isArray(secondaries) &&
+    secondaries.length > 0;
+  if (isCoextruded) {
+    const echo = secondaries![0];
+    if (typeof echo === "string" && echo.toLowerCase() === incomingHex.toLowerCase()) {
+      return undefined; // the exported representative color — keep null primary
+    }
+  }
+  return incomingHex;
+}
+
+/**
  * Map a resolved Filament DB document to PrusaSlicer INI key-value pairs.
  * Structured DB fields are mapped to their PrusaSlicer equivalents.
  * The `settings` bag is merged underneath (DB fields win on conflict).

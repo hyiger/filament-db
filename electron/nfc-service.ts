@@ -120,6 +120,43 @@ export class NfcService extends EventEmitter {
     lastError: null,
   };
 
+  /**
+   * GH #903: a single PC/SC connection is shared across all transport ops, so
+   * the present-edge auto-read in `electron/main.ts` (one-shot verification on
+   * tag arrival) could run a `readTag()` while a user-triggered write/read/erase
+   * is mid-flight — interleaving APDUs on the same reader. Serialize every
+   * public transport op through this chain: QUEUE-AND-WAIT, so a second op runs
+   * only after the first finishes. A failed op doesn't reject the next caller.
+   */
+  private txChain: Promise<unknown> = Promise.resolve();
+
+  /**
+   * Run `op` after all prior transport ops settle. When a `signal` is passed
+   * (from the IPC-timeout AbortController in main.ts), it is checked at DEQUEUE
+   * — the moment this op reaches the front of the queue — so a mutation whose
+   * 15s IPC timeout already fired WHILE QUEUED is dropped before it touches the
+   * tag (GH #915: otherwise a queued write/format runs later against whatever
+   * tag is now present, after the user saw failure and may have swapped tags).
+   * An op already in progress when the timeout fires is left to finish (the
+   * hazard is the still-queued one, not the in-flight one).
+   */
+  private runExclusive<T>(op: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    const guarded = () => {
+      if (signal?.aborted) {
+        throw new Error(
+          "NFC operation aborted — the reader was busy too long; remove the tag and try again.",
+        );
+      }
+      return op();
+    };
+    const run = this.txChain.then(guarded, guarded);
+    this.txChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
   constructor() {
     super();
     this.pcsc = pcsclite();
@@ -763,7 +800,11 @@ export class NfcService extends EventEmitter {
    *      blank/unrecognized content so its friendly message surfaces.
    *   3. ISO 15693 / NFC-V (SLIX2) — OpenPrintTag, or OpenTag3D on SLIX2.
    */
-  async readTag(): Promise<DecodedOpenPrintTag> {
+  async readTag(signal?: AbortSignal): Promise<DecodedOpenPrintTag> {
+    return this.runExclusive(() => this.readTagImpl(), signal); // GH #903/#915
+  }
+
+  private async readTagImpl(): Promise<DecodedOpenPrintTag> {
     // 1. Try Bambu (MIFARE Classic) first
     try {
       return await this.withConnection(async (protocol) => {
@@ -788,7 +829,11 @@ export class NfcService extends EventEmitter {
     });
   }
 
-  async writeTag(cborPayload: Uint8Array, productUrl?: string): Promise<void> {
+  async writeTag(cborPayload: Uint8Array, productUrl?: string, signal?: AbortSignal): Promise<void> {
+    return this.runExclusive(() => this.writeTagImpl(cborPayload, productUrl), signal); // GH #903/#915
+  }
+
+  private async writeTagImpl(cborPayload: Uint8Array, productUrl?: string): Promise<void> {
     return this.withConnection(async (protocol) => {
       const block0 = await this.readBlock(protocol, 0);
       // GH #437: refuse to overwrite a tag that doesn't carry an NFC-
@@ -863,7 +908,11 @@ export class NfcService extends EventEmitter {
     });
   }
 
-  async formatTag(): Promise<void> {
+  async formatTag(signal?: AbortSignal): Promise<void> {
+    return this.runExclusive(() => this.formatTagImpl(), signal); // GH #903/#915
+  }
+
+  private async formatTagImpl(): Promise<void> {
     // GH #583: a Bambu Lab tag is MIFARE Classic (ISO 14443) and read-only
     // (RSA-signed). The ISO 15693 `readBlock(0)` below would fail on it with
     // a raw "Read block 0 failed: SW=6a81" — opaque to the user. Detect it
@@ -945,7 +994,11 @@ export class NfcService extends EventEmitter {
    * a blank/foreign tag has no CC to lock, so both are refused with a typed
    * message the renderer maps to friendly copy.
    */
-  async setReadOnly(readOnly: boolean): Promise<void> {
+  async setReadOnly(readOnly: boolean, signal?: AbortSignal): Promise<void> {
+    return this.runExclusive(() => this.setReadOnlyImpl(readOnly), signal); // GH #903/#915
+  }
+
+  private async setReadOnlyImpl(readOnly: boolean): Promise<void> {
     // Bambu tags are MIFARE Classic, RSA-signed and inherently read-only —
     // there's no NFC-Forum CC to toggle. Detect first (own connection, like
     // formatTag) so we give a clear message instead of a raw ISO 15693 error.

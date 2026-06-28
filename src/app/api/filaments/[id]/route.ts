@@ -8,6 +8,7 @@ import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
+import { resolveSyncBackColor } from "@/lib/prusaSlicerBundle";
 import { escapeRegex } from "@/lib/matchFilament";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import {
@@ -539,7 +540,18 @@ export async function POST(
     // Core fields
     if (config.filament_type) update.type = config.filament_type;
     if (config.filament_vendor) update.vendor = config.filament_vendor;
-    if (config.filament_colour) update.color = config.filament_colour;
+    // GH #883: a coextruded filament exports secondaryColors[0] as its single
+    // colour key; suppress writing that echo back onto the null primary so the
+    // round-trip doesn't corrupt the spec-pure coextruded shape. GH #913: for a
+    // variant that inherits its parent's coextruded colors, resolve the parent's
+    // secondaryColors so the inherited-coextruded case is detected too.
+    if (config.filament_colour) {
+      const colorParent = filament.parentId
+        ? await Filament.findById(filament.parentId, { secondaryColors: 1 }).lean<{ secondaryColors?: string[] | null } | null>()
+        : null;
+      const resolvedColor = resolveSyncBackColor(filament, config.filament_colour, colorParent);
+      if (resolvedColor !== undefined) update.color = resolvedColor;
+    }
     if (config.filament_diameter) { const v = parseFloat(config.filament_diameter); if (!isNaN(v)) update.diameter = v; }
     if (config.filament_density) { const v = parseFloat(config.filament_density); if (!isNaN(v)) update.density = v; }
     if (config.filament_cost) { const v = parseFloat(config.filament_cost); if (!isNaN(v)) update.cost = v; }

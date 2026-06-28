@@ -7,6 +7,15 @@ let mongod: MongoMemoryServer | null = null;
 let uri: string | null = null;
 /** In-flight start, so concurrent callers share one create() (#681). */
 let starting: Promise<string> | null = null;
+/**
+ * #914: set by stopLocalMongo() so an in-flight MongoMemoryServer.create() that
+ * resolves AFTER shutdown began self-stops. The quit path in electron/main.ts
+ * only races stopLocalMongo() against a 5s hard timeout; a slow first launch
+ * (>5s, or a locked dbPath) means app.quit() can fire before stopLocalMongo's
+ * await returns — without this flag the child would still be created post-quit
+ * and orphan the dbPath lock. Reset on a fresh start.
+ */
+let shuttingDown = false;
 
 /**
  * Start an embedded local MongoDB instance.
@@ -14,6 +23,7 @@ let starting: Promise<string> | null = null;
  */
 export async function startLocalMongo(): Promise<string> {
   if (mongod && uri) return uri;
+  shuttingDown = false; // a fresh start supersedes any prior shutdown intent
   // #681: `mongod` is only assigned AFTER MongoMemoryServer.create() resolves,
   // so two overlapping callers (e.g. a hybrid resolveMongoUri racing the
   // atlas-fallback path) would both pass the guard above and each spawn a
@@ -57,6 +67,18 @@ async function doStartLocalMongo(): Promise<string> {
     },
   });
 
+  // #914: shutdown may have begun while create() was in flight (the 5s quit
+  // timeout in main.ts can elapse and app.quit() fire before stopLocalMongo's
+  // await returns). Stop the just-created server immediately so it doesn't
+  // linger as an orphan holding the dbPath lock, and throw so callers see the
+  // start didn't complete.
+  if (shuttingDown) {
+    await mongod.stop().catch(() => {});
+    mongod = null;
+    uri = null;
+    throw new Error("Local MongoDB start aborted — app is shutting down");
+  }
+
   // GH #435: if anything in the URI-parse / db-name-append block
   // throws (malformed URI is the obvious case), the catch must roll
   // back the partially-initialised state. Without rollback `mongod`
@@ -86,6 +108,25 @@ async function doStartLocalMongo(): Promise<string> {
  * Stop the embedded MongoDB instance.
  */
 export async function stopLocalMongo(): Promise<void> {
+  // #914: signal any in-flight start to self-stop on completion. This is the
+  // backstop for the case the await below can't cover — if the start takes
+  // longer than main.ts's 5s quit timeout, app.quit() fires before this await
+  // returns, but the create() will still see this flag when it resolves and
+  // stop itself (doStartLocalMongo), so no orphaned mongod holds the dbPath lock.
+  shuttingDown = true;
+  // #900: if a start is still in flight, `mongod` hasn't been assigned yet —
+  // returning here would let MongoMemoryServer.create() resolve AFTER we return,
+  // orphaning a mongod that holds the dbPath lock with no handle to stop it
+  // (the app quitting mid-boot). Wait (best-effort, within the quit budget) for
+  // the in-flight start to settle, then stop whatever it produced. A failed (or
+  // self-aborted, above) start rolls `mongod` back to null, so nothing to stop.
+  if (starting) {
+    try {
+      await starting;
+    } catch {
+      // start failed — nothing was left running to stop.
+    }
+  }
   if (mongod) {
     await mongod.stop();
     mongod = null;
