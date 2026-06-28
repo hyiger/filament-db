@@ -80,23 +80,14 @@ export async function PUT(
     if ("hardened" in body) update.hardened = body.hardened;
     if ("notes" in body) update.notes = body.notes;
 
-    const nozzle = await Nozzle.findOneAndUpdate(
-      { _id: id, _deletedAt: null },
-      update,
-      { returnDocument: "after", runValidators: true }
-    ).lean();
-    if (!nozzle) {
-      return errorResponse("Not found", 404);
-    }
-
+    // GH #897 / #912 (Codex P2): VALIDATE printerIds BEFORE mutating the nozzle,
+    // so a rejected assignment (multi-printer, bad/missing target) doesn't leave
+    // the nozzle partially updated (e.g. renamed but the request 400s).
+    // A single physical nozzle lives in at most ONE printer (#232); the
+    // nozzle-side assignment is AUTHORITATIVE (auto-move) — the $pull below
+    // displaces the previous claim — but it can't be in two printers at once.
+    let validatedTargetId: string | null = null;
     if (printerIds !== undefined) {
-      // GH #897: a single physical nozzle lives in at most ONE printer (#232).
-      // The nozzle-side assignment is AUTHORITATIVE (auto-move): the $pull below
-      // removes this nozzle from every other printer, so reassigning displaces
-      // the previous claim without a conflict prompt. But one nozzle cannot be
-      // in TWO printers at once — reject a multi-printer set rather than letting
-      // the $addToSet loop corrupt the one-printer-per-nozzle invariant (which
-      // the printer-side routes enforce via findNozzleConflicts).
       if (printerIds.length > 1) {
         return errorResponse(
           "A nozzle can be installed in at most one printer at a time.",
@@ -108,9 +99,9 @@ export async function PUT(
         if (typeof targetId !== "string" || !mongoose.isValidObjectId(targetId)) {
           return errorResponse("printerIds must contain a valid printer id", 400);
         }
-        // Validate the target exists + is active (mirrors the printer routes'
-        // existence check) so the assignment can't silently no-op while the
-        // $pull below still strips the nozzle from its current printer.
+        // Target must exist + be active (mirrors the printer routes' existence
+        // check) so the assignment can't silently no-op while the $pull below
+        // still strips the nozzle from its current printer.
         const target = await Printer.findOne(
           { _id: targetId, _deletedAt: null },
           { _id: 1 },
@@ -118,8 +109,23 @@ export async function PUT(
         if (!target) {
           return errorResponse("Target printer not found", 400);
         }
+        validatedTargetId = targetId;
+      }
+    }
+
+    const nozzle = await Nozzle.findOneAndUpdate(
+      { _id: id, _deletedAt: null },
+      update,
+      { returnDocument: "after", runValidators: true }
+    ).lean();
+    if (!nozzle) {
+      return errorResponse("Not found", 404);
+    }
+
+    if (printerIds !== undefined) {
+      if (validatedTargetId) {
         await Printer.updateMany(
-          { _id: targetId, _deletedAt: null },
+          { _id: validatedTargetId, _deletedAt: null },
           { $addToSet: { installedNozzles: id } },
         );
       }

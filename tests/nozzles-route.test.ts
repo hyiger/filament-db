@@ -372,6 +372,23 @@ describe("/api/nozzles", () => {
       expect(res.status).toBe(404);
     });
 
+    it("#912: a rejected printerIds assignment does NOT partially update the nozzle", async () => {
+      const noz = await Nozzle.create({ name: "Keep Me", diameter: 0.4, type: "Brass" });
+      const a = await Printer.create({ name: "PA", manufacturer: "X", printerModel: "1" });
+      const b = await Printer.create({ name: "PB", manufacturer: "X", printerModel: "2" });
+      const res = await updateNozzle(
+        jsonReq(
+          `http://localhost/api/nozzles/${noz._id}`,
+          { name: "Renamed", printerIds: [String(a._id), String(b._id)] }, // invalid multi-printer
+          "PUT",
+        ),
+        { params: Promise.resolve({ id: String(noz._id) }) },
+      );
+      expect(res.status).toBe(400);
+      // The nozzle name must be UNCHANGED — validation runs before the write.
+      expect((await Nozzle.findById(noz._id)).name).toBe("Keep Me");
+    });
+
     it("#897: rejects assigning one nozzle to MULTIPLE printers (one-printer-per-nozzle)", async () => {
       const noz = await Nozzle.create({ name: "Shared", diameter: 0.4, type: "Brass" });
       const a = await Printer.create({ name: "A", manufacturer: "X", printerModel: "1" });
