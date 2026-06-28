@@ -125,6 +125,64 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(bedTypes).toHaveLength(0);
   });
 
+  it("#889: rejects a raw body whose declared Content-Length exceeds the cap (413, no buffering)", async () => {
+    const req = new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "content-length": String(51 * 1024 * 1024), // > 50 MB cap
+      },
+      body: JSON.stringify({ version: 2, createdAt: new Date().toISOString(), collections: {} }),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(413);
+  });
+
+  it("#890: restore coerces ObjectId-array fields but leaves other 24-hex string arrays as strings", async () => {
+    const nozzleHex = "aaaaaaaaaaaaaaaaaaaaaaaa"; // valid 24-hex → real nozzle ref
+    const notARef = "bbbbbbbbbbbbbbbbbbbbbbbb"; // 24-hex but NOT an ObjectId field
+    const snapshot = {
+      version: 2,
+      createdAt: new Date().toISOString(),
+      collections: {
+        filaments: [
+          {
+            name: "Coerce guard",
+            vendor: "QA",
+            type: "PLA",
+            // A 24-hex string riding in the Mixed settings bag inside an array.
+            // The array branch must NOT coerce it (key isn't an OID array field).
+            settings: { customRefs: [notARef] },
+          },
+        ],
+        nozzles: [],
+        printers: [
+          {
+            name: "P1",
+            manufacturer: "X",
+            printerModel: "1",
+            installedNozzles: [nozzleHex], // genuine ObjectId array → must coerce
+          },
+        ],
+      },
+    };
+    const req = new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+
+    const printer = await Printer.findOne({ name: "P1" }).lean();
+    expect(printer.installedNozzles[0]).toBeInstanceOf(mongoose.Types.ObjectId);
+    expect(String(printer.installedNozzles[0])).toBe(nozzleHex);
+
+    const fil = await Filament.findOne({ name: "Coerce guard" }).lean();
+    expect(typeof fil.settings.customRefs[0]).toBe("string"); // NOT coerced to ObjectId
+    expect(fil.settings.customRefs[0]).toBe(notARef);
+  });
+
   /**
    * GH #158 regression guard.
    *
