@@ -24,6 +24,7 @@ import {
   mergeSlicerSettings,
   type SettingsMergeResult,
 } from "@/lib/slicerSettings";
+import { resolveSyncBackColor } from "@/lib/prusaSlicerBundle";
 import type {
   BambuParseResult,
   CalibrationHints,
@@ -51,6 +52,11 @@ import type {
 export interface ExistingFilamentForApply {
   type?: string | null;
   vendor?: string | null;
+  /** GH #883: read by resolveSyncBackColor to detect the spec-pure coextruded
+   *  shape (null primary + populated secondaries) and suppress writing the
+   *  exported secondary echo back onto the null primary. */
+  color?: string | null;
+  secondaryColors?: string[] | null;
   diameter?: number | null;
   density?: number | null;
   cost?: number | null;
@@ -221,7 +227,18 @@ export function buildStructuredUpdate(
 
   setIfNotInherited("type", parsed.type);
   setIfNotInherited("vendor", parsed.vendor);
-  if (parsed.color != null) u.color = parsed.color; // not inheritable
+  // not inheritable. GH #883: for a coextruded filament (null primary +
+  // secondaries) the export echoes secondaryColors[0] as the single color, so
+  // suppress writing that echo back onto the null primary; undefined = leave it.
+  if (parsed.color != null) {
+    // GH #913: pass the parent so an inherited-coextruded variant is detected.
+    const resolvedColor = resolveSyncBackColor(
+      existing,
+      parsed.color,
+      parent as { secondaryColors?: string[] | null } | null,
+    );
+    if (resolvedColor !== undefined) u.color = resolvedColor;
+  }
   setIfNotInherited("diameter", parsed.diameter);
   setIfNotInherited("density", parsed.density);
   setIfNotInherited("cost", parsed.cost);

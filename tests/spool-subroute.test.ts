@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as postUsage } from "@/app/api/filaments/[id]/spools/[spoolId]/usage/route";
 import { POST as postDryCycle } from "@/app/api/filaments/[id]/spools/[spoolId]/dry-cycles/route";
 import { DELETE as deleteSpool } from "@/app/api/filaments/[id]/spools/[spoolId]/route";
+import * as spoolSlots from "@/lib/spoolSlots";
 
 /**
  * Tests for the two v1.11 spool-ledger sub-endpoints:
@@ -255,6 +256,36 @@ describe("spool sub-routes", () => {
         { params: Promise.resolve({ id: fakeFilament, spoolId: fakeSpool }) },
       );
       expect(res.status).toBe(404);
+    });
+
+    it("#886: a slot-clear failure leaves the spool present (clear-before-delete is retryable)", async () => {
+      const f = await seedFilament();
+      const sid = String(f.spools[0]._id);
+      // Make the AMS-slot clear fail on the first attempt only.
+      const spy = vi
+        .spyOn(spoolSlots, "assignSpoolToSlot")
+        .mockRejectedValueOnce(new Error("transient slot-clear failure"));
+      try {
+        const res = await deleteSpool(
+          delReq(`http://localhost/api/filaments/${f._id}/spools/${sid}`),
+          { params: Promise.resolve({ id: String(f._id), spoolId: sid }) },
+        );
+        // The clear threw → the request errors. Crucially, because the clear runs
+        // BEFORE the $pull, the spool was NOT removed — pre-fix it would be gone
+        // with a dangling slot ref and the retry would 404.
+        expect(res.status).toBe(500);
+        const stillThere = await Filament.findById(f._id);
+        expect(stillThere.spools).toHaveLength(1);
+      } finally {
+        spy.mockRestore();
+      }
+      // Retry now succeeds and removes the spool.
+      const res2 = await deleteSpool(
+        delReq(`http://localhost/api/filaments/${f._id}/spools/${sid}`),
+        { params: Promise.resolve({ id: String(f._id), spoolId: sid }) },
+      );
+      expect(res2.status).toBe(200);
+      expect((await Filament.findById(f._id)).spools).toHaveLength(0);
     });
   });
 });
