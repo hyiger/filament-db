@@ -286,9 +286,52 @@ export function buildNdefMessageTlv(message: Uint8Array): Uint8Array {
   return out;
 }
 
-/** NFC-Forum Type 2 Capability Container (NTAG page 3): `E1 10 <userMem/8> 00`. */
-export function buildType2Cc(userMemoryBytes: number): Uint8Array {
-  return new Uint8Array([0xe1, 0x10, Math.floor(userMemoryBytes / 8) & 0xff, 0x00]);
+/**
+ * NFC-Forum Type 2 Capability Container (NTAG page 3): `E1 10 <userMem/8> <rwa>`.
+ * Byte 3 (`rwa`) is the read/write-access byte; its low nibble is the WRITE
+ * access condition — `0x0` = read/write (default), `0xF` = read-only. See the
+ * Type-2 read-only helpers below. `readOnly` defaults false (read/write).
+ */
+export function buildType2Cc(userMemoryBytes: number, readOnly = false): Uint8Array {
+  return new Uint8Array([
+    0xe1,
+    0x10,
+    Math.floor(userMemoryBytes / 8) & 0xff,
+    setType2CcReadOnly(0x00, readOnly),
+  ]);
+}
+
+// ── NTAG (NFC-Forum Type 2) read-only — REVERSIBLE soft lock ────────
+//
+// GH (OpenTag3D write): the NTAG "read-only" toggle is the Type-2 Capability
+// Container byte 3 (page 3, byte 15) WRITE-access nibble — NOT the chip's
+// static/dynamic lock bytes. The lock bytes are one-time-programmable (OTP):
+// once set they can NEVER be cleared, permanently bricking the tag for writes.
+// We deliberately NEVER touch them. The CC byte-3 low nibble, by contrast, is
+// ordinary rewritable page-3 data (page 3 is left unlocked), so `0x0`⇄`0xF`
+// round-trips — Erase / "Make Writable" clears it, exactly mirroring the
+// reversible SLIX2 soft lock above. Like that one, it's an accidental-overwrite
+// guard honored by our write path + compliant readers, not tamper-proofing.
+//
+// Type-2 RWA byte layout: high nibble = read access (keep 0x0 = always
+// readable), low nibble = write access (0x0 r/w, 0xF no-write).
+
+/** The low nibble of the Type-2 CC byte 3 carrying the write-access condition. */
+const TYPE2_WRITE_ACCESS_MASK = 0x0f;
+
+/** True if the Type-2 CC byte 3 marks the NTAG write-protected (low nibble 0xF). */
+export function isType2CcReadOnly(ccByte3: number): boolean {
+  return (ccByte3 & TYPE2_WRITE_ACCESS_MASK) === TYPE2_WRITE_ACCESS_MASK;
+}
+
+/**
+ * Return a new Type-2 CC byte 3 with the write-access nibble set to read-only
+ * (`0xF`) or read/write (`0x0`). The read-access high nibble is preserved.
+ * Masked to a byte.
+ */
+export function setType2CcReadOnly(ccByte3: number, readOnly: boolean): number {
+  const base = ccByte3 & 0xff;
+  return (readOnly ? base | TYPE2_WRITE_ACCESS_MASK : base & ~TYPE2_WRITE_ACCESS_MASK) & 0xff;
 }
 
 // ── Read-only (soft lock) via the NFC-Forum Type 5 CC byte ──────────
