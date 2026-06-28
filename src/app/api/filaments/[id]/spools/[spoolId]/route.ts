@@ -119,17 +119,6 @@ export async function PUT(
       );
     }
 
-    // GH #268: retiring a spool excludes it from inventory, so it must not stay
-    // loaded in a printer AMS slot (the assignment route already refuses to
-    // *assign* a retired spool). GH #886: clear it BEFORE the retire write — the
-    // same clear-before ordering as DELETE — so a slot-clear failure leaves the
-    // spool active and the op retryable rather than retired-but-still-slotted.
-    // The clear is an idempotent no-match-safe updateMany, so pre-clearing for a
-    // spool that turns out not to exist (the 404 below) is harmless.
-    if (validation.retired === true) {
-      await assignSpoolToSlot(Printer, spoolId, null);
-    }
-
     const filament = await Filament.findOneAndUpdate(
       { _id: id, _deletedAt: null, "spools._id": spoolId },
       { $set: update },
@@ -138,6 +127,18 @@ export async function PUT(
 
     if (!filament) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    // GH #268: a retired spool must not stay loaded in a printer AMS slot (the
+    // assignment route already refuses to *assign* a retired spool). Clear AFTER
+    // the write — the $set filter (`spools._id`) already proved the spool belongs
+    // to THIS filament, so we never clear a spool that belongs to another one
+    // (Codex P2 on #886 — `assignSpoolToSlot` clears globally by spoolId, so a
+    // pre-clear before the ownership check could strip another filament's slot).
+    // PUT doesn't need clear-before for retryability: unlike DELETE the spool
+    // stays findable, so a retry re-runs the $set + re-clears.
+    if (validation.retired === true) {
+      await assignSpoolToSlot(Printer, spoolId, null);
     }
 
     return NextResponse.json(filament);
@@ -200,6 +201,14 @@ export async function DELETE(
         { status: 404 },
       );
     }
+
+    // GH #886 (Codex P2): best-effort clear AGAIN after the $pull. The pre-clear
+    // above gives retryability (a clear failure leaves the spool present), but a
+    // concurrent assignment could slot this spool in the window between the
+    // pre-clear and the $pull — leaving Printer.amsSlots[] pointing at a
+    // now-deleted spool. A second clear after the delete closes that window. The
+    // spool is already gone, so a failure here is harmless (no retry path needed).
+    await assignSpoolToSlot(Printer, spoolId, null).catch(() => {});
 
     return NextResponse.json(filament);
   } catch (err) {
