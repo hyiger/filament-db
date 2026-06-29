@@ -418,6 +418,16 @@ describe("pruneOptPayloadAgainstParent (Issue #753)", () => {
     expect(pruned.optTags).toEqual([99]); // differs → kept
   });
 
+  it("#928: prunes secondaryColors that match the parent only by case", () => {
+    // OPT stores lower-case hex; the parent's effective colors are upper-case.
+    // A casing-only difference must still prune so the variant inherits.
+    const p = payload({ secondaryColors: ["#aabbcc", "#001122"] });
+    const pruned = pruneOptPayloadAgainstParent(p, {
+      secondaryColors: ["#AABBCC", "#001122"],
+    });
+    expect(pruned.secondaryColors).toEqual([]); // case-insensitively equal → inherit
+  });
+
   it("returns the payload unchanged when there is no parent", () => {
     const p = payload();
     expect(pruneOptPayloadAgainstParent(p, null)).toBe(p);

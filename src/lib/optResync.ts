@@ -436,7 +436,11 @@ export function pruneOptPayloadAgainstParent(
   for (const field of PRUNE_ARRAY_FIELDS) {
     const v = pruned[field];
     if (!Array.isArray(v) || v.length === 0) continue;
-    if (valuesEqual(v as string[], getPath(parentEffective, field))) {
+    // GH #928: use the case-folding compare for hex-color fields — a variant's
+    // secondaryColors that differ from the parent's only by case (#AABBCC vs
+    // #aabbcc) should still prune to inherit. valuesEqualForField is a no-op for
+    // the non-color array field (optTags), so this is safe for the whole set.
+    if (valuesEqualForField(field, v as OptValue, getPath(parentEffective, field))) {
       pruned[field] = [];
     }
   }
