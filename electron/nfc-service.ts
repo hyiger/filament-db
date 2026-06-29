@@ -1193,6 +1193,20 @@ export class NfcService extends EventEmitter {
       let ndefBytes: number;
       let needsFormat = false;
 
+      // GH #437 parity for NTAG (Codex P2 #927): refuse to overwrite a tag whose
+      // page-3 CC byte is neither an NFC-Forum Type-2 CC (0xE1) nor blank (0x00).
+      // The byte-0 NXP guard in detectType2Head only proves it's an NXP Type-2
+      // chip — it could still be a proprietary / non-NDEF NTAG (inventory, access
+      // badge, custom app) whose data we'd clobber by formatting over it. Only an
+      // NDEF tag (0xE1 — overwritten on explicit/confirmed Write) or a genuinely
+      // blank one (0x00) is ours to write. Mirrors writeSlix2Impl's guard.
+      if (ccMagic !== 0xe1 && ccMagic !== 0x00) {
+        throw new Error(
+          "Tag refuses NFC-Forum write (page 3 CC is neither 0xE1 nor blank 0x00). " +
+            "This looks like a non-NDEF formatted NTAG — remove and replace with a blank or NDEF-formatted tag.",
+        );
+      }
+
       if (ccMagic === 0xe1) {
         // NOTE: we deliberately do NOT pre-refuse on the Type-2 CC read-only
         // nibble (CC byte 3). On NTAG21x the CC page (page 3) is OTP — its bits
@@ -1214,9 +1228,10 @@ export class NfcService extends EventEmitter {
         const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
         ndefBytes = this.safeNtagNdefBytes(head[NTAG_CC_OFFSET + 2], verSize);
       } else {
-        // Blank/unformatted NTAG (CC magic 0x00, or any non-0xE1): no CC tells us
-        // the chip size. GET_VERSION it; refuse rather than guess (locked
-        // decision — a wrong size could write past a smaller chip's end).
+        // Blank NTAG (CC magic 0x00 — the guard above ruled out every other
+        // non-0xE1 value): no CC tells us the chip size. GET_VERSION it; refuse
+        // rather than guess (locked decision — a wrong size could write past a
+        // smaller chip's end).
         const sized = await this.getNtagNdefBytesViaGetVersion(protocol);
         if (sized == null) {
           throw new Error(
@@ -1392,6 +1407,17 @@ export class NfcService extends EventEmitter {
   private async formatNtagImpl(head: Buffer): Promise<void> {
     return this.withConnection(async (protocol) => {
       const ccMagic = head[NTAG_CC_OFFSET];
+      // GH #437 parity for NTAG (Codex P2 #927): refuse to reformat a tag whose
+      // page-3 CC byte is neither an NFC-Forum Type-2 CC (0xE1) nor blank (0x00).
+      // The byte-0 NXP guard only proves it's an NXP Type-2 chip — it could still
+      // be a proprietary / non-NDEF NTAG whose data Erase would clobber by writing
+      // a fresh CC + TLV over it. Mirrors the SLIX2 erase/write guard.
+      if (ccMagic !== 0xe1 && ccMagic !== 0x00) {
+        throw new Error(
+          "Tag refuses NFC-Forum format (page 3 CC is neither 0xE1 nor blank 0x00). " +
+            "This looks like a non-NDEF formatted NTAG — remove and replace with a blank or NDEF-formatted tag.",
+        );
+      }
       // Erase REFORMATS the tag, so the rewritten CC AND the zero-fill both use
       // the AUTHORITATIVE chip capacity from GET_VERSION. Unlike write/detect
       // (safeNtagNdefBytes), erase does NOT min() with the existing CC: it must be
