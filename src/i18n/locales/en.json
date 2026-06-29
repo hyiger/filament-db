@@ -1544,6 +1544,7 @@
   "settings.nfcLoadedTag": "Loaded tag:",
   "settings.nfcLoadedBambu": "Bambu (read-only)",
   "settings.nfcLoadedNtagOpenTag3d": "NTAG · OpenTag3D",
+  "settings.nfcLoadedNtagForeign": "NTAG · non-OpenTag3D NDEF data",
   "settings.nfcLoadedNtagBlank": "Blank NTAG",
   "settings.nfcLoadedSlix2OpenPrintTag": "SLIX2 · OpenPrintTag",
   "settings.nfcLoadedSlix2Blank": "Blank SLIX2",

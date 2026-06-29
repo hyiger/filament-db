@@ -1204,8 +1204,6 @@ export class NfcService extends EventEmitter {
         );
       }
       const ccMagic = head[NTAG_CC_OFFSET];
-      let ndefBytes: number;
-      let needsFormat = false;
 
       // GH #437 parity for NTAG (Codex P2 #927): refuse to overwrite a tag whose
       // page-3 CC byte is neither an NFC-Forum Type-2 CC (0xE1) nor blank (0x00).
@@ -1221,40 +1219,42 @@ export class NfcService extends EventEmitter {
         );
       }
 
+      // NTAG FAMILY CONFIRMATION + authoritative size (Codex P2 #927). GET_VERSION
+      // succeeds on NTAG21x but NOT on MIFARE Classic — which shares the FF B0 read
+      // APDU and can carry an NXP 0x04 UID, so the byte-0 guard alone can't exclude
+      // a non-Bambu Classic card (a coincidental 0xE1/0x00 byte-12 would otherwise
+      // reach the page writes below and clobber Classic blocks / access bits). Fail
+      // CLOSED when GET_VERSION can't confirm: never mutate a card we can't prove is
+      // an NTAG. GET_VERSION works on the ACR1552U in practice (a blank-NTAG write
+      // already required it), so this is the rare edge case.
+      const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
+      if (verSize == null) {
+        throw new Error(
+          "NTAG_SIZE_UNKNOWN: Couldn't confirm an NTAG (213/215/216) on the reader — refusing to write. " +
+            "The reader didn't return a recognized NTAG GET_VERSION response.",
+        );
+      }
+
+      // NOTE: we deliberately do NOT pre-refuse on the Type-2 CC read-only nibble
+      // (CC byte 3). On NTAG21x the CC page is OTP — a set bit can't be cleared
+      // (hardware-confirmed), so it's not a reversible signal and honoring it would
+      // permanently lock a tag out of our own write path. A GENUINELY locked NTAG
+      // (its static lock bytes set, which WE never set) just fails the page write
+      // below with an SW error. NTAG "set read-only" is unsupported for this reason.
+      let ndefBytes: number;
+      let needsFormat = false;
       if (ccMagic === 0xe1) {
-        // NOTE: we deliberately do NOT pre-refuse on the Type-2 CC read-only
-        // nibble (CC byte 3). On NTAG21x the CC page (page 3) is OTP — its bits
-        // can be set but never cleared (hardware-confirmed: writing 0x00 returns
-        // SW 9000 yet the 0x0F nibble persists). So the nibble is not a reliable,
-        // reversible read-only signal and honoring it would permanently lock a
-        // tag out of our own write path. A GENUINELY locked NTAG (its static lock
-        // bytes set, which WE never set) simply fails the page write below with an
-        // SW error, which surfaces. NTAG "set read-only" is unsupported for this
-        // reason — see setReadOnlyImpl.
-        // Codex #927 (P1): bound the write capacity by the AUTHORITATIVE chip
-        // size, not the (possibly corrupt/inflated) CC. safeNtagNdefBytes prefers
-        // GET_VERSION (smaller of it and the CC) and, when GET_VERSION is
-        // unavailable, caps to the conservative NTAG213 extent rather than
-        // trusting the CC — so a formatted NTAG213 whose CC lies that it's a
-        // 215/216 can't drive an Extended TLV past the 213 user area into its
-        // lock/config pages (the [3,255] page guard can't catch that, since config
-        // sits inside that range on a small chip).
-        const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
+        // Formatted: bound the payload by min(CC, verSize) via safeNtagNdefBytes so
+        // a corrupt/inflated CC (a real 213 claiming 215/216) can't drive an
+        // Extended TLV past the chip's user area into its lock/config pages (the
+        // [3,255] page guard can't catch that, since config sits in that range on a
+        // small chip).
         ndefBytes = this.safeNtagNdefBytes(head[NTAG_CC_OFFSET + 2], verSize);
       } else {
         // Blank NTAG (CC magic 0x00 — the guard above ruled out every other
-        // non-0xE1 value): no CC tells us the chip size. GET_VERSION it; refuse
-        // rather than guess (locked decision — a wrong size could write past a
-        // smaller chip's end).
-        const sized = await this.getNtagNdefBytesViaGetVersion(protocol);
-        if (sized == null) {
-          throw new Error(
-            "NTAG_SIZE_UNKNOWN: Couldn't determine the NTAG's size to format it. " +
-              "The reader didn't report a recognized NTAG storage size — try an NTAG 213/215/216, " +
-              "or pre-format the tag.",
-          );
-        }
-        ndefBytes = sized;
+        // non-0xE1 value): size from the verified GET_VERSION value; the fresh CC is
+        // written below, AFTER the capacity check.
+        ndefBytes = verSize;
         needsFormat = true; // CC written below — AFTER the capacity check (Codex #927)
       }
 
@@ -1445,31 +1445,28 @@ export class NfcService extends EventEmitter {
             "This looks like a non-NDEF formatted NTAG — remove and replace with a blank or NDEF-formatted tag.",
         );
       }
-      // Erase REFORMATS the tag, so the rewritten CC AND the zero-fill both use
-      // the AUTHORITATIVE chip capacity from GET_VERSION. Unlike write/detect
-      // (safeNtagNdefBytes), erase does NOT min() with the existing CC: it must be
-      // able to RESTORE a tag previously mis-formatted small — a real NTAG215/216
-      // formatted as a 213, or one with a corrupt/zero MLEN — to its true size
-      // (Codex P2 #927). This still can't write back a LYING CC: the size comes
-      // from GET_VERSION, not the old CC, so an inflated CC (a real 213 claiming
-      // 872) is replaced with the correct 144. A BLANK tag has no CC to fall back
-      // on, so it's refused when GET_VERSION can't size it (locked decision: never
-      // guess a blank tag's size). A FORMATTED tag with GET_VERSION unavailable
-      // falls back to the conservative NTAG213 extent — safe + honest, never the
-      // untrusted old CC — so a lying CC can't be written back, nor drive the wipe
-      // into a smaller chip's lock/config pages (which writeNtagPage's [3,255]
-      // guard alone wouldn't stop, since config sits above the user area).
+      // NTAG FAMILY CONFIRMATION + authoritative size (Codex P2 #927). GET_VERSION
+      // succeeds on NTAG21x but NOT on MIFARE Classic — which shares the FF B0 read
+      // APDU and can carry an NXP 0x04 UID with a coincidental 0xE1/0x00 byte-12, so
+      // the byte-0 guard alone can't exclude it. Fail CLOSED when GET_VERSION can't
+      // confirm: never run the page 3/4 writes against a card we can't prove is an
+      // NTAG (they'd clobber Classic blocks / access bits). Erase REFORMATS, so it
+      // uses the verified size DIRECTLY (no min() with the existing CC) for both the
+      // rewritten CC and the zero-fill — restoring a tag previously mis-formatted
+      // small (a real 215/216 formatted as a 213, or a corrupt/zero MLEN) to its
+      // true size, while still replacing a LYING inflated CC with the real value
+      // (the size is GET_VERSION's, never the old CC's). GET_VERSION works on the
+      // ACR1552U in practice, so this is the rare edge case.
       const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
-      if (ccMagic !== 0xe1 && verSize == null) {
+      if (verSize == null) {
         throw new Error(
-          "NTAG_SIZE_UNKNOWN: Couldn't determine the NTAG's size to erase it. " +
-            "Try an NTAG 213/215/216, or pre-format the tag.",
+          "NTAG_SIZE_UNKNOWN: Couldn't confirm an NTAG (213/215/216) on the reader — refusing to erase. " +
+            "The reader didn't return a recognized NTAG GET_VERSION response.",
         );
       }
-      // The chip's real (verified) capacity, or the conservative NTAG213 extent
-      // when unverifiable. Drives BOTH the rewritten CC and the zero-fill extent.
-      const wipeBytes = verSize ?? NTAG_CONSERVATIVE_WIPE_BYTES;
-      const ndefBytes = wipeBytes; // size written into the CC
+      // Verified physical capacity drives BOTH the rewritten CC and the zero-fill.
+      const wipeBytes = verSize;
+      const ndefBytes = verSize; // size written into the CC
 
       // Fresh read/write CC to page 3 — clears any soft read-only nibble.
       await this.writeNtagPage(protocol, 3, Buffer.from(buildType2Cc(ndefBytes)));
@@ -1620,21 +1617,41 @@ export class NfcService extends EventEmitter {
     if (head) {
       const ccMagic = head[NTAG_CC_OFFSET];
       if (ccMagic === 0xe1) {
-        // Codex #927 (P1): report the SAFE capacity (safeNtagNdefBytes) so the
-        // renderer's Core-vs-Extended choice matches the write's bound exactly —
-        // GET_VERSION when available (smaller of it and the CC), else the
-        // conservative NTAG213 extent rather than a possibly-inflated CC. This
-        // keeps detect and write in lockstep: when the size can't be verified the
-        // renderer encodes Core, which fits, instead of an Extended payload the
-        // write would (correctly) refuse.
-        const verSize = await this.withConnection((p) => this.getNtagNdefBytesViaGetVersion(p));
-        return {
-          family: "ntag",
-          standard: "opentag3d",
-          formatted: true,
-          readOnly: false, // NTAG read-only is unsupported (CC page is OTP) — never report it
-          ndefCapacity: this.safeNtagNdefBytes(head[NTAG_CC_OFFSET + 2], verSize),
-        };
+        // Parse the actual NDEF records (Codex P3 #927) — don't claim "opentag3d"
+        // from the CC byte alone, which would misreport an EMPTY/erased tag (our
+        // Erase writes 03 00 FE → 0 records) and a FOREIGN NDEF tag (URL/contact)
+        // as existing OpenTag3D. Mirrors readNtagTag: 0 records ⇒ blank, an
+        // opentag3d record ⇒ opentag3d, any other record(s) ⇒ foreign NDEF
+        // (formatted but standard null). One connection so size + read-back agree.
+        // Capacity reporting stays via safeNtagNdefBytes (Codex P1): GET_VERSION
+        // when available (smaller of it and the CC) else the conservative NTAG213
+        // extent, so the renderer's Core/Extended choice matches the write's bound.
+        return await this.withConnection(async (protocol) => {
+          const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
+          const ndefCapacity = this.safeNtagNdefBytes(head[NTAG_CC_OFFSET + 2], verSize);
+          let standard: TagDetection["standard"] = null;
+          let formatted = false;
+          try {
+            const { data, written } = await this.assembleNtagImage(protocol, head);
+            const records = parseNdefRecords(data.subarray(0, written), NTAG_CC_OFFSET);
+            if (records.length > 0) {
+              formatted = true; // carries an NDEF message…
+              if (records.some((r) => r.tnf === 0x02 && r.type === OPENTAG3D_MIME)) {
+                standard = "opentag3d"; // …and it's ours
+              }
+            }
+            // 0 records ⇒ empty/erased ⇒ blank (formatted:false, standard:null)
+          } catch {
+            // Read-back failed — leave as blank/unknown rather than over-claiming.
+          }
+          return {
+            family: "ntag",
+            standard,
+            formatted,
+            readOnly: false, // NTAG read-only is unsupported (CC page is OTP) — never report it
+            ndefCapacity,
+          };
+        });
       }
       // Readable as Type 2 but no NDEF CC (blank / non-NDEF) — a blank NTAG.
       // GET_VERSION it (best-effort) so the renderer can size the payload; null

@@ -65,8 +65,11 @@ export default function DevicesSettingsPage() {
     if (!detected) return null;
     if (detected.family === "bambu") return t("settings.nfcLoadedBambu");
     if (detected.family === "ntag") {
+      if (detected.standard === "opentag3d") return t("settings.nfcLoadedNtagOpenTag3d");
+      // Codex P3 #927: a formatted-but-not-OpenTag3D NTAG (foreign URL/contact
+      // NDEF) is distinct from a blank one — don't label it "OpenTag3D".
       return detected.formatted
-        ? t("settings.nfcLoadedNtagOpenTag3d")
+        ? t("settings.nfcLoadedNtagForeign")
         : t("settings.nfcLoadedNtagBlank");
     }
     if (detected.family === "slix2") {
