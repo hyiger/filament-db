@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useIsElectron } from "@/hooks/useIsElectron";
 import { useNfcContext } from "@/components/NfcProvider";
@@ -59,6 +59,16 @@ export default function DevicesSettingsPage() {
     return () => { cancelled = true; };
   }, [nfcStatus.tagPresent, nfcStatus.tagUid]);
 
+  // Re-probe the loaded tag after an action that CHANGES it (erase / read-only
+  // toggle). Those mutate the tag in place without a tagPresent/tagUid change, so
+  // the detect effect above wouldn't re-run and the card would keep the pre-action
+  // label until the user lifts + replaces the tag (Codex P3 #927).
+  const refreshDetected = useCallback(() => {
+    const api = window.electronAPI;
+    if (!api?.nfcDetectTag) return;
+    api.nfcDetectTag().then(setDetected).catch(() => setDetected(null));
+  }, []);
+
   // Map a detection result to a human label, reusing the read-dialog provenance
   // wording vocabulary (#864).
   const detectedLabel = (() => {
@@ -97,6 +107,7 @@ export default function DevicesSettingsPage() {
       await window.electronAPI.nfcFormatTag();
       notifyTagErased();
       setFormatResult({ ok: true, message: t("settings.nfcEraseSuccess") });
+      refreshDetected(); // tag is now blank — update the loaded-tag label (#927)
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : String(err);
       let message = raw;
@@ -117,6 +128,7 @@ export default function DevicesSettingsPage() {
       }
       await window.electronAPI.nfcSetReadOnly(readOnly);
       setFormatResult({ ok: true, message: t(readOnly ? "settings.nfcReadOnlySet" : "settings.nfcWritableSet") });
+      refreshDetected(); // read-only state changed — refresh the lock badge (#927)
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : String(err);
       let message = raw;
