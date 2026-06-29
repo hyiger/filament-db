@@ -370,6 +370,7 @@ NFC features require the Electron desktop app plus hardware. Skip this section i
 |------|---------|
 | **Reader** | ACS ACR1552U USB (~$40-50) |
 | **OpenPrintTag tags** | NXP ICODE SLIX2 (ISO 15693, 320 bytes) — read/write |
+| **OpenTag3D tags** | NTAG213/215/216 (NFC-A / ISO 14443 Type 2) — read/write (auto-detected). Used by Polar Filament, American Filament, Numakers, 3D-Fuel, Ecogenesis |
 | **Bambu Lab spools** | MIFARE Classic tags on Bambu filament spools — read-only (auto-detected) |
 | **macOS driver** | Install [ifd-acsccid.bundle](https://www.acs.com.hk/en/drivers/) from ACS |
 | **Linux / RPi driver** | `sudo apt install pcscd libpcsclite-dev` (standard `ccid` driver) |

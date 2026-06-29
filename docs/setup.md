@@ -24,7 +24,7 @@ For Atlas and Hybrid modes, you'll need a MongoDB Atlas connection string. See [
 
 Run Filament DB as a Docker container. The image is ~72MB, built on `node:22-alpine`, and supports both `linux/amd64` and `linux/arm64` (Raspberry Pi).
 
-> **Note:** The Docker image runs the web app only. NFC tag reading/writing requires the [desktop app](#option-1-desktop-app-easiest) for direct USB hardware access.
+> **Note:** The Docker image runs the web app only. NFC tag reading/writing (OpenPrintTag, Bambu, and OpenTag3D) requires the [desktop app](#option-1-desktop-app-easiest) for direct USB hardware access.
 
 ### Quick Start
 
@@ -339,7 +339,7 @@ journalctl -u filament-db -f            # tail the logs
 
 ### Using NFC alongside the service
 
-The desktop app includes NFC tag read/write support which requires direct USB access to an NFC reader. Since the web service and desktop app both start a Next.js server, run the desktop app on a different port so the web service stays available to PrusaSlicer and other network clients:
+The desktop app includes NFC tag read/write support (OpenPrintTag, Bambu, and OpenTag3D) which requires direct USB access to an NFC reader. Since the web service and desktop app both start a Next.js server, run the desktop app on a different port so the web service stays available to PrusaSlicer and other network clients:
 
 ```bash
 PORT=3457 "/opt/Filament DB/filament-db"

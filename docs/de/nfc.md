@@ -4,12 +4,13 @@
 
 [< Zurück zur README](../../README.md)
 
-Filament DB unterstützt das Lesen und Schreiben von [OpenPrintTag](https://openprinttag.io/)-NFC-V-Tags (ISO 15693) und das Lesen von Bambu-Lab-MIFARE-Classic-Spulen-Tags direkt aus der Desktop-App.
+Filament DB unterstützt das Lesen und Schreiben von [OpenPrintTag](https://openprinttag.org/)-NFC-V-Tags (ISO 15693), das Lesen und Schreiben von [OpenTag3D](https://opentag3d.info/)-NTAG-Tags (NFC-A / ISO 14443 Type 2) und das Lesen von Bambu-Lab-MIFARE-Classic-Spulen-Tags direkt aus der Desktop-App. Damit ist Filament DB ein neutraler Multi-Standard-Reader.
 
 ## Voraussetzungen
 
 - **Lesegerät**: ACS ACR1552U USB-NFC-Reader/Writer (oder kompatibles PC/SC-Lesegerät mit ISO-15693- und ISO-14443-Unterstützung)
 - **OpenPrintTag-Tags**: NXP ICODE SLIX2 (oder kompatible NFC-V- / ISO-15693-Tags mit mindestens 320 Byte Nutzerspeicher) — Lesen/Schreiben
+- **OpenTag3D-Tags**: NTAG213/215/216 (NFC-A / ISO 14443 Type 2) — Lesen/Schreiben (automatisch erkannt). NTAG215/216 fassen das vollständige Image; NTAG213 nur die Kernfelder
 - **Bambu-Lab-Spulen**: MIFARE-Classic-1K-Tags auf Bambu-Lab-Filamentspulen — nur lesen (automatisch erkannt)
 - **Desktop-App**: NFC-Funktionen sind ausschließlich in der Electron-Desktop-App verfügbar, nicht in der Web-Version
 
@@ -101,6 +102,8 @@ Du kannst einen OpenPrintTag **schreibgeschützt** markieren, damit die App den 
 - **Beschreibbar machen** — hebt die Sperre auf.
 
 Das ist eine *umkehrbare* Soft-Sperre (sie kippt die Schreibzugriffs-Bits des NFC-Forum-CC, keine permanente Hardware-Sperre), daher hebt auch **Löschen** sie auf. Bambu-Tags melden sich immer als schreibgeschützt (sie sind RSA-signiert). Der Lesedialog zeigt für einen schreibgeschützten Tag ein Schloss-Badge.
+
+> **Schreibschutz gibt es nur für OpenPrintTag (SLIX2).** Für OpenTag3D/NTAG-Tags ist er **nicht** verfügbar: Der Capability Container eines NTAG ist einmalig programmierbar (ein Schreibschutz-Bit lässt sich setzen, aber nie zurücksetzen), daher wäre eine Sperre irreversibel — die Schreibschutz-Schaltflächen sind deaktiviert, wenn ein NTAG aufliegt.
 
 ### Tags löschen / formatieren
 

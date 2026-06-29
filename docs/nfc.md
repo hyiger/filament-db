@@ -2,12 +2,13 @@
 
 [< Back to README](../README.md)
 
-Filament DB supports reading and writing [OpenPrintTag](https://openprinttag.org/) NFC-V (ISO 15693) tags and reading Bambu Lab MIFARE Classic spool tags directly from the desktop app.
+Filament DB is a neutral multi-standard NFC tag reader/writer. It reads and writes [OpenPrintTag](https://openprinttag.org/) NFC-V (ISO 15693) tags and [OpenTag3D](https://opentag3d.info/) NTAG (NFC-A / ISO 14443 Type 2) tags, and reads Bambu Lab MIFARE Classic spool tags, directly from the desktop app.
 
 ## Requirements
 
 - **Reader**: ACS ACR1552U USB NFC reader/writer (or compatible PC/SC reader with ISO 15693 and ISO 14443 support)
 - **OpenPrintTag tags**: NXP ICODE SLIX2 (or compatible NFC-V / ISO 15693 tags with at least 320 bytes user memory) — read/write
+- **OpenTag3D tags**: NTAG213/215/216 (NFC-A / ISO 14443 Type 2) — read/write (auto-detected). NTAG215/216 hold the full image; NTAG213 fits core fields only
 - **Bambu Lab spools**: MIFARE Classic 1K tags on Bambu Lab filament spools — read-only (auto-detected)
 - **Desktop app**: NFC features are only available in the Electron desktop app, not the web version
 
@@ -81,8 +82,10 @@ From any filament's detail page:
 
 1. Place a tag on the reader (the NFC status indicator turns green)
 2. Click **"Write NFC"** (purple button)
-3. The app encodes the filament data as OpenPrintTag CBOR, wraps it in an NDEF message, and writes it block-by-block
+3. The app **auto-detects the loaded chip** and encodes the right standard — an **OpenPrintTag** (SLIX2 / NFC-V) tag gets OpenPrintTag CBOR; an **OpenTag3D** (NTAG213/215/216) tag gets the OpenTag3D binary image — wraps it in an NDEF message, and writes it page/block-by-block
 4. The button shows progress and success/failure feedback
+
+> An NTAG215/216 holds the full OpenTag3D image; a smaller NTAG213 only fits the core fields (you'll get a notice that the spool ID and remaining weight were omitted). A combined filament type like `PA12-CF` is split into OpenTag3D's separate base (`PA12`) + modifier (`CF`) slots.
 
 **Before overwriting, the app checks the tag** (v1.34.8 / #583):
 
@@ -100,6 +103,8 @@ You can mark an OpenPrintTag **read-only** so the app won't accidentally overwri
 
 This is a *reversible* soft lock (it flips the NFC-Forum CC write-access bits, not a permanent hardware lock), so **Erase** also clears it. Bambu tags always report as read-only (they're RSA-signed). The read dialog shows a lock badge for a read-only tag.
 
+> **Read-only is OpenPrintTag (SLIX2) only.** It is **not** available for OpenTag3D/NTAG tags: an NTAG's capability container is one-time-programmable (a read-only bit can be set but never cleared), so a read-only flag could never be undone — the read-only buttons disable when an NTAG is loaded. (True NTAG read-only would need the chip's lock bytes, which are likewise permanent, so the app never writes them.)
+
 ### Erasing / Formatting Tags
 
 From the **Settings** page (Electron only):
@@ -110,7 +115,7 @@ From the **Settings** page (Electron only):
 4. The app writes a blank NFC Forum Type 5 header (CC bytes) to block 0, a terminator to block 1, and zeroes all remaining user memory blocks
 5. A success or error message appears when complete
 
-If you remove the tag before confirming, the confirmation prompt automatically dismisses. Erasing a **Bambu Lab** tag is refused with a clear "read-only" message (these tags are RSA-signed and can't be erased).
+Erase works for both **OpenPrintTag** (SLIX2) and **OpenTag3D** (NTAG) tags — the app detects the chip and writes the matching blank capability container + empty NDEF message. If you remove the tag before confirming, the confirmation prompt automatically dismisses. Erasing a **Bambu Lab** tag is refused with a clear "read-only" message (these tags are RSA-signed and can't be erased).
 
 ### OpenPrintTag Binary Export
 
@@ -137,8 +142,9 @@ The "Loaded" label persists after the tag-read dialog is dismissed (so you can s
 The app communicates with the ACR1552U via PC/SC using `@pokusew/pcsclite`:
 
 - **Connection**: Always connects with `SCARD_SHARE_SHARED`. On macOS the built-in `ifd-ccid` driver and Apple's `ifd-acsccid` driver both register an instance of the ACR1552U, but only the ACS driver handles ISO 15693 — the app tries a SHARED connect on each registered reader instance and uses whichever succeeds (it also waits briefly on hot-plug for both driver instances to register).
-- **Tag detection**: Tries MIFARE Classic read first (Bambu); on failure, falls through to ISO 15693 (OpenPrintTag)
+- **Tag detection**: Tries MIFARE Classic read first (Bambu); then NTAG / NFC-Forum Type 2 (OpenTag3D) via `FF B0` READ BINARY; on failure, falls through to ISO 15693 (OpenPrintTag). Read AND write/erase auto-detect the chip the same way.
 - **OpenPrintTag commands**: ACR1552U Pass Through (`FF FB`) wrapping ISO 15693 Read/Write Single Block commands
+- **OpenTag3D commands**: NTAG Type-2 pseudo-APDUs — Read Binary (`FF B0`), Update Binary (`FF D6`, 4-byte pages), and `GET_VERSION` (`60h`) to size a blank tag. The NDEF record is TNF=0x02, type=`application/opentag3d`. Note the NTAG capability container (page 3) is one-time-programmable, which is why NTAG read-only isn't offered (see above).
 - **Bambu commands**: Standard PC/SC pseudo-APDUs for MIFARE Classic — Get UID (`FF CA`), Load Key (`FF 82`), Authenticate (`FF 86`), Read Binary (`FF B0`)
 
 ### Data Format

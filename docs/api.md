@@ -22,7 +22,7 @@
 | `POST` | `/api/filaments/import-csv` | Upload a CSV file to import filaments |
 | `POST` | `/api/filaments/import-xlsx` | Upload an XLSX file to import filaments |
 | `GET` | `/api/filaments/match` | Match an NFC tag or scanned label QR against existing filaments. Query params: `instanceId` (highest priority), `name`, `vendor`, `type` |
-| `POST` | `/api/nfc/decode` | Decode raw NFC tag bytes (OpenPrintTag or Bambu) server-side and match the result against the DB. Backs the mobile scanner app |
+| `POST` | `/api/nfc/decode` | Decode raw NFC tag bytes (OpenPrintTag, OpenTag3D, or Bambu) server-side and match the result against the DB. A raw memory dump is auto-sniffed (the OpenTag3D MIME record is detected by the codec registry). Backs the mobile scanner app |
 | `GET` | `/api/filaments/types` | List all distinct filament types |
 | `GET` | `/api/filaments/vendors` | List all distinct vendor names |
 | `GET` | `/api/filaments/parents` | List filaments that can be used as parents. Query params: `search`, `exclude` |
@@ -590,7 +590,7 @@ Each `data:` payload is the same JSON shape:
 Field notes:
 - `filament` is the matched DB row, or `null` when no row matches. Slicers key presets by name and should switch on `filament.name` when non-null.
 - `candidates` is a short list of plausible alternatives (vendor + type, then vendor-only) when there is no exact match; empty otherwise.
-- `decoded` carries a subset of the tag fields useful to consumers; `tagSource` is `"openprinttag"` or `"bambu"`.
+- `decoded` carries a subset of the tag fields useful to consumers; `tagSource` is `"openprinttag"`, `"opentag3d"`, or `"bambu"`.
 
 Response headers:
 - `content-type: text/event-stream; charset=utf-8`

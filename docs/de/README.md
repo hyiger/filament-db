@@ -9,7 +9,7 @@ Deutsche Übersetzung der Dokumente in [`docs/`](..). Bei Diskrepanzen zwischen 
 - [Bedienung](usage.md) — Alltags-Workflows (Filament-Verwaltung, Spulen, Druckverlauf)
 - [Import & Export](importing.md) — CSV/XLSX, OpenPrintTag-DB, Prusament-QR, Snapshots
 - [API-Referenz](api.md) — REST-API-Endpunkte, Felder, Beispiele
-- [NFC](nfc.md) — OpenPrintTag und Bambu-Lab-Tag-Workflows, Hardware-Voraussetzungen
+- [NFC](nfc.md) — OpenPrintTag-, Bambu-Lab- und OpenTag3D-Tag-Workflows, Hardware-Voraussetzungen
 - [Desktop-App](desktop.md) — Electron-spezifische Hinweise, Installationsorte, Auto-Update
 - [Smart Filament Workflow Guide](smart-filament-workflow-guide.md) — Endbenutzer-Anleitung für den NFC-Scan → Slicer-Preset-Workflow (Screenshots stammen aus v1.25.1)
 - [Tests](testing.md) — Vitest-Setup, Testkonventionen

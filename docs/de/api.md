@@ -557,7 +557,7 @@ Jede `data:`-Payload hat dieselbe JSON-Form:
 Feldhinweise:
 - `filament` ist die gematchte DB-Zeile oder `null`, wenn keine Zeile passt. Slicer schlüsseln Presets per Name und sollten bei `filament.name` umschalten, wenn nicht-null.
 - `candidates` ist eine kurze Liste plausibler Alternativen (Vendor + Type, dann nur Vendor), wenn kein exakter Match vorliegt; sonst leer.
-- `decoded` trägt eine Teilmenge der Tag-Felder, die für Konsumenten nützlich sind; `tagSource` ist `"openprinttag"` oder `"bambu"`.
+- `decoded` trägt eine Teilmenge der Tag-Felder, die für Konsumenten nützlich sind; `tagSource` ist `"openprinttag"`, `"opentag3d"` oder `"bambu"`.
 
 Response-Header:
 - `content-type: text/event-stream; charset=utf-8`

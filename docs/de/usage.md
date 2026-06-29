@@ -288,7 +288,7 @@ Auf der Detailseite:
 
 ## NFC-Tags (nur Desktop-App)
 
-Die Desktop-App unterstützt Lesen und Schreiben von OpenPrintTag-NFC-V-Tags und Lesen von Bambu-Lab-MIFARE-Classic-Spulen-Tags. Siehe [NFC-Dokumentation](nfc.md) für Hardware-Voraussetzungen und Setup.
+Die Desktop-App ist ein neutraler Multi-Standard-Reader: Sie liest und schreibt OpenPrintTag-NFC-V-Tags (SLIX2) und OpenTag3D-Tags (NTAG213/215/216, NFC-A) und liest Bambu-Lab-MIFARE-Classic-Spulen-Tags. OpenTag3D ist ein offener NFC-Filament-Tag-Standard (opentag3d.info), der u. a. von Polar Filament, American Filament, Numakers, 3D-Fuel und Ecogenesis verwendet wird. Siehe [NFC-Dokumentation](nfc.md) für Hardware-Voraussetzungen und Setup.
 
 ### Tags lesen
 

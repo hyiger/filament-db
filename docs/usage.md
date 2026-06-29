@@ -288,14 +288,15 @@ On the detail page:
 
 ## NFC Tags (Desktop App Only)
 
-The desktop app supports reading and writing OpenPrintTag NFC-V tags and reading Bambu Lab MIFARE Classic spool tags. See the [NFC documentation](nfc.md) for hardware requirements and setup.
+Filament DB is a neutral multi-standard reader. The desktop app supports reading and writing **OpenPrintTag** (NFC-V / ISO 15693, SLIX2) tags, reading and writing **OpenTag3D** (NFC-A / ISO 14443 Type 2, NTAG213/215/216) tags, and reading **Bambu Lab** MIFARE Classic spool tags. See the [NFC documentation](nfc.md) for hardware requirements and setup.
 
 ### Reading Tags
 
-Place a tag on the reader -- the app auto-detects the tag type (OpenPrintTag or Bambu Lab) and reads it. A dialog appears showing:
+Place a tag on the reader -- the app auto-detects the tag type (OpenPrintTag, OpenTag3D, or Bambu Lab) and reads it. A dialog appears showing:
 
 - **Match found**: Shows the matching filament with a link to view it
 - **No match**: Shows the decoded data with an option to create a new filament (form pre-filled with tag data)
+- **OpenTag3D tags**: Displays an OpenTag3D provenance badge plus the OpenTag3D-only extra fields
 - **Bambu Lab spools**: Displays a "read-only" badge since Bambu tags cannot be written; also shows production date and filament length
 
 ### Writing Tags
