@@ -1539,6 +1539,7 @@
   "settings.nfcWritableSet": "Tag is now writable",
   "settings.nfcReadOnlyBambu": "Bambu Lab tags are already read-only and can't be changed.",
   "settings.nfcReadOnlyNotFormatted": "This tag has no OpenPrintTag data to lock yet — write a filament to it first.",
+  "settings.nfcReadOnlyNtagUnsupported": "Read-only isn't available for OpenTag3D/NTAG tags — their capability container is one-time-programmable, so it can't be undone. Read-only works on OpenPrintTag (SLIX2) tags.",
   "settings.nfcNtagSizeUnknown": "Couldn't determine the NTAG's size. Try an NTAG 213, 215, or 216, or pre-format the tag.",
   "settings.nfcLoadedTag": "Loaded tag:",
   "settings.nfcLoadedBambu": "Bambu (read-only)",

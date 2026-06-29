@@ -115,6 +115,7 @@ export default function DevicesSettingsPage() {
       let message = raw;
       if (raw.includes("BAMBU_READ_ONLY")) message = t("settings.nfcReadOnlyBambu");
       else if (raw.includes("TAG_NOT_FORMATTED")) message = t("settings.nfcReadOnlyNotFormatted");
+      else if (raw.includes("NTAG_READONLY_UNSUPPORTED")) message = t("settings.nfcReadOnlyNtagUnsupported");
       setFormatResult({ ok: false, message });
     } finally {
       setSettingReadOnly(false);
@@ -177,7 +178,7 @@ export default function DevicesSettingsPage() {
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <button
                 onClick={() => handleSetReadOnly(true)}
-                disabled={settingReadOnly || formatting || !nfcStatus.tagPresent}
+                disabled={settingReadOnly || formatting || !nfcStatus.tagPresent || detected?.family === "ntag"}
                 className="px-3 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-white rounded text-sm hover:bg-gray-300 dark:hover:bg-gray-600 disabled:opacity-30 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-2"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -187,7 +188,7 @@ export default function DevicesSettingsPage() {
               </button>
               <button
                 onClick={() => handleSetReadOnly(false)}
-                disabled={settingReadOnly || formatting || !nfcStatus.tagPresent}
+                disabled={settingReadOnly || formatting || !nfcStatus.tagPresent || detected?.family === "ntag"}
                 className="px-3 py-1.5 text-gray-600 dark:text-gray-300 rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors inline-flex items-center gap-2"
               >
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -196,6 +197,11 @@ export default function DevicesSettingsPage() {
                 {t("settings.nfcMakeWritable")}
               </button>
             </div>
+            {nfcStatus.tagPresent && detected?.family === "ntag" && (
+              <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {t("settings.nfcReadOnlyNtagUnsupported")}
+              </p>
+            )}
             <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">{t("settings.nfcReadOnlyHint")}</p>
 
             {formatResult && (

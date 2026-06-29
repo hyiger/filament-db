@@ -19,8 +19,6 @@ import {
   isCcByteReadOnly,
   setCcByteReadOnly,
   buildType2Cc,
-  isType2CcReadOnly,
-  setType2CcReadOnly,
   buildMediaNdefRecord,
   buildNdefMessageTlv,
 } from "./ndef";
@@ -961,11 +959,10 @@ export class NfcService extends EventEmitter {
     if (!decoded) {
       throw new Error('No NDEF record with type "application/opentag3d" found');
     }
-    // OpenTag3D write (Layer 3): surface the reversible soft read-only state
-    // (Type-2 CC byte 3 write-access nibble, page 3 / byte 15) so the read
-    // dialog's lock badge and the renderer's write-probe work for NTAG just as
-    // they do for SLIX2.
-    decoded.readOnly = isType2CcReadOnly(head[NTAG_CC_OFFSET + 3]);
+    // NTAG read-only is NOT surfaced: the Type-2 CC page is OTP (the read-only
+    // nibble can be set but never cleared), so it isn't a meaningful reversible
+    // state and we don't act on it (see setReadOnlyImpl / writeNtagImpl). Leaving
+    // readOnly unset avoids a lock badge the user could never clear.
     return decoded;
   }
 
@@ -1155,13 +1152,15 @@ export class NfcService extends EventEmitter {
       let needsFormat = false;
 
       if (ccMagic === 0xe1) {
-        // Formatted NTAG: honor the soft read-only nibble (CC byte 3). Erase is
-        // the escape hatch, not this.
-        if (isType2CcReadOnly(head[NTAG_CC_OFFSET + 3])) {
-          throw new Error(
-            "TAG_READ_ONLY: This tag is marked read-only. Erase it, or make it writable in Settings, before writing.",
-          );
-        }
+        // NOTE: we deliberately do NOT pre-refuse on the Type-2 CC read-only
+        // nibble (CC byte 3). On NTAG21x the CC page (page 3) is OTP — its bits
+        // can be set but never cleared (hardware-confirmed: writing 0x00 returns
+        // SW 9000 yet the 0x0F nibble persists). So the nibble is not a reliable,
+        // reversible read-only signal and honoring it would permanently lock a
+        // tag out of our own write path. A GENUINELY locked NTAG (its static lock
+        // bytes set, which WE never set) simply fails the page write below with an
+        // SW error, which surfaces. NTAG "set read-only" is unsupported for this
+        // reason — see setReadOnlyImpl.
         // Codex #927 (P1): bound the write capacity by the AUTHORITATIVE chip
         // size, not the (possibly corrupt/inflated) CC. A formatted NTAG213 whose
         // CC lies that it's a 215/216 would otherwise let an Extended TLV write
@@ -1431,12 +1430,19 @@ export class NfcService extends EventEmitter {
       throw new Error("BAMBU_READ_ONLY: Bambu Lab tags are already read-only.");
     }
 
-    // OpenTag3D write (Layer 3): detect the chip and dispatch. NTAG → toggle the
-    // Type-2 CC byte-3 nibble below; SLIX2 (head === null) → the existing CC
-    // byte-1 path.
+    // Detect the chip and dispatch. NTAG read-only is NOT supported: the Type-2
+    // CC page is OTP (the read-only nibble can be set but never cleared — so it
+    // is irreversible and would permanently lock the tag out of our write path).
+    // True NTAG read-only would need the static lock bytes, which are also OTP /
+    // bricking and which we never write. So refuse for NTAG; SLIX2 (head === null)
+    // takes the genuinely-reversible CC byte-1 path below.
     const head = await this.withConnection((protocol) => this.detectType2Head(protocol));
     if (head) {
-      return this.setReadOnlyNtagImpl(readOnly);
+      throw new Error(
+        "NTAG_READONLY_UNSUPPORTED: Read-only isn't available for OpenTag3D/NTAG tags — " +
+          "their capability container is one-time-programmable, so it can't be undone. " +
+          "Read-only is supported on OpenPrintTag (SLIX2) tags only.",
+      );
     }
 
     return this.withConnection(async (protocol) => {
@@ -1490,70 +1496,6 @@ export class NfcService extends EventEmitter {
     });
   }
 
-  /**
-   * OpenTag3D write (Layer 3): set/clear the reversible soft read-only flag on an
-   * NTAG by flipping the Type-2 CC byte-3 write-access nibble (page 3 / byte 15)
-   * and rewriting ONLY page 3.
-   *
-   * SAFETY INVARIANT: this writes page 3 (the rewritable CC) ONLY. The NTAG
-   * static lock bytes (page 2) and dynamic lock bytes are NEVER touched, so the
-   * lock stays reversible — Erase or "Make Writable" clears it; no permanent
-   * hardware lock, no bricking risk.
-   *
-   * Like the SLIX2 path, it confirms the tag carries an OpenTag3D record first
-   * (TAG_NOT_FORMATTED otherwise) so we never flip the CC of an unrelated tag.
-   */
-  private async setReadOnlyNtagImpl(readOnly: boolean): Promise<void> {
-    return this.withConnection(async (protocol) => {
-      // Confirm an OpenTag3D record is present before touching the CC — only an
-      // OpenTag3D tag is ours to lock (mirrors the SLIX2 OPENPRINTTAG_MIME guard,
-      // but requires OPENTAG3D_MIME here).
-      const head = await this.readNtagBurst(protocol, 0); // pages 0–3, CC at byte 12
-      if (head[NTAG_CC_OFFSET] !== 0xe1) {
-        throw new Error(
-          "TAG_NOT_FORMATTED: This tag has no OpenTag3D data to lock — write a filament to it first.",
-        );
-      }
-      let records;
-      try {
-        const { data, written } = await this.assembleNtagImage(protocol, head);
-        records = parseNdefRecords(data.subarray(0, written), NTAG_CC_OFFSET);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        const notFormatted = [
-          "Blank or unformatted",
-          "No NDEF",
-          "Invalid CC magic",
-          "Tag data too short",
-          "truncated",
-        ].some((s) => msg.includes(s));
-        if (notFormatted) {
-          throw new Error(
-            "TAG_NOT_FORMATTED: This tag has no OpenTag3D data to lock — write a filament to it first.",
-          );
-        }
-        throw err;
-      }
-      if (!records.some((r) => r.tnf === 0x02 && r.type === OPENTAG3D_MIME)) {
-        throw new Error(
-          "TAG_NOT_FORMATTED: This tag has no OpenTag3D data to lock — write a filament to it first.",
-        );
-      }
-
-      // Flip only the byte-3 write-access nibble on the CC (page 3 byte 3).
-      const newByte3 = setType2CcReadOnly(head[NTAG_CC_OFFSET + 3], readOnly);
-      if (newByte3 === head[NTAG_CC_OFFSET + 3]) {
-        return; // already in the requested state — no write needed
-      }
-      // Rewrite page 3: preserve magic + version + size, change only byte 3.
-      // ONLY page 3 is written — never the static (page 2) or dynamic lock bytes.
-      await this.writeNtagPage(
-        protocol,
-        3,
-        Buffer.from([0xe1, 0x10, head[NTAG_CC_OFFSET + 2], newByte3]),
-      );
-    }, { resetAfter: true });
-  }
 
   /**
    * OpenTag3D write (Layer 3): non-mutating probe of the tag in the field for the
@@ -1593,7 +1535,7 @@ export class NfcService extends EventEmitter {
           family: "ntag",
           standard: "opentag3d",
           formatted: true,
-          readOnly: isType2CcReadOnly(head[NTAG_CC_OFFSET + 3]),
+          readOnly: false, // NTAG read-only is unsupported (CC page is OTP) — never report it
           ndefCapacity: verSize != null ? Math.min(ccBytes, verSize) : ccBytes,
         };
       }

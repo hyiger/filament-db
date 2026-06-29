@@ -2,12 +2,7 @@ import { describe, it, expect } from "vitest";
 import { filamentToOpenTag3DFields, wrapOpenTag3DType2, splitMaterialType } from "../src/lib/opentag3d-encode";
 import { encodeOpenTag3D } from "../src/lib/opentag3d";
 import { decodeOpenTag3DTag } from "../src/lib/opentag3d-decode";
-import {
-  buildType2Cc,
-  isType2CcReadOnly,
-  setType2CcReadOnly,
-  parseNdefRecords,
-} from "../src/lib/ndef";
+import { parseNdefRecords } from "../src/lib/ndef";
 import { decodeFromNdefRecords } from "../src/lib/tagCodecs";
 
 describe("filamentToOpenTag3DFields → encode → decode round-trip", () => {
@@ -164,33 +159,5 @@ describe("splitMaterialType", () => {
   it("handles null/empty", () => {
     expect(splitMaterialType(null)).toEqual({ base: "", mod: "" });
     expect(splitMaterialType("  ")).toEqual({ base: "", mod: "" });
-  });
-});
-
-describe("Type-2 CC read-only helpers (NTAG, reversible)", () => {
-  it("isType2CcReadOnly reads the low nibble of byte 3", () => {
-    expect(isType2CcReadOnly(0x00)).toBe(false);
-    expect(isType2CcReadOnly(0x0f)).toBe(true);
-    expect(isType2CcReadOnly(0xff)).toBe(true);
-    expect(isType2CcReadOnly(0xf0)).toBe(false); // read nibble set, write nibble clear
-  });
-
-  it("setType2CcReadOnly flips only the write nibble, preserving the read nibble", () => {
-    expect(setType2CcReadOnly(0x00, true)).toBe(0x0f);
-    expect(setType2CcReadOnly(0x0f, false)).toBe(0x00);
-    expect(setType2CcReadOnly(0xf0, true)).toBe(0xff); // read nibble preserved
-    expect(setType2CcReadOnly(0xff, false)).toBe(0xf0);
-  });
-
-  it("round-trips read-only ⇄ read/write (reversible)", () => {
-    const ro = setType2CcReadOnly(0x00, true);
-    expect(isType2CcReadOnly(ro)).toBe(true);
-    const rw = setType2CcReadOnly(ro, false);
-    expect(isType2CcReadOnly(rw)).toBe(false);
-  });
-
-  it("buildType2Cc encodes size + the read-only flag", () => {
-    expect([...buildType2Cc(496)]).toEqual([0xe1, 0x10, 62, 0x00]); // NTAG215, r/w
-    expect([...buildType2Cc(496, true)]).toEqual([0xe1, 0x10, 62, 0x0f]); // read-only
   });
 });

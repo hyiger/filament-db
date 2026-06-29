@@ -1539,6 +1539,7 @@
   "settings.nfcWritableSet": "Tag ist jetzt beschreibbar",
   "settings.nfcReadOnlyBambu": "Bambu-Lab-Tags sind bereits schreibgeschützt und können nicht geändert werden.",
   "settings.nfcReadOnlyNotFormatted": "Dieser Tag enthält noch keine OpenPrintTag-Daten zum Sperren — schreiben Sie zuerst ein Filament darauf.",
+  "settings.nfcReadOnlyNtagUnsupported": "Schreibschutz ist für OpenTag3D/NTAG-Tags nicht verfügbar — ihr Capability Container ist einmalig programmierbar und lässt sich nicht zurücksetzen. Schreibschutz funktioniert bei OpenPrintTag (SLIX2)-Tags.",
   "settings.nfcNtagSizeUnknown": "Die Größe des NTAG konnte nicht ermittelt werden. Verwenden Sie einen NTAG 213, 215 oder 216 oder formatieren Sie den Tag vorab.",
   "settings.nfcLoadedTag": "Aufgelegter Tag:",
   "settings.nfcLoadedBambu": "Bambu (schreibgeschützt)",
