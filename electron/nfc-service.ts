@@ -955,6 +955,15 @@ export class NfcService extends EventEmitter {
     const { data, written } = await this.assembleNtagImage(protocol, head);
 
     const records = parseNdefRecords(data.subarray(0, written), NTAG_CC_OFFSET);
+    // An NDEF-formatted tag with an EMPTY message (our Erase writes the empty TLV
+    // 03 00 FE at page 4 → zero records) is BLANK, not a foreign tag. Report it as
+    // blank so the renderer's write-probe (ensureTagWritable) takes its blank-
+    // bypass and a write to a freshly-erased tag proceeds without an overwrite
+    // prompt / weight-update fail-closed (Codex #927). A non-empty record list
+    // that just isn't OpenTag3D is the genuine "foreign NDEF" case below.
+    if (records.length === 0) {
+      throw new Error("Blank or unformatted NFC tag (no NDEF data)");
+    }
     const decoded = decodeFromNdefRecords(records);
     if (!decoded) {
       throw new Error('No NDEF record with type "application/opentag3d" found');
