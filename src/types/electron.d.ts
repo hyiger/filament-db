@@ -50,6 +50,7 @@ interface ElectronAPI {
     standard: "opentag3d" | "openprinttag" | "bambu" | null;
     formatted: boolean;
     readOnly: boolean;
+    ndefCapacity: number | null;
   }>;
   /** OpenTag3D write: `standard` selects the wrapping/transport (default
    *  "openprinttag"); `productUrl` rides the SLIX2/OpenPrintTag path only. */

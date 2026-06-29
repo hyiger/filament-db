@@ -98,6 +98,16 @@ describe("filamentToOpenTag3DFields → encode → decode round-trip", () => {
     expect(decoded.actualWeightGrams).toBe(742); // remaining
   });
 
+  it("#927: Core image fits an NTAG213 (144B) where the Extended image does not", () => {
+    const { fields } = filamentToOpenTag3DFields(filament);
+    const NTAG213 = 144, NTAG215 = 496;
+    const ext = wrapOpenTag3DType2(fields, { includeExtended: true });
+    const core = wrapOpenTag3DType2(fields, { includeExtended: false });
+    expect(ext.tlv.length).toBeGreaterThan(NTAG213); // overflows 213 → must fall back
+    expect(core.tlv.length).toBeLessThanOrEqual(NTAG213); // Core fits 213
+    expect(ext.tlv.length).toBeLessThanOrEqual(NTAG215); // Extended fits 215/216
+  });
+
   it("wrapOpenTag3DType2 produces an NDEF TLV that decodes via the registry", () => {
     const { fields } = filamentToOpenTag3DFields(filament);
     const { tlv } = wrapOpenTag3DType2(fields);

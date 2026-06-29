@@ -109,6 +109,10 @@ export interface TagDetection {
   standard: "opentag3d" | "openprinttag" | "bambu" | null;
   formatted: boolean;
   readOnly: boolean;
+  /** NDEF-usable byte capacity for an NTAG (CC size, or GET_VERSION for a blank
+   * tag), so the renderer can pick the Core (112B) vs Extended (187B) OpenTag3D
+   * image to fit a small NTAG213. null when unknown / not an NTAG. */
+  ndefCapacity: number | null;
 }
 
 /**
@@ -1115,6 +1119,7 @@ export class NfcService extends EventEmitter {
     return this.withConnection(async (protocol) => {
       const ccMagic = head[NTAG_CC_OFFSET];
       let ndefBytes: number;
+      let needsFormat = false;
 
       if (ccMagic === 0xe1) {
         // Formatted NTAG: trust its existing CC for the capacity AND honor the
@@ -1138,18 +1143,24 @@ export class NfcService extends EventEmitter {
           );
         }
         ndefBytes = sized;
-        // Write a fresh read/write Type-2 CC to page 3 so the tag is NDEF-formatted.
-        await this.writeNtagPage(protocol, 3, Buffer.from(buildType2Cc(ndefBytes)));
+        needsFormat = true; // CC written below — AFTER the capacity check (Codex #927)
       }
 
-      // Build the NDEF-message TLV (0x03 … one media record … 0xFE terminator).
+      // Build the NDEF-message TLV (0x03 … one media record … 0xFE terminator)
+      // and capacity-check it BEFORE writing anything, so a too-large payload
+      // can't leave a blank tag half-formatted (CC written, no NDEF) — a partial
+      // mutation that detection/retries would then see as a malformed tag.
       const tlv = buildNdefMessageTlv(buildMediaNdefRecord(OPENTAG3D_MIME, payload));
-
       if (tlv.length > ndefBytes) {
         throw new Error(
           `TAG_TOO_SMALL: OpenTag3D data (${tlv.length} bytes) exceeds this NTAG's NDEF capacity ` +
             `(${ndefBytes} bytes). Use a larger NTAG (215/216).`,
         );
+      }
+
+      // Format a blank tag only now that the payload is known to fit.
+      if (needsFormat) {
+        await this.writeNtagPage(protocol, 3, Buffer.from(buildType2Cc(ndefBytes)));
       }
 
       // Write the TLV from page 4, 4 bytes per page (FF D6 UPDATE BINARY).
@@ -1181,9 +1192,20 @@ export class NfcService extends EventEmitter {
         Buffer.from(buildType2Cc(ndefBytes)).copy(verifyHead, NTAG_CC_OFFSET);
       }
       const { data: image, written } = await this.assembleNtagImage(protocol, verifyHead);
-      const decoded = decodeFromNdefRecords(parseNdefRecords(image.subarray(0, written), NTAG_CC_OFFSET));
-      if (!decoded || decoded.tagSource !== "opentag3d") {
+      const records = parseNdefRecords(image.subarray(0, written), NTAG_CC_OFFSET);
+      // Compare the read-back OpenTag3D record payload byte-for-byte to what we
+      // wrote (Codex #927) — a programming/read-back glitch could still decode as
+      // a valid-but-WRONG OpenTag3D image (different material/serial/weight), so
+      // "decodes as opentag3d" alone isn't proof the write landed correctly.
+      const rec = records.find((r) => r.tnf === 0x02 && r.type === OPENTAG3D_MIME);
+      if (!rec) {
         throw new Error("OpenTag3D verification read failed — the tag did not read back as OpenTag3D.");
+      }
+      if (rec.payload.length !== payload.length || rec.payload.some((b, i) => b !== payload[i])) {
+        throw new Error(
+          "OpenTag3D verification mismatch — the tag read back different bytes than were written. " +
+            "The write may not have landed correctly; try again.",
+        );
       }
     });
   }
@@ -1501,7 +1523,7 @@ export class NfcService extends EventEmitter {
       bambu = false;
     }
     if (bambu) {
-      return { family: "bambu", standard: "bambu", formatted: true, readOnly: true };
+      return { family: "bambu", standard: "bambu", formatted: true, readOnly: true, ndefCapacity: null };
     }
 
     // 2. NTAG (Type 2).
@@ -1514,10 +1536,14 @@ export class NfcService extends EventEmitter {
           standard: "opentag3d",
           formatted: true,
           readOnly: isType2CcReadOnly(head[NTAG_CC_OFFSET + 3]),
+          ndefCapacity: Math.max(0, head[NTAG_CC_OFFSET + 2] * 8), // CC size
         };
       }
       // Readable as Type 2 but no NDEF CC (blank / non-NDEF) — a blank NTAG.
-      return { family: "ntag", standard: null, formatted: false, readOnly: false };
+      // GET_VERSION it (best-effort) so the renderer can size the payload; null
+      // when unsupported (renderer falls back to Extended; service refuses on write).
+      const cap = await this.withConnection((p) => this.getNtagNdefBytesViaGetVersion(p));
+      return { family: "ntag", standard: null, formatted: false, readOnly: false, ndefCapacity: cap };
     }
 
     // 3. SLIX2 (Type 5). Read block 0; an 0xE1/0xE2 CC ⇒ an OpenPrintTag-class
@@ -1532,12 +1558,13 @@ export class NfcService extends EventEmitter {
             standard: "openprinttag" as const,
             formatted: true,
             readOnly: isCcByteReadOnly(block0[1]),
+            ndefCapacity: null, // SLIX2/OpenPrintTag payload is fixed-size; not needed
           };
         }
-        return { family: "slix2" as const, standard: null, formatted: false, readOnly: false };
+        return { family: "slix2" as const, standard: null, formatted: false, readOnly: false, ndefCapacity: null };
       });
     } catch {
-      return { family: "unknown", standard: null, formatted: false, readOnly: false };
+      return { family: "unknown", standard: null, formatted: false, readOnly: false, ndefCapacity: null };
     }
   }
 

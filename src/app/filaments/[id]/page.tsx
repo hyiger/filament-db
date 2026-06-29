@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useNfcContext } from "@/components/NfcProvider";
 import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
 import { encodeOpenTag3D } from "@/lib/opentag3d";
-import { filamentToOpenTag3DFields } from "@/lib/opentag3d-encode";
+import { filamentToOpenTag3DFields, wrapOpenTag3DType2 } from "@/lib/opentag3d-encode";
 import { selectSpoolForWrite } from "@/lib/selectSpoolForWrite";
 import { safeHttpUrl } from "@/lib/safeRenderUrl";
 import { useToast } from "@/components/Toast";
@@ -591,7 +591,16 @@ function FilamentDetail() {
           console.warn("[nfc] OpenTag3D lossy mapping:", notices);
           toast(t("detail.nfc.opentag3dNotice"), "info");
         }
-        return { payload: encodeOpenTag3D(fields), standard: "opentag3d" };
+        // Codex #927: pick the Core (112B) vs Extended (187B) image by the
+        // detected NDEF capacity — the Extended TLV (~214B) overflows a small
+        // NTAG213 (144B), so fall back to Core-only there instead of letting the
+        // write fail with TAG_TOO_SMALL.
+        let includeExtended = true;
+        if (typeof detected?.ndefCapacity === "number" && detected.ndefCapacity > 0) {
+          const ext = wrapOpenTag3DType2(fields, { includeExtended: true });
+          if (ext.tlv.length > detected.ndefCapacity) includeExtended = false;
+        }
+        return { payload: encodeOpenTag3D(fields, { includeExtended }), standard: "opentag3d" };
       }
 
       // Default / SLIX2 / blank → OpenPrintTag CBOR (unchanged behaviour).
