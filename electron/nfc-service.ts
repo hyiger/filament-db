@@ -98,6 +98,11 @@ const NTAG_MAX_NDEF_WRITE_BYTES = 872;
 // CC + empty-NDEF TLV already make the tag blank; the deeper wipe is just hygiene
 // and stale bytes past the TLV terminator are unreachable by NDEF readers.
 const NTAG_CONSERVATIVE_WIPE_BYTES = 144;
+// NXP manufacturer code (ISO/IEC 7816-6). A real NTAG21x's page-0 byte-0 (UID0)
+// is ALWAYS 0x04; it's never 0x00 or 0xE1. Used to tell a genuine Type-2 NTAG
+// apart from an ISO-15693 SLIX2 that the ACS reader also answers FF B0 for
+// (Codex P1, #927 — a blank SLIX2 reads 0x00 here, a formatted one 0xE1).
+const NTAG_NXP_MANUFACTURER_CODE = 0x04;
 
 /**
  * OpenTag3D write (Layers 2/3): the standard a writer lays down. The renderer
@@ -865,11 +870,17 @@ export class NfcService extends EventEmitter {
   /**
    * Detect an NFC-Forum Type 2 (NTAG) chip and return its pages-0–3 head (16
    * bytes; the Type-2 CC is at byte 12). Returns null when the tag is NOT a
-   * Type-2 NTAG — i.e. READ BINARY (FF B0) throws (a 15693 SLIX2 tag), the burst
-   * is short, or byte 0 is 0xE1 (a 15693 NFC-Forum Type 5 CC mis-answering FF B0
-   * rather than a real NTAG, whose page-0 byte-0 is the manufacturer code, never
-   * 0xE1). Mirrors readNtagTag's head-validation logic so detection and the read
-   * path agree on what "an NTAG" is.
+   * Type-2 NTAG — i.e. READ BINARY (FF B0) throws (most 15693 SLIX2 tags), the
+   * burst is short, or page-0 byte-0 is not the NXP manufacturer code (0x04).
+   * Some ACS readers ALSO answer FF B0 for an ISO-15693 SLIX2, returning its
+   * block 0 — which starts with 0xE1 on a FORMATTED OpenPrintTag (the NFC-Forum
+   * Type 5 CC magic) or 0x00 on a BLANK one. A real NTAG21x's page-0 byte-0 is
+   * the UID manufacturer code (always 0x04, never 0x00/0xE1), so requiring it is
+   * the robust discriminator: it defers BOTH SLIX2 states to the proven 15693
+   * path. Codex P1 (#927): the old `=== 0xE1`-only guard let a BLANK SLIX2 (0x00)
+   * through as a "blank NTAG", so OpenPrintTag write/erase took the NTAG path and
+   * failed (NTAG_SIZE_UNKNOWN / Type-2 page writes) instead of formatting it.
+   * Mirrors readNtagTag's head-validation logic so detection and read agree.
    *
    * Non-null ⇒ NTAG (Type 2); null ⇒ SLIX2 (Type 5) / not Type 2.
    */
@@ -881,7 +892,9 @@ export class NfcService extends EventEmitter {
       return null; // READ BINARY not supported → not a Type-2 NTAG
     }
     if (head.length < NTAG_TLV_OFFSET) return null;
-    if (head[0] === 0xe1) return null; // a 15693 Type-5 CC, not an NTAG UID
+    // Require the NXP manufacturer byte — a 15693 SLIX2 answering FF B0 has 0xE1
+    // (formatted) or 0x00 (blank) here, neither of which is a real NTAG UID.
+    if (head[0] !== NTAG_NXP_MANUFACTURER_CODE) return null;
     return head;
   }
 
@@ -934,15 +947,14 @@ export class NfcService extends EventEmitter {
     }
     if (head.length < NTAG_TLV_OFFSET) return null;
 
-    // Safety guard (no hardware needed): if some ACS readers answer FF B0 for a
-    // 15693 SLIX2 storage tag too, byte 0 of what we read is that tag's NFC-Forum
-    // Type 5 CC magic (0xE1) — NOT an NTAG UID (NTAG page 0 byte 0 is the
-    // manufacturer code, never 0xE1). Treat that as "this is really a 15693 tag"
-    // and defer to the proven ISO-15693 OpenPrintTag path rather than
-    // mis-parsing the Type-5 image as Type-2 (which could mis-throw "Blank or
-    // unformatted" on a valid OPT tag). A genuine NTAG falls through to the
-    // Type-2 CC check below.
-    if (head[0] === 0xe1) return null;
+    // Safety guard (no hardware needed): some ACS readers answer FF B0 for a
+    // 15693 SLIX2 storage tag too, returning its block 0 — which is the NFC-Forum
+    // Type 5 CC magic (0xE1) on a formatted OpenPrintTag, or 0x00 on a blank one.
+    // A real NTAG21x's page-0 byte-0 is the NXP manufacturer code (always 0x04,
+    // never 0x00/0xE1). Require it so BOTH SLIX2 states defer to the proven
+    // ISO-15693 path rather than being mis-parsed as Type-2 (Codex P1, #927 —
+    // mirrors detectType2Head). A genuine NTAG falls through to the CC check.
+    if (head[0] !== NTAG_NXP_MANUFACTURER_CODE) return null;
 
     const ccMagic = head[NTAG_CC_OFFSET];
     if (ccMagic === 0x00) {
