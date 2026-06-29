@@ -89,6 +89,23 @@ describe("filamentToOpenTag3DFields → encode → decode round-trip", () => {
     expect(notices.some((n) => /secondary-color slots/.test(n))).toBe(true);
   });
 
+  it("#927: omits an over-length spool ID rather than writing a truncated (mis-matching) serial", () => {
+    const longId = "x".repeat(40); // > 16-byte serial slot
+    const { fields, notices } = filamentToOpenTag3DFields(
+      { type: "PLA" },
+      { spoolInstanceId: longId },
+    );
+    expect("serial" in fields).toBe(false); // omitted, NOT truncated
+    expect(notices.some((n) => /Spool ID/.test(n))).toBe(true);
+    const decoded = decodeOpenTag3DTag(encodeOpenTag3D(fields));
+    expect(decoded.spoolUid).toBeUndefined(); // no false/truncated match value
+
+    // A normal-length id still writes + round-trips.
+    const ok = filamentToOpenTag3DFields({ type: "PLA" }, { spoolInstanceId: "abc1234567" });
+    expect(ok.fields.serial).toBe("abc1234567");
+    expect(decodeOpenTag3DTag(encodeOpenTag3D(ok.fields)).spoolUid).toBe("abc1234567");
+  });
+
   it("maps remaining (scale) weight to measured_filament_weight", () => {
     const { fields } = filamentToOpenTag3DFields(
       { type: "PLA", netFilamentWeight: 1000 },
