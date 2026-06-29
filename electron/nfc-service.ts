@@ -1392,32 +1392,31 @@ export class NfcService extends EventEmitter {
   private async formatNtagImpl(head: Buffer): Promise<void> {
     return this.withConnection(async (protocol) => {
       const ccMagic = head[NTAG_CC_OFFSET];
-      // GET_VERSION is the AUTHORITATIVE chip size — prefer it over a possibly
-      // corrupt/foreign CC byte (Codex #927). The CC we WRITE reflects the SAFE
-      // capacity via safeNtagNdefBytes: GET_VERSION when available, else the
-      // conservative NTAG213 extent rather than the existing CC — so Erase can't
-      // rewrite an inflated CC back onto a smaller chip (which would still mislead
-      // other tools / older code into writing past the user area). Matches the
-      // write/detect bound. The hygiene zero-fill EXTENT is likewise bounded by
-      // the authoritative size (or the NTAG213 floor when GET_VERSION is
-      // unavailable), so a lying CC can never drive the wipe into a smaller chip's
-      // lock/config pages (which writeNtagPage's [3,255] guard alone wouldn't
-      // stop, since config sits above the user area).
+      // Erase REFORMATS the tag, so the rewritten CC AND the zero-fill both use
+      // the AUTHORITATIVE chip capacity from GET_VERSION. Unlike write/detect
+      // (safeNtagNdefBytes), erase does NOT min() with the existing CC: it must be
+      // able to RESTORE a tag previously mis-formatted small — a real NTAG215/216
+      // formatted as a 213, or one with a corrupt/zero MLEN — to its true size
+      // (Codex P2 #927). This still can't write back a LYING CC: the size comes
+      // from GET_VERSION, not the old CC, so an inflated CC (a real 213 claiming
+      // 872) is replaced with the correct 144. A BLANK tag has no CC to fall back
+      // on, so it's refused when GET_VERSION can't size it (locked decision: never
+      // guess a blank tag's size). A FORMATTED tag with GET_VERSION unavailable
+      // falls back to the conservative NTAG213 extent — safe + honest, never the
+      // untrusted old CC — so a lying CC can't be written back, nor drive the wipe
+      // into a smaller chip's lock/config pages (which writeNtagPage's [3,255]
+      // guard alone wouldn't stop, since config sits above the user area).
       const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
-      let ndefBytes: number; // size written into the CC
-      if (ccMagic === 0xe1) {
-        ndefBytes = this.safeNtagNdefBytes(head[NTAG_CC_OFFSET + 2], verSize);
-      } else {
-        if (verSize == null) {
-          throw new Error(
-            "NTAG_SIZE_UNKNOWN: Couldn't determine the NTAG's size to erase it. " +
-              "Try an NTAG 213/215/216, or pre-format the tag.",
-          );
-        }
-        ndefBytes = verSize;
+      if (ccMagic !== 0xe1 && verSize == null) {
+        throw new Error(
+          "NTAG_SIZE_UNKNOWN: Couldn't determine the NTAG's size to erase it. " +
+            "Try an NTAG 213/215/216, or pre-format the tag.",
+        );
       }
-      // Zero-fill only as far as the chip is KNOWN to allow.
+      // The chip's real (verified) capacity, or the conservative NTAG213 extent
+      // when unverifiable. Drives BOTH the rewritten CC and the zero-fill extent.
       const wipeBytes = verSize ?? NTAG_CONSERVATIVE_WIPE_BYTES;
+      const ndefBytes = wipeBytes; // size written into the CC
 
       // Fresh read/write CC to page 3 — clears any soft read-only nibble.
       await this.writeNtagPage(protocol, 3, Buffer.from(buildType2Cc(ndefBytes)));
