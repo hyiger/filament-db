@@ -104,6 +104,12 @@ export function ot3dToDecodedTag(decoded: Ot3dDecoded): DecodedOpenPrintTag {
   // ── Extended no-home fields → aux (lossless; ride settings bag on create) ──
   const serial = str(f.serial);
   if (serial) aux.opentag3d_serial = serial;
+  // GH (#927): surface the serial as spoolUid too. The product write path stores
+  // the spool's instanceId in `serial`, and the scan/match pipeline keys
+  // /api/filaments/match on `spoolUid` — without this, a scan of a tag we wrote
+  // would never send an instanceId and multi-spool filaments would lose
+  // per-spool matching. A commercial tag's vendor serial simply won't match any
+  // spool's instanceId and falls through to name/vendor/type (same as OPT).
   const onlineUrl = str(f.online_data_url);
   // Stored WITHOUT a scheme to save bytes. Surfaced as the raw value only — it
   // is rendered as escaped text in NfcReadDialog (NOT as a clickable link) in
@@ -158,6 +164,7 @@ export function ot3dToDecodedTag(decoded: Ot3dDecoded): DecodedOpenPrintTag {
     materialAbbreviation: base,
     brandName: str(f.manufacturer),
     colorName: colorNameStr,
+    spoolUid: serial, // #927: drives per-spool scan matching (see note above)
     color,
     secondaryColors: secondaryColors.length ? secondaryColors : undefined,
     density: posNum(f.density),

@@ -90,6 +90,16 @@ const DEFAULT_BLOCK_COUNT = 80;
 const NTAG_CC_OFFSET = 12;
 const NTAG_TLV_OFFSET = 16;
 const NTAG_MAX_NDEF_BYTES = 1024;
+// Write/erase extent caps (Codex #927 — bound a corrupt/foreign CC size so a
+// write never runs off the chip / into config-lock pages). NTAG216 (the largest
+// real NTAG) holds 872 NDEF bytes → last user page 221 (< 256, no APDU wrap).
+const NTAG_MAX_NDEF_WRITE_BYTES = 872;
+// When the true chip size is UNKNOWN (GET_VERSION unsupported), bound the
+// hygiene zero-fill to NTAG213's user area (144 bytes) — safe on ANY chip, since
+// even the smallest NTAG's lock/config pages sit above its user area. The fresh
+// CC + empty-NDEF TLV already make the tag blank; the deeper wipe is just hygiene
+// and stale bytes past the TLV terminator are unreachable by NDEF readers.
+const NTAG_CONSERVATIVE_WIPE_BYTES = 144;
 
 /**
  * OpenTag3D write (Layers 2/3): the standard a writer lays down. The renderer
@@ -824,6 +834,14 @@ export class NfcService extends EventEmitter {
    * formatTagImpl, all of which start at page 3 or 4.
    */
   private async writeNtagPage(protocol: number, page: number, four: Buffer): Promise<void> {
+    // SAFETY backstop (Codex #927): the page rides in a SINGLE APDU byte, so a
+    // page >= 256 would silently wrap (e.g. 513 → page 1) and a page < 3 would
+    // hit the UID/static-lock pages (0–2). Refuse anything outside [3, 255] so a
+    // corrupt/foreign CC size can never drive a write into the lock/config area
+    // or wrap to a low page — the OTP-lock invariant holds regardless of caller.
+    if (!Number.isInteger(page) || page < 3 || page > 0xff) {
+      throw new Error(`Refusing unsafe NTAG page write: page ${page} is out of the safe [3,255] range`);
+    }
     const cmd = Buffer.from([0xff, 0xd6, 0x00, page, 0x04, four[0], four[1], four[2], four[3]]);
     const resp = await this.transmit(cmd, 10, protocol);
     if (!this.checkSW(resp)) {
@@ -1129,7 +1147,11 @@ export class NfcService extends EventEmitter {
             "TAG_READ_ONLY: This tag is marked read-only. Erase it, or make it writable in Settings, before writing.",
           );
         }
-        ndefBytes = Math.max(0, head[NTAG_CC_OFFSET + 2] * 8);
+        // Codex #927: clamp a possibly-corrupt/foreign CC size to the largest
+        // real NTAG so the capacity check (and any derived extent) can't be
+        // inflated. The TLV write extent below is bounded by the payload size
+        // regardless, and writeNtagPage refuses pages outside [3,255].
+        ndefBytes = Math.min(Math.max(0, head[NTAG_CC_OFFSET + 2] * 8), NTAG_MAX_NDEF_WRITE_BYTES);
       } else {
         // Blank/unformatted NTAG (CC magic 0x00, or any non-0xE1): no CC tells us
         // the chip size. GET_VERSION it; refuse rather than guess (locked
@@ -1310,19 +1332,29 @@ export class NfcService extends EventEmitter {
   private async formatNtagImpl(head: Buffer): Promise<void> {
     return this.withConnection(async (protocol) => {
       const ccMagic = head[NTAG_CC_OFFSET];
-      let ndefBytes: number;
+      // GET_VERSION is the AUTHORITATIVE chip size — prefer it over a possibly
+      // corrupt/foreign CC byte (Codex #927). The CC we WRITE reflects the real
+      // capacity (GET_VERSION, or the existing CC clamped to the largest real
+      // NTAG). The hygiene zero-fill EXTENT, however, is bounded by the
+      // authoritative size — or, when GET_VERSION is unavailable, by a
+      // conservative NTAG213 floor — so a lying CC can never drive the wipe into
+      // a smaller chip's lock/config pages (which writeNtagPage's [3,255] guard
+      // alone wouldn't stop, since config sits above the user area).
+      const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
+      let ndefBytes: number; // size written into the CC
       if (ccMagic === 0xe1) {
-        ndefBytes = Math.max(0, head[NTAG_CC_OFFSET + 2] * 8);
+        ndefBytes = verSize ?? Math.min(Math.max(0, head[NTAG_CC_OFFSET + 2] * 8), NTAG_MAX_NDEF_WRITE_BYTES);
       } else {
-        const sized = await this.getNtagNdefBytesViaGetVersion(protocol);
-        if (sized == null) {
+        if (verSize == null) {
           throw new Error(
             "NTAG_SIZE_UNKNOWN: Couldn't determine the NTAG's size to erase it. " +
               "Try an NTAG 213/215/216, or pre-format the tag.",
           );
         }
-        ndefBytes = sized;
+        ndefBytes = verSize;
       }
+      // Zero-fill only as far as the chip is KNOWN to allow.
+      const wipeBytes = verSize ?? NTAG_CONSERVATIVE_WIPE_BYTES;
 
       // Fresh read/write CC to page 3 — clears any soft read-only nibble.
       await this.writeNtagPage(protocol, 3, Buffer.from(buildType2Cc(ndefBytes)));
@@ -1330,9 +1362,8 @@ export class NfcService extends EventEmitter {
       // Empty-NDEF-message TLV at page 4: 03 00 FE 00 (tag, len=0, terminator).
       await this.writeNtagPage(protocol, 4, Buffer.from([0x03, 0x00, 0xfe, 0x00]));
 
-      // Zero the remaining user pages up to capacity (page 5 onward). The NDEF
-      // area starts at page 4, so the last user page is 4 + ndefBytes/4 - 1.
-      const lastUserPage = 4 + Math.ceil(ndefBytes / 4) - 1;
+      // Zero the remaining user pages up to the SAFE wipe bound (page 5 onward).
+      const lastUserPage = 4 + Math.ceil(wipeBytes / 4) - 1;
       const zeroes = Buffer.alloc(4);
       const totalPages = Math.max(0, lastUserPage - 5 + 1);
       for (let page = 5, n = 0; page <= lastUserPage; page++, n++) {

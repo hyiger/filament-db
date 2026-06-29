@@ -47,6 +47,7 @@ describe("filamentToOpenTag3DFields → encode → decode round-trip", () => {
     expect(decoded.nozzleTempMin).toBe(230);
     expect(decoded.bedTemp).toBe(80);
     expect(decoded.aux?.opentag3d_serial).toBe("abc1234567");
+    expect(decoded.spoolUid).toBe("abc1234567"); // #927: serial → spoolUid for scan matching
   });
 
   it("an un-ranged filament round-trips its single nozzle temp", () => {
