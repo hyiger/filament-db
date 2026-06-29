@@ -1083,6 +1083,7 @@
   "detail.nfc.updateWeightTitle": "Write updated weight to NFC tag",
   "detail.nfc.updated": "NFC tag updated: {weight}g remaining",
   "detail.nfc.opentag3dNotice": "Some fields don't fit on an OpenTag3D tag and were trimmed — see the console for details.",
+  "detail.nfc.opentag3dTooSmallForUpdate": "This NTAG is too small to store the remaining weight — use an NTAG215/216. The tag was not changed.",
   "detail.nfc.overwriteTitle": "Overwrite tag?",
   "detail.nfc.overwriteConfirm": "This tag already contains data for \"{name}\". Overwrite it with this filament?",
   "detail.nfc.overwriteConfirmBtn": "Overwrite",

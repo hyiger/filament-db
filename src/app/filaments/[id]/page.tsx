@@ -536,9 +536,15 @@ function FilamentDetail() {
     async ({
       spoolInstanceId,
       actualWeightGrams,
+      requireExtended = false,
     }: {
       spoolInstanceId: string | null;
       actualWeightGrams: number | null;
+      /** When true, refuse (rather than silently succeed) if the chip can't hold
+       * the OpenTag3D Extended image — the weight-update path's remaining weight
+       * (`measured_filament_weight`) + spool id (`serial`) are Extended-only, so
+       * a Core-only fallback on a tiny NTAG213 would drop them (Codex #927). */
+      requireExtended?: boolean;
     }): Promise<
       | { payload: Uint8Array; standard: "openprinttag" | "opentag3d"; productUrl?: string }
       | null
@@ -599,6 +605,13 @@ function FilamentDetail() {
         if (typeof detected?.ndefCapacity === "number" && detected.ndefCapacity > 0) {
           const ext = wrapOpenTag3DType2(fields, { includeExtended: true });
           if (ext.tlv.length > detected.ndefCapacity) includeExtended = false;
+        }
+        // Codex #927: the weight-update path's remaining weight + spool id live in
+        // Extended-only fields. If the chip forces Core-only, refuse rather than
+        // report a "successful" update that silently dropped them.
+        if (!includeExtended && requireExtended) {
+          toast(t("detail.nfc.opentag3dTooSmallForUpdate"), "error");
+          return null;
         }
         return { payload: encodeOpenTag3D(fields, { includeExtended }), standard: "opentag3d" };
       }
@@ -719,6 +732,7 @@ function FilamentDetail() {
       const built = await buildTagWritePayload({
         spoolInstanceId: writeSel.ok ? writeSel.instanceId : null,
         actualWeightGrams: actualRemaining,
+        requireExtended: true, // Codex #927: remaining weight is Extended-only
       });
       if (!built) return; // detection refused — toast already shown
       await writeTag(built.payload, { standard: built.standard, productUrl: built.productUrl });
