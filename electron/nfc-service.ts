@@ -1687,11 +1687,18 @@ export class NfcService extends EventEmitter {
             }
           }
           // 0 records ⇒ empty/erased ⇒ blank (formatted:false, standard:null)
-        } catch {
-          // Read-back failed — fall back to the CC-only signal (it has a Type-5 CC,
-          // so treat as a formatted OpenPrintTag-class tag) rather than under-claiming.
-          formatted = true;
-          standard = "openprinttag";
+        } catch (err) {
+          // An erased SLIX2's TLV area is just the FE terminator, so
+          // parseNdefRecords THROWS "No NDEF TLV found before terminator" rather
+          // than returning [] (NTAG erase writes 03 00 FE → []; SLIX2 erase writes
+          // FE only). Treat the no-NDEF / blank signals as BLANK (Codex P3 #927) so
+          // a freshly-erased SLIX2 reads as blank, not OpenPrintTag. Any OTHER error
+          // is a genuine read glitch — fall back to the CC-only signal (it has a
+          // Type-5 CC) rather than under-claiming a real tag as blank.
+          const msg = err instanceof Error ? err.message : String(err);
+          const blank = msg.includes("No NDEF") || msg.includes("Blank or unformatted");
+          formatted = !blank;
+          standard = blank ? null : "openprinttag";
         }
         return {
           family: "slix2" as const,
