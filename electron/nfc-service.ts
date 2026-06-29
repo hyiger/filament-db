@@ -1082,7 +1082,7 @@ export class NfcService extends EventEmitter {
             "Place an NTAG (213/215/216) on the reader.",
         );
       }
-      return this.writeNtagImpl(payload, head);
+      return this.writeNtagImpl(payload);
     }
 
     // standard === "openprinttag" — require SLIX2 (not an NTAG).
@@ -1187,8 +1187,22 @@ export class NfcService extends EventEmitter {
    *
    * `head` is the detected pages-0–3 burst from detectType2Head (CC at byte 12).
    */
-  private async writeNtagImpl(payload: Uint8Array, head: Buffer): Promise<void> {
-    return this.withConnection(async (protocol) => {
+  private async writeNtagImpl(payload: Uint8Array): Promise<void> {
+    // NOTE: await (not return) — the verify phase below MUST run after this.
+    await this.withConnection(async (protocol) => {
+      // Re-read pages 0–3 in THIS mutating connection (Codex P2 #927). The probe's
+      // head came from a SEPARATE connection in writeTagImpl, so a tag swapped
+      // after the probe would have the #437 guard + capacity applied to the
+      // PREVIOUS tag while the page writes hit the new one. Deriving ccMagic +
+      // capacity from a fresh in-connection read keeps check-and-write atomic; a
+      // tag that's no longer an NTAG aborts here instead of being clobbered.
+      const head = await this.detectType2Head(protocol);
+      if (!head) {
+        throw new Error(
+          "TAG_TYPE_MISMATCH: The tag on the reader is no longer an NTAG/Type-2 tag. " +
+            "Keep the tag still and try again.",
+        );
+      }
       const ccMagic = head[NTAG_CC_OFFSET];
       let ndefBytes: number;
       let needsFormat = false;
@@ -1332,9 +1346,11 @@ export class NfcService extends EventEmitter {
 
     // OpenTag3D write (Layer 2/3): detect the chip and dispatch. NTAG → the
     // Type-2 erase below; SLIX2 (head === null) → the existing ISO-15693 erase.
+    // This probe only picks the path; formatNtagImpl re-reads in its own mutating
+    // connection so the guards apply to the tag actually present (Codex P2 #927).
     const head = await this.withConnection((protocol) => this.detectType2Head(protocol));
     if (head) {
-      return this.formatNtagImpl(head);
+      return this.formatNtagImpl();
     }
 
     return this.withConnection(async (protocol) => {
@@ -1404,8 +1420,19 @@ export class NfcService extends EventEmitter {
    * Capacity: a formatted NTAG's existing CC byte-2 gives the size; a blank one
    * is sized via GET_VERSION (refused if unknown — never guess).
    */
-  private async formatNtagImpl(head: Buffer): Promise<void> {
+  private async formatNtagImpl(): Promise<void> {
     return this.withConnection(async (protocol) => {
+      // Re-read pages 0–3 in THIS mutating connection (Codex P2 #927): the probe's
+      // head came from a separate connection in formatTagImpl, so a tag swapped
+      // after the probe would apply the guards to the previous tag while the writes
+      // hit the new one. A tag that's no longer an NTAG aborts here.
+      const head = await this.detectType2Head(protocol);
+      if (!head) {
+        throw new Error(
+          "TAG_TYPE_MISMATCH: The tag on the reader is no longer an NTAG/Type-2 tag. " +
+            "Keep the tag still and try again.",
+        );
+      }
       const ccMagic = head[NTAG_CC_OFFSET];
       // GH #437 parity for NTAG (Codex P2 #927): refuse to reformat a tag whose
       // page-3 CC byte is neither an NFC-Forum Type-2 CC (0xE1) nor blank (0x00).
