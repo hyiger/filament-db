@@ -929,6 +929,27 @@ export class NfcService extends EventEmitter {
   }
 
   /**
+   * Resolve the SAFE NDEF byte capacity of a FORMATTED NTAG for write/size
+   * decisions (Codex P1, #927). GET_VERSION (`verSize`) is authoritative when
+   * available — take the smaller of it and the CC-claimed size. When GET_VERSION
+   * is UNAVAILABLE we must NOT trust a possibly-inflated CC: a corrupt CC claiming
+   * 215/216 on a real NTAG213 would let an Extended write run past the 213's user
+   * area into its lock/config pages — a brick the writeNtagPage [3,255] guard
+   * can't catch, since those pages sit INSIDE that range on a small chip. So fall
+   * back to the conservative NTAG213 extent (144 B), safe on ANY NTAG. Real
+   * 215/216 tags then degrade to Core-only writes when GET_VERSION is unsupported
+   * (the renderer surfaces the opentag3dCoreOnly notice) rather than risking a
+   * brick. In practice GET_VERSION works on the ACR1552U (a blank-NTAG write
+   * requires it), so this conservative branch is the rare edge case.
+   */
+  private safeNtagNdefBytes(ccByte2: number, verSize: number | null): number {
+    const ccBytes = Math.min(Math.max(0, ccByte2 * 8), NTAG_MAX_NDEF_WRITE_BYTES);
+    return verSize != null
+      ? Math.min(ccBytes, verSize)
+      : Math.min(ccBytes, NTAG_CONSERVATIVE_WIPE_BYTES);
+  }
+
+  /**
    * Read an NFC-Forum Type 2 (NTAG213/215/216) tag carrying an OpenTag3D (or any
    * registered) NDEF record. Returns:
    *   - the decoded tag on success,
@@ -1183,16 +1204,15 @@ export class NfcService extends EventEmitter {
         // SW error, which surfaces. NTAG "set read-only" is unsupported for this
         // reason — see setReadOnlyImpl.
         // Codex #927 (P1): bound the write capacity by the AUTHORITATIVE chip
-        // size, not the (possibly corrupt/inflated) CC. A formatted NTAG213 whose
-        // CC lies that it's a 215/216 would otherwise let an Extended TLV write
-        // past the 213 user area into its lock/config pages — and the [3,255]
-        // page guard can't catch that (config sits inside that page range on a
-        // small chip). Prefer GET_VERSION; take the SMALLER of it and the CC. When
-        // GET_VERSION is unavailable, trust the CC clamped to the largest real
-        // NTAG (the common formatted-tag case — its CC is correct).
-        const ccBytes = Math.min(Math.max(0, head[NTAG_CC_OFFSET + 2] * 8), NTAG_MAX_NDEF_WRITE_BYTES);
+        // size, not the (possibly corrupt/inflated) CC. safeNtagNdefBytes prefers
+        // GET_VERSION (smaller of it and the CC) and, when GET_VERSION is
+        // unavailable, caps to the conservative NTAG213 extent rather than
+        // trusting the CC — so a formatted NTAG213 whose CC lies that it's a
+        // 215/216 can't drive an Extended TLV past the 213 user area into its
+        // lock/config pages (the [3,255] page guard can't catch that, since config
+        // sits inside that range on a small chip).
         const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
-        ndefBytes = verSize != null ? Math.min(ccBytes, verSize) : ccBytes;
+        ndefBytes = this.safeNtagNdefBytes(head[NTAG_CC_OFFSET + 2], verSize);
       } else {
         // Blank/unformatted NTAG (CC magic 0x00, or any non-0xE1): no CC tells us
         // the chip size. GET_VERSION it; refuse rather than guess (locked
@@ -1545,18 +1565,20 @@ export class NfcService extends EventEmitter {
     if (head) {
       const ccMagic = head[NTAG_CC_OFFSET];
       if (ccMagic === 0xe1) {
-        // Codex #927 (P1): report the AUTHORITATIVE capacity so the renderer's
-        // Core-vs-Extended choice matches the write's bound — prefer GET_VERSION,
-        // take the smaller of it and the CC (catches an inflated/corrupt CC on a
-        // smaller chip). Falls back to the CC when GET_VERSION is unavailable.
-        const ccBytes = Math.min(Math.max(0, head[NTAG_CC_OFFSET + 2] * 8), NTAG_MAX_NDEF_WRITE_BYTES);
+        // Codex #927 (P1): report the SAFE capacity (safeNtagNdefBytes) so the
+        // renderer's Core-vs-Extended choice matches the write's bound exactly —
+        // GET_VERSION when available (smaller of it and the CC), else the
+        // conservative NTAG213 extent rather than a possibly-inflated CC. This
+        // keeps detect and write in lockstep: when the size can't be verified the
+        // renderer encodes Core, which fits, instead of an Extended payload the
+        // write would (correctly) refuse.
         const verSize = await this.withConnection((p) => this.getNtagNdefBytesViaGetVersion(p));
         return {
           family: "ntag",
           standard: "opentag3d",
           formatted: true,
           readOnly: false, // NTAG read-only is unsupported (CC page is OTP) — never report it
-          ndefCapacity: verSize != null ? Math.min(ccBytes, verSize) : ccBytes,
+          ndefCapacity: this.safeNtagNdefBytes(head[NTAG_CC_OFFSET + 2], verSize),
         };
       }
       // Readable as Type 2 but no NDEF CC (blank / non-NDEF) — a blank NTAG.
