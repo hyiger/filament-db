@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { filamentToOpenTag3DFields, wrapOpenTag3DType2 } from "../src/lib/opentag3d-encode";
+import { filamentToOpenTag3DFields, wrapOpenTag3DType2, splitMaterialType } from "../src/lib/opentag3d-encode";
 import { encodeOpenTag3D } from "../src/lib/opentag3d";
 import { decodeOpenTag3DTag } from "../src/lib/opentag3d-decode";
 import {
@@ -72,10 +72,21 @@ describe("filamentToOpenTag3DFields → encode → decode round-trip", () => {
     expect(decoded.secondaryColors).toEqual(["#112233", "#445566"]);
   });
 
-  it("flags a material type longer than the 5-byte slot", () => {
-    const { fields, notices } = filamentToOpenTag3DFields({ type: "PC-ABS" });
+  it("splits a combined material type into base + modifier (PA12-CF → PA12 / CF)", () => {
+    const { fields, notices } = filamentToOpenTag3DFields({ type: "PA12-CF" });
+    expect(fields.material_base).toBe("PA12");
+    expect(fields.material_mod).toBe("CF");
+    expect(notices).toEqual([]); // both fit their 5-byte slots → no truncation
+    const decoded = decodeOpenTag3DTag(encodeOpenTag3D(fields));
+    expect(decoded.materialType).toBe("PA12"); // base
+    expect(decoded.materialName).toContain("CF"); // modifier rejoined into the name
+  });
+
+  it("flags a no-separator material type longer than the 5-byte base slot", () => {
+    // No "-"/space to split on → the whole thing is the base, which truncates.
+    const { fields, notices } = filamentToOpenTag3DFields({ type: "NYLON12" });
+    expect(fields.material_base).toBe("NYLON12"); // value kept; encoder truncates to 5B
     expect(notices.some((n) => /Material type/.test(n))).toBe(true);
-    expect(fields.material_base).toBe("PC-ABS"); // value kept; encoder truncates
   });
 
   it("writes only 3 secondary slots and flags the overflow", () => {
@@ -136,6 +147,23 @@ describe("filamentToOpenTag3DFields → encode → decode round-trip", () => {
     const decoded = decodeFromNdefRecords(parseNdefRecords(image, 12));
     expect(decoded?.tagSource).toBe("opentag3d");
     expect(decoded?.materialType).toBe("PETG");
+  });
+});
+
+describe("splitMaterialType", () => {
+  it("splits on the first separator into base + modifier", () => {
+    expect(splitMaterialType("PA12-CF")).toEqual({ base: "PA12", mod: "CF" });
+    expect(splitMaterialType("PC-ABS")).toEqual({ base: "PC", mod: "ABS" });
+    expect(splitMaterialType("TPU 95A")).toEqual({ base: "TPU", mod: "95A" });
+    expect(splitMaterialType("PA6-GF25")).toEqual({ base: "PA6", mod: "GF25" });
+  });
+  it("returns base-only when there's no separator", () => {
+    expect(splitMaterialType("PLA")).toEqual({ base: "PLA", mod: "" });
+    expect(splitMaterialType("NYLON12")).toEqual({ base: "NYLON12", mod: "" });
+  });
+  it("handles null/empty", () => {
+    expect(splitMaterialType(null)).toEqual({ base: "", mod: "" });
+    expect(splitMaterialType("  ")).toEqual({ base: "", mod: "" });
   });
 });
 

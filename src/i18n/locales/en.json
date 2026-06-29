@@ -1521,7 +1521,7 @@
   "settings.saveKey": "Save Key",
   "settings.removeKey": "Remove Key",
   "settings.nfcTools": "NFC Tools",
-  "settings.nfcToolsDesc": "Read and write OpenPrintTag NFC tags.",
+  "settings.nfcToolsDesc": "Read and write OpenPrintTag and OpenTag3D NFC tags.",
   "settings.nfcTagDetected": "Tag detected ({uid})",
   "settings.nfcReaderReady": "Reader ready — place tag",
   "settings.nfcNoReader": "No NFC reader detected",

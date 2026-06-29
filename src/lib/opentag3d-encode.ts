@@ -72,6 +72,22 @@ export interface OpenTag3DFieldSet {
 const HEX_RE = /^#?[0-9a-fA-F]{6}$/;
 const utf8Len = (s: string) => new TextEncoder().encode(s).length;
 
+/**
+ * Split a combined filament type into OpenTag3D's separate base + modifier
+ * slots, e.g. "PA12-CF" → {base:"PA12", mod:"CF"}, "PC-ABS" → {"PC","ABS"},
+ * "TPU 95A" → {"TPU","95A"}, "PLA" → {"PLA",""}. Splits on the FIRST "-" or
+ * whitespace run; the remainder (further separators collapsed to spaces) is the
+ * modifier. A type with no separator is the base alone. setStr still flags the
+ * base/mod if either exceeds its 5-byte slot.
+ */
+export function splitMaterialType(type: string | null | undefined): { base: string; mod: string } {
+  const t = (type ?? "").trim();
+  if (!t) return { base: "", mod: "" };
+  const m = /^(.*?)[\s-]+(.*)$/.exec(t);
+  if (!m) return { base: t, mod: "" };
+  return { base: m[1], mod: m[2].replace(/[\s-]+/g, " ").trim() };
+}
+
 /** Set a string field, flagging truncation when it exceeds the tag's byte budget. */
 function setStr(
   out: Record<string, Ot3dValue>,
@@ -111,7 +127,14 @@ export function filamentToOpenTag3DFields(
   const notices: string[] = [];
 
   // ── identity ──
-  setStr(fields, notices, "material_base", f.type, "Material type");
+  // OpenTag3D has SEPARATE 5-byte material_base + material_mod slots. A combined
+  // type like "PA12-CF" / "PC-ABS" / "TPU 95A" is split on its first separator
+  // ("-" or whitespace) → base + modifier, so each fits its slot and round-trips
+  // (the decoder rejoins them). Without the split the whole type went into the
+  // 5-byte base and "PA12-CF" truncated to "PA12-" (observed on hardware).
+  const { base, mod } = splitMaterialType(f.type);
+  setStr(fields, notices, "material_base", base, "Material type");
+  setStr(fields, notices, "material_mod", mod, "Material modifier");
   setStr(fields, notices, "manufacturer", f.vendor, "Vendor");
   setStr(fields, notices, "color_name", f.colorName, "Color name");
 

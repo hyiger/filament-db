@@ -1521,7 +1521,7 @@
   "settings.saveKey": "Schlüssel speichern",
   "settings.removeKey": "Schlüssel entfernen",
   "settings.nfcTools": "NFC-Werkzeuge",
-  "settings.nfcToolsDesc": "OpenPrintTag-NFC-Tags lesen und beschreiben.",
+  "settings.nfcToolsDesc": "OpenPrintTag- und OpenTag3D-NFC-Tags lesen und beschreiben.",
   "settings.nfcTagDetected": "Tag erkannt ({uid})",
   "settings.nfcReaderReady": "Leser bereit — Tag auflegen",
   "settings.nfcNoReader": "Kein NFC-Leser erkannt",

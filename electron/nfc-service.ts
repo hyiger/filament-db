@@ -536,10 +536,22 @@ export class NfcService extends EventEmitter {
     );
   }
 
-  private disconnect(): Promise<void> {
+  private disconnect(reset = false): Promise<void> {
     return new Promise((resolve) => {
       if (!this.activeReader) return resolve();
-      this.activeReader.disconnect(this.activeReader.SCARD_LEAVE_CARD, () => resolve());
+      // `reset` re-powers the card on disconnect (SCARD_RESET_CARD). NTAG mutating
+      // ops pass it: the ACR1552U serves Type-2 FF B0 READ BINARY from an internal
+      // card buffer that's only refreshed on card (re)activation, so after an
+      // FF D6 write the NEXT operation's read would otherwise return the STALE
+      // buffer until the tag is physically re-presented (the read-only flag not
+      // clearing, post-write "no record", erase-then-write still read-only — all
+      // observed on hardware). Resetting forces the next connect to re-read the
+      // tag fresh. SLIX2/ISO-15693 (FF FB) is a direct pass-through and never
+      // needs this, so its ops keep SCARD_LEAVE_CARD.
+      const disposition = reset
+        ? this.activeReader.SCARD_RESET_CARD
+        : this.activeReader.SCARD_LEAVE_CARD;
+      this.activeReader.disconnect(disposition, () => resolve());
     });
   }
 
@@ -565,7 +577,10 @@ export class NfcService extends EventEmitter {
 
   // ── Connection-scoped operations ────────────────────────────────
 
-  private async withConnection<T>(fn: (protocol: number) => Promise<T>): Promise<T> {
+  private async withConnection<T>(
+    fn: (protocol: number) => Promise<T>,
+    opts: { resetAfter?: boolean } = {},
+  ): Promise<T> {
     if (this.readers.size === 0) throw new Error("No NFC reader connected");
 
     const protocol = await this.connect();
@@ -582,7 +597,7 @@ export class NfcService extends EventEmitter {
       this.clearLastError();
       return result;
     } finally {
-      try { await this.disconnect(); } catch { /* */ }
+      try { await this.disconnect(opts.resetAfter); } catch { /* */ }
     }
   }
 
@@ -1235,7 +1250,7 @@ export class NfcService extends EventEmitter {
             "The write may not have landed correctly; try again.",
         );
       }
-    });
+    }, { resetAfter: true });
   }
 
   async formatTag(signal?: AbortSignal): Promise<void> {
@@ -1387,7 +1402,7 @@ export class NfcService extends EventEmitter {
           percent: totalPages > 0 ? Math.round(((n + 1) / totalPages) * 100) : 100,
         });
       }
-    });
+    }, { resetAfter: true });
   }
 
   /**
@@ -1537,7 +1552,7 @@ export class NfcService extends EventEmitter {
         3,
         Buffer.from([0xe1, 0x10, head[NTAG_CC_OFFSET + 2], newByte3]),
       );
-    });
+    }, { resetAfter: true });
   }
 
   /**
