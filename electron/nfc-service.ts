@@ -1393,17 +1393,20 @@ export class NfcService extends EventEmitter {
     return this.withConnection(async (protocol) => {
       const ccMagic = head[NTAG_CC_OFFSET];
       // GET_VERSION is the AUTHORITATIVE chip size — prefer it over a possibly
-      // corrupt/foreign CC byte (Codex #927). The CC we WRITE reflects the real
-      // capacity (GET_VERSION, or the existing CC clamped to the largest real
-      // NTAG). The hygiene zero-fill EXTENT, however, is bounded by the
-      // authoritative size — or, when GET_VERSION is unavailable, by a
-      // conservative NTAG213 floor — so a lying CC can never drive the wipe into
-      // a smaller chip's lock/config pages (which writeNtagPage's [3,255] guard
-      // alone wouldn't stop, since config sits above the user area).
+      // corrupt/foreign CC byte (Codex #927). The CC we WRITE reflects the SAFE
+      // capacity via safeNtagNdefBytes: GET_VERSION when available, else the
+      // conservative NTAG213 extent rather than the existing CC — so Erase can't
+      // rewrite an inflated CC back onto a smaller chip (which would still mislead
+      // other tools / older code into writing past the user area). Matches the
+      // write/detect bound. The hygiene zero-fill EXTENT is likewise bounded by
+      // the authoritative size (or the NTAG213 floor when GET_VERSION is
+      // unavailable), so a lying CC can never drive the wipe into a smaller chip's
+      // lock/config pages (which writeNtagPage's [3,255] guard alone wouldn't
+      // stop, since config sits above the user area).
       const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
       let ndefBytes: number; // size written into the CC
       if (ccMagic === 0xe1) {
-        ndefBytes = verSize ?? Math.min(Math.max(0, head[NTAG_CC_OFFSET + 2] * 8), NTAG_MAX_NDEF_WRITE_BYTES);
+        ndefBytes = this.safeNtagNdefBytes(head[NTAG_CC_OFFSET + 2], verSize);
       } else {
         if (verSize == null) {
           throw new Error(
