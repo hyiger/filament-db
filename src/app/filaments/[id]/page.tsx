@@ -606,12 +606,18 @@ function FilamentDetail() {
           const ext = wrapOpenTag3DType2(fields, { includeExtended: true });
           if (ext.tlv.length > detected.ndefCapacity) includeExtended = false;
         }
-        // Codex #927: the weight-update path's remaining weight + spool id live in
-        // Extended-only fields. If the chip forces Core-only, refuse rather than
-        // report a "successful" update that silently dropped them.
-        if (!includeExtended && requireExtended) {
-          toast(t("detail.nfc.opentag3dTooSmallForUpdate"), "error");
-          return null;
+        if (!includeExtended) {
+          // Codex #927: the weight-update path's remaining weight + spool id live
+          // in Extended-only fields — refuse rather than report a "successful"
+          // update that silently dropped them.
+          if (requireExtended) {
+            toast(t("detail.nfc.opentag3dTooSmallForUpdate"), "error");
+            return null;
+          }
+          // Write path: Core-only is allowed, but it drops the Extended-only
+          // fields (serial/spool id, remaining weight) — tell the user so a later
+          // scan that doesn't match the spool isn't a surprise (Codex #927 r5).
+          toast(t("detail.nfc.opentag3dCoreOnly"), "info");
         }
         return { payload: encodeOpenTag3D(fields, { includeExtended }), standard: "opentag3d" };
       }

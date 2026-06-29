@@ -1084,6 +1084,7 @@
   "detail.nfc.updated": "NFC-Tag aktualisiert: {weight}g verbleibend",
   "detail.nfc.opentag3dNotice": "Einige Felder passen nicht auf einen OpenTag3D-Tag und wurden gekürzt — Details in der Konsole.",
   "detail.nfc.opentag3dTooSmallForUpdate": "Dieser NTAG ist zu klein, um das Restgewicht zu speichern — verwende einen NTAG215/216. Der Tag wurde nicht geändert.",
+  "detail.nfc.opentag3dCoreOnly": "Dieser NTAG ist klein (NTAG213) — nur die Kernfelder wurden geschrieben; Spulen-ID und Restgewicht wurden ausgelassen. Verwende einen NTAG215/216, um alles zu speichern.",
   "detail.nfc.overwriteTitle": "Tag überschreiben?",
   "detail.nfc.overwriteConfirm": "Dieser Tag enthält bereits Daten für „{name}“. Mit diesem Filament überschreiben?",
   "detail.nfc.overwriteConfirmBtn": "Überschreiben",
