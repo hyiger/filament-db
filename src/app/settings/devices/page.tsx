@@ -23,6 +23,14 @@ export default function DevicesSettingsPage() {
   const [formatResult, setFormatResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [showFormatConfirm, setShowFormatConfirm] = useState(false);
   const [settingReadOnly, setSettingReadOnly] = useState(false);
+  // #864 OpenTag3D write: the chip + standard of the tag currently on the reader,
+  // probed via nfcDetectTag on tag-present so the user knows what they're acting on.
+  const [detected, setDetected] = useState<{
+    family: "ntag" | "slix2" | "bambu" | "unknown";
+    standard: "opentag3d" | "openprinttag" | "bambu" | null;
+    formatted: boolean;
+    readOnly: boolean;
+  } | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -34,6 +42,40 @@ export default function DevicesSettingsPage() {
     const unsub = api.onNfcStatusChange(setNfcStatus);
     return () => { controller.abort(); unsub(); };
   }, []);
+
+  // #864: probe the loaded tag whenever one is present (and clear when lifted).
+  // Best-effort — a detect failure just leaves the line hidden.
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.nfcDetectTag) return;
+    if (!nfcStatus.tagPresent) {
+      setDetected(null); // eslint-disable-line react-hooks/set-state-in-effect -- clear in response to external reader state
+      return;
+    }
+    let cancelled = false;
+    api.nfcDetectTag()
+      .then((d) => { if (!cancelled) setDetected(d); })
+      .catch(() => { if (!cancelled) setDetected(null); });
+    return () => { cancelled = true; };
+  }, [nfcStatus.tagPresent, nfcStatus.tagUid]);
+
+  // Map a detection result to a human label, reusing the read-dialog provenance
+  // wording vocabulary (#864).
+  const detectedLabel = (() => {
+    if (!detected) return null;
+    if (detected.family === "bambu") return t("settings.nfcLoadedBambu");
+    if (detected.family === "ntag") {
+      return detected.formatted
+        ? t("settings.nfcLoadedNtagOpenTag3d")
+        : t("settings.nfcLoadedNtagBlank");
+    }
+    if (detected.family === "slix2") {
+      return detected.formatted
+        ? t("settings.nfcLoadedSlix2OpenPrintTag")
+        : t("settings.nfcLoadedSlix2Blank");
+    }
+    return t("settings.nfcLoadedUnknown");
+  })();
 
   const showFormatConfirmVisible = showFormatConfirm && nfcStatus.tagPresent;
 
@@ -50,7 +92,9 @@ export default function DevicesSettingsPage() {
       setFormatResult({ ok: true, message: t("settings.nfcEraseSuccess") });
     } catch (err: unknown) {
       const raw = err instanceof Error ? err.message : String(err);
-      const message = raw.includes("BAMBU_READ_ONLY") ? t("settings.nfcEraseBambuReadOnly") : raw;
+      let message = raw;
+      if (raw.includes("BAMBU_READ_ONLY")) message = t("settings.nfcEraseBambuReadOnly");
+      else if (raw.includes("NTAG_SIZE_UNKNOWN")) message = t("settings.nfcNtagSizeUnknown");
       setFormatResult({ ok: false, message });
     } finally {
       setFormatting(false);
@@ -89,6 +133,14 @@ export default function DevicesSettingsPage() {
           <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-5">
             <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-1">{t("settings.nfcTools")}</h2>
             <p className="text-sm text-gray-500 mb-4">{t("settings.nfcToolsDesc")}</p>
+
+            {/* #864: which chip + standard is on the reader right now. */}
+            {nfcStatus.tagPresent && detectedLabel && (
+              <p className="text-sm text-gray-600 dark:text-gray-300 mb-4">
+                <span className="text-gray-400 dark:text-gray-500">{t("settings.nfcLoadedTag")}</span>{" "}
+                <span className="font-medium">{detectedLabel}</span>
+              </p>
+            )}
 
             {!showFormatConfirmVisible ? (
               <button

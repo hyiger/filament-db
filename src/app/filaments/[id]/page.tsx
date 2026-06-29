@@ -5,6 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useNfcContext } from "@/components/NfcProvider";
 import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
+import { encodeOpenTag3D } from "@/lib/opentag3d";
+import { filamentToOpenTag3DFields } from "@/lib/opentag3d-encode";
 import { selectSpoolForWrite } from "@/lib/selectSpoolForWrite";
 import { safeHttpUrl } from "@/lib/safeRenderUrl";
 import { useToast } from "@/components/Toast";
@@ -408,7 +410,16 @@ function FilamentDetail() {
   // Returns true if the caller should proceed with the write.
   const ensureTagWritable = useCallback(
     async ({ confirmOverwrite = false, targetInstanceId }: { confirmOverwrite?: boolean; targetInstanceId?: string } = {}): Promise<boolean> => {
-      type ProbedTag = { tagSource?: string; materialName?: string; brandName?: string; spoolUid?: string; readOnly?: boolean };
+      type ProbedTag = {
+        tagSource?: string;
+        materialName?: string;
+        brandName?: string;
+        spoolUid?: string;
+        readOnly?: boolean;
+        // #864 OpenTag3D: the spool serial rides aux.opentag3d_serial (no
+        // first-class spoolUid slot), so the own-tag match falls back to it.
+        aux?: { opentag3d_serial?: string } | null;
+      };
       let existing: ProbedTag | null | undefined;
       // The tag carries a valid NDEF message but no OpenPrintTag record (e.g.
       // a URL/text/contact tag) — it's NOT blank, just not ours.
@@ -435,7 +446,10 @@ function FilamentDetail() {
         }
       }
 
-      // Bambu Lab tags are read-only — refuse on every write path.
+      // Bambu Lab tags are read-only — refuse on every write path. (An
+      // OpenTag3D tag in the field is writable on the NTAG path, so it is NOT
+      // refused here — it flows through the own-tag / overwrite logic below
+      // exactly like an OpenPrintTag.)
       if (existing?.tagSource === "bambu") {
         toast(t("detail.nfc.bambuReadOnly"), "error");
         return false;
@@ -455,7 +469,10 @@ function FilamentDetail() {
         // on instance id (most precise) or name+vendor. Only the weight-update
         // path (confirmOverwrite=false) trusts this to skip the prompt.
         const norm = (s?: string | null) => (s ?? "").trim().toLowerCase();
-        const tagInstance = norm(existing?.spoolUid);
+        // #864: an OpenTag3D tag carries its spool serial in
+        // aux.opentag3d_serial (no spoolUid slot); fall back to it so an
+        // own-OpenTag3D-tag weight update re-writes silently like an OPT tag.
+        const tagInstance = norm(existing?.spoolUid ?? existing?.aux?.opentag3d_serial);
         // #732 (Codex P2 r2/r3): the SILENT (weight-update) re-write may only
         // accept a tag that positively identifies as THIS write's target spool
         // — its spool_uid equals the target spool's instanceId. The
@@ -511,6 +528,112 @@ function FilamentDetail() {
     [toast, t, confirm, filament],
   );
 
+  // #864 OpenTag3D write: build the standard's native binary for the loaded
+  // chip. Probes via nfcDetectTag — an NTAG ⇒ OpenTag3D fixed-binary image, a
+  // SLIX2/blank tag ⇒ OpenPrintTag CBOR. Returns null (with a toast already
+  // shown) when the write should be aborted — e.g. a Bambu tag (read-only).
+  const buildTagWritePayload = useCallback(
+    async ({
+      spoolInstanceId,
+      actualWeightGrams,
+    }: {
+      spoolInstanceId: string | null;
+      actualWeightGrams: number | null;
+    }): Promise<
+      | { payload: Uint8Array; standard: "openprinttag" | "opentag3d"; productUrl?: string }
+      | null
+    > => {
+      if (!filament) return null;
+
+      // Detect which chip is in the field so we encode the right format. If the
+      // detect IPC isn't available (older app), fall back to OpenPrintTag — the
+      // historical behaviour.
+      let detected: Awaited<ReturnType<NonNullable<typeof window.electronAPI>["nfcDetectTag"]>> | null = null;
+      try {
+        detected = (await window.electronAPI?.nfcDetectTag?.()) ?? null;
+      } catch {
+        detected = null;
+      }
+
+      // A Bambu tag is read-only — refuse with the friendly message (mirrors
+      // ensureTagWritable, but the detect probe is the authoritative chip read).
+      if (detected?.family === "bambu") {
+        toast(t("detail.nfc.bambuReadOnly"), "error");
+        return null;
+      }
+
+      if (detected?.family === "ntag") {
+        // OpenTag3D fixed-binary image.
+        const { fields, notices } = filamentToOpenTag3DFields(
+          {
+            type: filament.type,
+            vendor: filament.vendor,
+            colorName: filament.colorName,
+            color: filament.color,
+            secondaryColors: filament.secondaryColors,
+            diameter: filament.diameter,
+            netFilamentWeight: filament.netFilamentWeight,
+            density: filament.density,
+            temperatures: {
+              nozzle: filament.temperatures?.nozzle,
+              bed: filament.temperatures?.bed,
+              nozzleRangeMin: filament.temperatures?.nozzleRangeMin,
+              nozzleRangeMax: filament.temperatures?.nozzleRangeMax,
+            },
+            dryingTemperature: filament.dryingTemperature,
+            dryingTime: filament.dryingTime,
+            maxVolumetricSpeed: filament.maxVolumetricSpeed,
+            spoolWeight: filament.spoolWeight,
+          },
+          { spoolInstanceId, actualWeightGrams },
+        );
+        if (notices.length > 0) {
+          console.warn("[nfc] OpenTag3D lossy mapping:", notices);
+          toast(t("detail.nfc.opentag3dNotice"), "info");
+        }
+        return { payload: encodeOpenTag3D(fields), standard: "opentag3d" };
+      }
+
+      // Default / SLIX2 / blank → OpenPrintTag CBOR (unchanged behaviour).
+      const payload = generateOpenPrintTagBinary({
+        materialName: filament.name,
+        brandName: filament.vendor,
+        materialType: filament.type,
+        // GH #477: nullable color → omit key 19 from CBOR.
+        color: filament.color ?? undefined,
+        // GH #477 Phase 3: surface secondaryColors on the tag too.
+        // The encoder caps at 5 to match the spec (keys 20–24).
+        secondaryColors: filament.secondaryColors,
+        density: filament.density,
+        diameter: filament.diameter,
+        nozzleTemp: filament.temperatures?.nozzle,
+        nozzleTempFirstLayer: filament.temperatures?.nozzleFirstLayer,
+        bedTemp: filament.temperatures?.bed,
+        bedTempFirstLayer: filament.temperatures?.bedFirstLayer,
+        chamberTemp: filament.settings?.chamber_temperature
+          ? Number(filament.settings.chamber_temperature)
+          : null,
+        weightGrams: filament.netFilamentWeight ?? null,
+        actualWeightGrams,
+        emptySpoolWeight: filament.spoolWeight ?? null,
+        spoolUid: spoolInstanceId,
+        dryingTemperature: filament.dryingTemperature,
+        dryingTime: filament.dryingTime,
+        transmissionDistance: filament.transmissionDistance,
+        abrasive: filament.settings?.filament_abrasive === "1",
+        soluble: filament.settings?.filament_soluble === "1",
+        shoreHardnessA: filament.shoreHardnessA,
+        shoreHardnessD: filament.shoreHardnessD,
+        optTags: filament.optTags,
+      });
+      // Include a URI record for Prusa app compatibility.
+      const productUrl = filament.tdsUrl
+        || `https://filamentdb.app/filament/${encodeURIComponent(filament.vendor)}/${encodeURIComponent(filament.name)}`;
+      return { payload, standard: "openprinttag", productUrl };
+    },
+    [filament, toast, t],
+  );
+
   const handleNfcWrite = async () => {
     if (!filament) return;
 
@@ -540,41 +663,15 @@ function FilamentDetail() {
       if (grossWeight != null && filament.spoolWeight != null) {
         actualWeightGrams = Math.max(0, grossWeight - filament.spoolWeight);
       }
-      const payload = generateOpenPrintTagBinary({
-        materialName: filament.name,
-        brandName: filament.vendor,
-        materialType: filament.type,
-        // GH #477: nullable color → omit key 19 from CBOR.
-        color: filament.color ?? undefined,
-        // GH #477 Phase 3: surface secondaryColors on the tag too.
-        // The encoder caps at 5 to match the spec (keys 20–24).
-        secondaryColors: filament.secondaryColors,
-        density: filament.density,
-        diameter: filament.diameter,
-        nozzleTemp: filament.temperatures?.nozzle,
-        nozzleTempFirstLayer: filament.temperatures?.nozzleFirstLayer,
-        bedTemp: filament.temperatures?.bed,
-        bedTempFirstLayer: filament.temperatures?.bedFirstLayer,
-        chamberTemp: filament.settings?.chamber_temperature
-          ? Number(filament.settings.chamber_temperature)
-          : null,
-        weightGrams: filament.netFilamentWeight ?? null,
+
+      // #864 OpenTag3D write: pick the standard from the loaded chip. NTAG ⇒
+      // OpenTag3D fixed-binary image; SLIX2/blank ⇒ OpenPrintTag CBOR.
+      const built = await buildTagWritePayload({
+        spoolInstanceId: writeSel.ok ? writeSel.instanceId : null,
         actualWeightGrams,
-        emptySpoolWeight: filament.spoolWeight ?? null,
-        spoolUid: writeSel.ok ? writeSel.instanceId : null,
-        dryingTemperature: filament.dryingTemperature,
-        dryingTime: filament.dryingTime,
-        transmissionDistance: filament.transmissionDistance,
-        abrasive: filament.settings?.filament_abrasive === "1",
-        soluble: filament.settings?.filament_soluble === "1",
-        shoreHardnessA: filament.shoreHardnessA,
-        shoreHardnessD: filament.shoreHardnessD,
-        optTags: filament.optTags,
       });
-      // Include a URI record for Prusa app compatibility
-      const productUrl = filament.tdsUrl
-        || `https://filamentdb.app/filament/${encodeURIComponent(filament.vendor)}/${encodeURIComponent(filament.name)}`;
-      await writeTag(payload, productUrl);
+      if (!built) return; // detection refused (e.g. Bambu) — toast already shown
+      await writeTag(built.payload, { standard: built.standard, productUrl: built.productUrl });
       notifyTagWritten({
         _id: String(filament._id),
         name: filament.name,
@@ -608,40 +705,14 @@ function FilamentDetail() {
     if (!(await ensureTagWritable({ targetInstanceId: writeSel.ok ? writeSel.instanceId : undefined }))) return;
     setNfcWriteSuccess(null);
     try {
-      const payload = generateOpenPrintTagBinary({
-        materialName: filament.name,
-        brandName: filament.vendor,
-        materialType: filament.type,
-        // GH #477: nullable color → omit key 19 from CBOR.
-        color: filament.color ?? undefined,
-        // GH #477 Phase 3: surface secondaryColors on the tag too.
-        // The encoder caps at 5 to match the spec (keys 20–24).
-        secondaryColors: filament.secondaryColors,
-        density: filament.density,
-        diameter: filament.diameter,
-        nozzleTemp: filament.temperatures?.nozzle,
-        nozzleTempFirstLayer: filament.temperatures?.nozzleFirstLayer,
-        bedTemp: filament.temperatures?.bed,
-        bedTempFirstLayer: filament.temperatures?.bedFirstLayer,
-        chamberTemp: filament.settings?.chamber_temperature
-          ? Number(filament.settings.chamber_temperature)
-          : null,
-        weightGrams: filament.netFilamentWeight ?? null,
+      // #864 OpenTag3D write: same chip-aware payload build as handleNfcWrite,
+      // but with the freshly-weighed remaining grams.
+      const built = await buildTagWritePayload({
+        spoolInstanceId: writeSel.ok ? writeSel.instanceId : null,
         actualWeightGrams: actualRemaining,
-        emptySpoolWeight: filament.spoolWeight ?? null,
-        spoolUid: writeSel.ok ? writeSel.instanceId : null,
-        dryingTemperature: filament.dryingTemperature,
-        dryingTime: filament.dryingTime,
-        transmissionDistance: filament.transmissionDistance,
-        abrasive: filament.settings?.filament_abrasive === "1",
-        soluble: filament.settings?.filament_soluble === "1",
-        shoreHardnessA: filament.shoreHardnessA,
-        shoreHardnessD: filament.shoreHardnessD,
-        optTags: filament.optTags,
       });
-      const productUrl = filament.tdsUrl
-        || `https://filamentdb.app/filament/${encodeURIComponent(filament.vendor)}/${encodeURIComponent(filament.name)}`;
-      await writeTag(payload, productUrl);
+      if (!built) return; // detection refused — toast already shown
+      await writeTag(built.payload, { standard: built.standard, productUrl: built.productUrl });
       notifyTagWritten({
         _id: String(filament._id),
         name: filament.name,
@@ -659,7 +730,7 @@ function FilamentDetail() {
       if (nfcWriteTimerRef.current) clearTimeout(nfcWriteTimerRef.current);
       nfcWriteTimerRef.current = setTimeout(() => setNfcWriteSuccess(null), 5000);
     }
-  }, [filament, writeTag, notifyTagWritten, toast, t, ensureTagWritable]);
+  }, [filament, writeTag, notifyTagWritten, toast, t, ensureTagWritable, buildTagWritePayload]);
 
   const handleWeightUpdate = async () => {
     if (!filament) return;

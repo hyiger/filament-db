@@ -64,12 +64,15 @@ export function useNfc() {
   }, [isElectron]);
 
   const writeTag = useCallback(
-    async (payload: Uint8Array, productUrl?: string) => {
+    async (
+      payload: Uint8Array,
+      opts: { standard?: "openprinttag" | "opentag3d"; productUrl?: string } = {},
+    ) => {
       if (!isElectron) throw new Error("NFC only available in Electron");
       setError(null);
       setWriting(true);
       try {
-        await window.electronAPI!.nfcWriteTag(Array.from(payload), productUrl);
+        await window.electronAPI!.nfcWriteTag(Array.from(payload), opts.standard, opts.productUrl);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         setError(message);

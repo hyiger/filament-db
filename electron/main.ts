@@ -1184,7 +1184,16 @@ ipcMain.handle("nfc-read-tag", async (event) => {
   return withIpcTimeout((signal) => nfcService!.readTag(signal), "nfc-read-tag");
 });
 
-ipcMain.handle("nfc-write-tag", async (event, payload: number[], productUrl?: string) => {
+// OpenTag3D write: non-mutating probe of the loaded tag so the renderer knows
+// which standard to encode (OpenPrintTag for SLIX2, OpenTag3D for NTAG) and
+// whether it's locked. Same trusted-sender + timeout posture as nfc-read-tag.
+ipcMain.handle("nfc-detect-tag", async (event) => {
+  assertTrustedSender(event, "nfc-detect-tag");
+  if (!nfcService) throw new Error("NFC not initialized");
+  return withIpcTimeout((signal) => nfcService!.detectTag(signal), "nfc-detect-tag");
+});
+
+ipcMain.handle("nfc-write-tag", async (event, payload: number[], standard?: unknown, productUrl?: unknown) => {
   assertTrustedSender(event, "nfc-write-tag");
   if (!nfcService) throw new Error("NFC not initialized");
 
@@ -1202,14 +1211,29 @@ ipcMain.handle("nfc-write-tag", async (event, payload: number[], productUrl?: st
   if (!payload.every((b) => Number.isInteger(b) && b >= 0 && b <= 255)) {
     throw new Error("nfc-write-tag: payload must contain only 0-255 integers");
   }
+  // OpenTag3D write: the standard discriminator picks the wrapping + which chip
+  // is required. Default to openprinttag for back-compat.
+  if (standard !== undefined && standard !== "openprinttag" && standard !== "opentag3d") {
+    throw new Error("nfc-write-tag: standard must be 'openprinttag' or 'opentag3d'");
+  }
+  const writeStandard = (standard ?? "openprinttag") as "openprinttag" | "opentag3d";
   // GH #278: productUrl is written onto the tag and acted on by
   // downstream readers (the Prusa app) — only http(s) is safe. A
   // javascript:/file: URL must never be persisted to physical media.
-  if (productUrl !== undefined && !/^https?:\/\//i.test(productUrl)) {
+  if (productUrl !== undefined && (typeof productUrl !== "string" || !/^https?:\/\//i.test(productUrl))) {
     throw new Error("nfc-write-tag: productUrl must be an http(s) URL");
   }
+  const writeUrl = productUrl as string | undefined;
 
-  await withIpcTimeout((signal) => nfcService!.writeTag(new Uint8Array(payload), productUrl, signal), "nfc-write-tag");
+  await withIpcTimeout(
+    (signal) =>
+      nfcService!.writeTag(
+        new Uint8Array(payload),
+        { standard: writeStandard, productUrl: writeUrl },
+        signal,
+      ),
+    "nfc-write-tag",
+  );
 
   // After a successful write, schedule a delayed read-back so the UI shows
   // the updated tag data. We delay to let the disconnect settle — reading

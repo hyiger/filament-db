@@ -44,7 +44,20 @@ interface ElectronAPI {
     } | null;
   }>;
   nfcReadTag: () => Promise<unknown>;
-  nfcWriteTag: (payload: number[], productUrl?: string) => Promise<{ success: boolean }>;
+  /** OpenTag3D write: probe the loaded tag — which standard to encode + lock state. */
+  nfcDetectTag: () => Promise<{
+    family: "ntag" | "slix2" | "bambu" | "unknown";
+    standard: "opentag3d" | "openprinttag" | "bambu" | null;
+    formatted: boolean;
+    readOnly: boolean;
+  }>;
+  /** OpenTag3D write: `standard` selects the wrapping/transport (default
+   *  "openprinttag"); `productUrl` rides the SLIX2/OpenPrintTag path only. */
+  nfcWriteTag: (
+    payload: number[],
+    standard?: "openprinttag" | "opentag3d",
+    productUrl?: string,
+  ) => Promise<{ success: boolean }>;
   nfcFormatTag: () => Promise<{ success: boolean }>;
   nfcSetReadOnly: (readOnly: boolean) => Promise<{ success: boolean }>;
   onNfcStatusChange: (callback: (status: {

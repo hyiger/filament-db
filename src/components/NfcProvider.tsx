@@ -17,7 +17,12 @@ interface NfcContextValue {
   status: NfcStatus;
   writing: boolean;
   writeError: string | null;
-  writeTag: (payload: Uint8Array, productUrl?: string) => Promise<void>;
+  /** OpenTag3D write: `standard` picks the wrapping/transport (default
+   *  "openprinttag"); `productUrl` rides the SLIX2/OpenPrintTag path only. */
+  writeTag: (
+    payload: Uint8Array,
+    opts?: { standard?: "openprinttag" | "opentag3d"; productUrl?: string },
+  ) => Promise<void>;
   /**
    * Last decoded scan result. Survives dialog dismissal so the dialog's
    * action buttons (View Filament / Create New / candidate suggestions)
@@ -213,11 +218,14 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
   // before any scan event can be observed, and the post-write suppression
   // window is armed on completion.
   const writeTag = useCallback(
-    async (payload: Uint8Array, productUrl?: string) => {
+    async (
+      payload: Uint8Array,
+      opts: { standard?: "openprinttag" | "opentag3d"; productUrl?: string } = {},
+    ) => {
       writingRef.current = true;
       setDialogOpen(false); // hide any read modal the background scan opened
       try {
-        await rawWriteTag(payload, productUrl);
+        await rawWriteTag(payload, opts);
       } finally {
         // Cover the main process's ~2s post-write read-back so it refreshes
         // the pill without re-popping the read modal.

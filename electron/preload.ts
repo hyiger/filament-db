@@ -70,7 +70,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   // NFC
   nfcGetStatus: () => ipcRenderer.invoke("nfc-get-status"),
   nfcReadTag: () => ipcRenderer.invoke("nfc-read-tag"),
-  nfcWriteTag: (payload: number[], productUrl?: string) => ipcRenderer.invoke("nfc-write-tag", payload, productUrl),
+  // OpenTag3D write: probe the loaded chip + format.
+  nfcDetectTag: () => ipcRenderer.invoke("nfc-detect-tag"),
+  // OpenTag3D write: `standard` selects the wrapping/transport (defaults to
+  // openprinttag for back-compat); productUrl rides on the SLIX2/OPT path only.
+  nfcWriteTag: (payload: number[], standard?: "openprinttag" | "opentag3d", productUrl?: string) =>
+    ipcRenderer.invoke("nfc-write-tag", payload, standard, productUrl),
   nfcFormatTag: () => ipcRenderer.invoke("nfc-format-tag"),
   nfcSetReadOnly: (readOnly: boolean) => ipcRenderer.invoke("nfc-set-readonly", readOnly),
   onNfcStatusChange: (callback: (status: NfcStatus) => void) => {
