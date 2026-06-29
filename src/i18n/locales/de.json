@@ -1547,6 +1547,8 @@
   "settings.nfcLoadedNtagForeign": "NTAG · Fremde NDEF-Daten (kein OpenTag3D)",
   "settings.nfcLoadedNtagBlank": "Leerer NTAG",
   "settings.nfcLoadedSlix2OpenPrintTag": "SLIX2 · OpenPrintTag",
+  "settings.nfcLoadedSlix2OpenTag3d": "SLIX2 · OpenTag3D",
+  "settings.nfcLoadedSlix2Foreign": "SLIX2 · Fremde NDEF-Daten (kein OpenPrintTag)",
   "settings.nfcLoadedSlix2Blank": "Leerer SLIX2",
   "settings.nfcLoadedUnknown": "Unbekannter Tag",
   "settings.dangerZone": "Gefahrenzone",

@@ -73,8 +73,12 @@ export default function DevicesSettingsPage() {
         : t("settings.nfcLoadedNtagBlank");
     }
     if (detected.family === "slix2") {
+      if (detected.standard === "openprinttag") return t("settings.nfcLoadedSlix2OpenPrintTag");
+      if (detected.standard === "opentag3d") return t("settings.nfcLoadedSlix2OpenTag3d");
+      // Codex P3 #927: a formatted-but-not-OpenPrintTag SLIX2 (foreign NDEF) is
+      // distinct from a blank one — don't label it "OpenPrintTag".
       return detected.formatted
-        ? t("settings.nfcLoadedSlix2OpenPrintTag")
+        ? t("settings.nfcLoadedSlix2Foreign")
         : t("settings.nfcLoadedSlix2Blank");
     }
     return t("settings.nfcLoadedUnknown");

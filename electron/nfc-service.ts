@@ -1666,16 +1666,40 @@ export class NfcService extends EventEmitter {
       return await this.withConnection(async (protocol) => {
         const block0 = await this.readBlock(protocol, 0);
         const ccMagic = block0[0];
-        if (ccMagic === 0xe1 || ccMagic === 0xe2) {
-          return {
-            family: "slix2" as const,
-            standard: "openprinttag" as const,
-            formatted: true,
-            readOnly: isCcByteReadOnly(block0[1]),
-            ndefCapacity: null, // SLIX2/OpenPrintTag payload is fixed-size; not needed
-          };
+        if (ccMagic !== 0xe1 && ccMagic !== 0xe2) {
+          // No NFC-Forum Type-5 CC — blank/unknown SLIX2.
+          return { family: "slix2" as const, standard: null, formatted: false, readOnly: false, ndefCapacity: null };
         }
-        return { family: "slix2" as const, standard: null, formatted: false, readOnly: false, ndefCapacity: null };
+        // Has a Type-5 CC — parse the actual NDEF records (Codex P3 #927) so a
+        // blank-after-erase SLIX2 (CC + terminator, no NDEF message) or a
+        // foreign/OpenTag3D record isn't mislabeled as OpenPrintTag from the CC
+        // byte alone. Mirrors the NTAG branch + setReadOnlyImpl's record check.
+        let standard: TagDetection["standard"] = null;
+        let formatted = false;
+        try {
+          const records = parseNdefRecords(await this.readNfcVImage(protocol), 0);
+          if (records.length > 0) {
+            formatted = true; // carries an NDEF message…
+            if (records.some((r) => r.tnf === 0x02 && r.type === OPENPRINTTAG_MIME)) {
+              standard = "openprinttag"; // …and it's ours
+            } else if (records.some((r) => r.tnf === 0x02 && r.type === OPENTAG3D_MIME)) {
+              standard = "opentag3d"; // OpenTag3D-on-SLIX2 (read-only support, #864)
+            }
+          }
+          // 0 records ⇒ empty/erased ⇒ blank (formatted:false, standard:null)
+        } catch {
+          // Read-back failed — fall back to the CC-only signal (it has a Type-5 CC,
+          // so treat as a formatted OpenPrintTag-class tag) rather than under-claiming.
+          formatted = true;
+          standard = "openprinttag";
+        }
+        return {
+          family: "slix2" as const,
+          standard,
+          formatted,
+          readOnly: isCcByteReadOnly(block0[1]),
+          ndefCapacity: null, // SLIX2 payload is fixed-size; not needed
+        };
       });
     } catch {
       return { family: "unknown", standard: null, formatted: false, readOnly: false, ndefCapacity: null };
