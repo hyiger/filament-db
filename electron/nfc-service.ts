@@ -1140,18 +1140,24 @@ export class NfcService extends EventEmitter {
       let needsFormat = false;
 
       if (ccMagic === 0xe1) {
-        // Formatted NTAG: trust its existing CC for the capacity AND honor the
-        // soft read-only nibble (CC byte 3). Erase is the escape hatch, not this.
+        // Formatted NTAG: honor the soft read-only nibble (CC byte 3). Erase is
+        // the escape hatch, not this.
         if (isType2CcReadOnly(head[NTAG_CC_OFFSET + 3])) {
           throw new Error(
             "TAG_READ_ONLY: This tag is marked read-only. Erase it, or make it writable in Settings, before writing.",
           );
         }
-        // Codex #927: clamp a possibly-corrupt/foreign CC size to the largest
-        // real NTAG so the capacity check (and any derived extent) can't be
-        // inflated. The TLV write extent below is bounded by the payload size
-        // regardless, and writeNtagPage refuses pages outside [3,255].
-        ndefBytes = Math.min(Math.max(0, head[NTAG_CC_OFFSET + 2] * 8), NTAG_MAX_NDEF_WRITE_BYTES);
+        // Codex #927 (P1): bound the write capacity by the AUTHORITATIVE chip
+        // size, not the (possibly corrupt/inflated) CC. A formatted NTAG213 whose
+        // CC lies that it's a 215/216 would otherwise let an Extended TLV write
+        // past the 213 user area into its lock/config pages — and the [3,255]
+        // page guard can't catch that (config sits inside that page range on a
+        // small chip). Prefer GET_VERSION; take the SMALLER of it and the CC. When
+        // GET_VERSION is unavailable, trust the CC clamped to the largest real
+        // NTAG (the common formatted-tag case — its CC is correct).
+        const ccBytes = Math.min(Math.max(0, head[NTAG_CC_OFFSET + 2] * 8), NTAG_MAX_NDEF_WRITE_BYTES);
+        const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
+        ndefBytes = verSize != null ? Math.min(ccBytes, verSize) : ccBytes;
       } else {
         // Blank/unformatted NTAG (CC magic 0x00, or any non-0xE1): no CC tells us
         // the chip size. GET_VERSION it; refuse rather than guess (locked
@@ -1562,12 +1568,18 @@ export class NfcService extends EventEmitter {
     if (head) {
       const ccMagic = head[NTAG_CC_OFFSET];
       if (ccMagic === 0xe1) {
+        // Codex #927 (P1): report the AUTHORITATIVE capacity so the renderer's
+        // Core-vs-Extended choice matches the write's bound — prefer GET_VERSION,
+        // take the smaller of it and the CC (catches an inflated/corrupt CC on a
+        // smaller chip). Falls back to the CC when GET_VERSION is unavailable.
+        const ccBytes = Math.min(Math.max(0, head[NTAG_CC_OFFSET + 2] * 8), NTAG_MAX_NDEF_WRITE_BYTES);
+        const verSize = await this.withConnection((p) => this.getNtagNdefBytesViaGetVersion(p));
         return {
           family: "ntag",
           standard: "opentag3d",
           formatted: true,
           readOnly: isType2CcReadOnly(head[NTAG_CC_OFFSET + 3]),
-          ndefCapacity: Math.max(0, head[NTAG_CC_OFFSET + 2] * 8), // CC size
+          ndefCapacity: verSize != null ? Math.min(ccBytes, verSize) : ccBytes,
         };
       }
       // Readable as Type 2 but no NDEF CC (blank / non-NDEF) — a blank NTAG.
