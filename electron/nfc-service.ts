@@ -1234,20 +1234,19 @@ export class NfcService extends EventEmitter {
         });
       }
 
-      // Verify: re-read from page 4 and decode through the registry. For a
-      // just-formatted blank tag the detection `head` still carries the stale
-      // pre-format CC at byte 12 — patch in the freshly-written CC so
-      // assembleNtagImage sizes correctly and the verify parse sees a valid CC.
-      const verifyHead = Buffer.from(head);
-      if (ccMagic !== 0xe1) {
-        Buffer.from(buildType2Cc(ndefBytes)).copy(verifyHead, NTAG_CC_OFFSET);
-      }
-      const { data: image, written } = await this.assembleNtagImage(protocol, verifyHead);
+    }, { resetAfter: true });
+
+    // Verify in a FRESH connection (Codex #927 P1). The resetAfter above means
+    // this connect RE-ACTIVATES the card, so the read-back can't return the
+    // ACR1552U's stale pre-write READ BINARY buffer and falsely fail a write that
+    // actually landed. Reading page 0–3 fresh also picks up the just-written CC
+    // (no need to patch a stale detection head). A mismatch here is therefore a
+    // REAL failure. (The per-page FF D6 SW=9000 already confirmed each write; this
+    // byte-exact check guards against a valid-but-WRONG read-back.)
+    await this.withConnection(async (protocol) => {
+      const vhead = await this.readNtagBurst(protocol, 0);
+      const { data: image, written } = await this.assembleNtagImage(protocol, vhead);
       const records = parseNdefRecords(image.subarray(0, written), NTAG_CC_OFFSET);
-      // Compare the read-back OpenTag3D record payload byte-for-byte to what we
-      // wrote (Codex #927) — a programming/read-back glitch could still decode as
-      // a valid-but-WRONG OpenTag3D image (different material/serial/weight), so
-      // "decodes as opentag3d" alone isn't proof the write landed correctly.
       const rec = records.find((r) => r.tnf === 0x02 && r.type === OPENTAG3D_MIME);
       if (!rec) {
         throw new Error("OpenTag3D verification read failed — the tag did not read back as OpenTag3D.");
