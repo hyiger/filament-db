@@ -583,6 +583,15 @@ async function runFetchWithRetries(): Promise<OPTDatabase> {
 // only once. Worst case: MAX_ATTEMPTS × DOWNLOAD_TIMEOUT_MS + backoff(3.2s) +
 // EXTRACT_TIMEOUT_MS = 3×45 + 3.2 + 120 ≈ 258s, comfortably under the client's
 // 300s (5 min) abort.
+//
+// Strictly: EXTRACT_TIMEOUT_MS bounds the gunzip→counter→tar.x PIPELINE only.
+// `clearTimeout(extractTimer)` fires right after the pipeline resolves, so the
+// YAML parse loop that follows has NO deadline. That's fine in practice —
+// parse is CPU-bound, yields to the event loop every 256 files, and runs once
+// per cold load — but a pathologically slow parse can still eat into the ~42s
+// margin between the 258s server window and the 300s client abort. If parse
+// ever takes long enough to matter, give it its own per-file or whole-loop
+// budget rather than widening EXTRACT_TIMEOUT_MS, which only governs unpack.
 const MAX_ATTEMPTS = 3;
 const DOWNLOAD_TIMEOUT_MS = 45_000;
 const EXTRACT_TIMEOUT_MS = 120_000;
@@ -591,6 +600,12 @@ const EXTRACT_TIMEOUT_MS = 120_000;
 // tarball is ~3 MB; 128 MB is generous headroom. (The decompressed-size /
 // file-count tar-bomb guard still runs during extraction below.)
 const MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024;
+// Cap the DECOMPRESSED stream during extract. A counting Transform between
+// gunzip and tar.x trips this against bytes actually streamed (not the lyable
+// header `size`). Injectable into extractAndParse so the trip can be unit-
+// tested without allocating 256 MB; production uses the default.
+const MAX_TARBALL_EXTRACT_BYTES = 256 * 1024 * 1024;
+const MAX_TARBALL_FILES = 50_000;
 
 /**
  * Retry the network download (exponential backoff) and return the compressed
@@ -730,9 +745,10 @@ async function extractParseOnce(tarballBuffer: Buffer): Promise<OPTDatabase> {
   }
 }
 
-async function extractAndParse(
+export async function extractAndParse(
   tarballBuffer: Buffer,
   tmpDir: string,
+  opts?: { maxExtractBytes?: number },
 ): Promise<OPTDatabase> {
   try {
     // GH #258: bound the extraction so a hostile/compromised tarball (tar
@@ -748,9 +764,11 @@ async function extractAndParse(
     // EXTRACT_TIMEOUT_MS budget. Aborting the pipeline rejects with an
     // AbortError, which relabelTimeoutError recognises so the surfaced message
     // names the extract phase honestly.
+    //
+    // `maxExtractBytes` is injectable so the decompressed-size trip can be
+    // unit-tested with a tiny cap — production uses MAX_TARBALL_EXTRACT_BYTES.
+    const maxExtractBytes = opts?.maxExtractBytes ?? MAX_TARBALL_EXTRACT_BYTES;
     const extractStart = Date.now();
-    const MAX_TARBALL_EXTRACT_BYTES = 256 * 1024 * 1024;
-    const MAX_TARBALL_FILES = 50_000;
     let decompressedBytes = 0;
     let fileCount = 0;
     const extractController = new AbortController();
@@ -761,7 +779,7 @@ async function extractAndParse(
     const byteCounter = new Transform({
       transform(chunk: Buffer, _enc, cb) {
         decompressedBytes += chunk.length;
-        if (decompressedBytes > MAX_TARBALL_EXTRACT_BYTES) {
+        if (decompressedBytes > maxExtractBytes) {
           cb(
             new Error(
               "OpenPrintTag tarball exceeds extraction limits (possible tar bomb).",

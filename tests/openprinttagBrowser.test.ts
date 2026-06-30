@@ -13,6 +13,7 @@ import {
   mkdtempSync,
   rmSync,
   writeFileSync,
+  readFileSync,
   createReadStream,
   readdirSync,
   utimesSync,
@@ -35,6 +36,7 @@ import {
   downloadTarballToBuffer,
   isTimeoutAbort,
   relabelTimeoutError,
+  extractAndParse,
 } from "@/lib/openprinttagBrowser";
 import { EnvHttpProxyAgent } from "undici";
 
@@ -1170,5 +1172,62 @@ describe("relabelTimeoutError", () => {
 
   it("returns null for a non-timeout error (caller rethrows the original)", () => {
     expect(relabelTimeoutError(new Error("tar bomb"), "extract")).toBeNull();
+  });
+});
+
+describe("extractAndParse maxExtractBytes cap", () => {
+  // Parity test for PR #933 review follow-up: downloadTarballToBuffer({maxBytes})
+  // is exported + tested for the compressed download cap. The symmetric guard
+  // on the DECOMPRESSED stream (the counting Transform between gunzip and
+  // tar.x) needs the same coverage so a future refactor can't silently drop
+  // the bound. The cap is injectable so we can trip it without allocating
+  // 256 MB of zeros.
+  let tarballsToCleanup: string[] = [];
+  let extractTmpDir = "";
+
+  beforeEach(() => {
+    clearCache();
+    tarballsToCleanup = [];
+    extractTmpDir = mkdtempSync(join(tmpdir(), "opt-test-extract-"));
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const p of tarballsToCleanup) {
+      try { rmSync(p, { force: true }); } catch { /* swallow */ }
+    }
+    try { rmSync(extractTmpDir, { recursive: true, force: true }); } catch { /* swallow */ }
+  });
+
+  it("rejects a tarball whose decompressed bytes exceed the injected cap (tar-bomb guard)", async () => {
+    // A normal-looking tarball with a few hundred bytes of decompressed
+    // content. Setting maxExtractBytes well below that total trips the
+    // counting Transform mid-stream; the pipeline tears down and the error
+    // surfaces with the tar-bomb wording.
+    const tarballPath = buildTarball({
+      "OpenPrintTag-bomb/data/brands/.gitkeep": "",
+      // ~500 bytes of payload — comfortably over the 100-byte cap below.
+      "OpenPrintTag-bomb/data/materials/big.yaml":
+        "x".repeat(500),
+    });
+    tarballsToCleanup.push(tarballPath);
+    const buf = readFileSync(tarballPath);
+
+    await expect(
+      extractAndParse(buf, extractTmpDir, { maxExtractBytes: 100 }),
+    ).rejects.toThrow(/exceeds extraction limits/);
+  });
+
+  it("accepts a tarball whose decompressed bytes stay under the injected cap", async () => {
+    const tarballPath = buildTarball({
+      "OpenPrintTag-ok/data/brands/.gitkeep": "",
+      "OpenPrintTag-ok/data/materials/m.yaml":
+        "uuid: m\nslug: m\nbrand:\n  slug: x\nname: M\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+    const buf = readFileSync(tarballPath);
+
+    // Generous cap — the tiny test tarball decompresses to well under 10 KB.
+    const db = await extractAndParse(buf, extractTmpDir, { maxExtractBytes: 10 * 1024 });
+    expect(db.totalFFF).toBe(1);
   });
 });

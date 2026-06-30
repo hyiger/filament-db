@@ -417,12 +417,15 @@ export default function OpenPrintTagBrowser() {
       // hangs" cause — a synchronous parse blocking the event loop — is fixed
       // server-side). This MUST exceed the server's worst-case window so it
       // never pre-empts the legitimate slow paths: the server retries only the
-      // GitHub download (3×45s + ~3.2s backoff ≈ 138s), then extracts/parses
-      // ONCE (≤120s), then serves a stale cached DB (GH #225) — a cached user
-      // on a flaky network must still get that stale data, not a premature
-      // timeout (PR #933 review). 300s (5 min) clears the ~258s server window
-      // with margin; the single-flight means a retry after a timeout joins the
-      // in-progress load rather than duplicating it.
+      // GitHub download (3×45s + ~3.2s backoff ≈ 138s), then extracts ONCE
+      // under a 120s pipeline deadline (the YAML parse loop that follows is
+      // unbounded — CPU-bound, yields every 256 files, runs once per cold
+      // load), then serves a stale cached DB (GH #225) — a cached user on a
+      // flaky network must still get that stale data, not a premature timeout
+      // (PR #933 review). 300s (5 min) clears the ~258s server window with
+      // ~42s of margin for the unbounded parse; the single-flight means a
+      // retry after a timeout joins the in-progress load rather than
+      // duplicating it.
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 300_000);
       try {
