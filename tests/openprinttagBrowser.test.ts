@@ -31,12 +31,14 @@ import {
   parseMaterialYaml,
   mapToFilamentPayload,
   fetchOpenPrintTagDatabase,
+  fetchUpstreamCommitSha,
   getProxyDispatcher,
   clearCache,
   downloadTarballToBuffer,
   isTimeoutAbort,
   relabelTimeoutError,
   extractAndParse,
+  shasMatch,
 } from "@/lib/openprinttagBrowser";
 import { EnvHttpProxyAgent } from "undici";
 
@@ -1229,5 +1231,300 @@ describe("extractAndParse maxExtractBytes cap", () => {
     // Generous cap — the tiny test tarball decompresses to well under 10 KB.
     const db = await extractAndParse(buf, extractTmpDir, { maxExtractBytes: 10 * 1024 });
     expect(db.totalFFF).toBe(1);
+  });
+});
+
+// ── #931: SHA-aware refresh ────────────────────────────────────────────
+
+describe("shasMatch", () => {
+  it("matches identical full SHAs", () => {
+    expect(shasMatch("abc1234def5678", "abc1234def5678")).toBe(true);
+  });
+
+  it("matches abbreviated against full (cached short, upstream long)", () => {
+    // The tarball-directory SHA is typically 7 chars; the commits API
+    // returns the full 40-char SHA. The compare must succeed.
+    expect(
+      shasMatch(
+        "abc1234567890abcdef1234567890abcdef123456",
+        "abc1234",
+      ),
+    ).toBe(true);
+  });
+
+  it("is case-insensitive (GitHub returns lowercase, tar may capitalise)", () => {
+    expect(shasMatch("ABC1234", "abc1234")).toBe(true);
+  });
+
+  it("returns false on a real mismatch", () => {
+    expect(shasMatch("abc1234", "xyz9999")).toBe(false);
+  });
+
+  it("returns false for empty inputs", () => {
+    expect(shasMatch("", "abc1234")).toBe(false);
+    expect(shasMatch("abc1234", "")).toBe(false);
+  });
+
+  it("rejects a degenerately short common prefix", () => {
+    // A 2-char overlap shouldn't count as a match.
+    expect(shasMatch("ab", "abcdef1234")).toBe(false);
+  });
+});
+
+describe("fetchUpstreamCommitSha", () => {
+  beforeEach(() => {
+    clearCache();
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("returns the SHA from the commits API on success", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      return new Response(
+        JSON.stringify({
+          sha: "deadbeefcafef00d1234567890abcdef12345678",
+          commit: { committer: { date: "2026-06-01T00:00:00Z" } },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    const sha = await fetchUpstreamCommitSha();
+    expect(sha).toBe("deadbeefcafef00d1234567890abcdef12345678");
+  });
+
+  it("returns null on a non-2xx response (fail-open)", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("rate limited", { status: 403 }),
+    );
+    expect(await fetchUpstreamCommitSha()).toBeNull();
+  });
+
+  it("returns null on network failure (fail-open)", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("ENOTFOUND"));
+    expect(await fetchUpstreamCommitSha()).toBeNull();
+  });
+
+  it("returns null when the response has no sha field", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ commit: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(await fetchUpstreamCommitSha()).toBeNull();
+  });
+});
+
+/**
+ * #931 — end-to-end coverage for the SHA-aware refresh path.
+ *
+ * Setup model: `fetch` is mocked to discriminate on URL. The first call
+ * populates the cache with a tarball whose directory name carries SHA "aaa…".
+ * Subsequent `{force:true}` calls hit the commits API first; the test sets
+ * the mock to return either the same SHA (slide-TTL path), a different SHA
+ * (tarball refetch path), or 503 (fail-open → tarball refetch).
+ */
+describe("SHA-aware refresh (#931)", () => {
+  let tarballsToCleanup: string[] = [];
+
+  // The fetch shim needs the same isolated TMPDIR trick the parent suite uses,
+  // because populating the cache requires running a full tarball extract.
+  const savedTmpEnv: Record<string, string | undefined> = {};
+  let isolatedTmpRoot = "";
+  beforeAll(() => {
+    for (const k of ["TMPDIR", "TMP", "TEMP"]) savedTmpEnv[k] = process.env[k];
+    isolatedTmpRoot = mkdtempSync(join(tmpdir(), "opt-test-sha-root-"));
+    process.env.TMPDIR = isolatedTmpRoot;
+    process.env.TMP = isolatedTmpRoot;
+    process.env.TEMP = isolatedTmpRoot;
+  });
+  afterAll(() => {
+    for (const k of ["TMPDIR", "TMP", "TEMP"]) {
+      if (savedTmpEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedTmpEnv[k];
+    }
+    try {
+      rmSync(isolatedTmpRoot, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  });
+
+  beforeEach(() => {
+    clearCache();
+    tarballsToCleanup = [];
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    for (const p of tarballsToCleanup) {
+      try { rmSync(p, { force: true }); } catch { /* swallow */ }
+    }
+  });
+
+  // Build a tarball whose extracted-root directory name embeds a particular
+  // SHA. The extract path keys off the directory name suffix, so this is the
+  // only way to seed a known cached SHA without poking at module internals.
+  function tarballWithSha(sha: string): string {
+    const tarballPath = buildTarball({
+      [`OpenPrintTag-openprinttag-database-${sha}/data/brands/x.yaml`]:
+        "slug: x\nname: X\n",
+      [`OpenPrintTag-openprinttag-database-${sha}/data/materials/x/m.yaml`]:
+        "uuid: m\nslug: m\nbrand:\n  slug: x\nname: M\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+    return tarballPath;
+  }
+
+  /**
+   * Install a `fetch` mock that returns:
+   *  - the commits-API response when the URL matches the commits endpoint
+   *  - a streamed tarball otherwise
+   *
+   * Each commits-API response can be a SHA string (200/JSON), a status code
+   * (4xx/5xx with empty body), or a thrown error to simulate network failure.
+   * We also count calls per-bucket so the assertions can pin "tarball was/
+   * wasn't re-downloaded".
+   */
+  function installMock(opts: {
+    commitsResponses: Array<string | number | "throw">;
+    tarballPath: string;
+  }): { commitsCalls: () => number; tarballCalls: () => number } {
+    let commitsIdx = 0;
+    let commitsCalls = 0;
+    let tarballCalls = 0;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/commits/main")) {
+        commitsCalls += 1;
+        const next = opts.commitsResponses[commitsIdx++];
+        if (next === "throw") throw new Error("ENOTFOUND");
+        if (typeof next === "number") {
+          return new Response("err", { status: next });
+        }
+        return new Response(
+          JSON.stringify({ sha: next, commit: { committer: { date: "" } } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      // Otherwise: stream the tarball.
+      tarballCalls += 1;
+      const nodeStream = createReadStream(opts.tarballPath);
+      const webStream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          nodeStream.on("data", (chunk: Buffer | string) => {
+            controller.enqueue(
+              typeof chunk === "string"
+                ? new TextEncoder().encode(chunk)
+                : new Uint8Array(chunk),
+            );
+          });
+          nodeStream.on("end", () => controller.close());
+          nodeStream.on("error", (err) => controller.error(err));
+        },
+        cancel() {
+          nodeStream.destroy();
+        },
+      });
+      return new Response(webStream, {
+        status: 200,
+        headers: { "content-type": "application/x-gzip" },
+      });
+    });
+    return {
+      commitsCalls: () => commitsCalls,
+      tarballCalls: () => tarballCalls,
+    };
+  }
+
+  it("same SHA: probes commits API, serves cached, does NOT re-fetch tarball", async () => {
+    const SHA = "abcdef0123456789abcdef0123456789abcdef01";
+    const tarballPath = tarballWithSha(SHA);
+
+    // First call: seed the cache with a tarball whose dir-name SHA matches.
+    const counters = installMock({
+      commitsResponses: [SHA], // for the SECOND call's probe
+      tarballPath,
+    });
+    const first = await fetchOpenPrintTagDatabase();
+    expect(first.totalFFF).toBe(1);
+    expect(first.sha).toBe(SHA); // extracted from the tarball dir name
+    expect(counters.tarballCalls()).toBe(1);
+    expect(counters.commitsCalls()).toBe(0);
+
+    // Second call with force=true: must hit commits API, see same SHA, and
+    // serve cached data without re-downloading the tarball.
+    const second = await fetchOpenPrintTagDatabase({ force: true });
+    expect(counters.commitsCalls()).toBe(1);
+    expect(counters.tarballCalls()).toBe(1); // unchanged from the first call
+    expect(second.totalFFF).toBe(1);
+    expect(second.sha).toBe(SHA);
+    // shaCheckedAt advances on the probe even though the data didn't.
+    expect(second.shaCheckedAt).not.toBe(first.shaCheckedAt);
+  });
+
+  it("changed SHA: probes commits API, then re-fetches tarball", async () => {
+    const SHA_OLD = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SHA_NEW = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    // Seed with the OLD tarball.
+    let counters = installMock({
+      commitsResponses: [],
+      tarballPath: tarballWithSha(SHA_OLD),
+    });
+    const first = await fetchOpenPrintTagDatabase();
+    expect(first.sha).toBe(SHA_OLD);
+    expect(counters.tarballCalls()).toBe(1);
+    vi.restoreAllMocks();
+
+    // Now: commits API reports the NEW SHA, tarball stream serves the NEW
+    // tarball. The library must probe THEN re-fetch.
+    counters = installMock({
+      commitsResponses: [SHA_NEW],
+      tarballPath: tarballWithSha(SHA_NEW),
+    });
+    const second = await fetchOpenPrintTagDatabase({ force: true });
+    expect(counters.commitsCalls()).toBe(1);
+    expect(counters.tarballCalls()).toBe(1); // the NEW tarball was fetched
+    expect(second.sha).toBe(SHA_NEW);
+  });
+
+  it("commits-API failure: falls through to tarball (fail-open)", async () => {
+    const SHA = "cccccccccccccccccccccccccccccccccccccccc";
+    // Seed.
+    let counters = installMock({
+      commitsResponses: [],
+      tarballPath: tarballWithSha(SHA),
+    });
+    await fetchOpenPrintTagDatabase();
+    expect(counters.tarballCalls()).toBe(1);
+    vi.restoreAllMocks();
+
+    // Refresh: commits API returns 503 — must NOT wedge the refresh.
+    counters = installMock({
+      commitsResponses: [503],
+      tarballPath: tarballWithSha(SHA),
+    });
+    const refreshed = await fetchOpenPrintTagDatabase({ force: true });
+    expect(counters.commitsCalls()).toBe(1);
+    // Tarball WAS re-fetched (the fail-open fallback path).
+    expect(counters.tarballCalls()).toBe(1);
+    expect(refreshed.totalFFF).toBe(1);
+  });
+
+  it("cold start: no cache means no commits probe — straight to tarball", async () => {
+    const SHA = "1111111111111111111111111111111111111111";
+    const counters = installMock({
+      commitsResponses: [],
+      tarballPath: tarballWithSha(SHA),
+    });
+    // Force=true on a clean cache. There's nothing to compare against, so
+    // the SHA probe must NOT run (it has no baseline) and we go directly to
+    // the tarball download.
+    const db = await fetchOpenPrintTagDatabase({ force: true });
+    expect(counters.commitsCalls()).toBe(0);
+    expect(counters.tarballCalls()).toBe(1);
+    expect(db.totalFFF).toBe(1);
+    expect(db.sha).toBe(SHA);
   });
 });

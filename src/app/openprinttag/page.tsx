@@ -60,6 +60,13 @@ interface OPTDatabase {
   cachedAt: string;
   totalFFF: number;
   totalSLA: number;
+  /** #931: upstream commit SHA the cached data was parsed from (or last
+   *  confirmed unchanged via the commits-API probe). May be absent on a
+   *  very old cache entry. */
+  sha?: string;
+  /** #931: ISO timestamp of the most recent SHA probe — set to "now" on a
+   *  successful tarball parse OR a TTL-slide commits probe. */
+  shaCheckedAt?: string;
 }
 
 type SortKey = "completeness" | "name" | "type" | "brand";
@@ -383,6 +390,31 @@ function MaterialRow({
   );
 }
 
+// ── Relative-time formatter ────────────────────────────────────────────
+
+/**
+ * Mirrors the pattern in `SyncStatusIndicator` — uses the existing
+ * `sync.time.*` translation keys (justNow / minutesAgo / hoursAgo / daysAgo)
+ * so the OPT browser's "checked Nm ago" line speaks the same language as the
+ * rest of the app without duplicating translations. Returns null on a bad
+ * timestamp so the caller can omit the suffix gracefully.
+ */
+function formatRelativeTime(
+  iso: string | undefined,
+  t: (key: string, params?: Record<string, string | number>) => string,
+): string | null {
+  if (!iso) return null;
+  const parsed = new Date(iso).getTime();
+  if (!Number.isFinite(parsed)) return null;
+  const diff = Date.now() - parsed;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return t("sync.time.justNow");
+  if (mins < 60) return t("sync.time.minutesAgo", { count: mins });
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return t("sync.time.hoursAgo", { count: hours });
+  return t("sync.time.daysAgo", { count: Math.floor(hours / 24) });
+}
+
 // ── Main page ──────────────────────────────────────────────────────────
 
 export default function OpenPrintTagBrowser() {
@@ -693,6 +725,26 @@ export default function OpenPrintTagBrowser() {
                   <span className="ml-2 text-gray-400">•</span>
                   <span className="ml-2">{t("openprinttag.slaFiltered", { slaCount: db.totalSLA.toLocaleString() })}</span>
                 </p>
+                {/* #931: surface the upstream-commit provenance — the SHA the
+                    cached data was parsed from + when we last confirmed it
+                    was current. Gated on `db.sha` so a pre-#931 cache
+                    snapshot still renders the page without an empty
+                    "commit · " label. */}
+                {db.sha && (
+                  <p className="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
+                    {t("openprinttag.lastRefreshedFromCommit", {
+                      sha: db.sha.slice(0, 7),
+                    })}
+                    {formatRelativeTime(db.shaCheckedAt, t) && (
+                      <>
+                        <span className="mx-1.5">·</span>
+                        {t("openprinttag.checkedAgo", {
+                          when: formatRelativeTime(db.shaCheckedAt, t)!,
+                        })}
+                      </>
+                    )}
+                  </p>
+                )}
               </div>
             </div>
 

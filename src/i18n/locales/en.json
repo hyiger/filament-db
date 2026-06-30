@@ -747,6 +747,8 @@
   "openprinttag.importFailedNetwork": "Import failed: network error",
   "openprinttag.unknown": "Unknown",
   "openprinttag.completenessTitle": "{score}/10 data completeness",
+  "openprinttag.lastRefreshedFromCommit": "Last refreshed from commit {sha}",
+  "openprinttag.checkedAgo": "checked {when}",
   "openprinttag.tierRich": "Rich",
   "openprinttag.tierPartial": "Partial",
   "openprinttag.tierStub": "Stub",

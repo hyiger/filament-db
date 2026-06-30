@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { fetchOpenPrintTagDatabase, clearCache } from "@/lib/openprinttagBrowser";
+import { fetchOpenPrintTagDatabase } from "@/lib/openprinttagBrowser";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
@@ -28,18 +28,24 @@ export async function GET() {
 /**
  * POST /api/openprinttag
  *
- * Clear the OpenPrintTag cache and force a fresh fetch from GitHub.
- * Previously this was triggered via `GET ?refresh=true`, which is a
- * GET-with-side-effect (cache mutation) — cross-origin link can thrash
- * the cache, and the verb misleads HTTP intermediaries that assume GET
- * is idempotent. Same-origin-only POST is the right shape (GH #427).
+ * Force-refresh the OpenPrintTag cache. Previously this was triggered via
+ * `GET ?refresh=true`, which is a GET-with-side-effect (cache mutation) —
+ * cross-origin link can thrash the cache, and the verb misleads HTTP
+ * intermediaries that assume GET is idempotent. Same-origin-only POST is the
+ * right shape (GH #427).
+ *
+ * #931: this no longer clears the cache up-front. Instead it asks the library
+ * to short-circuit the TTL check and run the SHA-aware probe — if upstream's
+ * commit hasn't changed since the last parse, we serve cached data and just
+ * slide the TTL window forward, skipping the ~3 MB tarball download +
+ * ~11k-file extract. Only a moved SHA (or a never-cached fresh install or a
+ * probe failure) takes the full tarball path.
  */
 export async function POST(request: NextRequest) {
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
   try {
-    clearCache();
-    const db = await fetchOpenPrintTagDatabase();
+    const db = await fetchOpenPrintTagDatabase({ force: true });
     return NextResponse.json(db);
   } catch (err) {
     console.error("OpenPrintTag refresh error:", err);

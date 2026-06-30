@@ -747,6 +747,8 @@
   "openprinttag.importFailedNetwork": "Import fehlgeschlagen: Netzwerkfehler",
   "openprinttag.unknown": "Unbekannt",
   "openprinttag.completenessTitle": "{score}/10 Datenvollständigkeit",
+  "openprinttag.lastRefreshedFromCommit": "Zuletzt aktualisiert aus Commit {sha}",
+  "openprinttag.checkedAgo": "geprüft {when}",
   "openprinttag.tierRich": "Umfangreich",
   "openprinttag.tierPartial": "Teilweise",
   "openprinttag.tierStub": "Minimal",
