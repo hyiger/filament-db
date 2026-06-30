@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 import { niceAxisScale } from "@/lib/chartScale";
 import { formatGrams } from "@/lib/formatWeight";
+import { formatDate } from "@/lib/dateFormat";
 
 interface DayFilamentSegment {
   id: string;
@@ -38,7 +39,7 @@ const DETAILED_STORAGE_KEY = "filamentdb-analytics-usage-detailed";
 const LEGEND_TOP_N = 10;
 
 export default function AnalyticsPage() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const { format: formatCurrency } = useCurrency();
   const [days, setDays] = useState<number>(30);
   const [data, setData] = useState<AnalyticsData | null>(null);
@@ -49,29 +50,36 @@ export default function AnalyticsPage() {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   // GH #934: opt-in stacked-by-filament render mode for the Usage-by-day
-  // chart. Lazy initialiser reads localStorage so the user's preference
-  // survives a reload; default is off so existing behaviour is unchanged
-  // for users who haven't opted in.
-  const [detailed, setDetailed] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
+  // chart. Initialised with the default so the SSR HTML and first client
+  // paint match; the stored preference loads in a post-mount effect (the
+  // same pattern as `src/app/inventory/page.tsx:186`). `detailedLoaded`
+  // gates the persist effect so it can't clobber storage with the default
+  // before the load runs.
+  const [detailed, setDetailed] = useState<boolean>(false);
+  const detailedLoaded = useRef(false);
+
+  useEffect(() => {
     try {
-      return window.localStorage.getItem(DETAILED_STORAGE_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
-  const toggleDetailed = () => {
-    setDetailed((prev) => {
-      const next = !prev;
-      try {
-        window.localStorage.setItem(DETAILED_STORAGE_KEY, next ? "1" : "0");
-      } catch {
-        // localStorage may be unavailable (Safari private mode); the
-        // toggle still works in-session, just doesn't persist.
+      if (window.localStorage.getItem(DETAILED_STORAGE_KEY) === "1") {
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- persisted pref
+        setDetailed(true);
       }
-      return next;
-    });
-  };
+    } catch {
+      /* localStorage may be unavailable (Safari private mode). */
+    }
+    detailedLoaded.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!detailedLoaded.current) return;
+    try {
+      window.localStorage.setItem(DETAILED_STORAGE_KEY, detailed ? "1" : "0");
+    } catch {
+      /* ignore quota / disabled storage */
+    }
+  }, [detailed]);
+
+  const toggleDetailed = () => setDetailed((prev) => !prev);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -311,12 +319,25 @@ export default function AnalyticsPage() {
                     <div className="absolute inset-0 flex items-end gap-0.5">
                       {data.usageByDay.map((d) => {
                         const pct = dayScale.max > 0 ? (d.grams / dayScale.max) * 100 : 0;
-                        const dayLabel = `${d.date}: ${formatGrams(d.grams)} g`;
+                        // GH #934 / Codex P3: route the YYYY-MM-DD prefix
+                        // through formatDate so German users get a locale
+                        // appropriate format; the separator + suffix come
+                        // from the i18n catalog.
+                        const dayDate = formatDate(
+                          new Date(`${d.date}T00:00Z`),
+                          locale,
+                        );
+                        const dayLabel = `${dayDate}: ${formatGrams(d.grams)} g`;
                         // GH #934: in Detailed mode, render the bar as a
                         // vertical stack of segments — one per filament,
                         // height proportional to its share of the day,
-                        // colored by the filament's hex. Each segment
-                        // carries its own title for the native tooltip.
+                        // colored by the filament's hex. The wrapper
+                        // carries the per-day aria-label; segments are
+                        // decorative — no `role` / no `tabIndex` so the
+                        // chart doesn't blow out keyboard navigation.
+                        // Each segment carries a 1px border (Codex P2)
+                        // so pure-white/black/gray-fallback hexes survive
+                        // every theme combination.
                         if (detailed && d.grams > 0 && d.byFilament.length > 0) {
                           return (
                             <div
@@ -336,12 +357,15 @@ export default function AnalyticsPage() {
                                     "analytics.usageByDay.tooltipFormat",
                                     { name: seg.name, grams: formatGrams(seg.grams) },
                                   );
+                                  const segTooltip = t(
+                                    "analytics.usageByDay.segmentTooltipFormat",
+                                    { date: dayDate, label: segLabel },
+                                  );
                                   return (
                                     <div
                                       key={seg.id}
-                                      title={`${d.date} — ${segLabel}`}
-                                      aria-label={`${d.date} — ${segLabel}`}
-                                      tabIndex={0}
+                                      title={segTooltip}
+                                      className="border border-gray-300 dark:border-gray-700"
                                       style={{
                                         height: `${segPct}%`,
                                         backgroundColor: seg.color,

@@ -353,6 +353,7 @@
   "analytics.usageByDay.detailed": "Detailliert",
   "analytics.usageByDay.detailed.tooltip": "Jeden Balken nach Filament aufschlüsseln",
   "analytics.usageByDay.tooltipFormat": "{name}: {grams} g",
+  "analytics.usageByDay.segmentTooltipFormat": "{date} — {label}",
   "analytics.usageByDay.moreCount": "+{count} weitere",
   "analytics.topFilaments": "Top-Filamente",
   "analytics.byVendor": "Nach Hersteller",

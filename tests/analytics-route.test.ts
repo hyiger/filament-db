@@ -287,4 +287,176 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
     expect(day.byFilament).toHaveLength(1);
     expect(day.byFilament[0].color).toBe("#112233");
   });
+
+  /**
+   * PrintHistory loop coverage. The four tests above all seed via
+   * `spools[].usageHistory` (`source: "manual"`), exercising only the
+   * second loop in `route.ts`. The first loop reads its color from the
+   * `.populate("usage.filamentId", "name vendor cost parentId color secondaryColors")`
+   * select string — trimming that select would silently regress every
+   * PrintHistory-driven segment to the `"#808080"` sentinel. This test
+   * pins the populate-select shape against both inheritance and
+   * coextruded fallback (Codex P2 on PR #936).
+   */
+  it("PrintHistory loop: variant inherits parent color + coextruded falls back to secondaryColors[0]", async () => {
+    // The PrintHistory route uses
+    // `.populate("usage.filamentId", "name vendor cost parentId color secondaryColors")`,
+    // which resolves the "Filament" model by name. The shared `beforeEach`
+    // above deletes models then re-imports — but the cached module's
+    // first-import side-effect already ran, so the registry can end up
+    // empty at populate time. Mirror the (working) pattern in
+    // `tests/variant-inheritance-routes.test.ts:30` and re-register the
+    // schemas if absent.
+    const filMod = await import("@/models/Filament");
+    const phMod = await import("@/models/PrintHistory");
+    if (!mongoose.models.Filament) {
+      mongoose.model("Filament", filMod.default.schema);
+    }
+    if (!mongoose.models.PrintHistory) {
+      mongoose.model("PrintHistory", phMod.default.schema);
+    }
+    const printerMod = await import("@/models/Printer");
+    if (!mongoose.models.Printer) {
+      mongoose.model("Printer", printerMod.default.schema);
+    }
+    const F = mongoose.models.Filament;
+    const PH = mongoose.models.PrintHistory;
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+
+    const parent = await F.create({
+      name: "PH Parent",
+      vendor: "V",
+      type: "PLA",
+      color: "#ABCDEF",
+    });
+    const variant = await F.create({
+      name: "PH Variant",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      parentId: parent._id,
+    });
+    const coex = await F.create({
+      name: "PH Coextruded",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      secondaryColors: ["#112233"],
+    });
+
+    await PH.create({
+      jobLabel: "ph color job",
+      startedAt: recent,
+      usage: [
+        { filamentId: variant._id, grams: 10 },
+        { filamentId: coex._id, grams: 20 },
+      ],
+    });
+
+    const res = await getAnalytics(new NextRequest("http://localhost/api/analytics?days=30"));
+    const body = await res.json();
+    const day = body.usageByDay.find((d: { grams: number }) => d.grams > 0);
+    expect(day).toBeDefined();
+    expect(day.byFilament).toHaveLength(2);
+    const byName = new Map<string, { color: string; grams: number }>(
+      day.byFilament.map((e: { name: string; color: string; grams: number }) => [
+        e.name,
+        { color: e.color, grams: e.grams },
+      ]),
+    );
+    expect(byName.get("PH Variant")?.color).toBe("#ABCDEF");
+    expect(byName.get("PH Coextruded")?.color).toBe("#112233");
+  });
+
+  /**
+   * Inherited-coextruded path: parent carries `secondaryColors` only and
+   * a variant inheriting both `color` and `secondaryColors` should
+   * resolve through `parentColorMap.get(...) → displayColor(p)` →
+   * `secondaryColors[0]`. The other inheritance test gives the parent a
+   * primary `color`, so this is the only case that pins
+   * `.select("_id cost color secondaryColors")` at the parents query
+   * (Codex P2 on PR #936) — trimming `secondaryColors` from that select
+   * would silently break only this case.
+   */
+  it("variant inherits parent's secondaryColors[0] when both color and own secondaryColors are empty", async () => {
+    const recent = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const parent = await Filament.create({
+      name: "Coex Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      secondaryColors: ["#998877", "#665544"],
+    });
+    await Filament.create({
+      name: "Coex Variant",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      // Variant declares no own colors — inherits from parent via
+      // resolveFilament's array-fallback rule.
+      secondaryColors: [],
+      parentId: parent._id,
+      spools: [
+        {
+          label: "main",
+          totalWeight: 950,
+          usageHistory: [{ grams: 30, date: recent, source: "manual", jobId: null }],
+        },
+      ],
+    });
+
+    const res = await getAnalytics(new NextRequest("http://localhost/api/analytics?days=30"));
+    const body = await res.json();
+    const day = body.usageByDay.find((d: { grams: number }) => d.grams > 0);
+    expect(day).toBeDefined();
+    expect(day.byFilament).toHaveLength(1);
+    expect(day.byFilament[0].name).toBe("Coex Variant");
+    expect(day.byFilament[0].color).toBe("#998877");
+  });
+
+  /**
+   * Rounding invariant — fractional grams. Pre-fix the chart dropped
+   * sub-0.5g segments to zero AND derived the day total as the
+   * sum-of-rounded-zero-segments, while `totals.grams` rounded the raw
+   * sum and the no-data check at `every(d => d.grams === 0)` would
+   * silently hide the bar. After the fix, the day total is round-of-raw
+   * so a 0.4g entry contributes to the visible day, and segments with
+   * raw > 0 are kept in the breakdown even when they round to zero
+   * (Codex P2 on PR #936).
+   */
+  it("preserves sub-0.5g usage in the day total and keeps positive-raw segments visible", async () => {
+    const recent = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);
+    await Filament.create({
+      name: "Sub-half PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF00FF",
+      spools: [
+        {
+          label: "main",
+          totalWeight: 950,
+          // Three 0.4g entries on the same day, same filament → raw sum
+          // 1.2g → day total rounds to 1g and segment grams rounds to 1g.
+          usageHistory: [
+            { grams: 0.4, date: recent, source: "manual", jobId: null },
+            { grams: 0.4, date: recent, source: "manual", jobId: null },
+            { grams: 0.4, date: recent, source: "manual", jobId: null },
+          ],
+        },
+      ],
+    });
+
+    const res = await getAnalytics(new NextRequest("http://localhost/api/analytics?days=30"));
+    const body = await res.json();
+    const day = body.usageByDay.find((d: { grams: number }) => d.grams > 0);
+    expect(day).toBeDefined();
+    // Round-of-raw: Math.round(1.2) === 1.
+    expect(day.grams).toBe(1);
+    // The segment for this filament aggregates raw 1.2g → rounds to 1g,
+    // not dropped by the rounded-zero filter.
+    expect(day.byFilament).toHaveLength(1);
+    expect(day.byFilament[0].name).toBe("Sub-half PLA");
+    expect(day.byFilament[0].grams).toBe(1);
+    expect(body.totals.grams).toBe(1);
+  });
 });

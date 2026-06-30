@@ -75,9 +75,13 @@ export async function GET(request: NextRequest) {
       { color: string | null; secondaryColors: string[] }
     >();
     if (parentIdSet.size > 0) {
+      // Parents are read-only here. A historical PrintHistory row whose
+      // variant has since been trashed (its parent too) is still a real
+      // job — resolving its color and cost from the on-disk parent gives
+      // the right answer; filtering `_deletedAt: null` here would paint
+      // the row with the "#808080" sentinel and zero out its cost.
       const parents = await Filament.find({
         _id: { $in: Array.from(parentIdSet) },
-        _deletedAt: null,
       })
         .select("_id cost color secondaryColors")
         .lean();
@@ -104,27 +108,39 @@ export async function GET(request: NextRequest) {
      * segment with. Mirrors `resolveCost`'s variant→parent inheritance
      * pattern but routes through `displayColor()` so coextruded
      * filaments (null primary) fall through to `secondaryColors[0]`.
+     *
+     * Cached by filament id — the answer is deterministic per fid, and a
+     * busy window can have 200+ usage rows for the same variant. Without
+     * the cache the `Array.isArray` + length + `displayColor` +
+     * `parentColorMap.get` work runs once per usage row instead of once
+     * per filament.
      */
+    const colorByFid = new Map<string, string>();
     function resolveColor(
+      fid: string,
       own: { color?: string | null; secondaryColors?: string[] | null },
       parentId: unknown,
     ): string {
+      const cached = colorByFid.get(fid);
+      if (cached !== undefined) return cached;
       const ownHasPrimary = own.color != null && own.color !== "";
       const ownHasSecondary =
         Array.isArray(own.secondaryColors) && own.secondaryColors.length > 0;
-      if (ownHasPrimary || ownHasSecondary) return displayColor(own);
-      if (parentId) {
-        const p = parentColorMap.get(String(parentId));
-        if (p) return displayColor(p);
-      }
-      return displayColor(own); // falls through to "#808080" sentinel
+      let color: string;
+      if (ownHasPrimary || ownHasSecondary) color = displayColor(own);
+      else if (parentId && parentColorMap.has(String(parentId)))
+        color = displayColor(parentColorMap.get(String(parentId))!);
+      else color = displayColor(own); // falls through to "#808080" sentinel
+      colorByFid.set(fid, color);
+      return color;
     }
 
-    // Build usageByDay bucket. Date key = YYYY-MM-DD in UTC for stability.
-    const byDay = new Map<string, number>();
     // GH #934: per-day breakdown by filament for the stacked chart. Each
     // outer key is a YYYY-MM-DD; the inner map keys on filament id so a
     // job with multiple filaments lands in distinct stack segments.
+    // `grams` is the RAW running total (fractional input is preserved so
+    // sub-0.5g entries don't silently round to zero before the no-data
+    // check) — segments and the day total are rounded at emission.
     const byDayFilament = new Map<
       string,
       Map<string, { name: string; color: string; grams: number }>
@@ -150,7 +166,6 @@ export async function GET(request: NextRequest) {
       const d = new Date(since);
       d.setUTCDate(d.getUTCDate() + i);
       const key = d.toISOString().slice(0, 10);
-      byDay.set(key, 0);
       byDayFilament.set(key, new Map());
     }
 
@@ -162,7 +177,6 @@ export async function GET(request: NextRequest) {
       const entryDate = new Date(entry.startedAt);
       if (Number.isNaN(entryDate.getTime())) continue;
       const dayKey = entryDate.toISOString().slice(0, 10);
-      byDay.set(dayKey, (byDay.get(dayKey) ?? 0) + sumGrams(entry.usage));
       const printerId =
         entry.printerId && typeof entry.printerId === "object"
           ? String((entry.printerId as { _id?: unknown })._id ?? "")
@@ -197,6 +211,7 @@ export async function GET(request: NextRequest) {
         // GH #934: resolve color via variant→parent inheritance for the
         // stacked chart segment.
         const color = resolveColor(
+          fid,
           { color: fdoc?.color ?? null, secondaryColors: fdoc?.secondaryColors ?? null },
           fdoc?.parentId,
         );
@@ -241,16 +256,16 @@ export async function GET(request: NextRequest) {
           // including them here would double-count the same grams.
           if (u.source !== "manual") continue;
           const dayKey = uDate.toISOString().slice(0, 10);
-          byDay.set(dayKey, (byDay.get(dayKey) ?? 0) + u.grams);
           // GH #223: same fix as the PrintHistory loop above — fall back
           // to the parent's cost when the variant inherits.
           const fCost = resolveCost(f.cost ?? null, f.parentId);
+          const fid = String(f._id);
           // GH #934: same variant→parent inheritance for color.
           const fColor = resolveColor(
+            fid,
             { color: f.color ?? null, secondaryColors: f.secondaryColors ?? null },
             f.parentId,
           );
-          const fid = String(f._id);
           const existing = byFilament.get(fid);
           if (existing) existing.grams += u.grams;
           else
@@ -276,27 +291,33 @@ export async function GET(request: NextRequest) {
     }
 
     // GH #934: emit each day with its per-filament breakdown for the
-    // stacked chart. Round each filament segment's grams individually,
-    // then derive the day-level `grams` as the SUM of those rounded
-    // values so the totals line up perfectly (no `0.5 + 0.5` rounding
-    // drift between the stack and the Y-axis math). Sort byFilament
-    // descending so the largest contributor renders at the BOTTOM of
-    // the stack — the client doesn't re-sort.
-    const usageByDay = Array.from(byDay.entries())
+    // stacked chart. Sort byFilament descending so the largest contributor
+    // renders at the BOTTOM of the stack — the client doesn't re-sort.
+    //
+    // The day total is derived from the RAW running sum (round-of-sum) so
+    // sub-0.5g entries — which round to 0 individually — don't collapse
+    // the day to 0g and disappear from the no-data check while still
+    // contributing to `totals.grams` (Codex P2). Segments are emitted as
+    // rounded grams for display but kept whenever their raw contribution
+    // is positive, so a rounded-zero segment still appears in the legend
+    // and the tooltip rather than being silently dropped.
+    const usageByDay = Array.from(byDayFilament.entries())
       .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([date]) => {
-        const dayBucket = byDayFilament.get(date) ?? new Map();
+      .map(([date, dayBucket]) => {
+        let rawDaySum = 0;
         const byFil = Array.from(dayBucket.entries())
-          .map(([id, v]) => ({
-            id,
-            name: v.name,
-            color: v.color,
-            grams: Math.round(v.grams),
-          }))
-          .filter((e) => e.grams > 0)
+          .filter(([, v]) => v.grams > 0)
+          .map(([id, v]) => {
+            rawDaySum += v.grams;
+            return {
+              id,
+              name: v.name,
+              color: v.color,
+              grams: Math.round(v.grams),
+            };
+          })
           .sort((a, b) => b.grams - a.grams);
-        const grams = byFil.reduce((sum, e) => sum + e.grams, 0);
-        return { date, grams, byFilament: byFil };
+        return { date, grams: Math.round(rawDaySum), byFilament: byFil };
       });
 
     const byFilamentArr = Array.from(byFilament.entries())
