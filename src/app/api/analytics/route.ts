@@ -3,12 +3,18 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import PrintHistory from "@/models/PrintHistory";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
+import { displayColor } from "@/lib/filamentColors";
 
 /**
  * GET /api/analytics?days=30 — usage analytics aggregation.
  *
  * Returns:
- *   - usageByDay:   per-day total grams (for the bar chart)
+ *   - usageByDay:   per-day total grams + per-filament breakdown for the
+ *                   stacked bar chart (GH #934). Each `byFilament` entry
+ *                   carries `{ id, name, color, grams }`, sorted desc by
+ *                   grams so the bottom of the stack is the largest
+ *                   contributor. The day's top-level `grams` equals the
+ *                   sum of `byFilament[].grams` after rounding.
  *   - byFilament:   total grams and cost per filament, sorted desc
  *   - byVendor:     total grams per vendor
  *   - byPrinter:    total grams per printer (only printed jobs)
@@ -34,12 +40,14 @@ export async function GET(request: NextRequest) {
         // Without this the populate returns the variant's own `cost`
         // (typically null on inheriting variants), so `totalCost` would
         // contribute 0 grams worth for every print job against a variant.
-        .populate("usage.filamentId", "name vendor cost parentId")
+        // GH #934: also include color + secondaryColors so the stacked
+        // chart can render each filament's segment in its real hex.
+        .populate("usage.filamentId", "name vendor cost parentId color secondaryColors")
         .lean(),
       // Include `parentId` here as well so the manual-usage loop below can
-      // walk inheritance.
+      // walk inheritance. GH #934: + color/secondaryColors for the stack.
       Filament.find({ _deletedAt: null })
-        .select("name vendor cost parentId spools")
+        .select("name vendor cost parentId color secondaryColors spools")
         .lean(),
     ]);
 
@@ -59,15 +67,28 @@ export async function GET(request: NextRequest) {
       }
     }
     const parentCostMap = new Map<string, number | null>();
+    // GH #934: parent color map mirrors the cost lookup so a variant that
+    // leaves `color`/`secondaryColors` blank to inherit gets its parent's
+    // palette resolved here, the same way `cost` already did.
+    const parentColorMap = new Map<
+      string,
+      { color: string | null; secondaryColors: string[] }
+    >();
     if (parentIdSet.size > 0) {
       const parents = await Filament.find({
         _id: { $in: Array.from(parentIdSet) },
         _deletedAt: null,
       })
-        .select("_id cost")
+        .select("_id cost color secondaryColors")
         .lean();
       for (const p of parents) {
         parentCostMap.set(String(p._id), (p.cost as number | null) ?? null);
+        parentColorMap.set(String(p._id), {
+          color: (p.color as string | null | undefined) ?? null,
+          secondaryColors: Array.isArray(p.secondaryColors)
+            ? (p.secondaryColors as string[])
+            : [],
+        });
       }
     }
     function resolveCost(
@@ -78,9 +99,36 @@ export async function GET(request: NextRequest) {
       if (!parentId) return null;
       return parentCostMap.get(String(parentId)) ?? null;
     }
+    /**
+     * GH #934: resolve the single hex color the chart should paint a
+     * segment with. Mirrors `resolveCost`'s variant→parent inheritance
+     * pattern but routes through `displayColor()` so coextruded
+     * filaments (null primary) fall through to `secondaryColors[0]`.
+     */
+    function resolveColor(
+      own: { color?: string | null; secondaryColors?: string[] | null },
+      parentId: unknown,
+    ): string {
+      const ownHasPrimary = own.color != null && own.color !== "";
+      const ownHasSecondary =
+        Array.isArray(own.secondaryColors) && own.secondaryColors.length > 0;
+      if (ownHasPrimary || ownHasSecondary) return displayColor(own);
+      if (parentId) {
+        const p = parentColorMap.get(String(parentId));
+        if (p) return displayColor(p);
+      }
+      return displayColor(own); // falls through to "#808080" sentinel
+    }
 
     // Build usageByDay bucket. Date key = YYYY-MM-DD in UTC for stability.
     const byDay = new Map<string, number>();
+    // GH #934: per-day breakdown by filament for the stacked chart. Each
+    // outer key is a YYYY-MM-DD; the inner map keys on filament id so a
+    // job with multiple filaments lands in distinct stack segments.
+    const byDayFilament = new Map<
+      string,
+      Map<string, { name: string; color: string; grams: number }>
+    >();
     const byFilament = new Map<
       string,
       { name: string; vendor: string; cost: number | null; grams: number }
@@ -101,7 +149,9 @@ export async function GET(request: NextRequest) {
     for (let i = 0; i <= days; i++) {
       const d = new Date(since);
       d.setUTCDate(d.getUTCDate() + i);
-      byDay.set(d.toISOString().slice(0, 10), 0);
+      const key = d.toISOString().slice(0, 10);
+      byDay.set(key, 0);
+      byDayFilament.set(key, new Map());
     }
 
     for (const entry of history) {
@@ -129,7 +179,14 @@ export async function GET(request: NextRequest) {
           ? String((u.filamentId as { _id?: unknown })._id ?? "")
           : String(u.filamentId);
         const fdoc = u.filamentId && typeof u.filamentId === "object"
-          ? (u.filamentId as { name?: string; vendor?: string; cost?: number | null; parentId?: unknown })
+          ? (u.filamentId as {
+              name?: string;
+              vendor?: string;
+              cost?: number | null;
+              parentId?: unknown;
+              color?: string | null;
+              secondaryColors?: string[] | null;
+            })
           : null;
         const name = fdoc?.name ?? "(unknown)";
         const vendor = fdoc?.vendor ?? "(unknown)";
@@ -137,12 +194,25 @@ export async function GET(request: NextRequest) {
         // directly and contributed 0 to totalCost for every job against
         // an inheriting variant. resolveCost falls back to the parent.
         const cost = resolveCost(fdoc?.cost ?? null, fdoc?.parentId);
+        // GH #934: resolve color via variant→parent inheritance for the
+        // stacked chart segment.
+        const color = resolveColor(
+          { color: fdoc?.color ?? null, secondaryColors: fdoc?.secondaryColors ?? null },
+          fdoc?.parentId,
+        );
         const existing = byFilament.get(fid);
         if (existing) existing.grams += u.grams;
         else byFilament.set(fid, { name, vendor, cost, grams: u.grams });
         byVendor.set(vendor, (byVendor.get(vendor) ?? 0) + u.grams);
         totalGrams += u.grams;
         if (cost != null) totalCost += (u.grams / 1000) * cost;
+        // GH #934: per-day-per-filament bucket for the stacked chart.
+        const dayBucket = byDayFilament.get(dayKey);
+        if (dayBucket) {
+          const fEntry = dayBucket.get(fid);
+          if (fEntry) fEntry.grams += u.grams;
+          else dayBucket.set(fid, { name, color, grams: u.grams });
+        }
       }
 
       if (printerId) {
@@ -175,10 +245,16 @@ export async function GET(request: NextRequest) {
           // GH #223: same fix as the PrintHistory loop above — fall back
           // to the parent's cost when the variant inherits.
           const fCost = resolveCost(f.cost ?? null, f.parentId);
-          const existing = byFilament.get(String(f._id));
+          // GH #934: same variant→parent inheritance for color.
+          const fColor = resolveColor(
+            { color: f.color ?? null, secondaryColors: f.secondaryColors ?? null },
+            f.parentId,
+          );
+          const fid = String(f._id);
+          const existing = byFilament.get(fid);
           if (existing) existing.grams += u.grams;
           else
-            byFilament.set(String(f._id), {
+            byFilament.set(fid, {
               name: f.name,
               vendor: f.vendor,
               cost: fCost,
@@ -187,14 +263,41 @@ export async function GET(request: NextRequest) {
           byVendor.set(f.vendor, (byVendor.get(f.vendor) ?? 0) + u.grams);
           totalGrams += u.grams;
           if (fCost != null) totalCost += (u.grams / 1000) * fCost;
+          // GH #934: per-day-per-filament bucket for the stacked chart.
+          const dayBucket = byDayFilament.get(dayKey);
+          if (dayBucket) {
+            const fEntry = dayBucket.get(fid);
+            if (fEntry) fEntry.grams += u.grams;
+            else dayBucket.set(fid, { name: f.name, color: fColor, grams: u.grams });
+          }
           manualEntries++;
         }
       }
     }
 
+    // GH #934: emit each day with its per-filament breakdown for the
+    // stacked chart. Round each filament segment's grams individually,
+    // then derive the day-level `grams` as the SUM of those rounded
+    // values so the totals line up perfectly (no `0.5 + 0.5` rounding
+    // drift between the stack and the Y-axis math). Sort byFilament
+    // descending so the largest contributor renders at the BOTTOM of
+    // the stack — the client doesn't re-sort.
     const usageByDay = Array.from(byDay.entries())
       .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([date, grams]) => ({ date, grams: Math.round(grams) }));
+      .map(([date]) => {
+        const dayBucket = byDayFilament.get(date) ?? new Map();
+        const byFil = Array.from(dayBucket.entries())
+          .map(([id, v]) => ({
+            id,
+            name: v.name,
+            color: v.color,
+            grams: Math.round(v.grams),
+          }))
+          .filter((e) => e.grams > 0)
+          .sort((a, b) => b.grams - a.grams);
+        const grams = byFil.reduce((sum, e) => sum + e.grams, 0);
+        return { date, grams, byFilament: byFil };
+      });
 
     const byFilamentArr = Array.from(byFilament.entries())
       .map(([id, v]) => ({ _id: id, ...v, grams: Math.round(v.grams) }))

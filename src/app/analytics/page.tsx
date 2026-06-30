@@ -8,17 +8,34 @@ import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 import { niceAxisScale } from "@/lib/chartScale";
 import { formatGrams } from "@/lib/formatWeight";
 
+interface DayFilamentSegment {
+  id: string;
+  name: string;
+  color: string;
+  grams: number;
+}
+
 interface AnalyticsData {
   since: string;
   days: number;
   totals: { grams: number; cost: number; jobs: number; manualEntries: number };
-  usageByDay: { date: string; grams: number }[];
+  /** GH #934: each day carries its total grams (used by the Y-axis math)
+   *  plus a per-filament breakdown sorted DESCENDING by grams so the
+   *  stacked chart can render largest-at-the-bottom without re-sorting. */
+  usageByDay: { date: string; grams: number; byFilament: DayFilamentSegment[] }[];
   byFilament: { _id: string; name: string; vendor: string; cost: number | null; grams: number }[];
   byVendor: { vendor: string; grams: number }[];
   byPrinter: { _id: string; name: string; grams: number }[];
 }
 
 const DAY_OPTIONS = [7, 30, 90, 365];
+
+/** GH #934: localStorage key for the per-user "detailed" toggle on the
+ *  Usage-by-day chart. Default off — flipping it stacks each bar by
+ *  filament with each segment painted in the filament's hex color. */
+const DETAILED_STORAGE_KEY = "filamentdb-analytics-usage-detailed";
+/** Cap on the in-chart legend chips when Detailed is on. */
+const LEGEND_TOP_N = 10;
 
 export default function AnalyticsPage() {
   const { t } = useTranslation();
@@ -31,6 +48,30 @@ export default function AnalyticsPage() {
   // explicit error so the user gets a message + retry, like the dashboard.
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  // GH #934: opt-in stacked-by-filament render mode for the Usage-by-day
+  // chart. Lazy initialiser reads localStorage so the user's preference
+  // survives a reload; default is off so existing behaviour is unchanged
+  // for users who haven't opted in.
+  const [detailed, setDetailed] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.localStorage.getItem(DETAILED_STORAGE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggleDetailed = () => {
+    setDetailed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(DETAILED_STORAGE_KEY, next ? "1" : "0");
+      } catch {
+        // localStorage may be unavailable (Safari private mode); the
+        // toggle still works in-session, just doesn't persist.
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     const ac = new AbortController();
@@ -70,6 +111,37 @@ export default function AnalyticsPage() {
   // #716: a rounded axis scale + tick values so the "Usage by day" bars are
   // readable against gridlines instead of guessing magnitudes by eye.
   const dayScale = useMemo(() => niceAxisScale(maxDayGrams), [maxDayGrams]);
+
+  /** GH #934: legend chips for the Detailed mode — one entry per filament
+   *  that appears anywhere in the window, sorted DESC by total grams, with
+   *  the first occurrence's hex color (an inheriting variant resolves the
+   *  same color across days, so picking-the-first is stable). Capped at
+   *  the top N; the remainder is summarised as "+M more". */
+  const dayLegend = useMemo(() => {
+    if (!data) return { top: [] as DayFilamentSegment[], more: 0 };
+    const totals = new Map<
+      string,
+      { id: string; name: string; color: string; grams: number }
+    >();
+    for (const d of data.usageByDay) {
+      for (const seg of d.byFilament) {
+        const existing = totals.get(seg.id);
+        if (existing) existing.grams += seg.grams;
+        else
+          totals.set(seg.id, {
+            id: seg.id,
+            name: seg.name,
+            color: seg.color,
+            grams: seg.grams,
+          });
+      }
+    }
+    const sorted = Array.from(totals.values()).sort((a, b) => b.grams - a.grams);
+    return {
+      top: sorted.slice(0, LEGEND_TOP_N),
+      more: Math.max(0, sorted.length - LEGEND_TOP_N),
+    };
+  }, [data]);
 
   const maxByFilament = useMemo(() => {
     if (!data) return 0;
@@ -184,9 +256,26 @@ export default function AnalyticsPage() {
             <>
           {/* Usage by day */}
           <section className="mb-8">
-            <h2 className="text-lg font-semibold mb-3">
-              {t("analytics.usageByDay")}
-            </h2>
+            <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
+              <h2 className="text-lg font-semibold">
+                {t("analytics.usageByDay")}
+              </h2>
+              {/* GH #934: opt-in stacked-by-filament toggle. Persisted in
+                  localStorage so the user's choice survives a reload. */}
+              <button
+                type="button"
+                onClick={toggleDetailed}
+                aria-pressed={detailed}
+                title={t("analytics.usageByDay.detailed.tooltip")}
+                className={`px-2.5 py-1 text-xs rounded border transition-colors ${
+                  detailed
+                    ? "bg-blue-600 text-white border-blue-600"
+                    : "border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-300 hover:border-gray-400"
+                }`}
+              >
+                {t("analytics.usageByDay.detailed")}
+              </button>
+            </div>
             {data.usageByDay.every((d) => d.grams === 0) ? (
               <p className="text-sm text-gray-500">{t("analytics.noData")}</p>
             ) : (
@@ -222,11 +311,53 @@ export default function AnalyticsPage() {
                     <div className="absolute inset-0 flex items-end gap-0.5">
                       {data.usageByDay.map((d) => {
                         const pct = dayScale.max > 0 ? (d.grams / dayScale.max) * 100 : 0;
+                        const dayLabel = `${d.date}: ${formatGrams(d.grams)} g`;
+                        // GH #934: in Detailed mode, render the bar as a
+                        // vertical stack of segments — one per filament,
+                        // height proportional to its share of the day,
+                        // colored by the filament's hex. Each segment
+                        // carries its own title for the native tooltip.
+                        if (detailed && d.grams > 0 && d.byFilament.length > 0) {
+                          return (
+                            <div
+                              key={d.date}
+                              className="flex-1 h-full flex flex-col items-center justify-end"
+                              title={dayLabel}
+                              aria-label={dayLabel}
+                            >
+                              <div
+                                className="w-full flex flex-col-reverse rounded-sm overflow-hidden"
+                                style={{ height: `${pct}%`, minHeight: "2px" }}
+                              >
+                                {d.byFilament.map((seg) => {
+                                  const segPct =
+                                    d.grams > 0 ? (seg.grams / d.grams) * 100 : 0;
+                                  const segLabel = t(
+                                    "analytics.usageByDay.tooltipFormat",
+                                    { name: seg.name, grams: formatGrams(seg.grams) },
+                                  );
+                                  return (
+                                    <div
+                                      key={seg.id}
+                                      title={`${d.date} — ${segLabel}`}
+                                      aria-label={`${d.date} — ${segLabel}`}
+                                      tabIndex={0}
+                                      style={{
+                                        height: `${segPct}%`,
+                                        backgroundColor: seg.color,
+                                      }}
+                                    />
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        }
                         return (
                           <div
                             key={d.date}
                             className="flex-1 h-full flex flex-col items-center justify-end"
-                            title={`${d.date}: ${formatGrams(d.grams)} g`}
+                            title={dayLabel}
                           >
                             <div
                               className={`w-full ${d.grams > 0 ? "bg-blue-500" : "bg-transparent"} rounded-sm`}
@@ -244,6 +375,28 @@ export default function AnalyticsPage() {
                     {data.usageByDay[data.usageByDay.length - 1]?.date}
                   </span>
                 </div>
+                {/* GH #934: legend, Detailed mode only. One chip per
+                    filament in the window, sorted by total grams desc,
+                    capped at the top N with a "+M more" tail. */}
+                {detailed && dayLegend.top.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 mt-3 pl-12 text-xs text-gray-700 dark:text-gray-300">
+                    {dayLegend.top.map((entry) => (
+                      <span key={entry.id} className="inline-flex items-center gap-1.5">
+                        <span
+                          aria-hidden="true"
+                          className="inline-block w-2.5 h-2.5 rounded-sm border border-gray-300 dark:border-gray-700"
+                          style={{ backgroundColor: entry.color }}
+                        />
+                        <span className="truncate max-w-[12rem]">{entry.name}</span>
+                      </span>
+                    ))}
+                    {dayLegend.more > 0 && (
+                      <span className="text-gray-500 dark:text-gray-400">
+                        {t("analytics.usageByDay.moreCount", { count: dayLegend.more })}
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </section>
