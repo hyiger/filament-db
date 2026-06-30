@@ -1,4 +1,13 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  beforeAll,
+  afterAll,
+} from "vitest";
 import {
   mkdirSync,
   mkdtempSync,
@@ -23,6 +32,9 @@ import {
   fetchOpenPrintTagDatabase,
   getProxyDispatcher,
   clearCache,
+  downloadTarballToBuffer,
+  isTimeoutAbort,
+  relabelTimeoutError,
 } from "@/lib/openprinttagBrowser";
 import { EnvHttpProxyAgent } from "undici";
 
@@ -724,6 +736,35 @@ describe("getProxyDispatcher", () => {
 describe("fetchOpenPrintTagDatabase", () => {
   let tarballsToCleanup: string[] = [];
 
+  // Isolate the temp root from the shared real os.tmpdir(): the suite's
+  // countTempDirs()/sweep assertions key off the literal `openprinttag-`
+  // prefix, but production sweepStaleTempDirs() runs against that same dir on
+  // every fetch — a >1h-old leftover from a crashed earlier CI run would make
+  // a count assertion fail for unrelated reasons. os.tmpdir() reads
+  // TMPDIR/TMP/TEMP at call time, so pointing them at a private dir redirects
+  // both the module's mkdtemp/sweep AND this file's helpers there.
+  const savedTmpEnv: Record<string, string | undefined> = {};
+  let isolatedTmpRoot = "";
+  beforeAll(() => {
+    for (const k of ["TMPDIR", "TMP", "TEMP"]) savedTmpEnv[k] = process.env[k];
+    // Create the private root under the ORIGINAL temp dir before we repoint.
+    isolatedTmpRoot = mkdtempSync(join(tmpdir(), "opt-test-root-"));
+    process.env.TMPDIR = isolatedTmpRoot;
+    process.env.TMP = isolatedTmpRoot;
+    process.env.TEMP = isolatedTmpRoot;
+  });
+  afterAll(() => {
+    for (const k of ["TMPDIR", "TMP", "TEMP"]) {
+      if (savedTmpEnv[k] === undefined) delete process.env[k];
+      else process.env[k] = savedTmpEnv[k];
+    }
+    try {
+      rmSync(isolatedTmpRoot, { recursive: true, force: true });
+    } catch {
+      /* best-effort */
+    }
+  });
+
   beforeEach(() => {
     clearCache();
     tarballsToCleanup = [];
@@ -1028,5 +1069,106 @@ type: Resin
     const db = await fetchOpenPrintTagDatabase();
     expect(db.totalFFF).toBe(2);
     expect(db.brands[0].name).toBe("Amolen");
+  });
+
+  it("rejects a download that exceeds the size cap (OOM/DoS guard)", async () => {
+    // Stream more bytes than the (injected, tiny) cap and assert the guard
+    // trips. The check runs BEFORE the chunk is retained, so this never holds
+    // more than one over-limit chunk in memory.
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          // 3 × 100-byte chunks = 300 bytes, over the 150-byte cap below.
+          for (let i = 0; i < 3; i++) controller.enqueue(new Uint8Array(100));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, statusText: "OK" });
+    });
+
+    await expect(
+      downloadTarballToBuffer({ maxBytes: 150 }),
+    ).rejects.toThrow(/exceeds size limit/);
+  });
+
+  it("returns the buffered body when under the size cap", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+          controller.enqueue(new Uint8Array([4, 5]));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, statusText: "OK" });
+    });
+
+    const buf = await downloadTarballToBuffer({ maxBytes: 1024 });
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(Array.from(buf)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("relabels a download-phase fetch timeout as a download timeout", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      const e = new Error("The operation was aborted due to timeout");
+      e.name = "TimeoutError";
+      throw e;
+    });
+
+    await expect(
+      downloadTarballToBuffer({ timeoutMs: 45_000 }),
+    ).rejects.toThrow(/OpenPrintTag download timed out \(45s limit\)/);
+  });
+});
+
+describe("isTimeoutAbort", () => {
+  it("is true for TimeoutError and AbortError", () => {
+    const t = new Error("timeout");
+    t.name = "TimeoutError";
+    const a = new Error("aborted");
+    a.name = "AbortError";
+    expect(isTimeoutAbort(t)).toBe(true);
+    expect(isTimeoutAbort(a)).toBe(true);
+  });
+
+  it("is false for other errors and non-errors", () => {
+    expect(isTimeoutAbort(new Error("nope"))).toBe(false);
+    expect(isTimeoutAbort("AbortError")).toBe(false);
+    expect(isTimeoutAbort(null)).toBe(false);
+  });
+});
+
+describe("relabelTimeoutError", () => {
+  it("labels an extract-phase AbortError honestly (download completed)", () => {
+    // The core of PR #933: an extract stall must NOT read as a download
+    // failure. An AbortError from the extract AbortController feeds this.
+    const abort = new Error("The operation was aborted");
+    abort.name = "AbortError";
+    const out = relabelTimeoutError(abort, "extract");
+    expect(out).toBeInstanceOf(Error);
+    expect(out!.message).toMatch(/extract timed out \(120s limit\)/);
+    expect(out!.message).toMatch(/the download completed but the extract phase/);
+  });
+
+  it("labels a download-phase TimeoutError as a download timeout", () => {
+    const to = new Error("timeout");
+    to.name = "TimeoutError";
+    const out = relabelTimeoutError(to, "download");
+    expect(out!.message).toMatch(/OpenPrintTag download timed out \(45s limit\)/);
+  });
+
+  it("honours injected deadlines in the surfaced message", () => {
+    const abort = new Error("aborted");
+    abort.name = "AbortError";
+    expect(
+      relabelTimeoutError(abort, "extract", { extractTimeoutMs: 90_000 })!.message,
+    ).toMatch(/90s limit/);
+    expect(
+      relabelTimeoutError(abort, "download", { downloadTimeoutMs: 30_000 })!.message,
+    ).toMatch(/30s limit/);
+  });
+
+  it("returns null for a non-timeout error (caller rethrows the original)", () => {
+    expect(relabelTimeoutError(new Error("tar bomb"), "extract")).toBeNull();
   });
 });
