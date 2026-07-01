@@ -8,7 +8,6 @@ import {
   arrangementToOptTag,
   displayColor,
   allColors,
-  isMultiColor,
   parentSwatchColors,
   type ColorArrangement,
 } from "@/lib/filamentColors";
@@ -156,43 +155,6 @@ describe("allColors", () => {
     expect(allColors({})).toEqual([]);
     expect(allColors({ color: null, secondaryColors: [] })).toEqual([]);
     expect(allColors({ color: "", secondaryColors: ["", null as unknown as string] })).toEqual([]);
-  });
-});
-
-describe("isMultiColor", () => {
-  it("returns false for null/undefined input", () => {
-    expect(isMultiColor(null)).toBe(false);
-    expect(isMultiColor(undefined)).toBe(false);
-  });
-
-  it("returns false for plain single-color filament", () => {
-    expect(isMultiColor({ color: "#FF0000" })).toBe(false);
-    expect(isMultiColor({ color: "#FF0000", secondaryColors: [] })).toBe(false);
-    expect(isMultiColor({ color: "#FF0000", optTags: [5] })).toBe(false); // matte, not arrangement
-  });
-
-  it("returns true when secondaryColors has at least one entry", () => {
-    expect(
-      isMultiColor({ color: "#FF0000", secondaryColors: ["#00FF00"] }),
-    ).toBe(true);
-  });
-
-  it("returns true when an arrangement tag is set (even with no secondary colors)", () => {
-    // Edge case: a misconfigured filament with the coextruded tag but no
-    // secondary colors yet. Still "multi-color" in intent — the form
-    // should show the arrangement radio so the user can add slots.
-    expect(isMultiColor({ color: "#FF0000", optTags: [29] })).toBe(true);
-    expect(isMultiColor({ color: "#FF0000", optTags: [28] })).toBe(true);
-  });
-
-  it("returns true when both arrangement tag AND secondaryColors are set", () => {
-    expect(
-      isMultiColor({
-        color: "#FF0000",
-        secondaryColors: ["#00FF00"],
-        optTags: [29],
-      }),
-    ).toBe(true);
   });
 });
 

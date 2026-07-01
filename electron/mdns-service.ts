@@ -84,8 +84,3 @@ export function stopMdnsAdvertisement(): void {
     console.error("Failed to destroy mDNS responder:", err);
   }
 }
-
-/** Whether an advertisement is currently published. */
-export function isMdnsAdvertising(): boolean {
-  return service !== null;
-}

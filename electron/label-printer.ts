@@ -101,28 +101,16 @@ function isCups(): boolean {
 }
 
 /**
- * List the printers/devices the OS print system can reach. Never throws —
- * returns [] on any failure so the picker shows its empty state.
- */
-/**
- * List label-printer targets.
+ * List label-printer targets. Never throws — returns [] on any failure
+ * so the picker shows its empty state.
  *
- * `probeUsb` (GH #771): when false (the default), only ALREADY-CONFIGURED
- * print queues are listed — on CUPS that's `lpstat -v`, which is a plain
- * read and never prompts. When true, additionally run `lpinfo` to discover
- * raw `usb://` devices that aren't set up as a queue yet.
- *
- * Why this matters: on macOS `lpinfo` issues the CUPS `CUPS-Get-Devices`
- * operation, which the default cupsd policy restricts to admins — so it pops
- * the macOS authorization dialog asking for an admin password. The Settings
- * panel used to call this on mount, so merely opening Settings prompted for
- * admin credentials (#771), which is especially jarring for the many users
- * who don't own a label printer. The renderer now does a passive (no-probe)
- * list on mount and only probes for USB devices on an explicit user action
- * (the Refresh button), where a credential prompt is expected and contextual.
- *
- * Windows (`Get-Printer`) lists installed printers without any elevation, so
- * `probeUsb` is a no-op there.
+ * `probeUsb` (GH #771): false by default. Only ALREADY-CONFIGURED queues
+ * are listed (CUPS `lpstat -v` — plain read, no prompt). When true, also
+ * run `lpinfo` to discover raw `usb://` devices that aren't a queue yet.
+ * On macOS `lpinfo` issues CUPS's admin-only `CUPS-Get-Devices` op and
+ * pops the macOS password dialog, so we probe only on explicit user
+ * action (the Refresh button), never on mount. On Windows `Get-Printer`
+ * needs no elevation, so `probeUsb` is a no-op there.
  */
 export async function listLabelPrinters(
   opts: { probeUsb?: boolean } = {},

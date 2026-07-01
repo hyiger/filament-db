@@ -12,7 +12,7 @@ import { useTranslation } from "@/i18n/TranslationProvider";
  * the same find-as-you-type experience as elsewhere in the app.
  */
 
-export interface PickerFilament {
+interface PickerFilament {
   _id: string;
   name: string;
   vendor: string;
@@ -20,7 +20,7 @@ export interface PickerFilament {
   color: string;
 }
 
-export interface FilamentPickerProps {
+interface FilamentPickerProps {
   /** Full catalog. The picker filters this in-memory; callers don't
    *  need to pre-filter. */
   filaments: PickerFilament[];

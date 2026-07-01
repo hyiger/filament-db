@@ -187,20 +187,3 @@ export function parentSwatchColors(
   return out;
 }
 
-/**
- * True if the filament should render as multi-color (i.e. it has at
- * least one secondary color OR an arrangement tag is set). Useful for
- * gating "the slicer export will drop secondaries" notices and the
- * arrangement radio on the form.
- */
-export function isMultiColor(
-  filament: {
-    color?: string | null;
-    secondaryColors?: string[] | null;
-    optTags?: number[] | null;
-  } | null | undefined,
-): boolean {
-  if (!filament) return false;
-  if (filament.secondaryColors && filament.secondaryColors.length > 0) return true;
-  return deriveArrangement(filament.optTags) !== "solid";
-}

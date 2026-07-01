@@ -234,7 +234,7 @@ fall back to QR / manual entry with a clear message.
   process). The Expo app lives under **`packages/mobile`** as a **self-contained package** with its
   own `node_modules` + `package-lock.json` — the repo root deliberately has **no `workspaces`**
   field, so installing the mobile app never touches the web/Electron dependency tree (see
-  `packages/mobile/README.md`). Types are restated client-side (DTOs in `src/lib/types.ts`), ideally
+  `packages/mobile/README.md`). Types are restated client-side (DTOs in `packages/mobile/src/lib/types.ts`), ideally
   later generated from `public/openapi.json`. No decoder, no `Buffer`, no crypto crosses the boundary
   — and avoiding workspaces also sidesteps the classic Expo-monorepo Metro/symlink pain.
   - Keep the EAS build pipeline isolated from the Electron release CI (`release.yml` / `docker.yml`).

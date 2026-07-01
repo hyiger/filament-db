@@ -486,15 +486,12 @@ export function resolveMaterialType(type: string): number | undefined {
 }
 
 /**
- * Derive a short material abbreviation from a filament type string.
- * @internal Exported for unit testing — consume via `generateOpenPrintTagBinary`.
+ * Uppercase, whitespace-stripped material abbreviation truncated to 7
+ * chars — the OpenPrintTag spec's cap. @internal for unit testing;
+ * consume via `generateOpenPrintTagBinary`.
  */
 export function deriveMaterialAbbreviation(type: string): string {
-  const upper = type.toUpperCase().replace(/\s+/g, "");
-  // Return as-is if already short enough (max 7 chars per spec)
-  if (upper.length <= 7) return upper;
-  // Otherwise take the first 7 characters
-  return upper.slice(0, 7);
+  return type.toUpperCase().replace(/\s+/g, "").slice(0, 7);
 }
 
 // ── Input interface ─────────────────────────────────────────────────

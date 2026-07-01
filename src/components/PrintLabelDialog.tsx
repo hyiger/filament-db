@@ -43,7 +43,7 @@ const LAST_QR_MODE_KEY = "filamentdb.printLabel.qrMode";
 
 type QrMode = "instanceId" | "url";
 
-export interface PrintLabelDialogProps {
+interface PrintLabelDialogProps {
   open: boolean;
   onClose: () => void;
   filament: {
