@@ -1,6 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { autoUpdater } from "electron-updater";
 import { assertTrustedSender } from "./ipc-security";
+import {
+  classifyUpdateError,
+  type UpdateErrorKind,
+} from "../src/lib/updateErrorMessage";
 
 /**
  * Thin wrapper around electron-updater that ships silently while the app is
@@ -30,7 +34,12 @@ interface UpdateInfo {
   version?: string;
   releaseNotes?: string;
   progress?: { percent: number; bytesPerSecond: number };
+  /** GH #946: short, stack-free detail (a tooltip / fallback), NOT the raw
+   *  multi-line electron-updater blob. The renderer shows a localized message
+   *  keyed off `errorKind`; this is supplementary. */
   error?: string;
+  /** GH #946: cause of the failure, mapped to a localized banner message. */
+  errorKind?: UpdateErrorKind;
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -57,6 +66,20 @@ function emit(update: Partial<UpdateInfo>) {
   ) {
     mainWindow.webContents.send("update-status", currentState);
   }
+}
+
+/**
+ * GH #946: emit an error state with a mapped `errorKind` (so the renderer can
+ * show a friendly, localized line) and a short stack-free `detail`, while the
+ * FULL raw error goes to the log for debugging. Returns the detail so the IPC
+ * handlers can pass it back to their caller.
+ */
+function emitError(err: unknown): string {
+  const { kind, detail } = classifyUpdateError(err);
+  // The user must never see this blob; the log (mirrored to main.log) keeps it.
+  console.error("[auto-updater] update error:", err);
+  emit({ state: "error", errorKind: kind, error: detail });
+  return detail;
 }
 
 export function initAutoUpdater(win: BrowserWindow) {
@@ -109,9 +132,7 @@ export function initAutoUpdater(win: BrowserWindow) {
       await autoUpdater.checkForUpdates();
       return { ok: true };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      emit({ state: "error", error: message });
-      return { ok: false, error: message };
+      return { ok: false, error: emitError(err) };
     }
   });
 
@@ -123,9 +144,7 @@ export function initAutoUpdater(win: BrowserWindow) {
       await autoUpdater.downloadUpdate();
       return { ok: true };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      emit({ state: "error", error: message });
-      return { ok: false, error: message };
+      return { ok: false, error: emitError(err) };
     }
   });
 
@@ -226,7 +245,7 @@ export function initAutoUpdater(win: BrowserWindow) {
     emit({ state: "ready", version: info.version });
   });
   autoUpdater.on("error", (err) => {
-    emit({ state: "error", error: err.message });
+    emitError(err);
   });
 
   // Check once shortly after startup, then every 6 hours while running.
