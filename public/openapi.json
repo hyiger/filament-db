@@ -2901,18 +2901,18 @@
           "Analytics"
         ],
         "summary": "Get usage analytics",
-        "description": "Aggregates print history and direct manual spool usage for a time window.",
+        "description": "Aggregates print history and direct manual spool usage for a time window. Fractional `days` is floored server-side. Every aggregate excludes rows with a `startedAt`/`date` past `now` (server clock) and rows with a malformed date; the JS-side guards belt-and-suspenders the DB-level `startedAt <= now` filter.",
         "parameters": [
           {
             "name": "days",
             "in": "query",
             "schema": {
-              "type": "integer",
+              "type": "number",
               "minimum": 7,
               "maximum": 365,
               "default": 30
             },
-            "description": "Number of days to include"
+            "description": "Number of days to include. Clamped to [7, 365]; fractional values are floored."
           }
         ],
         "responses": {
@@ -2921,7 +2921,129 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "required": [
+                    "since",
+                    "days",
+                    "totals",
+                    "usageByDay",
+                    "byFilament",
+                    "byVendor",
+                    "byPrinter"
+                  ],
+                  "properties": {
+                    "since": {
+                      "type": "string",
+                      "format": "date-time",
+                      "description": "Start of the window (UTC). `now - days * 24h`."
+                    },
+                    "days": {
+                      "type": "integer",
+                      "description": "Window size in days after flooring the request parameter."
+                    },
+                    "totals": {
+                      "type": "object",
+                      "required": ["grams", "cost", "jobs", "manualEntries"],
+                      "properties": {
+                        "grams": {
+                          "type": "integer",
+                          "description": "Round-of-sum across ALL usage rows (PrintHistory + spool-side manual)."
+                        },
+                        "cost": {
+                          "type": "number",
+                          "description": "Sum of `(grams/1000) * cost` for rows whose (resolved) cost is non-null, rounded to cents."
+                        },
+                        "jobs": {
+                          "type": "integer",
+                          "description": "Count of PrintHistory rows that PASSED the malformed-date + future-date guards — matches the row count reflected in every other aggregate. GH #936."
+                        },
+                        "manualEntries": {
+                          "type": "integer",
+                          "description": "Count of spool-side `usageHistory[]` entries with `source: \"manual\"` in-window. GH #204."
+                        }
+                      }
+                    },
+                    "usageByDay": {
+                      "type": "array",
+                      "description": "One entry per UTC day in `[since, now]`. `grams` is round-of-raw for the day; `byFilament[].grams` are Hamilton-apportioned integers that sum EXACTLY to `grams` (GH #934, #936).",
+                      "items": {
+                        "type": "object",
+                        "required": ["date", "grams", "byFilament"],
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "description": "UTC calendar day as `YYYY-MM-DD`."
+                          },
+                          "grams": {
+                            "type": "integer",
+                            "description": "`Math.round(rawDaySum)` — matches Σ byFilament[].grams by Hamilton apportionment."
+                          },
+                          "byFilament": {
+                            "type": "array",
+                            "description": "Per-filament breakdown for the stacked chart, sorted DESC by grams. A segment whose raw contribution was > 0 but rounds to 0 is kept in the array so it appears in the legend.",
+                            "items": {
+                              "type": "object",
+                              "required": ["id", "name", "color", "grams"],
+                              "properties": {
+                                "id": { "type": "string" },
+                                "name": { "type": "string" },
+                                "color": {
+                                  "type": "string",
+                                  "description": "Hex `#RRGGBB` — resolved via `resolveColor` (variant primary || variant secondaryColors[0] || parent secondaryColors[0] || `#808080` sentinel). Never inherits parent's primary color, matching `resolveFilament`'s `VARIANT_ONLY_FIELDS`. GH #477, #936."
+                                },
+                                "grams": {
+                                  "type": "integer",
+                                  "description": "Hamilton apportionment of `day.grams` — may be 0 for a sub-0.5g raw contributor even though the entry is preserved."
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "byFilament": {
+                      "type": "array",
+                      "description": "Top-filament ranking. `grams` here is round-of-raw over the whole window and can drift by up to N/2 from Σ across days of that filament's stacked-chart segments for sub-0.5g/day usage — the ranking prioritises window-total accuracy; the chart prioritises per-day segment-sum equality with `day.grams`.",
+                      "items": {
+                        "type": "object",
+                        "required": ["_id", "name", "vendor", "cost", "grams"],
+                        "properties": {
+                          "_id": { "type": "string" },
+                          "name": { "type": "string" },
+                          "vendor": { "type": "string" },
+                          "cost": {
+                            "type": "number",
+                            "nullable": true
+                          },
+                          "grams": { "type": "integer" }
+                        }
+                      }
+                    },
+                    "byVendor": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["vendor", "grams"],
+                        "properties": {
+                          "vendor": { "type": "string" },
+                          "grams": { "type": "integer" }
+                        }
+                      }
+                    },
+                    "byPrinter": {
+                      "type": "array",
+                      "description": "Per-printer ranking. Rows WITHOUT a `printerId` (e.g. slicer-agnostic jobs) are intentionally excluded — `Σ byPrinter[].grams ≤ totals.grams` by design.",
+                      "items": {
+                        "type": "object",
+                        "required": ["_id", "name", "grams"],
+                        "properties": {
+                          "_id": { "type": "string" },
+                          "name": { "type": "string" },
+                          "grams": { "type": "integer" }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }

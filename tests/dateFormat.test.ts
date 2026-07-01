@@ -50,6 +50,55 @@ describe("formatDate", () => {
     const out = formatDate(SAMPLE, "this-is-not-a-real-locale-tag");
     expect(out).not.toBe("");
   });
+
+  /**
+   * PR #936 (round-3 self-review P2): when the Intl formatter path
+   * throws, the fallback used to be `d.toLocaleDateString()` with no
+   * arguments — the browser's local timezone would silently shift a
+   * UTC-flagged input to the previous calendar day (`2026-05-30T02:30Z`
+   * → `5/29/2026` in America/Los_Angeles). The fix threads the
+   * caller's `{ timeZone }` option through to
+   * `d.toLocaleDateString(undefined, { timeZone })`. This test pins
+   * that invariant by forcing the catch branch (invalid locale tag)
+   * and asserting the UTC calendar day survives.
+   *
+   * Runs in a fixed timezone via `TZ=America/Los_Angeles` on `process.env`
+   * inside the test — Node reads `TZ` on Date construction so the shift
+   * is deterministic across CI hosts (which run in whichever TZ the
+   * runner defaults to). A future revert to the no-arg fallback would
+   * silently re-open the off-by-one bug the option was introduced to
+   * close, and this test would trip on the regression.
+   */
+  it("preserves the { timeZone } option across the Intl-reject fallback", () => {
+    const prevTz = process.env.TZ;
+    try {
+      // Only meaningful when Node picks up TZ before Date construction.
+      // Vitest reads env at spawn; we build the Date AFTER setting so
+      // any host-TZ that isn't PST doesn't leak into the assertion.
+      process.env.TZ = "America/Los_Angeles";
+      const utcInput = new Date("2026-05-30T02:30:00Z");
+      // 02:30 UTC on 2026-05-30 = 19:30 PDT on 2026-05-29. The
+      // un-timezoned fallback would render "5/29/2026"; the fixed
+      // fallback (threading timeZone: "UTC") renders "5/30/2026".
+      const outWithTz = formatDate(
+        utcInput,
+        "this-is-not-a-real-locale-tag",
+        { timeZone: "UTC" },
+      );
+      // Assert the day-of-month is 30 (UTC calendar day), NOT 29.
+      expect(outWithTz).toMatch(/30/);
+      expect(outWithTz).not.toMatch(/29/);
+
+      // Belt-and-suspenders: the try-path (valid locale) also honours
+      // the timeZone option — that's the primary correctness contract.
+      const outIntl = formatDate(utcInput, "en-US", { timeZone: "UTC" });
+      expect(outIntl).toMatch(/30/);
+      expect(outIntl).not.toMatch(/29/);
+    } finally {
+      if (prevTz === undefined) delete process.env.TZ;
+      else process.env.TZ = prevTz;
+    }
+  });
 });
 
 describe("formatTime", () => {

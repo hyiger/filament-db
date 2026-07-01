@@ -26,17 +26,39 @@ function normalise(input: DateInput): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-/** Locale-aware short date — `Intl.DateTimeFormat(locale, { dateStyle: "short" })`. */
-export function formatDate(input: DateInput, locale: string): string {
+/**
+ * Locale-aware short date — `Intl.DateTimeFormat(locale, { dateStyle: "short" })`.
+ *
+ * When the caller passes `{ timeZone: "UTC" }` the formatter renders in
+ * UTC instead of the browser's local timezone. Use this for values that
+ * are semantically CALENDAR DAYS in UTC (e.g. a `YYYY-MM-DD` day key
+ * from a server aggregation) — the default local-timezone rendering
+ * shifts them by up to ±1 day west/east of UTC.
+ */
+export function formatDate(
+  input: DateInput,
+  locale: string,
+  options?: { timeZone?: string },
+): string {
   const d = normalise(input);
   if (!d) return "";
   try {
-    return new Intl.DateTimeFormat(locale, { dateStyle: "short" }).format(d);
+    return new Intl.DateTimeFormat(locale, {
+      dateStyle: "short",
+      ...(options?.timeZone ? { timeZone: options.timeZone } : {}),
+    }).format(d);
   } catch {
     // Fall back to the browser-locale form if the supplied locale is
     // rejected (e.g. a future i18n catalog ships an exotic tag Intl
-    // doesn't know about). Better a wrong-locale date than a crash.
-    return d.toLocaleDateString();
+    // doesn't know about). Preserve `timeZone` across the fallback so a
+    // UTC-flagged input can't silently shift to the browser's local
+    // calendar day — that would silently re-open the off-by-one bug the
+    // option was introduced to close. Better a wrong-locale date than a
+    // crash; a wrong-calendar date is a different failure mode.
+    return d.toLocaleDateString(
+      undefined,
+      options?.timeZone ? { timeZone: options.timeZone } : undefined,
+    );
   }
 }
 
