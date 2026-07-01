@@ -1384,6 +1384,24 @@ describe("extractAndParse maxExtractBytes cap", () => {
     expect(db.totalFFF).toBe(1);
   });
 
+  it("rejects a tarball with files but no materials, instead of caching an empty DB (Codex P2 #943)", async () => {
+    // Files are present (fileCount > 0) but NONE under data/materials/ — a
+    // malformed archive or an upstream layout change. The in-memory parser
+    // must throw so runFetchWithRetries fails open to the stale cache rather
+    // than caching an empty database (the old disk path threw here too, via
+    // walkDir → ENOENT on a missing data/materials dir).
+    const tarballPath = buildTarball({
+      "OpenPrintTag-nomat/data/brands/x.yaml": "slug: x\nname: X\n",
+      "OpenPrintTag-nomat/README.md": "no materials in this archive",
+    });
+    tarballsToCleanup.push(tarballPath);
+    const buf = readFileSync(tarballPath);
+
+    await expect(extractAndParse(buf, extractTmpDir)).rejects.toThrow(
+      /no material files/,
+    );
+  });
+
   // NOTE: the extract `filter`'s `..`-traversal rejection (defence-in-depth
   // over tar's own sanitisation) is intentionally NOT unit-tested. Triggering
   // it means throwing inside the live `tar` stream's filter, whose failure mode

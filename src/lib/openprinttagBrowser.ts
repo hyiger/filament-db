@@ -1056,6 +1056,17 @@ export async function extractAndParse(
     if (fileCount === 0) {
       throw new Error("Tarball extraction produced no files");
     }
+    if (materialContents.length === 0) {
+      // A real OpenPrintTag database always ships thousands of material YAMLs.
+      // A tarball with files but NONE under data/materials/ means a malformed
+      // archive or an upstream layout change — throw so runFetchWithRetries
+      // fails open to the stale cache instead of caching an empty database and
+      // clobbering good data. (The old disk path threw here too: walkDir on a
+      // missing data/materials dir raised ENOENT — Codex P2 on PR #943.)
+      throw new Error(
+        "OpenPrintTag tarball contained no material files (unexpected layout?)",
+      );
+    }
 
     console.log(
       `${LOG} extract done (in-memory): ${fileCount} files / ${decompressedBytes} bytes in ${Date.now() - extractStart}ms`,
