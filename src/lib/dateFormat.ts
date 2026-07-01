@@ -50,8 +50,15 @@ export function formatDate(
   } catch {
     // Fall back to the browser-locale form if the supplied locale is
     // rejected (e.g. a future i18n catalog ships an exotic tag Intl
-    // doesn't know about). Better a wrong-locale date than a crash.
-    return d.toLocaleDateString();
+    // doesn't know about). Preserve `timeZone` across the fallback so a
+    // UTC-flagged input can't silently shift to the browser's local
+    // calendar day — that would silently re-open the off-by-one bug the
+    // option was introduced to close. Better a wrong-locale date than a
+    // crash; a wrong-calendar date is a different failure mode.
+    return d.toLocaleDateString(
+      undefined,
+      options?.timeZone ? { timeZone: options.timeZone } : undefined,
+    );
   }
 }
 

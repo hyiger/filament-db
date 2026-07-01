@@ -226,19 +226,34 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
     expect(day.grams).toBe(85);
   });
 
-  it("variant inherits parent color when own color is blank", async () => {
+  /**
+   * Variant color inheritance MATCHES `src/lib/resolveFilament.ts`:
+   *
+   *   - `color` is variant-only — a blank-primary variant does NOT
+   *     inherit the parent's primary color (Codex P2 on PR #936; would
+   *     otherwise diverge from every list/detail/export path).
+   *   - `secondaryColors` uses the array-fallback rule: a variant with
+   *     an empty/absent array inherits the parent's whole array (GH
+   *     #477), so a blank-primary variant under a parent with
+   *     `secondaryColors` picks up the parent's `secondaryColors[0]`.
+   *   - Otherwise the segment falls through to `"#808080"` — the same
+   *     hex the list/detail views paint for the same shape.
+   */
+  it("blank-primary variant WITHOUT parent secondaryColors resolves to the #808080 sentinel — parent primary is NOT inherited", async () => {
     const recent = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
     const parent = await Filament.create({
-      name: "Parent PLA",
+      name: "Parent Solid PLA",
       vendor: "V",
       type: "PLA",
       color: "#ABCDEF",
+      // Parent has NO secondaryColors — so the variant has nothing to
+      // inherit and MUST fall through to the sentinel, matching the
+      // list/detail/export rendering.
     });
     await Filament.create({
-      name: "Variant PLA",
+      name: "Variant Blank PLA",
       vendor: "V",
       type: "PLA",
-      // Variant has no own color — should inherit "#ABCDEF" from parent.
       color: null,
       parentId: parent._id,
       spools: [
@@ -257,8 +272,9 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
     );
     expect(day).toBeDefined();
     expect(day.byFilament).toHaveLength(1);
-    expect(day.byFilament[0].name).toBe("Variant PLA");
-    expect(day.byFilament[0].color).toBe("#ABCDEF");
+    expect(day.byFilament[0].name).toBe("Variant Blank PLA");
+    // Sentinel — parent primary #ABCDEF is intentionally NOT inherited.
+    expect(day.byFilament[0].color).toBe("#808080");
   });
 
   it("coextruded filament (null primary) resolves to secondaryColors[0] via displayColor()", async () => {
@@ -295,10 +311,13 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
    * `.populate("usage.filamentId", "name vendor cost parentId color secondaryColors")`
    * select string — trimming that select would silently regress every
    * PrintHistory-driven segment to the `"#808080"` sentinel. This test
-   * pins the populate-select shape against both inheritance and
-   * coextruded fallback (Codex P2 on PR #936).
+   * pins the populate-select shape against both parent-secondary
+   * inheritance and coextruded fallback (Codex P2 on PR #936). Variant
+   * primary `color` is NOT inherited (matches `resolveFilament`'s
+   * `VARIANT_ONLY_FIELDS`); only parent's `secondaryColors` may fall
+   * through.
    */
-  it("PrintHistory loop: variant inherits parent color + coextruded falls back to secondaryColors[0]", async () => {
+  it("PrintHistory loop: variant inherits parent secondaryColors + coextruded falls back to own secondaryColors[0]", async () => {
     // The PrintHistory route uses
     // `.populate("usage.filamentId", "name vendor cost parentId color secondaryColors")`,
     // which resolves the "Filament" model by name. The shared `beforeEach`
@@ -327,7 +346,11 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
       name: "PH Parent",
       vendor: "V",
       type: "PLA",
+      // Parent has BOTH a primary and secondaries. The variant below
+      // MUST inherit the secondary chain (`#DDDDEE`) NOT the primary
+      // (`#ABCDEF`), matching resolveFilament's VARIANT_ONLY_FIELDS.
       color: "#ABCDEF",
+      secondaryColors: ["#DDDDEE"],
     });
     const variant = await F.create({
       name: "PH Variant",
@@ -364,7 +387,9 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
         { color: e.color, grams: e.grams },
       ]),
     );
-    expect(byName.get("PH Variant")?.color).toBe("#ABCDEF");
+    // Variant inherits ONLY parent's secondaryColors[0] — the primary
+    // #ABCDEF is intentionally NOT propagated (variant-only field).
+    expect(byName.get("PH Variant")?.color).toBe("#DDDDEE");
     expect(byName.get("PH Coextruded")?.color).toBe("#112233");
   });
 
@@ -543,5 +568,55 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
       0,
     );
     expect(segmentSum).toBe(day.grams);
+  });
+
+  /**
+   * Future-dated entries: a bad client clock or a mis-imported snapshot
+   * can plant a `startedAt` / `usageHistory[].date` past `now`. Pre-fix
+   * the entry was counted in `totals.grams` / `byFilament` / `byVendor`
+   * but the corresponding `dayKey` had no bucket (the seed loop stops
+   * at `now`), so it silently vanished from `usageByDay` — chart and
+   * headline disagreed. Post-fix both loops skip `date > now` at
+   * ingestion time and the DB query caps `startedAt: { $lte: now }`
+   * as belt-and-suspenders (Codex P3 on PR #936).
+   */
+  it("skips future-dated entries in ALL aggregates so headline and chart agree", async () => {
+    const future = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    await Filament.create({
+      name: "Bad Clock PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#010101",
+      spools: [
+        {
+          label: "main",
+          totalWeight: 950,
+          usageHistory: [
+            // Real entry in-window — should count everywhere.
+            { grams: 10, date: recent, source: "manual", jobId: null },
+            // Future-dated — must NOT contribute to any aggregate.
+            { grams: 999, date: future, source: "manual", jobId: null },
+          ],
+        },
+      ],
+    });
+
+    const res = await getAnalytics(new NextRequest("http://localhost/api/analytics?days=30"));
+    const body = await res.json();
+    // Future entry excluded from totals + per-filament + per-vendor +
+    // manualEntries — every aggregate agrees.
+    expect(body.totals.grams).toBe(10);
+    expect(body.totals.manualEntries).toBe(1);
+    expect(body.byFilament).toHaveLength(1);
+    expect(body.byFilament[0].grams).toBe(10);
+    expect(body.byVendor.find((v: { vendor: string }) => v.vendor === "V")?.grams).toBe(10);
+    // usageByDay sums to the same total. Any future-dated day (past the
+    // window) would be absent from the seeded key set.
+    const chartSum = body.usageByDay.reduce(
+      (s: number, d: { grams: number }) => s + d.grams,
+      0,
+    );
+    expect(chartSum).toBe(10);
   });
 });

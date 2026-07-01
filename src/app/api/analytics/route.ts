@@ -30,10 +30,24 @@ export async function GET(request: NextRequest) {
     await dbConnect();
     const rawDays = Number(request.nextUrl.searchParams.get("days") ?? "30");
     const days = Math.min(Math.max(Number.isFinite(rawDays) ? rawDays : 30, 7), 365);
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const now = new Date();
+    const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    // Codex P3 on PR #936: entries with a future timestamp (bad client
+    // clock, snapshot import) get counted in totals / byFilament /
+    // byVendor but silently dropped from usageByDay because no bucket
+    // exists past `now` in the seed. Bound every aggregate at `now` so
+    // the chart, headline, and top-filament tables never disagree on
+    // the day-of-window boundary.
 
     const [history, filaments] = await Promise.all([
-      PrintHistory.find({ _deletedAt: null, startedAt: { $gte: since } })
+      PrintHistory.find({
+        _deletedAt: null,
+        // Codex P3 on PR #936: `$lte: now` on the DB side so future-dated
+        // rows never reach the aggregation (the JS-side guard below is
+        // belt-and-suspenders in case a row's ObjectId timestamp beat
+        // Date.now()'s ms resolution).
+        startedAt: { $gte: since, $lte: now },
+      })
         .populate("printerId", "name")
         // GH #223: include parentId + the bits we'll inherit (cost) so we
         // can resolve variant-inherited cost without a second round-trip.
@@ -105,9 +119,20 @@ export async function GET(request: NextRequest) {
     }
     /**
      * GH #934: resolve the single hex color the chart should paint a
-     * segment with. Mirrors `resolveCost`'s variant→parent inheritance
-     * pattern but routes through `displayColor()` so coextruded
-     * filaments (null primary) fall through to `secondaryColors[0]`.
+     * segment with. Mirrors `src/lib/resolveFilament.ts`'s inheritance
+     * contract exactly:
+     *
+     *   - `color` is in `VARIANT_ONLY_FIELDS` — a variant's own primary
+     *     color is used as-is; a blank-primary variant does NOT inherit
+     *     the parent's primary color. Painting the parent's primary onto
+     *     a variant here would diverge from every list, detail, and
+     *     export path (Codex P2 on PR #936).
+     *   - `secondaryColors` uses the array-fallback rule (GH #477): a
+     *     variant with an empty array inherits the parent's whole array
+     *     (through `displayColor()` that returns `secondaryColors[0]`
+     *     when the primary is null).
+     *   - Everything else falls through to the `"#808080"` sentinel,
+     *     matching `displayColor()`'s standalone behaviour.
      *
      * Cached by filament id — the answer is deterministic per fid, and a
      * busy window can have 200+ usage rows for the same variant. Without
@@ -127,10 +152,27 @@ export async function GET(request: NextRequest) {
       const ownHasSecondary =
         Array.isArray(own.secondaryColors) && own.secondaryColors.length > 0;
       let color: string;
-      if (ownHasPrimary || ownHasSecondary) color = displayColor(own);
-      else if (parentId && parentColorMap.has(String(parentId)))
-        color = displayColor(parentColorMap.get(String(parentId))!);
-      else color = displayColor(own); // falls through to "#808080" sentinel
+      if (ownHasPrimary || ownHasSecondary) {
+        color = displayColor(own);
+      } else if (parentId) {
+        const parent = parentColorMap.get(String(parentId));
+        // Inherit ONLY the parent's secondaryColors — not the parent's
+        // primary `color` (variant-only per resolveFilament).
+        if (
+          parent &&
+          Array.isArray(parent.secondaryColors) &&
+          parent.secondaryColors.length > 0
+        ) {
+          color = displayColor({
+            color: null,
+            secondaryColors: parent.secondaryColors,
+          });
+        } else {
+          color = displayColor(own); // falls through to "#808080" sentinel
+        }
+      } else {
+        color = displayColor(own);
+      }
       colorByFid.set(fid, color);
       return color;
     }
@@ -175,6 +217,11 @@ export async function GET(request: NextRequest) {
       // Invalid Date — `.toISOString()` on it throws RangeError and 500s
       // the whole endpoint. Skip the offending row instead.
       const entryDate = new Date(entry.startedAt);
+      // Codex P3 on PR #936: skip entries with a future timestamp so
+      // usageByDay + totals stay in sync — the seed loop stops at `now`,
+      // so a future dayKey wouldn't have a bucket and its grams would
+      // vanish from the chart while still landing in totals/byFilament.
+      if (entryDate > now) continue;
       if (Number.isNaN(entryDate.getTime())) continue;
       const dayKey = entryDate.toISOString().slice(0, 10);
       const printerId =
@@ -250,6 +297,10 @@ export async function GET(request: NextRequest) {
           // `uDate.toISOString()` below and throws RangeError.
           if (Number.isNaN(uDate.getTime())) continue;
           if (uDate < since) continue;
+          // Codex P3 on PR #936: same future-timestamp cap as the
+          // PrintHistory loop above — keep usageByDay and the aggregates
+          // consistent on the day-of-window boundary.
+          if (uDate > now) continue;
           // Only "manual" means "logged directly on the spool UI without a
           // PrintHistory record". "job" and "slicer" entries are owned by a
           // PrintHistory row and already counted in the first loop above;
