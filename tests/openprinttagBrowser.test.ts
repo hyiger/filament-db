@@ -1402,6 +1402,25 @@ describe("extractAndParse maxExtractBytes cap", () => {
     );
   });
 
+  it("handles a zero-byte YAML entry without hanging (Codex P2 #943)", async () => {
+    // A corrupt/unusual archive can carry an empty .yaml. node-tar may end the
+    // zero-byte ReadEntry before readEntry attaches its 'end' listener; without
+    // the zero-size short-circuit the buffered read never resolves and the whole
+    // fetch hangs forever. The parse must complete and simply skip the empty file.
+    const tarballPath = buildTarball({
+      "OpenPrintTag-zb/data/brands/x.yaml": "slug: x\nname: X\n",
+      "OpenPrintTag-zb/data/materials/x/empty.yaml": "",
+      "OpenPrintTag-zb/data/materials/x/ok.yaml":
+        "uuid: m\nslug: m\nbrand:\n  slug: x\nname: M\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+    const buf = readFileSync(tarballPath);
+
+    const db = await extractAndParse(buf, extractTmpDir);
+    expect(db.totalFFF).toBe(1);
+    expect(db.materials[0].slug).toBe("m");
+  });
+
   // NOTE: the extract `filter`'s `..`-traversal rejection (defence-in-depth
   // over tar's own sanitisation) is intentionally NOT unit-tested. Triggering
   // it means throwing inside the live `tar` stream's filter, whose failure mode

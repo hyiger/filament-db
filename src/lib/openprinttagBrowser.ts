@@ -958,13 +958,24 @@ export async function extractAndParse(
     });
 
     // Read one tar entry's body fully into a UTF-8 string.
-    const readEntry = (entry: tar.ReadEntry): Promise<string> =>
-      new Promise((resolve, reject) => {
+    const readEntry = (entry: tar.ReadEntry): Promise<string> => {
+      // A zero-byte entry has no body, and node-tar can end it before an 'end'
+      // listener attaches — which would leave this promise (and the
+      // `Promise.all(pending)` below, hence the whole single-flight fetch) hung
+      // FOREVER, with no timeout (the extract timer is already cleared by then).
+      // Resolve immediately; a zero-size entry's content is definitionally ""
+      // (Codex P2 #943). resume() consumes it so the parser advances.
+      if (!entry.size) {
+        entry.resume();
+        return Promise.resolve("");
+      }
+      return new Promise((resolve, reject) => {
         const chunks: Buffer[] = [];
         entry.on("data", (c: Buffer) => chunks.push(c));
         entry.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
         entry.on("error", reject);
       });
+    };
 
     // In-memory tar parser (`tar.t`, not `tar.x`): buffer only
     // data/brands/*.yaml + data/materials/**/*.yaml; drain every other entry so
