@@ -29,7 +29,18 @@ export async function GET(request: NextRequest) {
   try {
     await dbConnect();
     const rawDays = Number(request.nextUrl.searchParams.get("days") ?? "30");
-    const days = Math.min(Math.max(Number.isFinite(rawDays) ? rawDays : 30, 7), 365);
+    // Codex P3 on PR #936: `Math.floor` after the clamp — a fractional
+    // input like `?days=30.9` would compute `since = now - 30.9d` but
+    // the seed loop `for (i = 0; i <= days; i++)` walks integer i only,
+    // so it stops at `since + Math.floor(days) UTC-days` = 30 days
+    // forward = 0.9d before now. Today's `dayKey` then has no bucket
+    // and any in-window usage today lands in `dayBucket === undefined`
+    // → the segment code path silently skips it while totals still
+    // count it. Flooring keeps the seed range and the query range on
+    // the same day-of-window boundary.
+    const days = Math.floor(
+      Math.min(Math.max(Number.isFinite(rawDays) ? rawDays : 30, 7), 365),
+    );
     const now = new Date();
     const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
     // Codex P3 on PR #936: entries with a future timestamp (bad client

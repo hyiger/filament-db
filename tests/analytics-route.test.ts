@@ -860,4 +860,52 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
       findSpy.mockRestore();
     }
   });
+
+  /**
+   * Fractional `days` input. The route accepts any finite number via
+   * `Number(searchParams.get("days"))`, clamps to [7, 365], then floors.
+   * Pre-fix: without the floor, a fractional input like `?days=30.9`
+   * left `since = now - 30.9d` while the seed loop `for (i = 0; i <=
+   * days; i++)` covered only integer i, stopping at `since + 30d` —
+   * 0.9d before now. Today's `dayKey` had no bucket, so today's usage
+   * silently dropped from `usageByDay` while `totals.grams` /
+   * `byFilament` still counted it (Codex P3 on PR #936).
+   *
+   * Post-fix: `Math.floor(days)` after the clamp, so the seed range
+   * and the query range end on the same UTC calendar day, and today's
+   * usage lands in a real bucket.
+   */
+  it("coerces fractional ?days= to an integer so today's usage isn't dropped from the chart", async () => {
+    const today = new Date();
+    await Filament.create({
+      name: "Fractional Days PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#040404",
+      spools: [
+        {
+          label: "main",
+          totalWeight: 950,
+          usageHistory: [{ grams: 7, date: today, source: "manual", jobId: null }],
+        },
+      ],
+    });
+
+    // ?days=30.9 — pre-fix: today's dayKey missing from seed → usage
+    // silently dropped from chart while totals still count 7 g.
+    const res = await getAnalytics(
+      new NextRequest("http://localhost/api/analytics?days=30.9"),
+    );
+    const body = await res.json();
+    expect(body.totals.grams).toBe(7);
+    const chartSum = body.usageByDay.reduce(
+      (s: number, d: { grams: number }) => s + d.grams,
+      0,
+    );
+    // Post-fix: chart and totals agree; today's bucket exists.
+    expect(chartSum).toBe(7);
+    // days coerced to 30 → 31 daily buckets in the seed.
+    expect(body.days).toBe(30);
+    expect(body.usageByDay).toHaveLength(31);
+  });
 });
