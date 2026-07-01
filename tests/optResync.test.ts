@@ -351,6 +351,114 @@ describe("diffOptFields", () => {
   });
 });
 
+describe("getPath edge cases (via public API)", () => {
+  it("returns null for a managed field holding a non-scalar, non-array value (line 137)", () => {
+    // A payload field whose value is a plain object (or boolean) is neither a
+    // number, string, nor array — getPath must fall through to null so a
+    // garbage value never lands in the snapshot / diff. Exercised through
+    // buildOptSnapshot, which reads density via getPath.
+    const snap = buildOptSnapshot(payload({ density: { junk: true } as unknown as number }));
+    expect(snap).not.toHaveProperty("density");
+  });
+
+  it("treats a boolean field value as absent (getPath returns null)", () => {
+    // diffOptFields reads incoming via getPath; a boolean incoming is non-scalar
+    // to getPath's contract → null → the non-clearable field is skipped entirely.
+    const stored = {
+      color: "#3d3e3d",
+      density: 1.5,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    };
+    const changes = diffOptFields(stored, payload({ density: true as unknown as number }), null);
+    expect(changes.find((c) => c.field === "density")).toBeUndefined();
+  });
+
+  it("stops at a null intermediate segment of a dotted path (getPath early null)", () => {
+    // temperatures is null on the stored doc, so temperatures.nozzle can't be
+    // read — current becomes null → the nozzle change classifies as adopt.
+    const stored = {
+      color: "#3d3e3d",
+      density: 1.24,
+      temperatures: null,
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    };
+    const changes = diffOptFields(stored, payload(), null);
+    const nozzle = changes.find((c) => c.field === "temperatures.nozzle");
+    expect(nozzle).toBeDefined();
+    expect(nozzle!.current).toBeNull();
+    expect(nozzle!.kind).toBe("adopt");
+  });
+});
+
+describe("classify conflict via snapshot mismatch (line 224 branch)", () => {
+  it("hits both arms of the snapshot ternary in one diff", () => {
+    // density: snapshot says OPT wrote 1.24, local still 1.24 → adopt (equal arm).
+    // shoreHardnessD: snapshot says OPT wrote 80, local is 85 → conflict (unequal arm).
+    const stored = {
+      color: "#3d3e3d",
+      density: 1.0, // OPT now offers 1.24, snapshot 1.0 == local 1.0 → adopt
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 85, // OPT offers 81, snapshot 80 != local 85 → conflict
+      transmissionDistance: 0.2,
+    };
+    const snapshot = { density: 1.0, shoreHardnessD: 80 };
+    const changes = diffOptFields(stored, payload(), snapshot);
+    expect(changes.find((c) => c.field === "density")!.kind).toBe("adopt");
+    expect(changes.find((c) => c.field === "shoreHardnessD")!.kind).toBe("conflict");
+  });
+});
+
+describe("valuesEqual: array-vs-scalar mismatch (line 148 branch)", () => {
+  it("surfaces a change when local is a scalar but OPT offers an array (secondaryColors)", () => {
+    // Stored secondaryColors is a bogus non-empty scalar (legacy/corrupt data);
+    // OPT offers a real array. valuesEqual's "exactly one is an array" arm must
+    // return false so the change is surfaced rather than swallowed.
+    const stored = {
+      color: null,
+      secondaryColors: "#000000" as unknown as string[],
+      density: 1.24,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    };
+    const changes = diffOptFields(
+      stored,
+      payload({ color: null, secondaryColors: ["#000000", "#98282f"] }),
+      null,
+    );
+    const sec = changes.find((c) => c.field === "secondaryColors");
+    expect(sec).toBeDefined();
+    expect(sec!.incoming).toEqual(["#000000", "#98282f"]);
+  });
+});
+
+describe("canonicalizeColor: array with a non-string element (line 165 branch)", () => {
+  it("passes a non-string array element through unchanged when case-folding", () => {
+    // A secondaryColors array carrying a numeric element (corrupt data) must not
+    // throw in the case-fold path; the non-string element is passed through and
+    // the array still differs from OPT's, so the change surfaces.
+    const stored = {
+      color: null,
+      secondaryColors: [123 as unknown as string, "#98282F"],
+      density: 1.24,
+      temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
+      shoreHardnessD: 81,
+      transmissionDistance: 0.2,
+    };
+    const changes = diffOptFields(
+      stored,
+      payload({ color: null, secondaryColors: ["#000000", "#98282f"] }),
+      null,
+    );
+    const sec = changes.find((c) => c.field === "secondaryColors");
+    expect(sec).toBeDefined();
+    expect(sec!.incoming).toEqual(["#000000", "#98282f"]);
+  });
+});
+
 describe("buildOptSyncUpdate", () => {
   it("builds a $set patch only for selected, whitelisted fields", () => {
     const update = buildOptSyncUpdate(["density", "temperatures.nozzle"], payload());
@@ -431,6 +539,26 @@ describe("pruneOptPayloadAgainstParent (Issue #753)", () => {
   it("returns the payload unchanged when there is no parent", () => {
     const p = payload();
     expect(pruneOptPayloadAgainstParent(p, null)).toBe(p);
+  });
+
+  it("skips the temperature-prune block when the payload has no temperatures object (line 407 false branch)", () => {
+    // A payload whose temperatures is null must not trip the nested-temp loop;
+    // the scalar prune still runs (density matches → dropped).
+    const p = payload({ temperatures: null });
+    const pruned = pruneOptPayloadAgainstParent(p, {
+      density: 1.24,
+      temperatures: { nozzle: 225 },
+    });
+    expect("density" in pruned).toBe(false); // scalar prune still applied
+    expect(pruned.temperatures).toBeNull(); // untouched, no crash
+  });
+
+  it("skips the temperature-prune block when temperatures is missing entirely", () => {
+    const p = payload();
+    delete p.temperatures;
+    const pruned = pruneOptPayloadAgainstParent(p, { density: 1.5, temperatures: { nozzle: 225 } });
+    expect("temperatures" in pruned).toBe(false);
+    expect(pruned.density).toBe(1.24); // differs from parent → kept
   });
 
   it("leaves an empty OPT array empty even when the parent has one (documented empty=inherit limit)", () => {

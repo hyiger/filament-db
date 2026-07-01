@@ -84,6 +84,62 @@ describe("inventoryStats", () => {
       };
       expect(getRemainingGrams(f)).toBe(600);
     });
+
+    it("returns null when spoolWeight is missing but spools have weight", () => {
+      const f: InventoryFilament = {
+        spoolWeight: null,
+        netFilamentWeight: 800,
+        totalWeight: null,
+        spools: [{ totalWeight: 800 }],
+      };
+      expect(getRemainingGrams(f)).toBeNull();
+    });
+
+    it("skips active spools with no weight but still totals the rest", () => {
+      // An active spool with totalWeight == null must not count toward the
+      // total, but it also must not suppress a sibling that does have weight.
+      const f: InventoryFilament = {
+        ...baseTracked,
+        totalWeight: null,
+        spools: [{ totalWeight: null }, { totalWeight: 700 }],
+      };
+      expect(getRemainingGrams(f)).toBe(500);
+    });
+
+    it("returns null when the only active spool has no weight", () => {
+      const f: InventoryFilament = {
+        ...baseTracked,
+        totalWeight: null,
+        spools: [{ totalWeight: null }],
+      };
+      expect(getRemainingGrams(f)).toBeNull();
+    });
+
+    it("falls back to legacy single-spool grams when spools is empty (#524.3)", () => {
+      // spools absent → legacy path: max(0, totalWeight - spoolWeight).
+      expect(
+        getRemainingGrams({ ...baseTracked, totalWeight: 700, spools: [] }),
+      ).toBe(500);
+      // spools key entirely absent → same legacy path.
+      expect(
+        getRemainingGrams({ spoolWeight: 200, netFilamentWeight: 800, totalWeight: 700 }),
+      ).toBe(500);
+    });
+
+    it("clamps legacy grams to 0 when totalWeight is below spoolWeight", () => {
+      expect(
+        getRemainingGrams({ ...baseTracked, totalWeight: 100, spools: [] }),
+      ).toBe(0);
+    });
+
+    it("returns null in the legacy path when totalWeight or spoolWeight is missing", () => {
+      expect(
+        getRemainingGrams({ ...baseTracked, totalWeight: null, spools: [] }),
+      ).toBeNull();
+      expect(
+        getRemainingGrams({ spoolWeight: null, netFilamentWeight: 800, totalWeight: 700, spools: [] }),
+      ).toBeNull();
+    });
   });
 
   describe("getRemainingPct", () => {
@@ -108,6 +164,27 @@ describe("inventoryStats", () => {
           { totalWeight: 1000, retired: true },
           { totalWeight: 600, retired: true },
         ],
+      };
+      expect(getRemainingPct(f)).toBeNull();
+    });
+
+    it("skips active spools with no weight in the percentage", () => {
+      // A weightless active spool must not add a validCount or inflate the
+      // denominator; only the weighted active spool contributes.
+      const f: InventoryFilament = {
+        ...baseTracked,
+        totalWeight: null,
+        spools: [{ totalWeight: null }, { totalWeight: 400 }],
+      };
+      // Only the 400g spool counts: (400-200)/800 = 25%
+      expect(getRemainingPct(f)).toBe(25);
+    });
+
+    it("returns null when the only active spool has no weight", () => {
+      const f: InventoryFilament = {
+        ...baseTracked,
+        totalWeight: null,
+        spools: [{ totalWeight: null }],
       };
       expect(getRemainingPct(f)).toBeNull();
     });

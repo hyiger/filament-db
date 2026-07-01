@@ -4,6 +4,7 @@ import {
   generatePrusaSlicerBundle,
   collapsePerNozzleImportSections,
   resolveSyncBackColor,
+  nozzleSuffix,
 } from "@/lib/prusaSlicerBundle";
 import { parseIniFilaments } from "@/lib/parseIni";
 
@@ -410,6 +411,182 @@ describe("filamentToSlicerKeys", () => {
     expect(JSON.stringify(keys)).not.toContain("#808080");
   });
 
+  it("maps notes to filament_notes when unset in the settings bag (line 293)", () => {
+    const keys = filamentToSlicerKeys({
+      name: "Noted",
+      vendor: "V",
+      type: "PLA",
+      notes: "dry at 55C before printing",
+      temperatures: {},
+      settings: {},
+    });
+    expect(keys.filament_notes).toBe("dry at 55C before printing");
+  });
+
+  it("does NOT overwrite an existing settings-bag filament_notes with the DB notes (line 292 false branch)", () => {
+    const keys = filamentToSlicerKeys({
+      name: "Noted",
+      vendor: "V",
+      type: "PLA",
+      notes: "db notes",
+      temperatures: {},
+      settings: { filament_notes: "preset notes win" },
+    });
+    expect(keys.filament_notes).toBe("preset notes win");
+  });
+
+  it("emits filament_soluble / filament_abrasive from the boolean flags (lines 297-298)", () => {
+    const solubleTrue = filamentToSlicerKeys({
+      name: "PVA",
+      vendor: "V",
+      type: "PVA",
+      soluble: true,
+      abrasive: false,
+      temperatures: {},
+      settings: {},
+    });
+    expect(solubleTrue.filament_soluble).toBe("1");
+    expect(solubleTrue.filament_abrasive).toBe("0");
+
+    const abrasiveTrue = filamentToSlicerKeys({
+      name: "CF",
+      vendor: "V",
+      type: "PA-CF",
+      soluble: false,
+      abrasive: true,
+      temperatures: {},
+      settings: {},
+    });
+    expect(abrasiveTrue.filament_soluble).toBe("0");
+    expect(abrasiveTrue.filament_abrasive).toBe("1");
+  });
+
+  it("omits soluble/abrasive keys entirely when the flags are absent (297-298 false branch)", () => {
+    const keys = filamentToSlicerKeys({
+      name: "Plain",
+      vendor: "V",
+      type: "PLA",
+      temperatures: {},
+      settings: {},
+    });
+    expect(keys).not.toHaveProperty("filament_soluble");
+    expect(keys).not.toHaveProperty("filament_abrasive");
+  });
+
+  it("emits shrinkage compensation keys from shrinkageXY / shrinkageZ (lines 301-304)", () => {
+    const keys = filamentToSlicerKeys({
+      name: "Shrinky",
+      vendor: "V",
+      type: "ABS",
+      shrinkageXY: 100.4,
+      shrinkageZ: 100.2,
+      temperatures: {},
+      settings: {},
+    });
+    expect(keys.filament_shrinkage_compensation_xy).toBe("100.4");
+    expect(keys.filament_shrinkage_compensation_z).toBe("100.2");
+  });
+
+  it("omits shrinkage keys when shrinkageXY / shrinkageZ are absent (301-303 false branch)", () => {
+    const keys = filamentToSlicerKeys({
+      name: "NoShrink",
+      vendor: "V",
+      type: "PLA",
+      temperatures: {},
+      settings: {},
+    });
+    expect(keys).not.toHaveProperty("filament_shrinkage_compensation_xy");
+    expect(keys).not.toHaveProperty("filament_shrinkage_compensation_z");
+  });
+
+  it("emits shrinkage of 0 (falsy but non-null → still written)", () => {
+    // shrinkage compensation of exactly 0 is a real value; the guard is `!= null`
+    // so it must pass through `set()`, not be swallowed as a falsy default.
+    const keys = filamentToSlicerKeys({
+      name: "ZeroShrink",
+      vendor: "V",
+      type: "PLA",
+      shrinkageXY: 0,
+      shrinkageZ: 0,
+      temperatures: {},
+      settings: {},
+    });
+    // set() treats 0 as a value (only null/"" are skipped) → written as "0".
+    expect(keys.filament_shrinkage_compensation_xy).toBe("0");
+    expect(keys.filament_shrinkage_compensation_z).toBe("0");
+  });
+
+  it("tolerates a missing settings bag (line 235 `settings || {}` fallback)", () => {
+    // A doc with no `settings` field must not throw — the spread falls back to {}.
+    const keys = filamentToSlicerKeys({
+      name: "NoSettings",
+      vendor: "V",
+      type: "PLA",
+      temperatures: { nozzle: 205 },
+    });
+    expect(keys.filament_type).toBe("PLA");
+    expect(keys.temperature).toBe("205");
+    expect(keys.filament_settings_id).toBe("NoSettings");
+  });
+
+  it("falls back to empty string for filament_settings_id when name is empty (line 279)", () => {
+    const keys = filamentToSlicerKeys({
+      name: "",
+      vendor: "V",
+      type: "PLA",
+      temperatures: {},
+      settings: {},
+    });
+    expect(keys.filament_settings_id).toBe("");
+  });
+
+  it("ignores non-numeric compatibleNozzles entries when deriving the condition (line 374)", () => {
+    // Entries without a numeric `diameter`, and non-object entries, map to null and
+    // are filtered out; only the valid 0.4 survives the derivation.
+    const keys = filamentToSlicerKeys({
+      name: "Mixed",
+      vendor: "V",
+      type: "PLA",
+      temperatures: {},
+      settings: {},
+      compatibleNozzles: [
+        { diameter: 0.4 },
+        { diameter: "0.6" }, // non-number → dropped
+        { type: "Brass" }, // no diameter → dropped
+        null, // non-object → dropped
+        "0.8", // non-object → dropped
+      ],
+    });
+    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+  });
+
+  it("drops zero / negative nozzle diameters from the derived condition", () => {
+    const keys = filamentToSlicerKeys({
+      name: "ZeroDia",
+      vendor: "V",
+      type: "PLA",
+      temperatures: {},
+      settings: {},
+      compatibleNozzles: [{ diameter: 0 }, { diameter: -1 }, { diameter: 0.4 }],
+    });
+    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+  });
+
+  it("coextruded with an empty-string first secondary omits filament_colour (line 38 branch)", () => {
+    // color null + secondaryColors[0] is "" → slicerExportColor returns null, so
+    // set() is a no-op and no gray sentinel is invented.
+    const keys = filamentToSlicerKeys({
+      name: "BadSecondary",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      secondaryColors: ["", "#00FF00"],
+      temperatures: {},
+      settings: {},
+    });
+    expect(keys).not.toHaveProperty("filament_colour");
+  });
+
   it("null structured fields must not emit nil; settings bag nil is preserved", () => {
     const filament = {
       name: "Nil Test",
@@ -444,6 +621,28 @@ describe("filamentToSlicerKeys", () => {
     expect(bundle).not.toContain("filament_density = nil");
     // Normal settings bag values still work
     expect(bundle).toContain("fan_always_on = 1");
+  });
+});
+
+describe("nozzleSuffix (#872)", () => {
+  it("returns '' for a null/undefined nozzle or one with no diameter (lines 110-111)", () => {
+    expect(nozzleSuffix(null)).toBe("");
+    expect(nozzleSuffix(undefined)).toBe("");
+    expect(nozzleSuffix({ type: "Brass" })).toBe(""); // diameter missing
+  });
+
+  it("composes '<Ø> <type>' and appends HF for a high-flow nozzle", () => {
+    expect(nozzleSuffix({ diameter: 0.4, type: "Brass" })).toBe("0.4 Brass");
+    expect(nozzleSuffix({ diameter: 0.4, type: "Brass", highFlow: true })).toBe(
+      "0.4 Brass HF",
+    );
+  });
+
+  it("collapses the missing type to a bare diameter (type ?? '' branch, line 111)", () => {
+    // No type → the interpolated "" leaves a trailing space that trim() strips.
+    expect(nozzleSuffix({ diameter: 0.6 })).toBe("0.6");
+    // High-flow with no type keeps the HF marker.
+    expect(nozzleSuffix({ diameter: 0.6, highFlow: true })).toBe("0.6 HF");
   });
 });
 
@@ -594,6 +793,99 @@ describe("generatePrusaSlicerBundle", () => {
     // Calibration is NOT baked in the single-nozzle path (stays dynamic).
     expect(bundle).not.toContain("extrusion_multiplier = 0.98");
     expect(bundle).not.toContain("filamentdb_nozzle");
+  });
+
+  it("#872: prefers the any-printer/any-bed default over a printer-specific calibration for the same nozzle (line 459)", () => {
+    // Same nozzle key appears twice. The FIRST seen is printer-specific; the SECOND
+    // is the any-printer/any-bed default. The default must win as the representative
+    // (existing exists but new isDefault && !existingIsDefault → replace).
+    const bundle = generatePrusaSlicerBundle([
+      {
+        name: "PLA",
+        vendor: "Generic",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: { nozzle: 210 },
+        settings: {},
+        calibrations: [
+          // second-nozzle entry so byNozzle.size >= 2 → suffixed presets are emitted
+          { nozzle: { name: "0.6 Brass", diameter: 0.6, type: "Brass" }, printer: null, extrusionMultiplier: 0.9 },
+          // 0.4 Brass, printer-specific FIRST
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: { name: "MK4" }, bedType: { name: "Textured" }, extrusionMultiplier: 0.91 },
+          // 0.4 Brass default SECOND — should become the representative
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, bedType: null, extrusionMultiplier: 0.95 },
+        ],
+      },
+    ]);
+    // The default's extrusion multiplier is baked, not the printer-specific one.
+    expect(bundle).toContain("extrusion_multiplier = 0.95");
+    expect(bundle).not.toContain("extrusion_multiplier = 0.91");
+  });
+
+  it("#872: keeps the first-seen default when a later printer-specific cal shares its nozzle (line 459 no-replace branch)", () => {
+    // FIRST 0.4 Brass is the default; a later printer-specific one for the same
+    // nozzle must NOT replace it (existing is already default → keep existing).
+    const bundle = generatePrusaSlicerBundle([
+      {
+        name: "PLA",
+        vendor: "Generic",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: { nozzle: 210 },
+        settings: {},
+        calibrations: [
+          { nozzle: { name: "0.6 Brass", diameter: 0.6, type: "Brass" }, printer: null, extrusionMultiplier: 0.9 },
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, bedType: null, extrusionMultiplier: 0.95 },
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: { name: "MK4" }, extrusionMultiplier: 0.91 },
+        ],
+      },
+    ]);
+    expect(bundle).toContain("extrusion_multiplier = 0.95");
+    expect(bundle).not.toContain("extrusion_multiplier = 0.91");
+  });
+
+  it("#872: groups distinct typeless nozzles by diameter (nz.type ?? '' key branch, line 454)", () => {
+    // Two calibrations, both with a diameter but NO type — they must still key
+    // distinctly by diameter and expand into two suffixed presets.
+    const bundle = generatePrusaSlicerBundle([
+      {
+        name: "PLA",
+        vendor: "Generic",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: { nozzle: 210 },
+        settings: {},
+        calibrations: [
+          { nozzle: { diameter: 0.4 }, printer: null, extrusionMultiplier: 0.95 },
+          { nozzle: { diameter: 0.6 }, printer: null, extrusionMultiplier: 0.9 },
+        ],
+      },
+    ]);
+    expect(bundle).toContain("[filament:PLA 0.4]");
+    expect(bundle).toContain("[filament:PLA 0.6]");
+    expect(bundle).toContain("filamentdb_nozzle = 0.4");
+  });
+
+  it("#872: a standard and a high-flow nozzle of the same Ø+type are DISTINCT presets (line 454 HF key branch)", () => {
+    // The grouping key includes highFlow, so 0.4 Brass and 0.4 Brass HF don't
+    // collapse — they expand into two suffixed presets.
+    const bundle = generatePrusaSlicerBundle([
+      {
+        name: "PLA",
+        vendor: "Generic",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: { nozzle: 210 },
+        settings: {},
+        calibrations: [
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95 },
+          { nozzle: { name: "0.4 Brass HF", diameter: 0.4, type: "Brass", highFlow: true }, printer: null, extrusionMultiplier: 0.9 },
+        ],
+      },
+    ]);
+    expect(bundle).toContain("[filament:PLA 0.4 Brass]");
+    expect(bundle).toContain("[filament:PLA 0.4 Brass HF]");
+    expect(bundle).toContain("filamentdb_nozzle = 0.4 Brass HF");
   });
 
   it("ignores presets (single section per filament)", () => {
@@ -866,6 +1158,17 @@ describe("collapsePerNozzleImportSections (#872)", () => {
     const base = collapsePerNozzleImportSections(parsed)[0];
     expect("vendor" in base).toBe(false);
     expect("type" in base).toBe(false);
+  });
+
+  it("leaves the name unchanged when it does NOT end with the hint suffix (line 192 false branch)", () => {
+    // A hinted section whose section name does NOT end with " <hint>" (hand-crafted
+    // or renamed) can't be de-suffixed, so the base name stays as-is.
+    const parsed = parseIniFilaments(
+      `[filament:MyCustomPLA]\nfilament_type = PLA\nfilament_vendor = Acme\nfilamentdb_nozzle = 0.4 Brass\n`,
+    );
+    const collapsed = collapsePerNozzleImportSections(parsed);
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0].name).toBe("MyCustomPLA"); // hint present but name doesn't end with it
   });
 
   it("carries a shared scalar a collapsed section DID supply (normal export bakes them from the base)", () => {

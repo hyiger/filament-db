@@ -206,4 +206,59 @@ describe("single-filament slicer export routes", () => {
     expect(body).toContain("temperature = 210");
     expect(body).toContain("bed_temperature = 60");
   });
+
+  it("exports a variant whose parent is missing using only its own values (no resolve)", async () => {
+    // singleFilamentExport.ts line 74: `if (parent)` — the FALSE branch.
+    // A variant carries a parentId, but the parent lookup returns null
+    // (parent purged / soft-deleted). resolveFilamentForExport must skip
+    // resolveFilament() and fall through to the raw variant, so the
+    // export still succeeds with the variant's own values.
+    const orphanVariant = await Filament.create({
+      name: "Orphan Variant",
+      vendor: "TestCo",
+      type: "PLA",
+      parentId: new mongoose.Types.ObjectId(), // points at nothing
+      temperatures: { nozzle: 205, bed: 55 },
+    });
+
+    const res = await exportPrusa(req(String(orphanVariant._id)), {
+      params: Promise.resolve({ id: String(orphanVariant._id) }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("[filament:Orphan Variant]");
+    // The variant's OWN temps — nothing was inherited (no parent doc).
+    expect(body).toContain("temperature = 205");
+    expect(body).toContain("bed_temperature = 55");
+  });
+
+  it("skips resolve when the parent is soft-deleted (still the false branch)", async () => {
+    // A parent that exists but is trashed (_deletedAt set) is filtered
+    // out by the `_deletedAt: null` query, so the parent lookup returns
+    // null and the variant exports its own values unresolved.
+    const trashedParent = await Filament.create({
+      name: "Trashed Parent",
+      vendor: "TestCo",
+      type: "PETG",
+      temperatures: { nozzle: 245, bed: 90 },
+      _deletedAt: new Date(),
+    });
+    const variant = await Filament.create({
+      name: "Variant Of Trashed",
+      vendor: "TestCo",
+      type: "PETG",
+      parentId: trashedParent._id,
+      temperatures: { nozzle: 230, bed: 80 },
+    });
+
+    const res = await exportPrusa(req(String(variant._id)), {
+      params: Promise.resolve({ id: String(variant._id) }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    expect(body).toContain("[filament:Variant Of Trashed]");
+    // Own temps, not the trashed parent's 245/90.
+    expect(body).toContain("temperature = 230");
+    expect(body).toContain("bed_temperature = 80");
+  });
 });

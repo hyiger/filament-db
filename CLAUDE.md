@@ -69,8 +69,10 @@ packages/mobile/    Expo / React Native companion scanner app (NFC + QR) — see
 
 ## Testing
 
-- ~2000 tests across ~115 files (unit + Mongoose model + Next.js route handlers). Exact counts drift on every PR — run `npm test` for the current numbers.
-- Coverage thresholds: 80% lines/statements, 90% functions, 75% branches (enforced on `src/lib/**` and `src/models/**`; `src/lib/compressImage.ts` and `src/lib/labelBitmap.ts` are excluded because their main flow is DOM/canvas-only — GH #526)
+- ~3000 tests across ~145 files (unit + Mongoose model + Next.js route handlers). Exact counts drift on every PR — run `npm test` for the current numbers.
+- **Test discovery is scoped to `tests/`** (`test.include: ["tests/**/*.test.ts"]` in `vitest.config.ts`) so a nested git worktree under `.claude/worktrees/` — or any other in-tree checkout — can't get its stale test copies swept into the run.
+- Coverage thresholds: 99% lines, 98% statements, 96% functions, 96% branches (raised from 80/80/90/75 in the v1.61 coverage sweep, which drove `src/lib/**` + `src/models/**` to ~99% lines / ~98% branches). Enforced on `src/lib/**` and `src/models/**`; `src/lib/compressImage.ts` and `src/lib/labelBitmap.ts` are excluded because their main flow is DOM/canvas-only — GH #526. The residual uncovered branches are provably-unreachable defensive guards (Mongoose always materialises array schema fields as `[]` + rejects invalid Dates at cast; WHATWG URL mandates a host for http(s); regexes capturing only finite numerics; internal-consistency asserts) — thresholds sit just below the achieved numbers so a real regression trips CI while normal churn doesn't.
+- **Full DB-backed suite under `--coverage` needs capped parallelism.** v8 instrumentation + ~15 concurrent `mongodb-memory-server` instances (one `mongod` per test file via `tests/setup.ts` `beforeAll`) overwhelms the machine → `MongoNetworkTimeoutError` / hook timeouts. Run coverage with `--maxWorkers=4` (or fewer); the plain `npm test` run without instrumentation is fine at full parallelism.
 - Setup file: `tests/setup.ts` (mongodb-memory-server). **Caveat**: setup wipes `mongoose.models` between tests; route-level tests that use `.populate(...)` must re-register models in `beforeEach` by calling `mongoose.model(name, schema)` directly (see `tests/locations-route.test.ts` for the pattern).
 - Tests run in CI on Node 20 and 22
 

@@ -5,6 +5,10 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    // The repo's entire suite lives in tests/. Scope discovery there so a
+    // nested git worktree under .claude/worktrees/ (or any other checkout in
+    // the tree) can't get its stale test copies swept into the run.
+    include: ["tests/**/*.test.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov", "json-summary"],
@@ -26,11 +30,20 @@ export default defineConfig({
         // knows the trade-off.
         "src/lib/labelBitmap.ts",
       ],
+      // Raised from 80/90/75/80 after the v1.61 coverage sweep drove
+      // src/lib + src/models to ~99% lines / ~99% statements / ~97% functions
+      // / ~98% branches. The residual uncovered branches are provably
+      // unreachable defensive guards (Mongoose always materialises array
+      // schema fields as [] and rejects invalid Dates at cast; the WHATWG URL
+      // parser mandates a host for http(s); regexes that only capture finite
+      // numerics; internal-consistency asserts). Thresholds sit just below the
+      // achieved numbers so a genuine coverage regression trips CI while
+      // normal churn (a new defensive branch here and there) doesn't.
       thresholds: {
-        lines: 80,
-        functions: 90,
-        branches: 75,
-        statements: 80,
+        lines: 99,
+        functions: 96,
+        branches: 96,
+        statements: 98,
       },
     },
     // Bumped from the 15s prior cap. The v1.32.0 release build (run

@@ -287,6 +287,89 @@ describe("parseBambuStudioProfile", () => {
     expect(filament.vendor).toBeUndefined();
   });
 
+  it("accepts bare (non-array) scalar values for identity + fields", () => {
+    // The Bambu/Orca convention wraps every value in a single-element
+    // array, but a hand-authored or non-standard payload can carry bare
+    // scalars. unwrap() has a bare-string branch and a String()-coerce
+    // branch for anything else (numbers/booleans), so a raw non-array
+    // value must still resolve.
+    const { filament } = parseBambuStudioProfile({
+      // bare string → name (exercises the `typeof value === "string"` path)
+      name: "BarePLA",
+      // bare number → coerced via String() then num()
+      filament_diameter: 1.75,
+      // bare string number → num()
+      filament_density: "1.24",
+      // bare number passthrough → settings via String() coerce
+      slow_down_for_layer_cooling: 3,
+      // bare boolean passthrough → settings via String() coerce
+      some_flag: true,
+    });
+    expect(filament.name).toBe("BarePLA");
+    expect(filament.diameter).toBe(1.75);
+    expect(filament.density).toBe(1.24);
+    expect(filament.settings.slow_down_for_layer_cooling).toBe("3");
+    expect(filament.settings.some_flag).toBe("true");
+  });
+
+  it("treats a bare empty string as undefined", () => {
+    // The bare-string branch returns undefined for "" — so an empty
+    // string vendor doesn't set the field.
+    const { filament } = parseBambuStudioProfile({
+      name: "X",
+      filament_vendor: "",
+    });
+    expect(filament.vendor).toBeUndefined();
+  });
+
+  it("treats an array whose first element is null as undefined", () => {
+    // unwrap()'s `first == null` guard: a [null] / [undefined] array is
+    // as good as absent, so the field stays unset rather than becoming
+    // the string "null".
+    expect(
+      parseBambuStudioProfile({ name: ["X"], filament_vendor: [null] }).filament
+        .vendor,
+    ).toBeUndefined();
+    expect(
+      parseBambuStudioProfile({ name: ["X"], filament_cost: [null] }).filament
+        .cost,
+    ).toBeUndefined();
+  });
+
+  it("coerces a non-finite numeric input to undefined instead of NaN", () => {
+    // num() must never write NaN into the model — a value that Number()
+    // can't parse (or that overflows to Infinity via a bad string) falls
+    // back to undefined. filament_cost of "abc" → NaN → undefined.
+    const { filament } = parseBambuStudioProfile({
+      name: ["X"],
+      filament_cost: ["abc"],
+      filament_density: ["not-a-number"],
+      filament_diameter: ["Infinity"],
+    });
+    expect(filament.cost).toBeUndefined();
+    expect(filament.density).toBeUndefined();
+    expect(filament.diameter).toBeUndefined();
+  });
+
+  it("skips passthrough keys whose value unwraps to undefined (empty settings)", () => {
+    // A non-structured, non-calibration key whose value is an empty
+    // array / empty string / [null] unwraps to undefined and must NOT
+    // land in the settings bag (the `if (s == null) continue` guard).
+    const { filament } = parseBambuStudioProfile({
+      name: ["X"],
+      custom_empty_array: [],
+      custom_empty_string: [""],
+      custom_null_first: [null],
+      custom_kept: ["value"],
+    });
+    expect(filament.settings.custom_empty_array).toBeUndefined();
+    expect(filament.settings.custom_empty_string).toBeUndefined();
+    expect(filament.settings.custom_null_first).toBeUndefined();
+    // sanity: a real value on the same payload still lands in the bag
+    expect(filament.settings.custom_kept).toBe("value");
+    expect(Object.keys(filament.settings)).toEqual(["custom_kept"]);
+  });
+
   it("round-trips an OrcaSlicer-format export through the parser", () => {
     // Build a representative filament doc; pass it through the export
     // generator (which the Bambu export route also uses); parse it back.

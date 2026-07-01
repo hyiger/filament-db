@@ -30,6 +30,18 @@ describe("parseCsv", () => {
     expect(rows[0]).toEqual({ a: "1", b: "2" });
   });
 
+  // Bare CR (old-Mac style) line endings: a `\r` NOT followed by `\n`.
+  // Exercises the `if (input[i] === "\n") i++` false branch — the parser
+  // must treat the lone CR as a line end without swallowing the next char.
+  it("handles bare CR line endings", () => {
+    const csv = "a,b\r1,2\r3,4";
+    const rows = parseCsv(csv) as Array<Record<string, string>>;
+    expect(rows).toEqual([
+      { a: "1", b: "2" },
+      { a: "3", b: "4" },
+    ]);
+  });
+
   it("handles a trailing row without a newline", () => {
     const csv = "a,b\n1,2";
     const rows = parseCsv(csv) as Array<Record<string, string>>;
@@ -71,6 +83,18 @@ describe("parseCsv", () => {
 
   it("returns empty array on empty input", () => {
     expect(parseCsv("")).toEqual([]);
+  });
+
+  // Ragged data row shorter than the header row: the missing trailing
+  // columns must map to "" rather than undefined. Exercises the
+  // `trimmed[r][c] ?? ""` fallback when a cell index has no value.
+  it("fills missing trailing columns with empty strings", () => {
+    const csv = "a,b,c\n1,2\n";
+    const rows = parseCsv(csv) as Array<Record<string, string>>;
+    expect(rows).toEqual([{ a: "1", b: "2", c: "" }]);
+    // The absent column is a real own key, not undefined.
+    expect(Object.prototype.hasOwnProperty.call(rows[0], "c")).toBe(true);
+    expect(rows[0].c).toBe("");
   });
 
   it("trims unquoted whitespace around values", () => {

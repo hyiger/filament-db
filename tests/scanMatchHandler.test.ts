@@ -243,4 +243,167 @@ describe("createScanMatchHandler", () => {
     expect(onResult).not.toHaveBeenCalled();
     expect(onPublish).not.toHaveBeenCalled();
   });
+
+  it("commits null match when the fetch rejects with a non-object (no .name) rejection", async () => {
+    // isAbortError sees a primitive rejection reason on a non-aborted signal:
+    // typeof err !== "object" so it can't be an AbortError → returns false →
+    // the catch commits a null match instead of swallowing (covers line 77).
+    const onResult = vi.fn();
+    const onPublish = vi.fn();
+    const handle = createScanMatchHandler({
+      onResult,
+      onPublish,
+      fetch: makeAbortAwareFetch([
+        async () => {
+           
+          throw "string failure";
+        },
+      ]),
+    });
+
+    await handle({ data: decoded("Primitive-reject tag") });
+
+    expect(onPublish).toHaveBeenCalledTimes(1);
+    expect(onPublish.mock.calls[0]![1]).toBeNull();
+    expect(onResult.mock.calls[0]![0]).toMatchObject({ match: null, candidates: [] });
+  });
+
+  it("commits null match when the fetch rejects with an object lacking a name property", async () => {
+    // typeof err === "object" but "name" not in err → the inner branch is
+    // false and isAbortError falls through to `return false` (line 77).
+    const onResult = vi.fn();
+    const onPublish = vi.fn();
+    const handle = createScanMatchHandler({
+      onResult,
+      onPublish,
+      fetch: makeAbortAwareFetch([
+        async () => {
+           
+          throw { message: "no name key here" };
+        },
+      ]),
+    });
+
+    await handle({ data: decoded("Nameless-object-reject tag") });
+
+    expect(onPublish).toHaveBeenCalledTimes(1);
+    expect(onPublish.mock.calls[0]![1]).toBeNull();
+  });
+
+  it("falls back to global fetch when deps.fetch is omitted (covers the ?? default)", async () => {
+    // No fetch override → the handler binds globalThis.fetch. Stub it so the
+    // default-branch code path (line 81 `?? globalThis.fetch.bind(...)`) runs.
+    const onResult = vi.fn();
+    const onPublish = vi.fn();
+    const stub = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ match: matchFor("glob", "PLA"), candidates: [] }));
+    const original = globalThis.fetch;
+    globalThis.fetch = stub as unknown as typeof globalThis.fetch;
+    try {
+      const handle = createScanMatchHandler({ onResult, onPublish });
+      await handle({ data: decoded("PLA") });
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    expect(stub).toHaveBeenCalledTimes(1);
+    expect(onPublish).toHaveBeenCalledTimes(1);
+    expect(onPublish.mock.calls[0]![1]).toEqual(matchFor("glob", "PLA"));
+  });
+
+  it("omits query params for tag fields that are absent (covers the false side of each guard)", async () => {
+    // data present but every optional field missing: none of the four
+    // params.set() lines run (branches 111-114 false side).
+    const onResult = vi.fn();
+    const onPublish = vi.fn();
+    const fetchMock = makeAbortAwareFetch([
+      async () => jsonResponse({ match: null, candidates: [] }),
+    ]);
+    const handle = createScanMatchHandler({ onResult, onPublish, fetch: fetchMock });
+
+    await handle({ data: { meta: {}, main: {} } as DecodedOpenPrintTag });
+
+    const url = (fetchMock as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0]![0] as string;
+    // Empty query string — no instanceId/name/vendor/type appended.
+    expect(url).toBe("/api/filaments/match?");
+    expect(onPublish).toHaveBeenCalledTimes(1);
+    expect(onPublish.mock.calls[0]![1]).toBeNull();
+  });
+
+  it("defaults match to null and candidates to [] when the body omits them (branches 136/137)", async () => {
+    // The match response is a bare object: parsed.match is undefined → `?? null`
+    // fallback; parsed.candidates is undefined → the Array.isArray(...) guard is
+    // false → `[]` fallback. Also parsed.matchedSpool absent → null.
+    const onResult = vi.fn();
+    const onPublish = vi.fn();
+    const handle = createScanMatchHandler({
+      onResult,
+      onPublish,
+      fetch: makeAbortAwareFetch([async () => jsonResponse({})]),
+    });
+
+    await handle({ data: decoded("Empty-body tag") });
+
+    expect(onPublish).toHaveBeenCalledTimes(1);
+    expect(onPublish.mock.calls[0]![1]).toBeNull(); // match
+    expect(onPublish.mock.calls[0]![2]).toEqual([]); // candidates
+    expect(onPublish.mock.calls[0]![3]).toBeNull(); // matchedSpool
+    expect(onResult.mock.calls[0]![0]).toMatchObject({ match: null, candidates: [] });
+  });
+
+  it("swallows a superseded scan's own successful commit via the seq guard (branch 122)", async () => {
+    // A ignore-abort fetch lets the OLDER scan's request resolve successfully
+    // even after a newer scan supersedes it. Reaching `commit`, the seq guard
+    // (`mySeq !== seq`) must fire its early `return` so no stale commit lands —
+    // this is the true-branch of line 122 that the abort-path tests don't reach.
+    const onResult = vi.fn();
+    const onPublish = vi.fn();
+    const deferA = defer<Response>();
+    const deferB = defer<Response>();
+    // Custom fetch that does NOT wire up the abort → the resolved promise wins.
+    const calls: Array<Promise<Response>> = [deferA.promise, deferB.promise];
+    let i = 0;
+    const fetchMock = vi.fn(() => calls[i++]!) as unknown as typeof globalThis.fetch;
+
+    const handle = createScanMatchHandler({ onResult, onPublish, fetch: fetchMock });
+
+    const pA = handle({ data: decoded("Tag A") }); // mySeq = 1
+    const pB = handle({ data: decoded("Tag B") }); // mySeq = 2, seq now 2
+
+    // Resolve the OLDER (superseded) request first. It reaches commit, but
+    // mySeq(1) !== seq(2) → early return, nothing published.
+    deferA.resolve(jsonResponse({ match: matchFor("aaa", "Tag A"), candidates: [] }));
+    await pA;
+    expect(onPublish).not.toHaveBeenCalled();
+    expect(onResult).not.toHaveBeenCalled();
+
+    // The newest request commits normally.
+    deferB.resolve(jsonResponse({ match: matchFor("bbb", "Tag B"), candidates: [] }));
+    await pB;
+
+    expect(onPublish).toHaveBeenCalledTimes(1);
+    expect(onPublish.mock.calls[0]![1]).toEqual(matchFor("bbb", "Tag B"));
+    expect(onResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("coerces a non-array candidates field to [] (Array.isArray false branch, 137)", async () => {
+    // parsed.candidates is a truthy non-array → the ternary's false side runs.
+    const onResult = vi.fn();
+    const onPublish = vi.fn();
+    const handle = createScanMatchHandler({
+      onResult,
+      onPublish,
+      fetch: makeAbortAwareFetch([
+        async () =>
+          jsonResponse({ match: matchFor("x", "PLA"), candidates: "not-an-array" }),
+      ]),
+    });
+
+    await handle({ data: decoded("PLA") });
+
+    expect(onPublish).toHaveBeenCalledTimes(1);
+    expect(onPublish.mock.calls[0]![2]).toEqual([]); // candidates coerced to []
+  });
 });

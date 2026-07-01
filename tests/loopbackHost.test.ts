@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isLoopbackHostname } from "../src/lib/loopbackHost";
+import { isLoopbackHostname, isLoopbackUrl } from "../src/lib/loopbackHost";
 
 /**
  * Pin every loopback hostname shape we care about, so a future
@@ -131,4 +131,31 @@ describe("isLoopbackHostname — matches the URL.hostname output for common loop
       expect(isLoopbackHostname(hostname)).toBe(true);
     });
   }
+});
+
+describe("isLoopbackUrl", () => {
+  it("returns true for loopback URLs (parses then delegates to isLoopbackHostname)", () => {
+    expect(isLoopbackUrl("http://localhost:3456")).toBe(true);
+    expect(isLoopbackUrl("http://127.0.0.1:3456")).toBe(true);
+    expect(isLoopbackUrl("http://[::1]:3456")).toBe(true);
+    expect(isLoopbackUrl("http://0.0.0.0:3456")).toBe(true);
+    expect(isLoopbackUrl("https://localhost./")).toBe(true);
+  });
+
+  it("returns false for a valid non-loopback URL", () => {
+    expect(isLoopbackUrl("https://example.com")).toBe(false);
+    expect(isLoopbackUrl("http://192.168.1.10:3456")).toBe(false);
+  });
+
+  // Line 89: the catch branch — `new URL(...)` throws on unparseable
+  // input, and the wrapper deliberately returns false (let the user
+  // try rather than gate on a parser quirk).
+  it("returns false when the URL string is unparseable (catch branch)", () => {
+    expect(isLoopbackUrl("")).toBe(false);
+    expect(isLoopbackUrl("not a url")).toBe(false);
+    expect(isLoopbackUrl("http://")).toBe(false);
+    expect(isLoopbackUrl(":::::")).toBe(false);
+    // No scheme — the WHATWG URL parser rejects a bare host string.
+    expect(isLoopbackUrl("localhost:3456")).toBe(false);
+  });
 });

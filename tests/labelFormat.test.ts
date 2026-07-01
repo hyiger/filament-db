@@ -48,6 +48,30 @@ describe("composeLabelLines", () => {
       expect(composeLabelLines(SAMPLE_FILAMENT, f).length, key).toBeGreaterThan(0);
     }
   });
+
+  it("coerces null/undefined vendor+type to empty before joining (vendorType)", () => {
+    // Both null → the `s ?? ""` fallback fires for each, filter drops the empties → no line.
+    expect(composeLabelLines({ vendor: null, type: null }, fmt(["vendorType"]))).toEqual([]);
+    // Only type null → vendor survives, no trailing space from the null.
+    expect(composeLabelLines({ vendor: "Prusament", type: null }, fmt(["vendorType"]))).toEqual(["Prusament"]);
+    // Only vendor null → type survives, no leading space.
+    expect(composeLabelLines({ vendor: null, type: "PLA" }, fmt(["vendorType"]))).toEqual(["PLA"]);
+  });
+
+  it("coerces a null colorName to empty and drops it (colorName field)", () => {
+    expect(composeLabelLines({ colorName: null }, fmt(["colorName"]))).toEqual([]);
+    // undefined (missing key) likewise coerces to empty and is dropped.
+    expect(composeLabelLines({}, fmt(["colorName"]))).toEqual([]);
+    // A real value still passes through, trimmed.
+    expect(composeLabelLines({ colorName: "  Galaxy Black  " }, fmt(["colorName"]))).toEqual(["Galaxy Black"]);
+  });
+
+  it("skips an unknown line id via the optional-chaining fallback (no throw)", () => {
+    // A hand-crafted / legacy format carrying an id not in FIELD_VALUE:
+    // FIELD_VALUE[id]?.(...) is undefined → `?? ""` → dropped by the length filter.
+    const rogue = { ...DEFAULT_LABEL_FORMAT, lines: ["bogus", "name"] as unknown as LabelFormat["lines"] };
+    expect(composeLabelLines(FIL, rogue)).toEqual(["Galaxy Black"]);
+  });
 });
 
 describe("normalizeLabelFormat", () => {
@@ -172,5 +196,18 @@ describe("composeWrappedLabelLines (#745)", () => {
   it("still drops empty fields before wrapping", () => {
     const f = fmt({ lines: ["vendor", "name"], maxLinesPerField: 3 });
     expect(composeWrappedLabelLines({ name: "Solo Name Here" }, f)).toEqual(["Solo", "Name", "Here"]);
+  });
+
+  it("defaults to no-wrap when maxLinesPerField is missing (?? 1 fallback)", () => {
+    // A legacy/hand-built format object without maxLinesPerField (not run through
+    // normalizeLabelFormat) → the `?? 1` fallback → each field stays on one line.
+    const legacy = { ...DEFAULT_LABEL_FORMAT, lines: ["name"] } as Omit<LabelFormat, "maxLinesPerField"> & {
+      maxLinesPerField?: number;
+    };
+    delete legacy.maxLinesPerField;
+    const fil = { name: "Polymaker Panchroma Gradient Matte PLA Wood" };
+    expect(composeWrappedLabelLines(fil, legacy as LabelFormat)).toEqual([
+      "Polymaker Panchroma Gradient Matte PLA Wood",
+    ]);
   });
 });

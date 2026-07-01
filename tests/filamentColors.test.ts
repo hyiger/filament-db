@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
   deriveArrangement,
   arrangementToOptTag,
+  stripArrangementTags,
   displayColor,
   allColors,
   parentSwatchColors,
@@ -80,6 +81,38 @@ describe("arrangementToOptTag", () => {
   it("maps a 3+-secondary coextruded to triple_color (29)", () => {
     expect(arrangementToOptTag("coextruded", 3)).toBe(29);
     expect(arrangementToOptTag("coextruded", 5)).toBe(29);
+  });
+});
+
+describe("stripArrangementTags", () => {
+  it("returns an empty array for null/undefined optTags", () => {
+    expect(stripArrangementTags(null)).toEqual([]);
+    expect(stripArrangementTags(undefined)).toEqual([]);
+  });
+
+  it("returns an empty array (new copy) for an already-empty array", () => {
+    expect(stripArrangementTags([])).toEqual([]);
+  });
+
+  it("removes every arrangement tag (27 gradient, 28 dual, 29 triple)", () => {
+    expect(stripArrangementTags([27, 28, 29])).toEqual([]);
+  });
+
+  it("keeps non-arrangement tags and drops arrangement ones", () => {
+    // 16 = MATTE, 3 = ABRASIVE (non-arrangement) survive; 27/28/29 are stripped.
+    expect(stripArrangementTags([16, 27, 3, 28, 29])).toEqual([16, 3]);
+  });
+
+  it("leaves an array with no arrangement tags untouched (by value)", () => {
+    expect(stripArrangementTags([1, 2, 16])).toEqual([1, 2, 16]);
+  });
+
+  it("does not mutate the input array", () => {
+    const input = [16, 28, 3];
+    const result = stripArrangementTags(input);
+    expect(input).toEqual([16, 28, 3]);
+    expect(result).toEqual([16, 3]);
+    expect(result).not.toBe(input);
   });
 });
 

@@ -37,6 +37,19 @@ describe("snapToStep", () => {
     expect(snapToStep(1.23456, 0.001)).toBe(1.235);
   });
 
+  it("handles a step in exponential notation (0.0000001 → '1e-7')", () => {
+    // (1e-7).toString() === "1e-7", so decimalPlaces takes the e- branch and
+    // resolves to 7 decimals — the snapped value keeps that full precision
+    // rather than collapsing to 0 decimals (which would round to 1).
+    expect(snapToStep(1.23456789, 1e-7)).toBe(1.2345679);
+    expect(snapToStep(0.00000019, 1e-7)).toBe(2e-7);
+  });
+
+  it("handles a non-unit exponential-notation step (5e-7)", () => {
+    // "5e-7" also hits the e- branch → 7 decimals, snapping to the 5e-7 grid.
+    expect(snapToStep(1.2345678, 5e-7)).toBe(1.234568);
+  });
+
   it("returns the value unchanged for a non-positive or non-finite step", () => {
     expect(snapToStep(1.5, 0)).toBe(1.5);
     expect(snapToStep(1.5, -0.01)).toBe(1.5);

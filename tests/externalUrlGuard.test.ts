@@ -1,4 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import dns from "node:dns";
+import net from "node:net";
 
 const { mockLookup } = vi.hoisted(() => ({
   mockLookup: vi.fn(),
@@ -11,7 +13,12 @@ vi.mock("node:dns/promises", () => ({
   lookup: mockLookup,
 }));
 
-import { isPrivateIp, assertExternalUrl, readBodyCapped } from "@/lib/externalUrlGuard";
+import {
+  isPrivateIp,
+  assertExternalUrl,
+  readBodyCapped,
+  ssrfDispatcher,
+} from "@/lib/externalUrlGuard";
 
 /**
  * SSRF guard tests. The module is security-critical (used by the TDS
@@ -138,6 +145,28 @@ describe("isPrivateIp — IPv6 block list", () => {
     expect(isPrivateIp("12345::1")).toBe(true);           // group out of range
   });
 
+  it("blocks a mapped/embedded IPv4 with an out-of-range octet (fail closed)", () => {
+    // The `::ffff:<dotted quad>` form is parsed by folding the trailing
+    // IPv4 into two hex groups; an octet > 255 makes the embedded quad
+    // invalid, so expandIpv6 must bail to null → blocked conservatively.
+    expect(isPrivateIp("::ffff:999.0.0.1")).toBe(true);
+    expect(isPrivateIp("::ffff:1.2.3.400")).toBe(true);
+  });
+
+  it("blocks an IPv6 literal with more than one '::' (fail closed)", () => {
+    // Only a single zero-compression run is legal; two `::` runs are
+    // ambiguous and must be rejected rather than guessed.
+    expect(isPrivateIp("1::2::3")).toBe(true);
+    expect(isPrivateIp("::1::")).toBe(true);
+  });
+
+  it("blocks an IPv6 literal where '::' stands for zero groups (fail closed)", () => {
+    // Eight explicit groups leave no room for `::` to expand into at
+    // least one group, so the address is malformed → blocked.
+    expect(isPrivateIp("1:2:3:4:5:6:7:8::")).toBe(true);
+    expect(isPrivateIp("::1:2:3:4:5:6:7:8")).toBe(true);
+  });
+
   it("allows public IPv6 (Google / Cloudflare DNS)", () => {
     expect(isPrivateIp("2001:4860:4860::8888")).toBe(false);
     expect(isPrivateIp("2606:4700:4700::1111")).toBe(false);
@@ -174,6 +203,23 @@ describe("readBodyCapped — GH #258 response-size guard", () => {
     const res = new Response(null);
     const buf = await readBodyCapped(res, 1024);
     expect(buf.length).toBe(0);
+  });
+
+  it("skips zero-length chunks without corrupting the assembled body", async () => {
+    // A stream can legitimately emit an empty chunk before/between real
+    // data (`value.byteLength === 0`); the reader must not count it toward
+    // the cap nor push it, and the final body is just the real bytes.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(0)); // empty chunk → false branch
+        controller.enqueue(new TextEncoder().encode("hello"));
+        controller.enqueue(new Uint8Array(0)); // trailing empty chunk
+        controller.close();
+      },
+    });
+    const buf = await readBodyCapped(new Response(stream), 1024);
+    expect(buf.toString("utf8")).toBe("hello");
+    expect(buf.length).toBe(5);
   });
 });
 
@@ -279,5 +325,122 @@ describe("assertExternalUrl", () => {
     const url = await assertExternalUrl("http://[2001:4860:4860::8888]/");
     expect(url.hostname).toBe("[2001:4860:4860::8888]");
     expect(mockLookup).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The connection-time DNS guard (`ssrfValidatingLookup`) is the second
+ * layer of SSRF defence — it re-resolves the host at *connect* time and
+ * pins the socket to a validated IP, closing the DNS-rebinding TOCTOU
+ * (GH #256). It isn't exported, so it's exercised through the public
+ * `ssrfDispatcher` by driving a `fetch` and stubbing `node:dns`'s
+ * callback `lookup` (the exact resolution the interceptor performs).
+ *
+ * undici wraps the underlying cause in a generic `TypeError: fetch failed`,
+ * so assertions walk the `.cause` chain for the real message.
+ */
+describe("ssrfDispatcher — connection-time DNS guard", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function causeChain(err: unknown): string {
+    const parts: string[] = [];
+    let cur: unknown = err;
+    for (let depth = 0; cur && depth < 10; depth++) {
+      const e = cur as { message?: unknown; cause?: unknown };
+      if (e.message != null) parts.push(String(e.message));
+      cur = e.cause;
+    }
+    return parts.join(" | ");
+  }
+
+  function stubDnsLookup(impl: (cb: (err: Error | null, addrs?: dns.LookupAddress[]) => void) => void) {
+    vi.spyOn(dns, "lookup").mockImplementation(((host: unknown, opts: unknown, cb: unknown) => {
+      const callback = (typeof opts === "function" ? opts : cb) as (
+        err: Error | null,
+        addrs?: dns.LookupAddress[],
+      ) => void;
+      impl(callback);
+    }) as unknown as typeof dns.lookup);
+  }
+
+  it("blocks a connection when the host resolves to a private IP", async () => {
+    // Attacker DNS returns loopback at connect time — the interceptor must
+    // reject with the Blocked-SSRF error rather than dialing the socket.
+    stubDnsLookup((cb) => cb(null, [{ address: "127.0.0.1", family: 4 }]));
+    let caught: unknown;
+    try {
+      await fetch("http://rebind.example.test/", { dispatcher: ssrfDispatcher } as RequestInit & {
+        dispatcher?: typeof ssrfDispatcher;
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    const chain = causeChain(caught);
+    expect(chain).toMatch(/Blocked SSRF/);
+    expect(chain).toMatch(/127\.0\.0\.1/);
+  });
+
+  it("blocks when ANY resolved address is private (public + private mix)", async () => {
+    stubDnsLookup((cb) =>
+      cb(null, [
+        { address: "8.8.8.8", family: 4 },
+        { address: "10.0.0.1", family: 4 },
+      ]),
+    );
+    let caught: unknown;
+    try {
+      await fetch("http://mixed.example.test/", { dispatcher: ssrfDispatcher } as RequestInit & {
+        dispatcher?: typeof ssrfDispatcher;
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(causeChain(caught)).toMatch(/Blocked SSRF/);
+  });
+
+  it("propagates a DNS resolution error unchanged", async () => {
+    // A genuine resolver failure must surface the resolver's error, not a
+    // Blocked-SSRF message (they're different conditions).
+    stubDnsLookup((cb) => cb(new Error("ENOTFOUND boom")));
+    let caught: unknown;
+    try {
+      await fetch("http://nxdomain.example.test/", { dispatcher: ssrfDispatcher } as RequestInit & {
+        dispatcher?: typeof ssrfDispatcher;
+      });
+    } catch (err) {
+      caught = err;
+    }
+    const chain = causeChain(caught);
+    expect(chain).toMatch(/boom|ENOTFOUND/);
+    expect(chain).not.toMatch(/Blocked SSRF/);
+  });
+
+  it("passes validated public addresses through to the socket connect", async () => {
+    // A public resolution must reach `cb(null, addresses)` so undici proceeds
+    // to connect. We can't route a public IP to a local listener, so we
+    // observe that the connect is ATTEMPTED (only possible once the guard
+    // has approved the address) and fail it fast to keep the test quick.
+    let connectAttempted = false;
+    vi.spyOn(net.Socket.prototype, "connect").mockImplementation(function (
+      this: net.Socket,
+    ) {
+      connectAttempted = true;
+      setImmediate(() => this.destroy(new Error("test-fast-fail")));
+      return this;
+    } as unknown as typeof net.Socket.prototype.connect);
+
+    stubDnsLookup((cb) => cb(null, [{ address: "203.0.113.7", family: 4 }]));
+
+    try {
+      await fetch("http://public.example.test/", { dispatcher: ssrfDispatcher } as RequestInit & {
+        dispatcher?: typeof ssrfDispatcher;
+      });
+    } catch {
+      // Connect is intentionally failed after approval — irrelevant here.
+    }
+    expect(connectAttempted).toBe(true);
   });
 });

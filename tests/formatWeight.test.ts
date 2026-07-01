@@ -48,4 +48,16 @@ describe("formatGrams", () => {
     expect(formatGrams(-12.345)).toBe("-12.34");
     expect(formatGrams(-12.5, 0)).toBe("-12");
   });
+
+  it("falls back to the raw value when it stringifies to exponential notation", () => {
+    // A value big enough that String(value) is exponential (e.g. "1e+21")
+    // breaks the decimal-shift parser: `${value}e${decimals}` becomes
+    // "1e+21e2", which Number() parses as NaN. Line-27 guard returns the raw
+    // stringified value rather than "NaN". Absurd for a gram weight, but pinned.
+    expect(formatGrams(1e21)).toBe("1e+21");
+    expect(formatGrams(1e21, 0)).toBe("1e+21");
+    expect(formatGrams(Number.MAX_VALUE)).toBe(String(Number.MAX_VALUE));
+    // Tiniest denormal — also exponential ("5e-324").
+    expect(formatGrams(5e-324)).toBe("5e-324");
+  });
 });

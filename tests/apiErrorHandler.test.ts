@@ -4,6 +4,9 @@ import {
   errorResponse,
   errorResponseFromCaught,
   handleDuplicateKeyError,
+  handleVersionError,
+  assertActiveRefs,
+  assertMultipartFormData,
   checkFileSize,
   isClientInputError,
   isClientInputErrorMessage,
@@ -176,5 +179,159 @@ describe("checkFileSize", () => {
     expect(res!.status).toBe(413);
     const body = await res!.json();
     expect(body.error).toContain("too large");
+  });
+});
+
+describe("handleVersionError", () => {
+  it("returns 409 when the error name is VersionError", async () => {
+    const err = new Error("No matching document found for id ... version 3");
+    err.name = "VersionError";
+    const res = handleVersionError(err);
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(409);
+    const body = await res!.json();
+    expect(body.error).toContain("modified by another request");
+  });
+
+  it("returns 409 when only the constructor name is VersionError", async () => {
+    // Mongoose's VersionError is a subclass whose instance .name may be reset;
+    // the helper also matches on err.constructor.name (line 140 branch).
+    class VersionError extends Error {}
+    const err = new VersionError("stale version");
+    // Blank the .name so the first predicate can't match — force the
+    // constructor?.name branch to carry the decision.
+    Object.defineProperty(err, "name", { value: "", configurable: true });
+    const res = handleVersionError(err);
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(409);
+  });
+
+  it("returns null for a non-version Error (line 147)", () => {
+    expect(handleVersionError(new Error("some other failure"))).toBeNull();
+  });
+
+  it("returns null for a non-Error value", () => {
+    expect(handleVersionError("VersionError")).toBeNull();
+    expect(handleVersionError(null)).toBeNull();
+  });
+});
+
+describe("assertActiveRefs", () => {
+  // Minimal countable-model stub that returns a plain Promise<number>.
+  function promiseModel(count: number) {
+    const calls: Array<Record<string, unknown>> = [];
+    return {
+      calls,
+      countDocuments(filter: Record<string, unknown>): Promise<number> {
+        calls.push(filter);
+        return Promise.resolve(count);
+      },
+    };
+  }
+
+  // Countable-model stub whose countDocuments returns a Mongoose-style
+  // query object exposing .exec() (exercises the exec() branch, line 178-179).
+  function queryModel(count: number) {
+    const calls: Array<Record<string, unknown>> = [];
+    return {
+      calls,
+      countDocuments(filter: Record<string, unknown>) {
+        calls.push(filter);
+        return { exec: () => Promise.resolve(count) };
+      },
+    };
+  }
+
+  it("returns null immediately when ids is undefined (no query run)", async () => {
+    const model = promiseModel(0);
+    expect(await assertActiveRefs(model, undefined, "printers")).toBeNull();
+    expect(model.calls).toHaveLength(0);
+  });
+
+  it("returns null immediately when ids is empty (no query run)", async () => {
+    const model = promiseModel(0);
+    expect(await assertActiveRefs(model, [], "printers")).toBeNull();
+    expect(model.calls).toHaveLength(0);
+  });
+
+  it("returns null when every deduped id resolves to an active doc (plain Promise)", async () => {
+    // 3 distinct ids after dedupe, count == 3 → all active.
+    const model = promiseModel(3);
+    const res = await assertActiveRefs(model, ["a", "b", "c"], "printers");
+    expect(res).toBeNull();
+    // dedupe + $in / _deletedAt:null filter shape.
+    expect(model.calls[0]).toEqual({ _id: { $in: ["a", "b", "c"] }, _deletedAt: null });
+  });
+
+  it("dedupes ids before comparing against the count", async () => {
+    // ["a","a","b"] dedupes to ["a","b"] (len 2); count 2 → active.
+    const model = promiseModel(2);
+    const res = await assertActiveRefs(model, ["a", "a", "b"], "bed types");
+    expect(res).toBeNull();
+    expect(model.calls[0]).toEqual({ _id: { $in: ["a", "b"] }, _deletedAt: null });
+  });
+
+  it("returns null via the .exec() query branch when counts match", async () => {
+    const model = queryModel(1);
+    const res = await assertActiveRefs(model, ["x"], "nozzles");
+    expect(res).toBeNull();
+  });
+
+  it("returns a 400 naming the field when a ref is missing (deduped mismatch)", async () => {
+    // 2 distinct ids but only 1 active → mismatch.
+    const model = promiseModel(1);
+    const res = await assertActiveRefs(model, ["a", "b"], "printers");
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(400);
+    const body = await res!.json();
+    expect(body.error).toBe("One or more printers no longer exist.");
+  });
+
+  it("returns a 400 via the .exec() branch on a mismatch", async () => {
+    const model = queryModel(0);
+    const res = await assertActiveRefs(model, ["a"], "locations");
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(400);
+    const body = await res!.json();
+    expect(body.error).toBe("One or more locations no longer exist.");
+  });
+});
+
+describe("assertMultipartFormData", () => {
+  it("returns null when the content type is multipart/form-data", () => {
+    const req = new Request("http://localhost/api/x", {
+      method: "POST",
+      headers: { "content-type": "multipart/form-data; boundary=xyz" },
+    });
+    expect(assertMultipartFormData(req)).toBeNull();
+  });
+
+  it("is case-insensitive on the content type", () => {
+    const req = new Request("http://localhost/api/x", {
+      method: "POST",
+      headers: { "content-type": "MULTIPART/FORM-DATA; boundary=xyz" },
+    });
+    expect(assertMultipartFormData(req)).toBeNull();
+  });
+
+  it("returns a 400 for a non-multipart content type", async () => {
+    const req = new Request("http://localhost/api/x", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+    });
+    const res = assertMultipartFormData(req);
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(400);
+    const body = await res!.json();
+    expect(body.error).toContain("multipart/form-data");
+  });
+
+  it("returns a 400 when the content-type header is absent (|| \"\" fallback, branch 238)", async () => {
+    const req = new Request("http://localhost/api/x", { method: "POST" });
+    // No content-type header set → header.get returns null → the `|| ""`
+    // fallback drives the branch, and `.includes` is false.
+    const res = assertMultipartFormData(req);
+    expect(res).not.toBeNull();
+    expect(res!.status).toBe(400);
   });
 });

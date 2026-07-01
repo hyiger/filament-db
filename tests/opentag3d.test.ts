@@ -2,15 +2,17 @@ import { describe, it, expect } from "vitest";
 import {
   encodeOpenTag3D,
   decodeOpenTag3D,
+  ot3dField,
   OPENTAG3D_CORE_SIZE,
   OPENTAG3D_TOTAL_SIZE,
   OPENTAG3D_FIELDS,
   rgbaToHex,
   hexToRgba,
   isTransparentBlack,
+  type Ot3dDecoded,
   type Ot3dValue,
 } from "../src/lib/opentag3d";
-import { decodeOpenTag3DTag } from "../src/lib/opentag3d-decode";
+import { decodeOpenTag3DTag, ot3dToDecodedTag } from "../src/lib/opentag3d-decode";
 
 // A rich, controlled field set. Values are in REAL units (the encoder applies
 // the spec scaling). NOTE the spec's own `examples` mix raw and real values, so
@@ -297,6 +299,106 @@ describe("ot3dToDecodedTag mapping → DecodedOpenPrintTag", () => {
     expect(tag.aux?.opentag3d_max_volumetric_speed).toBe(120);
     expect(tag.aux?.opentag3d_target_volumetric_speed).toBe(80);
     expect(tag.aux?.opentag3d_td_mm as number).toBeCloseTo(11.8, 6);
+  });
+});
+
+describe("ot3dField lookup", () => {
+  it("returns the field definition for a known id", () => {
+    const f = ot3dField("color_1");
+    expect(f.id).toBe("color_1");
+    expect(f.start).toBe(0x4b);
+    expect(f.type).toBe("rgba");
+  });
+
+  it("throws on an unknown field id (programmer error)", () => {
+    expect(() => ot3dField("not_a_real_field")).toThrow(/Unknown OpenTag3D field id/);
+  });
+});
+
+describe("hexToRgba invalid input", () => {
+  it("throws on a malformed hex string", () => {
+    expect(() => hexToRgba("nothex")).toThrow(/Invalid hex color/);
+    expect(() => hexToRgba("#12")).toThrow(/Invalid hex color/); // wrong length
+  });
+});
+
+describe("ot3dToDecodedTag branch coverage", () => {
+  it("surfaces a distinct recommended bed temp in aux when it differs from the max (line 143/144)", () => {
+    // FULL has max_bed_temp == recommended bed_temp (both 60), so line 144 never
+    // fires there. Here the recommended (55) differs from the Extended max (60).
+    const tag = decodeOpenTag3DTag(
+      encodeOpenTag3D({
+        material_base: "PLA",
+        bed_temp: 55, // Core recommended
+        max_bed_temp: 60, // Extended max
+      }),
+    );
+    expect(tag.bedTemp).toBe(60); // range MAX = max_bed_temp
+    expect(tag.aux?.opentag3d_recommended_bed_temp_c).toBe(55);
+  });
+
+  it("does NOT surface a recommended bed temp when it equals the max", () => {
+    const tag = decodeOpenTag3DTag(
+      encodeOpenTag3D({ material_base: "PLA", bed_temp: 60, max_bed_temp: 60 }),
+    );
+    expect(tag.aux?.opentag3d_recommended_bed_temp_c).toBeUndefined();
+  });
+
+  it("stamps the tag version in aux when the tag declares a newer minor (line 156)", () => {
+    const tag = decodeOpenTag3DTag(
+      encodeOpenTag3D({ tag_version: 1.001, material_base: "PLA" }),
+    );
+    expect(tag.aux?.opentag3d_version).toBe("1.001");
+  });
+
+  it("does NOT stamp a version in aux on the current minor", () => {
+    const tag = decodeOpenTag3DTag(encodeOpenTag3D({ material_base: "PLA", serial: "X1" }));
+    expect(tag.aux?.opentag3d_version).toBeUndefined();
+  });
+
+  it("leaves materialName undefined when base/mod/colorName are all absent (line 74 fallback)", () => {
+    // No material_base, material_mod, or color_name → the filter+join yields ""
+    // and the `|| undefined` fallback kicks in.
+    const tag = decodeOpenTag3DTag(encodeOpenTag3D({ manufacturer: "Acme", target_weight: 1000 }));
+    expect(tag.materialName).toBeUndefined();
+    expect(tag.materialType).toBeUndefined();
+  });
+
+  it("formats a production date without a time when mfg_time is absent (line 101 false side)", () => {
+    // The decoder always emits a `time` object when the field is covered, so map
+    // a hand-built decode with mfg_date present but mfg_time omitted to hit the
+    // no-time branch of the timestamp formatter.
+    const decoded: Ot3dDecoded = {
+      version: "1.000",
+      versionRaw: 1000,
+      versionNewerMinor: false,
+      hasExtended: true,
+      fields: {
+        material_base: "PLA",
+        mfg_date: { year: 2025, month: 12, day: 5 },
+      },
+    };
+    const tag = ot3dToDecodedTag(decoded);
+    expect(tag.productionDate).toBe("2025-12-05");
+  });
+
+  it("ignores a non-number density (num() rejects non-numeric values — line 39 false side)", () => {
+    // Hand-built decode with a non-number in a numeric slot exercises num()'s
+    // `typeof v === "number"` false branch → the field is dropped, not coerced.
+    const decoded: Ot3dDecoded = {
+      version: "1.000",
+      versionRaw: 1000,
+      versionNewerMinor: false,
+      hasExtended: false,
+      fields: {
+        material_base: "PLA",
+        // A non-number in a numeric slot drives num()'s `typeof v === "number"`
+        // false branch (fields is loosely typed, so this needs no ts-ignore).
+        density: "not-a-number",
+      },
+    };
+    const tag = ot3dToDecodedTag(decoded);
+    expect(tag.density).toBeUndefined();
   });
 });
 

@@ -52,6 +52,13 @@ describe("niceAxisScale", () => {
     expect(ticks).toEqual([0, 500, 1000, 1500]);
   });
 
+  it("handles a raw step that is an exact power of ten (frac === 1)", () => {
+    // 40/4 = 10 → niceStep(10): frac === 1 → nice step 10 → max 40
+    const { max, ticks } = niceAxisScale(40);
+    expect(max).toBe(40);
+    expect(ticks).toEqual([0, 10, 20, 30, 40]);
+  });
+
   it("respects a custom target tick count", () => {
     const { max, ticks } = niceAxisScale(100, 5);
     // 100/5 = 20 → step 20 → max 100

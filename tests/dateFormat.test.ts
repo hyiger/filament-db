@@ -111,6 +111,16 @@ describe("formatTime", () => {
   it("returns an empty string for null input", () => {
     expect(formatTime(null, "en-US")).toBe("");
   });
+
+  it("falls back to the browser-locale time string for unknown locale tags", () => {
+    // An invalid locale tag forces Intl.DateTimeFormat to throw, exercising
+    // the catch branch (`d.toLocaleTimeString()`). The fallback must still
+    // return a non-empty time string rather than "" or a throw.
+    const out = formatTime(SAMPLE, "this-is-not-a-real-locale-tag");
+    expect(out).not.toBe("");
+    // A time-only string carries no date-style slash separator.
+    expect(out).not.toMatch(/\//);
+  });
 });
 
 describe("formatDateTime", () => {
@@ -127,5 +137,21 @@ describe("formatDateTime", () => {
     const en = formatDateTime(SAMPLE, "en-US");
     const de = formatDateTime(SAMPLE, "de-DE");
     expect(en).not.toBe(de);
+  });
+
+  it("returns an empty string for null / undefined / unparseable input", () => {
+    expect(formatDateTime(null, "en-US")).toBe("");
+    expect(formatDateTime(undefined, "en-US")).toBe("");
+    expect(formatDateTime("not a date", "en-US")).toBe("");
+  });
+
+  it("falls back to the browser-locale datetime string for unknown locale tags", () => {
+    // An invalid locale tag forces Intl.DateTimeFormat to throw, exercising
+    // the catch branch (`d.toLocaleString()`). The fallback must still
+    // return a non-empty datetime string rather than "" or a throw.
+    const out = formatDateTime(SAMPLE, "this-is-not-a-real-locale-tag");
+    expect(out).not.toBe("");
+    // A full datetime string carries at least one digit cluster.
+    expect(out).toMatch(/\d+/);
   });
 });
