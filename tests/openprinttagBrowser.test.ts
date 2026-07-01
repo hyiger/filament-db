@@ -1269,6 +1269,22 @@ describe("shasMatch", () => {
     // A 2-char overlap shouldn't count as a match.
     expect(shasMatch("ab", "abcdef1234")).toBe(false);
   });
+
+  it("rejects anything shorter than MIN_SHA_PREFIX_LEN (7 chars)", () => {
+    // The tarball regex emits `[0-9a-f]{7,40}`, so 7 is the smallest length
+    // either source can produce. A 4–6 char value reaching shasMatch is a
+    // malformed / truncated / hostile response and must NOT match — 1/65k
+    // (4-char) or better random collision rate would let a broken proxy
+    // lock the cache on a low-entropy prefix (hyiger P1 on PR #937).
+    expect(shasMatch("abcdef", "abcdef1234567890abcdef1234567890abcdef12")).toBe(
+      false,
+    );
+    expect(shasMatch("abcdef", "abcdef")).toBe(false);
+    // 7 chars is the minimum accepted length.
+    expect(
+      shasMatch("abcdef1", "abcdef1234567890abcdef1234567890abcdef12"),
+    ).toBe(true);
+  });
 });
 
 describe("fetchUpstreamCommitSha", () => {
@@ -1308,6 +1324,36 @@ describe("fetchUpstreamCommitSha", () => {
   it("returns null when the response has no sha field", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(JSON.stringify({ commit: {} }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(await fetchUpstreamCommitSha()).toBeNull();
+  });
+
+  it("returns null when body.sha is shorter than MIN_SHA_PREFIX_LEN (7)", async () => {
+    // Belt-and-suspenders alongside shasMatch's own floor: reject the
+    // degenerate prefix before it ever reaches the equality check, so a
+    // hostile / truncated response can't stamp a low-entropy prefix on the
+    // cache via subsequent flows (hyiger P1 on PR #937).
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ sha: "abc123" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    expect(await fetchUpstreamCommitSha()).toBeNull();
+  });
+
+  it("rejects a body that exceeds the 64 KB response cap", async () => {
+    // The commits payload is ~1 KB; a hostile / misconfigured proxy that
+    // returned a multi-MB body would previously be fully buffered before
+    // `.json()` parsed it. `readBodyCapped` at 64 KB now backstops that
+    // (hyiger P2 on PR #937). Simulate an oversize response via a manual
+    // ReadableStream chunk larger than the cap.
+    const oversize = Buffer.alloc(70 * 1024, "x");
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(new Uint8Array(oversize), {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -1459,8 +1505,21 @@ describe("SHA-aware refresh (#931)", () => {
     expect(counters.tarballCalls()).toBe(1); // unchanged from the first call
     expect(second.totalFFF).toBe(1);
     expect(second.sha).toBe(SHA);
-    // shaCheckedAt advances on the probe even though the data didn't.
-    expect(second.shaCheckedAt).not.toBe(first.shaCheckedAt);
+    // The probe path stamped `shaCheckedAt` with a fresh ISO timestamp.
+    // Pre-review this asserted `!== first.shaCheckedAt` which could flake on
+    // fast CI when both `Date.now()` calls returned the same ms (Codex P2 on
+    // PR #937). The commits-call counter above already proves the probe
+    // branch ran; here we just pin that a valid ISO string landed.
+    expect(second.shaCheckedAt).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/,
+    );
+    // Slide-TTL uses a SHALLOW spread — `materials` and `brands` MUST be the
+    // same array references as the previous parse (a future refactor to
+    // `structuredClone()` / `JSON.parse(JSON.stringify(...))` would re-allocate
+    // ~11k materials on every probe, so this pins the reference-identity
+    // invariant; hyiger P3 on PR #937).
+    expect(second.materials).toBe(first.materials);
+    expect(second.brands).toBe(first.brands);
   });
 
   it("changed SHA: probes commits API, then re-fetches tarball", async () => {
@@ -1526,5 +1585,50 @@ describe("SHA-aware refresh (#931)", () => {
     expect(counters.tarballCalls()).toBe(1);
     expect(db.totalFFF).toBe(1);
     expect(db.sha).toBe(SHA);
+  });
+
+  it("single-flight: N concurrent forced refreshes share ONE probe call", async () => {
+    const SHA = "2222222222222222222222222222222222222222";
+
+    // Seed the cache first so the probe branch is reachable.
+    let counters = installMock({
+      commitsResponses: [],
+      tarballPath: tarballWithSha(SHA),
+    });
+    await fetchOpenPrintTagDatabase();
+    expect(counters.tarballCalls()).toBe(1);
+    vi.restoreAllMocks();
+
+    // Now install a mock whose commits response can be consumed exactly ONCE
+    // (a second commits call would return `undefined` and throw the mock —
+    // making the amplification visible). Fire N forced refreshes IN PARALLEL:
+    // pre-review each would fire its own probe → N calls hitting GitHub's
+    // 60/hr unauthenticated quota; post-review the single-flight guard wraps
+    // the probe so all N share ONE probe call and ONE decision.
+    counters = installMock({
+      commitsResponses: [SHA], // only ONE commits response provisioned
+      tarballPath: tarballWithSha(SHA),
+    });
+    const results = await Promise.all([
+      fetchOpenPrintTagDatabase({ force: true }),
+      fetchOpenPrintTagDatabase({ force: true }),
+      fetchOpenPrintTagDatabase({ force: true }),
+      fetchOpenPrintTagDatabase({ force: true }),
+      fetchOpenPrintTagDatabase({ force: true }),
+    ]);
+    // ONE probe call, ZERO tarball calls (same SHA → slide-TTL).
+    expect(counters.commitsCalls()).toBe(1);
+    expect(counters.tarballCalls()).toBe(0);
+    // All callers got the same (slide-TTL upgraded) result.
+    for (const r of results) {
+      expect(r.sha).toBe(SHA);
+      expect(r.totalFFF).toBe(1);
+    }
+    // And the shallow-spread invariant: all 5 results are the SAME object
+    // reference (single-flight returned the same in-progress promise to
+    // every caller, and the slide-TTL branch returns `cachedDatabase`).
+    for (const r of results) {
+      expect(r).toBe(results[0]);
+    }
   });
 });
