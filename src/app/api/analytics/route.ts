@@ -208,6 +208,15 @@ export async function GET(request: NextRequest) {
     const byPrinter = new Map<string, { name: string; grams: number }>();
     let totalGrams = 0;
     let totalCost = 0;
+    // Codex P2 on PR #936: rows dropped by the JS guards below
+    // (`Number.isNaN(entryDate.getTime())` — malformed startedAt;
+    // `entryDate > now` — future-dated belt-and-suspenders) contribute
+    // to `history.length` but NOT to any grams / cost / vendor / printer
+    // / day aggregate. Emitting `history.length` as `totals.jobs` would
+    // let the headline claim "N jobs" while every other aggregate has
+    // no evidence of some of them. Count only rows that pass both
+    // guards so the headline agrees with the rest of the response.
+    let jobs = 0;
     // GH #204: per-spool `usageHistory` entries logged directly on the
     // spool UI (source: "manual") count toward grams + cost but are not
     // PrintHistory documents, so the existing `jobs` counter doesn't
@@ -230,12 +239,21 @@ export async function GET(request: NextRequest) {
       // Invalid Date — `.toISOString()` on it throws RangeError and 500s
       // the whole endpoint. Skip the offending row instead.
       const entryDate = new Date(entry.startedAt);
+      // Malformed startedAt (bad import, snapshot restore, historical
+      // print-history bug): `.toISOString()` on Invalid Date throws.
+      // Ordered BEFORE the future-date check so `NaN > now` (always
+      // false) can't accidentally let a NaN row through — the check
+      // is symmetric today but this keeps intent readable.
+      if (Number.isNaN(entryDate.getTime())) continue;
       // Codex P3 on PR #936: skip entries with a future timestamp so
       // usageByDay + totals stay in sync — the seed loop stops at `now`,
       // so a future dayKey wouldn't have a bucket and its grams would
       // vanish from the chart while still landing in totals/byFilament.
       if (entryDate > now) continue;
-      if (Number.isNaN(entryDate.getTime())) continue;
+      // Codex P2 on PR #936: only count rows that pass BOTH guards so
+      // `totals.jobs` agrees with every other aggregate. `history.length`
+      // would over-report by the number of skipped rows.
+      jobs += 1;
       const dayKey = entryDate.toISOString().slice(0, 10);
       const printerId =
         entry.printerId && typeof entry.printerId === "object"
@@ -413,6 +431,29 @@ export async function GET(request: NextRequest) {
         return { date, grams: dayGrams, byFilament: byFil };
       });
 
+    // GH #934: per-filament / vendor / printer totals are ROUND-OF-SUM
+    // over the raw grams accumulated across the window — the "biggest
+    // consumers" ranking wants the truest possible window total. The
+    // stacked chart's per-day segments are Hamilton-apportioned integers
+    // that sum to `day.grams` per day (see the usageByDay emission
+    // above). These two views can drift by up to N/2 grams over N days
+    // in the pathological case of sub-0.5g-per-day usage on the same
+    // filament — a user who mentally sums chart segments across the
+    // window won't get exactly the sidebar total.
+    //
+    // Trade-off: round-of-sum here keeps top-filament totals honest at
+    // window scale (a filament that used 30.4g reads as 30g, not 28g /
+    // 32g depending on daily rounding luck); the chart's per-day
+    // Hamilton invariant makes each day's stack visually consistent
+    // (Σ segments === day.grams). Both invariants can't hold at once —
+    // this shape prioritises the ranking's accuracy over cross-day
+    // segment-sum equality with the sidebar total.
+    //
+    // `byPrinter` intentionally excludes jobs without a `printerId` —
+    // "By printer" answers "how much did each printer print", not
+    // "how much did all jobs use", so an unattributed job legitimately
+    // isn't in any printer's total. Σ byPrinter[].grams ≤ totals.grams
+    // by design.
     const byFilamentArr = Array.from(byFilament.entries())
       .map(([id, v]) => ({ _id: id, ...v, grams: Math.round(v.grams) }))
       .sort((a, b) => b.grams - a.grams);
@@ -431,7 +472,7 @@ export async function GET(request: NextRequest) {
       totals: {
         grams: Math.round(totalGrams),
         cost: Math.round(totalCost * 100) / 100,
-        jobs: history.length,
+        jobs,
         manualEntries,
       },
       usageByDay,

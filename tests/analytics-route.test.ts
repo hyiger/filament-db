@@ -832,13 +832,13 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
         new NextRequest("http://localhost/api/analytics?days=30"),
       );
       const body = await res.json();
-      // totals.jobs counts ALL rows returned by the spied .find() (the
-      // route uses `history.length` for that count — no filter). So
-      // this assertion pins the FETCH shape (2 rows via spy) but does
-      // NOT prove the guard skipped one. The load-bearing invariant is
-      // the aggregate grams below, which come from the SEGMENT loop
-      // and DO route through the JS `entryDate > now` guard.
-      expect(body.totals.jobs).toBe(2);
+      // totals.jobs is now incremented ONLY for rows that pass the JS
+      // guards (Codex P2 on PR #936), so the spy's future row is
+      // excluded from the count too. This is what pins that the JS
+      // guard actually skipped the row rather than silently letting it
+      // through — if the guard were removed, `jobs` would become 2 AND
+      // the aggregate grams below would balloon.
+      expect(body.totals.jobs).toBe(1);
       // The JS guard drops the 999g future row. Without it,
       // totals.grams would be 30 + 999 = 1029.
       expect(body.totals.grams).toBe(30);
