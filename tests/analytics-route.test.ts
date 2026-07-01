@@ -305,6 +305,51 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
   });
 
   /**
+   * Coextruded VARIANT under a coextruded PARENT — pins the
+   * `ownHasPrimary || ownHasSecondary` short-circuit in resolveColor.
+   * The standalone coextruded test above doesn't discriminate this
+   * branch: with no parentId, dropping the `ownHasSecondary` from the
+   * OR would still land in the final `else displayColor(own)` branch
+   * and return `secondaryColors[0]` unchanged. Here the parent has
+   * DIFFERENT secondaries — the current code returns the variant's
+   * `#112233` via the short-circuit; a mutation that fell through to
+   * the parent-lookup branch instead would return `#999999`.
+   */
+  it("coextruded variant's OWN secondaryColors beat parent's (short-circuit before parent lookup)", async () => {
+    const recent = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    const parent = await Filament.create({
+      name: "Coex Parent (differently colored)",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      secondaryColors: ["#999999", "#AAAAAA"],
+    });
+    await Filament.create({
+      name: "Coex Variant (own secondaries)",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      secondaryColors: ["#112233"],
+      parentId: parent._id,
+      spools: [
+        {
+          label: "main",
+          totalWeight: 950,
+          usageHistory: [{ grams: 25, date: recent, source: "manual", jobId: null }],
+        },
+      ],
+    });
+
+    const res = await getAnalytics(new NextRequest("http://localhost/api/analytics?days=30"));
+    const body = await res.json();
+    const day = body.usageByDay.find((d: { grams: number }) => d.grams > 0);
+    expect(day).toBeDefined();
+    expect(day.byFilament).toHaveLength(1);
+    // Variant's own secondaries win via the short-circuit — NOT parent's #999999.
+    expect(day.byFilament[0].color).toBe("#112233");
+  });
+
+  /**
    * PrintHistory loop coverage. The four tests above all seed via
    * `spools[].usageHistory` (`source: "manual"`), exercising only the
    * second loop in `route.ts`. The first loop reads its color from the
@@ -568,6 +613,116 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
       0,
     );
     expect(segmentSum).toBe(day.grams);
+  });
+
+  /**
+   * Hamilton tie-break DIRECTION. The existing sub-0.5g test uses
+   * three EQUAL 0.4g raws — with all fracs equal the sort comparator
+   * (`b.frac - a.frac || b.raw - a.raw`) returns 0 for every pair, so
+   * the +1 deficit lands on whichever segment sorts first via engine
+   * stability. That's insufficient to pin the DESC-by-frac direction:
+   * a mutation flipping to `a.frac - b.frac` would still yield the
+   * same segmentSum, and the test comment already acknowledges "which
+   * one wins isn't asserted". This test uses UNEQUAL fracs (0.7 vs
+   * 0.3) so the larger-frac winner is deterministic and the direction
+   * IS pinned. Reversing the comparator sign would fail the
+   * `byFilament[name].grams === 1` assertion for the 0.7 filament.
+   */
+  it("Hamilton apportionment tie-break gives the +1 to the LARGER-frac segment", async () => {
+    const recent = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000);
+    await Filament.create({
+      name: "Larger Frac",
+      vendor: "V",
+      type: "PLA",
+      color: "#111111",
+      spools: [
+        {
+          label: "main",
+          totalWeight: 950,
+          usageHistory: [{ grams: 0.7, date: recent, source: "manual", jobId: null }],
+        },
+      ],
+    });
+    await Filament.create({
+      name: "Smaller Frac",
+      vendor: "V",
+      type: "PLA",
+      color: "#222222",
+      spools: [
+        {
+          label: "main",
+          totalWeight: 950,
+          usageHistory: [{ grams: 0.3, date: recent, source: "manual", jobId: null }],
+        },
+      ],
+    });
+
+    const res = await getAnalytics(new NextRequest("http://localhost/api/analytics?days=30"));
+    const body = await res.json();
+    const day = body.usageByDay.find((d: { grams: number }) => d.grams > 0);
+    expect(day).toBeDefined();
+    // rawDaySum = 1.0 → dayGrams = 1.
+    expect(day.grams).toBe(1);
+    // Both segments present (raw-filter, not rounded-filter).
+    expect(day.byFilament).toHaveLength(2);
+    const byName = new Map<string, number>(
+      day.byFilament.map((e: { name: string; grams: number }) => [e.name, e.grams]),
+    );
+    // Larger-frac winner: 0.7g → ideal ≈ 0.7 → floor 0, frac 0.7.
+    // Smaller-frac: 0.3g → ideal ≈ 0.3 → floor 0, frac 0.3. Deficit=1
+    // → 0.7 wins the +1, Smaller stays at 0.
+    expect(byName.get("Larger Frac")).toBe(1);
+    expect(byName.get("Smaller Frac")).toBe(0);
+  });
+
+  /**
+   * usageByDay outer-day sort direction. Every other usageByDay test
+   * uses `.find(d => d.grams > 0)` / `.reduce` — none depend on the
+   * emit order. A mutation flipping the sort comparator to render the
+   * chart right-to-left in time would pass every existing assertion.
+   * This test seeds usage on two DISTINCT days and pins ASC order via
+   * index comparison.
+   */
+  it("emits usageByDay in ASC date order (older days first)", async () => {
+    const olderDate = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000);
+    const recentDate = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    const olderKey = olderDate.toISOString().slice(0, 10);
+    const recentKey = recentDate.toISOString().slice(0, 10);
+
+    await Filament.create({
+      name: "Two-day PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#654321",
+      spools: [
+        {
+          label: "main",
+          totalWeight: 950,
+          usageHistory: [
+            { grams: 5, date: olderDate, source: "manual", jobId: null },
+            { grams: 5, date: recentDate, source: "manual", jobId: null },
+          ],
+        },
+      ],
+    });
+
+    const res = await getAnalytics(new NextRequest("http://localhost/api/analytics?days=30"));
+    const body = await res.json();
+    const idxOld = body.usageByDay.findIndex(
+      (d: { date: string }) => d.date === olderKey,
+    );
+    const idxRecent = body.usageByDay.findIndex(
+      (d: { date: string }) => d.date === recentKey,
+    );
+    expect(idxOld).toBeGreaterThanOrEqual(0);
+    expect(idxRecent).toBeGreaterThanOrEqual(0);
+    // ASC: older day appears BEFORE recent day. A mutation flipping
+    // the sort would trip this.
+    expect(idxOld).toBeLessThan(idxRecent);
+    // Also assert the array is monotonically ASC over its full length.
+    for (let i = 1; i < body.usageByDay.length; i++) {
+      expect(body.usageByDay[i].date > body.usageByDay[i - 1].date).toBe(true);
+    }
   });
 
   /**
