@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { GET as getAnalytics } from "@/app/api/analytics/route";
@@ -621,17 +621,27 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
   });
 
   /**
-   * Future-dated PrintHistory row (bad slicer clock / mis-imported).
-   * The sibling test above only exercises the manual-usage loop
-   * (`spools[].usageHistory` with `source: "manual"`); this test pins
-   * the two PrintHistory-side guards: the DB filter
-   * `startedAt: { $lte: now }` at `route.ts:49`, AND the JS-side
-   * `if (entryDate > now) continue;` at `route.ts:224`. Without them,
-   * a future-dated job would be counted in `totals.jobs` /
-   * `byFilament` / `byVendor` / `byPrinter` but silently dropped from
-   * `usageByDay` because no bucket exists past `now` in the seed.
+   * Future-dated PrintHistory row (bad slicer clock / mis-imported)
+   * end-to-end. The sibling test above only exercises the manual-usage
+   * loop (`spools[].usageHistory` with `source: "manual"`); this one
+   * covers the PrintHistory-side round-trip via `PH.create` +
+   * `PrintHistory.find`. Seeds a `printerId` on both rows so the
+   * `byPrinter` and `byVendor` aggregates are also stressed — a
+   * regression that reordered aggregation to accumulate before the
+   * future-date guard would show up in EVERY aggregate here, not just
+   * `totals.grams`.
+   *
+   * NB: this test alone does NOT discriminate the DB filter
+   * (`startedAt: { $lte: now }` at route.ts:49) from the JS guard
+   * (`entryDate > now` at route.ts:224). Under the DB filter alone the
+   * future row is dropped server-side; under the JS guard alone it's
+   * fetched then skipped in-loop. Both produce the same observable
+   * result here. The FOLLOWING test (`… JS-side guard in isolation`)
+   * bypasses the DB via a `PrintHistory.find` spy and pins the JS
+   * guard on its own so a future "cleanup" that removes the
+   * belt-and-suspenders in-code guard is caught by CI.
    */
-  it("skips future-dated PrintHistory rows from every aggregate", async () => {
+  it("skips future-dated PrintHistory rows from every aggregate (end-to-end)", async () => {
     const filMod = await import("@/models/Filament");
     const phMod = await import("@/models/PrintHistory");
     if (!mongoose.models.Filament) {
@@ -646,6 +656,7 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
     }
     const F = mongoose.models.Filament;
     const PH = mongoose.models.PrintHistory;
+    const P = mongoose.models.Printer;
 
     const future = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
     const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
@@ -656,17 +667,25 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
       type: "PLA",
       color: "#020202",
     });
+    const printer = await P.create({
+      name: "PH Test Printer",
+      manufacturer: "M",
+      printerModel: "T-1",
+    });
 
     // Real, in-window job — should count everywhere.
     await PH.create({
       jobLabel: "in-window job",
       startedAt: recent,
+      printerId: printer._id,
       usage: [{ filamentId: fil._id, grams: 20 }],
     });
-    // Future-dated job — MUST be excluded from every aggregate.
+    // Future-dated job — MUST be excluded from every aggregate,
+    // including byPrinter and byVendor.
     await PH.create({
       jobLabel: "future-dated job",
       startedAt: future,
+      printerId: printer._id,
       usage: [{ filamentId: fil._id, grams: 500 }],
     });
 
@@ -678,10 +697,167 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
     expect(body.totals.grams).toBe(20);
     expect(body.byFilament).toHaveLength(1);
     expect(body.byFilament[0].grams).toBe(20);
+    // byVendor and byPrinter aggregates: both must sum to 20g, NOT
+    // 520g — the 500g future-dated segment is excluded EVERYWHERE.
+    const vendorRow = body.byVendor.find(
+      (v: { vendor: string }) => v.vendor === "V",
+    );
+    expect(vendorRow?.grams).toBe(20);
+    expect(body.byPrinter).toHaveLength(1);
+    expect(body.byPrinter[0].grams).toBe(20);
     const chartSum = body.usageByDay.reduce(
       (s: number, d: { grams: number }) => s + d.grams,
       0,
     );
     expect(chartSum).toBe(20);
+  });
+
+  /**
+   * JS-side future-date guard in isolation. The DB filter
+   * `startedAt: { $lte: now }` is the front-line defense; the JS guard
+   * at route.ts:225 (`if (entryDate > now) continue;`) is
+   * belt-and-suspenders per the route comment ("in case the DB filter
+   * is later relaxed or a row is synthesized in memory"). Every other
+   * test in this file goes through `PH.create()` + the real DB query,
+   * so the DB filter drops future rows before the JS guard is even
+   * reachable — a partial revert that removes the JS guard would land
+   * green in CI.
+   *
+   * This test spies on `PrintHistory.find` and returns a future-dated
+   * row directly, bypassing the DB filter and pinning the JS guard on
+   * its own. If a future refactor removes the `entryDate > now` guard
+   * (perhaps as a "redundant" cleanup), this test trips.
+   */
+  it("skips future-dated PrintHistory rows via the JS-side guard alone (bypassing the DB filter)", async () => {
+    // Grab the SAME PrintHistory reference the route holds. The route
+    // does `import PrintHistory from "@/models/PrintHistory"` — Node
+    // caches the module, so importing here returns the identical
+    // `default` export. The shared `beforeEach` above deletes and
+    // re-imports `mongoose.models.PrintHistory`, which can leave the
+    // route's cached ref pointing at a different model instance than
+    // `mongoose.models.PrintHistory` — spying on the latter would then
+    // never intercept the route's calls. Spying on THIS reference
+    // works regardless.
+    const phMod = await import("@/models/PrintHistory");
+    const PH = phMod.default;
+    // Filament needs to be registered so PH.create's schema paths
+    // resolve; same beforeEach caveat applies but PH's Filament ref
+    // isn't the spy target.
+    const filMod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) {
+      mongoose.model("Filament", filMod.default.schema);
+    }
+    const F = mongoose.models.Filament;
+
+    const future = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+
+    const fil = await F.create({
+      name: "PH Isolate Guard PLA",
+      vendor: "IsoV",
+      type: "PLA",
+      color: "#030303",
+    });
+
+    // Seed one in-window row through the real DB path — the spy below
+    // returns BOTH so the in-window baseline is real, but the future
+    // row is force-injected past the DB filter.
+    const inWindowRow = await PH.create({
+      jobLabel: "iso in-window",
+      startedAt: recent,
+      usage: [{ filamentId: fil._id, grams: 30 }],
+    });
+
+    // Synthesize the future-dated row — this mirrors "a row synthesized
+    // in memory" from the route comment.
+    const syntheticFuture = {
+      _id: new mongoose.Types.ObjectId(),
+      _deletedAt: null,
+      jobLabel: "iso future-dated (bypasses DB filter)",
+      startedAt: future,
+      printerId: null,
+      // The route calls `populate("usage.filamentId", "…")` on the
+      // query — the spy returns a chain that produces a POPULATED
+      // shape so downstream `u.filamentId._id` reads work. Match the
+      // real filament so the aggregation attempts to count it.
+      usage: [
+        {
+          filamentId: {
+            _id: fil._id,
+            name: fil.name,
+            vendor: fil.vendor,
+            cost: fil.cost ?? null,
+            parentId: null,
+            color: fil.color,
+            secondaryColors: [],
+          },
+          grams: 999,
+        },
+      ],
+    };
+
+    // Populate the in-window row the same way so the shape matches.
+    const populatedInWindow = {
+      ...inWindowRow.toObject(),
+      usage: [
+        {
+          filamentId: {
+            _id: fil._id,
+            name: fil.name,
+            vendor: fil.vendor,
+            cost: fil.cost ?? null,
+            parentId: null,
+            color: fil.color,
+            secondaryColors: [],
+          },
+          grams: 30,
+        },
+      ],
+    };
+
+    // Chain: PrintHistory.find(...).populate(...).populate(...).lean().
+    // The route also awaits Promise.all so we need to return a thenable
+    // for the terminal .lean() step.
+    const chain = {
+      populate: () => chain,
+      lean: async () => [populatedInWindow, syntheticFuture],
+    };
+    const findSpy = vi
+      .spyOn(PH, "find")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockReturnValueOnce(chain as any);
+
+    try {
+      const res = await getAnalytics(
+        new NextRequest("http://localhost/api/analytics?days=30"),
+      );
+      const body = await res.json();
+      // totals.jobs counts ALL rows returned by the spied .find() (the
+      // route uses `history.length` for that count — no filter). So
+      // this assertion pins the FETCH shape (2 rows via spy) but does
+      // NOT prove the guard skipped one. The load-bearing invariant is
+      // the aggregate grams below, which come from the SEGMENT loop
+      // and DO route through the JS `entryDate > now` guard.
+      expect(body.totals.jobs).toBe(2);
+      // The JS guard drops the 999g future row. Without it,
+      // totals.grams would be 30 + 999 = 1029.
+      expect(body.totals.grams).toBe(30);
+      // byFilament reflects the single in-window contribution.
+      expect(body.byFilament).toHaveLength(1);
+      expect(body.byFilament[0].grams).toBe(30);
+      // byVendor also excludes the future row.
+      const vendorRow = body.byVendor.find(
+        (v: { vendor: string }) => v.vendor === "IsoV",
+      );
+      expect(vendorRow?.grams).toBe(30);
+      // Chart sum agrees.
+      const chartSum = body.usageByDay.reduce(
+        (s: number, d: { grams: number }) => s + d.grams,
+        0,
+      );
+      expect(chartSum).toBe(30);
+    } finally {
+      findSpy.mockRestore();
+    }
   });
 });
