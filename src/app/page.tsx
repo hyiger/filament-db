@@ -948,10 +948,15 @@ export default function Home() {
     const purchased = earliestSpoolDate(spools, "purchaseDate");
     const opened = earliestSpoolDate(spools, "openedDate");
     const cls = "py-2 px-2 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400";
+    // purchaseDate/openedDate are calendar-day values stored as UTC midnight
+    // (the SpoolCard date picker sends a bare YYYY-MM-DD → Mongoose casts it to
+    // UTC midnight). Format in UTC so the day matches the detail page + CSV
+    // export and doesn't shift back a day for users west of UTC (#941 review).
+    const fmt = (iso: string) => formatDate(iso, locale, { timeZone: "UTC" });
     return (
       <>
-        <td className={cls}>{purchased ? formatDate(purchased, locale) : "—"}</td>
-        <td className={cls}>{opened ? formatDate(opened, locale) : "—"}</td>
+        <td className={cls}>{purchased ? fmt(purchased) : "—"}</td>
+        <td className={cls}>{opened ? fmt(opened) : "—"}</td>
       </>
     );
   };

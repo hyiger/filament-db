@@ -2895,15 +2895,19 @@ function SpoolCard({
                 onClick={() => {
                   const g = Number(usageGrams);
                   if (!Number.isFinite(g) || g <= 0) return;
-                  // Send the picked date only when it isn't today, so the
-                  // common "log it now" case keeps the server's own timestamp
-                  // (with time-of-day) rather than a date-only UTC-midnight.
+                  // Send an explicit date only when back-dating; the common
+                  // "log it now" case keeps the server's own timestamp. Anchor
+                  // the picked day to LOCAL NOON (not a bare YYYY-MM-DD, which
+                  // the server would cast to UTC midnight) so it renders as
+                  // that day in the usage-history list (local time) AND buckets
+                  // to that day in the UTC-based Analytics chart — no off-by-one
+                  // for users west of UTC (#941 review).
                   const today = localTodayInput();
-                  onLogUsage({
-                    grams: g,
-                    jobLabel: usageLabel,
-                    date: usageDate && usageDate !== today ? usageDate : undefined,
-                  });
+                  const backDate =
+                    usageDate && usageDate !== today
+                      ? new Date(`${usageDate}T12:00:00`).toISOString()
+                      : undefined;
+                  onLogUsage({ grams: g, jobLabel: usageLabel, date: backDate });
                   setUsageGrams("");
                   setUsageLabel("");
                   setUsageDate(today);
