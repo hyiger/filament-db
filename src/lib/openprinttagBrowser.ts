@@ -657,25 +657,33 @@ export function shasMatch(a: string, b: string): boolean {
 
 /**
  * #931: Cheap "did upstream change?" probe. Hits GitHub's commits API for the
- * latest commit on `main` (~1 KB JSON) instead of re-downloading the 3 MB
- * tarball. Returns the full SHA on success, `null` on any failure — every
- * caller fail-opens to the tarball path on null, so this never wedges a
- * refresh; the probe is pure latency savings.
+ * latest commit on `main` and returns just the SHA — no file list, no author
+ * blob, no `parents` array. Returns the full SHA on success, `null` on any
+ * failure; every caller fail-opens to the tarball path on null, so this
+ * never wedges a refresh — the probe is pure latency savings.
  *
  * Honours the same proxy dispatcher as `downloadTarballToBuffer` so air-gapped
  * / proxied deployments work the same as the tarball path.
  *
- * Response-size cap (PR #937 review, hyiger P2): the body is read via
- * `readBodyCapped` at 64 KB — a hostile / misconfigured proxy can otherwise
- * return a multi-MB payload that `response.json()` would fully buffer before
- * parsing. Matches the #258/#260 hardening pattern the sibling tarball
- * download follows. The real payload is ~1 KB, so 64 KB is generous headroom.
+ * Response shape (Codex P2 on PR #937): asks for `application/vnd.github.sha`
+ * — the docs-supported media type that makes GitHub return the SHA as
+ * text/plain (a bare 40-char string), NOT the full JSON commit blob. Pre-fix
+ * the default JSON shape included the commit's changed-file list and could
+ * exceed the read cap when the latest upstream commit touched many files,
+ * killing the probe on exactly the "big refactor merged" days where the
+ * probe path was most valuable. The SHA media type is fixed-size regardless
+ * of commit content.
  *
- * Timeout (PR #937 review, hyiger P3): 5s default (was 10s). A 1 KB API call
- * that takes longer than 5s means the connection is dead — fail fast and let
- * the tarball path's existing retry backoff cover it. The full retry budget
- * comment near `runFetchWithRetries` bounds the worst-case wait; a 10s probe
- * eroded ~5s of that budget on a bad-network path.
+ * Response-size cap (PR #937 review, hyiger P2): body is read via
+ * `readBodyCapped` at 4 KB. The SHA-only response is ~40 bytes; 4 KB
+ * accommodates any error-body GitHub might still stuff into the response
+ * without permitting an OOM from a hostile / misconfigured proxy.
+ *
+ * Timeout (PR #937 review, hyiger P3): 5s default (was 10s). A 40-byte API
+ * call that takes longer than 5s means the connection is dead — fail fast
+ * and let the tarball path's existing retry backoff cover it. The full retry
+ * budget comment near `runFetchWithRetries` bounds the worst-case wait; a
+ * 10s probe eroded ~5s of that budget on a bad-network path.
  */
 export async function fetchUpstreamCommitSha(opts?: {
   timeoutMs?: number;
@@ -687,7 +695,10 @@ export async function fetchUpstreamCommitSha(opts?: {
   try {
     const response = await fetch(commitsUrl, {
       headers: {
-        Accept: "application/vnd.github+json",
+        // Codex P2 on PR #937: text/plain SHA rather than the full JSON
+        // commit blob, so the response is fixed-size and can't blow the
+        // read cap on a large commit's file list.
+        Accept: "application/vnd.github.sha",
         "User-Agent": "filament-db",
       },
       signal: AbortSignal.timeout(timeoutMs),
@@ -699,23 +710,23 @@ export async function fetchUpstreamCommitSha(opts?: {
       );
       return null;
     }
-    // Cap the body BEFORE parsing so a hostile proxy can't OOM the embedded
+    // Cap the body BEFORE reading so a hostile proxy can't OOM the embedded
     // server. `readBodyCapped` throws when the cap is hit; the outer catch
     // treats that as a probe failure and fail-opens to the tarball path.
-    const rawBody = await readBodyCapped(response, 64 * 1024);
-    const body = JSON.parse(rawBody.toString("utf-8")) as { sha?: unknown };
-    // Reject a shorter-than-`MIN_SHA_PREFIX_LEN` SHA so a degenerate response
-    // can't lock the cache on a low-entropy prefix (PR #937 review, hyiger P1).
-    // Length is checked against the same constant `shasMatch` uses, so the
-    // two guards can never drift.
-    if (
-      typeof body.sha !== "string" ||
-      body.sha.length < MIN_SHA_PREFIX_LEN
-    ) {
+    // 4 KB is enormous for a 40-char SHA but leaves room for any error-body
+    // GitHub might still send with a 2xx (unlikely; belt and suspenders).
+    const rawBody = await readBodyCapped(response, 4 * 1024);
+    // The SHA media type returns raw text — trim in case of a trailing
+    // newline. Reject a shorter-than-`MIN_SHA_PREFIX_LEN` value so a
+    // degenerate / hostile response can't lock the cache on a low-entropy
+    // prefix (PR #937 review, hyiger P1). Length is checked against the same
+    // constant `shasMatch` uses, so the two guards can never drift.
+    const sha = rawBody.toString("utf-8").trim();
+    if (sha.length < MIN_SHA_PREFIX_LEN) {
       console.warn(`${LOG} commits API response had no usable sha`);
       return null;
     }
-    return body.sha;
+    return sha;
   } catch (err) {
     console.warn(
       `${LOG} commits API request failed:`,

@@ -1296,15 +1296,28 @@ describe("fetchUpstreamCommitSha", () => {
   });
 
   it("returns the SHA from the commits API on success", async () => {
+    // Codex P2 on PR #937: the probe asks for `application/vnd.github.sha`
+    // now, so GitHub returns the SHA as text/plain (a bare 40-char string),
+    // NOT the full JSON commit blob. The mock mirrors that shape.
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
       return new Response(
-        JSON.stringify({
-          sha: "deadbeefcafef00d1234567890abcdef12345678",
-          commit: { committer: { date: "2026-06-01T00:00:00Z" } },
-        }),
-        { status: 200, headers: { "content-type": "application/json" } },
+        "deadbeefcafef00d1234567890abcdef12345678",
+        { status: 200, headers: { "content-type": "text/plain" } },
       );
     });
+    const sha = await fetchUpstreamCommitSha();
+    expect(sha).toBe("deadbeefcafef00d1234567890abcdef12345678");
+  });
+
+  it("trims a trailing newline from the SHA text response", async () => {
+    // Some HTTP clients append `\n` to text bodies; the probe must tolerate
+    // that so the returned SHA is a pure hex string (Codex P2 on PR #937).
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        "deadbeefcafef00d1234567890abcdef12345678\n",
+        { status: 200, headers: { "content-type": "text/plain" } },
+      ),
+    );
     const sha = await fetchUpstreamCommitSha();
     expect(sha).toBe("deadbeefcafef00d1234567890abcdef12345678");
   });
@@ -1321,41 +1334,43 @@ describe("fetchUpstreamCommitSha", () => {
     expect(await fetchUpstreamCommitSha()).toBeNull();
   });
 
-  it("returns null when the response has no sha field", async () => {
+  it("returns null when the response body is empty", async () => {
+    // The SHA media type returns text/plain; an empty body signals a hostile
+    // or broken response — fail-open to the tarball path.
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ commit: {} }), {
+      new Response("", {
         status: 200,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "text/plain" },
       }),
     );
     expect(await fetchUpstreamCommitSha()).toBeNull();
   });
 
-  it("returns null when body.sha is shorter than MIN_SHA_PREFIX_LEN (7)", async () => {
+  it("returns null when the SHA is shorter than MIN_SHA_PREFIX_LEN (7)", async () => {
     // Belt-and-suspenders alongside shasMatch's own floor: reject the
     // degenerate prefix before it ever reaches the equality check, so a
     // hostile / truncated response can't stamp a low-entropy prefix on the
     // cache via subsequent flows (hyiger P1 on PR #937).
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ sha: "abc123" }), {
+      new Response("abc123", {
         status: 200,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "text/plain" },
       }),
     );
     expect(await fetchUpstreamCommitSha()).toBeNull();
   });
 
-  it("rejects a body that exceeds the 64 KB response cap", async () => {
-    // The commits payload is ~1 KB; a hostile / misconfigured proxy that
-    // returned a multi-MB body would previously be fully buffered before
-    // `.json()` parsed it. `readBodyCapped` at 64 KB now backstops that
-    // (hyiger P2 on PR #937). Simulate an oversize response via a manual
+  it("rejects a body that exceeds the 4 KB response cap", async () => {
+    // The SHA-only payload is ~40 bytes; a hostile / misconfigured proxy
+    // that returned a multi-MB body would previously be fully buffered
+    // before parsing. `readBodyCapped` at 4 KB now backstops that (Codex P2
+    // + hyiger P2 on PR #937). Simulate an oversize response via a manual
     // ReadableStream chunk larger than the cap.
-    const oversize = Buffer.alloc(70 * 1024, "x");
+    const oversize = Buffer.alloc(8 * 1024, "x");
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(new Uint8Array(oversize), {
         status: 200,
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "text/plain" },
       }),
     );
     expect(await fetchUpstreamCommitSha()).toBeNull();
@@ -1448,10 +1463,13 @@ describe("SHA-aware refresh (#931)", () => {
         if (typeof next === "number") {
           return new Response("err", { status: next });
         }
-        return new Response(
-          JSON.stringify({ sha: next, commit: { committer: { date: "" } } }),
-          { status: 200, headers: { "content-type": "application/json" } },
-        );
+        // The probe asks for `application/vnd.github.sha` (Codex P2 on
+        // PR #937), so GitHub returns the SHA as text/plain (a bare 40-char
+        // string) — not the full JSON commit blob.
+        return new Response(next, {
+          status: 200,
+          headers: { "content-type": "text/plain" },
+        });
       }
       // Otherwise: stream the tarball.
       tarballCalls += 1;
