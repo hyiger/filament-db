@@ -3011,7 +3011,10 @@
                           "_id": { "type": "string" },
                           "name": { "type": "string" },
                           "vendor": { "type": "string" },
-                          "cost": { "type": ["number", "null"] },
+                          "cost": {
+                            "type": "number",
+                            "nullable": true
+                          },
                           "grams": { "type": "integer" }
                         }
                       }
