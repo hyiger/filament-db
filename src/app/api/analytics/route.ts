@@ -43,9 +43,11 @@ export async function GET(request: NextRequest) {
       PrintHistory.find({
         _deletedAt: null,
         // Codex P3 on PR #936: `$lte: now` on the DB side so future-dated
-        // rows never reach the aggregation (the JS-side guard below is
-        // belt-and-suspenders in case a row's ObjectId timestamp beat
-        // Date.now()'s ms resolution).
+        // rows never reach the aggregation. The JS-side guard below is
+        // belt-and-suspenders so the per-day-bucket invariant (every
+        // dayKey has a seeded bucket in `byDayFilament`) holds even if
+        // the DB filter is later relaxed or a row is synthesized in
+        // memory (e.g. a test that hand-crafts a PrintHistory doc).
         startedAt: { $gte: since, $lte: now },
       })
         .populate("printerId", "name")

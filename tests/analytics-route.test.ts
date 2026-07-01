@@ -619,4 +619,69 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
     );
     expect(chartSum).toBe(10);
   });
+
+  /**
+   * Future-dated PrintHistory row (bad slicer clock / mis-imported).
+   * The sibling test above only exercises the manual-usage loop
+   * (`spools[].usageHistory` with `source: "manual"`); this test pins
+   * the two PrintHistory-side guards: the DB filter
+   * `startedAt: { $lte: now }` at `route.ts:49`, AND the JS-side
+   * `if (entryDate > now) continue;` at `route.ts:224`. Without them,
+   * a future-dated job would be counted in `totals.jobs` /
+   * `byFilament` / `byVendor` / `byPrinter` but silently dropped from
+   * `usageByDay` because no bucket exists past `now` in the seed.
+   */
+  it("skips future-dated PrintHistory rows from every aggregate", async () => {
+    const filMod = await import("@/models/Filament");
+    const phMod = await import("@/models/PrintHistory");
+    if (!mongoose.models.Filament) {
+      mongoose.model("Filament", filMod.default.schema);
+    }
+    if (!mongoose.models.PrintHistory) {
+      mongoose.model("PrintHistory", phMod.default.schema);
+    }
+    const printerMod = await import("@/models/Printer");
+    if (!mongoose.models.Printer) {
+      mongoose.model("Printer", printerMod.default.schema);
+    }
+    const F = mongoose.models.Filament;
+    const PH = mongoose.models.PrintHistory;
+
+    const future = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+
+    const fil = await F.create({
+      name: "PH Bad Clock PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#020202",
+    });
+
+    // Real, in-window job — should count everywhere.
+    await PH.create({
+      jobLabel: "in-window job",
+      startedAt: recent,
+      usage: [{ filamentId: fil._id, grams: 20 }],
+    });
+    // Future-dated job — MUST be excluded from every aggregate.
+    await PH.create({
+      jobLabel: "future-dated job",
+      startedAt: future,
+      usage: [{ filamentId: fil._id, grams: 500 }],
+    });
+
+    const res = await getAnalytics(new NextRequest("http://localhost/api/analytics?days=30"));
+    const body = await res.json();
+    // totals.jobs counts PrintHistory rows returned from the DB — with
+    // the $lte: now filter, only the in-window row makes it through.
+    expect(body.totals.jobs).toBe(1);
+    expect(body.totals.grams).toBe(20);
+    expect(body.byFilament).toHaveLength(1);
+    expect(body.byFilament[0].grams).toBe(20);
+    const chartSum = body.usageByDay.reduce(
+      (s: number, d: { grams: number }) => s + d.grams,
+      0,
+    );
+    expect(chartSum).toBe(20);
+  });
 });
