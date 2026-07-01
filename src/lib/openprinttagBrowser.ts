@@ -13,9 +13,8 @@
  */
 
 import { parse as parseYaml } from "yaml";
-import { mkdtempSync } from "fs";
-import { readFile, readdir, rm, stat } from "fs/promises";
-import { basename, join } from "path";
+import { readdir, rm, stat } from "fs/promises";
+import { join } from "path";
 import { tmpdir } from "os";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -416,26 +415,6 @@ export function mapToFilamentPayload(
 
 // ── Tarball fetching and extraction ────────────────────────────────────
 
-/**
- * Walk a directory recursively, yielding file paths.
- *
- * #743: async (fs/promises) rather than readdirSync/statSync so the recursive
- * walk over the OpenPrintTag tree (~11k material files) doesn't block the
- * embedded server's single event loop on a cold parse.
- */
-async function walkDir(dir: string): Promise<string[]> {
-  const results: string[] = [];
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const full = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      results.push(...(await walkDir(full)));
-    } else {
-      results.push(full);
-    }
-  }
-  return results;
-}
-
 // Prefix on every diagnostic line so the OPT fetch flow is greppable in the
 // packaged app's main.log (electron/main.ts mirrors the embedded server's
 // stdout/stderr to %APPDATA%/Filament DB/logs/main.log).
@@ -444,31 +423,6 @@ const LOG = "[openprinttag]";
 // All temp dirs this module creates share this prefix; the stale-dir sweep
 // keys off it to reclaim partial copies left by an earlier interrupted run.
 const TMP_PREFIX = "openprinttag-";
-
-/**
- * Remove a temp dir robustly. Uses async `rm` (yields the event loop instead
- * of blocking it on a ~11k-file recursive delete — the reported "hang") with
- * Node's built-in retry, which backs off on the Windows file-lock errors
- * (EBUSY/EPERM/ENOTEMPTY) that antivirus / lingering handles trigger and that
- * a plain `force: true` does NOT retry — the cause of the partial leftovers.
- * Best-effort: logs the failure rather than throwing (cleanup must not mask
- * the real result), but does NOT swallow it silently.
- */
-async function cleanupTempDir(dir: string): Promise<void> {
-  try {
-    await rm(dir, {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-      retryDelay: 100,
-    });
-  } catch (err) {
-    console.warn(
-      `${LOG} cleanup failed for ${dir} — may leave a partial copy:`,
-      err instanceof Error ? err.message : err,
-    );
-  }
-}
 
 /**
  * Best-effort sweep of stale `openprinttag-*` temp dirs from earlier runs that
@@ -925,24 +879,20 @@ export async function downloadTarballToBuffer(opts?: {
  * Runs once (no retry) — see runFetchWithRetries. Caches the result.
  */
 async function extractParseOnce(tarballBuffer: Buffer): Promise<OPTDatabase> {
-  const tmpDir = mkdtempSync(join(tmpdir(), TMP_PREFIX));
-  console.log(`${LOG} extract starting (tmpDir=${basename(tmpDir)})`);
-  try {
-    const result = await extractAndParse(tarballBuffer, tmpDir);
-    console.log(
-      `${LOG} succeeded — ${result.totalFFF} FFF / ${result.totalSLA} SLA materials`,
-    );
-    return result;
-  } finally {
-    // Clean up the temp directory. Async + retrying so it neither blocks the
-    // event loop nor leaves a partial copy on a Windows file lock.
-    await cleanupTempDir(tmpDir);
-  }
+  console.log(`${LOG} extract starting (in-memory)`);
+  const result = await extractAndParse(tarballBuffer);
+  console.log(
+    `${LOG} succeeded — ${result.totalFFF} FFF / ${result.totalSLA} SLA materials`,
+  );
+  return result;
 }
 
 export async function extractAndParse(
   tarballBuffer: Buffer,
-  tmpDir: string,
+  // Retained for signature/back-compat only. Parsing is now fully IN-MEMORY
+  // (no `tar.x` to disk), so no temp directory is used — see the streaming
+  // rewrite below. Existing callers/tests that still pass a dir are harmless.
+  _tmpDir?: string,
   opts?: { maxExtractBytes?: number },
 ): Promise<OPTDatabase> {
   try {
@@ -966,11 +916,32 @@ export async function extractAndParse(
     const extractStart = Date.now();
     let decompressedBytes = 0;
     let fileCount = 0;
+    let tooManyFiles = false;
+    let sha: string | undefined;
+
+    // The brand + material YAML we actually parse, buffered IN MEMORY — the
+    // tarball is never written to disk. The previous implementation `tar.x`'d
+    // all ~18k entries to a temp dir and walked it back; on slow /
+    // antivirus-scanned / Docker-overlay filesystems those per-file writes were
+    // the "Fetching OpenPrintTag database… stuck then times out" phase, and the
+    // file count keeps growing as the OPT DB grows (13k+ FFF materials now).
+    // Streaming + in-memory parse is filesystem-independent and scales with
+    // BYTES, not FILE COUNT.
+    const brandContents: string[] = [];
+    const materialContents: string[] = [];
+
+    // The extract gets its OWN AbortController/timeout, independent of the
+    // network deadline; an abort rejects the pipeline and relabelTimeoutError
+    // names the extract phase honestly.
     const extractController = new AbortController();
     const extractTimer = setTimeout(
       () => extractController.abort(),
       EXTRACT_TIMEOUT_MS,
     );
+
+    // Cap the DECOMPRESSED bytes against what's actually streamed (not the
+    // attacker-declared header `size`, which a lying header could under-report)
+    // — the tar-bomb guard.
     const byteCounter = new Transform({
       transform(chunk: Buffer, _enc, cb) {
         decompressedBytes += chunk.length;
@@ -985,94 +956,138 @@ export async function extractAndParse(
         cb(null, chunk);
       },
     });
+
+    // Read one tar entry's body fully into a UTF-8 string.
+    const readEntry = (entry: tar.ReadEntry): Promise<string> =>
+      new Promise((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        entry.on("data", (c: Buffer) => chunks.push(c));
+        entry.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+        entry.on("error", reject);
+      });
+
+    // In-memory tar parser (`tar.t`, not `tar.x`): buffer only
+    // data/brands/*.yaml + data/materials/**/*.yaml; drain every other entry so
+    // the stream keeps flowing without touching disk. `pending` collects each
+    // buffered read so we can await them all once the stream ends.
+    const pending: Promise<void>[] = [];
+    const parser = tar.t({
+      gzip: false,
+      onentry: (entry: tar.ReadEntry) => {
+        const entryPath = entry.path || "";
+        if (entry.type !== "File") {
+          entry.resume();
+          return;
+        }
+        // Defence-in-depth: never buffer absolute / `..`-traversal paths. We're
+        // in memory so nothing can escape a directory; we simply skip them.
+        // (A throw inside the tar entry handler escapes as an *uncaught* error
+        // on some Node versions, so we drain instead of throwing.)
+        if (
+          entryPath.startsWith("/") ||
+          entryPath.split(/[\\/]/).includes("..")
+        ) {
+          entry.resume();
+          return;
+        }
+        fileCount += 1;
+        if (fileCount > MAX_TARBALL_FILES) {
+          tooManyFiles = true;
+          entry.resume();
+          return;
+        }
+        // #931: the first real entry names the repo root `<owner>-<repo>-<sha>/…`;
+        // pull the abbreviated SHA GitHub stamps there so the SHA-aware refresh
+        // probe has a baseline. A missing/short match leaves `sha` undefined and
+        // the probe falls through to a tarball fetch on first refresh.
+        if (sha === undefined) {
+          // The repo-root segment is `<owner>-<repo>-<sha>`. GitHub's tarball
+          // carries it as the FIRST path segment, but a locally-built tarball
+          // (e.g. `tar.c(["."])`) prefixes entries with `./`, so skip empty /
+          // `.` segments before reading the root.
+          const rootSeg =
+            entryPath.split(/[\\/]/).find((s) => s && s !== ".") ?? "";
+          const shaMatch = /-([0-9a-f]{7,40})$/i.exec(rootSeg);
+          if (shaMatch) sha = shaMatch[1];
+        }
+        const segs = entryPath.split(/[\\/]/);
+        const dataIdx = segs.indexOf("data");
+        const section = dataIdx !== -1 ? segs[dataIdx + 1] : undefined;
+        const isYaml =
+          entryPath.endsWith(".yaml") || entryPath.endsWith(".yml");
+        if (isYaml && section === "brands") {
+          pending.push(readEntry(entry).then((c) => void brandContents.push(c)));
+          return;
+        }
+        if (isYaml && section === "materials") {
+          pending.push(
+            readEntry(entry).then((c) => void materialContents.push(c)),
+          );
+          return;
+        }
+        entry.resume();
+      },
+    });
+
     try {
       await pipeline(
-        // Wrap in an array so the whole buffer is emitted as ONE chunk —
-        // `Readable.from(buffer)` is special-cased today but the array form is
-        // unambiguous across Node versions (CI runs 20 + 22).
+        // One chunk — the array form is unambiguous across Node versions
+        // (CI runs 20 + 22).
         Readable.from([tarballBuffer]),
-        // Gunzip ourselves so the counter sees DECOMPRESSED bytes; tar.x then
-        // parses raw (gzip:false) instead of detecting+decompressing again.
+        // Gunzip ourselves so the counter sees DECOMPRESSED bytes; the parser
+        // then reads raw (gzip:false).
         createGunzip(),
         byteCounter,
-        tar.x({
-          cwd: tmpDir,
-          gzip: false,
-          filter: (entryPath: string) => {
-            if (
-              entryPath.startsWith("/") ||
-              entryPath.split(/[\\/]/).includes("..")
-            ) {
-              throw new Error(`Unsafe tarball entry path: ${entryPath}`);
-            }
-            fileCount += 1;
-            if (fileCount > MAX_TARBALL_FILES) {
-              throw new Error(
-                "OpenPrintTag tarball exceeds extraction limits (possible tar bomb).",
-              );
-            }
-            return true;
-          },
-        }),
+        parser,
         { signal: extractController.signal },
       );
+      // Entries are consumed as the parser drains, so these are already settled
+      // by the time the pipeline resolves — awaited defensively.
+      await Promise.all(pending);
     } finally {
       clearTimeout(extractTimer);
     }
 
-    console.log(
-      `${LOG} extract done: ${fileCount} files / ${decompressedBytes} bytes in ${Date.now() - extractStart}ms`,
-    );
-
-    // The tarball extracts to a subdirectory like OpenPrintTag-openprinttag-database-<sha>/
-    const extracted = await readdir(tmpDir);
-    if (extracted.length === 0) throw new Error("Tarball extraction produced no files");
-    const repoRoot = join(tmpDir, extracted[0]);
-    // #931: pull the upstream commit SHA out of the directory name
-    // (`<owner>-<repo>-<sha>/`) so the SHA-aware refresh probe has a baseline
-    // to compare against later. GitHub's tarball API only emits the abbreviated
-    // 7-char SHA in this path; we keep whatever it gives us. A missing/short
-    // match still parses successfully — `sha` stays undefined and the SHA
-    // probe falls through to a tarball fetch on first refresh.
-    const shaMatch = /-([0-9a-f]{7,40})\/?$/i.exec(extracted[0]);
-    const sha = shaMatch ? shaMatch[1] : undefined;
-
-    // Parse brands
-    const parseStart = Date.now();
-    const brandMap = new Map<string, { name: string; country?: string }>();
-    const brandsDir = join(repoRoot, "data", "brands");
-    try {
-      for (const file of await readdir(brandsDir)) {
-        if (!file.endsWith(".yaml")) continue;
-        const content = await readFile(join(brandsDir, file), "utf-8");
-        const brand = parseBrandYaml(content);
-        if (brand) brandMap.set(brand.slug, { name: brand.name, country: brand.country });
-      }
-    } catch {
-      // brands dir may not exist in some edge cases
+    if (tooManyFiles) {
+      throw new Error(
+        "OpenPrintTag tarball exceeds extraction limits (possible tar bomb).",
+      );
+    }
+    if (fileCount === 0) {
+      throw new Error("Tarball extraction produced no files");
     }
 
-    // Parse materials. #743: async file reads + a periodic event-loop yield so
-    // this ~11k-file parse doesn't block the embedded server's single event
-    // loop (which would freeze the WHOLE app — every other tab/route — on a
-    // cold fetch, the reported symptom). parseYaml itself is synchronous, so we
-    // also yield via setImmediate every YIELD_EVERY files to break up CPU bursts.
+    console.log(
+      `${LOG} extract done (in-memory): ${fileCount} files / ${decompressedBytes} bytes in ${Date.now() - extractStart}ms`,
+    );
+
+    // Parse brands first (materials reference them by slug).
+    const parseStart = Date.now();
+    const brandMap = new Map<string, { name: string; country?: string }>();
+    for (const content of brandContents) {
+      const brand = parseBrandYaml(content);
+      if (brand)
+        brandMap.set(brand.slug, { name: brand.name, country: brand.country });
+    }
+
+    // Parse materials. #743: a periodic event-loop yield so this ~13k-file parse
+    // doesn't monopolise the embedded server's single event loop (which would
+    // freeze the WHOLE app on a cold fetch). parseYaml is synchronous, so we
+    // yield via setImmediate every YIELD_EVERY materials to break up CPU bursts.
     const materials: OPTMaterial[] = [];
     let totalSLA = 0;
-    const materialsDir = join(repoRoot, "data", "materials");
-    const allFiles = await walkDir(materialsDir);
-    console.log(`${LOG} parsing ${allFiles.length} files under data/materials`);
+    console.log(`${LOG} parsing ${materialContents.length} material files`);
 
     const YIELD_EVERY = 256;
     let seen = 0;
-    for (const filePath of allFiles) {
-      if (!filePath.endsWith(".yaml")) continue;
+    for (const content of materialContents) {
       if (++seen % YIELD_EVERY === 0) {
         await new Promise<void>((resolve) => setImmediate(resolve));
-        console.log(`${LOG} parse progress: ${seen}/${allFiles.length} files`);
+        console.log(
+          `${LOG} parse progress: ${seen}/${materialContents.length} materials`,
+        );
       }
       try {
-        const content = await readFile(filePath, "utf-8");
         const raw = parseYaml(content) as Record<string, unknown>;
         if (!raw || !raw.class) continue;
 
