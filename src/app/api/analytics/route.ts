@@ -291,33 +291,62 @@ export async function GET(request: NextRequest) {
     }
 
     // GH #934: emit each day with its per-filament breakdown for the
-    // stacked chart. Sort byFilament descending so the largest contributor
-    // renders at the BOTTOM of the stack — the client doesn't re-sort.
+    // stacked chart. Two invariants tie the chart, the headline, and
+    // the segments together:
     //
-    // The day total is derived from the RAW running sum (round-of-sum) so
-    // sub-0.5g entries — which round to 0 individually — don't collapse
-    // the day to 0g and disappear from the no-data check while still
-    // contributing to `totals.grams` (Codex P2). Segments are emitted as
-    // rounded grams for display but kept whenever their raw contribution
-    // is positive, so a rounded-zero segment still appears in the legend
-    // and the tooltip rather than being silently dropped.
+    //   1. `day.grams === Math.round(rawDaySum)` — sub-0.5g entries
+    //      that individually round to 0 still contribute to the day
+    //      total, so the no-data check (`every(d => d.grams === 0)`)
+    //      doesn't silently hide a day whose usage is only counted in
+    //      `totals.grams` (the Codex P2 concern on PR #936).
+    //
+    //   2. `day.grams === Σ byFilament[].grams` — the sum of the
+    //      displayed segments equals the day total exactly, so the
+    //      day-level tooltip and the per-segment tooltips can never
+    //      disagree and a visibly-tall bar can never render as
+    //      zero-height segments internally. This holds even in the
+    //      pathological case (e.g. 4 segments at 0.49g → day = 2g,
+    //      segments sum to 2g via largest-remainder distribution),
+    //      which round-independently would have produced day = 2g
+    //      with all segments = 0g.
+    //
+    // The apportionment is Hamilton's largest-remainder method: each
+    // segment gets its proportional floor of `day.grams`, then the
+    // deficit is distributed one unit at a time to the segments with
+    // the largest fractional remainders, tie-breaking by raw grams
+    // descending for determinism. Segments are then sorted DESC so
+    // the largest contributor renders at the BOTTOM of the stack —
+    // the client doesn't re-sort.
     const usageByDay = Array.from(byDayFilament.entries())
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([date, dayBucket]) => {
-        let rawDaySum = 0;
-        const byFil = Array.from(dayBucket.entries())
+        const rawEntries = Array.from(dayBucket.entries())
           .filter(([, v]) => v.grams > 0)
-          .map(([id, v]) => {
-            rawDaySum += v.grams;
-            return {
-              id,
-              name: v.name,
-              color: v.color,
-              grams: Math.round(v.grams),
-            };
-          })
+          .map(([id, v]) => ({ id, name: v.name, color: v.color, raw: v.grams }));
+        const rawDaySum = rawEntries.reduce((s, e) => s + e.raw, 0);
+        const dayGrams = Math.round(rawDaySum);
+        // Floor + fractional remainder per segment.
+        const apportioned = rawEntries.map((e) => {
+          const ideal = rawDaySum > 0 ? (e.raw / rawDaySum) * dayGrams : 0;
+          const floor = Math.floor(ideal);
+          return { ...e, grams: floor, frac: ideal - floor };
+        });
+        const deficit =
+          dayGrams - apportioned.reduce((s, e) => s + e.grams, 0);
+        // Distribute the deficit by largest fractional remainder,
+        // breaking ties by raw grams desc so the largest contributor
+        // gets rounded up first. Sort holds the same object refs so
+        // `.grams++` mutates the entry in `apportioned` too.
+        const byFrac = [...apportioned].sort(
+          (a, b) => b.frac - a.frac || b.raw - a.raw,
+        );
+        for (let i = 0; i < deficit && i < byFrac.length; i++) {
+          byFrac[i].grams += 1;
+        }
+        const byFil = apportioned
+          .map(({ id, name, color, grams }) => ({ id, name, color, grams }))
           .sort((a, b) => b.grams - a.grams);
-        return { date, grams: Math.round(rawDaySum), byFilament: byFil };
+        return { date, grams: dayGrams, byFilament: byFil };
       });
 
     const byFilamentArr = Array.from(byFilament.entries())

@@ -415,33 +415,113 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
   });
 
   /**
-   * Rounding invariant — fractional grams. Pre-fix the chart dropped
-   * sub-0.5g segments to zero AND derived the day total as the
-   * sum-of-rounded-zero-segments, while `totals.grams` rounded the raw
-   * sum and the no-data check at `every(d => d.grams === 0)` would
-   * silently hide the bar. After the fix, the day total is round-of-raw
-   * so a 0.4g entry contributes to the visible day, and segments with
-   * raw > 0 are kept in the breakdown even when they round to zero
-   * (Codex P2 on PR #936).
+   * Rounding invariant — fractional grams spread across DISTINCT
+   * filaments on the same day. Pre-fix the route did
+   * `.map(([id, v]) => ({ ..., grams: Math.round(v.grams) }))
+   *   .filter((e) => e.grams > 0)` and derived the day total as
+   * `sum-of-rounded-segments`, so three 0.4g entries on distinct
+   * filaments each rounded to 0 and were dropped → `day.grams = 0`
+   * while `totals.grams = Math.round(1.2) = 1`. The no-data check
+   * `every(d => d.grams === 0)` then hid the day from the chart even
+   * though the headline showed 1 g of usage.
+   *
+   * Post-fix (Codex P2 on PR #936 + the follow-up round on `034788bc`):
+   *   1. `day.grams = Math.round(rawDaySum)` — the sub-0.5g entries are
+   *      preserved in the day total.
+   *   2. `filter(([, v]) => v.grams > 0)` filters on RAW grams, so
+   *      rounded-zero segments survive to the byFilament breakdown.
+   *   3. Segments are apportioned via Hamilton's largest-remainder
+   *      method so `Σ byFilament[].grams === day.grams` by
+   *      construction (no visible drift between the day-bar total
+   *      and its stacked segments — the pathological case is exactly
+   *      this one: 3 segments at 0.4g → each round-independently to 0
+   *      but day = 1 → one segment gets the +1 apportionment).
+   *
+   * NB: three entries on the SAME filament would aggregate to a single
+   * segment with raw sum 1.2 g that rounds to 1 regardless of strategy,
+   * failing to discriminate pre-fix from post-fix. Distinct filaments
+   * are load-bearing here.
    */
-  it("preserves sub-0.5g usage in the day total and keeps positive-raw segments visible", async () => {
+  it("preserves sub-0.5g usage AND apportions the day total across distinct filaments (Σ segments === day.grams)", async () => {
     const recent = new Date(Date.now() - 4 * 24 * 60 * 60 * 1000);
+    // Three DISTINCT filaments — the segment must be their aggregation
+    // bucket to hit the round-to-zero-per-segment pathology.
+    for (let i = 0; i < 3; i++) {
+      await Filament.create({
+        name: `Sub-half PLA ${i}`,
+        vendor: "V",
+        type: "PLA",
+        color: `#${(i + 1).toString(16).padStart(2, "0")}${(i + 1).toString(16).padStart(2, "0")}${(i + 1).toString(16).padStart(2, "0")}`,
+        spools: [
+          {
+            label: "main",
+            totalWeight: 950,
+            usageHistory: [
+              { grams: 0.4, date: recent, source: "manual", jobId: null },
+            ],
+          },
+        ],
+      });
+    }
+
+    const res = await getAnalytics(new NextRequest("http://localhost/api/analytics?days=30"));
+    const body = await res.json();
+    const day = body.usageByDay.find((d: { grams: number }) => d.grams > 0);
+    expect(day).toBeDefined();
+    // Round-of-raw: Math.round(3 × 0.4) === 1.
+    expect(day.grams).toBe(1);
+    // All three segments survive the raw-> 0 filter (raw > 0, not rounded > 0).
+    // Pre-fix (rounded > 0 filter): array would be empty.
+    expect(day.byFilament).toHaveLength(3);
+    // Hamilton apportionment guarantees Σ segments === day.grams. One
+    // segment gets +1 via the largest-remainder distribution; the other
+    // two stay at 0. Which one wins isn't asserted (ties broken by raw
+    // grams desc — all three raws are equal here so the winner depends
+    // on stable order), but the SUM invariant is pinned.
+    const segmentSum = day.byFilament.reduce(
+      (s: number, e: { grams: number }) => s + e.grams,
+      0,
+    );
+    expect(segmentSum).toBe(day.grams);
+    expect(segmentSum).toBe(1);
+    expect(body.totals.grams).toBe(1);
+  });
+
+  /**
+   * Filter-position regression guard. The route filters on RAW grams
+   * BEFORE rounding: `filter(([, v]) => v.grams > 0)`. Reverting to a
+   * filter on rounded grams (`filter((e) => e.grams > 0)` after the
+   * rounding map) would silently drop sub-0.5g segments — the exact
+   * regression Codex flagged on PR #936. This test pins the current
+   * shape by seeding one sub-0.5g filament ALONGSIDE a well-above
+   * filament on the same day, so the day.grams total is non-trivially
+   * non-zero and the small segment MUST appear in the breakdown.
+   */
+  it("sub-0.5g segment survives the raw-grams filter alongside a larger segment", async () => {
+    const recent = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
     await Filament.create({
-      name: "Sub-half PLA",
+      name: "Small PLA",
       vendor: "V",
       type: "PLA",
-      color: "#FF00FF",
+      color: "#001122",
       spools: [
         {
           label: "main",
           totalWeight: 950,
-          // Three 0.4g entries on the same day, same filament → raw sum
-          // 1.2g → day total rounds to 1g and segment grams rounds to 1g.
-          usageHistory: [
-            { grams: 0.4, date: recent, source: "manual", jobId: null },
-            { grams: 0.4, date: recent, source: "manual", jobId: null },
-            { grams: 0.4, date: recent, source: "manual", jobId: null },
-          ],
+          usageHistory: [{ grams: 0.4, date: recent, source: "manual", jobId: null }],
+        },
+      ],
+    });
+    await Filament.create({
+      name: "Big PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#334455",
+      spools: [
+        {
+          label: "main",
+          totalWeight: 950,
+          usageHistory: [{ grams: 5, date: recent, source: "manual", jobId: null }],
         },
       ],
     });
@@ -450,13 +530,18 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
     const body = await res.json();
     const day = body.usageByDay.find((d: { grams: number }) => d.grams > 0);
     expect(day).toBeDefined();
-    // Round-of-raw: Math.round(1.2) === 1.
-    expect(day.grams).toBe(1);
-    // The segment for this filament aggregates raw 1.2g → rounds to 1g,
-    // not dropped by the rounded-zero filter.
-    expect(day.byFilament).toHaveLength(1);
-    expect(day.byFilament[0].name).toBe("Sub-half PLA");
-    expect(day.byFilament[0].grams).toBe(1);
-    expect(body.totals.grams).toBe(1);
+    // day.grams = Math.round(5.4) = 5.
+    expect(day.grams).toBe(5);
+    // Both segments present — the 0.4g one survives raw-filter even
+    // though its Hamilton-apportioned display is 0.
+    expect(day.byFilament).toHaveLength(2);
+    const names = day.byFilament.map((e: { name: string }) => e.name).sort();
+    expect(names).toEqual(["Big PLA", "Small PLA"]);
+    // Σ segments === day.grams by construction.
+    const segmentSum = day.byFilament.reduce(
+      (s: number, e: { grams: number }) => s + e.grams,
+      0,
+    );
+    expect(segmentSum).toBe(day.grams);
   });
 });

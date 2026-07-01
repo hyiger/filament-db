@@ -120,6 +120,23 @@ export default function AnalyticsPage() {
   // readable against gridlines instead of guessing magnitudes by eye.
   const dayScale = useMemo(() => niceAxisScale(maxDayGrams), [maxDayGrams]);
 
+  /** GH #934: pre-format each day's `date` prefix once per data/locale
+   *  change. `formatDate` allocates a fresh `Intl.DateTimeFormat` on
+   *  every call; without memoisation a 365-day window would rebuild the
+   *  formatter 365× per render and re-run on every state change
+   *  (Detailed toggle, retry, days-range flip). `timeZone: "UTC"` is
+   *  load-bearing — `d.date` is a UTC calendar-day key from the server;
+   *  local-timezone rendering shifts it by ±1 day west/east of UTC and
+   *  disagrees with the axis endpoint labels below. */
+  const dayDateByKey = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!data) return map;
+    for (const d of data.usageByDay) {
+      map.set(d.date, formatDate(d.date, locale, { timeZone: "UTC" }));
+    }
+    return map;
+  }, [data, locale]);
+
   /** GH #934: legend chips for the Detailed mode — one entry per filament
    *  that appears anywhere in the window, sorted DESC by total grams, with
    *  the first occurrence's hex color (an inheriting variant resolves the
@@ -320,24 +337,25 @@ export default function AnalyticsPage() {
                       {data.usageByDay.map((d) => {
                         const pct = dayScale.max > 0 ? (d.grams / dayScale.max) * 100 : 0;
                         // GH #934 / Codex P3: route the YYYY-MM-DD prefix
-                        // through formatDate so German users get a locale
-                        // appropriate format; the separator + suffix come
-                        // from the i18n catalog.
-                        const dayDate = formatDate(
-                          new Date(`${d.date}T00:00Z`),
-                          locale,
-                        );
+                        // through the memoised formatter map (built with
+                        // `timeZone: "UTC"` so the calendar day matches
+                        // the server key) rather than allocating a fresh
+                        // Intl instance per day per render.
+                        const dayDate = dayDateByKey.get(d.date) ?? d.date;
                         const dayLabel = `${dayDate}: ${formatGrams(d.grams)} g`;
                         // GH #934: in Detailed mode, render the bar as a
                         // vertical stack of segments — one per filament,
                         // height proportional to its share of the day,
                         // colored by the filament's hex. The wrapper
-                        // carries the per-day aria-label; segments are
-                        // decorative — no `role` / no `tabIndex` so the
-                        // chart doesn't blow out keyboard navigation.
-                        // Each segment carries a 1px border (Codex P2)
-                        // so pure-white/black/gray-fallback hexes survive
-                        // every theme combination.
+                        // carries the per-day aria-label on BOTH branches
+                        // so toggling Detailed doesn't silently change
+                        // the SR announcement. Segments are decorative —
+                        // no `role` / no `tabIndex` — so the chart
+                        // doesn't blow out keyboard navigation, and the
+                        // 1px contrast stroke is an INSET `box-shadow`
+                        // (not an outer `border`) so it doesn't consume
+                        // layout pixels on thin slices under
+                        // `box-sizing: border-box` (Tailwind preflight).
                         if (detailed && d.grams > 0 && d.byFilament.length > 0) {
                           return (
                             <div
@@ -365,10 +383,22 @@ export default function AnalyticsPage() {
                                     <div
                                       key={seg.id}
                                       title={segTooltip}
-                                      className="border border-gray-300 dark:border-gray-700"
                                       style={{
                                         height: `${segPct}%`,
                                         backgroundColor: seg.color,
+                                        // Inset stroke: doesn't
+                                        // participate in the box model,
+                                        // so a 5% slice on a 60px bar
+                                        // (3px total) keeps 3px of
+                                        // seg.color visible instead of
+                                        // losing 2px to a border. Two
+                                        // rings (semi-transparent black
+                                        // + white) so the rim reads
+                                        // against both bright and dark
+                                        // segment fills without a
+                                        // separate dark-mode variant.
+                                        boxShadow:
+                                          "inset 0 0 0 1px rgba(0,0,0,0.20), inset 0 0 0 2px rgba(255,255,255,0.08)",
                                       }}
                                     />
                                   );
@@ -382,6 +412,7 @@ export default function AnalyticsPage() {
                             key={d.date}
                             className="flex-1 h-full flex flex-col items-center justify-end"
                             title={dayLabel}
+                            aria-label={dayLabel}
                           >
                             <div
                               className={`w-full ${d.grams > 0 ? "bg-blue-500" : "bg-transparent"} rounded-sm`}
@@ -394,9 +425,18 @@ export default function AnalyticsPage() {
                   </div>
                 </div>
                 <div className="flex justify-between text-xs text-gray-500 mt-2 pl-12">
-                  <span>{data.usageByDay[0]?.date}</span>
                   <span>
-                    {data.usageByDay[data.usageByDay.length - 1]?.date}
+                    {(() => {
+                      const k = data.usageByDay[0]?.date;
+                      return k ? (dayDateByKey.get(k) ?? k) : "";
+                    })()}
+                  </span>
+                  <span>
+                    {(() => {
+                      const k =
+                        data.usageByDay[data.usageByDay.length - 1]?.date;
+                      return k ? (dayDateByKey.get(k) ?? k) : "";
+                    })()}
                   </span>
                 </div>
                 {/* GH #934: legend, Detailed mode only. One chip per
