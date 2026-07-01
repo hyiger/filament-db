@@ -1322,6 +1322,29 @@ describe("fetchUpstreamCommitSha", () => {
     expect(sha).toBe("deadbeefcafef00d1234567890abcdef12345678");
   });
 
+  it("sends Accept: application/vnd.github.sha so GitHub returns the SHA as text/plain", async () => {
+    // Codex P2 on PR #937 targeted a specific failure mode: on a big-refactor
+    // upstream commit the default JSON response includes the changed-file
+    // list and can exceed the 4 KB `readBodyCapped` cap. The switch to the
+    // SHA media type is the load-bearing mechanism keeping the probe useful.
+    // Without this assertion a silent revert to `application/vnd.github+json`
+    // — the exact regression the fix targets — would pass every other test
+    // in this file (all fetch mocks ignore the RequestInit argument).
+    let capturedAcceptHeader: string | null | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      // RequestInit.headers is HeadersInit — normalise via a Headers instance
+      // so plain-object and Headers-instance callers are both handled.
+      const h = new Headers((init as RequestInit)?.headers);
+      capturedAcceptHeader = h.get("accept");
+      return new Response(
+        "deadbeefcafef00d1234567890abcdef12345678",
+        { status: 200, headers: { "content-type": "text/plain" } },
+      );
+    });
+    await fetchUpstreamCommitSha();
+    expect(capturedAcceptHeader).toBe("application/vnd.github.sha");
+  });
+
   it("returns null on a non-2xx response (fail-open)", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("rate limited", { status: 403 }),
