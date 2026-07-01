@@ -3,7 +3,7 @@
   "info": {
     "title": "Filament DB API",
     "description": "REST API for managing 3D printing filament profiles, spools, nozzles, printers, bed types, locations, print history, sharing, slicer integrations, and OpenPrintTag imports.",
-    "version": "1.61.1",
+    "version": "1.62.0",
     "license": {
       "name": "AGPL-3.0-or-later",
       "url": "https://www.gnu.org/licenses/agpl-3.0.html"
@@ -2943,7 +2943,12 @@
                     },
                     "totals": {
                       "type": "object",
-                      "required": ["grams", "cost", "jobs", "manualEntries"],
+                      "required": [
+                        "grams",
+                        "cost",
+                        "jobs",
+                        "manualEntries"
+                      ],
                       "properties": {
                         "grams": {
                           "type": "integer",
@@ -2968,7 +2973,11 @@
                       "description": "One entry per UTC day in `[since, now]`. `grams` is round-of-raw for the day; `byFilament[].grams` are Hamilton-apportioned integers that sum EXACTLY to `grams` (GH #934, #936).",
                       "items": {
                         "type": "object",
-                        "required": ["date", "grams", "byFilament"],
+                        "required": [
+                          "date",
+                          "grams",
+                          "byFilament"
+                        ],
                         "properties": {
                           "date": {
                             "type": "string",
@@ -2983,10 +2992,19 @@
                             "description": "Per-filament breakdown for the stacked chart, sorted DESC by grams. A segment whose raw contribution was > 0 but rounds to 0 is kept in the array so it appears in the legend.",
                             "items": {
                               "type": "object",
-                              "required": ["id", "name", "color", "grams"],
+                              "required": [
+                                "id",
+                                "name",
+                                "color",
+                                "grams"
+                              ],
                               "properties": {
-                                "id": { "type": "string" },
-                                "name": { "type": "string" },
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
                                 "color": {
                                   "type": "string",
                                   "description": "Hex `#RRGGBB` — resolved via `resolveColor` (variant primary || variant secondaryColors[0] || parent secondaryColors[0] || `#808080` sentinel). Never inherits parent's primary color, matching `resolveFilament`'s `VARIANT_ONLY_FIELDS`. GH #477, #936."
@@ -3006,16 +3024,30 @@
                       "description": "Top-filament ranking. `grams` here is round-of-raw over the whole window and can drift by up to N/2 from Σ across days of that filament's stacked-chart segments for sub-0.5g/day usage — the ranking prioritises window-total accuracy; the chart prioritises per-day segment-sum equality with `day.grams`.",
                       "items": {
                         "type": "object",
-                        "required": ["_id", "name", "vendor", "cost", "grams"],
+                        "required": [
+                          "_id",
+                          "name",
+                          "vendor",
+                          "cost",
+                          "grams"
+                        ],
                         "properties": {
-                          "_id": { "type": "string" },
-                          "name": { "type": "string" },
-                          "vendor": { "type": "string" },
+                          "_id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "vendor": {
+                            "type": "string"
+                          },
                           "cost": {
                             "type": "number",
                             "nullable": true
                           },
-                          "grams": { "type": "integer" }
+                          "grams": {
+                            "type": "integer"
+                          }
                         }
                       }
                     },
@@ -3023,10 +3055,17 @@
                       "type": "array",
                       "items": {
                         "type": "object",
-                        "required": ["vendor", "grams"],
+                        "required": [
+                          "vendor",
+                          "grams"
+                        ],
                         "properties": {
-                          "vendor": { "type": "string" },
-                          "grams": { "type": "integer" }
+                          "vendor": {
+                            "type": "string"
+                          },
+                          "grams": {
+                            "type": "integer"
+                          }
                         }
                       }
                     },
@@ -3035,11 +3074,21 @@
                       "description": "Per-printer ranking. Rows WITHOUT a `printerId` (e.g. slicer-agnostic jobs) are intentionally excluded — `Σ byPrinter[].grams ≤ totals.grams` by design.",
                       "items": {
                         "type": "object",
-                        "required": ["_id", "name", "grams"],
+                        "required": [
+                          "_id",
+                          "name",
+                          "grams"
+                        ],
                         "properties": {
-                          "_id": { "type": "string" },
-                          "name": { "type": "string" },
-                          "grams": { "type": "integer" }
+                          "_id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "grams": {
+                            "type": "integer"
+                          }
                         }
                       }
                     }
