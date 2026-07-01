@@ -3,6 +3,7 @@ import {
   compareFilaments,
   getSortValue,
   nextSortState,
+  earliestSpoolDate,
   type SortKey,
   type SortableFilament,
 } from "@/lib/sortFilamentList";
@@ -178,5 +179,66 @@ describe("nextSortState — clicking a different column always resets to asc (GH
 
   it("clicking the same column toggles desc → asc", () => {
     expect(nextSortState({ sortKey: "cost", sortDir: "desc" }, "cost")).toEqual({ sortKey: "cost", sortDir: "asc" });
+  });
+});
+
+describe("purchase/opened date columns (#941)", () => {
+  const withSpools = (spools: unknown) =>
+    f({ spools: spools as SortableFilament["spools"] });
+
+  it("getSortValue returns the EARLIEST spool purchaseDate across all spools", () => {
+    expect(
+      getSortValue(
+        withSpools([
+          { purchaseDate: "2024-06-01" },
+          { purchaseDate: "2023-02-15" },
+          { purchaseDate: "2024-01-01" },
+        ]),
+        "purchased",
+      ),
+    ).toBe("2023-02-15");
+  });
+
+  it("getSortValue returns the earliest spool openedDate", () => {
+    expect(
+      getSortValue(
+        withSpools([{ openedDate: "2024-05-05" }, { openedDate: "2024-03-03" }]),
+        "opened",
+      ),
+    ).toBe("2024-03-03");
+  });
+
+  it("getSortValue returns null when no spool carries the date (sinks last)", () => {
+    expect(getSortValue(withSpools([{ purchaseDate: null }, {}]), "purchased")).toBe(null);
+    expect(getSortValue(f({ spools: [] }), "opened")).toBe(null);
+  });
+
+  it("earliestSpoolDate ignores blank strings and picks the minimum ISO date", () => {
+    expect(
+      earliestSpoolDate(
+        [
+          { purchaseDate: "" },
+          { purchaseDate: "2022-12-31" },
+          { purchaseDate: "2023-01-01" },
+        ] as SortableFilament["spools"],
+        "purchaseDate",
+      ),
+    ).toBe("2022-12-31");
+    expect(earliestSpoolDate(undefined, "purchaseDate")).toBe(null);
+  });
+
+  const mk = (id: string, d: string | null) =>
+    f({ name: id, spools: (d ? [{ purchaseDate: d }] : []) as SortableFilament["spools"] });
+
+  it("compareFilaments purchased asc: oldest purchase first, undated last", () => {
+    const rows = [mk("new", "2024-09-01"), mk("undated", null), mk("old", "2022-01-01")];
+    const sorted = [...rows].sort(compareFilaments("purchased", "asc"));
+    expect(sorted.map((r) => r.name)).toEqual(["old", "new", "undated"]);
+  });
+
+  it("compareFilaments purchased desc: newest first, undated STILL last (#575.6)", () => {
+    const rows = [mk("new", "2024-09-01"), mk("undated", null), mk("old", "2022-01-01")];
+    const sorted = [...rows].sort(compareFilaments("purchased", "desc"));
+    expect(sorted.map((r) => r.name)).toEqual(["new", "old", "undated"]);
   });
 });

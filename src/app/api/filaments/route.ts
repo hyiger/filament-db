@@ -290,6 +290,10 @@ export async function GET(request: NextRequest) {
                 // #616: the home-page stat line counts distinct spool
                 // locations; the id is enough (no Location join needed).
                 locationId: "$$s.locationId",
+                // #941: drive the sortable Purchased/Opened columns on the
+                // home list (earliest spool date per filament).
+                purchaseDate: "$$s.purchaseDate",
+                openedDate: "$$s.openedDate",
               },
             },
           },

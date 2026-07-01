@@ -29,6 +29,16 @@ import { formatGrams } from "@/lib/formatWeight";
 
 type Filament = FilamentDetail;
 
+/** Today's date as a `YYYY-MM-DD` string in the user's LOCAL timezone, for
+ *  seeding a native `<input type="date">` (#941). `toISOString()` would use
+ *  UTC and show "tomorrow" for users east of UTC late in the day. */
+function localTodayInput(): string {
+  const d = new Date();
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60000)
+    .toISOString()
+    .slice(0, 10);
+}
+
 function computeRemaining(filament: Filament, overrideTotalWeight?: number | null) {
   const { spoolWeight, netFilamentWeight, density, diameter } = filament;
   const totalWeight = overrideTotalWeight !== undefined ? overrideTotalWeight : filament.totalWeight;
@@ -966,7 +976,7 @@ function FilamentDetail() {
 
   const handleLogUsage = async (
     spoolId: string,
-    entry: { grams: number; jobLabel?: string },
+    entry: { grams: number; jobLabel?: string; date?: string },
   ) => {
     if (!filament) return;
     try {
@@ -2223,7 +2233,7 @@ interface SpoolCardProps {
   onUpdatePhoto: (dataUrl: string | null) => void;
   onToggleRetire: (retired: boolean) => void;
   onLogDryCycle: (entry: { tempC?: number | null; durationMin?: number | null; notes?: string }) => void;
-  onLogUsage: (entry: { grams: number; jobLabel?: string }) => void;
+  onLogUsage: (entry: { grams: number; jobLabel?: string; date?: string }) => void;
   /**
    * GH #601: provenance fields (lotNumber, purchaseDate, openedDate). All
    * three already round-trip through the spool subdoc schema, the
@@ -2283,6 +2293,11 @@ function SpoolCard({
   const [dryDuration, setDryDuration] = useState("");
   const [usageGrams, setUsageGrams] = useState("");
   const [usageLabel, setUsageLabel] = useState("");
+  // #941: let the user record WHEN the usage happened (they may log a print
+  // days later), not just "now". Defaults to today in the user's LOCAL date so
+  // the native date picker opens on the expected day. Fed to the usage POST,
+  // which already accepts an optional `date`; Analytics buckets by this date.
+  const [usageDate, setUsageDate] = useState(localTodayInput);
   // #608: expandable view of the spool's logged usage entries.
   const [showUsageHistory, setShowUsageHistory] = useState(false);
   // GH #601: provenance edits. ISO-string fields are sliced to YYYY-MM-DD
@@ -2849,6 +2864,17 @@ function SpoolCard({
                 value={usageGrams}
                 onChange={(e) => setUsageGrams(e.target.value)}
               />
+              {/* #941: when the usage actually happened (defaults to today).
+                  Capped at today — usage can't be logged in the future. */}
+              <input
+                type="date"
+                className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
+                aria-label={t("detail.spool.usageDate")}
+                title={t("detail.spool.usageDate")}
+                max={localTodayInput()}
+                value={usageDate}
+                onChange={(e) => setUsageDate(e.target.value)}
+              />
               <input
                 type="text"
                 className="flex-1 min-w-0 px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
@@ -2869,9 +2895,18 @@ function SpoolCard({
                 onClick={() => {
                   const g = Number(usageGrams);
                   if (!Number.isFinite(g) || g <= 0) return;
-                  onLogUsage({ grams: g, jobLabel: usageLabel });
+                  // Send the picked date only when it isn't today, so the
+                  // common "log it now" case keeps the server's own timestamp
+                  // (with time-of-day) rather than a date-only UTC-midnight.
+                  const today = localTodayInput();
+                  onLogUsage({
+                    grams: g,
+                    jobLabel: usageLabel,
+                    date: usageDate && usageDate !== today ? usageDate : undefined,
+                  });
                   setUsageGrams("");
                   setUsageLabel("");
+                  setUsageDate(today);
                 }}
                 className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400"
               >

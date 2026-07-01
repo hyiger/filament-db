@@ -21,8 +21,36 @@
 import type { FilamentSummary } from "@/types/filament";
 import { getRemainingPct, type InventoryFilament } from "@/lib/inventoryStats";
 
-export type SortKey = "name" | "vendor" | "type" | "nozzle" | "bed" | "cost" | "remaining";
+export type SortKey =
+  | "name"
+  | "vendor"
+  | "type"
+  | "nozzle"
+  | "bed"
+  | "cost"
+  | "remaining"
+  | "purchased"
+  | "opened";
 export type SortDir = "asc" | "desc";
+
+/** #941: earliest date (across ALL of a filament's spools, retired included —
+ * a purchase/open date is a historical fact regardless of retirement) for the
+ * given provenance field, as an ISO string. ISO strings compare
+ * chronologically, so the comparator can order them directly. Returns null
+ * when no spool carries the date (→ sinks to the bottom via `isBlank`). */
+export function earliestSpoolDate(
+  spools: SortableFilament["spools"] | undefined,
+  field: "purchaseDate" | "openedDate",
+): string | null {
+  let earliest: string | null = null;
+  for (const s of spools ?? []) {
+    const v = s?.[field];
+    if (typeof v === "string" && v && (earliest === null || v < earliest)) {
+      earliest = v;
+    }
+  }
+  return earliest;
+}
 
 /** Subset of FilamentSummary the comparator actually reads. Keeps tests
  * lightweight without forcing every fixture to spell out unrelated fields
@@ -48,6 +76,10 @@ export function getSortValue(f: SortableFilament, key: SortKey): string | number
       return f.cost ?? null;
     case "remaining":
       return getRemainingPct(f as unknown as InventoryFilament) ?? null;
+    case "purchased":
+      return earliestSpoolDate(f.spools, "purchaseDate");
+    case "opened":
+      return earliestSpoolDate(f.spools, "openedDate");
   }
 }
 

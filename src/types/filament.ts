@@ -180,6 +180,10 @@ export interface FilamentSummary {
      * the home-page stat line AND (#717) to show/change a spool's location
      * inline in the expandable per-spool panel. Null when unassigned. */
     locationId?: string | null;
+    /** #941 — provenance dates (ISO strings after JSON serialization), used to
+     * sort/display the home list's Purchased/Opened columns. Null when unset. */
+    purchaseDate?: string | null;
+    openedDate?: string | null;
   }[];
   spoolWeight: number | null;
   netFilamentWeight: number | null;
