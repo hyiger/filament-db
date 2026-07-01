@@ -471,6 +471,81 @@ secondary_colors:
     ]);
   });
 
+  // Object-input path (extractAndParse hands parseMaterialYaml an
+  // already-parsed object, not a string) — branch 266.
+  it("returns null for a pre-parsed object missing slug", () => {
+    expect(parseMaterialYaml({ name: "No Slug", class: "FFF" }, brandMap)).toBeNull();
+  });
+
+  it("returns null for a pre-parsed object missing name", () => {
+    expect(parseMaterialYaml({ slug: "no-name", class: "FFF" }, brandMap)).toBeNull();
+  });
+
+  // branch 271: object input whose class is not FFF (missing class also
+  // fails this check).
+  it("returns null for a pre-parsed non-FFF object (missing class)", () => {
+    expect(
+      parseMaterialYaml({ slug: "s", name: "N" }, brandMap),
+    ).toBeNull();
+  });
+
+  // branch 271: a FFF material with NO `brand` key exercises the
+  // `(raw.brand)?.slug || ""` empty-string fallback, so brandSlug is ""
+  // and brandName degrades to that empty string.
+  it("defaults brandSlug to empty string when the material has no brand", () => {
+    const raw = { slug: "no-brand", name: "No Brand", class: "FFF", type: "PLA" };
+    const m = parseMaterialYaml(raw, brandMap);
+    expect(m).not.toBeNull();
+    expect(m!.brandSlug).toBe("");
+    expect(m!.brandName).toBe(""); // brand?.name || brandSlug, both empty
+  });
+
+  // Invalid YAML string reaches the catch → null (line 355/356). parseYaml
+  // throws on the malformed document.
+  it("returns null when the YAML string is unparseable (catch path)", () => {
+    expect(parseMaterialYaml("foo: [unterminated", brandMap)).toBeNull();
+  });
+
+  // branch 303: a secondary_colors entry with an invalid color_rgba is
+  // dropped (rgbaToHex returns null), so it never lands in the array.
+  it("skips secondary_colors entries with an invalid color_rgba", () => {
+    const raw = {
+      slug: "mixed-secondaries",
+      name: "Mixed",
+      class: "FFF",
+      type: "PLA",
+      brand: { slug: "amolen" },
+      secondary_colors: [
+        { color_rgba: "#00ff00ff" }, // valid
+        { color_rgba: "zzzzzzzz" }, // invalid charset → dropped
+        {}, // no color_rgba → dropped
+        { color_rgba: "#0000ffff" }, // valid
+      ],
+    };
+    const m = parseMaterialYaml(raw, new Map([["amolen", { name: "Amolen" }]]));
+    expect(m).not.toBeNull();
+    expect(m!.secondaryColors).toEqual(["#00ff00", "#0000ff"]);
+  });
+
+  // Fallback branches 326 (uuid || ""), 330 (type || "Unknown"),
+  // 331 (abbreviation || type || ""), and 348 (photos[0].url || null).
+  it("applies fallbacks for missing uuid/type/abbreviation and a photo with no url", () => {
+    const raw = {
+      slug: "fallbacks",
+      name: "Fallbacks",
+      class: "FFF",
+      brand: { slug: "amolen" },
+      // no uuid, no type, no abbreviation
+      photos: [{ type: "unspecified" }], // present but no url
+    };
+    const m = parseMaterialYaml(raw, new Map([["amolen", { name: "Amolen" }]]));
+    expect(m).not.toBeNull();
+    expect(m!.uuid).toBe("");
+    expect(m!.type).toBe("Unknown");
+    expect(m!.abbreviation).toBe(""); // no type to fall back to either
+    expect(m!.photoUrl).toBeNull(); // photos present but first has no url
+  });
+
   it("still parses the legacy keyed secondary_color_0..4 shape", () => {
     // Belt-and-braces — if an older spec snapshot or a future schema
     // tidy-up keys the slots individually, we still get the colors.
@@ -699,6 +774,43 @@ describe("mapToFilamentPayload", () => {
     // ABRASIVE = 4, CONTAINS_CARBON_FIBER = 31
     expect(optTags).toContain(4);
     expect(optTags).toContain(31);
+  });
+
+  // branch 372: a tag string with no TAG_STRING_TO_OPT entry (enumKey
+  // undefined) is silently skipped rather than emitting a bad enum value.
+  it("skips tag strings with no OPT_TAG mapping", () => {
+    const material = {
+      slug: "test",
+      uuid: "test-uuid",
+      brandSlug: "test",
+      brandName: "Test",
+      name: "Test",
+      type: "PLA",
+      abbreviation: "PLA",
+      color: "#000000",
+      secondaryColors: [],
+      density: null,
+      nozzleTempMin: null,
+      nozzleTempMax: null,
+      bedTempMin: null,
+      bedTempMax: null,
+      chamberTemp: null,
+      preheatTemp: null,
+      dryingTemp: null,
+      dryingTime: null,
+      hardnessShoreD: null,
+      transmissionDistance: null,
+      tags: ["not_a_real_opt_tag", "abrasive"],
+      photoUrl: null,
+      productUrl: null,
+      completenessScore: 1,
+      completenessTier: "stub" as const,
+    };
+
+    const payload = mapToFilamentPayload(material);
+    const optTags = payload.optTags as number[];
+    // Only the mapped tag (ABRASIVE = 4) survives; the unknown one is dropped.
+    expect(optTags).toEqual([4]);
   });
 });
 
@@ -1123,6 +1235,45 @@ type: Resin
       downloadTarballToBuffer({ timeoutMs: 45_000 }),
     ).rejects.toThrow(/OpenPrintTag download timed out \(45s limit\)/);
   });
+
+  it("throws when the response is ok but has no body (line 889)", async () => {
+    // A 200 with a null body is a broken/degenerate response; the code
+    // refuses it explicitly rather than dereferencing a null stream.
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 200, statusText: "OK" }),
+    );
+    await expect(downloadTarballToBuffer()).rejects.toThrow(
+      /response had no body/,
+    );
+  });
+
+  it("serves the stale cache when a forced refresh's download fails (lines 757-763)", async () => {
+    // Seed the cache with a tarball whose extracted dir name carries NO
+    // parseable SHA, so `sha` stays undefined and the SHA-aware probe is
+    // skipped on the next forced refresh — the refresh goes straight to the
+    // tarball download. That download then fails, and because a cached
+    // payload exists (even past TTL) the stale-cache fallback serves it
+    // instead of throwing.
+    const seedPath = mockFetchTarball({
+      "OpenPrintTag-nosha/data/brands/x.yaml": "slug: x\nname: X\n",
+      "OpenPrintTag-nosha/data/materials/x/m.yaml":
+        "uuid: m\nslug: m\nbrand:\n  slug: x\nname: M\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(seedPath);
+    const seeded = await fetchOpenPrintTagDatabase();
+    expect(seeded.totalFFF).toBe(1);
+    expect(seeded.sha).toBeUndefined(); // no SHA parsed → probe won't run
+
+    // Now every download attempt fails. With a populated cache the fetch
+    // resolves to the STALE payload rather than rejecting.
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("boom", { status: 500, statusText: "Server Error" }),
+    );
+    const stale = await fetchOpenPrintTagDatabase({ force: true });
+    expect(stale.totalFFF).toBe(1);
+    expect(stale.materials).toBe(seeded.materials); // same cached object
+  });
 });
 
 describe("isTimeoutAbort", () => {
@@ -1231,6 +1382,98 @@ describe("extractAndParse maxExtractBytes cap", () => {
     // Generous cap — the tiny test tarball decompresses to well under 10 KB.
     const db = await extractAndParse(buf, extractTmpDir, { maxExtractBytes: 10 * 1024 });
     expect(db.totalFFF).toBe(1);
+  });
+
+  // NOTE: the extract `filter`'s `..`-traversal rejection (defence-in-depth
+  // over tar's own sanitisation) is intentionally NOT unit-tested. Triggering
+  // it means throwing inside the live `tar` stream's filter, whose failure mode
+  // is environment-dependent: on CI's Node 20/22 the throw surfaces as an
+  // *uncaught* exception and the extract promise never settles (hang → 30s
+  // timeout) rather than a clean rejection. It's a defence-in-depth guard (tar
+  // sanitises too, and the tarball is a trusted GitHub download, not user
+  // input), so it's left as a documented-defensive uncovered branch rather than
+  // pinned by a flaky test.
+
+  // Materials/brands parse-loop branch coverage (branches 1046/1049/1069/
+  // 1077/1085): one tarball exercises every skip path so the FFF count only
+  // reflects the genuinely-parseable FFF materials.
+  it("skips non-yaml files, null-brand yaml, class-less, SLA, and unparseable-to-null materials", async () => {
+    const tarballPath = buildTarball({
+      // A non-yaml file in brands/ is skipped (branch 1046).
+      "OpenPrintTag-mix/data/brands/README.md": "not yaml",
+      // A brand yaml that parses but lacks required fields → parseBrandYaml
+      // returns null → `if (brand)` false (branch 1049).
+      "OpenPrintTag-mix/data/brands/broken.yaml": "foo: bar\n",
+      // A valid brand.
+      "OpenPrintTag-mix/data/brands/amolen.yaml": "slug: amolen\nname: Amolen\n",
+      // Non-yaml file under materials/ → skipped (branch 1069).
+      "OpenPrintTag-mix/data/materials/amolen/notes.txt": "ignore me",
+      // A yaml with no `class` field → `!raw.class` continue (branch 1077).
+      "OpenPrintTag-mix/data/materials/amolen/noclass.yaml":
+        "uuid: n\nslug: n\nname: NoClass\ntype: PLA\n",
+      // An SLA material → counted as SLA, skipped from FFF.
+      "OpenPrintTag-mix/data/materials/amolen/resin.yaml":
+        "uuid: r\nslug: r\nbrand:\n  slug: amolen\nname: Resin\nclass: SLA\ntype: Resin\n",
+      // A FFF material missing `slug` → parseMaterialYaml returns null →
+      // `if (material)` false (branch 1085).
+      "OpenPrintTag-mix/data/materials/amolen/noslug.yaml":
+        "uuid: ns\nname: No Slug\nclass: FFF\ntype: PLA\nbrand:\n  slug: amolen\n",
+      // One genuinely-valid FFF material — the only one that should count.
+      "OpenPrintTag-mix/data/materials/amolen/good.yaml":
+        "uuid: g\nslug: good\nbrand:\n  slug: amolen\nname: Good PLA\nclass: FFF\ntype: PLA\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+    const buf = readFileSync(tarballPath);
+
+    const db = await extractAndParse(buf, extractTmpDir);
+    expect(db.totalFFF).toBe(1);
+    expect(db.totalSLA).toBe(1);
+    expect(db.materials[0].slug).toBe("good");
+    // The valid brand resolved its display name; the material inherits it.
+    expect(db.materials[0].brandName).toBe("Amolen");
+  });
+
+  // Line 1029: an empty tarball (no top-level entries under tmpDir) throws
+  // rather than dereferencing a missing repo root.
+  it("throws when the tarball extracts to no files", async () => {
+    // A tarball containing only an empty directory entry → readdir(tmpDir)
+    // finds nothing to descend into (mkdtemp already exists but stays empty
+    // because tar wrote no regular files at the top level). Build one with a
+    // single empty dir.
+    const staging = mkdtempSync(join(tmpdir(), "opt-empty-staging-"));
+    // Intentionally leave staging empty; tar.c over "." yields a tarball whose
+    // only entry is "./", which extracts nothing into tmpDir.
+    const tarballPath = join(tmpdir(), `opt-empty-${Date.now()}.tgz`);
+    tar.c({ gzip: true, file: tarballPath, cwd: staging, sync: true }, ["."]);
+    rmSync(staging, { recursive: true, force: true });
+    tarballsToCleanup.push(tarballPath);
+    const buf = readFileSync(tarballPath);
+
+    await expect(extractAndParse(buf, extractTmpDir)).rejects.toThrow(
+      /produced no files/,
+    );
+  });
+
+  // Line 1111: the brand-list sort comparator (`a.name.localeCompare`) only
+  // runs when there are ≥2 brands to order. Two materials from two brands
+  // exercise it and pin the alphabetical ordering.
+  it("sorts the brand list alphabetically by name (>=2 brands)", async () => {
+    const tarballPath = buildTarball({
+      "OpenPrintTag-sort/data/brands/zeta.yaml": "slug: zeta\nname: Zeta Filament\n",
+      "OpenPrintTag-sort/data/brands/alpha.yaml": "slug: alpha\nname: Alpha Filament\n",
+      "OpenPrintTag-sort/data/materials/zeta/z.yaml":
+        "uuid: z\nslug: z\nbrand:\n  slug: zeta\nname: Z\nclass: FFF\ntype: PLA\n",
+      "OpenPrintTag-sort/data/materials/alpha/a.yaml":
+        "uuid: a\nslug: a\nbrand:\n  slug: alpha\nname: A\nclass: FFF\ntype: PETG\n",
+    });
+    tarballsToCleanup.push(tarballPath);
+    const buf = readFileSync(tarballPath);
+
+    const db = await extractAndParse(buf, extractTmpDir);
+    expect(db.brands.map((b) => b.name)).toEqual([
+      "Alpha Filament",
+      "Zeta Filament",
+    ]);
   });
 });
 
@@ -1343,6 +1586,27 @@ describe("fetchUpstreamCommitSha", () => {
     });
     await fetchUpstreamCommitSha();
     expect(capturedAcceptHeader).toBe("application/vnd.github.sha");
+  });
+
+  it("attaches an EnvHttpProxyAgent dispatcher when HTTPS_PROXY is set (branch 705)", async () => {
+    // The commits probe honours the same proxy dispatcher as the tarball
+    // download so air-gapped / proxied deployments probe successfully.
+    let capturedDispatcher: unknown;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
+      capturedDispatcher = (init as { dispatcher?: unknown }).dispatcher;
+      return new Response("deadbeefcafef00d1234567890abcdef12345678", {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      });
+    });
+    process.env.HTTPS_PROXY = "http://proxy.example.invalid:8080";
+    try {
+      const sha = await fetchUpstreamCommitSha();
+      expect(sha).toBe("deadbeefcafef00d1234567890abcdef12345678");
+      expect(capturedDispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    } finally {
+      delete process.env.HTTPS_PROXY;
+    }
   });
 
   it("returns null on a non-2xx response (fail-open)", async () => {

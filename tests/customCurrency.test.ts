@@ -160,6 +160,29 @@ describe("parseCustomCurrencies", () => {
     expect(result[0].code).toBe("INR");
   });
 
+  it("drops entries whose code fails the shape regex (invalid chars / bad shape)", () => {
+    // These codes are non-empty, non-duplicate, and not built-in collisions,
+    // so they reach the CODE_RE guard (line 128) and are rejected there.
+    const json = JSON.stringify([
+      { code: "9XY", symbol: "$", name: "starts with digit" }, // must start with a letter
+      { code: "U$D", symbol: "$", name: "invalid char" }, // '$' not [A-Z0-9]
+      { code: "TOOLONG", symbol: "$", name: "7 chars > max 6" }, // too long for CODE_RE
+      { code: "INR", symbol: "₹", name: "" }, // valid — survives
+    ]);
+    const result = parseCustomCurrencies(json, BUILT_IN);
+    expect(result.map((c) => c.code)).toEqual(["INR"]);
+  });
+
+  it("drops a too-short single-letter code (fails CODE_RE min length)", () => {
+    // "X" is non-empty and unique, but CODE_RE requires 2–6 chars.
+    const json = JSON.stringify([
+      { code: "X", symbol: "$", name: "one letter" },
+      { code: "INR", symbol: "₹", name: "" },
+    ]);
+    const result = parseCustomCurrencies(json, BUILT_IN);
+    expect(result.map((c) => c.code)).toEqual(["INR"]);
+  });
+
   it("drops entries with too-long symbols (matches addCustomCurrency contract)", () => {
     const json = JSON.stringify([
       { code: "BAD", symbol: "TooMany", name: "" },

@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { wrapNdefForTag, parseNdefFromTag, isCcByteReadOnly, setCcByteReadOnly } from "../electron/ndef";
+import {
+  wrapNdefForTag,
+  parseNdefFromTag,
+  parseNdefRecords,
+  parseNdefRecordsAuto,
+  buildMediaNdefRecord,
+  buildNdefMessageTlv,
+  buildType2Cc,
+  isCcByteReadOnly,
+  setCcByteReadOnly,
+} from "../electron/ndef";
 
 const MIME_TYPE = "application/vnd.openprinttag";
 
@@ -436,5 +446,305 @@ describe("CC byte read-only helpers (GH #583)", () => {
       expect(setCcByteReadOnly(0x40, true)).toBeLessThanOrEqual(0xff);
       expect(setCcByteReadOnly(0xff, false)).toBe(0xfc);
     });
+  });
+});
+
+describe("wrapNdefForTag — small tag (short-record + short-TLV path)", () => {
+  it("uses SR=1 and a 1-byte TLV length on a small tag, round-tripping", () => {
+    // A small 64-byte tag keeps the padded OPT payload and the whole NDEF
+    // message under 255 bytes, so the encoder takes the SR=1 / short-TLV
+    // branch (lines 136–139) and writes a single-byte TLV length (line 224)
+    // rather than the long-TLV form the 320-byte default produces.
+    const payload = new Uint8Array([0x11, 0x22, 0x33]);
+    const result = wrapNdefForTag(payload, 64);
+
+    expect(result.length).toBe(64);
+    expect(result[0]).toBe(0xe1); // CC magic
+    expect(result[4]).toBe(0x03); // NDEF TLV tag
+    // Short TLV: byte 5 is the length itself, NOT the 0xFF long-format marker.
+    expect(result[5]).not.toBe(0xff);
+
+    // OPT record starts right after the 1-byte TLV length.
+    const recordStart = 6;
+    const flags = result[recordStart];
+    expect(flags & 0x10).toBe(0x10); // SR = 1 (short record)
+    expect(flags & 0x07).toBe(0x02); // TNF = media
+
+    const extracted = parseNdefFromTag(result);
+    expect(Array.from(extracted.slice(0, payload.length))).toEqual(Array.from(payload));
+  });
+});
+
+describe("wrapNdefForTag — long product URL (non-short URI record)", () => {
+  it("emits a 4-byte URI payload length when the URI remainder exceeds 255 bytes", () => {
+    // buildUriRecord's non-short branch (lines 62–65) only fires when the
+    // compressed remainder pushes the URI payload over 255 bytes.
+    const longPath = "x".repeat(300);
+    const url = `https://www.example.com/${longPath}`;
+    const result = wrapNdefForTag(new Uint8Array([0xaa, 0xbb]), 1024, url);
+
+    // Locate the first (URI) NDEF record after the TLV header.
+    const recordStart = result[5] === 0xff ? 8 : 6;
+    const uriFlags = result[recordStart];
+    expect(uriFlags & 0x07).toBe(0x01); // TNF = Well-Known (URI)
+    expect(uriFlags & 0x10).toBe(0x00); // SR = 0 (long record, >255B payload)
+    expect(uriFlags & 0x80).toBe(0x80); // MB = 1
+
+    // TYPE_LENGTH = 1, then a 4-byte payload length follows.
+    expect(result[recordStart + 1]).toBe(1);
+    const payloadLen =
+      (result[recordStart + 2] << 24) |
+      (result[recordStart + 3] << 16) |
+      (result[recordStart + 4] << 8) |
+      result[recordStart + 5];
+    // remainder = "example.com/xxx...", +1 prefix-code byte.
+    expect(payloadLen).toBe(1 + `example.com/${longPath}`.length);
+    // Type byte "U" (0x55) sits after the 4-byte length.
+    expect(result[recordStart + 6]).toBe(0x55);
+    // Prefix code 0x02 = "https://www."
+    expect(result[recordStart + 7]).toBe(0x02);
+
+    // OPT record still round-trips.
+    const extracted = parseNdefFromTag(result);
+    expect(extracted[0]).toBe(0xaa);
+    expect(extracted[1]).toBe(0xbb);
+  });
+});
+
+describe("buildMediaNdefRecord", () => {
+  it("builds a short (SR=1) media record with MB=1/ME=1 for a small payload", () => {
+    const payload = new Uint8Array([0x01, 0x02, 0x03]);
+    const rec = buildMediaNdefRecord("text/plain", payload);
+
+    const flags = rec[0];
+    expect(flags & 0x07).toBe(0x02); // TNF = media
+    expect(flags & 0x80).toBe(0x80); // MB
+    expect(flags & 0x40).toBe(0x40); // ME
+    expect(flags & 0x10).toBe(0x10); // SR (short)
+
+    const typeBytes = new TextEncoder().encode("text/plain");
+    expect(rec[1]).toBe(typeBytes.length); // TYPE_LENGTH
+    expect(rec[2]).toBe(payload.length); // 1-byte PAYLOAD_LENGTH
+    // TYPE then PAYLOAD.
+    expect(Array.from(rec.slice(3, 3 + typeBytes.length))).toEqual(Array.from(typeBytes));
+    expect(Array.from(rec.slice(3 + typeBytes.length))).toEqual([0x01, 0x02, 0x03]);
+  });
+
+  it("builds a non-short (SR=0) media record with a 4-byte payload length for a large payload", () => {
+    const payload = new Uint8Array(300);
+    payload[0] = 0x42;
+    payload[299] = 0x99;
+    const rec = buildMediaNdefRecord("application/octet-stream", payload);
+
+    const flags = rec[0];
+    expect(flags & 0x10).toBe(0x00); // SR = 0 (long record)
+
+    const typeBytes = new TextEncoder().encode("application/octet-stream");
+    expect(rec[1]).toBe(typeBytes.length);
+    // 4-byte big-endian payload length.
+    const plen = (rec[2] << 24) | (rec[3] << 16) | (rec[4] << 8) | rec[5];
+    expect(plen).toBe(300);
+    // Type sits after the 4-byte length, payload after the type.
+    const payloadStart = 6 + typeBytes.length;
+    expect(rec[payloadStart]).toBe(0x42);
+    expect(rec[payloadStart + 299]).toBe(0x99);
+  });
+
+  it("round-trips through buildNdefMessageTlv + parseNdefRecords for a media record", () => {
+    const payload = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+    const rec = buildMediaNdefRecord(MIME_TYPE, payload);
+    const tlv = buildNdefMessageTlv(rec);
+
+    // Prepend a Type-5 CC so parseNdefRecords (ccOffset=0) accepts it.
+    const cc = new Uint8Array([0xe1, 0x40, 0x28, 0x01]);
+    const raw = new Uint8Array(cc.length + tlv.length);
+    raw.set(cc, 0);
+    raw.set(tlv, cc.length);
+
+    const records = parseNdefRecords(raw, 0);
+    expect(records).toHaveLength(1);
+    expect(records[0].tnf).toBe(0x02);
+    expect(records[0].type).toBe(MIME_TYPE);
+    expect(Array.from(records[0].payload)).toEqual([0xde, 0xad, 0xbe, 0xef]);
+  });
+});
+
+describe("buildNdefMessageTlv", () => {
+  it("uses a 1-byte length header and a terminator for a short message", () => {
+    const message = new Uint8Array([0xaa, 0xbb, 0xcc]);
+    const tlv = buildNdefMessageTlv(message);
+
+    expect(tlv[0]).toBe(0x03); // NDEF Message TLV tag
+    expect(tlv[1]).toBe(message.length); // 1-byte length
+    expect(Array.from(tlv.slice(2, 2 + message.length))).toEqual([0xaa, 0xbb, 0xcc]);
+    expect(tlv[tlv.length - 1]).toBe(0xfe); // terminator
+    expect(tlv.length).toBe(2 + message.length + 1);
+  });
+
+  it("uses the 0xFF 3-byte length header for a message >= 255 bytes", () => {
+    const message = new Uint8Array(260);
+    const tlv = buildNdefMessageTlv(message);
+
+    expect(tlv[0]).toBe(0x03);
+    expect(tlv[1]).toBe(0xff); // long-format marker
+    const len = (tlv[2] << 8) | tlv[3];
+    expect(len).toBe(260);
+    expect(tlv[tlv.length - 1]).toBe(0xfe); // terminator
+    expect(tlv.length).toBe(4 + message.length + 1);
+  });
+});
+
+describe("buildType2Cc", () => {
+  it("emits E1 10 <userMem/8> 00 with a read/write access byte", () => {
+    const cc = buildType2Cc(144); // NTAG213 user memory
+    expect(Array.from(cc)).toEqual([0xe1, 0x10, 144 / 8, 0x00]);
+  });
+
+  it("floors and byte-masks the memory-size nibble", () => {
+    // 500 / 8 = 62.5 → floor 62 (0x3e), still within a byte.
+    expect(buildType2Cc(500)[2]).toBe(62);
+    // A huge value floors then masks to a single byte.
+    expect(buildType2Cc(8 * 300)[2]).toBe(300 & 0xff); // 0x2c
+  });
+});
+
+describe("parseNdefRecords — Type-2 (NTAG) CC offset", () => {
+  function type2Image(mime: string, payload: Uint8Array): Uint8Array {
+    // Bytes 0–11 = UID/lock (Type-2 header), CC at byte 12, TLV at byte 16.
+    const rec = buildMediaNdefRecord(mime, payload);
+    const tlv = buildNdefMessageTlv(rec);
+    const raw = new Uint8Array(16 + tlv.length);
+    // CC page (page 3 / bytes 12–15): E1 10 <mem/8> 00.
+    raw[12] = 0xe1;
+    raw[13] = 0x10;
+    raw[14] = 0x20;
+    raw[15] = 0x00;
+    raw.set(tlv, 16);
+    return raw;
+  }
+
+  it("parses records when the CC lives at byte 12 (ccOffset=12)", () => {
+    const raw = type2Image(MIME_TYPE, new Uint8Array([0x11, 0x22]));
+    const records = parseNdefRecords(raw, 12);
+    expect(records).toHaveLength(1);
+    expect(records[0].type).toBe(MIME_TYPE);
+    expect(Array.from(records[0].payload)).toEqual([0x11, 0x22]);
+  });
+});
+
+describe("parseNdefRecordsAuto", () => {
+  it("parses a Type-5 image at offset 0 without falling back", () => {
+    const tag = wrapNdefForTag(new Uint8Array([0x55, 0x66]), 64);
+    const records = parseNdefRecordsAuto(tag);
+    const opt = records.find((r) => r.type === MIME_TYPE);
+    expect(opt).toBeDefined();
+    expect(opt!.payload[0]).toBe(0x55);
+  });
+
+  it("falls back to the Type-2 CC at byte 12 when byte 0 is not a CC magic", () => {
+    // Build a Type-2 image (CC at 12); byte 0 is 0x00 so the offset-0 parse
+    // throws "Blank or unformatted", triggering the byte-12 fallback (line 531).
+    const rec = buildMediaNdefRecord(MIME_TYPE, new Uint8Array([0x77, 0x88]));
+    const tlv = buildNdefMessageTlv(rec);
+    const raw = new Uint8Array(16 + tlv.length);
+    raw[12] = 0xe1;
+    raw[13] = 0x10;
+    raw[14] = 0x20;
+    raw[15] = 0x00;
+    raw.set(tlv, 16);
+
+    const records = parseNdefRecordsAuto(raw);
+    expect(records).toHaveLength(1);
+    expect(records[0].type).toBe(MIME_TYPE);
+    expect(Array.from(records[0].payload)).toEqual([0x77, 0x88]);
+  });
+
+  it("re-throws the original offset-0 error when there is no Type-2 CC to fall back to", () => {
+    // Byte 0 is a non-zero, non-magic value and byte 12 is not 0xE1 either →
+    // the fallback condition is false, so the original error propagates.
+    const raw = new Uint8Array(20);
+    raw[0] = 0xab; // wrong CC magic
+    raw[1] = 0x40;
+    raw[2] = 0x28;
+    raw[3] = 0x01;
+    // byte 12 left 0x00 → not a Type-2 CC.
+    expect(() => parseNdefRecordsAuto(raw)).toThrow("Invalid CC magic byte");
+  });
+
+  it("re-throws when the buffer is too short for a Type-2 fallback (< 20 bytes)", () => {
+    // Offset-0 parse fails (blank CC) and the buffer is under 20 bytes, so the
+    // fallback guard is false and the blank-tag error surfaces.
+    const raw = new Uint8Array(16); // all-zero, < 20 bytes
+    expect(() => parseNdefRecordsAuto(raw)).toThrow("Blank or unformatted");
+  });
+});
+
+describe("parseNdefRecords — additional truncation / no-TLV paths", () => {
+  it('throws "No NDEF TLV found in tag data" when an unknown TLV consumes the rest', () => {
+    // Valid CC, then a single unknown TLV (type 0x05) whose length runs to the
+    // end of the buffer. The scan loop skips it and exits without a 0x03 TLV or
+    // a terminator, hitting the tail throw (line 429).
+    const raw = new Uint8Array([0xe1, 0x40, 0x28, 0x01, 0x05, 0x03, 0x00, 0x00, 0x00]);
+    expect(() => parseNdefRecords(raw, 0)).toThrow("No NDEF TLV found in tag data");
+  });
+
+  it("throws on an incomplete 3-byte (0xFF) TLV length header at end-of-buffer", () => {
+    // NULL TLVs pad the scan to a 0x03 tag whose 0xFF long-length marker leaves
+    // < 2 bytes for the 16-bit length that follows (branch/line 406–408).
+    const raw = new Uint8Array([0xe1, 0x40, 0x28, 0x01, 0x00, 0x00, 0x03, 0xff]);
+    expect(() => parseNdefRecords(raw, 0)).toThrow("incomplete 3-byte TLV length");
+  });
+
+  it("throws on a short NDEF record missing its 1-byte payload length", () => {
+    // NDEF message TLV len = 2: flags (SR+media) + type_len, but no payload
+    // length byte inside the message bound (branch/line 462–463).
+    const raw = new Uint8Array([0xe1, 0x40, 0x28, 0x01, 0x03, 0x02, 0xd2, 0x01, 0xfe]);
+    expect(() => parseNdefRecords(raw, 0)).toThrow("missing payload length");
+  });
+
+  it("throws when a record header can't fit before the NDEF message TLV end", () => {
+    // NDEF message TLV len = 1: only room for one byte, but a record header
+    // needs at least 2 (flags + type_len) — branch/line 450–451.
+    const raw = new Uint8Array([0xe1, 0x40, 0x28, 0x01, 0x03, 0x01, 0xd2, 0xfe, 0x00]);
+    expect(() => parseNdefRecords(raw, 0)).toThrow("not enough bytes for record header");
+  });
+
+  it("throws on a record whose IL flag is set but no ID-length byte remains", () => {
+    // flags = 0xda: MB+ME+SR+IL+TNF02. TLV len = 3 (flags, type_len, payload_len)
+    // leaves nothing for the ID-length byte the IL bit demands (lines 476–478).
+    const raw = new Uint8Array([0xe1, 0x40, 0x28, 0x01, 0x03, 0x03, 0xda, 0x01, 0x00, 0xfe]);
+    expect(() => parseNdefRecords(raw, 0)).toThrow("missing ID length");
+  });
+
+  it("parses a record with an ID field (IL flag set) and skips the ID bytes", () => {
+    // Exercise the ID-present happy path: IL set, idLength=2, so the parser
+    // reads and skips 2 ID bytes between the type and the payload.
+    const flags = 0xda; // MB+ME+SR+IL+TNF02
+    const type = new TextEncoder().encode("t/p");
+    const id = new Uint8Array([0xa1, 0xa2]);
+    const payload = new Uint8Array([0x0f, 0x1e]);
+    const recordLen = 1 + 1 + 1 + 1 + type.length + id.length + payload.length;
+    const raw = new Uint8Array(4 + 2 + recordLen + 1);
+    let p = 0;
+    raw.set([0xe1, 0x40, 0x28, 0x01], p);
+    p += 4;
+    raw[p++] = 0x03; // TLV tag
+    raw[p++] = recordLen; // TLV len
+    raw[p++] = flags;
+    raw[p++] = type.length; // TYPE_LENGTH
+    raw[p++] = payload.length; // PAYLOAD_LENGTH (SR)
+    raw[p++] = id.length; // ID_LENGTH
+    raw.set(type, p);
+    p += type.length;
+    raw.set(id, p);
+    p += id.length;
+    raw.set(payload, p);
+    p += payload.length;
+    raw[p++] = 0xfe;
+
+    const records = parseNdefRecords(raw, 0);
+    expect(records).toHaveLength(1);
+    expect(records[0].type).toBe("t/p");
+    expect(Array.from(records[0].payload)).toEqual([0x0f, 0x1e]);
   });
 });

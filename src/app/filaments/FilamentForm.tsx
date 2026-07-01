@@ -4,7 +4,7 @@ import { Fragment, useState, useEffect, useMemo, useRef } from "react";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import CollapsibleSection, { expandAndScrollToSection } from "@/components/CollapsibleSection";
-import FormToc, { FormTocMobileButton, type TocEntry } from "@/components/FormToc";
+import FormTabs, { type FormTab } from "@/components/FormTabs";
 import FilamentSwatch from "@/components/FilamentSwatch";
 import { snapToStep } from "@/lib/snapToStep";
 import { nozzleTypeLabel } from "@/lib/nozzleTypes";
@@ -346,21 +346,15 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
   // GH #286: dirty state is derived below, once `calibrations` and
   // `presets` are declared — see the `dirty` block after those.
 
-  const [showAdvanced, setShowAdvanced] = useState(() => {
-    // Auto-expand if any advanced fields have values
-    return !!(
-      form.shrinkageXY || form.shrinkageZ ||
-      form.fanMinSpeed || form.fanMaxSpeed || form.fanBridgeSpeed || form.fanDisableFirstLayers ||
-      form.overhangFanSpeed || form.auxFanSpeed || form.fanBelowLayerTime || form.slowDownMinSpeed ||
-      form.retractLength || form.retractSpeed || form.retractLift || form.retractMinTravel ||
-      form.abrasive || form.soluble || form.optTags.length > 0 ||
-      form.shoreHardnessA || form.shoreHardnessD ||
-      form.glassTempTransition || form.heatDeflectionTemp ||
-      form.dryingTemperature || form.dryingTime || form.transmissionDistance ||
-      form.filamentLoadingSpeed || form.filamentUnloadingSpeed ||
-      form.startGcode || form.endGcode || form.zOffset
-    );
-  });
+  // Which tab of the form is visible. All panels stay mounted (hidden via the
+  // `hidden` attribute) so native required-field validation still fires on
+  // tabs the user isn't looking at — see FormTabs + the onInvalidCapture
+  // handler on the <form>, which switches to the offending tab.
+  const [activeTab, setActiveTab] = useState<string>("basics");
+  // Guards onInvalidCapture so only the FIRST invalid field per submit drives
+  // the tab switch + focus (see the handler on the <form>). Without it the
+  // last invalid field steals focus from the first.
+  const invalidHandledRef = useRef(false);
   const [tdsSuggestions, setTdsSuggestions] = useState<{ name: string; tdsUrl: string }[]>([]);
   const [filamentTypes, setFilamentTypes] = useState<string[]>(DEFAULT_FILAMENT_TYPES);
   const [typeDropdownOpen, setTypeDropdownOpen] = useState(false);
@@ -966,16 +960,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
       ? t("form.updateFilament")
       : t("form.createFilament");
 
-  // Sidebar TOC entries — must mirror what's actually rendered, otherwise
-  // clicking an entry scrolls to a missing element and leaves the highlight
-  // stuck on an unreachable item (codex PR #214 P2). Two gating signals:
-  //   - `showAdvanced` hides shrinkage / fan / retraction / multi-material /
-  //     material-properties / material-tags
-  //   - `form.compatibleNozzles.length === 0` hides calibrations
-  // Identity fields (name / parent / vendor / type / color / cost) sit above
-  // the first TOC entry as always-visible primary content.
-  const hasCompatibleNozzles = form.compatibleNozzles.length > 0;
-
   // Placeholder helpers — when the form is opened from `?parentId=`, the
   // parent doc rides along on `initialData._parent`. We render the parent's
   // values as faded placeholders on every inheritable input so the user
@@ -1003,47 +987,65 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     if (value === null || value === undefined || value === "") return undefined;
     return String(value);
   };
-  const tocEntries: TocEntry[] = useMemo(() => {
-    const all: { id: string; label: string; show: boolean }[] = [
-      { id: "spool-weight", label: t("form.section.spoolWeight"), show: true },
-      { id: "print-speed", label: t("form.section.printSpeed"), show: true },
-      { id: "temperatures", label: t("form.section.temperatures"), show: true },
-      { id: "shrinkage", label: t("form.section.shrinkage"), show: showAdvanced },
-      { id: "fan", label: t("form.section.fan"), show: showAdvanced },
-      { id: "retraction", label: t("form.section.retraction"), show: showAdvanced },
-      { id: "multi-material", label: t("form.section.multiMaterial"), show: showAdvanced },
-      { id: "material-properties", label: t("form.section.materialProperties"), show: showAdvanced },
-      { id: "material-tags", label: t("form.section.materialTags"), show: showAdvanced },
-      { id: "compatible-nozzles", label: t("form.section.compatibleNozzles"), show: true },
-      { id: "calibrations", label: t("form.section.calibrations"), show: hasCompatibleNozzles },
-      { id: "presets", label: t("form.section.presets"), show: true },
-      { id: "gcode", label: t("form.section.gcode"), show: true },
-    ];
-    return all.filter((e) => e.show).map(({ id, label }) => ({ id, label }));
-  }, [t, showAdvanced, hasCompatibleNozzles]);
+  // Tabs group the form's sections so only one group shows at a time. The
+  // panels below (each carrying `data-tab` with the matching id) stay mounted
+  // in the form — see FormTabs for why that keeps native validation working
+  // across tabs.
+  const tabs: FormTab[] = useMemo(
+    () => [
+      { id: "basics", label: t("form.tab.basics") },
+      { id: "printing", label: t("form.tab.printing") },
+      { id: "advanced", label: t("form.tab.advanced") },
+      { id: "calibration", label: t("form.tab.calibration") },
+      { id: "slicer", label: t("form.tab.slicer") },
+    ],
+    [t],
+  );
 
   return (
-    <div className="lg:flex lg:gap-6 lg:items-start">
+    <div>
     <form
       onSubmit={handleSubmit}
-      // GH #228: when HTML5 validation rejects a required input inside a
-      // collapsed CollapsibleSection, the browser focuses the invalid
-      // element and tries to scroll to it — but the field is `hidden`,
-      // so the user sees nothing and the form looks frozen.
-      // `expandAndScrollToSection` walks up from the invalid input to
-      // its enclosing `<section data-toc-section>` and opens it before
-      // the browser's default scroll runs. Use the capture phase
-      // because the `invalid` event doesn't bubble in the standard
-      // sense — capture lets us see it on the form root regardless.
+      // GH #228 + tabs: when HTML5 validation rejects a field the user can't
+      // see, bring it into view. The field may be (a) on a tab that isn't
+      // active — every panel stays mounted so the browser still validates it
+      // — and/or (b) inside a collapsed CollapsibleSection. So switch to the
+      // panel's tab (via its `data-tab`), then open the enclosing section and
+      // scroll to it. Capture phase because the `invalid` event doesn't
+      // bubble — capture lets the form root see it regardless.
       onInvalidCapture={(e) => {
+        // A submit can fail validation on several fields at once; the browser
+        // fires `invalid` for each in DOM order. Only the FIRST drives the tab
+        // switch + focus, so focus lands on the first offending field rather
+        // than being stolen by the last. The flag resets on a macrotask —
+        // microtasks can interleave between the browser's per-field `invalid`
+        // dispatches, so a microtask reset would re-arm mid-burst.
+        if (invalidHandledRef.current) return;
+        invalidHandledRef.current = true;
+        setTimeout(() => {
+          invalidHandledRef.current = false;
+        }, 0);
         const target = e.target as HTMLElement | null;
         if (!target) return;
+        const panel = target.closest("[data-tab]") as HTMLElement | null;
+        const tab = panel?.dataset.tab;
+        if (tab && tab !== activeTab) setActiveTab(tab);
         const section = target.closest("section[id]") as HTMLElement | null;
         if (section && section.id) {
           expandAndScrollToSection(section.id);
+        } else {
+          // Bare field (e.g. name, vendor, tdsUrl): the browser tried to focus
+          // it while its panel was still hidden. After the tab switch commits,
+          // scroll it into view and refocus it.
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              target.scrollIntoView({ behavior: "smooth", block: "center" });
+              target.focus?.();
+            });
+          });
         }
       }}
-      className="space-y-4 flex-1 min-w-0"
+      className="space-y-4"
     >
       {fetchErrors.length > 0 && (
         <div className="px-3 py-2 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded text-sm text-yellow-700 dark:text-yellow-300">
@@ -1075,6 +1077,22 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         </div>
       )}
 
+      <FormTabs
+        tabs={tabs}
+        active={activeTab}
+        onChange={setActiveTab}
+        ariaLabel={t("form.tabs.aria")}
+      />
+
+      {/* ── BASICS ─────────────────────────────────────────────────── */}
+      <div
+        role="tabpanel"
+        id="tabpanel-basics"
+        aria-labelledby="tab-basics"
+        data-tab="basics"
+        hidden={activeTab !== "basics"}
+        className="space-y-4"
+      >
       <div>
         <label className={labelClass} htmlFor="filament-name">{t("form.name")} *</label>
         <input
@@ -1689,6 +1707,56 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         </div>
       </CollapsibleSection>
 
+      <div>
+        <label className={labelClass}>{t("form.tdsUrl")}</label>
+        <input
+          type="url"
+          className={inputClass}
+          value={form.tdsUrl}
+          onChange={(e) => setForm({ ...form, tdsUrl: e.target.value })}
+          placeholder={parentPh("tdsUrl") ?? t("form.placeholder.tdsUrl")}
+        />
+        {!form.tdsUrl && tdsSuggestions.length > 0 && (
+          <div className="mt-1">
+            <p className="text-xs text-gray-500 mb-1">{t("form.tdsFromVendor", { vendor: form.vendor })}</p>
+            <div className="flex flex-wrap gap-1">
+              {tdsSuggestions.map((s) => (
+                <button
+                  key={s.name}
+                  type="button"
+                  onClick={() => setForm({ ...form, tdsUrl: s.tdsUrl })}
+                  className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded hover:bg-blue-200 dark:hover:bg-blue-800"
+                >
+                  {t("form.useFrom", { name: s.name })}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div>
+        <label className={labelClass}>{t("form.notes")}</label>
+        <textarea
+          className={inputClass}
+          rows={4}
+          value={form.notes}
+          onChange={(e) => setForm({ ...form, notes: e.target.value })}
+          placeholder={t("form.placeholder.notes")}
+        />
+      </div>
+      </div>
+
+      {/* ── PRINTING ───────────────────────────────────────────────── */}
+      <div
+        role="tabpanel"
+        id="tabpanel-printing"
+        aria-labelledby="tab-printing"
+        data-tab="printing"
+        hidden={activeTab !== "printing"}
+        className="space-y-4"
+      >
+
       {/* #872: framed "Print Speed" section. These three fields used to be an
           unframed orphan grid between sections, so they didn't align with the
           other (bordered) groups. */}
@@ -1903,20 +1971,17 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           setForm({ ...form, bedTypeTemps: [...form.bedTypeTemps, { _uid: makeUid(), bedType: "", temperature: "", firstLayerTemperature: "" }] });
         }}>{t("form.addBedType")}</button>
       </CollapsibleSection>
-
-      <div>
-        <button
-          type="button"
-          onClick={() => setShowAdvanced(!showAdvanced)}
-          className="text-sm text-blue-600 hover:underline flex items-center gap-1"
-        >
-          <span className="text-xs">{showAdvanced ? "▾" : "▸"}</span>
-          {showAdvanced ? t("form.hideAdvanced") : t("form.showAdvanced")}
-          <span className="text-gray-400 font-normal">({t("form.advancedHint")})</span>
-        </button>
       </div>
 
-      {showAdvanced && (<>
+      {/* ── ADVANCED ───────────────────────────────────────────────── */}
+      <div
+        role="tabpanel"
+        id="tabpanel-advanced"
+        aria-labelledby="tab-advanced"
+        data-tab="advanced"
+        hidden={activeTab !== "advanced"}
+        className="space-y-4"
+      >
       <CollapsibleSection id="shrinkage" title={t("form.section.shrinkage")}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
@@ -2262,8 +2327,17 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           ))}
         </div>
       </CollapsibleSection>
-      </>)}
+      </div>
 
+      {/* ── CALIBRATION ────────────────────────────────────────────── */}
+      <div
+        role="tabpanel"
+        id="tabpanel-calibration"
+        aria-labelledby="tab-calibration"
+        data-tab="calibration"
+        hidden={activeTab !== "calibration"}
+        className="space-y-4"
+      >
       <CollapsibleSection
         id="compatible-nozzles"
         title={t("form.section.compatibleNozzles")}
@@ -2667,7 +2741,17 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           </div>
         </CollapsibleSection>
       )}
+      </div>
 
+      {/* ── SLICER ─────────────────────────────────────────────────── */}
+      <div
+        role="tabpanel"
+        id="tabpanel-slicer"
+        aria-labelledby="tab-slicer"
+        data-tab="slicer"
+        hidden={activeTab !== "slicer"}
+        className="space-y-4"
+      >
       <CollapsibleSection
         id="presets"
         title={t("form.section.presets")}
@@ -2792,34 +2876,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         </div>
       </div>
 
-      <div>
-        <label className={labelClass}>{t("form.tdsUrl")}</label>
-        <input
-          type="url"
-          className={inputClass}
-          value={form.tdsUrl}
-          onChange={(e) => setForm({ ...form, tdsUrl: e.target.value })}
-          placeholder={parentPh("tdsUrl") ?? t("form.placeholder.tdsUrl")}
-        />
-        {!form.tdsUrl && tdsSuggestions.length > 0 && (
-          <div className="mt-1">
-            <p className="text-xs text-gray-500 mb-1">{t("form.tdsFromVendor", { vendor: form.vendor })}</p>
-            <div className="flex flex-wrap gap-1">
-              {tdsSuggestions.map((s) => (
-                <button
-                  key={s.name}
-                  type="button"
-                  onClick={() => setForm({ ...form, tdsUrl: s.tdsUrl })}
-                  className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-700 dark:text-blue-300 rounded hover:bg-blue-200 dark:hover:bg-blue-800"
-                >
-                  {t("form.useFrom", { name: s.name })}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
-
       <CollapsibleSection id="gcode" title={t("form.section.gcode")}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
@@ -2840,16 +2896,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           </div>
         </div>
       </CollapsibleSection>
-
-      <div>
-        <label className={labelClass}>{t("form.notes")}</label>
-        <textarea
-          className={inputClass}
-          rows={4}
-          value={form.notes}
-          onChange={(e) => setForm({ ...form, notes: e.target.value })}
-          placeholder={t("form.placeholder.notes")}
-        />
       </div>
 
       <button
@@ -2860,12 +2906,6 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         {submitLabel}
       </button>
     </form>
-    {/* Desktop sidebar TOC: 200px wide, sticky, sits to the right of the form.
-     *  Mobile: replaced by the floating jump button below. */}
-    <aside className="lg:w-48 lg:flex-shrink-0 hidden lg:block">
-      <FormToc entries={tocEntries} />
-    </aside>
-    <FormTocMobileButton entries={tocEntries} />
     </div>
   );
 }

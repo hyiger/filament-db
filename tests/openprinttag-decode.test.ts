@@ -632,4 +632,261 @@ describe("decodeOpenPrintTagBinary", () => {
       expect(decoded.secondaryColors).toBeUndefined();
     });
   });
+
+  // ── CBOR argument-length truncation guards ────────────────────────
+  // These pin the "unexpected end of data reading N-byte argument"
+  // branches in decodeCBORItem. Each payload begins the meta map, then
+  // gives its value an initial byte that promises N argument bytes but
+  // supplies none, so the read runs off the end.
+  describe("truncated multi-byte CBOR arguments", () => {
+    it("throws reading a truncated 1-byte argument (additional 24)", () => {
+      // meta map {2: <1-byte arg>} but the arg byte is missing.
+      const payload = new Uint8Array([0xa1, 0x02, 0x18]);
+      expect(() => decodeOpenPrintTagBinary(payload)).toThrow(
+        "reading 1-byte argument",
+      );
+    });
+
+    it("throws reading a truncated 2-byte argument (additional 25)", () => {
+      // 0x19 = major 0, additional 25 → 2-byte arg, only 1 byte follows.
+      const payload = new Uint8Array([0xa1, 0x02, 0x19, 0x01]);
+      expect(() => decodeOpenPrintTagBinary(payload)).toThrow(
+        "reading 2-byte argument",
+      );
+    });
+
+    it("throws reading a truncated 4-byte argument (additional 26)", () => {
+      // 0x1a = major 0, additional 26 → 4-byte arg, only 2 bytes follow.
+      const payload = new Uint8Array([0xa1, 0x02, 0x1a, 0x00, 0x01]);
+      expect(() => decodeOpenPrintTagBinary(payload)).toThrow(
+        "reading 4-byte argument",
+      );
+    });
+
+    it("throws reading a truncated 8-byte argument (additional 27)", () => {
+      // 0x1b = major 0, additional 27 → 8-byte arg, only 3 bytes follow.
+      const payload = new Uint8Array([0xa1, 0x02, 0x1b, 0x00, 0x00, 0x01]);
+      expect(() => decodeOpenPrintTagBinary(payload)).toThrow(
+        "reading 8-byte argument",
+      );
+    });
+
+    it("decodes a well-formed 4-byte unsigned argument (additional 26)", () => {
+      // Positive-path companion to the truncation case: exercise the
+      // 4-byte read + unsigned coercion with a large value in a main field.
+      // key 16 = NOMINAL_NETTO_FULL_WEIGHT, value = 0x00100000 (1048576).
+      const payload = new Uint8Array([
+        0xa1, 0x02, 0x14, // meta: {2: 20}
+        0xbf, // indefinite map start
+        0x08, 0x00, // material_class = FFF
+        0x09, 0x00, // material_type = PLA
+        0x0a, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = "Test"
+        0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+        0x10, // key 16 = NOMINAL_NETTO_FULL_WEIGHT
+        0x1a, 0x00, 0x10, 0x00, 0x00, // uint32 = 1048576
+        0xff, // break
+      ]);
+      const decoded = decodeOpenPrintTagBinary(payload);
+      expect(decoded.weightGrams).toBe(0x00100000);
+    });
+
+    it("decodes a well-formed 8-byte unsigned argument (additional 27)", () => {
+      // key 16 value as a 64-bit uint (0x0000000100000000 = 4294967296).
+      const payload = new Uint8Array([
+        0xa1, 0x02, 0x14, // meta: {2: 20}
+        0xbf,
+        0x08, 0x00,
+        0x09, 0x00,
+        0x0a, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = "Test"
+        0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+        0x10, // key 16
+        0x1b, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, // uint64
+        0xff,
+      ]);
+      const decoded = decodeOpenPrintTagBinary(payload);
+      expect(decoded.weightGrams).toBe(0x100000000);
+    });
+  });
+
+  // ── Indefinite byte/text strings are rejected ─────────────────────
+  describe("indefinite-length strings (unsupported)", () => {
+    it("throws on an indefinite byte string (major 2, additional 31)", () => {
+      // 0x5f = major 2 (byte string), additional 31 (indefinite).
+      const payload = new Uint8Array([
+        0xa1, 0x02, 0x14, // meta: {2: 20}
+        0xbf,
+        0x08, 0x00,
+        0x09, 0x00,
+        0x13, // key 19 = PRIMARY_COLOR
+        0x5f, // indefinite byte string
+        0xff,
+      ]);
+      expect(() => decodeOpenPrintTagBinary(payload)).toThrow(
+        "indefinite byte strings not supported",
+      );
+    });
+
+    it("throws on an indefinite text string (major 3, additional 31)", () => {
+      // 0x7f = major 3 (text string), additional 31 (indefinite).
+      const payload = new Uint8Array([
+        0xa1, 0x02, 0x14, // meta: {2: 20}
+        0xbf,
+        0x08, 0x00,
+        0x09, 0x00,
+        0x0a, // key 10 = MATERIAL_NAME
+        0x7f, // indefinite text string
+        0xff,
+      ]);
+      expect(() => decodeOpenPrintTagBinary(payload)).toThrow(
+        "indefinite text strings not supported",
+      );
+    });
+
+    it("throws when a byte-string length exceeds the buffer", () => {
+      // 0x45 = major 2, length 5, but only 2 bytes remain.
+      const payload = new Uint8Array([
+        0xa1, 0x02, 0x14, // meta
+        0xbf,
+        0x08, 0x00,
+        0x09, 0x00,
+        0x13, // key 19 = PRIMARY_COLOR
+        0x45, 0x01, 0x02, // declares 5 bytes, supplies 2
+      ]);
+      expect(() => decodeOpenPrintTagBinary(payload)).toThrow(
+        "byte string length 5 exceeds available data",
+      );
+    });
+  });
+
+  // ── Indefinite container missing-break guards ─────────────────────
+  describe("indefinite containers missing their break byte", () => {
+    it("throws on an indefinite array with no break byte (major 4)", () => {
+      // key 28 = TAGS holds an indefinite array that runs off the end.
+      // 0x18 0x1c = key 28; 0x9f opens the array, its items [4, 13]
+      // consume the rest with no 0xff break → the array guard throws.
+      const payload = new Uint8Array([
+        0xa1, 0x02, 0x14, // meta: {2: 20}
+        0xbf,
+        0x08, 0x00,
+        0x09, 0x00,
+        0x18, 0x1c, // key 28 = TAGS
+        0x9f, 0x04, 0x0d, // indefinite array [4, 13] — no break, runs off end
+      ]);
+      expect(() => decodeOpenPrintTagBinary(payload)).toThrow(
+        "missing break byte for indefinite array",
+      );
+    });
+
+    it("throws on an indefinite map with no break byte (major 5)", () => {
+      // Main map is indefinite (0xbf) and never terminates.
+      const payload = new Uint8Array([
+        0xa1, 0x02, 0x14, // meta: {2: 20}
+        0xbf, // indefinite main map start — never closed
+        0x08, 0x00,
+        0x09, 0x00,
+      ]);
+      expect(() => decodeOpenPrintTagBinary(payload)).toThrow(
+        "missing break byte for indefinite map",
+      );
+    });
+  });
+
+  // ── Simple-value primitives (major 7, additional 20–23) ───────────
+  describe("CBOR simple values true/false/null/undefined", () => {
+    // Each rides in the aux region as key 0 so it surfaces on decoded.main
+    // via a well-known field. We put a simple value in a main field and
+    // read it back off decoded.main to observe the primitive.
+    function buildMainWithSimpleValue(simpleByte: number) {
+      // key 41 = CHAMBER_TEMPERATURE — an arbitrary main slot to carry the value.
+      return new Uint8Array([
+        0xa1, 0x02, 0x14, // meta: {2: 20}
+        0xbf,
+        0x08, 0x00,
+        0x09, 0x00,
+        0x0a, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = "Test"
+        0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+        0x18, 0x29, // key 41 = CHAMBER_TEMPERATURE
+        simpleByte,
+        0xff, // break (map)
+      ]);
+    }
+
+    it("decodes false (0xf4)", () => {
+      const decoded = decodeOpenPrintTagBinary(buildMainWithSimpleValue(0xf4));
+      expect(decoded.main.CHAMBER_TEMPERATURE).toBe(false);
+    });
+
+    it("decodes true (0xf5)", () => {
+      const decoded = decodeOpenPrintTagBinary(buildMainWithSimpleValue(0xf5));
+      expect(decoded.main.CHAMBER_TEMPERATURE).toBe(true);
+    });
+
+    it("decodes null (0xf6)", () => {
+      const decoded = decodeOpenPrintTagBinary(buildMainWithSimpleValue(0xf6));
+      expect(decoded.main.CHAMBER_TEMPERATURE).toBeNull();
+    });
+
+    it("decodes undefined (0xf7)", () => {
+      const decoded = decodeOpenPrintTagBinary(buildMainWithSimpleValue(0xf7));
+      // undefined values still land in the map (the key was present).
+      expect(decoded.main).toHaveProperty("CHAMBER_TEMPERATURE");
+      expect(decoded.main.CHAMBER_TEMPERATURE).toBeUndefined();
+    });
+  });
+
+  // ── Unknown key fallbacks (meta + main) ───────────────────────────
+  describe("unknown CBOR keys fall back to synthetic names", () => {
+    it("labels an unrecognised meta key as unknown_<k>", () => {
+      // Meta map carries key 7 (AUX_REGION_SIZE is a known meta key, so
+      // use key 99 which has no META_KEY_TO_NAME entry).
+      const payload = new Uint8Array([
+        0xa1, 0x18, 0x63, 0x14, // meta: {99: 20}
+        0xbf,
+        0x08, 0x00,
+        0x09, 0x00,
+        0x0a, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = "Test"
+        0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+        0xff,
+      ]);
+      const decoded = decodeOpenPrintTagBinary(payload);
+      expect(decoded.meta.unknown_99).toBe(20);
+    });
+
+    it("labels an unrecognised main key as key_<k>", () => {
+      // Key 60 has no MAIN_KEY_TO_NAME entry — should surface as key_60.
+      const payload = new Uint8Array([
+        0xa1, 0x02, 0x14, // meta: {2: 20}
+        0xbf,
+        0x08, 0x00,
+        0x09, 0x00,
+        0x0a, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = "Test"
+        0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+        0x18, 0x3c, // key 60 (unknown main key)
+        0x18, 0x2a, // value = 42 (uint, additional 24)
+        0xff,
+      ]);
+      const decoded = decodeOpenPrintTagBinary(payload);
+      expect(decoded.main.key_60).toBe(42);
+    });
+  });
+
+  // ── Malformed primary color skipped (bytesToRgbHex → null) ─────────
+  it("skips a primary color whose byte string is too short", () => {
+    // key 19 = PRIMARY_COLOR carries a 2-byte string (< 3 bytes required).
+    // bytesToRgbHex returns null → the `if (colorHex)` guard is false and
+    // `result.color` stays unset.
+    const payload = new Uint8Array([
+      0xa1, 0x02, 0x14, // meta: {2: 20}
+      0xbf,
+      0x08, 0x00,
+      0x09, 0x00,
+      0x0a, 0x64, 0x54, 0x65, 0x73, 0x74, // material_name = "Test"
+      0x0b, 0x65, 0x42, 0x72, 0x61, 0x6e, 0x64, // brand_name = "Brand"
+      0x13, // key 19 = PRIMARY_COLOR
+      0x42, 0xff, 0x00, // 2-byte string (too short for RGB)
+      0xff,
+    ]);
+    const decoded = decodeOpenPrintTagBinary(payload);
+    expect(decoded.color).toBeUndefined();
+  });
 });

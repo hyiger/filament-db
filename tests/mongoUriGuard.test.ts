@@ -115,4 +115,79 @@ describe("assertSafeMongoUri", () => {
     expect(mockLookup).not.toHaveBeenCalled();
     expect(mockResolveSrv).not.toHaveBeenCalled();
   });
+
+  // ── extractHost: bracketed IPv6 host specs ──
+
+  it("strips IPv6 brackets and port before checking a private literal", async () => {
+    // `[::1]:27017` → host `::1` (loopback, private) — no DNS lookup for a literal.
+    await expect(
+      assertSafeMongoUri("mongodb://[::1]:27017/db", { blockPrivateHosts: true }),
+    ).rejects.toThrow(/private\/internal/);
+    expect(mockLookup).not.toHaveBeenCalled();
+  });
+
+  it("accepts a bracketed public IPv6 literal", async () => {
+    await expect(
+      assertSafeMongoUri("mongodb://[2606:4700:4700::1111]:27017/db", {
+        blockPrivateHosts: true,
+      }),
+    ).resolves.toBeUndefined();
+    expect(mockLookup).not.toHaveBeenCalled();
+  });
+
+  it("tolerates a bracketed host missing its closing bracket", async () => {
+    // extractHost's `end === -1` fallback: slice off the leading '[' only.
+    // `[::1` → `::1` (a colon-bearing literal → treated as an IP, loopback).
+    await expect(
+      assertSafeMongoUri("mongodb://[::1/db", { blockPrivateHosts: true }),
+    ).rejects.toThrow(/private\/internal/);
+    expect(mockLookup).not.toHaveBeenCalled();
+  });
+
+  // ── host resolution + empty-host edge cases ──
+
+  it("rejects a host that does not resolve", async () => {
+    mockLookup.mockResolvedValue([]);
+    await expect(
+      assertSafeMongoUri("mongodb://ghost.example.com:27017/db", {
+        blockPrivateHosts: true,
+      }),
+    ).rejects.toThrow(/does not resolve/i);
+  });
+
+  it("rejects a plain URI whose host spec has no host (bare port)", async () => {
+    // authority `:27017` → extractHost → "" → the empty-host guard fires.
+    await expect(
+      assertSafeMongoUri("mongodb://:27017/db", { blockPrivateHosts: true }),
+    ).rejects.toThrow(/empty host/i);
+    expect(mockLookup).not.toHaveBeenCalled();
+  });
+
+  it("rejects a URI whose authority is only host separators", async () => {
+    // `,,` → split/filter leaves zero host specs → the no-host guard fires.
+    await expect(
+      assertSafeMongoUri("mongodb://,,/db", { blockPrivateHosts: true }),
+    ).rejects.toThrow(/no host/i);
+  });
+
+  it("rejects a mongodb+srv URI listing more than one host", async () => {
+    await expect(
+      assertSafeMongoUri("mongodb+srv://a.example.com,b.example.com/db", {
+        requireSrv: true,
+        blockPrivateHosts: true,
+      }),
+    ).rejects.toThrow(/exactly one host/i);
+    expect(mockResolveSrv).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mongodb+srv URI whose seed host is empty (bare port)", async () => {
+    // Single host spec `:27017` → seedHost "" → the empty-host guard in the SRV path.
+    await expect(
+      assertSafeMongoUri("mongodb+srv://:27017/db", {
+        requireSrv: true,
+        blockPrivateHosts: true,
+      }),
+    ).rejects.toThrow(/empty host/i);
+    expect(mockResolveSrv).not.toHaveBeenCalled();
+  });
 });

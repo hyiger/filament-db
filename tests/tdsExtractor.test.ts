@@ -736,4 +736,495 @@ describe("tdsExtractor", () => {
       expect(result).toBe(false);
     });
   });
+
+  // ── Additional coverage: fetch redirect edge cases + provider error paths ──
+
+  /** Build a fetch Response-ish object whose body is a real ReadableStream
+   * over `content` so readBodyCapped's reader loop runs (existing tests use
+   * text()/arrayBuffer() mocks that leave res.body undefined). */
+  function htmlBodyResponse(content: string, headers?: Record<string, string>) {
+    const bytes = new Uint8Array(Buffer.from(content, "utf-8"));
+    return {
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-type": "text/html", ...headers }),
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+    };
+  }
+
+  describe("fetchTdsContent redirect + body edge cases", () => {
+    it("throws when a 3xx response has no Location header", async () => {
+      const fetchMock = vi.fn().mockResolvedValueOnce({
+        status: 302,
+        headers: new Headers({}), // no location
+        body: { cancel: () => Promise.resolve() },
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/start", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/no Location header/i);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("truncates fetched HTML text to 50,000 chars", async () => {
+      // >50K chars after tag-strip/collapse. Use plain text (no tags) so the
+      // whitespace-collapse leaves length intact.
+      const huge = "A".repeat(60_000);
+      let geminiBody: string | undefined;
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(htmlBodyResponse(huge))
+        .mockImplementationOnce((_url: string, opts?: { body?: string }) => {
+          geminiBody = opts?.body;
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({
+              candidates: [{ content: { parts: [{ text: '{"name": "Trunc", "type": "PLA"}' }] } }],
+            }),
+          });
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/big.html", "fake-key");
+      expect(result.success).toBe(true);
+      // The prompt-wrapped text embeds the (truncated) TDS content. The run of
+      // 'A's in the request body must be exactly 50,000, not 60,000.
+      const runMatch = geminiBody!.match(/A+/g)!.reduce((a, b) => (b.length > a.length ? b : a), "");
+      expect(runMatch.length).toBe(50_000);
+    });
+
+    it("reads an empty body as empty text when res.body is absent", async () => {
+      // No `body` on the final response → readBodyCapped returns Buffer.alloc(0).
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+          // no body key
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            candidates: [{ content: { parts: [{ text: '{"name": "Empty", "type": "PLA"}' }] } }],
+          }),
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/tds", "fake-key");
+      expect(result.success).toBe(true);
+      expect(result.data?.name).toBe("Empty");
+    });
+  });
+
+  describe("Gemini provider error paths", () => {
+    it("maps a 400 with API_KEY in the body to an invalid-key error", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+          text: () => Promise.resolve("content"),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 400,
+          headers: new Headers(),
+          text: () => Promise.resolve('{"error":{"message":"API_KEY_INVALID"}}'),
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/tds", "bad-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Invalid Gemini API key/i);
+    });
+
+    it("surfaces a non-key 4xx as a Gemini API error with the body snippet", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+          text: () => Promise.resolve("content"),
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          headers: new Headers(),
+          text: () => Promise.resolve("internal server boom"),
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/tds", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Gemini API error: HTTP 500/i);
+      expect(result.error).toContain("internal server boom");
+    });
+
+    it("honours a Gemini retry-after header (seconds→ms) before failing", async () => {
+      vi.useFakeTimers();
+      let apiCalls = 0;
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((url: string) => {
+        if (url.includes("example.com")) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "text/html" }),
+            text: () => Promise.resolve("content"),
+          });
+        }
+        apiCalls++;
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          headers: new Headers({ "retry-after": "2" }),
+          text: () => Promise.resolve("slow down"),
+        });
+      }));
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const p = extractFromTds("https://example.com/tds", "fake-key");
+      // retryAfterMs = 2000; advance generously past each of the 3 retries.
+      for (let i = 0; i < 3; i++) await vi.advanceTimersByTimeAsync(2_000);
+      const result = await p;
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/rate limit/i);
+      expect(apiCalls).toBe(4); // 1 initial + 3 retries
+      vi.useRealTimers();
+    });
+
+    it("errors when Gemini returns an empty candidate text", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+          text: () => Promise.resolve("content"),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({ candidates: [] }), // no parts → "" text
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/tds", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/empty response/i);
+    });
+
+    it("errors when the provider response is not valid JSON", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "text/html" }),
+          text: () => Promise.resolve("content"),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: () => Promise.resolve({
+            candidates: [{ content: { parts: [{ text: "not json at all {" }] } }],
+          }),
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/tds", "fake-key");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Failed to parse gemini response as JSON/i);
+    });
+
+    it("sends PDF as inlineData with the fallback mimeType when none is set", async () => {
+      // A PDF fetched with a content-type that isn't application/pdf but a .pdf
+      // URL → content.mimeType is set to application/pdf by the fetcher; to
+      // drive the `|| "application/pdf"` fallback we go through the file-upload
+      // path where mimeType on the content can be undefined for a pdf branch.
+      let geminiBody: string | undefined;
+      const bytes = new Uint8Array(Buffer.from("%PDF-1.4 fake"));
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          headers: new Headers({ "content-type": "application/octet-stream" }),
+          body: new ReadableStream<Uint8Array>({
+            start(c) { c.enqueue(bytes); c.close(); },
+          }),
+        })
+        .mockImplementationOnce((_url: string, opts?: { body?: string }) => {
+          geminiBody = opts?.body;
+          return Promise.resolve({
+            ok: true,
+            json: () => Promise.resolve({
+              candidates: [{ content: { parts: [{ text: '{"name": "PdfBody", "type": "PLA"}' }] } }],
+            }),
+          });
+        });
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/doc.pdf", "fake-key");
+      expect(result.success).toBe(true);
+      const parsed = JSON.parse(geminiBody!);
+      expect(parsed.contents[0].parts[0].inlineData.mimeType).toBe("application/pdf");
+    });
+  });
+
+  describe("Claude provider error + content paths", () => {
+    it("sends a PDF as a document content block", async () => {
+      let claudeBody: string | undefined;
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, opts?: { body?: string }) => {
+        claudeBody = opts?.body;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            content: [{ type: "text", text: '{"name": "Claude PDF", "type": "PLA"}' }],
+          }),
+        });
+      }));
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTdsContent(Buffer.from("%PDF-1.4"), "application/pdf", "sk-ant", "claude");
+      expect(result.success).toBe(true);
+      expect(result.data?.name).toBe("Claude PDF");
+      const parsed = JSON.parse(claudeBody!);
+      const block = parsed.messages[0].content[0];
+      expect(block.type).toBe("document");
+      expect(block.source.type).toBe("base64");
+      expect(block.source.media_type).toBe("application/pdf");
+      // Second block is the prompt text.
+      expect(parsed.messages[0].content[1].type).toBe("text");
+    });
+
+    it("maps a Claude 401 to an invalid-key error", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        headers: new Headers(),
+        text: () => Promise.resolve("unauthorized"),
+      }));
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTdsContent(Buffer.from("x"), "text/plain", "sk-ant-bad", "claude");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Invalid Claude API key/i);
+    });
+
+    it("surfaces a non-auth Claude error with the body snippet", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+        headers: new Headers(),
+        text: () => Promise.resolve("overloaded_error"),
+      }));
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTdsContent(Buffer.from("x"), "text/plain", "sk-ant", "claude");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Claude API error: HTTP 500/i);
+      expect(result.error).toContain("overloaded_error");
+    });
+
+    it("retries a Claude 429 with retry-after then fails", async () => {
+      vi.useFakeTimers();
+      let apiCalls = 0;
+      vi.stubGlobal("fetch", vi.fn().mockImplementation(() => {
+        apiCalls++;
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          headers: new Headers({ "retry-after": "1" }),
+          text: () => Promise.resolve("rate limited"),
+        });
+      }));
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const p = extractFromTdsContent(Buffer.from("x"), "text/plain", "sk-ant", "claude");
+      for (let i = 0; i < 3; i++) await vi.advanceTimersByTimeAsync(1_000);
+      const result = await p;
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/rate limit/i);
+      expect(apiCalls).toBe(4);
+      vi.useRealTimers();
+    });
+
+    it("returns empty text when the Claude response has no text block", async () => {
+      // No text-type block → textBlock?.text || "" → empty → 'empty response' error.
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ content: [{ type: "tool_use" }] }),
+      }));
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTdsContent(Buffer.from("x"), "text/plain", "sk-ant", "claude");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/empty response/i);
+    });
+  });
+
+  describe("OpenAI provider error paths", () => {
+    it("maps an OpenAI 401 to an invalid-key error", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        headers: new Headers(),
+        text: () => Promise.resolve("Incorrect API key"),
+      }));
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTdsContent(Buffer.from("x"), "text/plain", "sk-bad", "openai");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Invalid OpenAI API key/i);
+    });
+
+    it("retries an OpenAI 429 with retry-after then fails", async () => {
+      vi.useFakeTimers();
+      let apiCalls = 0;
+      vi.stubGlobal("fetch", vi.fn().mockImplementation(() => {
+        apiCalls++;
+        return Promise.resolve({
+          ok: false,
+          status: 429,
+          headers: new Headers({ "retry-after": "1" }),
+          text: () => Promise.resolve("rate limited"),
+        });
+      }));
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const p = extractFromTdsContent(Buffer.from("x"), "text/plain", "sk-test", "openai");
+      for (let i = 0; i < 3; i++) await vi.advanceTimersByTimeAsync(1_000);
+      const result = await p;
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/rate limit/i);
+      expect(apiCalls).toBe(4);
+      vi.useRealTimers();
+    });
+
+    it("surfaces a non-auth OpenAI error with the body snippet", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+        ok: false,
+        status: 503,
+        headers: new Headers(),
+        text: () => Promise.resolve("service unavailable"),
+      }));
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTdsContent(Buffer.from("x"), "text/plain", "sk-test", "openai");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/OpenAI API error: HTTP 503/i);
+      expect(result.error).toContain("service unavailable");
+    });
+
+    it("returns empty text when OpenAI response has no choices", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ choices: [] }),
+      }));
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTdsContent(Buffer.from("x"), "text/plain", "sk-test", "openai");
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/empty response/i);
+    });
+  });
+
+  describe("cleanExtractedData / countFields", () => {
+    it("drops an all-null temperatures object entirely", async () => {
+      // temperatures present but every temp null → cleaned.temperatures NOT set
+      // (Object.keys(temps).length === 0 branch), and countFields sees no temps.
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, opts?: { body?: string }) => {
+        // First fetch = TDS content; only the AI call carries a body.
+        if (!opts?.body) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "text/html" }),
+            text: () => Promise.resolve("content"),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            candidates: [{ content: { parts: [{ text: JSON.stringify({
+              name: "OnlyName",
+              type: null,
+              temperatures: { nozzle: null, bed: null },
+            }) }] } }],
+          }),
+        });
+      }));
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/tds", "fake-key");
+      expect(result.success).toBe(true);
+      expect(result.data).not.toHaveProperty("temperatures");
+      expect(result.data?.name).toBe("OnlyName");
+      // Only `name` survived.
+      expect(result.fieldsExtracted).toBe(1);
+    });
+
+    it("counts nested temperature fields toward fieldsExtracted", async () => {
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, opts?: { body?: string }) => {
+        if (!opts?.body) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            headers: new Headers({ "content-type": "text/html" }),
+            text: () => Promise.resolve("content"),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            candidates: [{ content: { parts: [{ text: JSON.stringify({
+              name: "Multi",
+              temperatures: { nozzle: 210, bed: 60, standby: 170 },
+            }) }] } }],
+          }),
+        });
+      }));
+      const { extractFromTds } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTds("https://example.com/tds", "fake-key");
+      expect(result.success).toBe(true);
+      // name + 3 temps = 4
+      expect(result.fieldsExtracted).toBe(4);
+      expect(result.data?.temperatures?.standby).toBe(170);
+    });
+  });
+
+  describe("callProvider dispatch guard", () => {
+    it("errors on an unknown provider passed through the public API", async () => {
+      // No fetch should ever fire — the switch default throws first.
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const result = await extractFromTdsContent(
+        Buffer.from("x"),
+        "text/plain",
+        "fake-key",
+        "bogus" as never,
+      );
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Unknown AI provider: bogus/i);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("extractFromTdsContent HTML truncation", () => {
+    it("truncates a >50K-char uploaded HTML file to 50,000 chars", async () => {
+      let geminiBody: string | undefined;
+      vi.stubGlobal("fetch", vi.fn().mockImplementation((_url: string, opts?: { body?: string }) => {
+        geminiBody = opts?.body;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({
+            candidates: [{ content: { parts: [{ text: '{"name": "BigUpload", "type": "PLA"}' }] } }],
+          }),
+        });
+      }));
+      const { extractFromTdsContent } = await import("@/lib/tdsExtractor");
+      const buffer = Buffer.from("B".repeat(60_000));
+      const result = await extractFromTdsContent(buffer, "text/plain", "fake-key", "gemini");
+      expect(result.success).toBe(true);
+      const run = geminiBody!.match(/B+/g)!.reduce((a, b) => (b.length > a.length ? b : a), "");
+      expect(run.length).toBe(50_000);
+    });
+  });
 });

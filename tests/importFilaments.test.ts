@@ -377,6 +377,153 @@ describe("upsertImportRows", () => {
     expect(doc!.temperatures.nozzle).toBe(200);
     expect(doc!.temperatures.bed).toBe(55);
   });
+
+  // GH #503: a bad-hex `color` cell must land in skippedRows (not throw on the
+  // bulk save() and lose the whole batch's accounting) — lines 586-593.
+  it("skips a row with an invalid color hex and reports the reason, still importing the good rows", async () => {
+    const result = await upsertImportRows([
+      { name: "Bad Color Row", vendor: "V", type: "PLA", color: "red" },
+      { name: "Bad Color Row 2", vendor: "V", type: "PLA", color: "#GGGGGG" },
+      { name: "Good Color Row", vendor: "V", type: "PLA", color: "#00FF00" },
+    ]);
+
+    expect(result.created).toBe(1);
+    expect(result.skipped).toBe(2);
+    expect(result.skippedRows).toHaveLength(2);
+    expect(result.skippedRows[0].name).toBe("Bad Color Row");
+    expect(result.skippedRows[0].reason).toContain("Invalid color hex");
+    expect(result.skippedRows[0].reason).toContain("red");
+    expect(result.skippedRows[1].name).toBe("Bad Color Row 2");
+    expect(result.skippedRows[1].reason).toContain("#GGGGGG");
+
+    // The bad rows never persisted; the good one did.
+    expect(await Filament.findOne({ name: "Bad Color Row" })).toBeNull();
+    expect(await Filament.findOne({ name: "Bad Color Row 2" })).toBeNull();
+    const good = await Filament.findOne({ name: "Good Color Row" });
+    expect(good!.color).toBe("#00FF00");
+  });
+
+  // Branch 610: secondaryColors provided but EVERY entry is malformed → the
+  // filtered slots array is empty → doc.secondaryColors is never set (the
+  // schema default [] applies) and the null-primary block is not entered.
+  it("omits secondaryColors and does not touch color when every provided entry is malformed (branch 610)", async () => {
+    const result = await upsertImportRows([
+      {
+        name: "All Bad Secondaries",
+        vendor: "V",
+        type: "PLA",
+        color: "#abcdef",
+        secondaryColors: "red, #BAD, notahex",
+      },
+    ]);
+    expect(result.created).toBe(1);
+    const doc = await Filament.findOne({ name: "All Bad Secondaries" });
+    expect(doc!.secondaryColors).toEqual([]);
+    // color survives untouched — the null-primary override (line 620-622)
+    // only fires when slots.length > 0.
+    expect(doc!.color).toBe("#abcdef");
+  });
+
+  // Branch 458: two soft-deleted filaments share a name (allowed — the
+  // partial-unique index only covers active rows). Only the FIRST is indexed
+  // into deletedByName; the second hits the `!deletedByName.has(...)` false arm.
+  it("indexes only the first of two same-named soft-deleted rows for resurrection (branch 458)", async () => {
+    const first = await Filament.create({
+      name: "Dupe Deleted",
+      vendor: "V",
+      type: "PLA",
+      cost: 11,
+      _deletedAt: new Date(),
+    });
+    await Filament.create({
+      name: "Dupe Deleted",
+      vendor: "V",
+      type: "PETG",
+      cost: 22,
+      _deletedAt: new Date(),
+    });
+
+    const result = await upsertImportRows([
+      { name: "Dupe Deleted", vendor: "NewVendor", type: "PLA", cost: 33 },
+    ]);
+
+    // Resurrection updates exactly one row (the first-indexed soft-deleted one),
+    // not a create.
+    expect(result.updated).toBe(1);
+    expect(result.created).toBe(0);
+
+    const resurrected = await Filament.findById(first._id);
+    expect(resurrected!._deletedAt).toBeNull();
+    expect(resurrected!.vendor).toBe("NewVendor");
+    expect(resurrected!.cost).toBe(33);
+  });
+
+  // Line 770 / branch 760: a non-duplicate-key error (a schema ValidationError
+  // from `runValidators` on the update path) routes into skippedRows via the
+  // `err instanceof Error ? err.message` fallback, not the 11000 branch.
+  it("routes a validation error on update into skippedRows with the error message (line 770)", async () => {
+    await Filament.create({ name: "Validate Me", vendor: "V", type: "PLA", cost: 10 });
+
+    const result = await upsertImportRows([
+      // Negative cost trips the schema `min: 0` validator under runValidators
+      // on the update path → a ValidationError (not an E11000).
+      { name: "Validate Me", vendor: "V", type: "PLA", cost: -50 },
+    ]);
+
+    expect(result.updated).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.skippedRows).toHaveLength(1);
+    expect(result.skippedRows[0].name).toBe("Validate Me");
+    // The message is the raw validator text, not the "Duplicate …" shape.
+    expect(result.skippedRows[0].reason).not.toMatch(/^Duplicate /);
+    expect(result.skippedRows[0].reason.toLowerCase()).toContain("cost");
+
+    // The bad update did not persist.
+    const doc = await Filament.findOne({ name: "Validate Me" });
+    expect(doc!.cost).toBe(10);
+  });
+
+  // Scalar `?? null` branches: a column present-but-null must write an
+  // explicit null (the right arm of `row.cost ?? null` on line 631, and
+  // `row.nozzleTemp ?? null` on line 655), distinct from a present value.
+  it("writes explicit nulls for present-but-null scalar/temp columns (branches 631 & 655)", async () => {
+    await Filament.create({
+      name: "Nullify Fields",
+      vendor: "V",
+      type: "PLA",
+      cost: 10,
+      temperatures: { nozzle: 200 },
+    });
+    // Existing row → update path. cost + nozzleTemp present as null → the
+    // `?? null` right arm fires and writes null through.
+    const result = await upsertImportRows([
+      { name: "Nullify Fields", vendor: "V", type: "PLA", cost: null, nozzleTemp: null },
+    ]);
+    expect(result.updated).toBe(1);
+    const doc = await Filament.findOne({ name: "Nullify Fields" });
+    expect(doc!.cost).toBeNull();
+    expect(doc!.temperatures.nozzle).toBeNull();
+  });
+
+  // Create-path temps object (branch 703): a row that supplies SOME temp
+  // subfields but not others exercises both the value side and the `?? null`
+  // fallback within the nested temperatures object.
+  it("fills unsupplied create-path temp subfields with null while keeping supplied ones (branch 703)", async () => {
+    await upsertImportRows([
+      {
+        name: "Partial Temps Create",
+        vendor: "V",
+        type: "PLA",
+        // Only bed supplied → nozzle et al. fall through `?? null`.
+        bedTemp: 60,
+      },
+    ]);
+    const doc = await Filament.findOne({ name: "Partial Temps Create" });
+    expect(doc!.temperatures.bed).toBe(60);
+    expect(doc!.temperatures.nozzle).toBeNull();
+    expect(doc!.temperatures.nozzleFirstLayer).toBeNull();
+    expect(doc!.temperatures.bedFirstLayer).toBeNull();
+  });
 });
 
 /**
@@ -938,6 +1085,58 @@ describe("splitInheritedImportSet (GH #628)", () => {
       parent,
     );
     expect(set).toEqual({ name: "V", cost: null });
+    expect(unset).toEqual([]);
+  });
+
+  it("$unsets a stale diverging secondaryColors override when the import reconciles it back to the parent (line 353/354)", () => {
+    // Variant carries its OWN non-empty secondaryColors that differ from the
+    // parent's; the import row matches the parent's array (a flattened-export
+    // re-import). The whole-array inheritance rule → drop the local override
+    // so the variant resumes inheriting.
+    const variant = { secondaryColors: ["#111111", "#222222"] };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", secondaryColors: ["#FF0000", "#00FF00"] },
+      variant,
+      parent,
+    );
+    expect(set).toEqual({ name: "V" });
+    expect(unset).toEqual(["secondaryColors"]);
+  });
+
+  it("does NOT $unset secondaryColors when the variant's local array already equals the incoming/parent array", () => {
+    // variantArr equals incoming → nothing stale to reconcile → skip $set, no $unset.
+    const variant = { secondaryColors: ["#FF0000", "#00FF00"] };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", secondaryColors: ["#FF0000", "#00FF00"] },
+      variant,
+      parent,
+    );
+    expect(set).toEqual({ name: "V" });
+    expect(unset).toEqual([]);
+  });
+
+  it("treats a non-array parent.secondaryColors as [] so a non-empty incoming array is a genuine override (branch 344)", () => {
+    // parent.secondaryColors is undefined → coerced to []; incoming is
+    // non-empty and can't equal [] → $set through.
+    const parentNoArr = { ...parent, secondaryColors: undefined };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", secondaryColors: ["#0000FF"] },
+      { secondaryColors: [] },
+      parentNoArr,
+    );
+    expect(set.secondaryColors).toEqual(["#0000FF"]);
+    expect(unset).toEqual([]);
+  });
+
+  it("treats a non-array variant.secondaryColors as [] (branch 347) — matches parent → skip, no unset", () => {
+    // variant.secondaryColors is undefined → coerced to []; incoming equals
+    // the parent's array → skip $set. variantArr is empty so no $unset.
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", secondaryColors: ["#FF0000", "#00FF00"] },
+      { secondaryColors: undefined },
+      parent,
+    );
+    expect(set).toEqual({ name: "V" });
     expect(unset).toEqual([]);
   });
 });

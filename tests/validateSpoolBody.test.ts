@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { validateSpoolBody, isValidIsoDateString } from "@/lib/validateSpoolBody";
+import {
+  validateSpoolBody,
+  isValidIsoDateString,
+  validateSpoolPhotoDataUrl,
+} from "@/lib/validateSpoolBody";
 
 describe("validateSpoolBody (POST semantics)", () => {
   it("accepts an empty body and defaults label/totalWeight", () => {
@@ -182,6 +186,19 @@ describe("isValidIsoDateString", () => {
     expect(isValidIsoDateString("2025-01-01T12:61:00Z")).toBe(false);  // bad minute
   });
 
+  // GH #524.2: ECMA-262 aliases T24:00[:00] to 00:00 of the next day, so
+  // `new Date(...)` accepts it (a silent +1-day shift) — the isNaN check at
+  // line 97 does NOT catch it. The explicit hour>=24 guard rejects it.
+  it("rejects T24:00 aliasing (silent +1-day shift)", () => {
+    expect(isValidIsoDateString("2025-01-01T24:00Z")).toBe(false);
+    expect(isValidIsoDateString("2025-01-01T24:00:00Z")).toBe(false);
+    expect(isValidIsoDateString("2025-01-01T24:00:00.000Z")).toBe(false);
+    // A time portion with no explicit Z/offset still trips the guard.
+    expect(isValidIsoDateString("2025-01-01T24:00")).toBe(false);
+    // Boundary: hour 23 with a valid time is still accepted.
+    expect(isValidIsoDateString("2025-01-01T23:00:00Z")).toBe(true);
+  });
+
   // Codex P3 on PR #375: Date.UTC has a legacy 2-digit-year remap that
   // would silently shift years 0-99 into 1900-1999, falsely rejecting
   // valid 4-digit ISO inputs like "0099-12-31". The helper now uses
@@ -193,6 +210,48 @@ describe("isValidIsoDateString", () => {
     expect(isValidIsoDateString("0000-01-01")).toBe(true);
     // Impossible-day rules still apply in the low-year range.
     expect(isValidIsoDateString("0050-02-30")).toBe(false);
+  });
+});
+
+// Direct coverage for the extracted photo-URL helper (GH #626) — shared with
+// the embedded-spool write paths, so it's a public entry point in its own right.
+describe("validateSpoolPhotoDataUrl", () => {
+  it("passes undefined through as undefined (field absent)", () => {
+    const r = validateSpoolPhotoDataUrl(undefined);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value).toBeUndefined();
+  });
+
+  it("passes null through as null", () => {
+    const r = validateSpoolPhotoDataUrl(null);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value).toBeNull();
+  });
+
+  it("rejects a non-string value", () => {
+    for (const bad of [42, {}, [], true]) {
+      const r = validateSpoolPhotoDataUrl(bad);
+      expect(r.ok).toBe(false);
+      if (r.ok) continue;
+      expect(r.error).toMatch(/photoDataUrl must be a string or null/);
+    }
+  });
+
+  it("normalises empty string to null", () => {
+    const r = validateSpoolPhotoDataUrl("");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value).toBeNull();
+  });
+
+  it("accepts a valid raster data URL verbatim", () => {
+    const url = "data:image/png;base64,AAAA";
+    const r = validateSpoolPhotoDataUrl(url);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.value).toBe(url);
   });
 });
 
@@ -257,6 +316,53 @@ describe("validateSpoolBody (PUT semantics with partial: true)", () => {
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     expect(r.photoDataUrl).toBeNull();
+  });
+
+  it("rejects a non-string, non-null photoDataUrl via validateSpoolBody", () => {
+    const r = validateSpoolBody({ photoDataUrl: 12345 });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/photoDataUrl must be a string or null/);
+  });
+
+  // locationId: string (an ObjectId) or null.
+  it("accepts locationId: null explicitly", () => {
+    const r = validateSpoolBody({ locationId: null });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.locationId).toBeNull();
+  });
+
+  it("accepts a string locationId", () => {
+    const r = validateSpoolBody({ locationId: "507f1f77bcf86cd799439011" });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.locationId).toBe("507f1f77bcf86cd799439011");
+  });
+
+  it("rejects a non-string, non-null locationId", () => {
+    const r = validateSpoolBody({ locationId: 42 });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/locationId must be a string or null/);
+  });
+
+  // retired: boolean.
+  it("accepts a boolean retired flag", () => {
+    const rTrue = validateSpoolBody({ retired: true });
+    expect(rTrue.ok).toBe(true);
+    if (rTrue.ok) expect(rTrue.retired).toBe(true);
+
+    const rFalse = validateSpoolBody({ retired: false });
+    expect(rFalse.ok).toBe(true);
+    if (rFalse.ok) expect(rFalse.retired).toBe(false);
+  });
+
+  it("rejects a non-boolean retired flag", () => {
+    const r = validateSpoolBody({ retired: "yes" });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/retired must be a boolean/);
   });
 
   // #732 Phase 4: user-entered/edited spool instanceId + regenerate.

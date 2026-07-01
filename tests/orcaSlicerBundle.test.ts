@@ -266,6 +266,134 @@ describe("filamentToOrcaSlicerKeys", () => {
     expect(keys.filament_soluble).toEqual(["1"]);
   });
 
+  it("maps soluble=false to filament_soluble '0'", () => {
+    const filament = {
+      name: "Not Soluble",
+      vendor: "Test",
+      type: "PLA",
+      color: "#FFFFFF",
+      diameter: 1.75,
+      soluble: false,
+      temperatures: {},
+      settings: {},
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+    // false is non-null so the flag is emitted, and false → "0"
+    expect(keys.filament_soluble).toEqual(["0"]);
+  });
+
+  it("emits filament_notes from the notes field", () => {
+    const filament = {
+      name: "Noted",
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      notes: "Dry at 45C for 6h",
+      temperatures: {},
+      settings: {},
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+    expect(keys.filament_notes).toEqual(["Dry at 45C for 6h"]);
+  });
+
+  it("preserves filament_notes from settings bag over the notes field", () => {
+    const filament = {
+      name: "Note Conflict",
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      notes: "structured note",
+      temperatures: {},
+      settings: {
+        filament_notes: "settings-bag note",
+      },
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+    // The `!keys.filament_notes` guard means the settings-bag value wins.
+    expect(keys.filament_notes).toEqual(["settings-bag note"]);
+  });
+
+  it("maps shrinkage XY (percent-suffixed) and Z", () => {
+    const filament = {
+      name: "Shrinker",
+      vendor: "Test",
+      type: "ABS",
+      color: "#808080",
+      diameter: 1.75,
+      shrinkageXY: 0.4,
+      shrinkageZ: 0.2,
+      temperatures: {},
+      settings: {},
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+    // shrinkageXY is emitted with a trailing "%"
+    expect(keys.filament_shrink).toEqual(["0.4%"]);
+    expect(keys.filament_shrinkage_compensation_z).toEqual(["0.2"]);
+  });
+
+  it("emits shrinkage keys even when the value is 0 (only null skips)", () => {
+    const filament = {
+      name: "Zero Shrink",
+      vendor: "Test",
+      type: "ABS",
+      color: "#808080",
+      diameter: 1.75,
+      shrinkageXY: 0,
+      shrinkageZ: 0,
+      temperatures: {},
+      settings: {},
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+    // The guard is `!= null`, so 0 still emits (via set()'s own `!= null` check).
+    expect(keys.filament_shrink).toEqual(["0%"]);
+    expect(keys.filament_shrinkage_compensation_z).toEqual(["0"]);
+  });
+
+  it("skips a null value in the settings bag", () => {
+    const filament = {
+      name: "Null Setting",
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      temperatures: {},
+      settings: {
+        filament_start_gcode: null,
+        overhang_fan_speed: "80",
+      },
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+    // The null settings value is dropped entirely; the non-null one survives.
+    expect(keys).not.toHaveProperty("filament_start_gcode");
+    expect(keys.overhang_fan_speed).toEqual(["80"]);
+  });
+
+  it("coextruded filament whose first secondary is empty omits filament_colour", () => {
+    const filament = {
+      name: "Empty First Secondary",
+      vendor: "Test",
+      type: "PLA",
+      color: null,
+      // first slot is an empty string — slicerExportColor must skip it and
+      // fall through to null rather than emitting an empty colour
+      secondaryColors: ["", "#AABBCC"],
+      diameter: 1.75,
+      temperatures: {},
+      settings: {},
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+    expect(keys).not.toHaveProperty("filament_colour");
+  });
+
   it("handles settings bag with array values", () => {
     const filament = {
       name: "Array Settings",
@@ -459,6 +587,42 @@ describe("generateOrcaSlicerProfiles", () => {
     expect(profiles).toHaveLength(2);
     expect(profiles[0].name).toBe("PLA");
     expect(profiles[1].name).toBe("PETG");
+  });
+
+  it("falls back to an empty name string when the filament has no name", () => {
+    const filaments = [
+      {
+        _id: "id-noname",
+        // no `name` — the `filament.name || ""` fallback should kick in
+        vendor: "Anon",
+        type: "PLA",
+        color: "#808080",
+        diameter: 1.75,
+        temperatures: {},
+        settings: {},
+      },
+    ];
+
+    const profiles = generateOrcaSlicerProfiles(filaments);
+    expect(profiles[0].name).toBe("");
+  });
+
+  it("falls back to empty filament_id suffix when _id is missing", () => {
+    const filaments = [
+      {
+        // no `_id` — the `filament._id?.toString() || ""` fallback yields "fdb_"
+        name: "No Id",
+        vendor: "Anon",
+        type: "PLA",
+        color: "#808080",
+        diameter: 1.75,
+        temperatures: {},
+        settings: {},
+      },
+    ];
+
+    const profiles = generateOrcaSlicerProfiles(filaments);
+    expect(profiles[0].filament_id).toBe("fdb_");
   });
 
   it("includes bed-type-specific temps in profiles", () => {

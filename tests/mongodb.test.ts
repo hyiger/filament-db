@@ -372,4 +372,324 @@ describe("dbConnect", () => {
     expect(nozzles).toHaveLength(2); // original + exactly ONE clone
     expect(cached.migrations.nozzlePhysicalInstances).toBe(true);
   });
+
+  // GH #312: a cached handle whose connection went dead (readyState !== 1
+  // after an outage / Atlas failover) must be dropped so the reconnect path
+  // runs instead of returning a stale handle. src/lib/mongodb.ts:81-84.
+  it("drops a stale cached handle and reconnects when readyState !== 1", async () => {
+    // Establish a live, fully-migrated connection first.
+    await dbConnect();
+    // Force the "connected" check to see a dead handle for the duration of
+    // the next connect — the mocked getter flips readyState to 0
+    // (disconnected), tripping the stale-handle drop.
+    const readySpy = vi
+      .spyOn(mongoose.connection, "readyState", "get")
+      .mockReturnValue(0 as unknown as 0);
+    let result: typeof mongoose;
+    try {
+      result = await dbConnect();
+    } finally {
+      readySpy.mockRestore();
+    }
+    // The reconnect path re-established a usable handle.
+    expect(result).toBe(mongoose);
+    expect(mongoose.connection.readyState).toBe(1);
+  });
+
+  // src/lib/mongodb.ts:104-107 — the connect promise's own .catch nulls
+  // cached.promise and rethrows so a failed first connect doesn't get cached
+  // as a permanently-rejected promise (the next call retries cleanly).
+  it("clears the cached promise and rethrows when mongoose.connect rejects", async () => {
+    (global as Record<string, unknown>).mongoose = undefined;
+    const connectSpy = vi
+      .spyOn(mongoose, "connect")
+      .mockRejectedValueOnce(new Error("connect boom"));
+    try {
+      await expect(dbConnect()).rejects.toThrow("connect boom");
+      const cached = (global as Record<string, unknown>).mongoose as Record<
+        string,
+        unknown
+      >;
+      // The .catch reset the promise so a retry re-attempts the connect.
+      expect(cached.promise).toBeNull();
+      expect(cached.conn).toBeNull();
+    } finally {
+      connectSpy.mockRestore();
+    }
+    // Recovery: the next call connects for real (spy consumed once).
+    const ok = await dbConnect();
+    expect(ok).toBe(mongoose);
+  });
+
+  // src/lib/mongodb.ts:184-186 — the filament-level backfill's own catch. It's
+  // gated on the spool backfill succeeding, so a filament-backfill throw leaves
+  // spoolInstanceIds=true but instanceIds=false, and the next connect retries.
+  it("retries the filament backfill on the next connect when it fails once", async () => {
+    (global as Record<string, unknown>).mongoose = undefined;
+    const filamentMod = await import("@/models/Filament");
+    const spy = vi
+      .spyOn(filamentMod, "backfillInstanceIds")
+      .mockRejectedValueOnce(new Error("transient filament failure"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await dbConnect();
+      const cached = (global as Record<string, unknown>).mongoose as {
+        migrations: { instanceIds: boolean; spoolInstanceIds: boolean };
+      };
+      // Spool backfill (which runs first) succeeded; the filament backfill threw.
+      expect(cached.migrations.spoolInstanceIds).toBe(true);
+      expect(cached.migrations.instanceIds).toBe(false);
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to backfill instanceIds"),
+        expect.anything(),
+      );
+
+      // Next connect retries the failed one — and now succeeds.
+      await dbConnect();
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(cached.migrations.instanceIds).toBe(true);
+    } finally {
+      spy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
+
+  // src/lib/mongodb.ts:205-207 — the SharedCatalog syncIndexes "dropped > 0"
+  // log branch (corrective on an upgraded DB). Hard to force a real drop
+  // deterministically, so stub syncIndexes to report a dropped index name.
+  it("logs when SharedCatalog syncIndexes reports dropped indexes", async () => {
+    (global as Record<string, unknown>).mongoose = undefined;
+    const SharedCatalog = (await import("@/models/SharedCatalog")).default;
+    const scSpy = vi
+      .spyOn(SharedCatalog, "syncIndexes")
+      .mockResolvedValueOnce(["slug_1"] as unknown as string[]);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await dbConnect();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "[migration] Rebuilt SharedCatalog indexes (dropped: slug_1)",
+        ),
+      );
+      const cached = (global as Record<string, unknown>).mongoose as {
+        migrations: { sharedCatalogIndexes: boolean };
+      };
+      expect(cached.migrations.sharedCatalogIndexes).toBe(true);
+    } finally {
+      scSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
+  // src/lib/mongodb.ts:234-239 — the per-model "dropped > 0" log branch inside
+  // the coreModelIndexes loop. Stub one model's syncIndexes to report a drop.
+  it("logs when a core model's syncIndexes reports dropped indexes", async () => {
+    (global as Record<string, unknown>).mongoose = undefined;
+    await dbConnect(); // establish + run the migration block once
+    const Filament = (await import("@/models/Filament")).default;
+    const fSpy = vi
+      .spyOn(Filament, "syncIndexes")
+      .mockResolvedValueOnce(["name_1"] as unknown as string[]);
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const cached = (global as Record<string, unknown>).mongoose as {
+      migrations: { coreModelIndexes: boolean };
+      migrationsPromise: Promise<void> | null;
+    };
+    cached.migrations.coreModelIndexes = false;
+    cached.migrationsPromise = null;
+    try {
+      await dbConnect();
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Rebuilt Filament indexes (dropped: name_1)",
+        ),
+      );
+      expect(cached.migrations.coreModelIndexes).toBe(true);
+    } finally {
+      fSpy.mockRestore();
+      logSpy.mockRestore();
+    }
+  });
+
+  // src/lib/mongodb.ts:242-244 — the coreModelIndexes catch. A syncIndexes
+  // failure leaves the flag false so the next connect retries.
+  it("retries the core-model index sync on the next connect when it fails once", async () => {
+    (global as Record<string, unknown>).mongoose = undefined;
+    await dbConnect();
+    const BedType = (await import("@/models/BedType")).default;
+    const spy = vi
+      .spyOn(BedType, "syncIndexes")
+      .mockRejectedValueOnce(new Error("transient index failure"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const cached = (global as Record<string, unknown>).mongoose as {
+      migrations: { coreModelIndexes: boolean };
+      migrationsPromise: Promise<void> | null;
+    };
+    cached.migrations.coreModelIndexes = false;
+    cached.migrationsPromise = null;
+    try {
+      await dbConnect();
+      expect(cached.migrations.coreModelIndexes).toBe(false);
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to sync core model indexes"),
+        expect.anything(),
+      );
+
+      await dbConnect();
+      expect(spy).toHaveBeenCalledTimes(2);
+      expect(cached.migrations.coreModelIndexes).toBe(true);
+    } finally {
+      spy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
+
+  // src/lib/mongodb.ts:285 (`p.installedNozzles || []`) + :301 (`if (!source)
+  // continue`). A nozzle referenced by two printers but soft-deleted between
+  // the ref walk and the hydrate is skipped, minting no clone; a
+  // no-installedNozzles printer exercises the `|| []` fallback.
+  it("#232 split: skips a soft-deleted source nozzle and tolerates a printer with no installedNozzles", async () => {
+    await dbConnect();
+    const Nozzle = (await import("@/models/Nozzle")).default;
+    const Printer = (await import("@/models/Printer")).default;
+    await Nozzle.deleteMany({});
+    await Printer.collection.deleteMany({});
+
+    // Nozzle inserted already soft-deleted → Nozzle.findOne({_deletedAt:null})
+    // returns null → the `!source` branch continues without cloning.
+    const nozzleId = new mongoose.Types.ObjectId();
+    await Nozzle.collection.insertOne({
+      _id: nozzleId,
+      name: "GoneNozzle",
+      diameter: 0.4,
+      type: "Brass",
+      _deletedAt: new Date(),
+    });
+    await Printer.collection.insertMany([
+      { name: "SP1", installedNozzles: [nozzleId], _deletedAt: null },
+      { name: "SP2", installedNozzles: [nozzleId], _deletedAt: null },
+      // No installedNozzles field at all → exercises the `|| []` guard.
+      { name: "SPNone", _deletedAt: null },
+    ]);
+
+    const cached = (global as Record<string, unknown>).mongoose as {
+      migrations: { nozzlePhysicalInstances: boolean };
+      migrationsPromise: Promise<void> | null;
+    };
+    cached.migrations.nozzlePhysicalInstances = false;
+    cached.migrationsPromise = null;
+
+    try {
+      await dbConnect();
+      // No clone minted (source was gone); the pass still completes cleanly.
+      const active = await Nozzle.find({ _deletedAt: null });
+      expect(active).toHaveLength(0);
+      expect(cached.migrations.nozzlePhysicalInstances).toBe(true);
+    } finally {
+      await Nozzle.deleteMany({});
+      await Printer.collection.deleteMany({});
+    }
+  });
+
+  // src/lib/mongodb.ts:351-354 (`if (!fresh) throw`) — the printer being
+  // swapped disappears mid-migration. The throw is caught by the inner
+  // try/catch, the clone is rolled back, the swapErr propagates to the outer
+  // catch (:390), and the flag stays false so the pass retries.
+  it("#232 split: rolls back the clone and stays retryable when the printer vanishes mid-swap", async () => {
+    await dbConnect();
+    const Nozzle = (await import("@/models/Nozzle")).default;
+    const Printer = (await import("@/models/Printer")).default;
+    await Nozzle.deleteMany({});
+    await Printer.collection.deleteMany({});
+
+    const noz = await Nozzle.create({ name: "Steel", diameter: 0.6, type: "Steel" });
+    await Printer.collection.insertMany([
+      { name: "FP1", installedNozzles: [noz._id], _deletedAt: null },
+      { name: "FP2", installedNozzles: [noz._id], _deletedAt: null },
+    ]);
+
+    const cached = (global as Record<string, unknown>).mongoose as {
+      migrations: { nozzlePhysicalInstances: boolean };
+      migrationsPromise: Promise<void> | null;
+    };
+    cached.migrations.nozzlePhysicalInstances = false;
+    cached.migrationsPromise = null;
+
+    // Printer.findById(...).select(...).lean() resolves to null → `!fresh`.
+    const findByIdSpy = vi.spyOn(Printer, "findById").mockReturnValueOnce({
+      select: () => ({ lean: () => Promise.resolve(null) }),
+    } as unknown as ReturnType<typeof Printer.findById>);
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await dbConnect();
+      // Clone rolled back → only the original nozzle survives.
+      const active = await Nozzle.find({ _deletedAt: null });
+      expect(active).toHaveLength(1);
+      expect(active[0].name).toBe("Steel");
+      // Outer catch logged and left the flag false for a retry.
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to split duplicated nozzles"),
+        expect.anything(),
+      );
+      expect(cached.migrations.nozzlePhysicalInstances).toBe(false);
+    } finally {
+      findByIdSpy.mockRestore();
+      errSpy.mockRestore();
+      await Nozzle.deleteMany({});
+      await Printer.collection.deleteMany({});
+    }
+  });
+
+  // src/lib/mongodb.ts:356-379 — the atomic-swap write itself fails. The
+  // clone is rolled back (:373), swapErr rethrown (:378), outer catch (:390)
+  // logs and leaves the flag false. Also exercises the swapped-array map
+  // (:358-360) over a printer that carries an UNRELATED nozzle too, so both
+  // ternary branches (keep unrelated / swap source) run.
+  it("#232 split: rolls back the clone when the swap write fails", async () => {
+    await dbConnect();
+    const Nozzle = (await import("@/models/Nozzle")).default;
+    const Printer = (await import("@/models/Printer")).default;
+    await Nozzle.deleteMany({});
+    await Printer.collection.deleteMany({});
+
+    const shared = await Nozzle.create({ name: "SharedBrass", diameter: 0.4, type: "Brass" });
+    const other = await Nozzle.create({ name: "SoloSteel", diameter: 0.6, type: "Steel" });
+    await Printer.collection.insertMany([
+      { name: "WP1", installedNozzles: [shared._id], _deletedAt: null },
+      // WP2 carries the shared nozzle AND an unrelated one → the swap map
+      // hits both ternary branches.
+      { name: "WP2", installedNozzles: [shared._id, other._id], _deletedAt: null },
+    ]);
+
+    const cached = (global as Record<string, unknown>).mongoose as {
+      migrations: { nozzlePhysicalInstances: boolean };
+      migrationsPromise: Promise<void> | null;
+    };
+    cached.migrations.nozzlePhysicalInstances = false;
+    cached.migrationsPromise = null;
+
+    const updSpy = vi
+      .spyOn(Printer, "updateOne")
+      .mockRejectedValueOnce(new Error("swap write boom"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await dbConnect();
+      expect(updSpy).toHaveBeenCalledTimes(1);
+      // The freshly-minted clone was deleted on rollback → only the two
+      // originals remain (SharedBrass + SoloSteel), no "SharedBrass #2".
+      const active = await Nozzle.find({ _deletedAt: null });
+      expect(active).toHaveLength(2);
+      expect(active.some((n) => n.name === "SharedBrass #2")).toBe(false);
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to split duplicated nozzles"),
+        expect.anything(),
+      );
+      expect(cached.migrations.nozzlePhysicalInstances).toBe(false);
+    } finally {
+      updSpy.mockRestore();
+      errSpy.mockRestore();
+      await Nozzle.deleteMany({});
+      await Printer.collection.deleteMany({});
+    }
+  });
 });

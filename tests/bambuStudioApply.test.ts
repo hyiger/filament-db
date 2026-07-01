@@ -1,9 +1,14 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
+import mongoose from "mongoose";
 import {
   buildStructuredUpdate,
+  resolveAndApplyCalibration,
   type ExistingFilamentForApply,
 } from "@/lib/bambuStudioApply";
-import type { ParsedFilament } from "@/lib/bambuStudioImport";
+import type {
+  CalibrationHints,
+  ParsedFilament,
+} from "@/lib/bambuStudioImport";
 
 /**
  * GH #422 — direct tests for the pure `buildStructuredUpdate` helper.
@@ -243,6 +248,36 @@ describe("buildStructuredUpdate", () => {
       expect(update.color).toBe("#FF0000");
     });
 
+    it("suppresses writing the exported echo color back onto a null coextruded primary (GH #883)", () => {
+      // A coextruded filament stores color:null + secondaryColors; the
+      // export echoes secondaryColors[0] as the single color. On sync-back
+      // resolveSyncBackColor returns undefined for that echo, so color is
+      // NOT written — the null primary is preserved (line 269 false branch).
+      const existing: ExistingFilamentForApply = {
+        color: null,
+        secondaryColors: ["#112233", "#445566"],
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ color: "#112233" }),
+        existing,
+      );
+      expect("color" in update).toBe(false);
+    });
+
+    it("writes a genuinely-edited color even when the stored filament is coextruded", () => {
+      // Incoming hex differs from secondaryColors[0], so it's a real edit
+      // and resolveSyncBackColor returns it — color IS written (line 269 true).
+      const existing: ExistingFilamentForApply = {
+        color: null,
+        secondaryColors: ["#112233"],
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ color: "#ABCDEF" }),
+        existing,
+      );
+      expect(update.color).toBe("#ABCDEF");
+    });
+
     it("treats existing without parentId as a root filament — every scalar emits", () => {
       const { set: update } = buildStructuredUpdate(
         makeParsed({ type: "PLA", vendor: "Polymaker" }),
@@ -394,5 +429,385 @@ describe("buildStructuredUpdate", () => {
       // stay pinned because $unset would trip the required validator.
       expect(unset).toEqual(["density"]);
     });
+  });
+});
+
+/**
+ * DB-backed tests for `resolveAndApplyCalibration` (and, through it,
+ * the private `matchPrinterNozzle`). These reach the calibration-row
+ * field mapping, the existing-row merge vs append branches, and the
+ * printer/nozzle match heuristics — all of which need Printer / Nozzle
+ * docs, so they run against mongodb-memory-server (tests/setup.ts).
+ *
+ * The route tests in tests/bambustudio-route.test.ts exercise the happy
+ * paths end-to-end, but never in isolation hit: the full hint→row field
+ * copy, the merge-into-an-existing-calibration-row branch, or the
+ * no-diameter / no-model-hint / non-finite-diameter guards in
+ * matchPrinterNozzle.
+ */
+describe("resolveAndApplyCalibration (DB-backed)", () => {
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  let Printer: any;
+  let Nozzle: any;
+  /* eslint-enable @typescript-eslint/no-explicit-any */
+
+  beforeEach(async () => {
+    const prtMod = await import("@/models/Printer");
+    const nozMod = await import("@/models/Nozzle");
+    if (!mongoose.models.Printer) mongoose.model("Printer", prtMod.default.schema);
+    if (!mongoose.models.Nozzle) mongoose.model("Nozzle", nozMod.default.schema);
+    Printer = mongoose.models.Printer;
+    Nozzle = mongoose.models.Nozzle;
+  });
+
+  function makeHints(over: Partial<CalibrationHints> = {}): CalibrationHints {
+    return { hasAnyHint: true, ...over };
+  }
+
+  function makeParsedFil(over: Partial<ParsedFilament> = {}): ParsedFilament {
+    return {
+      name: "Cal Filament",
+      temperatures: {},
+      bedTypeTemps: [],
+      settings: {},
+      ...over,
+    };
+  }
+
+  it("returns early (no match, no unresolved) when there are no hints", async () => {
+    const update: Record<string, unknown> = {};
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil(),
+      makeHints({ hasAnyHint: false }),
+      update,
+      null,
+    );
+    expect(outcome).toEqual({ applied: false, unresolved: false });
+    expect("calibrations" in update).toBe(false);
+  });
+
+  it("copies every present hint + temperature onto the calibration row", async () => {
+    const nozzle = await Nozzle.create({ name: "Brass 0.4", diameter: 0.4, type: "Brass" });
+    const printer = await Printer.create({
+      name: "Bambu Lab P1S",
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [nozzle._id],
+    });
+
+    const update: Record<string, unknown> = {};
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil({
+        temperatures: {
+          nozzle: 210,
+          nozzleFirstLayer: 215,
+          bed: 60,
+          bedFirstLayer: 65,
+        },
+      }),
+      makeHints({
+        printerSettingsId: "Bambu Lab P1S 0.4 nozzle",
+        extrusionMultiplier: 0.98,
+        maxVolumetricSpeed: 15,
+        pressureAdvance: 0.02,
+        retractLength: 0.8,
+        retractSpeed: 30,
+        retractLift: 0.2,
+        fanMinSpeed: 20,
+        fanMaxSpeed: 100,
+        fanBridgeSpeed: 80,
+      }),
+      update,
+      null,
+    );
+
+    expect(outcome.applied).toBe(true);
+    expect(outcome.unresolved).toBe(false);
+    expect(outcome.context?.printerName).toBe("Bambu Lab P1S");
+    expect(outcome.context?.nozzleDiameter).toBe(0.4);
+
+    const rows = update.calibrations as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(String(row.printer)).toBe(String(printer._id));
+    expect(String(row.nozzle)).toBe(String(nozzle._id));
+    expect(row.extrusionMultiplier).toBe(0.98);
+    expect(row.maxVolumetricSpeed).toBe(15);
+    expect(row.pressureAdvance).toBe(0.02);
+    expect(row.retractLength).toBe(0.8);
+    expect(row.retractSpeed).toBe(30);
+    expect(row.retractLift).toBe(0.2);
+    expect(row.fanMinSpeed).toBe(20);
+    expect(row.fanMaxSpeed).toBe(100);
+    expect(row.fanBridgeSpeed).toBe(80);
+    expect(row.nozzleTemp).toBe(210);
+    expect(row.nozzleTempFirstLayer).toBe(215);
+    expect(row.bedTemp).toBe(60);
+    expect(row.bedTempFirstLayer).toBe(65);
+  });
+
+  it("MERGES into an existing calibration row for the same printer+nozzle (does not append)", async () => {
+    const nozzle = await Nozzle.create({ name: "Brass 0.4", diameter: 0.4, type: "Brass" });
+    const printer = await Printer.create({
+      name: "Bambu Lab P1S",
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [nozzle._id],
+    });
+
+    // Existing row for the same printer/nozzle carrying a value the new
+    // import doesn't set — it must be preserved on merge (line 373 branch).
+    const existing = {
+      calibrations: [
+        {
+          printer: String(printer._id),
+          nozzle: String(nozzle._id),
+          pressureAdvance: 0.05,
+          extrusionMultiplier: 0.9,
+        },
+      ],
+    };
+
+    const update: Record<string, unknown> = {};
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil(),
+      makeHints({
+        printerSettingsId: "Bambu Lab P1S 0.4 nozzle",
+        extrusionMultiplier: 0.97, // overrides the existing 0.9
+      }),
+      update,
+      existing,
+    );
+
+    expect(outcome.applied).toBe(true);
+    const rows = update.calibrations as Array<Record<string, unknown>>;
+    // Still ONE row (merged, not appended).
+    expect(rows).toHaveLength(1);
+    expect(rows[0].extrusionMultiplier).toBe(0.97); // overwritten
+    expect(rows[0].pressureAdvance).toBe(0.05); // preserved from existing
+  });
+
+  it("APPENDS a new calibration row when no existing row matches the printer+nozzle", async () => {
+    const nozzle = await Nozzle.create({ name: "Brass 0.4", diameter: 0.4, type: "Brass" });
+    const printer = await Printer.create({
+      name: "Bambu Lab P1S",
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [nozzle._id],
+    });
+
+    // Existing row for a DIFFERENT printer/nozzle — must be kept, and a
+    // new row appended (line 375 else branch, complementing 373).
+    const existing = {
+      calibrations: [
+        {
+          printer: new mongoose.Types.ObjectId().toString(),
+          nozzle: new mongoose.Types.ObjectId().toString(),
+          pressureAdvance: 0.05,
+        },
+      ],
+    };
+
+    const update: Record<string, unknown> = {};
+    await resolveAndApplyCalibration(
+      makeParsedFil(),
+      makeHints({ printerSettingsId: "Bambu Lab P1S 0.4 nozzle", extrusionMultiplier: 0.97 }),
+      update,
+      existing,
+    );
+
+    const rows = update.calibrations as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(2);
+    expect(String(rows[1].printer)).toBe(String(printer._id));
+    expect(String(rows[1].nozzle)).toBe(String(nozzle._id));
+  });
+
+  it("adopts a unique global-catalog nozzle when the matched printer has none at that diameter", async () => {
+    // Printer installed with a 0.6 only; a single 0.4 exists in the global
+    // catalog → the global-fallback branch adopts it.
+    const big = await Nozzle.create({ name: "Brass 0.6", diameter: 0.6, type: "Brass" });
+    const global04 = await Nozzle.create({ name: "Only 0.4", diameter: 0.4, type: "Brass" });
+    const printer = await Printer.create({
+      name: "Bambu Lab P1S",
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [big._id],
+    });
+
+    const update: Record<string, unknown> = {};
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil(),
+      makeHints({ printerSettingsId: "Bambu Lab P1S 0.4 nozzle", extrusionMultiplier: 0.97 }),
+      update,
+      null,
+    );
+
+    expect(outcome.applied).toBe(true);
+    expect(outcome.context?.nozzleId).toBe(String(global04._id));
+    expect(outcome.context?.printerId).toBe(String(printer._id));
+  });
+
+  it("is unresolved when the printer has no matching nozzle AND the global catalog has multiple at that diameter (line 477 area)", async () => {
+    const big = await Nozzle.create({ name: "Brass 0.6", diameter: 0.6, type: "Brass" });
+    // Two global 0.4 nozzles → ambiguous global fallback → unresolved.
+    await Nozzle.create({ name: "Brass 0.4", diameter: 0.4, type: "Brass" });
+    await Nozzle.create({ name: "Hardened 0.4", diameter: 0.4, type: "Hardened Steel" });
+    await Printer.create({
+      name: "Bambu Lab P1S",
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [big._id],
+    });
+
+    const update: Record<string, unknown> = {};
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil(),
+      makeHints({ printerSettingsId: "Bambu Lab P1S 0.4 nozzle", extrusionMultiplier: 0.97 }),
+      update,
+      null,
+    );
+
+    expect(outcome).toEqual({ applied: false, unresolved: true });
+    expect("calibrations" in update).toBe(false);
+  });
+
+  it("is unresolved when the printer has MULTIPLE installed nozzles at the target diameter (ambiguous, line 477)", async () => {
+    const brass = await Nozzle.create({ name: "Brass 0.4", diameter: 0.4, type: "Brass" });
+    const hard = await Nozzle.create({ name: "Hardened 0.4", diameter: 0.4, type: "Hardened Steel" });
+    await Printer.create({
+      name: "Bambu Lab P1S",
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [brass._id, hard._id],
+    });
+
+    const update: Record<string, unknown> = {};
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil(),
+      makeHints({ printerSettingsId: "Bambu Lab P1S 0.4 nozzle" }),
+      update,
+      null,
+    );
+
+    expect(outcome).toEqual({ applied: false, unresolved: true });
+  });
+
+  it("is unresolved when the hint carries no trailing diameter (line 407)", async () => {
+    const nozzle = await Nozzle.create({ name: "Brass 0.4", diameter: 0.4, type: "Brass" });
+    await Printer.create({
+      name: "Bambu Lab P1S",
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [nozzle._id],
+    });
+
+    const update: Record<string, unknown> = {};
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil(),
+      makeHints({ printerSettingsId: "Bambu Lab P1S nozzle" }),
+      update,
+      null,
+    );
+    // No number in the hint → diameterMatch fails → null → unresolved.
+    expect(outcome).toEqual({ applied: false, unresolved: true });
+  });
+
+  it("is unresolved when there is no model-hint substring before the diameter (line 416)", async () => {
+    const nozzle = await Nozzle.create({ name: "Bambu Lab P1S", diameter: 0.4, type: "Brass" });
+    await Printer.create({
+      name: "Bambu Lab P1S",
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [nozzle._id],
+    });
+
+    const update: Record<string, unknown> = {};
+    // Hint is just the diameter — modelHint slice is empty → null.
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil(),
+      makeHints({ printerSettingsId: "0.4 nozzle" }),
+      update,
+      null,
+    );
+    expect(outcome).toEqual({ applied: false, unresolved: true });
+  });
+
+  it("is unresolved when neither printerSettingsId nor compatiblePrinters is present (line 402)", async () => {
+    const update: Record<string, unknown> = {};
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil(),
+      // hasAnyHint true (e.g. a bare flow ratio) but no printer reference.
+      makeHints({ extrusionMultiplier: 0.98 }),
+      update,
+      null,
+    );
+    expect(outcome).toEqual({ applied: false, unresolved: true });
+  });
+
+  it("falls back to compatiblePrinters when printerSettingsId is absent (line 401)", async () => {
+    const nozzle = await Nozzle.create({ name: "Brass 0.4", diameter: 0.4, type: "Brass" });
+    const printer = await Printer.create({
+      name: "Bambu Lab P1S",
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [nozzle._id],
+    });
+
+    const update: Record<string, unknown> = {};
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil(),
+      makeHints({ compatiblePrinters: "Bambu Lab P1S 0.4 nozzle", extrusionMultiplier: 0.97 }),
+      update,
+      null,
+    );
+    expect(outcome.applied).toBe(true);
+    expect(outcome.context?.printerId).toBe(String(printer._id));
+  });
+
+  it("matches a printer via manufacturer + printerModel when the free-text name doesn't contain the hint (line 433)", async () => {
+    const nozzle = await Nozzle.create({ name: "Brass 0.4", diameter: 0.4, type: "Brass" });
+    const printer = await Printer.create({
+      name: "Garage machine", // free-text name has no model hint
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [nozzle._id],
+    });
+
+    const update: Record<string, unknown> = {};
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil(),
+      makeHints({ printerSettingsId: "Bambu Lab P1S 0.4 nozzle" }),
+      update,
+      null,
+    );
+    // Matched on `${manufacturer} ${printerModel}` = "Bambu Lab P1S".
+    expect(outcome.applied).toBe(true);
+    expect(outcome.context?.printerId).toBe(String(printer._id));
+  });
+
+  it("is unresolved when more than one printer matches the model hint (ambiguous, line 435)", async () => {
+    const nozzle1 = await Nozzle.create({ name: "Brass 0.4 a", diameter: 0.4, type: "Brass" });
+    const nozzle2 = await Nozzle.create({ name: "Brass 0.4 b", diameter: 0.4, type: "Brass" });
+    await Printer.create({
+      name: "Bambu Lab P1S",
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [nozzle1._id],
+    });
+    await Printer.create({
+      name: "Bambu Lab P1S (downstairs)",
+      manufacturer: "Bambu Lab",
+      printerModel: "P1S",
+      installedNozzles: [nozzle2._id],
+    });
+
+    const update: Record<string, unknown> = {};
+    const outcome = await resolveAndApplyCalibration(
+      makeParsedFil(),
+      makeHints({ printerSettingsId: "Bambu Lab P1S 0.4 nozzle" }),
+      update,
+      null,
+    );
+    expect(outcome).toEqual({ applied: false, unresolved: true });
   });
 });

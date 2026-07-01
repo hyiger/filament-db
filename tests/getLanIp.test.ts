@@ -1,5 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { pickLanIpv4, type NetworkAddress } from "@/lib/getLanIp";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import os from "os";
+import { pickLanIpv4, listLanIpv4, type NetworkAddress } from "@/lib/getLanIp";
 
 const v4 = (address: string, internal = false): NetworkAddress => ({
   address,
@@ -60,6 +61,54 @@ describe("pickLanIpv4", () => {
       lan: [v4("192.168.1.1")],
     });
     expect(out).toEqual(["192.168.1.1", "172.15.0.1"]);
+  });
+
+  it("treats 172.32 as NON-private (upper-bound of 172.16-31 block)", () => {
+    // second octet 32 satisfies `second >= 16` but fails `second <= 31`, so it
+    // must rank AFTER a real RFC1918 private address (exercises the <= 31 branch).
+    const out = pickLanIpv4({
+      other: [v4("172.32.0.1")],
+      lan: [v4("10.9.9.9")],
+    });
+    expect(out).toEqual(["10.9.9.9", "172.32.0.1"]);
+  });
+
+  it("ranks a private address ahead when the private one appears second (y-branch)", () => {
+    // First candidate is non-private, second is private — exercises the
+    // comparator's `y` ternary returning 0 (private) while `x` returns 1.
+    const out = pickLanIpv4({
+      vpn: [v4("100.64.0.1")], // CGNAT, non-private
+      lan: [v4("192.168.5.5")],
+    });
+    expect(out).toEqual(["192.168.5.5", "100.64.0.1"]);
+  });
+});
+
+describe("listLanIpv4", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("delegates to os.networkInterfaces() and picks LAN IPv4s", () => {
+    vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+      en0: [
+        { address: "192.168.1.77", family: "IPv4", internal: false },
+        { address: "fe80::1", family: "IPv6", internal: false },
+      ],
+      tailscale0: [{ address: "100.64.0.9", family: "IPv4", internal: false }],
+    } as unknown as ReturnType<typeof os.networkInterfaces>);
+
+    // Loopback + IPv6 dropped; private 192.168 ranked ahead of the CGNAT/VPN addr.
+    expect(listLanIpv4()).toEqual(["192.168.1.77", "100.64.0.9"]);
+  });
+
+  it("returns [] when the host reports no external IPv4 interfaces", () => {
+    vi.spyOn(os, "networkInterfaces").mockReturnValue({
+      lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+    } as unknown as ReturnType<typeof os.networkInterfaces>);
+
+    expect(listLanIpv4()).toEqual([]);
   });
 
   it("orders private LAN addresses ahead of public/VPN ones", () => {

@@ -218,6 +218,52 @@ describe("encodeCBORFloat16", () => {
     // 1.0 in float16 = 0x3C00
     expect(buf).toEqual([0xf9, 0x3c, 0x00]);
   });
+
+  it("encodes +Infinity as float16 Inf (0x7C00)", () => {
+    const buf: number[] = [];
+    encodeCBORFloat16(buf, Infinity);
+    // exp32 === 0xff, frac32 === 0 → sign 0, 0x7C00, no NaN mantissa bit
+    expect(buf).toEqual([0xf9, 0x7c, 0x00]);
+  });
+
+  it("encodes -Infinity as float16 -Inf (0xFC00)", () => {
+    const buf: number[] = [];
+    encodeCBORFloat16(buf, -Infinity);
+    expect(buf).toEqual([0xf9, 0xfc, 0x00]);
+  });
+
+  it("encodes NaN as float16 NaN (sets mantissa bit 0x0200)", () => {
+    const buf: number[] = [];
+    encodeCBORFloat16(buf, NaN);
+    // exp32 === 0xff with a non-zero fraction → 0x7C00 | 0x0200 = 0x7E00
+    expect(buf).toEqual([0xf9, 0x7e, 0x00]);
+  });
+
+  it("overflows a too-large finite value to float16 Inf (newExp >= 31)", () => {
+    const buf: number[] = [];
+    encodeCBORFloat16(buf, 1e30);
+    // Exponent exceeds float16's max → Inf, not a wrapped value
+    expect(buf).toEqual([0xf9, 0x7c, 0x00]);
+  });
+
+  it("underflows a far-too-small value to float16 zero (newExp < -10)", () => {
+    const buf: number[] = [];
+    // 1e-8 is a normal float32 whose remapped exponent is below -10, so the
+    // encoder flushes it straight to +0 without a subnormal mantissa.
+    encodeCBORFloat16(buf, 1e-8);
+    expect(buf).toEqual([0xf9, 0x00, 0x00]);
+  });
+
+  it("encodes a subnormal float16 (0 < newExp shift, nonzero mantissa)", () => {
+    const buf: number[] = [];
+    encodeCBORFloat16(buf, 1e-5); // inside the float16 subnormal range
+    // Header + a non-zero subnormal mantissa (round-trips to ~1e-5)
+    expect(buf[0]).toBe(0xf9);
+    const bits = (buf[1] << 8) | buf[2];
+    expect(bits).not.toBe(0); // subnormal, not flushed to zero
+    expect(bits & 0x7c00).toBe(0); // exponent field is zero → subnormal
+    expect(decodeCBORFloat16(bits)).toBeCloseTo(1e-5, 6);
+  });
 });
 
 describe("encodeCBORFloat32", () => {
@@ -252,6 +298,24 @@ describe("decodeCBORFloat16", () => {
     const bits = (buf[1] << 8) | buf[2];
     expect(decodeCBORFloat16(bits)).toBeCloseTo(2.75, 2);
   });
+
+  it("decodes a subnormal (exp === 0, nonzero frac)", () => {
+    // 0x0001 = smallest positive float16 subnormal = 2^-24
+    expect(decodeCBORFloat16(0x0001)).toBeCloseTo(Math.pow(2, -24), 12);
+  });
+
+  it("decodes +Infinity (exp === 31, frac === 0)", () => {
+    expect(decodeCBORFloat16(0x7c00)).toBe(Infinity);
+  });
+
+  it("decodes NaN (exp === 31, frac !== 0)", () => {
+    expect(decodeCBORFloat16(0x7e00)).toBeNaN();
+  });
+
+  it("decodes negative values via the sign path (-Inf and -1.0)", () => {
+    expect(decodeCBORFloat16(0xfc00)).toBe(-Infinity);
+    expect(decodeCBORFloat16(0xbc00)).toBe(-1.0);
+  });
 });
 
 describe("encodeCBORCompactNumber", () => {
@@ -281,6 +345,33 @@ describe("encodeCBORCompactNumber", () => {
     const buf: number[] = [];
     encodeCBORCompactNumber(buf, 0);
     expect(buf).toEqual([0x00]);
+  });
+
+  it("falls back to float32 when float16 loses too much precision", () => {
+    const buf: number[] = [];
+    // 1234.5678 can't round-trip through float16 within 0.001, so the
+    // half-float branch is rejected and it emits a 5-byte float32.
+    encodeCBORCompactNumber(buf, 1234.5678);
+    expect(buf[0]).toBe(0xfa); // CBOR float32 header (major type 7, additional 26)
+    expect(buf.length).toBe(5);
+    // Decode the emitted float32 to confirm it carries the value.
+    const dv = new DataView(new Uint8Array(buf.slice(1)).buffer);
+    expect(dv.getFloat32(0)).toBeCloseTo(1234.5678, 3);
+  });
+
+  it("uses float16 for a value that round-trips within tolerance", () => {
+    const buf: number[] = [];
+    encodeCBORCompactNumber(buf, 2.75); // exact in float16
+    expect(buf[0]).toBe(0xf9);
+    expect(buf.length).toBe(3);
+  });
+
+  it("does not treat negative integers as CBOR uint (falls to float path)", () => {
+    const buf: number[] = [];
+    // Number.isInteger(-3) is true but value >= 0 is false, so the uint
+    // shortcut is skipped and it goes through the float encoder.
+    encodeCBORCompactNumber(buf, -3);
+    expect([0xf9, 0xfa]).toContain(buf[0]);
   });
 });
 
@@ -1124,6 +1215,90 @@ describe("generateOpenPrintTagBinary", () => {
     // Count 0xBF occurrences — should be exactly 1 (main map only)
     const bfCount = bytes.filter((b) => b === 0xbf).length;
     expect(bfCount).toBe(1);
+  });
+
+  it("uses a 3-byte meta header when the whole payload is < 24 bytes", () => {
+    // Empty names + unknown material type produce a minimal main map so the
+    // total falls below 24, exercising the 3-byte meta branch (0xA1 0x02 <val<24>).
+    const result = generateOpenPrintTagBinary({
+      materialName: "",
+      brandName: "",
+      materialType: "",
+    });
+    const bytes = Array.from(result);
+    expect(result.byteLength).toBeLessThan(24);
+    expect(bytes[0]).toBe(0xa1); // meta map
+    expect(bytes[1]).toBe(0x02); // key = aux_region_offset
+    // Offset encodes directly as a single byte (< 24), then the main map begins.
+    expect(bytes[2]).toBeLessThan(24);
+    expect(bytes[3]).toBe(0xbf); // main indefinite map starts right after the 3-byte meta
+    // The offset points at the trailing empty aux map (last byte).
+    expect(bytes[bytes[2]]).toBe(0xa0);
+  });
+
+  it("uses a 5-byte meta header when the payload is >= 256 bytes", () => {
+    // A large distinct-tag array pushes the total over 256, exercising the
+    // 5-byte meta branch (0xA1 0x02 0x19 hi lo) — the only public-API way to
+    // exceed the 31-char string caps.
+    const manyTags = Array.from({ length: 300 }, (_, i) => i);
+    const result = generateOpenPrintTagBinary({
+      ...minimalInput,
+      optTags: manyTags,
+    });
+    const bytes = Array.from(result);
+    expect(result.byteLength).toBeGreaterThanOrEqual(256);
+    expect(bytes[0]).toBe(0xa1);
+    expect(bytes[1]).toBe(0x02);
+    expect(bytes[2]).toBe(0x19); // uint16 offset follows
+    const offset = (bytes[3] << 8) | bytes[4];
+    expect(offset).toBe(result.byteLength - 1);
+    expect(bytes[offset]).toBe(0xa0); // empty aux map at the offset
+  });
+
+  it("encodes a 24–255-length tags array with a 0x98 uint8 header", () => {
+    const tags30 = Array.from({ length: 30 }, (_, i) => i);
+    const result = generateOpenPrintTagBinary({ ...minimalInput, optTags: tags30 });
+    const bytes = Array.from(result);
+    const keyIdx = findCBORKey(bytes, OPT_KEY.TAGS);
+    expect(keyIdx).not.toBe(-1);
+    // Tags key 28 >= 24, so the array header starts at keyIdx + 2.
+    expect(bytes[keyIdx + 2]).toBe(0x98); // definite array, uint8 length
+    expect(bytes[keyIdx + 3]).toBe(30);
+  });
+
+  it("encodes a 256+-length tags array with a 0x99 uint16 header", () => {
+    const manyTags = Array.from({ length: 300 }, (_, i) => i);
+    const result = generateOpenPrintTagBinary({ ...minimalInput, optTags: manyTags });
+    const bytes = Array.from(result);
+    const keyIdx = findCBORKey(bytes, OPT_KEY.TAGS);
+    expect(keyIdx).not.toBe(-1);
+    expect(bytes[keyIdx + 2]).toBe(0x99); // definite array, uint16 length
+    expect(bytes[keyIdx + 3]).toBe((300 >> 8) & 0xff); // 0x01
+    expect(bytes[keyIdx + 4]).toBe(300 & 0xff); // 0x2c
+  });
+
+  it("encodes secondary colors into their slots, skipping malformed entries (GH #477)", async () => {
+    // Slot 1 ("notacolor") is unparseable; the encoder must skip it (rgba === null)
+    // and write slots 0 and 2 in their own key slots. Round-trip through the
+    // decoder to assert the observable result rather than raw byte offsets.
+    const result = generateOpenPrintTagBinary({
+      ...minimalInput,
+      secondaryColors: ["#112233", "notacolor", "#445566"],
+    });
+    const { decodeOpenPrintTagBinary } = await import("@/lib/openprinttag-decode");
+    const decoded = decodeOpenPrintTagBinary(result);
+    // Only the two valid entries survive; the malformed middle slot is dropped.
+    expect(decoded.secondaryColors).toEqual(["#112233", "#445566"]);
+  });
+
+  it("emits no secondary colors when every entry is malformed", async () => {
+    const result = generateOpenPrintTagBinary({
+      ...minimalInput,
+      secondaryColors: ["nope", "#12"],
+    });
+    const { decodeOpenPrintTagBinary } = await import("@/lib/openprinttag-decode");
+    const decoded = decodeOpenPrintTagBinary(result);
+    expect(decoded.secondaryColors).toBeUndefined();
   });
 });
 

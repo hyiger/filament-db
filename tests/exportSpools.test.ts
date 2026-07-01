@@ -233,6 +233,80 @@ describe("getSpoolExportRows", () => {
     expect(rows.every((r) => r.instanceId !== filament.instanceId)).toBe(true);
   });
 
+  it("falls back to empty string for a coextruded filament with a null primary color", async () => {
+    // GH #477: `color` is nullable (coextruded/rainbow materials have no
+    // single primary). The exporter must emit "" rather than crash or leak
+    // null into the CSV cell — the `filament.color ?? ""` fallback.
+    await Filament.create({
+      name: "Coextruded PLA",
+      vendor: "Test",
+      type: "PLA",
+      color: null, // spec-pure null primary
+      secondaryColors: ["#ff0000", "#00ff00"],
+      spools: [{ label: "Rainbow spool", totalWeight: 1000 }],
+    });
+
+    const rows = await getSpoolExportRows();
+    const row = rows.find((r) => r.label === "Rainbow spool")!;
+    expect(row.color).toBe("");
+  });
+
+  it("falls back to empty string for a spool whose label is explicitly null", async () => {
+    // The label field defaults to "" but an explicit null (or a legacy row)
+    // must still export as "" via `spool.label ?? ""`.
+    await Filament.create({
+      name: "Unlabeled-spool PLA",
+      vendor: "Test",
+      type: "PLA",
+      spools: [{ label: null, totalWeight: 500, lotNumber: "FIND-ME" }],
+    });
+
+    const rows = await getSpoolExportRows();
+    const row = rows.find((r) => r.lotNumber === "FIND-ME")!;
+    expect(row.label).toBe("");
+  });
+
+  it("emits null totalWeight for a spool with no weight recorded (non-number branch)", async () => {
+    // `typeof spool.totalWeight === "number" ? ... : null` — a spool created
+    // without a totalWeight keeps the schema default (null), which is NOT a
+    // number, so the false branch fires and the row reports null.
+    await Filament.create({
+      name: "Weightless PLA",
+      vendor: "Test",
+      type: "PLA",
+      spools: [{ label: "No weight yet", lotNumber: "NW-1" }],
+    });
+
+    const rows = await getSpoolExportRows();
+    const row = rows.find((r) => r.lotNumber === "NW-1")!;
+    expect(row.totalWeight).toBeNull();
+  });
+
+  it("treats a zero-gram usage entry as contributing zero to usedGrams (grams || 0 branch)", async () => {
+    // grams is `required, min: 0`, so a 0-gram entry is valid. The reducer's
+    // `u.grams || 0` must add it as 0 (not skip, not NaN) and mix with a
+    // real entry so the sum is exactly the real one.
+    await Filament.create({
+      name: "Zero-usage PLA",
+      vendor: "Test",
+      type: "PLA",
+      spools: [
+        {
+          label: "Zeroish",
+          totalWeight: 900,
+          usageHistory: [
+            { grams: 0, jobLabel: "no-op", date: new Date(), source: "manual" },
+            { grams: 50, jobLabel: "real", date: new Date(), source: "manual" },
+          ],
+        },
+      ],
+    });
+
+    const rows = await getSpoolExportRows();
+    const row = rows.find((r) => r.label === "Zeroish")!;
+    expect(row.usedGrams).toBe(50);
+  });
+
   // Matches the parent/variant exposure added to exportFilaments — the spool
   // export now also surfaces the relationship so a spool's row tells you
   // whether its filament is a variant (and of what).

@@ -5,6 +5,7 @@ import {
   findSpoolSlot,
   assignSpoolToSlot,
   clearSpoolsFromOtherPrinters,
+  findInvalidSlotSpoolRef,
 } from "@/lib/spoolSlots";
 import {
   GET as getAssignment,
@@ -217,6 +218,53 @@ describe("spool ↔ printer-slot assignment (GH #242)", () => {
       expect(String((await Printer.findById(printer._id)).amsSlots[0].spoolId)).toBe(
         String(spoolId),
       );
+    });
+  });
+
+  describe("findInvalidSlotSpoolRef slot labelling (GH #631)", () => {
+    it("labels an offending slot by its slotName when present", async () => {
+      // Named slot with an invalid ObjectId — the message quotes the name.
+      const msg = await findInvalidSlotSpoolRef(Filament, [
+        { slotName: "AMS Slot A", spoolId: "not-an-object-id" },
+      ]);
+      expect(msg).toBe('Slot "AMS Slot A": spoolId is not a valid id');
+    });
+
+    it("falls back to a positional #N label when the slot has no name", async () => {
+      // Nameless slot (missing slotName) with an invalid spoolId — the label
+      // branch takes the `#${i + 1}` positional form for the SECOND slot.
+      const msg = await findInvalidSlotSpoolRef(Filament, [
+        { slotName: "First", spoolId: null }, // empty — skipped
+        { spoolId: "not-an-object-id" }, // nameless, index 1 -> "#2"
+      ]);
+      expect(msg).toBe("Slot #2: spoolId is not a valid id");
+    });
+
+    it("falls back to #N when slotName is an empty string", async () => {
+      // Empty-string slotName is falsy, so the ternary also picks #N.
+      const msg = await findInvalidSlotSpoolRef(Filament, [
+        { slotName: "", spoolId: "not-an-object-id" },
+      ]);
+      expect(msg).toBe("Slot #1: spoolId is not a valid id");
+    });
+
+    it("returns null when every slot ref is valid and non-retired", async () => {
+      const fil = await Filament.create({
+        name: "Slot ref PLA",
+        vendor: "V",
+        type: "PLA",
+        spools: [{ label: "S" }],
+      });
+      const msg = await findInvalidSlotSpoolRef(Filament, [
+        { slotName: "S1" }, // empty slot
+        { slotName: "S2", spoolId: String(fil.spools[0]._id) },
+      ]);
+      expect(msg).toBeNull();
+    });
+
+    it("passes non-array input through as valid", async () => {
+      expect(await findInvalidSlotSpoolRef(Filament, null)).toBeNull();
+      expect(await findInvalidSlotSpoolRef(Filament, undefined)).toBeNull();
     });
   });
 

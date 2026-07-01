@@ -147,4 +147,21 @@ describe("isUpdateNozzleRangeInverted (#892 — shared slicer-sync guard)", () =
     const update = { temperatures: { nozzleRangeMin: 300 } };
     expect(isUpdateNozzleRangeInverted(update, undefined, { nozzleRangeMax: 200 })).toBe(true);
   });
+
+  it("short-circuits to false when the update has no nozzle-range fields at all (line 151)", () => {
+    // No `temperatures` object and no dotted nozzle-range paths → the effective
+    // own range is null, so the guard returns false before any inversion test —
+    // even with an already-inverted parent range that must not be tripped.
+    const update = { name: "renamed", "temperatures.bed": 60 };
+    expect(
+      isUpdateNozzleRangeInverted(update, { nozzleRangeMin: 300, nozzleRangeMax: 100 }, {
+        nozzleRangeMin: 400,
+        nozzleRangeMax: 50,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false for an empty body (no endpoints, own is null)", () => {
+    expect(isUpdateNozzleRangeInverted({}, null, null)).toBe(false);
+  });
 });

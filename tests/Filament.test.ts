@@ -893,6 +893,111 @@ describe("backfillSpoolInstanceIds (#732)", () => {
   });
 });
 
+describe("isSpoolInstanceIdTaken (#732 Phase 4)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+  let isSpoolInstanceIdTaken: typeof import("@/models/Filament").isSpoolInstanceIdTaken;
+
+  beforeEach(async () => {
+    delete mongoose.models.Filament;
+    const schemas = (mongoose as unknown as Record<string, Record<string, unknown>>).modelSchemas;
+    if (schemas) delete schemas.Filament;
+    const mod = await import("@/models/Filament");
+    Filament = mod.default;
+    isSpoolInstanceIdTaken = mod.isSpoolInstanceIdTaken;
+    await Filament.syncIndexes();
+  });
+
+  it("returns false for an id held by no spool and no filament", async () => {
+    await Filament.create({ name: "Some Fil", vendor: "Test", type: "PLA" });
+    expect(await isSpoolInstanceIdTaken("neverused01")).toBe(false);
+  });
+
+  it("reports a collision with another spool's instanceId", async () => {
+    await Filament.create({
+      name: "Has Spool Id",
+      vendor: "Test",
+      type: "PLA",
+      spools: [{ label: "A", instanceId: "spoolaaa01" }],
+    });
+    expect(await isSpoolInstanceIdTaken("spoolaaa01")).toBe(true);
+  });
+
+  it("excludeSpoolId lets a spool keep its own id on edit", async () => {
+    const f = await Filament.create({
+      name: "Edit Own Spool",
+      vendor: "Test",
+      type: "PLA",
+      spools: [{ label: "A", instanceId: "spoolbbb01" }],
+    });
+    const spoolId = f.spools[0]._id.toString();
+    // Same spool re-checking its own id → not a collision.
+    expect(await isSpoolInstanceIdTaken("spoolbbb01", spoolId)).toBe(false);
+    // A different spool would still collide (no exclusion).
+    expect(await isSpoolInstanceIdTaken("spoolbbb01")).toBe(true);
+  });
+
+  it("reports a collision with ANOTHER filament's top-level instanceId", async () => {
+    // matchFilament resolves spool ids before the filament-level fallback,
+    // so a spool id equal to another filament's top-level id must be rejected.
+    await Filament.create({
+      name: "Owns Top Id",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "toplevel001",
+    });
+    expect(await isSpoolInstanceIdTaken("toplevel001")).toBe(true);
+  });
+
+  it("ownFilamentId permits the carry-over where a spool id equals ITS OWN filament's top-level id", async () => {
+    const own = await Filament.create({
+      name: "Carry Over",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "carryover01",
+    });
+    // Without ownFilamentId the filament's own top-level id reads as taken.
+    expect(await isSpoolInstanceIdTaken("carryover01")).toBe(true);
+    // Passing the filament's own id excludes it → the legitimate carry-over.
+    expect(
+      await isSpoolInstanceIdTaken("carryover01", undefined, own._id.toString()),
+    ).toBe(false);
+  });
+
+  it("ownFilamentId does NOT excuse a collision with a DIFFERENT filament's top-level id", async () => {
+    await Filament.create({
+      name: "Other Owner",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "sharedtop01",
+    });
+    const mine = await Filament.create({
+      name: "My Filament",
+      vendor: "Test",
+      type: "PLA",
+    });
+    // The id belongs to a different filament; excluding my own id doesn't help.
+    expect(
+      await isSpoolInstanceIdTaken("sharedtop01", undefined, mine._id.toString()),
+    ).toBe(true);
+  });
+
+  it("ignores a trashed filament's ids (scoped to _deletedAt: null)", async () => {
+    const f = await Filament.create({
+      name: "Trashed Owner",
+      vendor: "Test",
+      type: "PLA",
+      instanceId: "trashedtop1",
+      spools: [{ label: "A", instanceId: "trashedspl1" }],
+    });
+    await Filament.updateOne({ _id: f._id }, { $set: { _deletedAt: new Date() } });
+    // Both the spool id and the top-level id belong to a soft-deleted row,
+    // so neither counts as taken — the id may be reused by a live filament.
+    expect(await isSpoolInstanceIdTaken("trashedtop1")).toBe(false);
+    expect(await isSpoolInstanceIdTaken("trashedspl1")).toBe(false);
+  });
+});
+
 describe("Filament Model — v1.11 spool fields", () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let Filament: any;
@@ -1142,6 +1247,80 @@ describe("Filament Model — v1.11 spool fields", () => {
     await Filament.updateOne({ _id: f._id }, { $set: { secondaryColors: [] } });
   });
 
+  it("validates tdsUrl passed as a TOP-LEVEL update key (not under $set)", async () => {
+    // The hook checks BOTH `update.tdsUrl` (replacement-style, top-level) and
+    // `$set.tdsUrl`. The existing suite only exercises the $set path; this
+    // covers the top-level candidate + the `$set ?? {}` fallback when no $set
+    // is present.
+    const f = await Filament.create({
+      name: "TDS TopLevel",
+      vendor: "Test",
+      type: "PLA",
+      tdsUrl: "https://example.com/ok",
+    });
+
+    await expect(
+      Filament.updateOne({ _id: f._id }, { tdsUrl: "javascript:alert(1)" }),
+    ).rejects.toThrow(/tdsUrl/);
+    await expect(
+      Filament.findOneAndUpdate({ _id: f._id }, { tdsUrl: "file:///etc/passwd" }),
+    ).rejects.toThrow(/tdsUrl/);
+
+    // Original value survives the rejected updates.
+    expect((await Filament.findById(f._id).lean())!.tdsUrl).toBe("https://example.com/ok");
+
+    // A valid top-level http(s) update still applies.
+    await Filament.updateOne({ _id: f._id }, { $set: { tdsUrl: "https://ok.example/x" } });
+    expect((await Filament.findById(f._id).lean())!.tdsUrl).toBe("https://ok.example/x");
+  });
+
+  it("validates color / secondaryColors passed as TOP-LEVEL update keys (not under $set)", async () => {
+    // Mirrors the tdsUrl top-level case for the GH #632 color hook: covers
+    // `update.color` / `update.secondaryColors` (replacement-style) and the
+    // `$set ?? {}` fallback.
+    const f = await Filament.create({
+      name: "Color TopLevel",
+      vendor: "Test",
+      type: "PLA",
+      color: "#112233",
+      secondaryColors: ["#445566"],
+    });
+
+    await expect(
+      Filament.updateOne({ _id: f._id }, { color: "#nothex" }),
+    ).rejects.toThrow(/color/);
+    await expect(
+      Filament.updateOne({ _id: f._id }, { secondaryColors: ["#GGGGGG"] }),
+    ).rejects.toThrow(/secondaryColors/);
+
+    // Untouched after rejects.
+    const reread = await Filament.findById(f._id).lean();
+    expect(reread!.color).toBe("#112233");
+    expect(reread!.secondaryColors).toEqual(["#445566"]);
+  });
+
+  it("rejects a non-array secondaryColors on update queries", async () => {
+    // The `!Array.isArray(candidate)` branch: a scalar / object slipped into
+    // secondaryColors on a bare update (e.g. a malformed import) is rejected
+    // with a distinct message before the length / per-entry checks run.
+    const f = await Filament.create({
+      name: "Secondary NonArray",
+      vendor: "Test",
+      type: "PLA",
+      secondaryColors: ["#123456"],
+    });
+
+    await expect(
+      Filament.updateOne({ _id: f._id }, { $set: { secondaryColors: "not-an-array" } }),
+    ).rejects.toThrow(/must be an array/);
+    await expect(
+      Filament.findOneAndUpdate({ _id: f._id }, { secondaryColors: 42 }),
+    ).rejects.toThrow(/must be an array/);
+
+    // Value untouched after the rejected writes.
+    expect((await Filament.findById(f._id).lean())!.secondaryColors).toEqual(["#123456"]);
+  });
+
   it("sanitizes negative and fractional optTags entries on write (GH #634)", async () => {
     const ok = await Filament.create({
       name: "Tags OK",
@@ -1162,6 +1341,25 @@ describe("Filament Model — v1.11 spool fields", () => {
       optTags: [-1, 1.5, 2 ** 32 + 16, 4, 16],
     });
     expect(mixed.optTags).toEqual([4, 16]);
+  });
+
+  it("sanitizes a non-array optTags value to an empty array (GH #634)", async () => {
+    // The setter's `!Array.isArray(arr)` guard: a non-array write (a stray
+    // string / object from a malformed import or client) is coerced to [] on
+    // assignment rather than throwing or persisting garbage.
+    const f = await Filament.create({
+      name: "Tags NonArray",
+      vendor: "Test",
+      type: "PLA",
+      optTags: "not-an-array" as unknown as number[],
+    });
+    expect(f.optTags).toEqual([]);
+
+    // Also holds when assigning after construction.
+    f.optTags = 42 as unknown as number[];
+    await f.save();
+    const reread = await Filament.findById(f._id).lean();
+    expect(reread!.optTags).toEqual([]);
   });
 
   // Codex P2 on PR #650: a rejecting validator would block ANY save() on a

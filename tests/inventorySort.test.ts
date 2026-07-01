@@ -183,4 +183,137 @@ describe("groupAndSortInventory — sorting", () => {
       "none",
     ]);
   });
+
+  it("sorts by name with a blank name sinking last (isBlank guard)", () => {
+    const named: Row[] = [
+      row("charlie", { filamentName: "Charlie" }),
+      row("blank", { filamentName: "   " }), // whitespace → blank → null → sinks
+      row("alpha", { filamentName: "Alpha" }),
+    ];
+    const g: InventorySourceGroup<Row>[] = [
+      { locationId: null, location: null, count: named.length, totalGrams: 0, spools: named },
+    ];
+    expect(groupAndSortInventory(g, "none", "name", "asc")[0].spools.map((r) => r.id)).toEqual([
+      "alpha",
+      "charlie",
+      "blank",
+    ]);
+  });
+
+  it("sorts by type, blank types sink last either direction", () => {
+    const typed: Row[] = [
+      row("petg", { filamentType: "PETG" }),
+      row("blank", { filamentType: "  " }), // whitespace → blank → null → sinks
+      row("abs", { filamentType: "ABS" }),
+      row("pla", { filamentType: "PLA" }),
+    ];
+    const g: InventorySourceGroup<Row>[] = [
+      { locationId: null, location: null, count: typed.length, totalGrams: 0, spools: typed },
+    ];
+    expect(groupAndSortInventory(g, "none", "type", "asc")[0].spools.map((r) => r.id)).toEqual([
+      "abs",
+      "petg",
+      "pla",
+      "blank",
+    ]);
+    // desc reverses the real values (case-insensitive) but the blank still sinks last
+    expect(groupAndSortInventory(g, "none", "type", "desc")[0].spools.map((r) => r.id)).toEqual([
+      "pla",
+      "petg",
+      "abs",
+      "blank",
+    ]);
+  });
+
+  it("sorts by vendor, case-insensitively, blank vendors sink last", () => {
+    const vendored: Row[] = [
+      row("globex", { filamentVendor: "globex" }), // lowercase — sort is case-insensitive
+      row("acme", { filamentVendor: "Acme" }),
+      row("blank", { filamentVendor: "" }), // blank → null → sinks
+      row("zenith", { filamentVendor: "Zenith" }),
+    ];
+    const g: InventorySourceGroup<Row>[] = [
+      { locationId: null, location: null, count: vendored.length, totalGrams: 0, spools: vendored },
+    ];
+    expect(groupAndSortInventory(g, "none", "vendor", "asc")[0].spools.map((r) => r.id)).toEqual([
+      "acme",
+      "globex",
+      "zenith",
+      "blank",
+    ]);
+  });
+
+  it("sorts by opened date; missing and malformed dates both sink last", () => {
+    const opened: Row[] = [
+      row("later", { openedDate: "2026-05-01" }),
+      row("missing", { openedDate: null }), // no date → null → sinks
+      row("earlier", { openedDate: "2026-04-01" }),
+      row("garbage", { openedDate: "not-a-date" }), // Date.parse → NaN → null → sinks
+    ];
+    const g: InventorySourceGroup<Row>[] = [
+      { locationId: null, location: null, count: opened.length, totalGrams: 0, spools: opened },
+    ];
+    const out = groupAndSortInventory(g, "none", "opened", "asc")[0].spools.map((r) => r.id);
+    // real dates ascend first; the two unknowns (null + NaN) sink to the end
+    expect(out.slice(0, 2)).toEqual(["earlier", "later"]);
+    expect(out.slice(2).sort()).toEqual(["garbage", "missing"]);
+  });
+
+  it("keeps two same-key unknowns stable relative to each other (both-null tie → 0)", () => {
+    // Two rows whose sort value is null for the SAME key exercise the
+    // `av == null && bv == null` tie path; the sort is stable so input order holds.
+    const both: Row[] = [
+      row("first", { totalWeight: null }), // remaining unknown
+      row("second", { totalWeight: null }), // remaining unknown
+      row("real", { totalWeight: 1000, spoolWeight: 200 }), // 800
+    ];
+    const g: InventorySourceGroup<Row>[] = [
+      { locationId: null, location: null, count: both.length, totalGrams: 0, spools: both },
+    ];
+    const out = groupAndSortInventory(g, "none", "remaining", "asc")[0].spools.map((r) => r.id);
+    expect(out).toEqual(["real", "first", "second"]);
+  });
+});
+
+describe("groupAndSortInventory — group ordering edge cases", () => {
+  it("orders location groups by name, tolerating a location with an empty name (|| '' fallback)", () => {
+    // A real locationId but an empty-name Location reaches the `a.location?.name || ""`
+    // fallback at the group comparator (it is NOT the no-location sentinel bucket).
+    const source: InventorySourceGroup<Row>[] = [
+      {
+        locationId: "L1",
+        location: loc("L1", "Shelf"),
+        count: 1,
+        totalGrams: 0,
+        spools: [row("s1")],
+      },
+      {
+        locationId: "L2",
+        location: loc("L2", ""), // empty name → sorts first via "" localeCompare
+        count: 1,
+        totalGrams: 0,
+        spools: [row("s2")],
+      },
+    ];
+    const out = groupAndSortInventory(source, "location", "name", "asc");
+    // "" < "Shelf", so the empty-named location group comes first; both are real
+    // location groups (neither is the no-location sentinel), so the last comparator
+    // arm with the `?.name || ""` fallback runs.
+    expect(out.map((g) => g.key)).toEqual(["L2", "L1"]);
+  });
+
+  it("orders type groups by label", () => {
+    const source: InventorySourceGroup<Row>[] = [
+      {
+        locationId: "L1",
+        location: loc("L1", "Shelf"),
+        count: 2,
+        totalGrams: 0,
+        spools: [row("z", { filamentType: "TPU" }), row("a", { filamentType: "ABS" })],
+      },
+    ];
+    const out = groupAndSortInventory(source, "type", "name", "asc");
+    // ABS before TPU (label localeCompare at the group comparator's last arm)
+    expect(out.map((g) => g.label)).toEqual(["ABS", "TPU"]);
+  });
 });
