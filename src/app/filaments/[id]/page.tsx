@@ -2930,7 +2930,14 @@ function SpoolCard({
                 // back, see (apparently) cleared inputs, click again,
                 // and not know whether their click did nothing or
                 // re-posted the previous value.
-                disabled={!(Number(usageGrams) > 0)}
+                // Also disable on a future date: the picker's `max` blocks
+                // selection but not typed/pasted input, and a future-dated
+                // log would decrement the spool yet be hidden from Analytics
+                // until that day (#936). The onClick clamps too, as defense.
+                disabled={
+                  !(Number(usageGrams) > 0) ||
+                  (!!usageDate && !!todayInput && usageDate > todayInput)
+                }
                 onClick={() => {
                   const g = Number(usageGrams);
                   if (!Number.isFinite(g) || g <= 0) return;
@@ -2941,21 +2948,24 @@ function SpoolCard({
                   //   so the picked day shows identically for every time
                   //   zone, and a past day's UTC midnight is never in the
                   //   future.
-                  // - TODAY (the default): omit `date` so the server stamps
-                  //   the actual instant. The history list renders
-                  //   timestamps in LOCAL time, so it shows the picked day
-                  //   for every zone, and the entry is immediately visible
-                  //   in Analytics (bucketed by its UTC instant, exactly
-                  //   like job/slicer/mobile entries). Sending today's
-                  //   YYYY-MM-DD instead would store a UTC midnight that,
-                  //   east of UTC, hasn't happened yet — Analytics excludes
-                  //   future entries (#936), so a just-logged entry would
-                  //   vanish from totals until UTC catches up.
+                  // - TODAY or FUTURE (the default / clamp): omit `date` so
+                  //   the server stamps the actual instant. The history list
+                  //   renders timestamps in LOCAL time, so it shows the
+                  //   picked day for every zone, and the entry is immediately
+                  //   visible in Analytics (bucketed by its UTC instant,
+                  //   exactly like job/slicer/mobile entries). Sending today's
+                  //   YYYY-MM-DD instead would store a UTC midnight that, east
+                  //   of UTC, hasn't happened yet — Analytics excludes future
+                  //   entries (#936), so a just-logged entry would vanish from
+                  //   totals until UTC catches up. Only a STRICTLY-PAST date
+                  //   is sent as a backdate; a typed/pasted future date (the
+                  //   picker's `max` doesn't block manual entry) is clamped to
+                  //   "now" rather than posted into the future.
                   const today = localTodayInput();
                   onLogUsage({
                     grams: g,
                     jobLabel: usageLabel,
-                    date: usageDate && usageDate !== today ? usageDate : undefined,
+                    date: usageDate && usageDate < today ? usageDate : undefined,
                   });
                   setUsageGrams("");
                   setUsageLabel("");
