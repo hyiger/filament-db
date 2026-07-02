@@ -49,6 +49,32 @@ describe("classifyUpdateError (GH #946)", () => {
     expect(classifyUpdateError(new Error("Could not get code signature for running application")).kind).toBe("signature");
   });
 
+  it("prioritizes signing failures that also mention a certificate over the network branch (Codex review)", () => {
+    // electron-updater's Windows verification rejects an installer whose
+    // signing certificate is wrong/expired with messages that carry both
+    // signature/publisher wording AND the word `certificate` — these must not
+    // read as "check your connection".
+    expect(
+      classifyUpdateError(
+        new Error(
+          "New version 1.63.0 is not signed by the application owner: publisherNames: [Hyiger], raw info: certificate chain is invalid",
+        ),
+      ).kind,
+    ).toBe("signature");
+    expect(
+      classifyUpdateError(
+        new Error("Code signature validation failed: signing certificate has expired"),
+      ).kind,
+    ).toBe("signature");
+  });
+
+  it("still classifies TLS-layer certificate failures as network", () => {
+    expect(classifyUpdateError(new Error("self signed certificate in certificate chain")).kind).toBe("network");
+    expect(classifyUpdateError(new Error("unable to verify the first certificate")).kind).toBe("network");
+    expect(classifyUpdateError(new Error("certificate has expired")).kind).toBe("network");
+    expect(classifyUpdateError(new Error("net::ERR_CERT_AUTHORITY_INVALID")).kind).toBe("network");
+  });
+
   it("falls back to unknown with a short, first-line detail", () => {
     const { kind, detail } = classifyUpdateError(
       new Error("Something unexpected went wrong\n    at foo (bar.js:1:1)"),

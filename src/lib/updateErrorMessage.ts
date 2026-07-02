@@ -54,22 +54,40 @@ export function classifyUpdateError(err: unknown): ClassifiedUpdateError {
 
   let kind: UpdateErrorKind = "unknown";
   if (
-    // TRANSPORT errors first: a DNS / connection / TLS / timeout failure while
-    // requesting the metadata file carries the `latest*.yml` URL in its
+    // UNAMBIGUOUS TRANSPORT errors first: a DNS / connection / timeout failure
+    // while requesting the metadata file carries the `latest*.yml` URL in its
     // message too, so it must be classified `network` BEFORE the URL-based
     // no-metadata check below — otherwise "couldn't reach the server" would
-    // read as "no update for this release" (Codex review).
-    /enotfound|econnrefused|econnreset|etimedout|eai_again|enetunreach|epipe|net::|getaddrinfo|request timed out|timed out|socket hang up|network error|\bdns\b|certificate|self[- ]signed|unable to (verify|get)/.test(
+    // read as "no update for this release" (Codex review). Certificate/TLS
+    // wording is deliberately NOT matched here — see the ordering note on the
+    // signature branch.
+    /enotfound|econnrefused|econnreset|etimedout|eai_again|enetunreach|epipe|net::|getaddrinfo|request timed out|timed out|socket hang up|network error|\bdns\b/.test(
       lower,
     )
   ) {
     kind = "network";
   } else if (
     // Signature / integrity: the downloaded update is corrupt or its
-    // code-signature / checksum doesn't validate.
-    /sha512|checksum|integrity|code sign|not signed|signature|notariz/.test(lower)
+    // code-signature / checksum doesn't validate. Checked BEFORE the TLS
+    // certificate patterns below because a rejected installer signature often
+    // mentions its signing `certificate` too (e.g. electron-updater's "not
+    // signed by the application owner: publisherNames …") — a broad
+    // `certificate` transport match would misreport a failed verification as
+    // "check your connection" (Codex review).
+    /sha512|checksum|integrity|code ?sign|not signed|signature|notariz|publisher/.test(lower)
   ) {
     kind = "signature";
+  } else if (
+    // TLS-layer certificate failures reaching the update server (proxy MITM,
+    // clock skew, corporate TLS interception). Narrowed to TLS-specific
+    // shapes — a bare `certificate` is no longer enough, so a signing-cert
+    // message without explicit signature wording falls through to `unknown`
+    // rather than misclassifying as network.
+    /self[- ]signed|certificate has expired|certificate verify failed|unable to (verify|get)|\btls\b|\bssl\b/.test(
+      lower,
+    )
+  ) {
+    kind = "network";
   } else if (
     // The release is missing its update-metadata file, or the release/asset
     // isn't found (404). Requires an explicit not-found signal — merely
