@@ -277,40 +277,48 @@ export async function POST(request: NextRequest) {
     // "transactions or defer all saves until validation passes" (we do
     // both). Transactions require a replica set — Atlas deployments have
     // this by default, local mongod may not. On a standalone server
-    // startSession().withTransaction() throws with a specific error, so
-    // we fall back to sequential saves.
+    // connection.transaction() throws with a specific error, so we fall
+    // back to sequential saves.
     let history;
     try {
-      const session = await mongoose.startSession();
-      try {
-        await session.withTransaction(async () => {
-          for (const f of filaments) {
-            // GH #905: this job only mutates spool weight + usageHistory. Validate
-            // ONLY modified paths so a legacy out-of-range field elsewhere on the
-            // filament (e.g. a temperature stored before the numeric validators
-            // existed) can't throw a ValidationError and block the spool debit.
-            // Safe here because `f` was loaded from the DB with all required
-            // fields present (unlike a create, where omitted required fields must
-            // still be caught — which is why this is per-save, not schema-wide).
-            await f.save({ session, validateModifiedOnly: true });
-          }
-          const created = await PrintHistory.create(
-            [{
-              _id: historyId,
-              jobLabel: body.jobLabel.trim(),
-              printerId,
-              usage: resolvedUsage,
-              startedAt,
-              source,
-              notes,
-            }],
-            { session },
-          );
-          history = created[0];
-        });
-      } finally {
-        await session.endSession();
-      }
+      // GH #949: use connection.transaction() rather than a bare
+      // startSession().withTransaction(). On a TransientTransactionError
+      // (WriteConflict, primary stepdown at commit) the driver retries this
+      // callback — and with bare withTransaction the first aborted save()
+      // has already cleared each doc's modified paths, so the retry's
+      // f.save() computes an empty delta and silently drops the spool debit
+      // + usageHistory entry while PrintHistory still commits (permanent,
+      // silent inventory drift). connection.transaction() resets each saved
+      // doc's modified-path/version/atomics state between retries (gh-13698),
+      // so the retry re-persists. The pass-2 mutation stays OUTSIDE this
+      // callback on purpose: the in-memory doc already holds the final
+      // debited value and is re-marked dirty on retry, so it is written
+      // exactly once — re-mutating inside the callback would double-debit.
+      await mongoose.connection.transaction(async (session) => {
+        for (const f of filaments) {
+          // GH #905: this job only mutates spool weight + usageHistory. Validate
+          // ONLY modified paths so a legacy out-of-range field elsewhere on the
+          // filament (e.g. a temperature stored before the numeric validators
+          // existed) can't throw a ValidationError and block the spool debit.
+          // Safe here because `f` was loaded from the DB with all required
+          // fields present (unlike a create, where omitted required fields must
+          // still be caught — which is why this is per-save, not schema-wide).
+          await f.save({ session, validateModifiedOnly: true });
+        }
+        const created = await PrintHistory.create(
+          [{
+            _id: historyId,
+            jobLabel: body.jobLabel.trim(),
+            printerId,
+            usage: resolvedUsage,
+            startedAt,
+            source,
+            notes,
+          }],
+          { session },
+        );
+        history = created[0];
+      });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       const isTxnUnsupported =

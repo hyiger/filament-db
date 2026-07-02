@@ -108,20 +108,16 @@ describe("GH #224 — print-history concurrency + rollback", () => {
       spools: [{ label: "main", totalWeight: 1000 }],
     });
 
-    // Force the standalone-fallback branch.
-    const sessionSpy = vi
-      .spyOn(mongoose, "startSession")
-      .mockImplementationOnce(
-        () =>
-          ({
-            withTransaction: async () => {
-              throw new Error(
-                "Transaction numbers are only allowed on a replica set",
-              );
-            },
-            endSession: async () => {},
-          }) as never,
-      );
+    // Force the standalone-fallback branch. GH #949: the route now routes
+    // the transaction path through mongoose.connection.transaction(), so
+    // the fallback is forced by making THAT throw the unsupported-txn
+    // error (a bare mongoose.startSession spy would no longer be hit).
+    const txnSpy = vi.spyOn(mongoose.Connection.prototype, "transaction")
+      .mockImplementationOnce(async () => {
+        throw new Error(
+          "Transaction numbers are only allowed on a replica set",
+        );
+      });
 
     // Patch save() to throw VersionError once. The route's fallback
     // catches this and rolls back, then must return 409 (not 500) so
@@ -155,7 +151,7 @@ describe("GH #224 — print-history concurrency + rollback", () => {
         }),
       );
     } finally {
-      sessionSpy.mockRestore();
+      txnSpy.mockRestore();
       proto.save = originalSave;
     }
 
@@ -193,20 +189,14 @@ describe("GH #224 — print-history concurrency + rollback", () => {
       spools: [{ label: "b1", totalWeight: 800 }],
     });
 
-    // Force the route into the sequential-fallback path.
-    const sessionSpy = vi
-      .spyOn(mongoose, "startSession")
-      .mockImplementationOnce(
-        () =>
-          ({
-            withTransaction: async () => {
-              throw new Error(
-                "Transaction numbers are only allowed on a replica set",
-              );
-            },
-            endSession: async () => {},
-          }) as never,
-      );
+    // Force the route into the sequential-fallback path (GH #949: mock
+    // connection.transaction, not startSession — see the 409 test).
+    const txnSpy = vi.spyOn(mongoose.Connection.prototype, "transaction")
+      .mockImplementationOnce(async () => {
+        throw new Error(
+          "Transaction numbers are only allowed on a replica set",
+        );
+      });
 
     // Patch save() so the second call throws.
     const proto = mongoose.Model.prototype as unknown as {
@@ -240,7 +230,7 @@ describe("GH #224 — print-history concurrency + rollback", () => {
       // survived in the DB.
       threw = true;
     } finally {
-      sessionSpy.mockRestore();
+      txnSpy.mockRestore();
       proto.save = originalSave;
     }
     void threw;
@@ -274,19 +264,12 @@ describe("GH #224 — print-history concurrency + rollback", () => {
       spools: [{ label: "main", totalWeight: 500 }],
     });
 
-    const sessionSpy = vi
-      .spyOn(mongoose, "startSession")
-      .mockImplementationOnce(
-        () =>
-          ({
-            withTransaction: async () => {
-              throw new Error(
-                "Transaction numbers are only allowed on a replica set",
-              );
-            },
-            endSession: async () => {},
-          }) as never,
-      );
+    const txnSpy = vi.spyOn(mongoose.Connection.prototype, "transaction")
+      .mockImplementationOnce(async () => {
+        throw new Error(
+          "Transaction numbers are only allowed on a replica set",
+        );
+      });
 
     const res = await postPrintHistory(
       makeReq({
@@ -295,12 +278,52 @@ describe("GH #224 — print-history concurrency + rollback", () => {
       }),
     );
 
-    sessionSpy.mockRestore();
+    txnSpy.mockRestore();
 
     expect(res.status).toBe(201);
     const after = await Filament.findById(f._id).lean();
     expect(after.spools[0].totalWeight).toBe(425);
     const ph = await PrintHistory.find({ jobLabel: "happy job" }).lean();
     expect(ph).toHaveLength(1);
+  });
+
+  it("GH #949: routes the transaction path through connection.transaction() (retry-safe)", async () => {
+    // The #949 fix swaps a bare startSession().withTransaction() for
+    // mongoose.connection.transaction(), which resets each saved
+    // document's modified-path/version/atomics state between
+    // TransientTransactionError retries (gh-13698). Without it, a retry's
+    // f.save() computes an empty delta and silently drops the spool debit
+    // while the PrintHistory row still commits — permanent inventory
+    // drift. A real transient needs a replica set (the standalone test
+    // harness can't run one), so this pins the delegation itself: a
+    // regression back to bare withTransaction would stop calling
+    // connection.transaction and trip this test.
+    const f = await Filament.create({
+      name: "Txn Delegation PLA",
+      vendor: "T",
+      type: "PLA",
+      spools: [{ label: "main", totalWeight: 300 }],
+    });
+
+    const txnSpy = vi.spyOn(mongoose.Connection.prototype, "transaction");
+
+    // Standalone mongod can't run transactions, so the real call throws
+    // the unsupported-txn error and the route falls back to sequential
+    // saves — the debit still lands AND the transaction API was invoked.
+    const res = await postPrintHistory(
+      makeReq({
+        jobLabel: "delegation job",
+        usage: [{ filamentId: String(f._id), grams: 50 }],
+      }),
+    );
+
+    // Assert BEFORE mockRestore() — restoring clears the spy's call
+    // history, so a post-restore toHaveBeenCalledTimes would read 0.
+    expect(txnSpy).toHaveBeenCalledTimes(1);
+    txnSpy.mockRestore();
+
+    expect(res.status).toBe(201);
+    const after = await Filament.findById(f._id).lean();
+    expect(after.spools[0].totalWeight).toBe(250);
   });
 });
