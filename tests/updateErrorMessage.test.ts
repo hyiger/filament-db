@@ -29,6 +29,21 @@ describe("classifyUpdateError (GH #946)", () => {
     expect(classifyUpdateError(new Error("The request timed out.")).kind).toBe("network");
   });
 
+  it("prioritizes a transport error over the metadata URL it was fetching (Codex review)", () => {
+    // A DNS/timeout failure while requesting latest-mac.yml carries the URL in
+    // its message; it must classify as `network`, not `no-metadata`.
+    expect(
+      classifyUpdateError(
+        new Error(
+          "getaddrinfo ENOTFOUND github.com (requesting https://github.com/o/r/releases/download/v1/latest-mac.yml)",
+        ),
+      ).kind,
+    ).toBe("network");
+    expect(
+      classifyUpdateError(new Error("Could not download latest.yml: net::ERR_TIMED_OUT")).kind,
+    ).toBe("network");
+  });
+
   it("classifies checksum / code-signature failures as signature", () => {
     expect(classifyUpdateError(new Error("sha512 checksum mismatch, expected X got Y")).kind).toBe("signature");
     expect(classifyUpdateError(new Error("Could not get code signature for running application")).kind).toBe("signature");

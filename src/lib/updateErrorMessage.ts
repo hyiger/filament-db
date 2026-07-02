@@ -54,16 +54,16 @@ export function classifyUpdateError(err: unknown): ClassifiedUpdateError {
 
   let kind: UpdateErrorKind = "unknown";
   if (
-    // The reported case: the release is missing its update-metadata file, or
-    // the GitHub API can't find the release/asset (404). electron-updater's
-    // "Cannot find <latest*.yml>" and "No published versions" fall here.
-    /latest[\w-]*\.yml/.test(lower) ||
-    lower.includes("cannot find") ||
-    lower.includes("no published versions") ||
-    ((lower.includes("404") || lower.includes("not found")) &&
-      (lower.includes("release") || lower.includes(".yml")))
+    // TRANSPORT errors first: a DNS / connection / TLS / timeout failure while
+    // requesting the metadata file carries the `latest*.yml` URL in its
+    // message too, so it must be classified `network` BEFORE the URL-based
+    // no-metadata check below — otherwise "couldn't reach the server" would
+    // read as "no update for this release" (Codex review).
+    /enotfound|econnrefused|econnreset|etimedout|eai_again|enetunreach|epipe|net::|getaddrinfo|request timed out|timed out|socket hang up|network error|\bdns\b|certificate|self[- ]signed|unable to (verify|get)/.test(
+      lower,
+    )
   ) {
-    kind = "no-metadata";
+    kind = "network";
   } else if (
     // Signature / integrity: the downloaded update is corrupt or its
     // code-signature / checksum doesn't validate.
@@ -71,12 +71,16 @@ export function classifyUpdateError(err: unknown): ClassifiedUpdateError {
   ) {
     kind = "signature";
   } else if (
-    // Couldn't reach the update server (DNS / connection / TLS / timeout).
-    /enotfound|econnrefused|econnreset|etimedout|eai_again|enetunreach|epipe|net::|getaddrinfo|request timed out|timed out|socket hang up|network|dns|certificate|self[- ]signed|unable to (verify|get)/.test(
-      lower,
-    )
+    // The release is missing its update-metadata file, or the release/asset
+    // isn't found (404). Requires an explicit not-found signal — merely
+    // mentioning `latest*.yml` isn't enough, because that URL also appears in
+    // the transport errors handled above.
+    lower.includes("cannot find") ||
+    lower.includes("no published versions") ||
+    ((lower.includes("404") || lower.includes("not found")) &&
+      (lower.includes(".yml") || lower.includes("release")))
   ) {
-    kind = "network";
+    kind = "no-metadata";
   }
 
   return { kind, detail: shortDetail(raw) };

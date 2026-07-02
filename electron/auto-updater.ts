@@ -44,6 +44,11 @@ interface UpdateInfo {
 
 let mainWindow: BrowserWindow | null = null;
 let currentState: UpdateInfo = { state: "idle" };
+/** GH #946 (Codex): main.ts's `diag`, injected via initAutoUpdater so update
+ *  errors reach main.log. A plain console.* in the main process is NOT
+ *  mirrored to main.log (only the embedded server's stdout is). Falls back to
+ *  console.error when absent (unit tests / older callers). */
+let diagLog: ((message: string) => void) | null = null;
 /** Tracks whether initAutoUpdater has done its one-time setup (IPC handlers,
  * autoUpdater listeners, periodic-check timers) for this process. The
  * function is called from `createWindow()` in electron/main.ts, which on
@@ -76,17 +81,28 @@ function emit(update: Partial<UpdateInfo>) {
  */
 function emitError(err: unknown): string {
   const { kind, detail } = classifyUpdateError(err);
-  // The user must never see this blob; the log (mirrored to main.log) keeps it.
-  console.error("[auto-updater] update error:", err);
+  // Full raw error (incl. stack) → main.log via the injected diag logger, so a
+  // packaged user's support log keeps it. The user only ever sees `detail` +
+  // the localized message keyed on `kind`.
+  const raw = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  (diagLog ?? ((m: string) => console.error(m)))(
+    `[auto-updater] update error [${kind}]: ${raw}`,
+  );
   emit({ state: "error", errorKind: kind, error: detail });
   return detail;
 }
 
-export function initAutoUpdater(win: BrowserWindow) {
+export function initAutoUpdater(
+  win: BrowserWindow,
+  log?: (message: string) => void,
+) {
   // Always refresh the window reference — the previous window may have
   // been closed and the renderer for the new window needs to receive
   // future status events.
   mainWindow = win;
+  // GH #946: capture the diagnostic logger (main.ts's `diag`) so update errors
+  // land in main.log. Refreshed on every call; harmless if unchanged.
+  if (log) diagLog = log;
 
   if (initialized) {
     // Re-emit the current state into the new window so the renderer's
