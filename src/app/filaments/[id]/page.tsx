@@ -2838,7 +2838,11 @@ function SpoolCard({
                       className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 border-b border-gray-100 dark:border-gray-800 pb-1 last:border-0"
                     >
                       <span className="text-gray-400 dark:text-gray-500 w-20 shrink-0">
-                        {formatDate(u.date, locale)}
+                        {/* UTC so a back-dated entry (stored UTC midnight)
+                            shows the picked day for every time zone, and the
+                            day matches the UTC-bucketed Analytics chart
+                            (#941 / Codex review). */}
+                        {formatDate(u.date, locale, { timeZone: "UTC" })}
                       </span>
                       <span className="font-medium w-14 shrink-0 text-right">
                         {formatGrams(u.grams)}g
@@ -2896,18 +2900,18 @@ function SpoolCard({
                   const g = Number(usageGrams);
                   if (!Number.isFinite(g) || g <= 0) return;
                   // Send an explicit date only when back-dating; the common
-                  // "log it now" case keeps the server's own timestamp. Anchor
-                  // the picked day to LOCAL NOON (not a bare YYYY-MM-DD, which
-                  // the server would cast to UTC midnight) so it renders as
-                  // that day in the usage-history list (local time) AND buckets
-                  // to that day in the UTC-based Analytics chart — no off-by-one
-                  // for users west of UTC (#941 review).
+                  // "log it now" case keeps the server's own timestamp. The
+                  // bare YYYY-MM-DD is stored as UTC midnight, and every
+                  // surface that shows a usage date (the history list below +
+                  // the Analytics chart) reads it in UTC — so the picked
+                  // calendar day is preserved identically for ALL time zones,
+                  // with no local-vs-UTC divergence (#941 / Codex review).
                   const today = localTodayInput();
-                  const backDate =
-                    usageDate && usageDate !== today
-                      ? new Date(`${usageDate}T12:00:00`).toISOString()
-                      : undefined;
-                  onLogUsage({ grams: g, jobLabel: usageLabel, date: backDate });
+                  onLogUsage({
+                    grams: g,
+                    jobLabel: usageLabel,
+                    date: usageDate && usageDate !== today ? usageDate : undefined,
+                  });
                   setUsageGrams("");
                   setUsageLabel("");
                   setUsageDate(today);
