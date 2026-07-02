@@ -2314,7 +2314,18 @@ function SpoolCard({
   // days later), not just "now". Defaults to today in the user's LOCAL date so
   // the native date picker opens on the expected day. Fed to the usage POST,
   // which already accepts an optional `date`; Analytics buckets by this date.
-  const [usageDate, setUsageDate] = useState(localTodayInput);
+  // Seeded post-mount (not in the initializer) so the value derives from the
+  // BROWSER's timezone, never the server's — a server-side render around a UTC
+  // date boundary would otherwise bake in the server's "today" and mismatch
+  // the client's local day. `todayInput` also drives the picker's `max`.
+  // Mirrors the post-mount seeding pattern in src/app/inventory/page.tsx.
+  const [usageDate, setUsageDate] = useState("");
+  const [todayInput, setTodayInput] = useState("");
+  useEffect(() => {
+    const t = localTodayInput();
+    setTodayInput(t); // eslint-disable-line react-hooks/set-state-in-effect -- local-date seed (avoids SSR/first-paint TZ mismatch)
+    setUsageDate(t);
+  }, []);
   // #608: expandable view of the spool's logged usage entries.
   const [showUsageHistory, setShowUsageHistory] = useState(false);
   // GH #601: provenance edits. ISO-string fields are sliced to YYYY-MM-DD
@@ -2899,7 +2910,7 @@ function SpoolCard({
                 className="px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-transparent"
                 aria-label={t("detail.spool.usageDate")}
                 title={t("detail.spool.usageDate")}
-                max={localTodayInput()}
+                max={todayInput}
                 value={usageDate}
                 onChange={(e) => setUsageDate(e.target.value)}
               />
