@@ -327,7 +327,7 @@ function createWindow(urlPath = "/") {
   mainWindow.loadURL(getAppURL(urlPath));
 
   // Start the auto-updater bound to this window. No-ops in dev.
-  initAutoUpdater(mainWindow);
+  initAutoUpdater(mainWindow, diag);
 
   // GH #902: the `will-navigate` + `setWindowOpenHandler` guards are NOT
   // installed per-window here. The global `app.on("web-contents-created")`

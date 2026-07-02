@@ -120,7 +120,18 @@ export default function UpdateBanner() {
     tone = "bg-amber-600";
     body = (
       <>
-        <span>{t("update.error", { error: status.error ?? "" })}</span>
+        {/* GH #946: show a friendly, localized line by cause instead of the
+            raw electron-updater message (which carries a stack trace). The
+            short stack-free detail rides along as a hover tooltip. */}
+        <span title={status.error ?? ""}>
+          {status.errorKind === "no-metadata"
+            ? t("update.error.noMetadata")
+            : status.errorKind === "network"
+              ? t("update.error.network")
+              : status.errorKind === "signature"
+                ? t("update.error.signature")
+                : t("update.error.unknown")}
+        </span>
         <button
           onClick={handleOpenPage}
           className="px-2 py-0.5 rounded bg-white/20 hover:bg-white/30 text-xs"

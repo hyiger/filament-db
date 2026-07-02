@@ -1,6 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { autoUpdater } from "electron-updater";
 import { assertTrustedSender } from "./ipc-security";
+import {
+  classifyUpdateError,
+  type UpdateErrorKind,
+} from "../src/lib/updateErrorMessage";
 
 /**
  * Thin wrapper around electron-updater that ships silently while the app is
@@ -30,11 +34,21 @@ interface UpdateInfo {
   version?: string;
   releaseNotes?: string;
   progress?: { percent: number; bytesPerSecond: number };
+  /** GH #946: short, stack-free detail (a tooltip / fallback), NOT the raw
+   *  multi-line electron-updater blob. The renderer shows a localized message
+   *  keyed off `errorKind`; this is supplementary. */
   error?: string;
+  /** GH #946: cause of the failure, mapped to a localized banner message. */
+  errorKind?: UpdateErrorKind;
 }
 
 let mainWindow: BrowserWindow | null = null;
 let currentState: UpdateInfo = { state: "idle" };
+/** GH #946 (Codex): main.ts's `diag`, injected via initAutoUpdater so update
+ *  errors reach main.log. A plain console.* in the main process is NOT
+ *  mirrored to main.log (only the embedded server's stdout is). Falls back to
+ *  console.error when absent (unit tests / older callers). */
+let diagLog: ((message: string) => void) | null = null;
 /** Tracks whether initAutoUpdater has done its one-time setup (IPC handlers,
  * autoUpdater listeners, periodic-check timers) for this process. The
  * function is called from `createWindow()` in electron/main.ts, which on
@@ -59,11 +73,36 @@ function emit(update: Partial<UpdateInfo>) {
   }
 }
 
-export function initAutoUpdater(win: BrowserWindow) {
+/**
+ * GH #946: emit an error state with a mapped `errorKind` (so the renderer can
+ * show a friendly, localized line) and a short stack-free `detail`, while the
+ * FULL raw error goes to the log for debugging. Returns the detail so the IPC
+ * handlers can pass it back to their caller.
+ */
+function emitError(err: unknown): string {
+  const { kind, detail } = classifyUpdateError(err);
+  // Full raw error (incl. stack) → main.log via the injected diag logger, so a
+  // packaged user's support log keeps it. The user only ever sees `detail` +
+  // the localized message keyed on `kind`.
+  const raw = err instanceof Error ? (err.stack ?? err.message) : String(err);
+  (diagLog ?? ((m: string) => console.error(m)))(
+    `[auto-updater] update error [${kind}]: ${raw}`,
+  );
+  emit({ state: "error", errorKind: kind, error: detail });
+  return detail;
+}
+
+export function initAutoUpdater(
+  win: BrowserWindow,
+  log?: (message: string) => void,
+) {
   // Always refresh the window reference — the previous window may have
   // been closed and the renderer for the new window needs to receive
   // future status events.
   mainWindow = win;
+  // GH #946: capture the diagnostic logger (main.ts's `diag`) so update errors
+  // land in main.log. Refreshed on every call; harmless if unchanged.
+  if (log) diagLog = log;
 
   if (initialized) {
     // Re-emit the current state into the new window so the renderer's
@@ -109,9 +148,7 @@ export function initAutoUpdater(win: BrowserWindow) {
       await autoUpdater.checkForUpdates();
       return { ok: true };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      emit({ state: "error", error: message });
-      return { ok: false, error: message };
+      return { ok: false, error: emitError(err) };
     }
   });
 
@@ -123,9 +160,7 @@ export function initAutoUpdater(win: BrowserWindow) {
       await autoUpdater.downloadUpdate();
       return { ok: true };
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      emit({ state: "error", error: message });
-      return { ok: false, error: message };
+      return { ok: false, error: emitError(err) };
     }
   });
 
@@ -226,7 +261,7 @@ export function initAutoUpdater(win: BrowserWindow) {
     emit({ state: "ready", version: info.version });
   });
   autoUpdater.on("error", (err) => {
-    emit({ state: "error", error: err.message });
+    emitError(err);
   });
 
   // Check once shortly after startup, then every 6 hours while running.

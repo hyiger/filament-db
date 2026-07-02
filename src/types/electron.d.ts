@@ -152,7 +152,10 @@ export interface UpdateStatus {
   version?: string;
   releaseNotes?: string;
   progress?: { percent: number; bytesPerSecond: number };
+  /** GH #946: short, stack-free detail (tooltip/fallback), not the raw blob. */
   error?: string;
+  /** GH #946: failure cause the banner maps to a localized message. */
+  errorKind?: import("@/lib/updateErrorMessage").UpdateErrorKind;
 }
 
 export interface UpdateInstallStrings {
