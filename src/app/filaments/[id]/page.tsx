@@ -2899,18 +2899,25 @@ function SpoolCard({
                 onClick={() => {
                   const g = Number(usageGrams);
                   if (!Number.isFinite(g) || g <= 0) return;
-                  // Send an explicit date only when back-dating; the common
-                  // "log it now" case keeps the server's own timestamp. The
-                  // bare YYYY-MM-DD is stored as UTC midnight, and every
-                  // surface that shows a usage date (the history list below +
-                  // the Analytics chart) reads it in UTC — so the picked
-                  // calendar day is preserved identically for ALL time zones,
-                  // with no local-vs-UTC divergence (#941 / Codex review).
+                  // ALWAYS send the picked calendar day (bare YYYY-MM-DD →
+                  // stored as UTC midnight), including "today" — every surface
+                  // that shows a usage date (the history list below + the
+                  // Analytics chart) reads it in UTC, so the picked day is
+                  // preserved identically for ALL time zones. Letting "today"
+                  // fall through to the server's own timestamp would store a
+                  // post-UTC-midnight instant for a west-of-UTC evening log
+                  // and display it under TOMORROW (#941 / Codex review).
+                  // Trade-off: for a zone east of UTC the local today's UTC
+                  // midnight can sit a few hours in the UTC future, so
+                  // Analytics (which consistently excludes future entries
+                  // from chart AND totals, #936) defers the entry until that
+                  // UTC day begins — transient and self-healing, vs. the old
+                  // behaviour's permanent wrong-day label.
                   const today = localTodayInput();
                   onLogUsage({
                     grams: g,
                     jobLabel: usageLabel,
-                    date: usageDate && usageDate !== today ? usageDate : undefined,
+                    date: usageDate || today,
                   });
                   setUsageGrams("");
                   setUsageLabel("");
