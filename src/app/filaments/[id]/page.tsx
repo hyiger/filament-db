@@ -39,6 +39,23 @@ function localTodayInput(): string {
     .slice(0, 10);
 }
 
+/** True when the stored value is exactly UTC midnight — the shape a
+ *  date-only usage entry takes (the picker sends a bare `YYYY-MM-DD`,
+ *  stored as `00:00:00.000Z`). Real "now" timestamps (job/slicer
+ *  entries, mobile logs, manual logs from before the picker) are
+ *  effectively never exactly midnight UTC, so this cleanly separates
+ *  calendar-day values from instants (#941 / Codex review). */
+function isUtcMidnight(value: string | Date): boolean {
+  const d = value instanceof Date ? value : new Date(value);
+  return (
+    !Number.isNaN(d.getTime()) &&
+    d.getUTCHours() === 0 &&
+    d.getUTCMinutes() === 0 &&
+    d.getUTCSeconds() === 0 &&
+    d.getUTCMilliseconds() === 0
+  );
+}
+
 function computeRemaining(filament: Filament, overrideTotalWeight?: number | null) {
   const { spoolWeight, netFilamentWeight, density, diameter } = filament;
   const totalWeight = overrideTotalWeight !== undefined ? overrideTotalWeight : filament.totalWeight;
@@ -2838,11 +2855,18 @@ function SpoolCard({
                       className="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300 border-b border-gray-100 dark:border-gray-800 pb-1 last:border-0"
                     >
                       <span className="text-gray-400 dark:text-gray-500 w-20 shrink-0">
-                        {/* UTC so a back-dated entry (stored UTC midnight)
-                            shows the picked day for every time zone, and the
-                            day matches the UTC-bucketed Analytics chart
-                            (#941 / Codex review). */}
-                        {formatDate(u.date, locale, { timeZone: "UTC" })}
+                        {/* Date-only entries (stored UTC midnight) format in
+                            UTC so the picked day shows for every time zone
+                            and matches the UTC-bucketed Analytics chart. Real
+                            timestamps (job/slicer entries, mobile logs, older
+                            manual logs) format in LOCAL time so a print
+                            logged at 8 PM doesn't read as tomorrow west of
+                            UTC (#941 / Codex review). */}
+                        {formatDate(
+                          u.date,
+                          locale,
+                          isUtcMidnight(u.date) ? { timeZone: "UTC" } : undefined,
+                        )}
                       </span>
                       <span className="font-medium w-14 shrink-0 text-right">
                         {formatGrams(u.grams)}g
