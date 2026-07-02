@@ -2923,25 +2923,28 @@ function SpoolCard({
                 onClick={() => {
                   const g = Number(usageGrams);
                   if (!Number.isFinite(g) || g <= 0) return;
-                  // ALWAYS send the picked calendar day (bare YYYY-MM-DD →
-                  // stored as UTC midnight), including "today" — every surface
-                  // that shows a usage date (the history list below + the
-                  // Analytics chart) reads it in UTC, so the picked day is
-                  // preserved identically for ALL time zones. Letting "today"
-                  // fall through to the server's own timestamp would store a
-                  // post-UTC-midnight instant for a west-of-UTC evening log
-                  // and display it under TOMORROW (#941 / Codex review).
-                  // Trade-off: for a zone east of UTC the local today's UTC
-                  // midnight can sit a few hours in the UTC future, so
-                  // Analytics (which consistently excludes future entries
-                  // from chart AND totals, #936) defers the entry until that
-                  // UTC day begins — transient and self-healing, vs. the old
-                  // behaviour's permanent wrong-day label.
+                  // Two storage shapes, one per case (#941 / Codex review):
+                  // - BACKDATE: send the bare YYYY-MM-DD → stored as UTC
+                  //   midnight of that day. The history list renders
+                  //   date-only values in UTC and Analytics buckets in UTC,
+                  //   so the picked day shows identically for every time
+                  //   zone, and a past day's UTC midnight is never in the
+                  //   future.
+                  // - TODAY (the default): omit `date` so the server stamps
+                  //   the actual instant. The history list renders
+                  //   timestamps in LOCAL time, so it shows the picked day
+                  //   for every zone, and the entry is immediately visible
+                  //   in Analytics (bucketed by its UTC instant, exactly
+                  //   like job/slicer/mobile entries). Sending today's
+                  //   YYYY-MM-DD instead would store a UTC midnight that,
+                  //   east of UTC, hasn't happened yet — Analytics excludes
+                  //   future entries (#936), so a just-logged entry would
+                  //   vanish from totals until UTC catches up.
                   const today = localTodayInput();
                   onLogUsage({
                     grams: g,
                     jobLabel: usageLabel,
-                    date: usageDate || today,
+                    date: usageDate && usageDate !== today ? usageDate : undefined,
                   });
                   setUsageGrams("");
                   setUsageLabel("");
