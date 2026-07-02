@@ -2321,6 +2321,21 @@ function SpoolCard({
   // Mirrors the post-mount seeding pattern in src/app/inventory/page.tsx.
   const [usageDate, setUsageDate] = useState("");
   const [todayInput, setTodayInput] = useState("");
+  // Whether the user has actually edited the date field. An UNTOUCHED
+  // default must always log as "now", never as a backdate — otherwise a
+  // page left open across local midnight (seeded default now reads as
+  // "yesterday") would silently backdate a plain "log now" click to
+  // yesterday (#941 / Codex review). Only an explicit edit counts as a
+  // backdate. `refreshDefaultDate` re-seeds the default + `max` from the
+  // CURRENT local day so an untouched field/picker stays current across a
+  // rollover.
+  const [usageDateDirty, setUsageDateDirty] = useState(false);
+  const refreshDefaultDate = () => {
+    if (usageDateDirty) return;
+    const t = localTodayInput();
+    setTodayInput(t);
+    setUsageDate(t);
+  };
   useEffect(() => {
     const t = localTodayInput();
     setTodayInput(t); // eslint-disable-line react-hooks/set-state-in-effect -- local-date seed (avoids SSR/first-paint TZ mismatch)
@@ -2912,7 +2927,14 @@ function SpoolCard({
                 title={t("detail.spool.usageDate")}
                 max={todayInput}
                 value={usageDate}
-                onChange={(e) => setUsageDate(e.target.value)}
+                // Refresh the default + max to the CURRENT day when the user
+                // opens the picker, so a page left open across midnight
+                // doesn't offer a stale "yesterday" default/max.
+                onFocus={refreshDefaultDate}
+                onChange={(e) => {
+                  setUsageDate(e.target.value);
+                  setUsageDateDirty(true);
+                }}
               />
               <input
                 type="text"
@@ -2960,16 +2982,24 @@ function SpoolCard({
                   //   totals until UTC catches up. Only a STRICTLY-PAST date
                   //   is sent as a backdate; a typed/pasted future date (the
                   //   picker's `max` doesn't block manual entry) is clamped to
-                  //   "now" rather than posted into the future.
+                  //   "now" rather than posted into the future. Only an
+                  //   EDITED field (`usageDateDirty`) is ever a backdate — an
+                  //   untouched default is always "now", even if it's gone
+                  //   stale across a midnight rollover.
                   const today = localTodayInput();
                   onLogUsage({
                     grams: g,
                     jobLabel: usageLabel,
-                    date: usageDate && usageDate < today ? usageDate : undefined,
+                    date:
+                      usageDateDirty && usageDate && usageDate < today
+                        ? usageDate
+                        : undefined,
                   });
                   setUsageGrams("");
                   setUsageLabel("");
                   setUsageDate(today);
+                  setTodayInput(today);
+                  setUsageDateDirty(false);
                 }}
                 className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-gray-400 dark:disabled:bg-gray-700 disabled:text-gray-200 disabled:cursor-not-allowed disabled:hover:bg-gray-400"
               >
