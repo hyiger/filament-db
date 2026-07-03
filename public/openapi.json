@@ -1006,7 +1006,7 @@
           "Filaments"
         ],
         "summary": "Get calibration for nozzle diameter",
-        "description": "Returns calibration data for a specific filament and nozzle diameter. Looks up the filament by URL-encoded name or ObjectId, resolves variant inheritance, then finds the calibration entry whose nozzle diameter matches the query param. Used by PrusaSlicer to auto-adjust filament settings when the user switches printer presets.",
+        "description": "Returns calibration data for a specific filament and nozzle diameter. Looks up the filament by URL-encoded name or ObjectId, resolves variant inheritance, then finds the calibration entry whose nozzle diameter matches the query param. Used by PrusaSlicer and OrcaSlicer to auto-adjust filament settings when the user switches printer presets. Optional high_flow, nozzle_type, and bed_type params disambiguate multiple calibrations at the same diameter (a type/bed miss falls back to a same-diameter entry rather than 404ing). With format=orcaslicer the response returns OrcaSlicer key names + array values under calibration_orca instead of the default calibration object.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -1032,6 +1032,35 @@
               ]
             },
             "description": "Filter by high-flow nozzle flag. Disambiguates same-diameter nozzles (e.g. 0.4mm vs 0.4mm HF)."
+          },
+          {
+            "name": "nozzle_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Disambiguate same-diameter nozzles of different TYPE (e.g. Brass vs Diamondback), case-insensitive. Symmetric with the sync-back route's filamentdb_nozzle hint so a suffixed per-nozzle preset reads back ITS nozzle's pressure_advance (#872). Soft filter: a type miss falls back to the same-diameter matches rather than 404ing.",
+            "example": "Diamondback"
+          },
+          {
+            "name": "bed_type",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Filter by bed type name OR BedType ObjectId. A bed-type-specific calibration wins; otherwise it falls back to a calibration without a bed type. When omitted, entries without a bed type are preferred.",
+            "example": "Smooth PEI"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "orcaslicer"
+              ]
+            },
+            "description": "When set to `orcaslicer`, the 200 response returns OrcaSlicer key names with array values under `calibration_orca` instead of the default `calibration` object."
           }
         ],
         "responses": {
@@ -1065,8 +1094,22 @@
                       "nullable": true,
                       "description": "Printer name, or null if calibration is not printer-specific"
                     },
+                    "bedType": {
+                      "type": "object",
+                      "nullable": true,
+                      "description": "The bed type the matched calibration is pinned to, or null when the calibration has no bed type.",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "material": {
+                          "type": "string"
+                        }
+                      }
+                    },
                     "calibration": {
                       "type": "object",
+                      "description": "Default response shape. Omitted when format=orcaslicer (see calibration_orca instead).",
                       "properties": {
                         "pressureAdvance": {
                           "type": "number",
@@ -1133,6 +1176,11 @@
                           "description": "Bridge fan speed (0–100)"
                         }
                       }
+                    },
+                    "calibration_orca": {
+                      "type": "object",
+                      "description": "Returned INSTEAD of `calibration` when format=orcaslicer — OrcaSlicer key names (e.g. filament_flow_ratio, pressure_advance, filament_retraction_length) mapped to their array values. Additional properties are OrcaSlicer keys.",
+                      "additionalProperties": true
                     }
                   }
                 }
@@ -1171,10 +1219,18 @@
                               },
                               "name": {
                                 "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "description": "Nozzle material/type (e.g. Brass, Diamondback) — helps the caller pick a nozzle_type to retry with."
+                              },
+                              "highFlow": {
+                                "type": "boolean",
+                                "description": "Whether this calibration's nozzle is high-flow — helps the caller pick a high_flow value to retry with."
                               }
                             }
                           },
-                          "description": "List of nozzle diameters that do have calibration data"
+                          "description": "The filament's nozzles that DO have calibration data (diameter/name/type/highFlow), so the caller can retry with a matching nozzle_diameter/nozzle_type/high_flow."
                         }
                       }
                     }
@@ -4280,6 +4336,15 @@
                       "$ref": "#/components/schemas/ScanEventFilament"
                     }
                   },
+                  "matchedSpool": {
+                    "nullable": true,
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/ScanEventSpool"
+                      }
+                    ],
+                    "description": "The spool the tag's spool_uid resolved to (#732), or null/omitted for a filament-level / heuristic match. Validated against the same allow-list — requires string _id + instanceId, label bounded, else dropped to null."
+                  },
                   "decoded": {
                     "$ref": "#/components/schemas/ScanEventDecoded"
                   }
@@ -6154,6 +6219,28 @@
           }
         }
       },
+      "ScanEventSpool": {
+        "type": "object",
+        "required": [
+          "_id",
+          "instanceId"
+        ],
+        "description": "The specific spool a scan resolved to (#732), when the tag's spool_uid matched a spools[].instanceId. Null on the event for a filament-level / heuristic match.",
+        "properties": {
+          "_id": {
+            "type": "string",
+            "description": "Spool subdocument ObjectId"
+          },
+          "instanceId": {
+            "type": "string",
+            "description": "The spool's 5-byte hex instanceId that matched"
+          },
+          "label": {
+            "type": "string",
+            "description": "The spool's label (empty string when unset)"
+          }
+        }
+      },
       "ScanEvent": {
         "type": "object",
         "required": [
@@ -6183,6 +6270,15 @@
               "$ref": "#/components/schemas/ScanEventFilament"
             },
             "description": "Plausible alternatives (vendor+type, then vendor-only) when there is no exact match"
+          },
+          "matchedSpool": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ScanEventSpool"
+              }
+            ],
+            "description": "The spool the tag's spool_uid resolved to (#732), or null for a filament-level / heuristic match."
           },
           "decoded": {
             "$ref": "#/components/schemas/ScanEventDecoded"
