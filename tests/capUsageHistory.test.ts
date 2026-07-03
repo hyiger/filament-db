@@ -48,10 +48,23 @@ describe("capUsageHistory", () => {
     expect(ids(out)).toEqual([1, 3]); // job(1) preserved, manual(2) evicted
   });
 
-  it("treats source 'job' and 'slicer' as undo-relevant (never evicted first)", () => {
-    const arr = [job(1), slicer(2), manual(3)];
+  it("treats source 'job' and 'slicer' as undo-relevant (evicted after manuals)", () => {
+    // The oldest MANUAL rolls off; both the job and slicer entries are kept
+    // because they're undo-relevant, and the newest entry is always kept.
+    const arr = [manual(1), job(2), slicer(3), manual(4)];
+    const out = capUsageHistory(arr, 3);
+    expect(ids(out)).toEqual([2, 3, 4]);
+  });
+
+  it("never evicts the freshly appended (newest) entry, even sacrificing an old undo entry (#961 Codex P2)", () => {
+    // Spool full of undo-relevant job entries; a new manual is appended. The
+    // newest row must survive — dropping it while the caller has already
+    // debited weight would silently lose the just-recorded use. An OLD job
+    // entry is sacrificed instead (only reachable on a spool this deep in jobs).
+    const arr = [job(1), job(2), manual(99)];
     const out = capUsageHistory(arr, 2);
-    expect(ids(out)).toEqual([1, 2]); // both undo entries kept, manual dropped
+    expect(ids(out)).toEqual([2, 99]); // oldest job evicted, new manual kept
+    expect(out.some((e) => e.grams === 99 && e.source === "manual")).toBe(true);
   });
 
   it("treats 'nfc' entries as evictable like 'manual'", () => {

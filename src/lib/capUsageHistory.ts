@@ -18,9 +18,16 @@
  * sources the DELETE handler still matches on) are evicted only as a last resort,
  * when the array is ENTIRELY undo-relevant — a pathological 1000-live-jobs-on-one-
  * spool case a real physical spool never reaches. Chronological order (the append
- * order the array is built in) is preserved throughout, and the caller's freshly
- * pushed job entries — always the newest and always undo-relevant — are never
- * evicted.
+ * order the array is built in) is preserved throughout.
+ *
+ * CONTRACT: callers push-then-cap, so the LAST entry is the row just recorded —
+ * it is never evicted. Without that guard, a spool already full of undo-relevant
+ * entries would drop the freshly appended manual/nfc row (the only non-undo
+ * entry) while the caller has already debited weight and returned 201 — a silent
+ * loss of the just-logged use (Codex P2 on PR #961). Protecting the newest row
+ * means the last-resort eviction can sacrifice an OLD undo entry to keep it; that
+ * only bites on the same pathological all-undo spool, where losing what the user
+ * just did is worse than a rare refund gap on a decade-deep history.
  */
 
 /** Hard cap on a spool's `usageHistory` length. Far above any realistic
@@ -61,17 +68,20 @@ export function capUsageHistory<T extends CappableEntry>(
   const excess = entries.length - max;
   const drop = new Set<number>();
 
+  // The last entry is the row the caller just recorded (push-then-cap) and is
+  // never a candidate — see CONTRACT above. Everything before it is evictable.
+  const evictableEnd = entries.length - 1;
+
   // Pass 1: evict non-undo (manual/nfc) entries, oldest → newest.
-  for (let i = 0; i < entries.length && drop.size < excess; i++) {
+  for (let i = 0; i < evictableEnd && drop.size < excess; i++) {
     if (!isUndoRelevant(entries[i])) drop.add(i);
   }
   // Pass 2 (last resort): the array is short of `max` even after dropping every
-  // non-undo entry, i.e. it's entirely undo-relevant. Evict undo-relevant
-  // entries oldest → newest to honour the hard cap; the caller's just-pushed
-  // entries are the newest so they're kept, but an old live job's entry may be
-  // lost here (its later DELETE then skips the refund — accepted, and only
-  // reachable on a spool carrying 1000+ live jobs).
-  for (let i = 0; i < entries.length && drop.size < excess; i++) {
+  // older non-undo entry, i.e. it's (near-)entirely undo-relevant. Evict
+  // undo-relevant entries oldest → newest to honour the hard cap; an old live
+  // job's entry may be lost here (its later DELETE then skips the refund —
+  // accepted, and only reachable on a spool carrying ~1000 live jobs).
+  for (let i = 0; i < evictableEnd && drop.size < excess; i++) {
     if (!drop.has(i)) drop.add(i);
   }
 

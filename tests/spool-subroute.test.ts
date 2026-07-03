@@ -121,6 +121,49 @@ describe("spool sub-routes", () => {
       ).toBe(true);
     });
 
+    it("persists a freshly logged manual even when the spool is full of job entries (#961 Codex P2)", async () => {
+      // Spool already at the cap with ONLY undo-relevant job entries. Appending
+      // a manual then capping must not drop the just-recorded manual (its weight
+      // is already debited); an old job entry is sacrificed instead.
+      const jobs = Array.from({ length: MAX_SPOOL_HISTORY }, (_, i) => ({
+        grams: 1,
+        jobLabel: `j${i}`,
+        date: new Date(),
+        source: "job" as const,
+        jobId: new mongoose.Types.ObjectId(),
+      }));
+      const f = await Filament.create({
+        name: "Full Of Jobs",
+        vendor: "Test",
+        type: "PLA",
+        spoolWeight: 200,
+        netFilamentWeight: 1000,
+        spools: [{ label: "Main", totalWeight: 1000, usageHistory: jobs }],
+      });
+      const sid = String(f.spools[0]._id);
+
+      const res = await postUsage(
+        postReq(`http://localhost/api/filaments/${f._id}/spools/${sid}/usage`, {
+          grams: 40,
+          jobLabel: "just-now",
+        }),
+        { params: Promise.resolve({ id: String(f._id), spoolId: sid }) },
+      );
+      expect(res.status).toBe(201);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools[0].usageHistory).toHaveLength(MAX_SPOOL_HISTORY);
+      // The freshly logged manual survived the cap...
+      expect(
+        fresh.spools[0].usageHistory.some(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (e: any) => e.source === "manual" && e.grams === 40 && e.jobLabel === "just-now",
+        ),
+      ).toBe(true);
+      // ...and its weight debit stuck (history + ledger stay consistent).
+      expect(fresh.spools[0].totalWeight).toBe(960);
+    });
+
     it("clamps totalWeight at 0 when the request over-draws", async () => {
       const f = await seedFilament();
       const sid = String(f.spools[0]._id);
