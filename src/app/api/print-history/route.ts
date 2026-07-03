@@ -7,6 +7,21 @@ import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/a
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
+ * Thrown when a filament that passed the pass-1 existence check has vanished
+ * (a concurrent soft-delete/purge committed) by the time the transaction
+ * reloads it fresh. Mapped to a 404 in the handler's outer catch so the caller
+ * sees the same "not found" contract pass 1 enforces, rather than a 500 from a
+ * null dereference (the fix reloads inside the transaction, so the pass-1 map is
+ * no longer the one the debit runs against — GH #949 Codex follow-up).
+ */
+class FilamentNotFoundError extends Error {
+  constructor(filamentId: string) {
+    super(`Filament not found: ${filamentId}`);
+    this.name = "FilamentNotFoundError";
+  }
+}
+
+/**
  * GET /api/print-history — list print history entries.
  *
  * Supports optional query params:
@@ -205,72 +220,86 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Pass 2: apply mutations to in-memory docs. A single filament can be
-    // referenced by multiple usage entries in one job, so we mutate the
-    // shared doc instance and save each filament once at the end.
-    //
     // Generate the PrintHistory _id up front so each spool usageHistory
     // entry can carry a jobId pointing back at this job. The undo path
     // (DELETE /api/print-history/{id}) uses that linkage to refund the
     // exact entries this POST created — without it the undo previously
     // matched by `(grams, date)` and silently removed the wrong entry
-    // when a manual usage log happened to share both.
+    // when a manual usage log happened to share both. Stable across
+    // transaction retries so the linkage is consistent no matter how many
+    // times the callback below reruns.
     const historyId = new mongoose.Types.ObjectId();
 
-    const resolvedUsage: {
-      filamentId: mongoose.Types.ObjectId;
-      spoolId: mongoose.Types.ObjectId | null;
-      grams: number;
-    }[] = [];
-
-    for (const u of usage) {
-      const filament = byId.get(u.filamentId)!;
-
-      // Pick the target spool: explicit spoolId, else first non-retired
-      // spool with non-null totalWeight, else any non-retired spool.
-      //
-      // GH #305: there is deliberately no fall-through to `spools[0]`.
-      // When every spool is retired, `spool` stays undefined and the
-      // `else` branch below records the usage with `spoolId: null` — a
-      // print job must not silently debit a retired spool, which would
-      // corrupt the retired spool's preserved history and under-count
-      // active inventory. An explicit `u.spoolId` is honoured even when
-      // retired (the caller named it on purpose; pass 1 already
-      // confirmed it exists).
-      const spool = u.spoolId
-        ? filament.spools.find((s) => String(s._id) === u.spoolId)
-        : filament.spools.find(
-            (s) => !s.retired && s.totalWeight !== null && s.totalWeight > 0,
-          ) ?? filament.spools.find((s) => !s.retired);
-
-      if (spool) {
-        if (typeof spool.totalWeight === "number") {
-          spool.totalWeight = Math.max(0, spool.totalWeight - u.grams);
+    // Pass 2, as a reusable step: pick the target spool for each usage entry,
+    // debit its weight, append a `source: "job"` usageHistory entry tagged with
+    // the jobId, and return the resolved usage for the PrintHistory record.
+    //
+    // Selection and mutation are intentionally COUPLED in one pass — a later
+    // usage entry for the same filament must see the earlier debit (e.g. so a
+    // debit that empties one spool routes the next entry to the following
+    // spool). It runs against WHATEVER doc set it's handed: freshly-reloaded
+    // docs inside the transaction (re-applied per retry attempt), or the pass-1
+    // docs in the standalone fallback.
+    //
+    // GH #305: there is deliberately no fall-through to `spools[0]`. When every
+    // spool is retired, `spool` stays undefined and the entry is recorded with
+    // `spoolId: null` — a print job must not silently debit a retired spool,
+    // which would corrupt its preserved history and under-count active
+    // inventory. An explicit `u.spoolId` is honoured even when retired (pass 1
+    // confirmed it exists).
+    const applyJobToFilaments = (
+      filamentsById: Map<string, (typeof filaments)[number]>,
+    ) => {
+      const resolved: {
+        filamentId: mongoose.Types.ObjectId;
+        spoolId: mongoose.Types.ObjectId | null;
+        grams: number;
+      }[] = [];
+      for (const u of usage) {
+        // Pass 1 validated existence, but the transaction path reloads fresh —
+        // a filament can be soft-deleted/purged in that window and drop out of
+        // the reload's `_deletedAt: null` filter. Surface it as a 404 (via the
+        // outer catch) instead of dereferencing undefined into a 500.
+        const filament = filamentsById.get(u.filamentId);
+        if (!filament) {
+          throw new FilamentNotFoundError(u.filamentId);
         }
-        spool.usageHistory = spool.usageHistory || [];
-        spool.usageHistory.push({
-          grams: u.grams,
-          jobLabel: body.jobLabel.trim(),
-          date: startedAt,
-          // "job" tags this as owned by a PrintHistory record. Analytics
-          // filters these out of the per-spool fallback so totals aren't
-          // double-counted against the aggregated PrintHistory pass.
-          source: "job",
-          jobId: historyId,
-        });
-        resolvedUsage.push({
-          filamentId: filament._id,
-          spoolId: spool._id,
-          grams: u.grams,
-        });
-      } else {
-        resolvedUsage.push({
-          filamentId: filament._id,
-          spoolId: null,
-          grams: u.grams,
-        });
+        const spool = u.spoolId
+          ? filament.spools.find((s) => String(s._id) === u.spoolId)
+          : filament.spools.find(
+              (s) => !s.retired && s.totalWeight !== null && s.totalWeight > 0,
+            ) ?? filament.spools.find((s) => !s.retired);
+
+        if (spool) {
+          if (typeof spool.totalWeight === "number") {
+            spool.totalWeight = Math.max(0, spool.totalWeight - u.grams);
+          }
+          spool.usageHistory = spool.usageHistory || [];
+          spool.usageHistory.push({
+            grams: u.grams,
+            jobLabel: body.jobLabel.trim(),
+            date: startedAt,
+            // "job" tags this as owned by a PrintHistory record. Analytics
+            // filters these out of the per-spool fallback so totals aren't
+            // double-counted against the aggregated PrintHistory pass.
+            source: "job",
+            jobId: historyId,
+          });
+          resolved.push({
+            filamentId: filament._id,
+            spoolId: spool._id,
+            grams: u.grams,
+          });
+        } else {
+          resolved.push({
+            filamentId: filament._id,
+            spoolId: null,
+            grams: u.grams,
+          });
+        }
       }
-    }
+      return resolved;
+    };
 
     // Persist. Prefer a transaction so a mid-write failure rolls back any
     // already-applied spool mutations, matching the reviewer's ask for
@@ -281,21 +310,39 @@ export async function POST(request: NextRequest) {
     // back to sequential saves.
     let history;
     try {
-      // GH #949: use connection.transaction() rather than a bare
-      // startSession().withTransaction(). On a TransientTransactionError
-      // (WriteConflict, primary stepdown at commit) the driver retries this
-      // callback — and with bare withTransaction the first aborted save()
-      // has already cleared each doc's modified paths, so the retry's
-      // f.save() computes an empty delta and silently drops the spool debit
-      // + usageHistory entry while PrintHistory still commits (permanent,
-      // silent inventory drift). connection.transaction() resets each saved
-      // doc's modified-path/version/atomics state between retries (gh-13698),
-      // so the retry re-persists. The pass-2 mutation stays OUTSIDE this
-      // callback on purpose: the in-memory doc already holds the final
-      // debited value and is re-marked dirty on retry, so it is written
-      // exactly once — re-mutating inside the callback would double-debit.
+      // GH #949 (+ Codex P1 follow-up): reload the filaments FRESH inside the
+      // transaction callback and (re-)apply the debit HERE, per attempt, rather
+      // than saving docs mutated once outside it.
+      //
+      // Why not mutate outside and just save inside? connection.transaction()
+      // only resets a saved doc's modified-path/version/atomics state between
+      // retries when the CALLBACK THROWS (mongoose gh-13698 —
+      // `_wrapUserTransaction`'s catch calls `_resetSessionDocuments`). That
+      // covers an operation-time TransientTransactionError (a WriteConflict on
+      // save() re-throws → reset → rerun). But a TransientTransactionError
+      // raised by commitTransaction reruns this callback WITHOUT the reset (the
+      // callback resolved; nothing threw). The prior save() already cleared each
+      // outside doc's modified paths, so re-saving them would write an empty
+      // delta and silently drop the spool debit + usageHistory entry while
+      // PrintHistory still commits — the exact silent inventory drift this
+      // change fixes, just moved to the commit-retry path.
+      //
+      // Reloading fresh each attempt reads the transaction's rolled-back
+      // baseline, so `applyJobToFilaments` lands the debit exactly once per
+      // committed attempt regardless of which retry (operation- or commit-time)
+      // fired — the idempotent-callback contract MongoDB's withTransaction
+      // expects. `historyId` is generated once outside, so PrintHistory keeps a
+      // stable _id and jobId linkage across retries.
       await mongoose.connection.transaction(async (session) => {
-        for (const f of filaments) {
+        const txnFilaments = await Filament.find({
+          _id: { $in: uniqueIds },
+          _deletedAt: null,
+        }).session(session);
+        const txnById = new Map(
+          txnFilaments.map((f) => [String(f._id), f] as const),
+        );
+        const resolvedUsage = applyJobToFilaments(txnById);
+        for (const f of txnFilaments) {
           // GH #905: this job only mutates spool weight + usageHistory. Validate
           // ONLY modified paths so a legacy out-of-range field elsewhere on the
           // filament (e.g. a temperature stored before the numeric validators
@@ -341,10 +388,14 @@ export async function POST(request: NextRequest) {
       }
       if (!isTxnUnsupported) throw err;
 
-      // Fallback path for non-replicated mongod (offline/test). Sequential
-      // saves with explicit rollback on failure — without this, save #2
-      // throwing after save #1 committed would leak a partial debit
-      // (spool weight gone, no PrintHistory row, no refund path).
+      // Fallback path for non-replicated mongod (offline/test). No transaction
+      // to roll back, so we apply the debit to the pass-1 docs here (the txn
+      // callback above never ran — connection.transaction() throws before
+      // invoking it on a standalone server, so `filaments` is still pristine),
+      // then save sequentially with explicit rollback on failure — without
+      // this, save #2 throwing after save #1 committed would leak a partial
+      // debit (spool weight gone, no PrintHistory row, no refund path).
+      const resolvedUsage = applyJobToFilaments(byId);
       const savedFilaments: typeof filaments = [];
       try {
         for (const f of filaments) {
@@ -407,6 +458,13 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(history, { status: 201 });
   } catch (err) {
+    // A filament validated in pass 1 vanished before the transaction reloaded
+    // it (concurrent soft-delete) — same 404 contract pass 1 enforces, not a
+    // 500 (GH #949 Codex follow-up). The persist-block catch rethrows it here
+    // (it is neither a VersionError nor a txn-unsupported error).
+    if (err instanceof FilamentNotFoundError) {
+      return errorResponse(err.message, 404);
+    }
     return errorResponseFromCaught(err, "Failed to record print history");
   }
 }

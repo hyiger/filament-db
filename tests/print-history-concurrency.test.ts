@@ -326,4 +326,114 @@ describe("GH #224 — print-history concurrency + rollback", () => {
     const after = await Filament.findById(f._id).lean();
     expect(after.spools[0].totalWeight).toBe(250);
   });
+
+  it("GH #949 (Codex P1): a commit-time retry re-applies the debit exactly once (no drift, no double-debit)", async () => {
+    // gh-13698's document-state reset only fires when the transaction callback
+    // THROWS (an operation-time TransientTransactionError). A
+    // TransientTransactionError raised by commitTransaction instead reruns the
+    // callback with NO reset — so the earlier fix (mutate outside, save inside)
+    // would re-save a doc whose modified paths were already cleared, writing an
+    // empty delta and dropping the debit while PrintHistory still committed.
+    //
+    // The follow-up fix moves the debit inside the callback on freshly-reloaded
+    // docs, so each attempt reads the transaction's rolled-back baseline and
+    // applies the debit exactly once. We can't run a real replica set here, so
+    // we SIMULATE a commit-retry: run the callback, undo its writes (the
+    // abort/rollback), then run it again (the retry). A single 100g debit must
+    // survive — the OLD approach would leave the weight at 1000 (debit lost).
+    const f = await Filament.create({
+      name: "Commit Retry PLA",
+      vendor: "T",
+      type: "PLA",
+      spools: [{ label: "main", totalWeight: 1000 }],
+    });
+
+    const txnSpy = vi
+      .spyOn(mongoose.Connection.prototype, "transaction")
+      .mockImplementationOnce(
+        async (fn: (session: mongoose.ClientSession) => Promise<unknown>) => {
+          // A session-less run commits directly to the memory-server (no real
+          // transaction/rollback here); undefined is fine as the fake session.
+          const noSession = undefined as unknown as mongoose.ClientSession;
+          // Attempt 1 — commits to the (session-less) memory-server.
+          await fn(noSession);
+          // Simulate the transaction ABORTING before a commit-time
+          // TransientTransactionError retry: restore the pre-debit baseline and
+          // drop the just-created PrintHistory row so the retry starts clean,
+          // exactly as a real rollback would.
+          await Filament.updateOne(
+            { _id: f._id },
+            { $set: { "spools.0.totalWeight": 1000, "spools.0.usageHistory": [] } },
+          );
+          await PrintHistory.deleteMany({});
+          // Attempt 2 — the retry. Must re-read the restored baseline and
+          // re-apply the debit rather than silently no-op'ing.
+          await fn(noSession);
+        },
+      );
+
+    const res = await postPrintHistory(
+      makeReq({
+        jobLabel: "commit-retry job",
+        usage: [{ filamentId: String(f._id), grams: 100 }],
+      }),
+    );
+    txnSpy.mockRestore();
+
+    expect(res.status).toBe(201);
+    const after = await Filament.findById(f._id).lean();
+    // Exactly one 100g debit survived — not lost (1000) and not doubled (800).
+    expect(after.spools[0].totalWeight).toBe(900);
+    const jobEntries = after.spools[0].usageHistory.filter(
+      (e: { source: string }) => e.source === "job",
+    );
+    expect(jobEntries).toHaveLength(1);
+    const phCount = await PrintHistory.countDocuments({
+      jobLabel: "commit-retry job",
+    });
+    expect(phCount).toBe(1);
+  });
+
+  it("GH #949 (Codex P2): a filament soft-deleted between pass-1 and the transaction reload returns 404, not a 500", async () => {
+    // The fix reloads filaments fresh inside the transaction. If one was
+    // validated in pass 1 but soft-deleted before the reload, the reload's
+    // `_deletedAt: null` filter excludes it — a null dereference in the debit
+    // helper would 500 (and leak the internal error). It must surface the same
+    // 404 pass 1 enforces. Simulate the race by soft-deleting inside the mocked
+    // transaction (i.e. after pass 1 ran) and then invoking the callback.
+    const f = await Filament.create({
+      name: "Vanishing PLA",
+      vendor: "T",
+      type: "PLA",
+      spools: [{ label: "main", totalWeight: 1000 }],
+    });
+
+    const txnSpy = vi
+      .spyOn(mongoose.Connection.prototype, "transaction")
+      .mockImplementationOnce(
+        async (fn: (session: mongoose.ClientSession) => Promise<unknown>) => {
+          await Filament.updateOne(
+            { _id: f._id },
+            { $set: { _deletedAt: new Date() } },
+          );
+          // The reload inside `fn` now excludes the filament → the helper throws
+          // FilamentNotFoundError, which propagates out to the 404 mapping.
+          return fn(undefined as unknown as mongoose.ClientSession);
+        },
+      );
+
+    const res = await postPrintHistory(
+      makeReq({
+        jobLabel: "vanish job",
+        usage: [{ filamentId: String(f._id), grams: 50 }],
+      }),
+    );
+    txnSpy.mockRestore();
+
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toMatch(/not found/i);
+    // Nothing committed for the vanished job.
+    const phCount = await PrintHistory.countDocuments({ jobLabel: "vanish job" });
+    expect(phCount).toBe(0);
+  });
 });
