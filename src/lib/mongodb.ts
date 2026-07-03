@@ -235,7 +235,24 @@ export default async function dbConnect() {
   // E11000. syncIndexes() drops mismatched indexes and recreates them —
   // idempotent on fresh DBs, corrective on upgraded ones. Same
   // retry-tracked pattern as the SharedCatalog block above.
-  if (!cached.migrations.coreModelIndexes) {
+  //
+  // GATED ON BOTH instanceId backfills (#955.14, Codex re-review): this MUST NOT
+  // run until every active filament has an `instanceId`. Building the
+  // partial-unique `instanceId` index over legacy rows the backfill hasn't
+  // filled yet E11000s on the SHARED null value — but that's exactly what the
+  // backfill repairs, so it's transient, NOT terminal. If the backfills throw
+  // transiently (leaving their flags false) and this ran anyway, the terminal
+  // E11000 handling below would mark the flag done and PERMANENTLY skip the
+  // rebuild even after the backfill later succeeds — until a process restart.
+  // Gating means that once we DO run, a remaining E11000 can only be genuine
+  // duplicate ACTIVE rows (dup name or dup real instanceId), which is terminal.
+  // In the common single-pass connect both backfills succeed just above, so the
+  // gate is already satisfied and this runs in the same pass.
+  if (
+    cached.migrations.spoolInstanceIds &&
+    cached.migrations.instanceIds &&
+    !cached.migrations.coreModelIndexes
+  ) {
     try {
       const models = await Promise.all([
         import("@/models/Filament"),
@@ -245,9 +262,10 @@ export default async function dbConnect() {
         import("@/models/Printer"),
       ]);
       // #955.14: sync each model INDEPENDENTLY, and treat a duplicate-key
-      // (E11000) failure as TERMINAL rather than retryable. syncIndexes() throws
-      // E11000 when a DB already holds duplicate active rows on a unique field
-      // (`name` / `instanceId`) — a DATA problem no retry can fix. Before this,
+      // (E11000) failure as TERMINAL rather than retryable. Because this block is
+      // gated on the instanceId backfills above, a syncIndexes() E11000 here can
+      // only be genuine duplicate active rows on a unique field (`name` / a real
+      // `instanceId`) — a DATA problem no retry can fix. Before this,
       // that error escaped the shared try, left `coreModelIndexes` false, and
       // the whole block re-ran on EVERY subsequent request — re-throwing and
       // re-logging forever, and doing wasted index work per request. Now a

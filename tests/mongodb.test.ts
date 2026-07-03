@@ -623,6 +623,62 @@ describe("dbConnect", () => {
     }
   });
 
+  // #955.14 (Codex re-review): the terminal-E11000 handling must NOT fire while
+  // the instanceId backfills are still pending. If the spool backfill throws
+  // transiently, the filament backfill is gated off and legacy rows stay without
+  // an instanceId — building the partial-unique index would E11000 on the shared
+  // null. Treating THAT as terminal would permanently skip the index rebuild even
+  // after the backfill later succeeds. The coreModelIndexes block is gated on
+  // both backfills, so it doesn't run (and doesn't converge) until they finish.
+  it("keeps the index sync retryable until the instanceId backfills finish", async () => {
+    (global as Record<string, unknown>).mongoose = undefined;
+    await dbConnect(); // establish; all flags true
+    const Filament = (await import("@/models/Filament")).default;
+
+    const cached = (global as Record<string, unknown>).mongoose as {
+      migrations: {
+        spoolInstanceIds: boolean;
+        instanceIds: boolean;
+        coreModelIndexes: boolean;
+      };
+      migrationsPromise: Promise<void> | null;
+    };
+    // Re-arm: pretend NOTHING has migrated yet this process.
+    cached.migrations.spoolInstanceIds = false;
+    cached.migrations.instanceIds = false;
+    cached.migrations.coreModelIndexes = false;
+    cached.migrationsPromise = null;
+
+    const filamentMod = await import("@/models/Filament");
+    const backfillSpy = vi
+      .spyOn(filamentMod, "backfillSpoolInstanceIds")
+      .mockRejectedValueOnce(new Error("transient backfill failure"));
+    const syncSpy = vi.spyOn(Filament, "syncIndexes");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // Cycle 1: spool backfill throws → filament backfill gated off → the
+      // coreModelIndexes gate (both backfills) is UNMET → syncIndexes not called,
+      // flag stays false (retryable), NOT terminally converged.
+      await dbConnect();
+      expect(cached.migrations.spoolInstanceIds).toBe(false);
+      expect(cached.migrations.instanceIds).toBe(false);
+      expect(cached.migrations.coreModelIndexes).toBe(false);
+      expect(syncSpy).not.toHaveBeenCalled();
+
+      // Cycle 2: backfills succeed (mock consumed) → gate met → the index sync
+      // runs and converges. The rebuild wasn't permanently skipped.
+      await dbConnect();
+      expect(cached.migrations.spoolInstanceIds).toBe(true);
+      expect(cached.migrations.instanceIds).toBe(true);
+      expect(cached.migrations.coreModelIndexes).toBe(true);
+      expect(syncSpy).toHaveBeenCalled();
+    } finally {
+      backfillSpy.mockRestore();
+      syncSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+  });
+
   // src/lib/mongodb.ts:285 (`p.installedNozzles || []`) + :301 (`if (!source)
   // continue`). A nozzle referenced by two printers but soft-deleted between
   // the ref walk and the hydrate is skipped, minting no clone; a
