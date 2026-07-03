@@ -512,7 +512,10 @@ describe("Spool subdocument persistence", () => {
     expect(getRemainingGrams(found!)).toBe(1070);
   });
 
-  it("getRemainingGrams returns null for a persisted filament with no spoolWeight", async () => {
+  it("getRemainingGrams uses a 0g tare for a persisted filament with no spoolWeight (#954)", async () => {
+    // GH #954: aligned with by-location/dashboard/locations — a missing tare
+    // falls back to 0g (gross weight) rather than suppressing the figure, so
+    // the home-list low-stock badge can fire.
     const filament = await Filament.create({
       name: "Null SpoolWeight PLA",
       vendor: "Test",
@@ -520,7 +523,7 @@ describe("Spool subdocument persistence", () => {
       spoolWeight: null,
       spools: [{ label: "Spool B", totalWeight: 850 }],
     });
-    expect(getRemainingGrams(filament)).toBeNull();
+    expect(getRemainingGrams(filament)).toBe(850);
   });
 
   it("getRemainingGrams clamps a near-empty persisted spool at zero", async () => {

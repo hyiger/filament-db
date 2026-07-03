@@ -110,6 +110,12 @@ describe("normalizeLabelFormat", () => {
     expect(normalizeLabelFormat({ lines: [] }).lines).toEqual(DEFAULT_LABEL_FORMAT.lines);
   });
 
+  it("dedupes repeated line ids so a field can't stack and overflow the head (#954)", () => {
+    expect(
+      normalizeLabelFormat({ lines: ["name", "name", "vendor", "name", "vendor"] }).lines,
+    ).toEqual(["name", "vendor"]);
+  });
+
   it("round-trips a valid format through JSON", () => {
     const f: LabelFormat = {
       qr: { enabled: false, placement: "right" },

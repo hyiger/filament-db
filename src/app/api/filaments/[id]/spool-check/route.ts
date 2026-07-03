@@ -166,8 +166,28 @@ export async function GET(
         };
       });
 
-    // If no spools had totalWeight set, assume OK
     if (spoolResults.length === 0) {
+      // GH #954: distinguish "no weight data at all" (genuinely can't check →
+      // ok:true) from "weight data exists but every such spool is RETIRED"
+      // (zero active stock). The retired exclusion above exists precisely to
+      // stop a retired spool from suppressing the slicer's insufficient-filament
+      // warning — so the all-retired case must warn (ok:false), not silently
+      // pass with the misleading "no data" message.
+      const hasRetiredWeightData = rawSpools.some(
+        (s) => s.totalWeight != null && s.retired,
+      );
+      if (hasRetiredWeightData) {
+        return NextResponse.json({
+          ok: false,
+          filament: filament.name,
+          requiredWeightG: Math.round(requiredWeight * 10) / 10,
+          requiredLengthM:
+            requiredLengthM !== null ? Math.round(requiredLengthM * 100) / 100 : null,
+          warning: "No active spools — all spools with weight data are retired",
+          spools: [],
+        });
+      }
+      // Genuinely no weight data on any spool — can't check, assume OK.
       return NextResponse.json({
         ok: true,
         filament: filament.name,

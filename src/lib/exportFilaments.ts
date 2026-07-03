@@ -55,6 +55,13 @@ export interface ExportRow {
    */
   parentName: string | null;
   variantCount: number;
+  /**
+   * GH #954: OpenPrintTag `optTags` (color-arrangement + finish) as a
+   * comma-separated list of numeric ids. Round-trips through the importer's
+   * split-on-comma parse. Without it a coextruded/gradient/finish filament
+   * collapses to a solid swatch on a create-path CSV round-trip.
+   */
+  optTags: string;
 }
 
 export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
@@ -97,6 +104,9 @@ export const EXPORT_COLUMNS: { key: keyof ExportRow; header: string }[] = [
   // consumers that read columns by header index keep working.
   { key: "parentName", header: "Parent" },
   { key: "variantCount", header: "Variant Count" },
+  // GH #954: color arrangement + finish tags, comma-separated numeric ids.
+  // Appended last so header-index consumers keep working.
+  { key: "optTags", header: "Tags" },
 ];
 
 export async function getExportRows(): Promise<ExportRow[]> {
@@ -181,6 +191,9 @@ export async function getExportRows(): Promise<ExportRow[]> {
       // are 0 unless they have variants pointing at them.
       parentName: parentDoc?.name ?? null,
       variantCount: variantCountByParent.get(filament._id.toString()) ?? 0,
+      // GH #954: resolved so a variant exports its EFFECTIVE tags (matching
+      // secondaryColors), keeping the round-trip's arrangement/finish intact.
+      optTags: (resolved.optTags ?? []).join(","),
     };
   });
 }

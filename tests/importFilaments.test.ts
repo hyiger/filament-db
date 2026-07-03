@@ -1653,3 +1653,76 @@ describe("upsertImportRows — create/resurrect preserve inheritance (GH #951)",
     expect(resolveFilament(resurrected, freshParent).cost).toBe(33);
   });
 });
+
+/**
+ * GH #954: CSV/XLSX optTags round-trip (the `Tags` column). Honoured on
+ * CREATE/RESURRECT only (like the Parent column); the update path ignores it.
+ */
+describe("upsertImportRows — optTags round-trip (GH #954)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+  });
+
+  const COLS = ["Name", "Vendor", "Type", "Color", "Tags", "Parent"];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = (rs: any[][]) => {
+    const mapping = mapHeaders(COLS);
+    return rs.map((r) => rowToImport(r, mapping));
+  };
+
+  it("CREATE parses the Tags column into optTags (dedup + integer-only)", async () => {
+    const res = await upsertImportRows(
+      rows([["Tagged PLA", "Acme", "PLA", "#112233", "28, 16, 28, x, -1", ""]]),
+    );
+    expect(res.created).toBe(1);
+    const f = await Filament.findOne({ name: "Tagged PLA" }).lean();
+    expect(f.optTags).toEqual([28, 16]); // deduped; "x"/-1 dropped
+  });
+
+  it("CREATE variant inheriting the parent's tags is not pinned (empty === inherit)", async () => {
+    const result = await upsertImportRows(
+      rows([
+        ["Tag Parent", "Acme", "PLA", "#808080", "28,16", ""],
+        // variant row carries the parent-resolved tags (flattened export)
+        ["Tag Parent — Red", "Acme", "PLA", "#FF0000", "28,16", "Tag Parent"],
+      ]),
+    );
+    expect(result.created).toBe(2);
+    const variant = await Filament.findOne({ name: "Tag Parent — Red" }).lean();
+    expect(variant.optTags ?? []).toEqual([]); // inherited, not pinned
+
+    // parent edit propagates through resolveFilament.
+    const parent = await Filament.findOne({ name: "Tag Parent" }).lean();
+    const { resolveFilament } = await import("@/lib/resolveFilament");
+    expect(resolveFilament(variant, parent).optTags).toEqual([28, 16]);
+  });
+
+  it("CREATE variant with DISTINCT tags keeps its own override", async () => {
+    const result = await upsertImportRows(
+      rows([
+        ["TagP2", "Acme", "PLA", "#808080", "28,16", ""],
+        ["TagP2 — Silk", "Acme", "PLA", "#00FF00", "22", "TagP2"], // 22 = sparkle
+      ]),
+    );
+    expect(result.created).toBe(2);
+    const variant = await Filament.findOne({ name: "TagP2 — Silk" }).lean();
+    expect(variant.optTags).toEqual([22]);
+  });
+
+  it("UPDATE ignores the Tags column (create/resurrect only)", async () => {
+    const f = await Filament.create({
+      name: "Existing Tagged",
+      vendor: "Acme",
+      type: "PLA",
+      optTags: [16],
+    });
+    const res = await upsertImportRows(
+      rows([["Existing Tagged", "Acme", "PLA", "#123456", "28,29", ""]]),
+    );
+    expect(res.updated).toBe(1);
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.optTags).toEqual([16]); // unchanged — Tags ignored on update
+  });
+});

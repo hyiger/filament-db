@@ -51,6 +51,16 @@ export interface ImportRow {
    * "Create variant" / Clone-from-parent UI already covers the manual case.
    */
   parentName?: string | null;
+  /**
+   * GH #954: OpenPrintTag `optTags` (color arrangement + finish) as a
+   * comma-separated list of numeric ids, round-tripping the `Tags` export
+   * column. Honoured on CREATE/RESURRECT only — like the `Parent` column,
+   * re-writing tags on an existing filament from a re-import is surprising,
+   * and honouring it on the update path would need the same variant-inheritance
+   * split `secondaryColors` gets (out of scope; the create-path round-trip is
+   * the reported loss).
+   */
+  optTags?: string | null;
 }
 
 /** Map header text (case-insensitive) to ImportRow keys */
@@ -136,6 +146,10 @@ const HEADER_MAP: Record<string, keyof ImportRow | undefined> = {
   parentname: "parentName",
   "variant count": undefined,
   variantcount: undefined,
+  // GH #954: OpenPrintTag color-arrangement + finish tags (comma-separated ids).
+  tags: "optTags",
+  "opt tags": "optTags",
+  opttags: "optTags",
 };
 
 const NUM_FIELDS = new Set<keyof ImportRow>([
@@ -512,6 +526,20 @@ export function pruneInheritedCreateDoc(
     }
   }
 
+  // GH #954: optTags inherits as a WHOLE array too (empty === inherit), so a
+  // create/resurrect variant whose exported (resolved) tags equal the parent's
+  // must reset to [] rather than pin them — same rule as secondaryColors.
+  if (Array.isArray(out.optTags) && out.optTags.length > 0) {
+    const parentArr: unknown[] = Array.isArray(parent.optTags) ? parent.optTags : [];
+    const incoming = out.optTags as unknown[];
+    if (
+      parentArr.length === incoming.length &&
+      incoming.every((v, i) => v === parentArr[i])
+    ) {
+      out.optTags = [];
+    }
+  }
+
   return out;
 }
 
@@ -550,7 +578,7 @@ export async function upsertImportRows(
     "maxVolumetricSpeed spoolWeight netFilamentWeight dryingTemperature " +
     "dryingTime transmissionDistance glassTempTransition heatDeflectionTemp " +
     "shoreHardnessA shoreHardnessD shrinkageXY shrinkageZ minPrintSpeed " +
-    "maxPrintSpeed spoolType tdsUrl inherits temperatures secondaryColors";
+    "maxPrintSpeed spoolType tdsUrl inherits temperatures secondaryColors optTags";
 
   const allExisting = await Filament.find({ name: { $in: [...namesToLoad] } })
     .select(INHERITANCE_PROJECTION)
@@ -747,6 +775,24 @@ export async function upsertImportRows(
         }
       }
     }
+    // GH #954: parse the "Tags" column (comma-separated OpenPrintTag ids) into a
+    // numeric array. Mirrors the secondaryColors parse (only set when there are
+    // valid entries); the schema's sanitizeOptTags setter drops any stragglers.
+    // Honoured on CREATE/RESURRECT only — the update path deletes it below.
+    if (row.optTags !== undefined && row.optTags !== null) {
+      const raw = String(row.optTags).trim();
+      if (raw !== "") {
+        const tags = [
+          ...new Set(
+            raw
+              .split(",")
+              .map((tag) => Number(tag.trim()))
+              .filter((n) => Number.isInteger(n) && n >= 0),
+          ),
+        ];
+        if (tags.length > 0) doc.optTags = tags;
+      }
+    }
     if (row.diameter !== undefined && row.diameter !== null) {
       doc.diameter = row.diameter;
     }
@@ -793,6 +839,11 @@ export async function upsertImportRows(
       // sub-fields that weren't in the import
       const updateDoc = { ...doc };
       delete updateDoc.temperatures;
+      // GH #954: `optTags` (the Tags column) is honoured on CREATE/RESURRECT
+      // only — like the Parent column. Drop it from the update `$set` so a
+      // re-import can't re-pin a variant's tags (which would need the same
+      // whole-array inheritance split secondaryColors gets).
+      delete updateDoc.optTags;
       let $set: Record<string, unknown> = { ...updateDoc };
       for (const [tempKey, tempVal] of Object.entries(temps)) {
         $set[`temperatures.${tempKey}`] = tempVal;

@@ -85,14 +85,19 @@ describe("inventoryStats", () => {
       expect(getRemainingGrams(f)).toBe(600);
     });
 
-    it("returns null when spoolWeight is missing but spools have weight", () => {
+    it("falls back to a 0g tare when spoolWeight is missing but spools have weight (#954)", () => {
+      // GH #954: aligns with the 0-tare posture in by-location / dashboard /
+      // locations so the home-list low-stock badge can fire for a legacy
+      // null-spoolWeight filament. Over-reports by the (unknown) empty-spool
+      // mass — the accepted trade-off for cross-surface consistency.
       const f: InventoryFilament = {
         spoolWeight: null,
         netFilamentWeight: 800,
         totalWeight: null,
-        spools: [{ totalWeight: 800 }],
+        spools: [{ totalWeight: 800 }, { totalWeight: 300, retired: true }],
       };
-      expect(getRemainingGrams(f)).toBeNull();
+      // 0-tare: 800 gross from the active spool; retired spool still excluded.
+      expect(getRemainingGrams(f)).toBe(800);
     });
 
     it("skips active spools with no weight but still totals the rest", () => {

@@ -257,10 +257,14 @@ describe("API route correctness", () => {
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    // The only parent spool is retired → no usable stock → "no data",
-    // not a false ok-based-on-a-retired-spool.
+    // The only parent spool is retired → no usable stock. GH #954: this now
+    // warns (ok:false) instead of silently passing with a "no data" message —
+    // weight data EXISTS, it's just all retired, which is exactly the case the
+    // retired exclusion is meant to surface to the slicer.
     expect(body.spools).toHaveLength(0);
-    expect(body.message).toMatch(/no spool weight data/i);
+    expect(body.ok).toBe(false);
+    expect(body.warning).toMatch(/retired/i);
+    expect(body.message).toBeUndefined();
   });
 
   // ── #305: print history never debits a retired spool ───────────────
