@@ -6,11 +6,6 @@ import PrintHistory from "@/models/PrintHistory";
 import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
-/** GH #304/#954: cap on a spool's embedded usageHistory. Matches the
- * manual-usage and dry-cycle routes so no writer can grow the array unbounded
- * toward MongoDB's 16MB document limit. */
-const MAX_SPOOL_HISTORY = 1000;
-
 /**
  * Thrown when a precondition that pass 1 validated no longer holds on the
  * document the transaction reloads fresh — a filament soft-deleted/purged, or an
@@ -216,18 +211,10 @@ export async function POST(request: NextRequest) {
     // aborts the txn for us — but the fallback runs save() one at a
     // time and would otherwise leak a partial debit if save #2 throws
     // after save #1 committed.
-    // GH #954 (Codex P2 on #960): also capture the pre-mutation usageHistory as
-    // plain objects. The 1000-entry cap can slice off the OLDEST entries when a
-    // spool is already at the limit — the rollback below then can't recover them
-    // by filtering out this job's entries (they'd be gone from the DB after a
-    // committed save). Restoring the snapshotted original array un-does BOTH the
-    // pushed job entries and any collateral eviction, so a failed multi-filament
-    // fallback loses no unrelated history.
     type SpoolSnapshot = {
       filamentId: string;
       spoolId: string;
       totalWeight: number | null;
-      usageHistory: Record<string, unknown>[];
     };
     const spoolSnapshots: SpoolSnapshot[] = [];
     for (const f of filaments) {
@@ -236,12 +223,6 @@ export async function POST(request: NextRequest) {
           filamentId: String(f._id),
           spoolId: String(s._id),
           totalWeight: typeof s.totalWeight === "number" ? s.totalWeight : null,
-          usageHistory: Array.isArray(s.usageHistory)
-            ? s.usageHistory.map((e) =>
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                typeof (e as any)?.toObject === "function" ? (e as any).toObject() : e,
-              )
-            : [],
         });
       }
     }
@@ -326,17 +307,6 @@ export async function POST(request: NextRequest) {
             source: "job",
             jobId: historyId,
           });
-          // GH #954/#304: cap the embedded usageHistory at the same 1000-entry
-          // limit the manual-usage and dry-cycle routes enforce, so a spool
-          // under print-farm / slicer-integration load can't grow this array
-          // unbounded toward MongoDB's 16MB BSON ceiling. Applied in-memory so it
-          // covers BOTH the transaction and standalone-fallback save paths. A
-          // single POST caps usage[] at 100 (validated above), so the newly
-          // pushed job entries are never trimmed by their own request — the
-          // DELETE-undo jobId linkage stays intact.
-          if (spool.usageHistory.length > MAX_SPOOL_HISTORY) {
-            spool.usageHistory = spool.usageHistory.slice(-MAX_SPOOL_HISTORY);
-          }
           resolved.push({
             filamentId: filament._id,
             spoolId: spool._id,
@@ -465,11 +435,9 @@ export async function POST(request: NextRequest) {
         });
       } catch (innerErr) {
         // Reset every already-persisted filament to its pre-call state.
-        // Reload from DB to avoid version conflicts, then restore the original
-        // totalWeight AND the original usageHistory from the snapshot. GH #954
-        // (Codex P2): restoring the whole snapshotted array — rather than just
-        // filtering out this job's entries — also brings back any oldest entries
-        // the 1000-cap slice evicted, so a rolled-back job leaves history intact.
+        // Reload from DB to avoid version conflicts, then splice off any
+        // usageHistory entries we'd pushed and restore the original
+        // totalWeight from the snapshot.
         for (const f of savedFilaments) {
           try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -483,7 +451,12 @@ export async function POST(request: NextRequest) {
               );
               if (!snap) continue;
               if (snap.totalWeight != null) s.totalWeight = snap.totalWeight;
-              s.usageHistory = snap.usageHistory;
+              if (Array.isArray(s.usageHistory)) {
+                s.usageHistory = s.usageHistory.filter(
+                  (e: { jobId?: unknown }) =>
+                    String(e.jobId ?? "") !== String(historyId),
+                );
+              }
             }
             await fresh.save({ validateModifiedOnly: true }); // GH #905 (rollback debit)
           } catch {
