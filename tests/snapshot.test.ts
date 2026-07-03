@@ -689,6 +689,31 @@ describe("snapshot route — Location + PrintHistory round-trip", () => {
       expect(await Location.countDocuments({ _id: canary._id })).toBe(1);
     });
 
+    it("rejects a present collection whose value is not an array, and does NOT wipe (Codex P1)", async () => {
+      const canary = await Location.create({ name: "Canary Loc 5" });
+      // `locations: {}` passes the key-presence guard but isn't an array — the
+      // destructure would leave it non-array, `.length` undefined, every insert
+      // skipped after the wipe. Must 400 before the destructive path.
+      const res = await postSnapshot({
+        version: 4,
+        createdAt: new Date().toISOString(),
+        collections: { locations: {} },
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/must be an array/i);
+      expect(await Location.countDocuments({ _id: canary._id })).toBe(1);
+
+      // Also a scalar under a known key.
+      const canary2 = await Location.create({ name: "Canary Loc 6" });
+      const res2 = await postSnapshot({
+        version: 4,
+        createdAt: new Date().toISOString(),
+        collections: { filaments: 1 },
+      });
+      expect(res2.status).toBe(400);
+      expect(await Location.countDocuments({ _id: canary2._id })).toBe(1);
+    });
+
     it("still restores a snapshot with no version field (older/hand-written) when collections are recognized", async () => {
       await Location.create({ name: "Pre-existing Loc" });
       const res = await postSnapshot({

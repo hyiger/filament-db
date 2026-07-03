@@ -318,6 +318,20 @@ async function restoreSnapshot(request: NextRequest) {
       { status: 400 },
     );
   }
+  // GH #953 (Codex P1): each PRESENT known collection must be an array. The
+  // destructure below only defaults ABSENT keys to `[]` — a present non-array
+  // value (`{ filaments: {} }`, `{ locations: 1 }`) survives, its `.length` is
+  // undefined so every insert is skipped, and the handler wipes the DB then
+  // reports success with nothing restored. Reject before the backup/wipe.
+  const colsRecord = cols as Record<string, unknown>;
+  for (const key of KNOWN_COLLECTION_KEYS) {
+    if (key in colsRecord && !Array.isArray(colsRecord[key])) {
+      return NextResponse.json(
+        { error: `Invalid snapshot: 'collections.${key}' must be an array` },
+        { status: 400 },
+      );
+    }
+  }
 
   const {
     filaments = [],
