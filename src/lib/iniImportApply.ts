@@ -29,6 +29,7 @@
 import Filament from "@/models/Filament";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
 import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
+import { INI_TOP_LEVEL_SETTING_KEYS } from "@/lib/parseIni";
 import type { CollapsedFilamentData } from "@/lib/prusaSlicerBundle";
 
 /**
@@ -99,15 +100,48 @@ async function buildIniUpdate(
 export type IniUpsertOutcome = "created" | "updated";
 
 /**
+ * GH #951 (Codex): drop the structured keys that also live in a top-level
+ * `FilamentData` field from the raw INI `settings` bag. `parseIniFilaments`
+ * dumps every `key=value` line into `settings`, so the bag shadows the
+ * top-level fields. On a VARIANT re-import the top-level scalars are correctly
+ * left inheriting (null), but the settings-bag shadow would survive verbatim
+ * and leak back into exports (`filamentToSlicerKeys` seeds `keys` from the
+ * settings bag, then only overwrites when the resolved top-level value is
+ * truthy — a null resolved value with a non-null shadow is a no-op). Stripping
+ * keeps the settings bag to genuine passthrough keys, matching the per-id sync
+ * route (which already excludes STRUCTURED_KEYS). Returns a shallow clone so
+ * the caller's parsed object isn't mutated; every stripped key round-trips via
+ * its top-level field, so nothing is lost.
+ */
+function stripStructuredSettings(collapsed: CollapsedFilamentData): CollapsedFilamentData {
+  if (!collapsed.settings) return collapsed;
+  const settings = { ...collapsed.settings };
+  for (const k of INI_TOP_LEVEL_SETTING_KEYS) delete settings[k];
+  return { ...collapsed, settings };
+}
+
+/**
  * Upsert a single collapsed INI section, preserving variant inheritance
  * (GH #951). Three atomic phases (active → resurrect-trashed → create/race).
  * Returns whether the row was created or updated. Throws on a genuine create
  * failure (validation, non-duplicate driver error); callers wrap per-row for
  * error isolation, exactly as the routes did before.
+ *
+ * Each phase reads the target by name then writes by `_id` — the `name` is
+ * ALSO kept in the write filter so a concurrent rename in the read→write
+ * window makes the write miss and fall through (create a fresh row) instead of
+ * reverting the rename / pinning this section onto the renamed filament. This
+ * restores the old single-op `findOneAndUpdate({ name })` semantics (the Bambu
+ * bulk route stays safe differently — it never puts `name` in its `$set`).
  */
 export async function upsertIniFilament(
-  collapsed: CollapsedFilamentData,
+  section: CollapsedFilamentData,
 ): Promise<IniUpsertOutcome> {
+  // Strip the settings-bag shadows of top-level fields up front so every write
+  // path (update / resurrect / create / race) and both roots and variants see
+  // a clean settings bag — in particular the phase-3 `Filament.create` below
+  // spreads `collapsed` directly rather than going through `buildIniUpdate`.
+  const collapsed = stripStructuredSettings(section);
   const name = collapsed.name;
 
   // Phase 1 — update an existing ACTIVE row.
@@ -116,12 +150,15 @@ export async function upsertIniFilament(
     .lean();
   if (existingActive) {
     const updated = await Filament.findOneAndUpdate(
-      { _id: existingActive._id, _deletedAt: null },
+      // `name` re-checked so a concurrent rename in the read→write window
+      // misses here and falls through (rather than the by-id write reverting
+      // the rename via the `name` in `$set`). GH #951 (Codex).
+      { _id: existingActive._id, name, _deletedAt: null },
       await buildIniUpdate(collapsed, existingActive),
       { runValidators: true, context: "query", returnDocument: "after" },
     );
     if (updated) return "updated";
-    // Soft-deleted between read and write → fall through to phase 2/3.
+    // Soft-deleted or renamed between read and write → fall through to phase 2/3.
   }
 
   // Phase 2 — resurrect a TRASHED (non-purged) row of the same name rather
@@ -143,12 +180,13 @@ export async function upsertIniFilament(
       _deletedAt: null,
     };
     const resurrected = await Filament.findOneAndUpdate(
-      { _id: existingTrashed._id, _deletedAt: { $ne: null }, _purged: { $ne: true } },
+      // `name` re-checked for the same rename-race reason as phase 1.
+      { _id: existingTrashed._id, name, _deletedAt: { $ne: null }, _purged: { $ne: true } },
       update,
       { runValidators: true, context: "query", returnDocument: "after" },
     );
     if (resurrected) return "updated";
-    // Purged/restored between read and write → fall through to phase 3.
+    // Purged/restored/renamed between read and write → fall through to phase 3.
   }
 
   // Phase 3 — create. INI sections never carry a parentId, so a freshly
@@ -168,7 +206,8 @@ export async function upsertIniFilament(
       .lean();
     if (!racing) throw createErr;
     const merged = await Filament.findOneAndUpdate(
-      { _id: racing._id, _deletedAt: null },
+      // `name` re-checked for the same rename-race reason as phase 1.
+      { _id: racing._id, name, _deletedAt: null },
       await buildIniUpdate(collapsed, racing),
       { runValidators: true, context: "query", returnDocument: "after" },
     );

@@ -19,6 +19,32 @@ export interface FilamentData {
   settings: Record<string, string | null>;
 }
 
+/**
+ * GH #951 (Codex): the INI keys that `flushFilament` below lifts into a
+ * TOP-LEVEL `FilamentData` field (rather than leaving only in the `settings`
+ * passthrough bag). The bulk INI importers strip these from the stored
+ * `settings` bag so a variant that inherits one of them doesn't keep a stale
+ * shadow copy that leaks back into exports (`filamentToSlicerKeys` seeds `keys`
+ * from `settings`, so a shadow survives when the resolved top-level value is
+ * null). Every key here round-trips via its top-level field, so stripping loses
+ * nothing. Keep this in lockstep with the `currentSettings.*` reads in
+ * `flushFilament` — `tests/parseIni.test.ts` pins that invariant.
+ */
+export const INI_TOP_LEVEL_SETTING_KEYS = [
+  "filament_vendor",
+  "filament_type",
+  "filament_colour",
+  "filament_cost",
+  "filament_density",
+  "filament_diameter",
+  "filament_max_volumetric_speed",
+  "temperature",
+  "first_layer_temperature",
+  "bed_temperature",
+  "first_layer_bed_temperature",
+  "inherits",
+] as const;
+
 export function parseIniFilaments(content: string): FilamentData[] {
   const filaments: FilamentData[] = [];
   const lines = content.split("\n");
