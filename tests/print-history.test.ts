@@ -78,6 +78,63 @@ describe("print-history POST", () => {
     expect(updated.spools[0].totalWeight).toBe(1175);
   });
 
+  it("GH #954: caps spool usageHistory at 1000, rolling off the oldest", async () => {
+    // Seed a spool already at the cap so one more job entry must evict the
+    // oldest rather than grow the array unbounded (toward the 16MB BSON limit).
+    const seed = Array.from({ length: 1000 }, (_, i) => ({
+      grams: 1,
+      jobLabel: `old-${i}`,
+      date: new Date(2020, 0, 1),
+      source: "manual" as const,
+    }));
+    const f = await Filament.create({
+      name: "History Cap PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      spools: [{ label: "", totalWeight: 5000, usageHistory: seed }],
+    });
+
+    const res = await postPrintHistory(
+      makeReq({
+        jobLabel: "capping.gcode",
+        usage: [{ filamentId: String(f._id), grams: 10 }],
+      }),
+    );
+    expect(res.status).toBe(201);
+    const historyId = (await res.json())._id;
+
+    const updated = await Filament.findById(f._id);
+    const hist = updated.spools[0].usageHistory;
+    // Exactly 1000 (rolled off), not 1001.
+    expect(hist).toHaveLength(1000);
+    // The newest entry is the just-created job entry, with its DELETE-undo
+    // jobId linkage intact (the current job is never trimmed by its own POST).
+    const newest = hist[hist.length - 1];
+    expect(newest.source).toBe("job");
+    expect(String(newest.jobId)).toBe(String(historyId));
+  });
+
+  it("GH #954: a single 100-row batch never self-trims a fresh spool", async () => {
+    // usage[] is capped at 100 per request, so one POST adds at most 100 entries
+    // — a fresh spool must keep all of them (the cap only rolls off older ones).
+    const f = await Filament.create({
+      name: "Batch 100 PLA",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      spools: [{ label: "", totalWeight: 100000 }],
+    });
+    const usage = Array.from({ length: 100 }, () => ({
+      filamentId: String(f._id),
+      grams: 1,
+    }));
+    const res = await postPrintHistory(makeReq({ jobLabel: "batch.gcode", usage }));
+    expect(res.status).toBe(201);
+    const updated = await Filament.findById(f._id);
+    expect(updated.spools[0].usageHistory).toHaveLength(100);
+  });
+
   it("#905: debits a spool even when the filament carries a legacy out-of-range field", async () => {
     const f = await Filament.create({
       name: "Legacy Field PLA",

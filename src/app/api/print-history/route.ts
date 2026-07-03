@@ -6,6 +6,11 @@ import PrintHistory from "@/models/PrintHistory";
 import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
+/** GH #304/#954: cap on a spool's embedded usageHistory. Matches the
+ * manual-usage and dry-cycle routes so no writer can grow the array unbounded
+ * toward MongoDB's 16MB document limit. */
+const MAX_SPOOL_HISTORY = 1000;
+
 /**
  * Thrown when a precondition that pass 1 validated no longer holds on the
  * document the transaction reloads fresh — a filament soft-deleted/purged, or an
@@ -307,6 +312,17 @@ export async function POST(request: NextRequest) {
             source: "job",
             jobId: historyId,
           });
+          // GH #954/#304: cap the embedded usageHistory at the same 1000-entry
+          // limit the manual-usage and dry-cycle routes enforce, so a spool
+          // under print-farm / slicer-integration load can't grow this array
+          // unbounded toward MongoDB's 16MB BSON ceiling. Applied in-memory so it
+          // covers BOTH the transaction and standalone-fallback save paths. A
+          // single POST caps usage[] at 100 (validated above), so the newly
+          // pushed job entries are never trimmed by their own request — the
+          // DELETE-undo jobId linkage stays intact.
+          if (spool.usageHistory.length > MAX_SPOOL_HISTORY) {
+            spool.usageHistory = spool.usageHistory.slice(-MAX_SPOOL_HISTORY);
+          }
           resolved.push({
             filamentId: filament._id,
             spoolId: spool._id,
