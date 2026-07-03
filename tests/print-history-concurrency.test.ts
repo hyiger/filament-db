@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as postPrintHistory } from "@/app/api/print-history/route";
+import { MAX_SPOOL_HISTORY } from "@/lib/capUsageHistory";
 
 /**
  * GH #224 — print-history concurrency guarantees.
@@ -252,6 +253,94 @@ describe("GH #224 — print-history concurrency + rollback", () => {
     // No PrintHistory row persisted.
     const count = await PrintHistory.countDocuments();
     expect(count).toBe(0);
+  });
+
+  it("fallback rollback does not lose pre-existing history rows to the usageHistory cap trim (#954 / PR #961 Codex P2)", async () => {
+    // Filament A already sits at exactly the cap with MANUAL logs — rows a print
+    // job must never touch. A trim baked into the debit save would evict one to
+    // make room for the job's own entry; if the job then fails and rolls back,
+    // that pre-existing manual row is gone forever even though the job never
+    // landed. The fix defers the trim until AFTER the job is durably written, so
+    // a rolled-back fallback request can't orphan pre-existing rows.
+    const manuals = Array.from({ length: MAX_SPOOL_HISTORY }, (_, i) => ({
+      grams: 1,
+      jobLabel: `m${i}`,
+      date: new Date(),
+      source: "manual" as const,
+      jobId: null,
+    }));
+    const a = await Filament.create({
+      name: "Cap Rollback A",
+      vendor: "T",
+      type: "PLA",
+      spools: [{ label: "a1", totalWeight: 1000, usageHistory: manuals }],
+    });
+    const b = await Filament.create({
+      name: "Cap Rollback B",
+      vendor: "T",
+      type: "PLA",
+      spools: [{ label: "b1", totalWeight: 800 }],
+    });
+
+    // Force the sequential-fallback path (mock connection.transaction, per the
+    // sibling rollback test).
+    const txnSpy = vi
+      .spyOn(mongoose.Connection.prototype, "transaction")
+      .mockImplementationOnce(async () => {
+        throw new Error("Transaction numbers are only allowed on a replica set");
+      });
+
+    // Make save() #2 throw so filament A's debit save (#1) has already committed
+    // when the failure fires — exactly the partial-write the rollback must undo.
+    const proto = mongoose.Model.prototype as unknown as {
+      save: () => Promise<unknown>;
+    };
+    const originalSave = proto.save;
+    let saveCallsMade = 0;
+    proto.save = async function () {
+      saveCallsMade++;
+      if (saveCallsMade === 2) {
+        throw new Error("simulated downstream write failure");
+      }
+      return originalSave.apply(this);
+    };
+
+    try {
+      await postPrintHistory(
+        makeReq({
+          jobLabel: "cap rollback job",
+          usage: [
+            { filamentId: String(a._id), grams: 50 },
+            { filamentId: String(b._id), grams: 25 },
+          ],
+        }),
+      );
+    } catch {
+      // The handler may rethrow; we only assert on the persisted state.
+    } finally {
+      txnSpy.mockRestore();
+      proto.save = originalSave;
+    }
+
+    const aAfter = await Filament.findById(a._id).lean();
+    const bAfter = await Filament.findById(b._id).lean();
+
+    // Pre-debit weight restored, the job's own entry stripped by the rollback...
+    expect(aAfter.spools[0].totalWeight).toBe(1000);
+    expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (aAfter.spools[0].usageHistory || []).some((e: any) => e.jobId != null),
+    ).toBe(false);
+    // ...and — the point of the fix — every pre-existing manual row survived: a
+    // trim that got rolled back must not have evicted one. Under a non-deferred
+    // trim this array would be MAX_SPOOL_HISTORY - 1.
+    expect(aAfter.spools[0].usageHistory).toHaveLength(MAX_SPOOL_HISTORY);
+    // Filament B never reached its save, so the DB never saw its debit.
+    expect(bAfter.spools[0].totalWeight).toBe(800);
+    expect((bAfter.spools[0].usageHistory || []).length).toBe(0);
+
+    // No PrintHistory row persisted.
+    expect(await PrintHistory.countDocuments()).toBe(0);
   });
 
   it("happy path on standalone fallback still creates the PrintHistory row", async () => {
