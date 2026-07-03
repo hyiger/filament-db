@@ -254,6 +254,72 @@ describe("GH #224 — print-history concurrency + rollback", () => {
     expect(count).toBe(0);
   });
 
+  it("GH #954 (Codex P2): fallback rollback restores history the 1000-cap evicted", async () => {
+    // Filament A's spool is already AT the 1000-entry cap, so this job's push
+    // slices off the oldest entry. When B's save then fails, the rollback must
+    // restore A's ORIGINAL history in full — not just strip this job's entry,
+    // which would leave the evicted oldest permanently lost.
+    const seed = Array.from({ length: 1000 }, (_, i) => ({
+      grams: 1,
+      jobLabel: `old-${i}`,
+      date: new Date(2020, 0, 1),
+      source: "manual" as const,
+    }));
+    const a = await Filament.create({
+      name: "Rollback History A",
+      vendor: "T",
+      type: "PLA",
+      spoolWeight: 100,
+      spools: [{ label: "a1", totalWeight: 1000, usageHistory: seed }],
+    });
+    const b = await Filament.create({
+      name: "Rollback History B",
+      vendor: "T",
+      type: "PLA",
+      spools: [{ label: "b1", totalWeight: 800 }],
+    });
+
+    const txnSpy = vi.spyOn(mongoose.Connection.prototype, "transaction")
+      .mockImplementationOnce(async () => {
+        throw new Error("Transaction numbers are only allowed on a replica set");
+      });
+    const proto = mongoose.Model.prototype as unknown as { save: () => Promise<unknown> };
+    const originalSave = proto.save;
+    let saveCallsMade = 0;
+    proto.save = async function () {
+      saveCallsMade++;
+      if (saveCallsMade === 2) throw new Error("simulated downstream write failure");
+      return originalSave.apply(this);
+    };
+
+    try {
+      await postPrintHistory(
+        makeReq({
+          jobLabel: "history rollback job",
+          usage: [
+            { filamentId: String(a._id), grams: 50 },
+            { filamentId: String(b._id), grams: 25 },
+          ],
+        }),
+      );
+    } catch {
+      // handler may rethrow; the DB state is what we assert.
+    } finally {
+      txnSpy.mockRestore();
+      proto.save = originalSave;
+    }
+
+    const aAfter = await Filament.findById(a._id).lean();
+    const hist = aAfter.spools[0].usageHistory || [];
+    // Full original history restored: 1000 entries, the oldest still present,
+    // no leaked job entry, and the debit reverted.
+    expect(hist.length).toBe(1000);
+    expect(hist.some((e: { jobLabel?: string }) => e.jobLabel === "old-0")).toBe(true);
+    expect(hist.every((e: { source?: string }) => e.source === "manual")).toBe(true);
+    expect(aAfter.spools[0].totalWeight).toBe(1000);
+    expect(await PrintHistory.countDocuments()).toBe(0);
+  });
+
   it("happy path on standalone fallback still creates the PrintHistory row", async () => {
     // Sanity check that the new rollback logic doesn't poison the
     // success path.

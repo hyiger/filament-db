@@ -216,10 +216,18 @@ export async function POST(request: NextRequest) {
     // aborts the txn for us — but the fallback runs save() one at a
     // time and would otherwise leak a partial debit if save #2 throws
     // after save #1 committed.
+    // GH #954 (Codex P2 on #960): also capture the pre-mutation usageHistory as
+    // plain objects. The 1000-entry cap can slice off the OLDEST entries when a
+    // spool is already at the limit — the rollback below then can't recover them
+    // by filtering out this job's entries (they'd be gone from the DB after a
+    // committed save). Restoring the snapshotted original array un-does BOTH the
+    // pushed job entries and any collateral eviction, so a failed multi-filament
+    // fallback loses no unrelated history.
     type SpoolSnapshot = {
       filamentId: string;
       spoolId: string;
       totalWeight: number | null;
+      usageHistory: Record<string, unknown>[];
     };
     const spoolSnapshots: SpoolSnapshot[] = [];
     for (const f of filaments) {
@@ -228,6 +236,12 @@ export async function POST(request: NextRequest) {
           filamentId: String(f._id),
           spoolId: String(s._id),
           totalWeight: typeof s.totalWeight === "number" ? s.totalWeight : null,
+          usageHistory: Array.isArray(s.usageHistory)
+            ? s.usageHistory.map((e) =>
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                typeof (e as any)?.toObject === "function" ? (e as any).toObject() : e,
+              )
+            : [],
         });
       }
     }
@@ -451,9 +465,11 @@ export async function POST(request: NextRequest) {
         });
       } catch (innerErr) {
         // Reset every already-persisted filament to its pre-call state.
-        // Reload from DB to avoid version conflicts, then splice off any
-        // usageHistory entries we'd pushed and restore the original
-        // totalWeight from the snapshot.
+        // Reload from DB to avoid version conflicts, then restore the original
+        // totalWeight AND the original usageHistory from the snapshot. GH #954
+        // (Codex P2): restoring the whole snapshotted array — rather than just
+        // filtering out this job's entries — also brings back any oldest entries
+        // the 1000-cap slice evicted, so a rolled-back job leaves history intact.
         for (const f of savedFilaments) {
           try {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -467,12 +483,7 @@ export async function POST(request: NextRequest) {
               );
               if (!snap) continue;
               if (snap.totalWeight != null) s.totalWeight = snap.totalWeight;
-              if (Array.isArray(s.usageHistory)) {
-                s.usageHistory = s.usageHistory.filter(
-                  (e: { jobId?: unknown }) =>
-                    String(e.jobId ?? "") !== String(historyId),
-                );
-              }
+              s.usageHistory = snap.usageHistory;
             }
             await fresh.save({ validateModifiedOnly: true }); // GH #905 (rollback debit)
           } catch {
