@@ -85,17 +85,14 @@ describe("inventoryStats", () => {
       expect(getRemainingGrams(f)).toBe(600);
     });
 
-    it("treats a null spoolWeight as a 0g tare (GH #954)", () => {
-      // Legacy roll with no recorded tare: fall back to 0g so the gross weight
-      // still counts (matching dashboard/locations), instead of suppressing the
-      // grams entirely — which kept the low-stock badge dark for these rows.
+    it("returns null when spoolWeight is missing but spools have weight", () => {
       const f: InventoryFilament = {
         spoolWeight: null,
         netFilamentWeight: 800,
         totalWeight: null,
         spools: [{ totalWeight: 800 }],
       };
-      expect(getRemainingGrams(f)).toBe(800);
+      expect(getRemainingGrams(f)).toBeNull();
     });
 
     it("skips active spools with no weight but still totals the rest", () => {
@@ -135,15 +132,13 @@ describe("inventoryStats", () => {
       ).toBe(0);
     });
 
-    it("returns null in the legacy path only when totalWeight is missing", () => {
-      // No totalWeight → not weight-tracked → null.
+    it("returns null in the legacy path when totalWeight or spoolWeight is missing", () => {
       expect(
         getRemainingGrams({ ...baseTracked, totalWeight: null, spools: [] }),
       ).toBeNull();
-      // GH #954: a null spoolWeight no longer suppresses the figure — 0g tare.
       expect(
         getRemainingGrams({ spoolWeight: null, netFilamentWeight: 800, totalWeight: 700, spools: [] }),
-      ).toBe(700);
+      ).toBeNull();
     });
   });
 
@@ -213,21 +208,6 @@ describe("inventoryStats", () => {
       expect(
         getRemainingPct({ ...baseTracked, totalWeight: null, spools: [] }),
       ).toBeNull();
-    });
-
-    it("treats a null spoolWeight as a 0g tare, in lockstep with grams (GH #954)", () => {
-      // net is known but tare isn't → 0g tare, clamped: (700-0)/800 = 87.5% → 88.
-      const multi: InventoryFilament = {
-        spoolWeight: null,
-        netFilamentWeight: 800,
-        totalWeight: null,
-        spools: [{ totalWeight: 700 }],
-      };
-      expect(getRemainingPct(multi)).toBe(88);
-      // Legacy single-spool path, same treatment.
-      expect(
-        getRemainingPct({ spoolWeight: null, netFilamentWeight: 800, totalWeight: 700, spools: [] }),
-      ).toBe(88);
     });
 
     it("clamps to 0..100", () => {

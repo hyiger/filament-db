@@ -44,21 +44,13 @@ export function getSpoolCount(f: InventoryFilament): number {
  * the calculation actually uses. */
 export function getRemainingGrams(f: InventoryFilament): number | null {
   if (f.spools && f.spools.length > 0) {
-    // GH #954: a null `spoolWeight` (legacy rolls tracked before the tare field
-    // existed) falls back to a 0g tare — matching /api/dashboard, /api/locations,
-    // and /api/spools/by-location, which all use `?? 0` for the same shape.
-    // Previously this returned null, so the home page's low-stock badge + quick
-    // filter (isLowStock needs a non-null grams) never fired for those filaments
-    // even near-empty, while every other surface counted them. 0g-tare
-    // over-reports by the empty-spool mass (gross, not net), a documented
-    // trade-off preferred here for cross-surface consistency.
-    const tare = f.spoolWeight ?? 0;
+    if (f.spoolWeight == null) return null;
     let grams = 0;
     let any = false;
     for (const s of f.spools) {
       if (s.retired) continue;
       if (s.totalWeight != null) {
-        grams += Math.max(0, s.totalWeight - tare);
+        grams += Math.max(0, s.totalWeight - f.spoolWeight);
         any = true;
       }
     }
@@ -70,8 +62,8 @@ export function getRemainingGrams(f: InventoryFilament): number | null {
   // null as "not low") never lights up the badge for a pre-migration
   // filament with a top-level `totalWeight`, even though the same row's
   // remaining-% bar renders correctly via getRemainingPct's legacy path.
-  if (f.totalWeight == null) return null;
-  return Math.max(0, f.totalWeight - (f.spoolWeight ?? 0)); // GH #954: 0g-tare fallback
+  if (f.totalWeight == null || f.spoolWeight == null) return null;
+  return Math.max(0, f.totalWeight - f.spoolWeight);
 }
 
 /** Percentage remaining (0-100, integer). Excludes retired spools so
@@ -81,19 +73,16 @@ export function getRemainingPct(f: InventoryFilament): number | null {
   if (
     f.spools &&
     f.spools.length > 0 &&
+    f.spoolWeight != null &&
     f.netFilamentWeight != null &&
     f.netFilamentWeight > 0
   ) {
-    // GH #954: 0g-tare fallback for a null spoolWeight, in lockstep with
-    // getRemainingGrams so the bar and the low-stock badge agree. The result
-    // still clamps to [0, 100] below, so a gross-weight over-report caps at 100%.
-    const tare = f.spoolWeight ?? 0;
     let totalRemaining = 0;
     let validCount = 0;
     for (const spool of f.spools) {
       if (spool.retired) continue;
       if (spool.totalWeight != null) {
-        totalRemaining += Math.max(0, spool.totalWeight - tare);
+        totalRemaining += Math.max(0, spool.totalWeight - f.spoolWeight);
         validCount++;
       }
     }
@@ -103,6 +92,7 @@ export function getRemainingPct(f: InventoryFilament): number | null {
   }
   if (
     f.totalWeight == null ||
+    f.spoolWeight == null ||
     f.netFilamentWeight == null ||
     f.netFilamentWeight <= 0
   ) {
@@ -110,6 +100,6 @@ export function getRemainingPct(f: InventoryFilament): number | null {
   }
   return Math.min(
     100,
-    Math.max(0, Math.round(((f.totalWeight - (f.spoolWeight ?? 0)) / f.netFilamentWeight) * 100)),
+    Math.max(0, Math.round(((f.totalWeight - f.spoolWeight) / f.netFilamentWeight) * 100)),
   );
 }
