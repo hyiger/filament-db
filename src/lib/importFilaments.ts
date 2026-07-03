@@ -283,6 +283,12 @@ const IMPORT_INHERITABLE_SCALARS = new Set<string>([
   "maxPrintSpeed",
   "spoolType",
   "tdsUrl",
+  // GH #951 (Codex): `inherits` (PrusaSlicer preset-inheritance key) is
+  // inheritable per resolveFilament and carried top-level by parseIniFilaments,
+  // so an INI round-trip would otherwise pin the parent's echoed value onto a
+  // variant. The CSV/XLSX importer maps no `inherits` column, so listing it
+  // here is a no-op for that path (it never appears in the CSV setBody).
+  "inherits",
 ]);
 
 /** Required by the Filament schema — never `$unset` on a variant (the
@@ -321,6 +327,10 @@ type LeanFilament = Record<string, any>;
  *     an empty array as "inherit"), so it's skipped only when the incoming
  *     array matches the parent's array exactly (order-sensitive — order is
  *     meaningful for multi-color rendering).
+ *   - `settings` inherits by SHALLOW PER-KEY merge, so it's rebuilt to hold
+ *     only keys that differ from the parent's `settings` (parent-equal keys
+ *     keep inheriting). This runs only when the caller supplies the parent's
+ *     settings; without them it writes through (GH #951, Codex).
  *   - The variant-local empty-string rule mirrors resolveFilament:67-72 —
  *     a variant value of `""` counts as "missing" (already inheriting), so
  *     it never triggers an $unset.
@@ -366,6 +376,34 @@ export function splitInheritedImportSet(
         continue;
       }
       set[key] = incoming;
+      continue;
+    }
+
+    if (key === "settings" && incoming && typeof incoming === "object" && !Array.isArray(incoming)) {
+      // GH #951 (Codex): `settings` is inherited by SHALLOW PER-KEY merge
+      // (resolveFilament: `{ ...parent.settings, ...variant.settings }`), so a
+      // variant that inherits a setting has the parent's value echoed back into
+      // the incoming bag on a round-trip. Treating `settings` as pass-through
+      // (variant-only) would copy those echoed keys onto the variant and sever
+      // inheritance. Store only keys that DIFFER from the parent — parent-equal
+      // keys keep inheriting, and because we rebuild the whole bag a stale
+      // variant key that now matches the parent self-heals (same equal-==-inherit
+      // rule as the scalar path). When the caller doesn't supply the parent's
+      // settings (e.g. the INI import's projection omits them, keeping its raw
+      // settings-bag behaviour unchanged), fall back to writing through.
+      const parentSettings =
+        parent.settings && typeof parent.settings === "object"
+          ? (parent.settings as Record<string, unknown>)
+          : null;
+      if (!parentSettings) {
+        set[key] = incoming;
+        continue;
+      }
+      const filtered: Record<string, unknown> = {};
+      for (const [sk, sv] of Object.entries(incoming as Record<string, unknown>)) {
+        if (parentSettings[sk] !== sv) filtered[sk] = sv;
+      }
+      set[key] = filtered;
       continue;
     }
 
@@ -512,7 +550,7 @@ export async function upsertImportRows(
     "maxVolumetricSpeed spoolWeight netFilamentWeight dryingTemperature " +
     "dryingTime transmissionDistance glassTempTransition heatDeflectionTemp " +
     "shoreHardnessA shoreHardnessD shrinkageXY shrinkageZ minPrintSpeed " +
-    "maxPrintSpeed spoolType tdsUrl temperatures secondaryColors";
+    "maxPrintSpeed spoolType tdsUrl inherits temperatures secondaryColors";
 
   const allExisting = await Filament.find({ name: { $in: [...namesToLoad] } })
     .select(INHERITANCE_PROJECTION)

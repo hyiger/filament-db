@@ -1147,6 +1147,37 @@ describe("splitInheritedImportSet (GH #628)", () => {
     expect(set).toEqual({ name: "V" });
     expect(unset).toEqual([]);
   });
+
+  // GH #951 (Codex F2): `inherits` is now an inheritable scalar.
+  it("skips $set for `inherits` when it matches the parent, keeps a genuine override", () => {
+    const p = { ...parent, inherits: "*PLA*" };
+    const skip = splitInheritedImportSet({ name: "V", inherits: "*PLA*" }, { inherits: null }, p);
+    expect(skip.set).toEqual({ name: "V" });
+    const keep = splitInheritedImportSet({ name: "V", inherits: "*PLA-CF*" }, { inherits: null }, p);
+    expect(keep.set).toEqual({ name: "V", inherits: "*PLA-CF*" });
+  });
+
+  // GH #951 (Codex F1): `settings` inherits by shallow per-key merge.
+  it("filters `settings` per-key against the parent (parent-equal keys keep inheriting)", () => {
+    const p = { ...parent, settings: { fan_speed: "60", z_hop: "0.2", nozzle: "hot" } };
+    const { set } = splitInheritedImportSet(
+      // fan_speed matches parent → drop; z_hop differs → keep; brim is variant-only → keep
+      { name: "V", settings: { fan_speed: "60", z_hop: "0.4", brim: "5" } },
+      { settings: {} },
+      p,
+    );
+    expect(set).toEqual({ name: "V", settings: { z_hop: "0.4", brim: "5" } });
+  });
+
+  it("writes `settings` through unchanged when the parent has no settings to inherit", () => {
+    const p = { ...parent }; // no settings key
+    const { set } = splitInheritedImportSet(
+      { name: "V", settings: { fan_speed: "60" } },
+      { settings: {} },
+      p,
+    );
+    expect(set).toEqual({ name: "V", settings: { fan_speed: "60" } });
+  });
 });
 
 /**

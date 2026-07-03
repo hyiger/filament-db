@@ -34,12 +34,16 @@ import type { CollapsedFilamentData } from "@/lib/prusaSlicerBundle";
 /**
  * Fields a collapsed INI section can carry that participate in
  * variant→parent inheritance (`parseIniFilaments` only produces this subset:
- * vendor/type/cost/density/diameter/maxVolumetricSpeed + the four temp
+ * vendor/type/cost/density/diameter/maxVolumetricSpeed/inherits + the four temp
  * subfields). Projected on the variant AND its parent so `splitInheritedImportSet`
  * can compare incoming vs parent and detect a stale variant override to clear.
+ * `settings` is deliberately NOT projected: the INI settings bag is a raw
+ * key-dump (it includes the structured keys), so per-key parent filtering isn't
+ * meaningful here — `splitInheritedImportSet` falls back to writing it through
+ * unchanged when the parent's settings are absent (GH #951, Codex).
  */
 const INI_INHERITANCE_PROJECTION =
-  "_id parentId vendor type cost density diameter maxVolumetricSpeed temperatures";
+  "_id parentId vendor type cost density diameter maxVolumetricSpeed inherits temperatures";
 
 /** Loosely-typed lean filament — same posture as resolveFilament / importFilaments. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -1023,6 +1023,56 @@ describe("API route correctness", () => {
     expect(fresh.cost == null).toBe(true); // $unset → inheritance resumes
   });
 
+  it("#951 (Codex F1) — a variant sync does not pin parent-inherited slicer settings", async () => {
+    const parent = await Filament.create({
+      name: "Settings PLA",
+      vendor: "Acme",
+      type: "PLA",
+      settings: { some_passthrough_key: "parentval", shared_key: "same" },
+    });
+    const variant = await Filament.create({
+      name: "Settings PLA — Green",
+      vendor: "Acme",
+      type: "PLA",
+      color: "#00FF00",
+      parentId: parent._id,
+      // inherits settings from the parent
+    });
+
+    // The fork echoes the resolved settings (parent ∪ variant); shared_key ==
+    // parent, some_passthrough_key == parent, and one genuine variant override.
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${variant._id}`, {
+        config: {
+          filamentdb_id: String(variant._id),
+          some_passthrough_key: "parentval", // == parent → must not pin
+          shared_key: "same", // == parent → must not pin
+          variant_only_key: "mine", // ≠ parent → genuine override
+        },
+      }),
+      { params: Promise.resolve({ id: String(variant._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Filament.findById(variant._id).lean();
+    const vs = (fresh.settings ?? {}) as Record<string, unknown>;
+    // Parent-equal keys are NOT stored on the variant → they keep inheriting.
+    expect(vs.some_passthrough_key).toBeUndefined();
+    expect(vs.shared_key).toBeUndefined();
+    // The genuine override is stored.
+    expect(vs.variant_only_key).toBe("mine");
+
+    // A later parent settings edit still propagates to the variant.
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { "settings.some_passthrough_key": "changed" } },
+    );
+    const { resolveFilament } = await import("@/lib/resolveFilament");
+    const freshParent = await Filament.findById(parent._id).lean();
+    const resolved = resolveFilament(fresh, freshParent);
+    expect(resolved.settings.some_passthrough_key).toBe("changed");
+  });
+
   it("#872 — a per-nozzle sync with an out-of-range baked calibration value is rejected with 400 (nothing persisted)", async () => {
     const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
     const f = await Filament.create({

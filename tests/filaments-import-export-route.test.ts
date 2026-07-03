@@ -485,6 +485,48 @@ filament_cost = 45
       const fresh = await Filament.findById(variant._id).lean();
       expect(fresh.cost == null).toBe(true); // $unset → inheritance resumes
     });
+
+    it("#951 (Codex F2): re-importing a variant does NOT pin the inherited `inherits` preset key", async () => {
+      const parent = await Filament.create({
+        name: "PLA Inh",
+        vendor: "Acme",
+        type: "PLA",
+        inherits: "*PLA*",
+      });
+      const variant = await Filament.create({
+        name: "PLA Inh — Red",
+        vendor: "Acme",
+        type: "PLA",
+        color: "#FF0000",
+        parentId: parent._id,
+        // inheriting `inherits` from the parent
+      });
+
+      const ini = `[filament:PLA Inh — Red]
+filament_type = PLA
+filament_vendor = Acme
+inherits = *PLA*
+`;
+      const res = await prusaImport(
+        new NextRequest("http://localhost/api/filaments/prusaslicer", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: ini,
+        }),
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).updated).toBe(1);
+
+      const fresh = await Filament.findById(variant._id).lean();
+      // Top-level `inherits` matches the parent → NOT pinned (keeps inheriting).
+      expect(fresh.inherits == null).toBe(true);
+
+      // parent edit still propagates.
+      await Filament.updateOne({ _id: parent._id }, { $set: { inherits: "*PLA-HF*" } });
+      const { resolveFilament } = await import("@/lib/resolveFilament");
+      const freshParent = await Filament.findById(parent._id).lean();
+      expect(resolveFilament(fresh, freshParent).inherits).toBe("*PLA-HF*");
+    });
   });
 
   describe("POST /api/filaments/parse-ini (#872 prefill)", () => {
