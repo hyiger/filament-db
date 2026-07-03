@@ -398,6 +398,14 @@ properties:
     expect(toOptNumber(Infinity)).toBeNull();
     expect(toOptNumber(NaN)).toBeNull();
     expect(toOptNumber(0)).toBe(0); // a real zero survives
+    // GH #959 (Codex P2): a malformed boolean/sequence must NOT fabricate a
+    // number — Number(false)/Number([]) are 0, Number(true) is 1, Number([65])
+    // is 65. Treat them as absent (null) so the resync guard skips bad data.
+    expect(toOptNumber(true)).toBeNull();
+    expect(toOptNumber(false)).toBeNull();
+    expect(toOptNumber([])).toBeNull();
+    expect(toOptNumber([65])).toBeNull();
+    expect(toOptNumber({})).toBeNull();
   });
 
   it("filters out SLA materials", () => {

@@ -243,12 +243,21 @@ export function rgbaToHex(rgba: string | undefined | null): string | null {
  * strings and non-numerics return null — NOT 0 (`Number("") === 0` would
  * silently invent a value). Same "cast at the boundary" intent as the #632 /
  * #894 fixes; the OPTMaterial interface already types every field `number | null`.
+ *
+ * Only real numbers and numeric STRINGS coerce. A malformed upstream value
+ * typed as a boolean or a sequence is left as "absent" (null) rather than
+ * fabricated — `Number(false)`/`Number([])` are 0, `Number(true)` is 1,
+ * `Number([65])` is 65, which would invent a value the downstream optResync
+ * guard otherwise skips (Codex P2 on PR #959).
  */
 export function toOptNumber(v: unknown): number | null {
-  if (v == null) return null;
-  if (typeof v === "string" && v.trim() === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string") {
+    if (v.trim() === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
 }
 
 // ── YAML parsing ───────────────────────────────────────────────────────
