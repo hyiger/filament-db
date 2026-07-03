@@ -57,6 +57,25 @@ export function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * #955.12: matchFilament runs on the hot scan path (desktop SSE bus + the
+ * mobile scanner) and returns lean filament docs verbatim. A spool's
+ * `photoDataUrl` can be a ~5 MB data URL, and `usageHistory` / `dryCycles` grow
+ * unbounded — none of which any match consumer reads. The desktop scan handler,
+ * the scan-bus publish route, and the mobile app all read only identity fields
+ * (`_id`/`name`/`vendor`/`type`/`color`) off `match`/`candidates` plus the
+ * matched spool's `_id`/`instanceId`/`label`; the mobile app fetches full spool
+ * detail from the SEPARATE `/api/filaments/{id}` endpoint. So every match query
+ * prunes these three heavy subfields to keep a scan from pulling megabytes per
+ * read.
+ *
+ * PURE exclusion on purpose: it keeps every other field (top-level `instanceId`
+ * for the decode route's `matchedBy` check, and `spools[].instanceId`/`label`
+ * for `toMatchedSpool`) — a mixed include/exclude projection would drop them.
+ */
+const MATCH_PROJECTION =
+  "-spools.photoDataUrl -spools.usageHistory -spools.dryCycles";
+
 /** Minimal lean shapes for reading spool subdocs off a `.lean()` filament. */
 interface LeanSpool {
   _id: unknown;
@@ -96,6 +115,7 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
       "spools.instanceId": instanceId,
       _deletedAt: null,
     })
+      .select(MATCH_PROJECTION)
       .limit(2)
       .lean()) as LeanFilamentWithSpools[];
     const exactPairs = spoolExact.flatMap((f) => {
@@ -117,6 +137,7 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
       "spools.instanceId": { $regex: `^${escapeRegex(instanceId)}$`, $options: "i" },
       _deletedAt: null,
     })
+      .select(MATCH_PROJECTION)
       .limit(2)
       .lean()) as LeanFilamentWithSpools[];
     const lowerId = instanceId.toLowerCase();
@@ -154,7 +175,9 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
     const exact = await Filament.findOne({
       instanceId,
       _deletedAt: null,
-    }).lean();
+    })
+      .select(MATCH_PROJECTION)
+      .lean();
     if (exact) {
       return { match: exact, candidates: [], matchedSpool: null };
     }
@@ -168,6 +191,7 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
       instanceId: { $regex: `^${escapeRegex(instanceId)}$`, $options: "i" },
       _deletedAt: null,
     })
+      .select(MATCH_PROJECTION)
       .limit(2)
       .lean();
     if (ciMatches.length === 1) {
@@ -194,7 +218,9 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
   //    GH #896 vendor-substring fix.
   if (name) {
     // 1a. Exact-case — a confident match even when a case-variant sibling exists.
-    const exact = await Filament.findOne({ name, _deletedAt: null }).lean();
+    const exact = await Filament.findOne({ name, _deletedAt: null })
+      .select(MATCH_PROJECTION)
+      .lean();
     if (exact) {
       return { match: exact, candidates: [], matchedSpool: null };
     }
@@ -205,6 +231,7 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
       name: { $regex: `^${escapeRegex(name)}$`, $options: "i" },
       _deletedAt: null,
     })
+      .select(MATCH_PROJECTION)
       .limit(2)
       .lean();
     if (ciMatches.length === 1) {
@@ -229,6 +256,7 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
           type: { $regex: `^${escapeRegex(type)}$`, $options: "i" },
           _deletedAt: null,
         })
+          .select(MATCH_PROJECTION)
           .sort({ name: 1 })
           .limit(5)
           .lean()
@@ -251,6 +279,7 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
       vendor: { $regex: escapeRegex(vendor), $options: "i" },
       _deletedAt: null,
     })
+      .select(MATCH_PROJECTION)
       .sort({ name: 1 })
       .limit(5)
       .lean();
