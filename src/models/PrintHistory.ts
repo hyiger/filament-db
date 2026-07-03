@@ -85,6 +85,10 @@ const PrintHistorySchema = new Schema<IPrintHistory>(
 
 // Index for common query patterns: "this printer's prints in the last N days"
 PrintHistorySchema.index({ printerId: 1, startedAt: -1 });
+// GH #955: back the `?filamentId=` list query (filter on the usage.filamentId
+// multikey + the startedAt:-1 sort) with one index. Legal as a compound index
+// because only usage.filamentId is an array field (startedAt is scalar).
+PrintHistorySchema.index({ "usage.filamentId": 1, startedAt: -1 });
 
 const PrintHistory: Model<IPrintHistory> =
   mongoose.models.PrintHistory || mongoose.model<IPrintHistory>("PrintHistory", PrintHistorySchema);

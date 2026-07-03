@@ -36,6 +36,14 @@ import { readBodyCapped } from "@/lib/externalUrlGuard";
  * curl path used to work. Returning a dispatcher only when a proxy is
  * actually configured keeps the no-proxy fast path identical.
  */
+// GH #955: memoize a single EnvHttpProxyAgent for the production (default env)
+// path. Every OPT fetch used to `new EnvHttpProxyAgent()`, leaking a dispatcher
+// per call. EnvHttpProxyAgent reads HTTP(S)_PROXY/NO_PROXY per-REQUEST, so one
+// long-lived instance behaves identically to a fresh-per-call one (a mid-process
+// env change isn't a real scenario for the embedded server). `null` = not yet
+// computed; `undefined` = computed, no proxy configured.
+let sharedProxyDispatcher: Dispatcher | undefined | null = null;
+
 export function getProxyDispatcher(
   env: Partial<Record<string, string | undefined>> = process.env,
 ): Dispatcher | undefined {
@@ -47,7 +55,20 @@ export function getProxyDispatcher(
       env.ALL_PROXY ||
       env.all_proxy,
   );
-  return hasProxy ? new EnvHttpProxyAgent() : undefined;
+  // Explicit env argument (the unit-test path) stays pure — construct fresh.
+  if (env !== process.env) {
+    return hasProxy ? new EnvHttpProxyAgent() : undefined;
+  }
+  if (sharedProxyDispatcher === null) {
+    sharedProxyDispatcher = hasProxy ? new EnvHttpProxyAgent() : undefined;
+  }
+  return sharedProxyDispatcher;
+}
+
+/** Test hygiene: reset the memoized production dispatcher so a module-level
+ * cache can't bleed across test files that mutate process.env. */
+export function resetProxyDispatcherForTest(): void {
+  sharedProxyDispatcher = null;
 }
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -1266,4 +1287,5 @@ let inFlightFetch: Promise<OPTDatabase> | null = null;
 export function clearCache(): void {
   cachedDatabase = null;
   cacheTimestamp = 0;
+  sharedProxyDispatcher = null; // GH #955: drop the memoized proxy dispatcher too
 }

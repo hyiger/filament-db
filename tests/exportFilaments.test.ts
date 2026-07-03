@@ -76,6 +76,23 @@ describe("getExportRows", () => {
     expect(row.tdsUrl).toBe("https://example.com/tds.pdf");
   });
 
+  it("GH #955: spoolCount excludes retired spools (matches getSpoolCount / the UI)", async () => {
+    await Filament.create({
+      name: "Retired Count PLA",
+      vendor: "V",
+      type: "PLA",
+      spoolWeight: 200,
+      spools: [
+        { label: "active", totalWeight: 900 },
+        { label: "retired", totalWeight: 800, retired: true },
+      ],
+    });
+    const rows = await getExportRows();
+    const row = rows.find((r) => r.name === "Retired Count PLA")!;
+    // Two spools, one retired → the export reports the active count (1), not 2.
+    expect(row.spoolCount).toBe(1);
+  });
+
   it("returns null for missing optional fields", async () => {
     await Filament.create({
       name: "Minimal",

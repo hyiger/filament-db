@@ -525,7 +525,11 @@ export function parseNdefRecordsAuto(raw: Uint8Array): NdefRecord[] {
     return parseNdefRecords(raw, 0);
   } catch (err) {
     // A Type-2 (NTAG) image carries UID/lock bytes at 0–11 and its CC at byte 12.
-    if (raw.length >= 20 && raw[12] === 0xe1) {
+    // GH #955: also retry at offset 12 for a blank CC (0x00) — a factory-blank
+    // NTAG has raw[0]=0x04 (UID) so the offset-0 parse throws "Invalid CC magic",
+    // and without this the friendly "Blank or unformatted" message (raised by
+    // the offset-12 parse) is never reached on the auto-sniff path.
+    if (raw.length >= 20 && (raw[12] === 0xe1 || raw[12] === 0x00)) {
       return parseNdefRecords(raw, 12);
     }
     throw err;

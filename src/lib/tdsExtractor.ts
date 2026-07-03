@@ -173,6 +173,10 @@ async function fetchTdsContent(url: string): Promise<TdsContent> {
     }
 
     if (!res.ok) {
+      // GH #955: drain the body on the error branch so the undici stream isn't
+      // leaked (the OK path consumes it via readBodyCapped below, so this can't
+      // be an unconditional pre-check cancel — only on the non-OK return).
+      res.body?.cancel().catch(() => {});
       throw new Error(`Failed to fetch TDS: HTTP ${res.status} ${res.statusText}`);
     }
 

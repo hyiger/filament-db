@@ -1,6 +1,7 @@
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { resolveFilament } from "@/lib/resolveFilament";
+import { getSpoolCount } from "@/lib/inventoryStats";
 
 export interface ExportRow {
   name: string;
@@ -148,7 +149,16 @@ export async function getExportRows(): Promise<ExportRow[]> {
       maxVolumetricSpeed: resolved.maxVolumetricSpeed ?? null,
       spoolWeight: resolved.spoolWeight ?? null,
       netFilamentWeight: resolved.netFilamentWeight ?? null,
-      spoolCount: resolved.spools?.length || (resolved.totalWeight != null ? 1 : 0),
+      // GH #955: delegate to the single source of truth so the export count
+      // can't drift from the UI. getSpoolCount excludes retired spools and
+      // returns the filtered count first (an all-retired array yields 0, not a
+      // fall-through to the legacy totalWeight branch).
+      spoolCount: getSpoolCount({
+        spools: resolved.spools,
+        spoolWeight: resolved.spoolWeight ?? null,
+        netFilamentWeight: resolved.netFilamentWeight ?? null,
+        totalWeight: resolved.totalWeight ?? null,
+      }),
       dryingTemperature: resolved.dryingTemperature ?? null,
       dryingTime: resolved.dryingTime ?? null,
       transmissionDistance: resolved.transmissionDistance ?? null,

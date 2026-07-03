@@ -86,6 +86,11 @@ export function parseIniFilaments(content: string): FilamentData[] {
     }
 
     if (currentName) {
+      // GH #955: skip comment lines (`#` and `;` are both INI/PrusaSlicer
+      // comment markers) and blanks — an in-section comment that happens to
+      // contain `=` would otherwise become a junk settings key. Real preset
+      // keys are `[a-z0-9_]` identifiers that never start with `#`/`;`.
+      if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) continue;
       const eqIndex = trimmed.indexOf("=");
       if (eqIndex > 0) {
         const key = trimmed.substring(0, eqIndex).trim();

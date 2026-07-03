@@ -90,6 +90,14 @@ describe("rowToImport", () => {
     expect(row.cost).toBeNull();
   });
 
+  it("GH #955: rejects Infinity in numeric fields (Number.isFinite, not just isNaN)", () => {
+    const mapping = mapHeaders(["Name", "Cost", "Density"]);
+    const row = rowToImport(["Test", "Infinity", "-Infinity"], mapping);
+    // A raw isNaN check let "Infinity" through and persisted it.
+    expect(row.cost).toBeNull();
+    expect(row.density).toBeNull();
+  });
+
   it("handles null and undefined values", () => {
     const mapping = mapHeaders(["Name", "Color", "Cost"]);
     const values = ["Test", null, undefined];

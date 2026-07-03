@@ -31,19 +31,17 @@ export function sanitizeFormulaPrefix(value: string): string {
   if (value.length > 0 && FORMULA_TRIGGERS.includes(value[0])) {
     return "'" + value;
   }
-  // GH #649 (Codex P3): a value that GENUINELY starts with `'` + a trigger
-  // (e.g. a filament literally named `'+95A`) is exported unguarded by the
-  // clause above (its first char isn't a trigger), yet `unsanitizeCsvCell`
-  // would strip that real apostrophe on import — corrupting the name.
-  // Double the apostrophe here so the unguard can restore exactly one,
-  // keeping the round trip lossless. A genuine `'70s` (apostrophe + benign
-  // char) is still left alone — only the ambiguous `'`+trigger shape needs
-  // disambiguating.
-  if (
-    value.length >= 2 &&
-    value[0] === "'" &&
-    FORMULA_TRIGGERS.includes(value[1])
-  ) {
+  // GH #649/#955 (Codex P3): a value that GENUINELY starts with an apostrophe
+  // RUN of any length immediately followed by a trigger (e.g. `'+95A`, `''+95A`)
+  // is exported unguarded by the clause above (its first char isn't a trigger),
+  // yet `unsanitizeCsvCell` would strip one of those real apostrophes on import
+  // — corrupting the name. Prepend one apostrophe so the unguard restores
+  // exactly one, keeping the round trip lossless for a run of ANY length. A
+  // genuine `'70s` / `''70s` (apostrophe run + benign char) is still left
+  // alone — only the ambiguous run-then-trigger shape needs disambiguating.
+  let n = 0;
+  while (n < value.length && value[n] === "'") n++;
+  if (n >= 1 && n < value.length && FORMULA_TRIGGERS.includes(value[n])) {
     return "'" + value;
   }
   return value;
@@ -110,11 +108,11 @@ export function isFormulaCandidate(value: unknown): boolean {
  * pattern that `csvCell` produces. A value that genuinely starts with `'`
  * followed by a non-trigger character (e.g. `'70s blue`) is left alone.
  *
- * GH #649 (Codex P3): `sanitizeFormulaPrefix` doubles the apostrophe for a
- * value that genuinely begins with `'` + a trigger, so the `''` + trigger
- * shape unwinds by one here too — `'+95A` (guarded `+95A`) → `+95A`,
- * `''+95A` (guarded genuine `'+95A`) → `'+95A`. Both strip exactly one
- * leading apostrophe; `'70s` (apostrophe + benign) is untouched.
+ * GH #649/#955 (Codex P3): `sanitizeFormulaPrefix` prepends one apostrophe for a
+ * value that genuinely begins with an apostrophe RUN of any length + a trigger,
+ * so that shape unwinds by exactly one here too — `'+95A` (guarded `+95A`) →
+ * `+95A`, `''+95A` (guarded genuine `'+95A`) → `'+95A`, `'''+95A` → `''+95A`. A
+ * run + benign char (`'70s`, `''70s`) is untouched.
  *
  * Codex P2 follow-up to PR #144: without this, exporting then re-
  * importing a row whose filament name / vendor / location starts with
@@ -123,17 +121,15 @@ export function isFormulaCandidate(value: unknown): boolean {
  * verbatim into the document.
  */
 export function unsanitizeCsvCell(value: string): string {
-  if (value.length >= 2 && value[0] === "'") {
-    // `'` + trigger → guarded trigger value, strip one.
-    if (FORMULA_TRIGGERS.includes(value[1])) return value.slice(1);
-    // `''` + trigger → guarded genuine apostrophe value, strip one.
-    if (
-      value.length >= 3 &&
-      value[1] === "'" &&
-      FORMULA_TRIGGERS.includes(value[2])
-    ) {
-      return value.slice(1);
-    }
+  let n = 0;
+  while (n < value.length && value[n] === "'") n++;
+  // Bare-trigger guard: exactly one apostrophe + trigger → strip one.
+  if (n === 1 && value.length >= 2 && FORMULA_TRIGGERS.includes(value[1])) {
+    return value.slice(1);
+  }
+  // Run guard: >=2 apostrophes + trigger → strip exactly one.
+  if (n >= 2 && n < value.length && FORMULA_TRIGGERS.includes(value[n])) {
+    return value.slice(1);
   }
   return value;
 }

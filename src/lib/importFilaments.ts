@@ -166,7 +166,10 @@ const NUM_FIELDS = new Set<keyof ImportRow>([
 function parseNum(val: unknown): number | null {
   if (val == null || val === "") return null;
   const n = Number(val);
-  return isNaN(n) ? null : n;
+  // GH #955: Number.isFinite rejects Infinity/-Infinity as well as NaN — a raw
+  // isNaN check let "Infinity" through and persisted it (matches toFiniteNumber
+  // in temperatureRange.ts).
+  return Number.isFinite(n) ? n : null;
 }
 
 /**

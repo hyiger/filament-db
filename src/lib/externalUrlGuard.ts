@@ -162,7 +162,12 @@ export async function assertExternalUrl(url: string): Promise<URL> {
   }
   if (!parsed.hostname) throw new Error("URL has no hostname");
 
-  const looksLikeIp = /^(\d+\.){3}\d+$|^\[?[\da-f:]+\]?$/i.test(parsed.hostname);
+  // GH #955: the IPv6 alternative requires a colon (every real IPv6 literal has
+  // one), so a colon-less hex label like "cafe" or "deadbeef" is no longer
+  // misclassified as an IP literal — it falls through to DNS resolution +
+  // per-address isPrivateIp (the stronger check), not weaker. The dot in the
+  // class covers the embedded-IPv4 forms (::ffff:127.0.0.1).
+  const looksLikeIp = /^(\d+\.){3}\d+$|^\[?[\da-f.:]*:[\da-f.:]*\]?$/i.test(parsed.hostname);
   let ips: string[];
   if (looksLikeIp) {
     ips = [parsed.hostname.replace(/^\[|\]$/g, "")];
