@@ -104,6 +104,41 @@ describe("POST /api/filaments/[id]/spools — body validation (GH #203)", () => 
     expect(String(fresh.spools[0].locationId)).toBe(String(loc._id));
   });
 
+  // GH #953 finding 2: a locationId that doesn't reference an active Location
+  // must be refused, or a dangling ref persists and produces a phantom
+  // "no location" group in every location-grouped view.
+  it("returns 400 for a locationId that references no active Location", async () => {
+    const f = await seed();
+    const ghost = new mongoose.Types.ObjectId();
+    const res = await createSpool(postReq(String(f._id), { locationId: String(ghost) }), {
+      params: Promise.resolve({ id: String(f._id) }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/location/i);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(0);
+  });
+
+  it("returns 400 for a non-ObjectId locationId", async () => {
+    const f = await seed();
+    const res = await createSpool(postReq(String(f._id), { locationId: "nope" }), {
+      params: Promise.resolve({ id: String(f._id) }),
+    });
+    expect(res.status).toBe(400);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(0);
+  });
+
+  // GH #953 finding 1: over-long free-form text is rejected by validateSpoolBody.
+  it("returns 400 for an over-long label", async () => {
+    const f = await seed();
+    const res = await createSpool(postReq(String(f._id), { label: "x".repeat(5000) }), {
+      params: Promise.resolve({ id: String(f._id) }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/label must be \d+ characters or fewer/);
+  });
+
   it("persists every supplied field (no silent drop of lotNumber/dates)", async () => {
     const f = await seed();
     const res = await createSpool(

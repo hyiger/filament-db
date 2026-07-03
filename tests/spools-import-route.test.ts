@@ -97,6 +97,36 @@ describe("/api/spools/import", () => {
     expect(fresh.spools[0].totalWeight).toBe(800);
   });
 
+  // GH #953 finding 1: cap the free-form spool text fields on the CSV path too.
+  // The check is side-effect-free (before resolveLocationId auto-creates a
+  // Location), so a too-long row fails alone without dirtying the catalog.
+  it("fails a row whose label exceeds the length cap without a location side effect", async () => {
+    await Filament.create({ name: "Long Label CSV", vendor: "Test", type: "PLA" });
+    const csv =
+      "filament,totalWeight,label,location\n" +
+      `Long Label CSV,500,${"x".repeat(5000)},Ghost Shelf\n`;
+    const res = await importSpools(csvRequest(csv));
+    const body = await res.json();
+    expect(body.imported).toBe(0);
+    expect(body.failed).toBe(1);
+    const failed = body.results.find((r: { ok: boolean; error?: string }) => !r.ok);
+    expect(failed.error).toMatch(/label must be \d+ characters or fewer/);
+    // side-effect-free: no orphan location auto-created for the failed row.
+    expect(await Location.countDocuments({ name: "Ghost Shelf" })).toBe(0);
+  });
+
+  it("fails a row whose lotNumber exceeds the length cap", async () => {
+    await Filament.create({ name: "Long Lot CSV", vendor: "Test", type: "PLA" });
+    const csv =
+      "filament,totalWeight,lotNumber\n" +
+      `Long Lot CSV,500,${"y".repeat(5000)}\n`;
+    const res = await importSpools(csvRequest(csv));
+    const body = await res.json();
+    expect(body.failed).toBe(1);
+    const failed = body.results.find((r: { ok: boolean; error?: string }) => !r.ok);
+    expect(failed.error).toMatch(/lotNumber must be \d+ characters or fewer/);
+  });
+
   it("auto-creates referenced locations by name", async () => {
     const f = await Filament.create({ name: "Loc Test", vendor: "Test", type: "PLA" });
     const csv =

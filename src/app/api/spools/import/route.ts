@@ -6,7 +6,7 @@ import { parseCsv } from "@/lib/parseCsv";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { unsanitizeCsvCell } from "@/lib/csvWriter";
-import { isValidIsoDateString, validateSpoolInstanceId } from "@/lib/validateSpoolBody";
+import { isValidIsoDateString, validateSpoolInstanceId, MAX_SPOOL_TEXT_LENGTH } from "@/lib/validateSpoolBody";
 
 /**
  * POST /api/spools/import — bulk-create OR upsert spools from CSV.
@@ -258,6 +258,29 @@ export async function POST(request: NextRequest) {
       }
       const purchaseDate = rawPurchase ? new Date(rawPurchase) : null;
       const openedDate = rawOpened ? new Date(rawOpened) : null;
+
+      // GH #953: cap the free-form spool text fields. The schema `maxlength`
+      // backstops the save, but check here (side-effect-free, before
+      // resolveLocationId auto-creates a Location) so a too-long value fails its
+      // own row with a clean message rather than aborting the whole bucket save
+      // with a misattributed Mongoose ValidationError. Measure the UNSANITIZED
+      // value — that's what persists.
+      if (unsanitizeCsvCell(r.label || "").length > MAX_SPOOL_TEXT_LENGTH) {
+        rowResults[i] = {
+          row: i + 2,
+          ok: false,
+          error: `label must be ${MAX_SPOOL_TEXT_LENGTH} characters or fewer`,
+        };
+        continue;
+      }
+      if (r.lotNumber && unsanitizeCsvCell(r.lotNumber).length > MAX_SPOOL_TEXT_LENGTH) {
+        rowResults[i] = {
+          row: i + 2,
+          ok: false,
+          error: `lotNumber must be ${MAX_SPOOL_TEXT_LENGTH} characters or fewer`,
+        };
+        continue;
+      }
 
       // #732 Phase 5: optional `instanceId` column — the spool's own id.
       // CONTRACT: the column is honored only when CREATING a new spool; on the

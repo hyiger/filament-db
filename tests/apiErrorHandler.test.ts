@@ -6,6 +6,7 @@ import {
   handleDuplicateKeyError,
   handleVersionError,
   assertActiveRefs,
+  assertActiveSpoolLocation,
   assertMultipartFormData,
   checkFileSize,
   isClientInputError,
@@ -294,6 +295,72 @@ describe("assertActiveRefs", () => {
     expect(res!.status).toBe(400);
     const body = await res!.json();
     expect(body.error).toBe("One or more locations no longer exist.");
+  });
+});
+
+describe("assertActiveSpoolLocation (#953)", () => {
+  const VALID_OID = "a".repeat(24);
+
+  function promiseModel(count: number) {
+    const calls: Array<Record<string, unknown>> = [];
+    return {
+      calls,
+      countDocuments(filter: Record<string, unknown>): Promise<number> {
+        calls.push(filter);
+        return Promise.resolve(count);
+      },
+    };
+  }
+
+  function queryModel(count: number) {
+    return {
+      countDocuments() {
+        return { exec: () => Promise.resolve(count) };
+      },
+    };
+  }
+
+  it("passes null/undefined/empty without a query (no location = valid)", async () => {
+    const model = promiseModel(0);
+    expect(await assertActiveSpoolLocation(model, null)).toBeNull();
+    expect(await assertActiveSpoolLocation(model, undefined)).toBeNull();
+    expect(await assertActiveSpoolLocation(model, "")).toBeNull();
+    expect(model.calls).toHaveLength(0);
+  });
+
+  it("400s a non-ObjectId locationId without a query", async () => {
+    const model = promiseModel(1);
+    const res = await assertActiveSpoolLocation(model, "not-an-objectid");
+    expect(res!.status).toBe(400);
+    expect((await res!.json()).error).toBe("Invalid location id");
+    expect(model.calls).toHaveLength(0);
+  });
+
+  it("400s a non-string locationId without a query", async () => {
+    const model = promiseModel(1);
+    const res = await assertActiveSpoolLocation(model, 12345);
+    expect(res!.status).toBe(400);
+    expect(model.calls).toHaveLength(0);
+  });
+
+  it("returns null when the location exists and is active", async () => {
+    const model = promiseModel(1);
+    const res = await assertActiveSpoolLocation(model, VALID_OID);
+    expect(res).toBeNull();
+    expect(model.calls[0]).toEqual({ _id: VALID_OID, _deletedAt: null });
+  });
+
+  it("400s a well-formed id that resolves to no active location (dangling ref)", async () => {
+    const model = promiseModel(0);
+    const res = await assertActiveSpoolLocation(model, VALID_OID);
+    expect(res!.status).toBe(400);
+    expect((await res!.json()).error).toBe("The selected location no longer exists.");
+  });
+
+  it("resolves through the .exec() query branch", async () => {
+    expect(await assertActiveSpoolLocation(queryModel(1), VALID_OID)).toBeNull();
+    const res = await assertActiveSpoolLocation(queryModel(0), VALID_OID);
+    expect(res!.status).toBe(400);
   });
 });
 

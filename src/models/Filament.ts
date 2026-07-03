@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import mongoose, { Schema, Document, Model, AnyBulkWriteOperation } from "mongoose";
 import { isEncodableOptTag } from "@/lib/openprinttag";
+import { MAX_SPOOL_TEXT_LENGTH } from "@/lib/validateSpoolBody";
 
 /** Generate a random 5-byte hex instance ID (10 hex chars), matching Prusament's format.
  * Exported (#732) so the spool-create routes that write via `$push` — which
@@ -387,9 +388,29 @@ const FilamentSchema = new Schema<IFilament>(
       {
         // #732: each spool gets its own 5-byte hex id (default-generated).
         instanceId: { type: String, default: generateInstanceId },
-        label: { type: String, default: "" },
+        // GH #953: bound the free-form spool text fields. The dedicated spool
+        // routes cap these via validateSpoolBody, but that runs only on the API
+        // surface; this schema `maxlength` is the backstop for every path that
+        // reaches Mongoose validation (embedded-spool create, CSV import save,
+        // snapshot restore) so an unbounded string can't persist and bloat the
+        // /api/filaments list projection, exports, and sync payloads.
+        label: {
+          type: String,
+          default: "",
+          maxlength: [
+            MAX_SPOOL_TEXT_LENGTH,
+            `label must be ${MAX_SPOOL_TEXT_LENGTH} characters or fewer`,
+          ],
+        },
         totalWeight: { type: Number, default: null, min: 0 },
-        lotNumber: { type: String, default: null },
+        lotNumber: {
+          type: String,
+          default: null,
+          maxlength: [
+            MAX_SPOOL_TEXT_LENGTH,
+            `lotNumber must be ${MAX_SPOOL_TEXT_LENGTH} characters or fewer`,
+          ],
+        },
         purchaseDate: { type: Date, default: null },
         openedDate: { type: Date, default: null },
         createdAt: { type: Date, default: Date.now },

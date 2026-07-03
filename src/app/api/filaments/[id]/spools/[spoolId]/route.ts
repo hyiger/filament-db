@@ -4,9 +4,10 @@ import dbConnect from "@/lib/mongodb";
 import Filament, { generateInstanceId, isSpoolInstanceIdTaken } from "@/models/Filament";
 import Printer from "@/models/Printer";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
+import Location from "@/models/Location";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
-import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
 
 export async function PUT(
   request: NextRequest,
@@ -49,6 +50,12 @@ export async function PUT(
     if (!mongoose.isValidObjectId(id) || !mongoose.isValidObjectId(spoolId)) {
       return errorResponse("Invalid filament or spool id", 400);
     }
+
+    // GH #953: a moved-to location must reference an active Location, or a
+    // dangling ref persists (e.g. a queued offline move replayed after the
+    // location was deleted) and breaks every location-grouped view.
+    const locGuard = await assertActiveSpoolLocation(Location, validation.locationId);
+    if (locGuard) return locGuard;
 
     // #732 Phase 4: edit or regenerate the spool's instanceId. `regenerate`
     // wins and mints a fresh id; a user-entered id (charset/length already

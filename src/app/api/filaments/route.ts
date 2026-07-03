@@ -4,9 +4,10 @@ import Filament from "@/models/Filament";
 import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
-import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
+import Location from "@/models/Location";
+import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
-import { validateSpoolPhotoDataUrl } from "@/lib/validateSpoolBody";
+import { validateSpoolPhotoDataUrl, isValidIsoDateString } from "@/lib/validateSpoolBody";
 import { decodedTagToFilamentPayload } from "@/lib/decodedTagToFilament";
 import {
   isInvertedNozzleRange,
@@ -409,18 +410,44 @@ export async function POST(request: NextRequest) {
       photoDataUrl: s?.photoDataUrl,
       retired: s?.retired,
     }));
-    // GH #626: the dedicated spool routes validate photoDataUrl through
-    // validateSpoolBody (raster-only MIME allow-list + 5MB cap — SVG is
-    // rejected because inline <script> can execute in some rendering
-    // contexts). The #431 allowlist above keeps the field but didn't
-    // validate its content, so an embedded spool on filament create was
-    // a bypass. Enforce the same rules here.
+    // The dedicated spool routes enforce a set of per-field contracts via
+    // validateSpoolBody / assertActiveSpoolLocation; the #431 allowlist above
+    // keeps the fields but historically validated only their names, so an
+    // embedded spool on filament create bypassed those checks. Enforce the same
+    // contracts here so create matches POST/PUT /spools:
+    //   - GH #626: photoDataUrl raster-only MIME allow-list + 5MB cap (SVG is
+    //     rejected — inline <script> can execute in some rendering contexts).
+    //   - GH #953 (finding 3): purchaseDate/openedDate must name a real ISO
+    //     date. Without this, Mongoose silently normalises "2025-02-29" → Mar 1
+    //     on cast (the GH #372 bug), and locale strings / epoch numbers persist
+    //     while every other spool write path 400s them.
+    //   - GH #953 (finding 2): locationId must reference an active Location, so
+    //     a dangling ref can't persist and produce a phantom "no location" group.
+    //   (label/lotNumber length is backstopped by the schema maxlength, which
+    //    Filament.create validates — a >200-char value 400s as a ValidationError.)
     for (let i = 0; i < body.spools.length; i++) {
-      const photo = validateSpoolPhotoDataUrl(body.spools[i].photoDataUrl);
+      const spool = body.spools[i];
+
+      const photo = validateSpoolPhotoDataUrl(spool.photoDataUrl);
       if (!photo.ok) {
         return errorResponse(`spools[${i}]: ${photo.error}`, 400);
       }
-      body.spools[i].photoDataUrl = photo.value;
+      spool.photoDataUrl = photo.value;
+
+      for (const field of ["purchaseDate", "openedDate"] as const) {
+        const v = spool[field];
+        if (v !== null && v !== undefined && v !== "") {
+          if (typeof v !== "string" || !isValidIsoDateString(v)) {
+            return errorResponse(
+              `spools[${i}]: ${field} must be a valid ISO date string (YYYY-MM-DD or full ISO 8601) or null`,
+              400,
+            );
+          }
+        }
+      }
+
+      const locGuard = await assertActiveSpoolLocation(Location, spool.locationId);
+      if (locGuard) return locGuard;
     }
   }
 

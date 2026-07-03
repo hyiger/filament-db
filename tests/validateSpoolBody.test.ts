@@ -3,6 +3,7 @@ import {
   validateSpoolBody,
   isValidIsoDateString,
   validateSpoolPhotoDataUrl,
+  MAX_SPOOL_TEXT_LENGTH,
 } from "@/lib/validateSpoolBody";
 
 describe("validateSpoolBody (POST semantics)", () => {
@@ -86,6 +87,39 @@ describe("validateSpoolBody (POST semantics)", () => {
   it("rejects non-string optional fields", () => {
     expect(validateSpoolBody({ lotNumber: 12345 }).ok).toBe(false);
     expect(validateSpoolBody({ purchaseDate: { invalid: true } }).ok).toBe(false);
+  });
+
+  // GH #953: cap the free-form spool text fields so an unbounded string can't
+  // persist (and then bloat the /api/filaments list projection, exports, sync).
+  it("accepts label/lotNumber at exactly the length cap", () => {
+    const atCap = "x".repeat(MAX_SPOOL_TEXT_LENGTH);
+    const r = validateSpoolBody({ label: atCap, lotNumber: atCap });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.label).toBe(atCap);
+    expect(r.lotNumber).toBe(atCap);
+  });
+
+  it("rejects a label over the length cap", () => {
+    const r = validateSpoolBody({ label: "x".repeat(MAX_SPOOL_TEXT_LENGTH + 1) });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/label must be \d+ characters or fewer/);
+  });
+
+  it("rejects a lotNumber over the length cap", () => {
+    const r = validateSpoolBody({ lotNumber: "x".repeat(MAX_SPOOL_TEXT_LENGTH + 1) });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.error).toMatch(/lotNumber must be \d+ characters or fewer/);
+  });
+
+  it("caps label on PUT (partial) semantics too", () => {
+    const r = validateSpoolBody(
+      { label: "x".repeat(MAX_SPOOL_TEXT_LENGTH + 1) },
+      { partial: true },
+    );
+    expect(r.ok).toBe(false);
   });
 
   // GH #372: date strings must parse to a real date, not just be string-shaped.

@@ -147,6 +147,18 @@ export function validateSpoolPhotoDataUrl(
   return { ok: true, value: value === "" ? null : value };
 }
 
+/**
+ * GH #953: cap the free-form spool text fields (`label`, `lotNumber`). Neither
+ * had a length bound — validateSpoolBody only type-checked them, the schema
+ * fields have no `maxlength`, and the PUT positional-`$` update bypasses
+ * subdocument validation — so an unbounded string persisted and then bloated
+ * every `/api/filaments` list fetch (which projects `spools[].label`), CSV /
+ * snapshot exports, and sync payloads. Same DoS-lite class GH #350 fixed for
+ * print-history `jobLabel`; 200 matches that precedent (labels are short UI
+ * strings; lot numbers are short batch codes).
+ */
+export const MAX_SPOOL_TEXT_LENGTH = 200;
+
 export function validateSpoolBody(
   body: unknown,
   opts: ValidateOpts = {},
@@ -161,6 +173,12 @@ export function validateSpoolBody(
   if (b.label !== undefined) {
     if (typeof b.label !== "string") {
       return { ok: false, error: "label must be a string" };
+    }
+    if (b.label.length > MAX_SPOOL_TEXT_LENGTH) {
+      return {
+        ok: false,
+        error: `label must be ${MAX_SPOOL_TEXT_LENGTH} characters or fewer`,
+      };
     }
     result.label = b.label;
   } else if (!opts.partial) {
@@ -208,6 +226,12 @@ export function validateSpoolBody(
     if (b.lotNumber === null) {
       result.lotNumber = null;
     } else if (typeof b.lotNumber === "string") {
+      if (b.lotNumber.length > MAX_SPOOL_TEXT_LENGTH) {
+        return {
+          ok: false,
+          error: `lotNumber must be ${MAX_SPOOL_TEXT_LENGTH} characters or fewer`,
+        };
+      }
       result.lotNumber = b.lotNumber;
     } else {
       return { ok: false, error: "lotNumber must be a string or null" };

@@ -35,6 +35,7 @@ vi.mock("@/lib/mongoUriGuard", () => ({
 describe("embedded spool photoDataUrl validation (#626)", () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */
   let Filament: any;
+  let Location: any;
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
   const SVG_DATA_URL = `data:image/svg+xml;base64,${Buffer.from(
@@ -49,11 +50,14 @@ describe("embedded spool photoDataUrl validation (#626)", () => {
     const nozMod = await import("@/models/Nozzle");
     const printerMod = await import("@/models/Printer");
     const bedMod = await import("@/models/BedType");
+    const locMod = await import("@/models/Location");
     if (!mongoose.models.Filament) mongoose.model("Filament", filMod.default.schema);
     if (!mongoose.models.Nozzle) mongoose.model("Nozzle", nozMod.default.schema);
     if (!mongoose.models.Printer) mongoose.model("Printer", printerMod.default.schema);
     if (!mongoose.models.BedType) mongoose.model("BedType", bedMod.default.schema);
+    if (!mongoose.models.Location) mongoose.model("Location", locMod.default.schema);
     Filament = mongoose.models.Filament;
+    Location = mongoose.models.Location;
   });
 
   function postReq(url: string, body: unknown) {
@@ -120,6 +124,102 @@ describe("embedded spool photoDataUrl validation (#626)", () => {
       const fresh = await Filament.findOne({ name: "Valid Photo PLA" });
       expect(fresh.spools[0].photoDataUrl).toBe(VALID_PNG_DATA_URL);
       expect(fresh.spools[1].photoDataUrl).toBeNull();
+    });
+
+    // GH #953 finding 3: the dedicated spool routes 400 an ISO-shaped-but-
+    // impossible date (GH #372); the embedded-spool create path used to pass
+    // it through and let Mongoose silently normalise "2025-02-29" → Mar 1.
+    it("rejects an impossible ISO date on an embedded spool with 400", async () => {
+      const res = await createFilament(
+        postReq("http://localhost/api/filaments", {
+          name: "Bad Date PLA",
+          vendor: "T",
+          type: "PLA",
+          spools: [{ label: "S1", totalWeight: 1000, purchaseDate: "2025-02-29" }],
+        }),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/spools\[0\]/);
+      expect(body.error).toMatch(/purchaseDate/);
+      expect(await Filament.countDocuments({ name: "Bad Date PLA" })).toBe(0);
+    });
+
+    it("rejects a non-ISO openedDate (locale string) on an embedded spool with 400", async () => {
+      const res = await createFilament(
+        postReq("http://localhost/api/filaments", {
+          name: "Locale Date PLA",
+          vendor: "T",
+          type: "PLA",
+          spools: [{ totalWeight: 1000, openedDate: "1/15/2025" }],
+        }),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/openedDate/);
+      expect(await Filament.countDocuments({ name: "Locale Date PLA" })).toBe(0);
+    });
+
+    // GH #953 finding 2: a dangling locationId (references a deleted or
+    // never-existent Location) must be refused — it otherwise produces a
+    // phantom "no location" group in every location-grouped view.
+    it("rejects an embedded spool locationId that references no active Location with 400", async () => {
+      const ghostId = new mongoose.Types.ObjectId();
+      const res = await createFilament(
+        postReq("http://localhost/api/filaments", {
+          name: "Dangling Loc PLA",
+          vendor: "T",
+          type: "PLA",
+          spools: [{ totalWeight: 1000, locationId: String(ghostId) }],
+        }),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toMatch(/location/i);
+      expect(await Filament.countDocuments({ name: "Dangling Loc PLA" })).toBe(0);
+    });
+
+    it("rejects an embedded spool locationId that isn't an ObjectId with 400", async () => {
+      const res = await createFilament(
+        postReq("http://localhost/api/filaments", {
+          name: "Garbage Loc PLA",
+          vendor: "T",
+          type: "PLA",
+          spools: [{ totalWeight: 1000, locationId: "not-an-objectid" }],
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect(await Filament.countDocuments({ name: "Garbage Loc PLA" })).toBe(0);
+    });
+
+    it("accepts an embedded spool locationId that references an active Location", async () => {
+      const loc = await Location.create({ name: "Shelf 953" });
+      const res = await createFilament(
+        postReq("http://localhost/api/filaments", {
+          name: "Good Loc PLA",
+          vendor: "T",
+          type: "PLA",
+          spools: [{ totalWeight: 1000, locationId: String(loc._id) }],
+        }),
+      );
+      expect(res.status).toBe(201);
+      const fresh = await Filament.findOne({ name: "Good Loc PLA" });
+      expect(String(fresh.spools[0].locationId)).toBe(String(loc._id));
+    });
+
+    // GH #953 finding 1: the schema `maxlength` backstops the embedded-create
+    // path (Filament.create runs subdoc validation → ValidationError → 400).
+    it("rejects an over-long embedded spool label with 400", async () => {
+      const res = await createFilament(
+        postReq("http://localhost/api/filaments", {
+          name: "Long Label PLA",
+          vendor: "T",
+          type: "PLA",
+          spools: [{ label: "x".repeat(5000), totalWeight: 1000 }],
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect(await Filament.countDocuments({ name: "Long Label PLA" })).toBe(0);
     });
   });
 

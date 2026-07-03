@@ -2,9 +2,10 @@ import mongoose from "mongoose";
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament, { generateInstanceId, isSpoolInstanceIdTaken } from "@/models/Filament";
+import Location from "@/models/Location";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
-import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { errorResponse, errorResponseFromCaught, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
 
 export async function POST(
   request: NextRequest,
@@ -82,6 +83,12 @@ export async function POST(
     if (!mongoose.isValidObjectId(id)) {
       return errorResponse("Invalid filament id", 400);
     }
+
+    // GH #953: a new spool's locationId must reference an active Location, so a
+    // dangling ref can't persist and produce a phantom "no location" group in
+    // every location-grouped view.
+    const locGuard = await assertActiveSpoolLocation(Location, validation.locationId);
+    if (locGuard) return locGuard;
 
     // Only push fields the validator captured. Previously the $push
     // dropped lotNumber / purchaseDate / openedDate / locationId /

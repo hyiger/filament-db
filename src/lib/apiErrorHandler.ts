@@ -184,6 +184,44 @@ export async function assertActiveRefs(
   return null;
 }
 
+/** 24-hex ObjectId shape — kept local so this module stays mongoose-free and
+ * edge-safe (see the handleVersionError lazy-import note). */
+const SPOOL_OID_RE = /^[a-f0-9]{24}$/i;
+
+/**
+ * GH #953: assert a spool's `locationId` references an existing, ACTIVE
+ * (non-soft-deleted) Location. No spool write path validated this — unlike the
+ * nozzle/printer/bed-type refs on the filament routes, which flow through
+ * assertActiveRefs — so a dangling ref (e.g. a mobile offline-queue move
+ * replayed after the referenced location was deleted, or an API retry) persisted
+ * and produced a phantom "no location" group in every location-grouped view
+ * (/inventory, ?kind= filters silently drop the spool, the home-page
+ * "N spools in M locations" stat overcounts).
+ *
+ * `null`/empty = "no location" and passes. The Location model is injected (same
+ * pattern as assertActiveRefs) so this module doesn't import a model and stays
+ * edge-safe. Returns a 400 NextResponse on a bad/dangling ref, else null.
+ */
+export async function assertActiveSpoolLocation(
+  locationModel: CountableModel,
+  locationId: unknown,
+): Promise<NextResponse | null> {
+  if (locationId === null || locationId === undefined || locationId === "") {
+    return null;
+  }
+  if (typeof locationId !== "string" || !SPOOL_OID_RE.test(locationId)) {
+    return errorResponse("Invalid location id", 400);
+  }
+  const result = locationModel.countDocuments({ _id: locationId, _deletedAt: null });
+  const count = await (typeof (result as { exec?: () => Promise<number> }).exec === "function"
+    ? (result as { exec(): Promise<number> }).exec()
+    : (result as Promise<number>));
+  if (count === 0) {
+    return errorResponse("The selected location no longer exists.", 400);
+  }
+  return null;
+}
+
 /** Maximum upload file size (10 MB) */
 export const MAX_UPLOAD_SIZE = 10 * 1024 * 1024;
 

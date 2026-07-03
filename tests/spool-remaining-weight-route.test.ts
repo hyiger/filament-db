@@ -145,4 +145,63 @@ describe("PUT /api/filaments/{id}/spools/{spoolId} — remainingWeight", () => {
     const res = await call(missingId, missingSpool, { remainingWeight: 500 });
     expect(res.status).toBe(404);
   });
+
+  // GH #953 finding 2: the PUT move-to path is the exact scenario in the
+  // finding (a mobile offline-queue move replayed after the location was
+  // deleted). A dangling locationId must be refused before the write.
+  describe("locationId validation (#953)", () => {
+    async function LocationModel() {
+      const locMod = await import("@/models/Location");
+      if (!mongoose.models.Location) mongoose.model("Location", locMod.default.schema);
+      return mongoose.models.Location;
+    }
+
+    it("rejects a move to a locationId with no active Location (400, no write)", async () => {
+      const f = await Filament.create({
+        name: "Move Host",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ label: "A", totalWeight: 1000 }],
+      });
+      const sid = String(f.spools[0]._id);
+      const ghost = new mongoose.Types.ObjectId();
+      const res = await call(String(f._id), sid, { locationId: String(ghost) });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/location/i);
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools[0].locationId ?? null).toBeNull();
+    });
+
+    it("accepts a move to an active Location (200)", async () => {
+      const Location = await LocationModel();
+      const loc = await Location.create({ name: "Shelf PUT 953" });
+      const f = await Filament.create({
+        name: "Move Host 2",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ label: "A", totalWeight: 1000 }],
+      });
+      const sid = String(f.spools[0]._id);
+      const res = await call(String(f._id), sid, { locationId: String(loc._id) });
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id);
+      expect(String(fresh.spools[0].locationId)).toBe(String(loc._id));
+    });
+
+    it("still allows clearing the location (locationId: null)", async () => {
+      const Location = await LocationModel();
+      const loc = await Location.create({ name: "Shelf PUT clear" });
+      const f = await Filament.create({
+        name: "Clear Loc Host",
+        vendor: "Test",
+        type: "PLA",
+        spools: [{ label: "A", totalWeight: 1000, locationId: loc._id }],
+      });
+      const sid = String(f.spools[0]._id);
+      const res = await call(String(f._id), sid, { locationId: null });
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools[0].locationId ?? null).toBeNull();
+    });
+  });
 });

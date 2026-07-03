@@ -624,4 +624,80 @@ describe("snapshot route — Location + PrintHistory round-trip", () => {
       "snap-roll-2",
     ]);
   });
+
+  // GH #953 finding 4: restore must fail closed on a snapshot it can't fully
+  // apply, BEFORE the destructive wipe — never wipe the DB and then report
+  // success while silently dropping data.
+  describe("restore version + shape validation (#953)", () => {
+    function postSnapshot(snapshot: unknown) {
+      return POST(
+        new NextRequest("http://localhost/api/snapshot", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(snapshot),
+        }),
+      );
+    }
+
+    it("rejects a snapshot from a newer version with 400 and does NOT wipe", async () => {
+      const canary = await Location.create({ name: "Canary Loc" });
+      const res = await postSnapshot({
+        version: 5,
+        createdAt: new Date().toISOString(),
+        // A v5 file could carry a new/renamed collection the v4 restore would drop.
+        collections: { filaments: [], nozzles: [], printers: [], bedTypes: [] },
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/newer version/i);
+      // The pre-existing data survives — no wipe happened.
+      expect(await Location.countDocuments({ _id: canary._id })).toBe(1);
+    });
+
+    it("rejects an empty collections object with 400 and does NOT wipe", async () => {
+      const canary = await Location.create({ name: "Canary Loc 2" });
+      const res = await postSnapshot({
+        version: 4,
+        createdAt: new Date().toISOString(),
+        collections: {},
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/no recognized collections/i);
+      expect(await Location.countDocuments({ _id: canary._id })).toBe(1);
+    });
+
+    it("rejects a non-object collections value (collections: 1) with 400 and does NOT wipe", async () => {
+      const canary = await Location.create({ name: "Canary Loc 3" });
+      const res = await postSnapshot({
+        version: 4,
+        createdAt: new Date().toISOString(),
+        collections: 1,
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/missing or malformed/i);
+      expect(await Location.countDocuments({ _id: canary._id })).toBe(1);
+    });
+
+    it("rejects collections with only unrecognized keys with 400 and does NOT wipe", async () => {
+      const canary = await Location.create({ name: "Canary Loc 4" });
+      const res = await postSnapshot({
+        version: 4,
+        createdAt: new Date().toISOString(),
+        collections: { spoolsCollection: [{ foo: 1 }] },
+      });
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/no recognized collections/i);
+      expect(await Location.countDocuments({ _id: canary._id })).toBe(1);
+    });
+
+    it("still restores a snapshot with no version field (older/hand-written) when collections are recognized", async () => {
+      await Location.create({ name: "Pre-existing Loc" });
+      const res = await postSnapshot({
+        createdAt: new Date().toISOString(),
+        collections: { locations: [{ name: "Restored No-Version" }] },
+      });
+      expect(res.status).toBe(200);
+      const names = (await Location.find({}).lean()).map((l: { name: string }) => l.name);
+      expect(names).toEqual(["Restored No-Version"]);
+    });
+  });
 });

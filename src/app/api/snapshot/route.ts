@@ -18,6 +18,24 @@ import SharedCatalog from "@/models/SharedCatalog";
 // This is acceptable for a single-instance desktop app.
 let restoreInProgress = false;
 
+/** Current snapshot schema version (see the version history in GET). Bumped
+ * whenever the `collections` shape changes so restore can reject newer files
+ * (GH #953). */
+const CURRENT_SNAPSHOT_VERSION = 4;
+
+/** The collection keys a v≤4 snapshot carries. Restore requires at least one to
+ * be present so a wrong-shape / newer file 400s instead of silently wiping the
+ * DB and inserting nothing (GH #953). */
+const KNOWN_COLLECTION_KEYS = [
+  "filaments",
+  "nozzles",
+  "printers",
+  "bedTypes",
+  "locations",
+  "printHistory",
+  "sharedCatalogs",
+] as const;
+
 const OID_RE = /^[a-f0-9]{24}$/i;
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
 const OID_FIELDS = new Set([
@@ -144,7 +162,7 @@ export async function GET(request: NextRequest) {
   // Older snapshots still restore cleanly because POST destructures
   // missing collections to `[]`.
   const snapshot = {
-    version: 4,
+    version: CURRENT_SNAPSHOT_VERSION,
     createdAt: new Date().toISOString(),
     collections: {
       filaments,
@@ -260,10 +278,43 @@ async function restoreSnapshot(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON in snapshot file" }, { status: 400 });
   }
 
-  // Validate structure
-  if (!snapshot.collections) {
+  // GH #953: reject a snapshot from a NEWER app version BEFORE the destructive
+  // wipe. The restore only knows the seven v≤4 collection keys (destructured
+  // with `= []` defaults); a v5+ file that added/renamed/moved a collection
+  // would have that data silently dropped after every current collection is
+  // wiped, and the handler would still report "restored successfully" — a
+  // partial restore over a full wipe with no warning. Fail closed instead.
+  if (
+    typeof snapshot.version === "number" &&
+    snapshot.version > CURRENT_SNAPSHOT_VERSION
+  ) {
     return NextResponse.json(
-      { error: "Invalid snapshot: missing 'collections' key" },
+      {
+        error: `This snapshot is from a newer version (v${snapshot.version}). Update Filament DB to at least the version that created it before restoring.`,
+      },
+      { status: 400 },
+    );
+  }
+
+  // Validate structure. `collections` must be a plain, non-array object that
+  // carries at least one recognized collection key. GH #953: the old bare
+  // truthiness check (`if (!snapshot.collections)`) let a wrong-shape file
+  // through — `collections: 1`, `collections: {}`, or `collections: { foo: [] }`
+  // all destructure the seven known keys to `[]`, so the wipe runs, nothing is
+  // inserted, and the handler reports success over an emptied DB.
+  const cols = snapshot.collections;
+  if (typeof cols !== "object" || cols === null || Array.isArray(cols)) {
+    return NextResponse.json(
+      { error: "Invalid snapshot: missing or malformed 'collections'" },
+      { status: 400 },
+    );
+  }
+  if (!KNOWN_COLLECTION_KEYS.some((k) => k in cols)) {
+    return NextResponse.json(
+      {
+        error:
+          "Invalid snapshot: 'collections' contains no recognized collections (filaments, nozzles, printers, bedTypes, locations, printHistory, sharedCatalogs). This file may not be a Filament DB snapshot, or is from a newer version.",
+      },
       { status: 400 },
     );
   }
@@ -276,7 +327,7 @@ async function restoreSnapshot(request: NextRequest) {
     locations = [],
     printHistory = [],
     sharedCatalogs = [],
-  } = snapshot.collections;
+  } = cols;
 
   // --- Safety: snapshot the current DB so we can roll back on failure ---
   const [
