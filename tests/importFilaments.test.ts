@@ -1515,6 +1515,102 @@ describe("upsertImportRows — create/resurrect preserve inheritance (GH #951)",
     expect(variant.temperatures?.bed ?? null).toBeNull(); // == parent → inherited
   });
 
+  it("CREATE does not pin inherited RANGE temps (nozzleRangeMin/Max/standby) on a variant", async () => {
+    // Regression for GH #951 Codex finding 3: the dotted `temperatures.*` keys
+    // added alongside the nested `temperatures` object overrode the null that
+    // `pruneInheritedCreateDoc` writes, re-pinning inherited range temps.
+    const RANGE_COLS = [
+      "Name",
+      "Vendor",
+      "Type",
+      "Color",
+      "Nozzle Range Min (°C)",
+      "Nozzle Range Max (°C)",
+      "Standby Temp (°C)",
+      "Parent",
+    ];
+    const mapping = mapHeaders(RANGE_COLS);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const rangeRows = (rows: any[][]) => rows.map((r) => rowToImport(r, mapping));
+
+    const result = await upsertImportRows(
+      rangeRows([
+        ["Range Parent", "Acme", "PLA", "#808080", 190, 230, 150, ""],
+        // variant row carries the parent-resolved range temps (flattened export)
+        ["Range Parent — Red", "Acme", "PLA", "#FF0000", 190, 230, 150, "Range Parent"],
+      ]),
+    );
+    expect(result.created).toBe(2);
+    expect(result.skipped).toBe(0);
+
+    const variant = await Filament.findOne({ name: "Range Parent — Red" }).lean();
+    // Inherited range temps must NOT be pinned — they read as null on the variant.
+    expect(variant.temperatures?.nozzleRangeMin ?? null).toBeNull();
+    expect(variant.temperatures?.nozzleRangeMax ?? null).toBeNull();
+    expect(variant.temperatures?.standby ?? null).toBeNull();
+
+    // …and a later parent edit still propagates through resolveFilament.
+    const parent = await Filament.findOne({ name: "Range Parent" }).lean();
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { "temperatures.nozzleRangeMin": 200 } },
+    );
+    const { resolveFilament } = await import("@/lib/resolveFilament");
+    const freshParent = await Filament.findById(parent._id).lean();
+    const resolved = resolveFilament(variant, freshParent);
+    expect(resolved.temperatures.nozzleRangeMin).toBe(200);
+    expect(resolved.temperatures.standby).toBe(150);
+  });
+
+  it("RESURRECT of a trashed variant with RANGE temps succeeds (no dotted/nested conflict)", async () => {
+    // Regression for GH #951 Codex finding 3: on resurrect the dotted
+    // `temperatures.nozzleRangeMin` key + the nested `temperatures` object
+    // collided in a single updateOne (MongoServerError code 40), so the row
+    // was caught and SKIPPED — the trashed variant never came back.
+    const parent = await Filament.create({
+      name: "Range Resurrect Parent",
+      vendor: "Acme",
+      type: "PLA",
+      temperatures: { nozzleRangeMin: 190, nozzleRangeMax: 230, standby: 150 },
+    });
+    const variant = await Filament.create({
+      name: "Range Resurrect Variant",
+      vendor: "Acme",
+      type: "PLA",
+      color: "#00FF00",
+      parentId: parent._id,
+      _deletedAt: new Date(), // trashed
+    });
+
+    const RANGE_COLS = [
+      "Name",
+      "Vendor",
+      "Type",
+      "Color",
+      "Nozzle Range Min (°C)",
+      "Nozzle Range Max (°C)",
+      "Standby Temp (°C)",
+      "Parent",
+    ];
+    const mapping = mapHeaders(RANGE_COLS);
+    const result = await upsertImportRows([
+      rowToImport(
+        ["Range Resurrect Variant", "Acme", "PLA", "#00FF00", 190, 230, 150, "Range Resurrect Parent"],
+        mapping,
+      ),
+    ]);
+
+    expect(result.skipped).toBe(0);
+    expect(result.updated).toBe(1);
+
+    const resurrected = await Filament.findById(variant._id).lean();
+    expect(resurrected._deletedAt).toBeNull(); // actually revived
+    // inherited range temps not pinned
+    expect(resurrected.temperatures?.nozzleRangeMin ?? null).toBeNull();
+    expect(resurrected.temperatures?.nozzleRangeMax ?? null).toBeNull();
+    expect(resurrected.temperatures?.standby ?? null).toBeNull();
+  });
+
   it("RESURRECT of a trashed variant does not pin parent-inherited values", async () => {
     const parent = await Filament.create({
       name: "Universal ABS",

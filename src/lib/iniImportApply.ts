@@ -34,17 +34,19 @@ import type { CollapsedFilamentData } from "@/lib/prusaSlicerBundle";
 
 /**
  * Fields a collapsed INI section can carry that participate in
- * variant→parent inheritance (`parseIniFilaments` only produces this subset:
- * vendor/type/cost/density/diameter/maxVolumetricSpeed/inherits + the four temp
- * subfields). Projected on the variant AND its parent so `splitInheritedImportSet`
- * can compare incoming vs parent and detect a stale variant override to clear.
- * `settings` is deliberately NOT projected: the INI settings bag is a raw
- * key-dump (it includes the structured keys), so per-key parent filtering isn't
- * meaningful here — `splitInheritedImportSet` falls back to writing it through
- * unchanged when the parent's settings are absent (GH #951, Codex).
+ * variant→parent inheritance (the top-level fields `parseIniFilaments` lifts:
+ * vendor/type/cost/density/diameter/maxVolumetricSpeed/inherits/spoolWeight/
+ * shrinkageXY/shrinkageZ + the four temp subfields). Projected on the variant
+ * AND its parent so `splitInheritedImportSet` can compare incoming vs parent and
+ * detect a stale variant override to clear. `settings` is deliberately NOT
+ * projected: after `stripStructuredSettings` removes the top-level shadows the
+ * bag holds only genuine passthrough keys, so `splitInheritedImportSet` writes it
+ * through unchanged (its settings branch no-ops when the parent's settings are
+ * absent). GH #951 (Codex).
  */
 const INI_INHERITANCE_PROJECTION =
-  "_id parentId vendor type cost density diameter maxVolumetricSpeed inherits temperatures";
+  "_id parentId vendor type cost density diameter maxVolumetricSpeed inherits " +
+  "spoolWeight shrinkageXY shrinkageZ temperatures";
 
 /** Loosely-typed lean filament — same posture as resolveFilament / importFilaments. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

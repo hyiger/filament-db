@@ -768,9 +768,13 @@ export async function upsertImportRows(
     if (row.maxPrintSpeed !== undefined) doc.maxPrintSpeed = row.maxPrintSpeed ?? null;
     if (row.colorName !== undefined) doc.colorName = row.colorName ?? null;
     if (row.spoolType !== undefined) doc.spoolType = row.spoolType ?? null;
-    if (row.nozzleRangeMin !== undefined) doc["temperatures.nozzleRangeMin"] = row.nozzleRangeMin ?? null;
-    if (row.nozzleRangeMax !== undefined) doc["temperatures.nozzleRangeMax"] = row.nozzleRangeMax ?? null;
-    if (row.standbyTemp !== undefined) doc["temperatures.standby"] = row.standbyTemp ?? null;
+    // GH #951: nozzleRangeMin/Max/standby ride the nested `temperatures` object
+    // (create/resurrect) and the temps loop's dotted `$set` (update) below —
+    // they must NOT also be added as dotted keys on `doc`. On create the dotted
+    // key overrode the nested null that `pruneInheritedCreateDoc` writes,
+    // re-pinning an inherited range temp on a variant; on resurrect the dotted
+    // key + nested object collided in one `updateOne` (MongoDB code 40
+    // "would create a conflict at 'temperatures'"), failing the whole row.
     if (row.tdsUrl !== undefined) doc.tdsUrl = row.tdsUrl ?? null;
     if (row.instanceId) doc.instanceId = row.instanceId;
 

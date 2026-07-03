@@ -16,6 +16,14 @@ export interface FilamentData {
   };
   maxVolumetricSpeed: number | null;
   inherits: string | null;
+  // GH #951 (Codex): spool weight + shrinkage are lifted to top-level (like
+  // cost/density) so their settings-bag shadow can be stripped without data
+  // loss. OPTIONAL and set ONLY when the source INI key is present — an omitted
+  // key must not become `$set: null` and clobber an existing value on a root
+  // (the "carry only when supplied" idiom the per-nozzle collapse also uses).
+  spoolWeight?: number | null;
+  shrinkageXY?: number | null;
+  shrinkageZ?: number | null;
   settings: Record<string, string | null>;
 }
 
@@ -43,6 +51,9 @@ export const INI_TOP_LEVEL_SETTING_KEYS = [
   "bed_temperature",
   "first_layer_bed_temperature",
   "inherits",
+  "filament_spool_weight",
+  "filament_shrinkage_compensation_xy",
+  "filament_shrinkage_compensation_z",
 ] as const;
 
 export function parseIniFilaments(content: string): FilamentData[] {
@@ -66,7 +77,7 @@ export function parseIniFilaments(content: string): FilamentData[] {
         return val;
       };
 
-      filaments.push({
+      const fd: FilamentData = {
         name: currentName!,
         vendor: currentSettings.filament_vendor || "Unknown",
         type: currentSettings.filament_type || "Unknown",
@@ -83,7 +94,21 @@ export function parseIniFilaments(content: string): FilamentData[] {
         maxVolumetricSpeed: parseNum(currentSettings.filament_max_volumetric_speed),
         inherits: nilOrVal(currentSettings.inherits),
         settings: { ...currentSettings },
-      });
+      };
+      // GH #951 (Codex): lift spool weight + shrinkage to top-level ONLY when the
+      // source key is present, so an INI that omits them leaves the field
+      // `undefined` (→ omitted from the importer's `$set`) rather than nulling a
+      // value already on the row. See the FilamentData comment above.
+      if ("filament_spool_weight" in currentSettings) {
+        fd.spoolWeight = parseNum(currentSettings.filament_spool_weight);
+      }
+      if ("filament_shrinkage_compensation_xy" in currentSettings) {
+        fd.shrinkageXY = parseNum(currentSettings.filament_shrinkage_compensation_xy);
+      }
+      if ("filament_shrinkage_compensation_z" in currentSettings) {
+        fd.shrinkageZ = parseNum(currentSettings.filament_shrinkage_compensation_z);
+      }
+      filaments.push(fd);
     }
   }
 

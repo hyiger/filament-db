@@ -369,6 +369,9 @@ inherits = *PLA*
       "filament_density",
       "filament_diameter",
       "filament_max_volumetric_speed",
+      "filament_shrinkage_compensation_xy",
+      "filament_shrinkage_compensation_z",
+      "filament_spool_weight",
       "filament_type",
       "filament_vendor",
       "first_layer_bed_temperature",
@@ -376,5 +379,35 @@ inherits = *PLA*
       "inherits",
       "temperature",
     ]);
+  });
+
+  // GH #951 (Codex R3): spool weight + shrinkage are lifted to top-level so
+  // their settings-bag shadow can be stripped without data loss.
+  it("lifts filament_spool_weight and filament_shrinkage_* to top-level fields", () => {
+    const ini = `[filament:Lift]
+filament_type = PLA
+filament_vendor = Acme
+filament_spool_weight = 250
+filament_shrinkage_compensation_xy = 0.3%
+filament_shrinkage_compensation_z = 0.5%
+`;
+    const [f] = parseIniFilaments(ini);
+    expect(f.spoolWeight).toBe(250);
+    // parseNum strips the trailing '%', matching the form + per-id sync handling.
+    expect(f.shrinkageXY).toBe(0.3);
+    expect(f.shrinkageZ).toBe(0.5);
+  });
+
+  it("leaves spool weight + shrinkage UNDEFINED (not null) when the INI omits them — no-clobber guard", () => {
+    const ini = `[filament:NoLift]
+filament_type = PLA
+filament_vendor = Acme
+`;
+    const [f] = parseIniFilaments(ini);
+    // undefined (key absent) — NOT null — so the importer's $set omits them and
+    // can't clobber an existing top-level value on a root/resurrected filament.
+    expect("spoolWeight" in f).toBe(false);
+    expect("shrinkageXY" in f).toBe(false);
+    expect("shrinkageZ" in f).toBe(false);
   });
 });

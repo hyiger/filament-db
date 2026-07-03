@@ -640,7 +640,7 @@ inherits = *ABS*
       expect(fresh.inherits).toBe("*ABS*");
     });
 
-    it("#951 (Codex R2-B): settings-only keys (no top-level home) SURVIVE the strip", async () => {
+    it("#951 (Codex R2-B/R3): settings-only keys survive; top-level-mapped keys are stripped + extracted", async () => {
       const ini = `[filament:Passthrough PLA]
 filament_type = PLA
 filament_vendor = Acme
@@ -661,12 +661,99 @@ filament_shrinkage_compensation_xy = 0.3%
 
       const fresh = await Filament.findOne({ name: "Passthrough PLA" }).lean();
       const vs = (fresh.settings ?? {}) as Record<string, unknown>;
-      // These have no top-level home in the INI mapping, so they must remain.
-      expect(vs.filament_spool_weight).toBe("250");
+      // No top-level home in the INI mapping → must remain in the settings bag.
       expect(vs.filament_soluble).toBe("1");
       expect(vs.filament_notes).toBe("keep me");
       expect(vs.filament_settings_id).toBe("MyPreset");
-      expect(vs.filament_shrinkage_compensation_xy).toBe("0.3%");
+      // GH #951 (R3): spool weight + shrinkage now HAVE a top-level home, so they
+      // are stripped from the settings bag and stored as structured fields.
+      expect(vs.filament_spool_weight).toBeUndefined();
+      expect(vs.filament_shrinkage_compensation_xy).toBeUndefined();
+      expect(fresh.spoolWeight).toBe(250);
+      expect(fresh.shrinkageXY).toBe(0.3);
+    });
+
+    it("#951 (Codex R3): a variant inheriting spool weight + shrinkage doesn't leak the shadow on re-export after a FORM-created parent clears them", async () => {
+      // The parent sets spoolWeight/shrinkage as TOP-LEVEL fields only (as the
+      // form does) — the case option (b) would have missed.
+      const parent = await Filament.create({
+        name: "SW Base",
+        vendor: "Acme",
+        type: "PLA",
+        spoolWeight: 250,
+        shrinkageXY: 0.3,
+      });
+      const variant = await Filament.create({
+        name: "SW Base — Red",
+        vendor: "Acme",
+        type: "PLA",
+        color: "#FF0000",
+        parentId: parent._id,
+        // inheriting spoolWeight + shrinkageXY
+      });
+
+      // The flattened export bakes the parent's resolved values into the section.
+      const ini = `[filament:SW Base — Red]
+filament_type = PLA
+filament_vendor = Acme
+filament_spool_weight = 250
+filament_shrinkage_compensation_xy = 0.3
+`;
+      const res = await prusaImport(
+        new NextRequest("http://localhost/api/filaments/prusaslicer", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: ini,
+        }),
+      );
+      expect(res.status).toBe(200);
+
+      const fresh = await Filament.findById(variant._id).lean();
+      // No shadow in settings, and top-level stays inheriting (null).
+      const vs = (fresh.settings ?? {}) as Record<string, unknown>;
+      expect(vs.filament_spool_weight).toBeUndefined();
+      expect(vs.filament_shrinkage_compensation_xy).toBeUndefined();
+      expect(fresh.spoolWeight ?? null).toBeNull();
+      expect(fresh.shrinkageXY ?? null).toBeNull();
+
+      // Parent CLEARS the fields; a stale shadow would re-emit them on export.
+      await Filament.updateOne(
+        { _id: parent._id },
+        { $set: { spoolWeight: null, shrinkageXY: null } },
+      );
+      const exportRes = await exportFilaments();
+      const section = extractSection(await exportRes.text(), "SW Base — Red");
+      expect(section).not.toMatch(/^\s*filament_spool_weight\s*=/m);
+      expect(section).not.toMatch(/^\s*filament_shrinkage_compensation_xy\s*=/m);
+    });
+
+    it("#951 (Codex R3): a partial INI that omits spool weight does NOT clobber an existing top-level value (no-clobber guard)", async () => {
+      const root = await Filament.create({
+        name: "Clobber Guard PLA",
+        vendor: "Acme",
+        type: "PLA",
+        spoolWeight: 200,
+        shrinkageXY: 0.4,
+      });
+      // Re-import a section for the same name WITHOUT filament_spool_weight/shrinkage.
+      const ini = `[filament:Clobber Guard PLA]
+filament_type = PLA
+filament_vendor = Acme
+filament_cost = 25
+`;
+      const res = await prusaImport(
+        new NextRequest("http://localhost/api/filaments/prusaslicer", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: ini,
+        }),
+      );
+      expect(res.status).toBe(200);
+
+      const fresh = await Filament.findById(root._id).lean();
+      expect(fresh.spoolWeight).toBe(200); // NOT nulled by the omitted key
+      expect(fresh.shrinkageXY).toBe(0.4);
+      expect(fresh.cost).toBe(25); // the supplied field did update
     });
   });
 
