@@ -131,6 +131,22 @@ describe("unsanitizeCsvCell — inverse of csvCell's formula guard", () => {
     expect(sanitizeFormulaPrefix("'70s Blue")).toBe("'70s Blue");
     expect(unsanitizeCsvCell(csvCell("'70s Blue"))).toBe("'70s Blue");
   });
+
+  // GH #955 (Codex P3): the guard/unguard now handle an apostrophe RUN of any
+  // length, not just one — a value with 2+ leading apostrophes followed by a
+  // trigger must still round-trip losslessly (prepend one, strip one).
+  it("round-trips apostrophe RUNS (2+) before a trigger without drift", () => {
+    for (const original of ["''+95A", "'''=x", "''''@sum", "''-CF"]) {
+      expect(sanitizeFormulaPrefix(original)).toBe("'" + original);
+      expect(unsanitizeCsvCell(csvCell(original))).toBe(original);
+    }
+    // A run before a BENIGN char is untouched (no trigger to disambiguate).
+    expect(sanitizeFormulaPrefix("''70s")).toBe("''70s");
+    expect(unsanitizeCsvCell(csvCell("''70s"))).toBe("''70s");
+    // An all-apostrophe value (no trailing char) is untouched too.
+    expect(sanitizeFormulaPrefix("'''")).toBe("'''");
+    expect(unsanitizeCsvCell("'''")).toBe("'''");
+  });
 });
 
 describe("isFormulaCandidate", () => {

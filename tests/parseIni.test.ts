@@ -115,6 +115,26 @@ temperature = 250
     expect(result[0].inherits).toBeNull();
   });
 
+  it("GH #955: ignores in-section comment lines (# and ;) even when they contain =", () => {
+    const content = `
+[filament:Comment Test]
+filament_vendor = Test
+filament_type = PLA
+# this is a comment = with an equals sign
+; another comment = here too
+some_real_key = value
+`;
+    const result = parseIniFilaments(content);
+    expect(result).toHaveLength(1);
+    const settings = result[0].settings;
+    // Comment lines must NOT become junk settings keys.
+    expect(settings["# this is a comment"]).toBeUndefined();
+    expect(settings["; another comment"]).toBeUndefined();
+    // A real in-section key is still parsed.
+    expect(settings.some_real_key).toBe("value");
+    expect(result[0].vendor).toBe("Test");
+  });
+
   it("handles percentage values in numeric fields", () => {
     const content = `
 [filament:Percent Test]

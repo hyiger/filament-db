@@ -150,6 +150,21 @@ export interface FilamentDetail {
    *  Gates the "Check for updates" button so an inherited slug on a variant
    *  doesn't show a dead action. */
   _hasOwnOptLink?: boolean;
+  // GH #955: form-managed schema fields that were missing from the type. Kept
+  // client-safe (no import from src/models, which pulls in mongoose) by
+  // mirroring IBedTypeTemp locally.
+  bedTypeTemps?: FilamentBedTypeTemp[];
+  /** Below this many grams remaining, the row shows a low-stock badge. */
+  lowStockThreshold?: number | null;
+  shrinkageXY?: number | null;
+  shrinkageZ?: number | null;
+}
+
+/** Client-safe mirror of the model's IBedTypeTemp (per-bed-surface temps). */
+export interface FilamentBedTypeTemp {
+  bedType: string;
+  temperature: number | null;
+  firstLayerTemperature: number | null;
 }
 
 /** Lightweight filament summary (used on list/dashboard page) */

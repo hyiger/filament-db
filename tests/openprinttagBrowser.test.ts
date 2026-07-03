@@ -34,6 +34,7 @@ import {
   fetchOpenPrintTagDatabase,
   fetchUpstreamCommitSha,
   getProxyDispatcher,
+  resetProxyDispatcherForTest,
   clearCache,
   downloadTarballToBuffer,
   isTimeoutAbort,
@@ -897,6 +898,24 @@ describe("getProxyDispatcher", () => {
 
   it("treats an empty proxy string as unset", () => {
     expect(getProxyDispatcher({ HTTPS_PROXY: "" })).toBeUndefined();
+  });
+
+  it("GH #955: memoizes a single dispatcher on the production (process.env) path", () => {
+    const prev = process.env.HTTP_PROXY;
+    try {
+      process.env.HTTP_PROXY = "http://proxy.example.invalid:8080";
+      resetProxyDispatcherForTest();
+      const a = getProxyDispatcher(); // no arg → process.env, first compute
+      const b = getProxyDispatcher(); // cached
+      expect(a).toBeInstanceOf(EnvHttpProxyAgent);
+      expect(a).toBe(b); // same instance, not a fresh dispatcher per call (the leak)
+      resetProxyDispatcherForTest();
+      expect(getProxyDispatcher()).not.toBe(a); // reset → fresh instance
+    } finally {
+      if (prev === undefined) delete process.env.HTTP_PROXY;
+      else process.env.HTTP_PROXY = prev;
+      resetProxyDispatcherForTest();
+    }
   });
 });
 

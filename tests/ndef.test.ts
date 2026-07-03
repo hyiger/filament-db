@@ -660,15 +660,25 @@ describe("parseNdefRecordsAuto", () => {
   });
 
   it("re-throws the original offset-0 error when there is no Type-2 CC to fall back to", () => {
-    // Byte 0 is a non-zero, non-magic value and byte 12 is not 0xE1 either →
-    // the fallback condition is false, so the original error propagates.
+    // Byte 0 is a non-zero, non-magic value and byte 12 is neither the Type-2 CC
+    // magic (0xE1) nor a blank CC (0x00 — GH #955), so the fallback condition is
+    // false and the original error propagates.
     const raw = new Uint8Array(20);
     raw[0] = 0xab; // wrong CC magic
     raw[1] = 0x40;
     raw[2] = 0x28;
     raw[3] = 0x01;
-    // byte 12 left 0x00 → not a Type-2 CC.
+    raw[12] = 0x55; // not 0xE1 and not 0x00 → no Type-2 fallback.
     expect(() => parseNdefRecordsAuto(raw)).toThrow("Invalid CC magic byte");
+  });
+
+  it("GH #955: a factory-blank NTAG (UID at byte 0, blank CC) reaches the friendly blank message", () => {
+    // A blank NTAG reports raw[0]=0x04 (UID start) so the offset-0 parse throws
+    // "Invalid CC magic"; the offset-12 retry (raw[12]=0x00) must surface the
+    // friendly "Blank or unformatted" message instead of the raw magic error.
+    const raw = new Uint8Array(64);
+    raw[0] = 0x04;
+    expect(() => parseNdefRecordsAuto(raw)).toThrow("Blank or unformatted");
   });
 
   it("re-throws when the buffer is too short for a Type-2 fallback (< 20 bytes)", () => {
