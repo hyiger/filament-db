@@ -3,12 +3,7 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { errorResponse, errorResponseFromCaught, handleVersionError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
-
-/** GH #304: hard cap on a spool's embedded usageHistory array. Far
- * above any realistic per-spool history; exists to stop a client
- * looping POSTs from growing the filament document toward the 16MB
- * BSON limit. Oldest entries roll off once the cap is reached. */
-const MAX_SPOOL_HISTORY = 1000;
+import { capUsageHistory, MAX_SPOOL_HISTORY } from "@/lib/capUsageHistory";
 
 /**
  * POST /api/filaments/{id}/spools/{spoolId}/usage — manually log grams used.
@@ -86,10 +81,15 @@ export async function POST(
       // explicit at every call site.
       jobId: null,
     });
-    // GH #304: roll off the oldest entries once the cap is reached so
-    // the embedded array can't grow the filament document unbounded.
+    // GH #304 / #954 finding #6: roll off the oldest entries once the cap is
+    // reached so the embedded array can't grow the filament document unbounded.
+    // Undo-aware (capUsageHistory) rather than a plain `slice(-N)`: a manual log
+    // must not evict a still-live `source:"job"` entry, whose later
+    // DELETE /api/print-history refund keys off the entry still being present
+    // (GH #621). Manual/nfc entries are evicted first; job/slicer only as a last
+    // resort when the array is entirely undo-relevant.
     if (spool.usageHistory.length > MAX_SPOOL_HISTORY) {
-      spool.usageHistory = spool.usageHistory.slice(-MAX_SPOOL_HISTORY);
+      spool.usageHistory = capUsageHistory(spool.usageHistory, MAX_SPOOL_HISTORY);
     }
     // GH #905: usage logging only mutates this spool — validate modified paths
     // only so a legacy out-of-range field elsewhere can't block the log/debit.

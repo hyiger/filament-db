@@ -5,6 +5,7 @@ import Filament from "@/models/Filament";
 import PrintHistory from "@/models/PrintHistory";
 import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { capUsageHistory, MAX_SPOOL_HISTORY } from "@/lib/capUsageHistory";
 
 /**
  * Thrown when a precondition that pass 1 validated no longer holds on the
@@ -262,6 +263,11 @@ export async function POST(request: NextRequest) {
         spoolId: mongoose.Types.ObjectId | null;
         grams: number;
       }[] = [];
+      // GH #954 finding #6: collect the spools this job appends to so each can be
+      // trimmed exactly ONCE after every usage row is applied. Trimming inside
+      // the loop could evict an entry an earlier row of THIS job just pushed when
+      // two usage rows target the same spool.
+      const touchedSpools = new Set<(typeof filaments)[number]["spools"][number]>();
       for (const u of usage) {
         // Pass 1 validated existence, but the transaction path reloads fresh —
         // a filament can be soft-deleted/purged in that window and drop out of
@@ -307,6 +313,7 @@ export async function POST(request: NextRequest) {
             source: "job",
             jobId: historyId,
           });
+          touchedSpools.add(spool);
           resolved.push({
             filamentId: filament._id,
             spoolId: spool._id,
@@ -318,6 +325,18 @@ export async function POST(request: NextRequest) {
             spoolId: null,
             grams: u.grams,
           });
+        }
+      }
+      // GH #304 / #954 finding #6: cap each touched spool's usageHistory so a
+      // looping client can't grow the filament document unbounded. Undo-aware
+      // (capUsageHistory) rather than a plain `slice(-N)`: an OLD, still-live
+      // `source:"job"`/`"slicer"` entry must not be evicted, because its later
+      // DELETE /api/print-history refund keys off the entry still being present
+      // (GH #621). Manual/nfc entries roll off first; this job's just-pushed
+      // entries are the newest + undo-relevant, so they always survive.
+      for (const spool of touchedSpools) {
+        if (spool.usageHistory && spool.usageHistory.length > MAX_SPOOL_HISTORY) {
+          spool.usageHistory = capUsageHistory(spool.usageHistory, MAX_SPOOL_HISTORY);
         }
       }
       return resolved;
