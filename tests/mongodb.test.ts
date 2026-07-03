@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
-import dbConnect from "@/lib/mongodb";
+import dbConnect, { isDuplicateKeyError } from "@/lib/mongodb";
 
 describe("dbConnect", () => {
   beforeEach(() => {
@@ -541,6 +541,85 @@ describe("dbConnect", () => {
     } finally {
       spy.mockRestore();
       errSpy.mockRestore();
+    }
+  });
+
+  // #955.14: the duplicate-key classifier. Covers every branch deterministically
+  // so the integration test below doesn't have to reproduce each error shape.
+  describe("isDuplicateKeyError (#955.14)", () => {
+    it("is true for a driver E11000 (numeric code)", () => {
+      expect(isDuplicateKeyError({ code: 11000, message: "whatever" })).toBe(true);
+    });
+    it("is true when only the message carries E11000 / 'duplicate key'", () => {
+      expect(isDuplicateKeyError({ message: "E11000 duplicate key error" })).toBe(true);
+      expect(isDuplicateKeyError({ message: "duplicate key on index" })).toBe(true);
+    });
+    it("is false for an unrelated error, a wrong code, and non-objects", () => {
+      expect(isDuplicateKeyError(new Error("transient blip"))).toBe(false);
+      expect(isDuplicateKeyError({ code: 26, message: "ns not found" })).toBe(false);
+      expect(isDuplicateKeyError(null)).toBe(false);
+      expect(isDuplicateKeyError("E11000")).toBe(false);
+    });
+  });
+
+  // #955.14: a DB with duplicate ACTIVE rows on a unique field made the
+  // coreModelIndexes migration loop forever — syncIndexes() E11000'd, the shared
+  // catch left the flag false, and the block re-ran on every request. Now the
+  // dup-key error is terminal: it logs once, the flag converges, and the block
+  // stops re-entering. Seed the collision with a raw insertMany (bypassing the
+  // model's validators + the unique index, which is dropped first) to reproduce
+  // a pre-migration upgraded DB.
+  it("treats a duplicate-active-rows E11000 as terminal so the index migration converges", async () => {
+    (global as Record<string, unknown>).mongoose = undefined;
+    await dbConnect(); // establish + build the Filament indexes once
+    const Filament = (await import("@/models/Filament")).default;
+
+    // Drop every non-_id index so the colliding pair can be inserted, then seed
+    // two ACTIVE filaments sharing a name (distinct instanceIds isolate the
+    // E11000 to the name partial-unique index).
+    await Filament.collection.dropIndexes().catch(() => {});
+    await Filament.collection.insertMany([
+      { name: "DupName", vendor: "V", type: "PLA", color: "#808080", diameter: 1.75, instanceId: "dupinst001", _deletedAt: null },
+      { name: "DupName", vendor: "V", type: "PLA", color: "#808080", diameter: 1.75, instanceId: "dupinst002", _deletedAt: null },
+    ]);
+
+    const cached = (global as Record<string, unknown>).mongoose as {
+      migrations: { coreModelIndexes: boolean };
+      migrationsPromise: Promise<void> | null;
+    };
+    cached.migrations.coreModelIndexes = false;
+    cached.migrationsPromise = null;
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    // Spy WITHOUT a mock impl so the real syncIndexes runs (and throws E11000);
+    // we only need the call count to prove the block stops re-entering.
+    const syncSpy = vi.spyOn(Filament, "syncIndexes");
+    try {
+      // Cycle 1: Filament.syncIndexes throws E11000 → terminal → logged once →
+      // flag converges to true despite the unbuildable index.
+      await dbConnect();
+      expect(cached.migrations.coreModelIndexes).toBe(true);
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining("cannot build a unique index"),
+        expect.anything(),
+      );
+      // It must NOT have logged the retryable "will retry" message — E11000 is
+      // terminal, not transient.
+      expect(errSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining("Failed to sync core model indexes"),
+        expect.anything(),
+      );
+      const callsAfterCycle1 = syncSpy.mock.calls.length;
+      expect(callsAfterCycle1).toBeGreaterThan(0);
+
+      // Cycle 2: the flag is now true, so the migration block never re-enters —
+      // syncIndexes isn't called again. This is the anti-infinite-loop proof.
+      await dbConnect();
+      expect(syncSpy.mock.calls.length).toBe(callsAfterCycle1);
+    } finally {
+      errSpy.mockRestore();
+      syncSpy.mockRestore();
+      await Filament.deleteMany({ name: "DupName" });
     }
   });
 
