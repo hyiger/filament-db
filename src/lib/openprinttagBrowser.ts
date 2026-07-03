@@ -230,6 +230,36 @@ export function rgbaToHex(rgba: string | undefined | null): string | null {
   return `#${hex.slice(0, 6)}`;
 }
 
+/**
+ * GH #954: coerce a YAML-parsed scalar to a real number at the parse boundary.
+ * The `yaml` package parses a QUOTED numeric scalar (`density: "1.24"`) to the
+ * JS string "1.24" (only an unquoted `65` becomes a number), and the old
+ * `props.density as number` cast is a compile-time no-op that let the string
+ * through. That string then round-trips into the Mixed `openprinttagSnapshot`
+ * (which does no casting) while Mongoose casts the stored field to a number, so
+ * every OPT re-sync check compared `1.24` vs `"1.24"` (strict `===` → not equal)
+ * and surfaced a permanent, unapplyable conflict. Coercing here keeps types
+ * honest end-to-end (snapshot, exports, completeness scoring). Empty/whitespace
+ * strings and non-numerics return null — NOT 0 (`Number("") === 0` would
+ * silently invent a value). Same "cast at the boundary" intent as the #632 /
+ * #894 fixes; the OPTMaterial interface already types every field `number | null`.
+ *
+ * Only real numbers and numeric STRINGS coerce. A malformed upstream value
+ * typed as a boolean or a sequence is left as "absent" (null) rather than
+ * fabricated — `Number(false)`/`Number([])` are 0, `Number(true)` is 1,
+ * `Number([65])` is 65, which would invent a value the downstream optResync
+ * guard otherwise skips (Codex P2 on PR #959).
+ */
+export function toOptNumber(v: unknown): number | null {
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  if (typeof v === "string") {
+    if (v.trim() === "") return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
 // ── YAML parsing ───────────────────────────────────────────────────────
 
 /**
@@ -330,17 +360,17 @@ export function parseMaterialYaml(
       abbreviation: (raw.abbreviation as string) || (raw.type as string) || "",
       color: rgbaToHex(primaryColor?.color_rgba as string | undefined),
       secondaryColors,
-      density: (props.density as number) ?? null,
-      nozzleTempMin: (props.min_print_temperature as number) ?? null,
-      nozzleTempMax: (props.max_print_temperature as number) ?? null,
-      bedTempMin: (props.min_bed_temperature as number) ?? null,
-      bedTempMax: (props.max_bed_temperature as number) ?? null,
-      chamberTemp: (props.chamber_temperature as number) ?? null,
-      preheatTemp: (props.preheat_temperature as number) ?? null,
-      dryingTemp: (props.drying_temperature as number) ?? null,
-      dryingTime: (props.drying_time as number) ?? null,
-      hardnessShoreD: (props.hardness_shore_d as number) ?? null,
-      transmissionDistance: (raw.transmission_distance as number) ?? null,
+      density: toOptNumber(props.density),
+      nozzleTempMin: toOptNumber(props.min_print_temperature),
+      nozzleTempMax: toOptNumber(props.max_print_temperature),
+      bedTempMin: toOptNumber(props.min_bed_temperature),
+      bedTempMax: toOptNumber(props.max_bed_temperature),
+      chamberTemp: toOptNumber(props.chamber_temperature),
+      preheatTemp: toOptNumber(props.preheat_temperature),
+      dryingTemp: toOptNumber(props.drying_temperature),
+      dryingTime: toOptNumber(props.drying_time),
+      hardnessShoreD: toOptNumber(props.hardness_shore_d),
+      transmissionDistance: toOptNumber(raw.transmission_distance),
       tags: Array.isArray(raw.tags) ? (raw.tags as string[]) : [],
       photoUrl:
         photos && photos.length > 0

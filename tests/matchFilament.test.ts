@@ -135,6 +135,28 @@ describe("matchFilament", () => {
       expect(res.matchedSpool).toBeNull();
     });
 
+    // GH #954: the name index is case-sensitive, so "PLA Black" and "pla black"
+    // can both be active. A query matching NEITHER exactly must surface both as
+    // candidates, never auto-pick one (which the SSE bus would silently select).
+    it("returns both filaments as candidates on a case-only name collision", async () => {
+      await Filament.create({ name: "PLA Black", vendor: "Test", type: "PLA" });
+      await Filament.create({ name: "pla black", vendor: "Test", type: "PLA" });
+      const res = await matchFilament({ name: "PLA BLACK" });
+      expect(res.match).toBeNull();
+      expect(res.matchedSpool).toBeNull();
+      expect(names(res.candidates)).toEqual(["PLA Black", "pla black"]);
+    });
+
+    // Exact case wins outright — a case-variant sibling must NOT demote an exact
+    // hit to ambiguous.
+    it("prefers the exact-case name when a case-variant sibling exists", async () => {
+      await Filament.create({ name: "PLA Black", vendor: "Test", type: "PLA" });
+      await Filament.create({ name: "pla black", vendor: "Test", type: "PLA" });
+      const res = await matchFilament({ name: "pla black" });
+      expect((res.match as { name: string }).name).toBe("pla black");
+      expect(res.candidates).toEqual([]);
+    });
+
     it("returns the empty result when nothing is supplied", async () => {
       const res = await matchFilament({});
       expect(res).toEqual({ match: null, candidates: [], matchedSpool: null });

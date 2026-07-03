@@ -142,6 +142,35 @@ describe("Filament trash workflow", () => {
     expect(live._deletedAt).toBeNull();
   });
 
+  it("GH #954/#905: restores a trashed filament carrying a legacy out-of-range field", async () => {
+    // Insert directly via the driver so the #337 numeric validators don't reject
+    // the out-of-range value on the way in — mimicking a doc created before
+    // those validators existed, already soft-deleted. A full-document save on
+    // restore would throw a ValidationError (400) and strand it in the trash.
+    const _id = new mongoose.Types.ObjectId();
+    await Filament.collection.insertOne({
+      _id,
+      name: "Legacy Out-Of-Range",
+      vendor: "T",
+      type: "PLA",
+      temperatures: { nozzle: 999 }, // above the max-600 validator
+      _deletedAt: new Date(),
+    });
+
+    const restoreRes = await restoreFilament(
+      new NextRequest(`http://localhost/api/filaments/${_id}/restore`, {
+        method: "POST",
+      }),
+      { params: Promise.resolve({ id: String(_id) }) },
+    );
+    expect(restoreRes.status).toBe(200);
+
+    const live = await Filament.findById(_id);
+    expect(live._deletedAt).toBeNull();
+    // The out-of-range field is untouched (validate-modified-only left it alone).
+    expect(live.temperatures.nozzle).toBe(999);
+  });
+
   it("restore refuses with 409 when an active filament has reused the name", async () => {
     const f = await Filament.create({
       name: "Reused name",

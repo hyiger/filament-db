@@ -182,14 +182,36 @@ export async function matchFilament(query: MatchQuery): Promise<MatchResult> {
     // suggestions if they supplied those alongside.
   }
 
-  // 1. Exact name match (case-insensitive) — a confident match.
+  // 1. Name match. GH #954: the name partial-unique index is case-SENSITIVE
+  //    (src/models/Filament.ts — no collation), so two active filaments
+  //    differing only by case ("PLA Black" vs "pla black") can coexist. A bare
+  //    case-insensitive findOne returned whichever Mongo yielded first as a
+  //    CONFIDENT match — the SSE scan bus then auto-selects a possibly-wrong
+  //    PrusaSlicer preset silently. Mirror the instanceId tier above: exact case
+  //    first (deterministic in the common case, and not demoted to "ambiguous"
+  //    just because a case-variant sibling exists), then a case-insensitive
+  //    fallback that only auto-matches when it's unambiguous. Same class as the
+  //    GH #896 vendor-substring fix.
   if (name) {
-    const exact = await Filament.findOne({
-      name: { $regex: `^${escapeRegex(name)}$`, $options: "i" },
-      _deletedAt: null,
-    }).lean();
+    // 1a. Exact-case — a confident match even when a case-variant sibling exists.
+    const exact = await Filament.findOne({ name, _deletedAt: null }).lean();
     if (exact) {
       return { match: exact, candidates: [], matchedSpool: null };
+    }
+    // 1b. Case-insensitive fallback for legacy case drift. Cap at 2 to detect
+    //     "more than one" without scanning the DB. One hit → confident match;
+    //     multiple → case-only collision, surface as candidates.
+    const ciMatches = await Filament.find({
+      name: { $regex: `^${escapeRegex(name)}$`, $options: "i" },
+      _deletedAt: null,
+    })
+      .limit(2)
+      .lean();
+    if (ciMatches.length === 1) {
+      return { match: ciMatches[0], candidates: [], matchedSpool: null };
+    }
+    if (ciMatches.length > 1) {
+      return { match: null, candidates: ciMatches, matchedSpool: null };
     }
   }
 

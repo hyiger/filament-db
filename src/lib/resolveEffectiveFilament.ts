@@ -34,7 +34,28 @@ export interface EffectiveFilament {
 export async function resolveEffectiveFilament(
   filament: Record<string, unknown>,
 ): Promise<EffectiveFilament> {
+  return resolveEffectiveFilamentInner(filament, new Set());
+}
+
+/**
+ * GH #954: the recursion has no depth or seen guard, so a `parentId` cycle
+ * (a filament whose ancestor chain loops back — self-reference, or two variants
+ * pointing at each other in bad/corrupted data) recurses forever awaiting
+ * `Filament.findOne` and the request never returns. Thread a `seen` set of the
+ * ids resolved so far in this chain; on revisiting one, stop resolving
+ * inheritance and fall back to the raw doc (`parentEffective: null`) — the same
+ * degradation already used when the parent can't be loaded. Best-effort for
+ * broken data; a well-formed chain (no cycle) is unaffected.
+ */
+async function resolveEffectiveFilamentInner(
+  filament: Record<string, unknown>,
+  seen: Set<string>,
+): Promise<EffectiveFilament> {
   if (!filament.parentId) return { effective: filament, parentEffective: null };
+  // A DB-loaded doc always carries `_id`; String() it for the visited-set key.
+  const selfId = String(filament._id);
+  if (seen.has(selfId)) return { effective: filament, parentEffective: null };
+  seen.add(selfId);
   const parent = await Filament.findOne({
     _id: filament.parentId,
     _deletedAt: null,
@@ -46,8 +67,9 @@ export async function resolveEffectiveFilament(
   ) as unknown as Record<string, unknown>;
   // Resolve the parent too (it may itself be a variant) so the "value after
   // clearing this variant's own array" is the parent's EFFECTIVE array.
-  const { effective: parentEffective } = await resolveEffectiveFilament(
+  const { effective: parentEffective } = await resolveEffectiveFilamentInner(
     parent as unknown as Record<string, unknown>,
+    seen,
   );
   return { effective, parentEffective };
 }

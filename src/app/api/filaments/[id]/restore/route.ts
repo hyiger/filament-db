@@ -78,7 +78,14 @@ export async function POST(
     }
 
     trashed._deletedAt = null;
-    await trashed.save();
+    // GH #905/#954: restore only mutates `_deletedAt`, so validate ONLY the
+    // modified path. A full-document save() runs the #337 numeric min/max
+    // validators against every field — a legacy out-of-range value (written
+    // before those validators, or via a pre-#872 unvalidated calibration
+    // update) would throw a ValidationError → 400, permanently stranding the
+    // doc in the trash (the PUT handler filters `_deletedAt: null`, so the user
+    // can't edit it back into range). This is the missed GH #905 call site.
+    await trashed.save({ validateModifiedOnly: true });
 
     return NextResponse.json({ message: "Restored", _id: String(trashed._id) });
   } catch (err) {

@@ -27,6 +27,7 @@ import {
   computeCompletenessScore,
   completenessTier,
   rgbaToHex,
+  toOptNumber,
   parseBrandYaml,
   parseMaterialYaml,
   mapToFilamentPayload,
@@ -355,6 +356,56 @@ properties:
     expect(m!.tags).toEqual(["blend"]);
     expect(m!.completenessScore).toBeGreaterThanOrEqual(8);
     expect(m!.completenessTier).toBe("rich");
+  });
+
+  // GH #954: a QUOTED numeric scalar in the upstream YAML parses to a JS string;
+  // the old `as number` cast was a no-op that let it through, causing a
+  // permanent OPT re-sync conflict (number-in-DB vs string-in-snapshot). The
+  // parse boundary must coerce to a real number.
+  it("coerces quoted-numeric YAML scalars to real numbers", () => {
+    const yaml = `uuid: q1
+slug: quoted-numerics
+brand:
+  slug: prusament
+name: Quoted Numerics
+class: FFF
+type: PLA
+transmission_distance: "6.4"
+properties:
+  density: "1.24"
+  min_print_temperature: "210"
+  max_print_temperature: 230
+  drying_temperature: "55"`;
+    const m = parseMaterialYaml(yaml, brandMap);
+    expect(m).not.toBeNull();
+    // Numbers, not the strings "1.24"/"210"/"6.4".
+    expect(m!.density).toBe(1.24);
+    expect(typeof m!.density).toBe("number");
+    expect(m!.nozzleTempMin).toBe(210);
+    expect(m!.nozzleTempMax).toBe(230); // unquoted still works
+    expect(m!.dryingTemp).toBe(55);
+    expect(m!.transmissionDistance).toBe(6.4);
+  });
+
+  it("toOptNumber: coerces strings, guards blanks/garbage to null (never 0)", () => {
+    expect(toOptNumber("1.24")).toBe(1.24);
+    expect(toOptNumber(65)).toBe(65);
+    expect(toOptNumber(null)).toBeNull();
+    expect(toOptNumber(undefined)).toBeNull();
+    expect(toOptNumber("")).toBeNull(); // NOT 0 (Number("") === 0)
+    expect(toOptNumber("   ")).toBeNull();
+    expect(toOptNumber("abc")).toBeNull();
+    expect(toOptNumber(Infinity)).toBeNull();
+    expect(toOptNumber(NaN)).toBeNull();
+    expect(toOptNumber(0)).toBe(0); // a real zero survives
+    // GH #959 (Codex P2): a malformed boolean/sequence must NOT fabricate a
+    // number — Number(false)/Number([]) are 0, Number(true) is 1, Number([65])
+    // is 65. Treat them as absent (null) so the resync guard skips bad data.
+    expect(toOptNumber(true)).toBeNull();
+    expect(toOptNumber(false)).toBeNull();
+    expect(toOptNumber([])).toBeNull();
+    expect(toOptNumber([65])).toBeNull();
+    expect(toOptNumber({})).toBeNull();
   });
 
   it("filters out SLA materials", () => {
