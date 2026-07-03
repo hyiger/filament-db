@@ -7,17 +7,24 @@ import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/a
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
- * Thrown when a filament that passed the pass-1 existence check has vanished
- * (a concurrent soft-delete/purge committed) by the time the transaction
- * reloads it fresh. Mapped to a 404 in the handler's outer catch so the caller
- * sees the same "not found" contract pass 1 enforces, rather than a 500 from a
- * null dereference (the fix reloads inside the transaction, so the pass-1 map is
- * no longer the one the debit runs against — GH #949 Codex follow-up).
+ * Thrown when a precondition that pass 1 validated no longer holds on the
+ * document the transaction reloads fresh — a filament soft-deleted/purged, or an
+ * explicitly-named spool deleted, in the window between pass-1 validation and
+ * the reload. Carries the HTTP status the handler's outer catch should surface,
+ * so the caller sees the SAME contract pass 1 enforces (404 for a missing
+ * filament, 400 for a missing named spool) rather than a 500 from a null
+ * dereference or a silent no-debit success (GH #949 Codex follow-up).
+ *
+ * The fix reloads filaments inside the transaction, so the pass-1 map is no
+ * longer the one the debit runs against — these checks re-assert on the reloaded
+ * doc what pass 1 asserted on the original.
  */
-class FilamentNotFoundError extends Error {
-  constructor(filamentId: string) {
-    super(`Filament not found: ${filamentId}`);
-    this.name = "FilamentNotFoundError";
+class JobPreconditionError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "JobPreconditionError";
+    this.status = status;
   }
 }
 
@@ -262,13 +269,28 @@ export async function POST(request: NextRequest) {
         // outer catch) instead of dereferencing undefined into a 500.
         const filament = filamentsById.get(u.filamentId);
         if (!filament) {
-          throw new FilamentNotFoundError(u.filamentId);
+          throw new JobPreconditionError(`Filament not found: ${u.filamentId}`, 404);
         }
         const spool = u.spoolId
           ? filament.spools.find((s) => String(s._id) === u.spoolId)
           : filament.spools.find(
               (s) => !s.retired && s.totalWeight !== null && s.totalWeight > 0,
             ) ?? filament.spools.find((s) => !s.retired);
+
+        // An explicitly-named spool that pass 1 confirmed can likewise be
+        // deleted before the reload. Without this, `spool` is undefined and the
+        // `else` branch below records the entry with `spoolId: null` and NO
+        // debit — the job is silently accepted without touching the requested
+        // inventory (and the undo path skips `spoolId: null`). Re-assert pass
+        // 1's 400 contract instead. Only fires for a NAMED spool; the no-spoolId
+        // auto-select path still legitimately yields null when every spool is
+        // retired (Codex P2 follow-up).
+        if (u.spoolId && !spool) {
+          throw new JobPreconditionError(
+            `Spool not found on filament ${u.filamentId}: ${u.spoolId}`,
+            400,
+          );
+        }
 
         if (spool) {
           if (typeof spool.totalWeight === "number") {
@@ -458,12 +480,14 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(history, { status: 201 });
   } catch (err) {
-    // A filament validated in pass 1 vanished before the transaction reloaded
-    // it (concurrent soft-delete) — same 404 contract pass 1 enforces, not a
-    // 500 (GH #949 Codex follow-up). The persist-block catch rethrows it here
-    // (it is neither a VersionError nor a txn-unsupported error).
-    if (err instanceof FilamentNotFoundError) {
-      return errorResponse(err.message, 404);
+    // A precondition pass 1 validated (filament exists / named spool exists) no
+    // longer held on the doc the transaction reloaded (concurrent delete) —
+    // surface the SAME status pass 1 would (404 / 400), not a 500 from a null
+    // dereference or a silent no-debit success (GH #949 Codex follow-up). The
+    // persist-block catch rethrows it here (neither a VersionError nor a
+    // txn-unsupported error).
+    if (err instanceof JobPreconditionError) {
+      return errorResponse(err.message, err.status);
     }
     return errorResponseFromCaught(err, "Failed to record print history");
   }

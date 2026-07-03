@@ -436,4 +436,53 @@ describe("GH #224 — print-history concurrency + rollback", () => {
     const phCount = await PrintHistory.countDocuments({ jobLabel: "vanish job" });
     expect(phCount).toBe(0);
   });
+
+  it("GH #949 (Codex P2): an explicit spoolId deleted between pass-1 and the reload returns 400, not a silent no-debit", async () => {
+    // A named spool validated in pass 1 can be removed before the transaction
+    // reloads the filament. Without a re-check the debit helper falls through to
+    // `spoolId: null` and records the job with NO debit (silently accepting it
+    // without touching the requested inventory). It must instead re-assert pass
+    // 1's 400 contract. Simulate by $pull-ing the named spool inside the mocked
+    // transaction (after pass 1 ran), leaving a sibling spool behind.
+    const f = await Filament.create({
+      name: "Spool Vanish PLA",
+      vendor: "T",
+      type: "PLA",
+      spools: [
+        { label: "A", totalWeight: 1000 },
+        { label: "B", totalWeight: 500 },
+      ],
+    });
+    const spoolA = String(f.spools[0]._id);
+    const spoolB = String(f.spools[1]._id);
+
+    const txnSpy = vi
+      .spyOn(mongoose.Connection.prototype, "transaction")
+      .mockImplementationOnce(
+        async (fn: (session: mongoose.ClientSession) => Promise<unknown>) => {
+          await Filament.updateOne(
+            { _id: f._id },
+            { $pull: { spools: { _id: spoolA } } },
+          );
+          return fn(undefined as unknown as mongoose.ClientSession);
+        },
+      );
+
+    const res = await postPrintHistory(
+      makeReq({
+        jobLabel: "spool vanish job",
+        usage: [{ filamentId: String(f._id), spoolId: spoolA, grams: 50 }],
+      }),
+    );
+    txnSpy.mockRestore();
+
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/spool not found/i);
+    const phCount = await PrintHistory.countDocuments({ jobLabel: "spool vanish job" });
+    expect(phCount).toBe(0);
+    // The surviving sibling spool was never touched.
+    const after = await Filament.findById(f._id).lean();
+    const survivor = after.spools.find((s: { _id: unknown }) => String(s._id) === spoolB);
+    expect(survivor.totalWeight).toBe(500);
+  });
 });
