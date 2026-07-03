@@ -250,11 +250,16 @@ export interface ImportResult {
 }
 
 /**
- * GH #628: scalar fields the CSV/XLSX import can write that participate in
- * variant→parent inheritance (the intersection of `INHERITABLE_FIELDS` in
- * `src/lib/resolveFilament.ts` with the columns the importer maps).
- * `temperatures.*` dot-keys and the `secondaryColors` array are handled
- * separately in `splitInheritedImportSet` below.
+ * GH #628: scalar fields that participate in variant→parent inheritance —
+ * the subset of `INHERITABLE_FIELDS` in `src/lib/resolveFilament.ts` that is
+ * a plain scalar (`temperatures.*` dot-keys and the `secondaryColors` array
+ * are handled separately in `splitInheritedImportSet` / `pruneInheritedCreateDoc`
+ * below). Deliberately covers the FULL set of inheritable scalars, not just the
+ * columns the CSV/XLSX importer maps, because GH #951 shares
+ * `splitInheritedImportSet` with the PrusaSlicer per-id sync route (which also
+ * writes `shrinkageXY`/`shrinkageZ`). Keys the CSV importer never emits are
+ * simply absent from its `setBody`, so listing them here is a no-op for that
+ * path while making the shared helper correct for the sync path too.
  */
 const IMPORT_INHERITABLE_SCALARS = new Set<string>([
   "vendor",
@@ -272,6 +277,8 @@ const IMPORT_INHERITABLE_SCALARS = new Set<string>([
   "heatDeflectionTemp",
   "shoreHardnessA",
   "shoreHardnessD",
+  "shrinkageXY",
+  "shrinkageZ",
   "minPrintSpeed",
   "maxPrintSpeed",
   "spoolType",
@@ -394,6 +401,82 @@ export function splitInheritedImportSet(
   return { set, unset };
 }
 
+/**
+ * GH #951: the create/resurrect counterpart to `splitInheritedImportSet`.
+ *
+ * The CSV/XLSX export flattens a variant's inherited values through
+ * `resolveFilament` (correct for export — every row stands alone). Re-importing
+ * that flattened row on the UPDATE path already skips pinning parent-equal
+ * values (splitInheritedImportSet, GH #628), but the CREATE path
+ * (`Filament.create`) and the RESURRECT path (`updateOne` on a trashed row)
+ * wrote the whole flattened doc verbatim — so a fresh-DB migration or a
+ * trashed-variant restore pinned every inherited field as a local override,
+ * severing GH #106 live inheritance exactly the way #628 fixed for updates.
+ *
+ * Returns a copy of the create doc with each inheritable field whose incoming
+ * value equals the parent's value reset to its "inherit" sentinel:
+ *   - scalars + `temperatures.*` subfields → `null`
+ *   - `secondaryColors` → `[]` (resolveFilament treats an empty array as
+ *     "inherit"; comparison is order-sensitive, matching splitInheritedImportSet)
+ *
+ * There is no `$unset` step (unlike the update path): a create/resurrect writes
+ * the whole document, so a value that equals the parent just becomes the
+ * inherit sentinel — there is no pre-existing divergent override to clear.
+ *
+ * Never touched: `vendor`/`type` (schema-required — a variant always carries
+ * its own value and resolveFilament never inherits them) and the
+ * always-variant-specific `name`/`color`. `vendor`/`type` are excluded via
+ * `IMPORT_REQUIRED_FIELDS`; `name`/`color` are simply not in any inheritable
+ * set here.
+ *
+ * Pure + exported for unit tests.
+ */
+export function pruneInheritedCreateDoc(
+  doc: Record<string, unknown>,
+  parent: LeanFilament,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...doc };
+
+  for (const key of IMPORT_INHERITABLE_SCALARS) {
+    if (IMPORT_REQUIRED_FIELDS.has(key)) continue;
+    const incoming = out[key];
+    if (incoming != null && incoming !== "" && incoming === parent[key]) {
+      out[key] = null;
+    }
+  }
+
+  // Temperatures ride the create doc as a NESTED object; compare each subfield
+  // against the parent's same subfield (resolveFilament inherits each temp
+  // independently via `??`).
+  const temps = out.temperatures;
+  if (temps && typeof temps === "object" && !Array.isArray(temps)) {
+    const parentTemps = (parent.temperatures ?? {}) as Record<string, unknown>;
+    const nextTemps: Record<string, unknown> = { ...(temps as Record<string, unknown>) };
+    for (const sub of Object.keys(nextTemps)) {
+      const val = nextTemps[sub];
+      if (val != null && val === parentTemps[sub]) nextTemps[sub] = null;
+    }
+    out.temperatures = nextTemps;
+  }
+
+  // secondaryColors inherits as a WHOLE array (empty === inherit); drop it to
+  // [] only when it matches the parent's array exactly (order-sensitive).
+  if (Array.isArray(out.secondaryColors) && out.secondaryColors.length > 0) {
+    const parentArr: unknown[] = Array.isArray(parent.secondaryColors)
+      ? parent.secondaryColors
+      : [];
+    const incoming = out.secondaryColors as unknown[];
+    if (
+      parentArr.length === incoming.length &&
+      incoming.every((v, i) => v === parentArr[i])
+    ) {
+      out.secondaryColors = [];
+    }
+  }
+
+  return out;
+}
+
 export async function upsertImportRows(
   rows: ImportRow[],
 ): Promise<ImportResult> {
@@ -428,8 +511,8 @@ export async function upsertImportRows(
     "_id name parentId _deletedAt vendor type cost density diameter " +
     "maxVolumetricSpeed spoolWeight netFilamentWeight dryingTemperature " +
     "dryingTime transmissionDistance glassTempTransition heatDeflectionTemp " +
-    "shoreHardnessA shoreHardnessD minPrintSpeed maxPrintSpeed spoolType " +
-    "tdsUrl temperatures secondaryColors";
+    "shoreHardnessA shoreHardnessD shrinkageXY shrinkageZ minPrintSpeed " +
+    "maxPrintSpeed spoolType tdsUrl temperatures secondaryColors";
 
   const allExisting = await Filament.find({ name: { $in: [...namesToLoad] } })
     .select(INHERITANCE_PROJECTION)
@@ -713,6 +796,35 @@ export async function upsertImportRows(
         };
       }
       if (resolvedParentId) doc.parentId = resolvedParentId;
+
+      // GH #951: create/resurrect inheritance parity with the UPDATE path.
+      // The export flattened this variant's inherited values through
+      // resolveFilament; writing them verbatim would pin every inherited field
+      // as a local override and sever GH #106 live inheritance (a fresh-DB
+      // migration or trashed-variant restore). Null/empty each field whose
+      // incoming value equals the parent's so the new/resurrected variant keeps
+      // tracking parent edits. The effective parent after a resurrect is
+      // `resolvedParentId ?? softDeleted.parentId` (see the resurrect note
+      // below — parentId only rides `doc` when a Parent column was supplied).
+      let writeDoc = doc;
+      const createParentId = softDeleted
+        ? resolvedParentId ?? softDeleted.parentId
+        : resolvedParentId;
+      if (createParentId) {
+        // `parentById` (loaded after pass 1) indexes the parents of EXISTING
+        // active variants, so it won't hold a parent freshly created earlier in
+        // THIS batch — fall back to a direct fetch. Guard a missing/soft-deleted
+        // parent (nothing to inherit → write the doc as-is).
+        let parentDoc = parentById.get(String(createParentId));
+        if (!parentDoc) {
+          parentDoc =
+            (await Filament.findOne({ _id: createParentId, _deletedAt: null })
+              .select(INHERITANCE_PROJECTION)
+              .lean()) ?? undefined;
+        }
+        if (parentDoc) writeDoc = pruneInheritedCreateDoc(doc, parentDoc);
+      }
+
       if (softDeleted) {
         // GH #228: the resurrect path was the only Filament write in the
         // codebase running `updateOne` without `runValidators`. The pre-
@@ -724,7 +836,7 @@ export async function upsertImportRows(
         // invalid numeric fields.
         await Filament.updateOne(
           { _id: softDeleted._id },
-          { ...doc, _deletedAt: null },
+          { ...writeDoc, _deletedAt: null },
           { runValidators: true, context: "query" },
         );
         // GH #379: re-promote into activeByName so a later pass-2 row
@@ -740,7 +852,7 @@ export async function upsertImportRows(
         deletedByName.delete(row.name);
         updated++;
       } else {
-        const newDoc = await Filament.create(doc);
+        const newDoc = await Filament.create(writeDoc);
         // GH #379: seed activeByName with the freshly-created row so a
         // later pass-2 row referencing it as Parent can resolve in-batch
         // (the round-trip case: parent and variant rows in the same CSV).

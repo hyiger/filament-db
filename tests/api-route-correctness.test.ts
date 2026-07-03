@@ -905,6 +905,124 @@ describe("API route correctness", () => {
     expect(fresh.colorName).toBe("Rainbow"); // so name is NOT cleared
   });
 
+  // ── #951: a variant sync must not pin parent-inherited values ──────
+  // The bundle export flattens a variant through resolveFilament, so the fork
+  // echoes the parent's density/cost/temps back on every sync. Blindly $set-ing
+  // them onto the variant would sever GH #106 live inheritance.
+
+  it("#951 — syncing a variant does NOT pin parent-equal inherited values (inheritance survives)", async () => {
+    const parent = await Filament.create({
+      name: "Sync PLA",
+      vendor: "Acme",
+      type: "PLA",
+      cost: 25,
+      density: 1.24,
+      spoolWeight: 250,
+      temperatures: { nozzle: 215, bed: 60 },
+    });
+    const variant = await Filament.create({
+      name: "Sync PLA — Red",
+      vendor: "Acme",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+      // fully inheriting
+    });
+
+    // The fork echoes the full (resolved) config — every value equals the parent.
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${variant._id}`, {
+        config: {
+          filamentdb_id: String(variant._id),
+          filament_type: "PLA",
+          filament_vendor: "Acme",
+          filament_density: "1.24",
+          filament_cost: "25",
+          filament_spool_weight: "250",
+          temperature: "215",
+          bed_temperature: "60",
+        },
+      }),
+      { params: Promise.resolve({ id: String(variant._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Filament.findById(variant._id).lean();
+    // None of the parent-equal inherited fields were pinned as local overrides.
+    expect(fresh.cost).toBeNull();
+    expect(fresh.density).toBeNull();
+    expect(fresh.spoolWeight ?? null).toBeNull();
+    expect(fresh.temperatures?.nozzle ?? null).toBeNull();
+    expect(fresh.temperatures?.bed ?? null).toBeNull();
+
+    // A later parent edit still propagates to the variant (GH #106 intact).
+    await Filament.updateOne({ _id: parent._id }, { $set: { cost: 30 } });
+    const { resolveFilament } = await import("@/lib/resolveFilament");
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(resolveFilament(fresh, freshParent).cost).toBe(30);
+  });
+
+  it("#951 — a variant sync value that DIFFERS from the parent is written as a genuine override", async () => {
+    const parent = await Filament.create({
+      name: "Sync PETG",
+      vendor: "Acme",
+      type: "PETG",
+      cost: 20,
+      temperatures: { nozzle: 240 },
+    });
+    const variant = await Filament.create({
+      name: "Sync PETG — Black",
+      vendor: "Acme",
+      type: "PETG",
+      color: "#000000",
+      parentId: parent._id,
+    });
+
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${variant._id}`, {
+        config: {
+          filamentdb_id: String(variant._id),
+          filament_cost: "20", // == parent → not pinned
+          temperature: "250", // ≠ parent 240 → genuine override
+        },
+      }),
+      { params: Promise.resolve({ id: String(variant._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Filament.findById(variant._id).lean();
+    expect(fresh.cost).toBeNull(); // inherited
+    expect(fresh.temperatures.nozzle).toBe(250); // override written
+  });
+
+  it("#951 — a variant sync clears a stale local override once it matches the parent again ($unset)", async () => {
+    const parent = await Filament.create({
+      name: "Sync ASA",
+      vendor: "Acme",
+      type: "ASA",
+      cost: 35,
+    });
+    const variant = await Filament.create({
+      name: "Sync ASA — White",
+      vendor: "Acme",
+      type: "ASA",
+      color: "#FFFFFF",
+      parentId: parent._id,
+      cost: 40, // stale divergence
+    });
+
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${variant._id}`, {
+        config: { filamentdb_id: String(variant._id), filament_cost: "35" }, // == parent
+      }),
+      { params: Promise.resolve({ id: String(variant._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Filament.findById(variant._id).lean();
+    expect(fresh.cost == null).toBe(true); // $unset → inheritance resumes
+  });
+
   it("#872 — a per-nozzle sync with an out-of-range baked calibration value is rejected with 400 (nothing persisted)", async () => {
     const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
     const f = await Filament.create({

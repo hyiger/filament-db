@@ -9,6 +9,7 @@ import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDupl
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
 import { resolveSyncBackColor } from "@/lib/prusaSlicerBundle";
+import { splitInheritedImportSet } from "@/lib/importFilaments";
 import { escapeRegex } from "@/lib/matchFilament";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import {
@@ -917,6 +918,32 @@ export async function POST(
       }
     }
 
+    // GH #951: a variant's PrusaSlicer export flattens its inherited values
+    // through resolveFilament, so the fork echoes the parent's
+    // density/cost/temps/spoolWeight/diameter/… back on every sync. Blindly
+    // $set-ing them onto the variant pins each as a local override and severs
+    // GH #106 live inheritance — a later parent edit stops propagating. Before
+    // this, only `color` had echo suppression (resolveSyncBackColor). Reuse the
+    // CSV importer's battle-tested split (GH #628 / #649): drop each inheritable
+    // field whose incoming value equals the parent's (keep inheriting), and
+    // $unset a stale diverging local override so inheritance resumes. Variant-
+    // only + non-inheritable keys (color, colorName, name, settings, soluble,
+    // …) pass through untouched. `calParent` is the already-fetched parent doc;
+    // when it's null (standalone/parent, or a soft-deleted/missing parent —
+    // nothing to inherit) the update is written verbatim.
+    const mongoUpdate: Record<string, unknown> = { $set: update };
+    if (filament.parentId && calParent) {
+      const split = splitInheritedImportSet(
+        update,
+        filament.toObject(),
+        calParent.toObject(),
+      );
+      mongoUpdate.$set = split.set;
+      if (split.unset.length > 0) {
+        mongoUpdate.$unset = Object.fromEntries(split.unset.map((k) => [k, ""]));
+      }
+    }
+
     // GH #618: `runValidators` so the numeric range validators (#337)
     // actually fire on a PrusaSlicer sync — without it a config like
     // `filament_cost = -3` parses clean and persists a negative cost the
@@ -926,7 +953,7 @@ export async function POST(
     try {
       await Filament.findByIdAndUpdate(
         filament._id,
-        { $set: update },
+        mongoUpdate,
         { runValidators: true, context: "query" },
       );
     } catch (validationErr) {
