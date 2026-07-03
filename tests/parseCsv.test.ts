@@ -103,6 +103,53 @@ describe("parseCsv", () => {
     expect(rows[0]).toEqual({ a: "1", b: "2" });
   });
 
+  // #955.1: a QUOTED field keeps its leading/trailing whitespace (the docblock
+  // promises "quoted values untouched"). Before the fix the trim pass ran after
+  // quoted-ness was lost, so csvCell-quoted round-trip values silently lost
+  // their whitespace and missed the importer's exact-name match → duplicates.
+  describe("quoted-field whitespace preservation (#955.1)", () => {
+    it("preserves leading/trailing whitespace inside a quoted field", () => {
+      const csv = 'a,b\n"  hello  ",world\n';
+      const rows = parseCsv(csv) as Array<Record<string, string>>;
+      expect(rows[0]).toEqual({ a: "  hello  ", b: "world" });
+    });
+
+    it("trims an unquoted field but keeps a quoted one in the SAME row", () => {
+      const csv = 'a,b\n  x  ,"  y  "\n';
+      const rows = parseCsv(csv) as Array<Record<string, string>>;
+      expect(rows[0]).toEqual({ a: "x", b: "  y  " });
+    });
+
+    it("round-trips a value whose quoting was triggered by a comma, keeping the trailing space", () => {
+      // The finding's exact case: 'Red, matte ' — csvCell quotes it (embedded
+      // comma), and re-import must return the identical string, space and all.
+      const csv = 'name\n"Red, matte "\n';
+      const rows = parseCsv(csv) as Array<Record<string, string>>;
+      expect(rows[0].name).toBe("Red, matte ");
+    });
+
+    it("preserves quoted whitespace in header:false mode too", () => {
+      const csv = '"  a  ",b\n';
+      const rows = parseCsv(csv, { header: false }) as string[][];
+      expect(rows).toEqual([["  a  ", "b"]]);
+    });
+
+    it("keeps an empty quoted field empty (trim vs no-trim agree)", () => {
+      const csv = 'a,b\n"",z\n';
+      const rows = parseCsv(csv) as Array<Record<string, string>>;
+      expect(rows[0]).toEqual({ a: "", b: "z" });
+    });
+
+    it("still discards a header-mode row whose only field is quoted whitespace (blank-row rule unchanged)", () => {
+      // isBlankRow trims the raw buffer, so a quoted "   " row is still blank
+      // and discarded in header mode — the fix preserves whitespace on KEPT
+      // fields without resurrecting whitespace-only separator rows.
+      const csv = 'h\nd1\n"   "\nd2\n';
+      const rows = parseCsv(csv) as Array<Record<string, string>>;
+      expect(rows.map((r) => r.h)).toEqual(["d1", "d2"]);
+    });
+  });
+
   // GH #294: pin the exact row-limit boundary so an off-by-one or a
   // 2x-too-large cap on the CSV DoS guard would fail a test. Per the
   // CsvParseOptions contract, `maxRows` caps emitted DATA rows — the
