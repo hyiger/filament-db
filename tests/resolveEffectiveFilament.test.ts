@@ -147,4 +147,36 @@ describe("resolveEffectiveFilament (GH #607)", () => {
     expect(parentEffective).not.toBeNull();
     expect((parentEffective as Record<string, unknown>).density).toBe(1.11);
   });
+
+  // GH #954: a parentId cycle in corrupted data (the API guards against nested
+  // inheritance, but a direct DB write / bad migration could create one) used to
+  // recurse forever awaiting Filament.findOne — the request never returned. The
+  // seen-set guard must make it terminate. If the guard regressed, these tests
+  // time out (the failure the fix prevents) rather than passing.
+  it("terminates on a two-node parentId cycle instead of hanging", async () => {
+    const a = await Filament.create({ name: "Cycle A", vendor: "Acme", type: "PLA", density: 1.2 });
+    const b = await Filament.create({ name: "Cycle B", vendor: "Acme", type: "PLA", density: 1.3 });
+    // Corrupt data: A → B → A (bypasses the API's no-nested-inheritance guard).
+    await Filament.updateOne({ _id: a._id }, { $set: { parentId: b._id } });
+    await Filament.updateOne({ _id: b._id }, { $set: { parentId: a._id } });
+    const lean = await Filament.findById(a._id).lean();
+
+    const result = await resolveEffectiveFilament(lean);
+    // The point: it RETURNS a well-formed result rather than recursing forever.
+    expect(result).toHaveProperty("effective");
+    expect(result).toHaveProperty("parentEffective");
+  });
+
+  it("terminates on a self-referential parentId", async () => {
+    const a = await Filament.create({ name: "Self Cycle", vendor: "Acme", type: "PLA", density: 1.5 });
+    await Filament.updateOne({ _id: a._id }, { $set: { parentId: a._id } });
+    const lean = await Filament.findById(a._id).lean();
+
+    const result = await resolveEffectiveFilament(lean);
+    // The point is termination (no infinite recursion). A self-reference is
+    // loadable (the doc is its own parent), so parentEffective is that doc's
+    // resolved value — the guard fires one level down. Both shapes present.
+    expect(result).toHaveProperty("effective");
+    expect(result).toHaveProperty("parentEffective");
+  });
 });
