@@ -5,6 +5,7 @@ import Filament from "@/models/Filament";
 import PrintHistory from "@/models/PrintHistory";
 import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { capUsageHistory, MAX_SPOOL_HISTORY } from "@/lib/capUsageHistory";
 
 /**
  * Thrown when a precondition that pass 1 validated no longer holds on the
@@ -262,6 +263,11 @@ export async function POST(request: NextRequest) {
         spoolId: mongoose.Types.ObjectId | null;
         grams: number;
       }[] = [];
+      // GH #954 finding #6: collect the spools this job appends to so each can be
+      // trimmed exactly ONCE after every usage row is applied. Trimming inside
+      // the loop could evict an entry an earlier row of THIS job just pushed when
+      // two usage rows target the same spool.
+      const touchedSpools = new Set<(typeof filaments)[number]["spools"][number]>();
       for (const u of usage) {
         // Pass 1 validated existence, but the transaction path reloads fresh —
         // a filament can be soft-deleted/purged in that window and drop out of
@@ -307,6 +313,7 @@ export async function POST(request: NextRequest) {
             source: "job",
             jobId: historyId,
           });
+          touchedSpools.add(spool);
           resolved.push({
             filamentId: filament._id,
             spoolId: spool._id,
@@ -320,7 +327,39 @@ export async function POST(request: NextRequest) {
           });
         }
       }
-      return resolved;
+      return { resolved, touchedSpools };
+    };
+
+    // GH #304 / #954 finding #6: cap each touched spool's usageHistory so a
+    // looping client can't grow the filament document unbounded. Undo-aware
+    // (capUsageHistory) rather than a plain `slice(-N)`: an OLD, still-live
+    // `source:"job"`/`"slicer"` entry must not be evicted, because its later
+    // DELETE /api/print-history refund keys off the entry still being present
+    // (GH #621). Manual/nfc entries roll off first; this job's just-pushed
+    // entries are the newest + undo-relevant, so they always survive. Returns
+    // the spools whose array was actually shortened, so the fallback path knows
+    // which filaments need a re-save.
+    //
+    // WHEN this runs matters (Codex P2 on PR #961). The trim evicts PRE-EXISTING
+    // manual/nfc rows that this job never touched — so it must only become
+    // durable together with the job:
+    //   - Transaction path: trim BEFORE the saves, inside the txn, so a mid-write
+    //     failure rolls the eviction back atomically with everything else.
+    //   - Standalone fallback: trim only AFTER the job is durably written, so a
+    //     rolled-back fallback request can't permanently delete rows it never
+    //     meant to touch (the rollback restores totalWeight + strips this job's
+    //     entries, but a fresh reload can't resurrect trimmed-away rows).
+    const capTouchedSpools = (
+      touched: Set<(typeof filaments)[number]["spools"][number]>,
+    ) => {
+      const changed = new Set<(typeof filaments)[number]["spools"][number]>();
+      for (const spool of touched) {
+        if (spool.usageHistory && spool.usageHistory.length > MAX_SPOOL_HISTORY) {
+          spool.usageHistory = capUsageHistory(spool.usageHistory, MAX_SPOOL_HISTORY);
+          changed.add(spool);
+        }
+      }
+      return changed;
     };
 
     // Persist. Prefer a transaction so a mid-write failure rolls back any
@@ -363,7 +402,10 @@ export async function POST(request: NextRequest) {
         const txnById = new Map(
           txnFilaments.map((f) => [String(f._id), f] as const),
         );
-        const resolvedUsage = applyJobToFilaments(txnById);
+        const { resolved: resolvedUsage, touchedSpools } = applyJobToFilaments(txnById);
+        // Trim inside the txn, before the saves — a mid-write failure rolls the
+        // eviction back atomically along with the debit (see capTouchedSpools).
+        capTouchedSpools(touchedSpools);
         for (const f of txnFilaments) {
           // GH #905: this job only mutates spool weight + usageHistory. Validate
           // ONLY modified paths so a legacy out-of-range field elsewhere on the
@@ -417,7 +459,7 @@ export async function POST(request: NextRequest) {
       // then save sequentially with explicit rollback on failure — without
       // this, save #2 throwing after save #1 committed would leak a partial
       // debit (spool weight gone, no PrintHistory row, no refund path).
-      const resolvedUsage = applyJobToFilaments(byId);
+      const { resolved: resolvedUsage, touchedSpools } = applyJobToFilaments(byId);
       const savedFilaments: typeof filaments = [];
       try {
         for (const f of filaments) {
@@ -475,6 +517,26 @@ export async function POST(request: NextRequest) {
           );
         }
         throw innerErr;
+      }
+
+      // The job is now durably recorded, so trimming here is safe (Codex P2 on
+      // PR #961): unlike a trim baked into the debit save, an eviction applied
+      // now can't be undone by a rollback that would otherwise orphan
+      // pre-existing manual/nfc rows this job never meant to touch. Best-effort —
+      // being a couple of entries over the cap until the next write is harmless,
+      // and a trim-save failure must not turn an already-recorded job into an
+      // error.
+      const cappedSpools = capTouchedSpools(touchedSpools);
+      if (cappedSpools.size > 0) {
+        for (const f of filaments) {
+          if (f.spools.some((s) => cappedSpools.has(s))) {
+            try {
+              await f.save({ validateModifiedOnly: true });
+            } catch {
+              // Best-effort cap; the job is already recorded.
+            }
+          }
+        }
       }
     }
 

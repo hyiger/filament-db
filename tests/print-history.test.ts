@@ -4,6 +4,7 @@ import { NextRequest } from "next/server";
 import { POST as postPrintHistory } from "@/app/api/print-history/route";
 import { DELETE as deletePrintHistory } from "@/app/api/print-history/[id]/route";
 import { GET as getAnalytics } from "@/app/api/analytics/route";
+import { MAX_SPOOL_HISTORY } from "@/lib/capUsageHistory";
 
 /**
  * Covers two behaviours added in the v1.11 review round:
@@ -325,6 +326,73 @@ describe("print-history DELETE (undo)", () => {
     const refunded = await Filament.findById(f._id);
     expect(refunded.spools[0].totalWeight).toBe(1000);
     expect(refunded.spools[0].usageHistory).toHaveLength(0);
+  });
+
+  it("caps usageHistory without evicting an OLD live job entry, so its refund survives (#954)", async () => {
+    const f = await Filament.create({
+      name: "Cap Undo Aware",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ label: "", totalWeight: 1000 }],
+    });
+
+    // Job A goes through the real POST path, so it owns a PrintHistory row and a
+    // source:"job" usageHistory entry carrying a jobId.
+    const jobA = await postJob(f, "old-job", 50);
+    let doc = await Filament.findById(f._id);
+    expect(doc.spools[0].totalWeight).toBe(950);
+    expect(doc.spools[0].usageHistory).toHaveLength(1);
+
+    // Make Job A the OLDEST entry by appending MAX-1 manual logs after it,
+    // filling the array to exactly the cap (no trim yet).
+    for (let i = 0; i < MAX_SPOOL_HISTORY - 1; i++) {
+      doc.spools[0].usageHistory.push({
+        grams: 1,
+        jobLabel: `manual-${i}`,
+        date: new Date(),
+        source: "manual",
+        jobId: null,
+      });
+    }
+    await doc.save();
+    doc = await Filament.findById(f._id);
+    expect(doc.spools[0].usageHistory).toHaveLength(MAX_SPOOL_HISTORY);
+
+    // Job B pushes one more entry → over the cap → trim fires. A naive
+    // slice(-MAX) would evict index 0 (Job A, the oldest); the undo-aware trim
+    // evicts the oldest MANUAL instead, preserving Job A.
+    const jobB = await postJob(f, "new-job", 30);
+    doc = await Filament.findById(f._id);
+    expect(doc.spools[0].usageHistory).toHaveLength(MAX_SPOOL_HISTORY);
+    expect(doc.spools[0].totalWeight).toBe(920);
+    const jobAEntry = doc.spools[0].usageHistory.find(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (e: any) => String(e.jobId) === String(jobA._id),
+    );
+    expect(jobAEntry).toBeTruthy();
+
+    // The payoff: deleting Job A still finds its entry and refunds the 50g —
+    // with a naive trim the entry would be gone and the refund silently skipped.
+    const delRes = await deletePrintHistory(delReq(jobA._id), {
+      params: Promise.resolve({ id: jobA._id }),
+    });
+    expect(delRes.status).toBe(200);
+    const refundedDoc = await Filament.findById(f._id);
+    expect(refundedDoc.spools[0].totalWeight).toBe(970); // 920 + 50 refunded
+    expect(
+      refundedDoc.spools[0].usageHistory.some(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (e: any) => String(e.jobId) === String(jobA._id),
+      ),
+    ).toBe(false);
+    expect(
+      refundedDoc.spools[0].usageHistory.some(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (e: any) => String(e.jobId) === String(jobB._id),
+      ),
+    ).toBe(true);
   });
 
   it("does not remove a manual usage log that shares (grams, date) with the job", async () => {

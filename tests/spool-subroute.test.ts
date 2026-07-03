@@ -5,6 +5,7 @@ import { POST as postUsage } from "@/app/api/filaments/[id]/spools/[spoolId]/usa
 import { POST as postDryCycle } from "@/app/api/filaments/[id]/spools/[spoolId]/dry-cycles/route";
 import { DELETE as deleteSpool } from "@/app/api/filaments/[id]/spools/[spoolId]/route";
 import * as spoolSlots from "@/lib/spoolSlots";
+import { MAX_SPOOL_HISTORY } from "@/lib/capUsageHistory";
 
 /**
  * Tests for the two v1.11 spool-ledger sub-endpoints:
@@ -67,6 +68,100 @@ describe("spool sub-routes", () => {
         jobLabel: "benchy",
         source: "manual",
       });
+    });
+
+    it("undo-aware cap: a manual log rolls off an old manual, never a live job entry (#954)", async () => {
+      const jobId = new mongoose.Types.ObjectId();
+      const f = await Filament.create({
+        name: "Manual Cap Undo",
+        vendor: "Test",
+        type: "PLA",
+        spoolWeight: 200,
+        netFilamentWeight: 1000,
+        spools: [
+          {
+            label: "Main",
+            totalWeight: 1000,
+            usageHistory: [
+              // OLDEST entry is a live job entry — a naive slice(-MAX) would
+              // evict it and break its DELETE /api/print-history refund.
+              { grams: 5, jobLabel: "old-job", date: new Date("2020-01-01"), source: "job", jobId },
+              // Fill the rest with manuals up to exactly the cap.
+              ...Array.from({ length: MAX_SPOOL_HISTORY - 1 }, () => ({
+                grams: 1,
+                jobLabel: "m",
+                date: new Date(),
+                source: "manual",
+                jobId: null,
+              })),
+            ],
+          },
+        ],
+      });
+      const sid = String(f.spools[0]._id);
+
+      // One more manual log → over the cap → undo-aware trim fires.
+      const res = await postUsage(
+        postReq(`http://localhost/api/filaments/${f._id}/spools/${sid}/usage`, {
+          grams: 2,
+          jobLabel: "newest",
+        }),
+        { params: Promise.resolve({ id: String(f._id), spoolId: sid }) },
+      );
+      expect(res.status).toBe(201);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools[0].usageHistory).toHaveLength(MAX_SPOOL_HISTORY);
+      // The old job entry survived; an old manual rolled off instead.
+      expect(
+        fresh.spools[0].usageHistory.some(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (e: any) => String(e.jobId) === String(jobId),
+        ),
+      ).toBe(true);
+    });
+
+    it("persists a freshly logged manual even when the spool is full of job entries (#961 Codex P2)", async () => {
+      // Spool already at the cap with ONLY undo-relevant job entries. Appending
+      // a manual then capping must not drop the just-recorded manual (its weight
+      // is already debited); an old job entry is sacrificed instead.
+      const jobs = Array.from({ length: MAX_SPOOL_HISTORY }, (_, i) => ({
+        grams: 1,
+        jobLabel: `j${i}`,
+        date: new Date(),
+        source: "job" as const,
+        jobId: new mongoose.Types.ObjectId(),
+      }));
+      const f = await Filament.create({
+        name: "Full Of Jobs",
+        vendor: "Test",
+        type: "PLA",
+        spoolWeight: 200,
+        netFilamentWeight: 1000,
+        spools: [{ label: "Main", totalWeight: 1000, usageHistory: jobs }],
+      });
+      const sid = String(f.spools[0]._id);
+
+      const res = await postUsage(
+        postReq(`http://localhost/api/filaments/${f._id}/spools/${sid}/usage`, {
+          grams: 40,
+          jobLabel: "just-now",
+        }),
+        { params: Promise.resolve({ id: String(f._id), spoolId: sid }) },
+      );
+      expect(res.status).toBe(201);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools[0].usageHistory).toHaveLength(MAX_SPOOL_HISTORY);
+      // The freshly logged manual survived the cap...
+      expect(
+        fresh.spools[0].usageHistory.some(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (e: any) => e.source === "manual" && e.grams === 40 && e.jobLabel === "just-now",
+        ),
+      ).toBe(true);
+      // ...and its weight debit stuck (history + ledger stay consistent).
+      expect(fresh.spools[0].totalWeight).toBe(960);
     });
 
     it("clamps totalWeight at 0 when the request over-draws", async () => {
