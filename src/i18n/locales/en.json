@@ -347,6 +347,7 @@
   "share.public.importing": "Importing...",
   "share.public.imported": "Imported {count} filament(s)",
   "share.public.conflicts": "{count} conflict(s):",
+  "share.public.orphanVariant": "Variant \"{name}\" skipped — its parent wasn't imported",
   "share.public.importError": "Import failed. Please try again.",
   "analytics.title": "Analytics",
   "analytics.subtitle": "Filament usage across recent prints.",
