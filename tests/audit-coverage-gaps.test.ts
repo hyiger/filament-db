@@ -63,17 +63,19 @@ describe("GH #227 — audit coverage gaps", () => {
     it("transactional callback is actually invoked (not just synthesised by the fallback)", async () => {
       // The existing test suite all routes through the standalone-fallback
       // branch because mongodb-memory-server isn't a replica set —
-      // `withTransaction` throws "Transaction numbers are only allowed..."
-      // and the fallback runs. This test injects a synthetic session
-      // whose `withTransaction` actually invokes the callback, so the
-      // body of the transactional code path runs at least once.
+      // `connection.transaction()` throws "Transaction numbers are only
+      // allowed..." and the fallback runs. This test mocks
+      // `connection.transaction` (GH #949: the route swapped a bare
+      // startSession().withTransaction() for connection.transaction()) so its
+      // callback actually fires, exercising the body of the transactional code
+      // path at least once.
       //
       // We can't easily assert the *commit* succeeded against the
-      // memory-server (passing `{ session }` to save/create from a fake
-      // session errors at Mongoose's internals — the real ClientSession
-      // has many more methods than our shim). The thing we can pin is:
-      // the callback FIRES — i.e. the txn branch is on the executed
-      // code path rather than getting skipped to fallback.
+      // memory-server (passing a fake `session` to save/create errors at
+      // Mongoose's internals — the real ClientSession has many more methods
+      // than our shim). The thing we can pin is: the callback FIRES — i.e. the
+      // txn branch is on the executed code path rather than getting skipped to
+      // fallback.
       const f = await Filament.create({
         name: "Txn Callback PLA",
         vendor: "T",
@@ -82,24 +84,22 @@ describe("GH #227 — audit coverage gaps", () => {
       });
 
       let callbackRan = false;
-      const sessionSpy = vi
-        .spyOn(mongoose, "startSession")
+      const txnSpy = vi
+        .spyOn(mongoose.Connection.prototype, "transaction")
         .mockImplementationOnce(
-          () =>
-            ({
-              withTransaction: async (cb: () => Promise<void>) => {
-                callbackRan = true;
-                try {
-                  await cb();
-                } catch {
-                  // Real Atlas rolls back here; we just swallow so the
-                  // route returns the "happy" path rather than the
-                  // synthetic-error path. We don't care whether the
-                  // saves committed — only that the callback fired.
-                }
-              },
-              endSession: async () => {},
-            }) as never,
+          async (fn: (session: mongoose.ClientSession) => Promise<unknown>) => {
+            callbackRan = true;
+            try {
+              await fn({} as mongoose.ClientSession);
+            } catch {
+              // Real Atlas rolls back here; we just swallow so the route
+              // returns the "happy" path rather than the synthetic-error path.
+              // The fake session makes the inner save()/create() error — we
+              // don't care whether they committed, only that the callback
+              // fired.
+            }
+            return undefined as never;
+          },
         );
 
       await postPrintHistory(
@@ -109,20 +109,23 @@ describe("GH #227 — audit coverage gaps", () => {
         }),
       );
 
-      sessionSpy.mockRestore();
+      txnSpy.mockRestore();
       expect(callbackRan).toBe(true);
     });
 
-    it("an abort inside withTransaction surfaces as a 500 and creates no PrintHistory row", async () => {
+    it("an abort inside the transaction surfaces as a 500 and creates no PrintHistory row", async () => {
       // GH #264: honest scope. This test does NOT verify transactional
       // rollback — that is a MongoDB guarantee exercised only on a
       // replica set (Atlas), and tests/setup.ts runs a single-node
-      // mongodb-memory-server. The injected fake `withTransaction` runs
-      // the callback then throws *without* rolling back, so the spool
-      // debit it applied is not reverted here. What this test locks in
-      // is the route's failure *shape* on an unexpected abort: a 500
-      // response (not a 201) and no independently-committed PrintHistory
-      // row. Rollback of the spool weight itself is covered in
+      // mongodb-memory-server. The mocked `connection.transaction` (GH #949:
+      // the route now uses connection.transaction(), not
+      // startSession().withTransaction()) runs the callback then throws
+      // *without* rolling back. The abort message is NOT a txn-unsupported
+      // one, so the route rethrows rather than dropping to the sequential
+      // fallback. What this test locks in is the route's failure *shape* on an
+      // unexpected abort: a 500 response (not a 201) and no
+      // independently-committed PrintHistory row (create lives inside the
+      // aborted callback). Rollback of the spool weight itself is covered in
       // production by the real driver.
       const f = await Filament.create({
         name: "Txn Abort PLA",
@@ -131,17 +134,19 @@ describe("GH #227 — audit coverage gaps", () => {
         spools: [{ label: "main", totalWeight: 1000 }],
       });
 
-      const sessionSpy = vi
-        .spyOn(mongoose, "startSession")
+      const txnSpy = vi
+        .spyOn(mongoose.Connection.prototype, "transaction")
         .mockImplementationOnce(
-          () =>
-            ({
-              withTransaction: async (cb: () => Promise<void>) => {
-                await cb();
-                throw new Error("simulated transaction abort");
-              },
-              endSession: async () => {},
-            }) as never,
+          async (fn: (session: mongoose.ClientSession) => Promise<unknown>) => {
+            try {
+              await fn({} as mongoose.ClientSession);
+            } catch {
+              // The fake session makes the inner save()/create() error before
+              // anything commits; we ignore it and drive the assertion from the
+              // outer abort below.
+            }
+            throw new Error("simulated transaction abort");
+          },
         );
 
       let res;
@@ -156,7 +161,7 @@ describe("GH #227 — audit coverage gaps", () => {
         // The handler routes through errorResponseFromCaught — should
         // not throw.
       }
-      sessionSpy.mockRestore();
+      txnSpy.mockRestore();
 
       // 500 expected — the unexpected abort isn't a VersionError so the
       // 409 path doesn't apply.
