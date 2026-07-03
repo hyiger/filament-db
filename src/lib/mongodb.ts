@@ -41,6 +41,21 @@ declare global {
   var mongoose: MongooseCache | undefined;
 }
 
+/**
+ * True for a MongoDB duplicate-key error (E11000). `syncIndexes()` throws this
+ * when it tries to build a UNIQUE index on a collection that already holds
+ * duplicate values on that key — stale DATA a retry can never fix. Matched by
+ * the driver's numeric `code` first, with a message fallback for wrappers that
+ * don't surface `.code`. Used by the `coreModelIndexes` migration to treat a
+ * dup-key index build as terminal instead of retrying it forever (#955.14).
+ */
+export function isDuplicateKeyError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  if ((err as { code?: unknown }).code === 11000) return true;
+  const message = (err as { message?: unknown }).message;
+  return typeof message === "string" && /E11000|duplicate key/i.test(message);
+}
+
 export default async function dbConnect() {
   const MONGODB_URI = process.env.MONGODB_URI;
 
@@ -220,7 +235,24 @@ export default async function dbConnect() {
   // E11000. syncIndexes() drops mismatched indexes and recreates them —
   // idempotent on fresh DBs, corrective on upgraded ones. Same
   // retry-tracked pattern as the SharedCatalog block above.
-  if (!cached.migrations.coreModelIndexes) {
+  //
+  // GATED ON BOTH instanceId backfills (#955.14, Codex re-review): this MUST NOT
+  // run until every active filament has an `instanceId`. Building the
+  // partial-unique `instanceId` index over legacy rows the backfill hasn't
+  // filled yet E11000s on the SHARED null value — but that's exactly what the
+  // backfill repairs, so it's transient, NOT terminal. If the backfills throw
+  // transiently (leaving their flags false) and this ran anyway, the terminal
+  // E11000 handling below would mark the flag done and PERMANENTLY skip the
+  // rebuild even after the backfill later succeeds — until a process restart.
+  // Gating means that once we DO run, a remaining E11000 can only be genuine
+  // duplicate ACTIVE rows (dup name or dup real instanceId), which is terminal.
+  // In the common single-pass connect both backfills succeed just above, so the
+  // gate is already satisfied and this runs in the same pass.
+  if (
+    cached.migrations.spoolInstanceIds &&
+    cached.migrations.instanceIds &&
+    !cached.migrations.coreModelIndexes
+  ) {
     try {
       const models = await Promise.all([
         import("@/models/Filament"),
@@ -229,15 +261,45 @@ export default async function dbConnect() {
         import("@/models/Nozzle"),
         import("@/models/Printer"),
       ]);
+      // #955.14: sync each model INDEPENDENTLY, and treat a duplicate-key
+      // (E11000) failure as TERMINAL rather than retryable. Because this block is
+      // gated on the instanceId backfills above, a syncIndexes() E11000 here can
+      // only be genuine duplicate active rows on a unique field (`name` / a real
+      // `instanceId`) — a DATA problem no retry can fix. Before this,
+      // that error escaped the shared try, left `coreModelIndexes` false, and
+      // the whole block re-ran on EVERY subsequent request — re-throwing and
+      // re-logging forever, and doing wasted index work per request. Now a
+      // dup-key error is caught per model, logged ONCE with actionable
+      // guidance, and the loop moves on so the flag still converges to true
+      // (the block never re-enters ⇒ the log fires once). A TRANSIENT
+      // (non-E11000) failure is re-thrown to the outer catch, which leaves the
+      // flag unset so the next connect genuinely retries.
       for (const mod of models) {
         const model = mod.default;
-        const dropped = await model.syncIndexes();
-        if (dropped.length > 0) {
-          console.log(
-            `[migration] Rebuilt ${model.modelName} indexes (dropped: ${dropped.join(", ")})`,
-          );
+        try {
+          const dropped = await model.syncIndexes();
+          if (dropped.length > 0) {
+            console.log(
+              `[migration] Rebuilt ${model.modelName} indexes (dropped: ${dropped.join(", ")})`,
+            );
+          }
+        } catch (err) {
+          if (isDuplicateKeyError(err)) {
+            console.error(
+              `[migration] ${model.modelName}: cannot build a unique index — the collection has duplicate ACTIVE rows on a unique field (name/instanceId). A retry can't fix stale data, so this index is being SKIPPED (other migrations continue). Resolve the duplicates (rename or trash one of each colliding pair) and restart to build it.`,
+              err,
+            );
+            // Terminal — fall through to the next model. Do NOT re-throw:
+            // re-throwing would leave the flag false and loop forever.
+          } else {
+            // Transient (network blip, DB busy) — a retry may succeed, so bubble
+            // to the outer catch which leaves the flag unset.
+            throw err;
+          }
         }
       }
+      // Reached only when every model either succeeded or hit a terminal E11000
+      // — never after a transient throw. Converge so the block stops running.
       cached.migrations.coreModelIndexes = true;
     } catch (err) {
       console.error("[migration] Failed to sync core model indexes (will retry on next connect):", err);

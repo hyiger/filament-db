@@ -162,4 +162,79 @@ describe("matchFilament", () => {
       expect(res).toEqual({ match: null, candidates: [], matchedSpool: null });
     });
   });
+
+  // #955.12: every match query prunes the heavy spool subfields (a photoDataUrl
+  // data URL can be ~5 MB; usageHistory / dryCycles grow unbounded) that no scan
+  // consumer reads, while keeping the identity fields the matcher — and the
+  // matchedSpool builder — depend on. Pure-exclusion projection: everything
+  // else, including spools[].instanceId / label, survives.
+  describe("heavy-field projection (#955.12)", () => {
+    const heavySpool = (label: string, instanceId: string) => ({
+      label,
+      totalWeight: 1000,
+      instanceId,
+      photoDataUrl: "data:image/png;base64,AAAAAAAA",
+      usageHistory: [{ grams: 12, date: new Date() }],
+      dryCycles: [{ date: new Date(), tempC: 50, durationMin: 120 }],
+    });
+
+    const assertPruned = (spool: Record<string, unknown>) => {
+      expect(spool.photoDataUrl).toBeUndefined();
+      expect(spool.usageHistory).toBeUndefined();
+      expect(spool.dryCycles).toBeUndefined();
+    };
+
+    it("omits photoDataUrl / usageHistory / dryCycles from a name-tier match, keeping spool identity", async () => {
+      await Filament.create({
+        name: "Projected PLA",
+        vendor: "Acme",
+        type: "PLA",
+        spools: [heavySpool("Bin 1", "proj0000a1")],
+      });
+      const res = await matchFilament({ name: "Projected PLA" });
+      const spool = (res.match as { spools: Record<string, unknown>[] }).spools[0];
+      assertPruned(spool);
+      // Identity fields the consumers rely on survive the pure-exclusion projection.
+      expect(spool.instanceId).toBe("proj0000a1");
+      expect(spool.label).toBe("Bin 1");
+      expect(spool.totalWeight).toBe(1000);
+    });
+
+    it("prunes candidates in the vendor+type tier too", async () => {
+      await Filament.create({
+        name: "Cand A",
+        vendor: "Acme",
+        type: "PETG",
+        spools: [heavySpool("A", "cand0000a1")],
+      });
+      await Filament.create({
+        name: "Cand B",
+        vendor: "Acme",
+        type: "PETG",
+        spools: [heavySpool("B", "cand0000b1")],
+      });
+      const res = await matchFilament({ vendor: "Acme", type: "PETG" });
+      expect(res.match).toBeNull();
+      expect(res.candidates.length).toBe(2);
+      for (const c of res.candidates as { spools: Record<string, unknown>[] }[]) {
+        assertPruned(c.spools[0]);
+      }
+    });
+
+    it("still resolves matchedSpool from the pruned spool tier", async () => {
+      const f = await Filament.create({
+        name: "Spool Tier",
+        vendor: "Acme",
+        type: "PLA",
+        spools: [heavySpool("Drybox", "spool00001")],
+      });
+      const res = await matchFilament({ instanceId: "spool00001" });
+      expect(res.matchedSpool).toMatchObject({
+        instanceId: "spool00001",
+        label: "Drybox",
+        _id: String(f.spools[0]._id),
+      });
+      assertPruned((res.match as { spools: Record<string, unknown>[] }).spools[0]);
+    });
+  });
 });
