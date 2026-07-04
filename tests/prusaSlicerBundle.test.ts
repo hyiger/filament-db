@@ -1302,6 +1302,57 @@ describe("collapsePerNozzleImportSections (#872)", () => {
     expect(base.density).toBe(1.24);
     expect(base.diameter).toBe(1.75);
   });
+
+  it("#950 (Codex r3): KEEPS a user-pinned compatible_printers_condition on a hinted collapse (round-trip)", () => {
+    // 950.2 makes the export carry a user pin through per-nozzle sections; the
+    // import must NOT strip it (the $set replaces the whole bag), else the pin is
+    // destroyed on export→import.
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\ncompatible_printers_condition = printer_model==MK4\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    expect(base.settings.compatible_printers_condition).toBe("printer_model==MK4");
+  });
+
+  it("#950 (Codex r3): STRIPS an auto-derived nozzle_diameter condition on a hinted collapse (re-derived on export)", () => {
+    // The baked per-nozzle value differs per section, so pinning it onto the base
+    // would be wrong — it's stripped and re-derived from compatibleNozzles.
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\ncompatible_printers_condition = nozzle_diameter[0]==0.4\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    expect("compatible_printers_condition" in base.settings).toBe(false);
+  });
+
+  it("#950 (Codex r3): KEEPS a nil (inherit) compatible_printers_condition on a hinted collapse", () => {
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\ncompatible_printers_condition = nil\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    // nil parses to null (the inheritance marker) and must survive the collapse.
+    expect(base.settings.compatible_printers_condition).toBeNull();
+  });
+
+  it("#950 (Codex r3): a pinned condition survives a full multi-nozzle export→parse→collapse round-trip", () => {
+    const filament = {
+      name: "PLA",
+      vendor: "Generic",
+      type: "PLA",
+      _id: "64b000000000000000000010",
+      temperatures: { nozzle: 210, bed: 60 },
+      // User pin at filament scope.
+      settings: { compatible_printers_condition: "printer_model==MK4" },
+      calibrations: [
+        { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95, nozzleTemp: 205 },
+        { nozzle: { name: "0.6 Brass", diameter: 0.6, type: "Brass" }, printer: null, maxVolumetricSpeed: 20, nozzleTemp: 215 },
+      ],
+    };
+    const bundle = generatePrusaSlicerBundle([filament]);
+    // The export carries the user pin (not the derived diameter condition) in each section.
+    expect(bundle).toContain("compatible_printers_condition = printer_model==MK4");
+    const base = collapsePerNozzleImportSections(parseIniFilaments(bundle))[0];
+    expect(base.settings.compatible_printers_condition).toBe("printer_model==MK4"); // survived
+  });
 });
 
 describe("resolveSyncBackColor (#883)", () => {

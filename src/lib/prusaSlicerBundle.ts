@@ -224,6 +224,25 @@ export function collapsePerNozzleImportSections(
     seenGroups.add(groupKey);
     const settings = { ...f.settings };
     for (const k of [...PER_NOZZLE_BAKED_SETTING_KEYS, ...SETTINGS_STRIP_KEYS]) {
+      // GH #950 (Codex P2 on PR #968 r3): compatible_printers_condition is
+      // normally "baked" (an auto-derived nozzle_diameter[...] value, different per
+      // suffixed section) so it's stripped and re-derived on the next export. But
+      // the 950.2 export now also carries a USER PIN (a non-derived restriction) or
+      // the `nil` inheritance marker through the per-nozzle sections — and since the
+      // importer $set-s the WHOLE settings bag, unconditionally stripping those
+      // would DESTROY the pin on export→import (lossy). Strip ONLY the auto-derived
+      // shape (contains `nozzle_diameter[`) or an empty "no restriction"; preserve a
+      // user pin (any other non-empty string) and nil (null) so they round-trip.
+      // (The single-nozzle / non-hinted branch never strips this key, so it already
+      // round-trips there.)
+      if (k === "compatible_printers_condition") {
+        const v = settings[k];
+        const isDerived = typeof v === "string" && v.includes("nozzle_diameter[");
+        const isEmpty = v === "" || v === undefined;
+        if (isDerived || isEmpty) delete settings[k];
+        // else: user pin (non-derived string) or nil (null) → keep for round-trip.
+        continue;
+      }
       delete settings[k];
     }
     // Drop temperatures + maxVolumetricSpeed (baked per-nozzle): omitting the keys
