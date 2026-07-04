@@ -327,24 +327,38 @@ type LeanFilament = Record<string, any>;
  *
  *   - incoming value equals the parent's value → SKIP the $set so the
  *     variant keeps inheriting dynamically at read time;
- *   - …and if the variant currently carries a local override that DIFFERS
- *     from the incoming value, emit an `$unset` so inheritance resumes
- *     (a stale divergence the import just reconciled) — except for
- *     schema-required fields, which are left in place;
+ *   - …and if the variant currently carries ANY local override of that field
+ *     (divergent OR parent-equal — see the GH #971 note below), emit an
+ *     `$unset` so inheritance resumes — except for schema-required fields,
+ *     which are left in place;
  *   - incoming value differs from the parent → $set normally (a genuine
  *     variant override).
  *
+ * GH #971: when the incoming section reports a field EQUAL to the parent, the
+ * export (which flattens through resolveFilament) can't tell a deliberate pin
+ * from a true inherit — both serialize to the same value — so the safe re-import
+ * default is to CLEAR any variant-local override so it tracks the parent live
+ * (GH #106). The `$unset` therefore fires on PRESENCE of a local override, not
+ * on divergence: a variant value equal to the parent is still a stored pin that
+ * would block a future parent edit, so it's cleared too (this matches the
+ * settings self-heal added in #969). Divergent pins were already cleared; #971
+ * extends it to parent-equal pins across the scalar, temperature, AND
+ * secondaryColors branches.
+ *
  * Array + nested handling:
  *   - `temperatures.*` dot-keys compare against the parent's same subfield
- *     (resolveFilament inherits each temp independently via `??`).
+ *     (resolveFilament inherits each temp independently via `??`); a local temp
+ *     override of a parent-equal subfield is cleared.
  *   - `secondaryColors` inherits as a WHOLE array (resolveFilament treats
- *     an empty array as "inherit"), so it's skipped only when the incoming
- *     array matches the parent's array exactly (order-sensitive — order is
- *     meaningful for multi-color rendering).
+ *     an empty array as "inherit"); when the incoming array matches the parent's
+ *     array exactly (order-sensitive — order is meaningful for multi-color
+ *     rendering), any non-empty variant-local array is cleared so it inherits.
  *   - `settings` inherits by SHALLOW PER-KEY merge, so it's rebuilt to hold
  *     only keys that differ from the parent's `settings` (parent-equal keys
  *     keep inheriting). This runs only when the caller supplies the parent's
- *     settings; without them it writes through (GH #951, Codex).
+ *     settings; without them it writes through (GH #951, Codex). (Note: the
+ *     bulk INI path's `settingsSelfHealUnset` clears stored parent-equal
+ *     settings pins on top of this; the per-id sync path does not yet — GH #972.)
  *   - The variant-local empty-string rule mirrors resolveFilament:67-72 —
  *     a variant value of `""` counts as "missing" (already inheriting), so
  *     it never triggers an $unset.
@@ -367,7 +381,9 @@ export function splitInheritedImportSet(
       const parentVal = parent.temperatures?.[sub] ?? null;
       const variantVal = variant.temperatures?.[sub] ?? null;
       if (incoming != null && parentVal === incoming) {
-        if (variantVal != null && variantVal !== incoming) unset.push(key);
+        // GH #971: clear ANY local override of a parent-equal subfield
+        // (divergent OR parent-equal pin) so it inherits live.
+        if (variantVal != null) unset.push(key);
         continue;
       }
       set[key] = incoming;
@@ -384,7 +400,10 @@ export function splitInheritedImportSet(
       const equalsArr = (a: unknown[], b: unknown[]) =>
         a.length === b.length && a.every((v, i) => v === b[i]);
       if (incoming.length > 0 && equalsArr(incoming, parentArr)) {
-        if (variantArr.length > 0 && !equalsArr(variantArr, incoming)) {
+        // GH #971: the section reports the array equal to the parent's, so any
+        // non-empty variant-local array is a pin (divergent OR parent-equal) —
+        // clear it so the whole array inherits live.
+        if (variantArr.length > 0) {
           unset.push(key);
         }
         continue;
@@ -436,7 +455,10 @@ export function splitInheritedImportSet(
           if (variantVal !== incoming) set[key] = incoming;
           continue;
         }
-        if (hasLocalValue(variantVal) && variantVal !== incoming) {
+        // GH #971: clear ANY local override of a parent-equal scalar (divergent
+        // OR parent-equal pin) so a later parent edit propagates. Required
+        // fields returned above; they never inherit and are never unset.
+        if (hasLocalValue(variantVal)) {
           unset.push(key);
         }
         continue;

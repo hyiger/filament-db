@@ -996,6 +996,32 @@ describe("splitInheritedImportSet (GH #628)", () => {
     expect(unset).toEqual(["cost"]);
   });
 
+  it("$unsets a scalar override that already EQUALS the parent (GH #971 parent-equal pin)", () => {
+    // variant pinned cost=25, parent=25, import=25 → the pin is redundant now
+    // but would block a future parent cost edit; a flattened export can't
+    // distinguish it from a true inherit, so it's cleared so inheritance resumes.
+    const variant = { cost: 25 };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", cost: 25 },
+      variant,
+      parent,
+    );
+    expect(set).toEqual({ name: "V" });
+    expect(unset).toEqual(["cost"]);
+  });
+
+  it("$unsets a temperature subfield override that already EQUALS the parent (GH #971)", () => {
+    // variant nozzle=215 == parent 215 == incoming → cleared so it inherits.
+    const variant = { temperatures: { nozzle: 215 } };
+    const { set, unset } = splitInheritedImportSet(
+      { name: "V", "temperatures.nozzle": 215 },
+      variant,
+      parent,
+    );
+    expect(set).toEqual({ name: "V" });
+    expect(unset).toEqual(["temperatures.nozzle"]);
+  });
+
   it("never $unsets schema-required fields (vendor/type), and writes them through when stale (GH #649)", () => {
     // Required fields can't be unset (validation) and never inherit at read
     // time — resolveFilament always uses the variant's own value. So when
@@ -1111,8 +1137,10 @@ describe("splitInheritedImportSet (GH #628)", () => {
     expect(unset).toEqual(["secondaryColors"]);
   });
 
-  it("does NOT $unset secondaryColors when the variant's local array already equals the incoming/parent array", () => {
-    // variantArr equals incoming → nothing stale to reconcile → skip $set, no $unset.
+  it("$unsets secondaryColors when the variant's local array equals the incoming/parent array (GH #971)", () => {
+    // GH #971: a variant-local array equal to the parent's is still a stored pin
+    // — a flattened export can't distinguish it from a true inherit, so on
+    // re-import it's cleared so the whole array inherits live.
     const variant = { secondaryColors: ["#FF0000", "#00FF00"] };
     const { set, unset } = splitInheritedImportSet(
       { name: "V", secondaryColors: ["#FF0000", "#00FF00"] },
@@ -1120,7 +1148,7 @@ describe("splitInheritedImportSet (GH #628)", () => {
       parent,
     );
     expect(set).toEqual({ name: "V" });
-    expect(unset).toEqual([]);
+    expect(unset).toEqual(["secondaryColors"]);
   });
 
   it("treats a non-array parent.secondaryColors as [] so a non-empty incoming array is a genuine override (branch 344)", () => {

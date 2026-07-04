@@ -139,11 +139,13 @@ function mergeSettingsDotKeys(setBody: Record<string, unknown>): Record<string, 
  * strict parent-equality predicate (`splitInheritedImportSet`'s `!==`); a future
  * change to one must keep the other in lockstep.
  *
- * Known scope gap (GH #971): the SCALAR path (`splitInheritedImportSet`) clears
- * only a DIVERGENT parent-equal override and leaves a parent-*equal* scalar pin
- * in place — the same latent gap this fixes for settings. It's shared by three
- * call sites (CSV import, per-id sync, INI import), so aligning it is tracked
- * separately rather than widened into this PR.
+ * Sibling paths (GH #971, now fixed): the SCALAR / temperature / secondaryColors
+ * branches of `splitInheritedImportSet` now also clear a parent-*equal* pin
+ * (presence-based `$unset`), matching this settings self-heal across all three
+ * shared call sites (CSV import, per-id sync, INI import). The one remaining
+ * asymmetry is that THIS settings self-heal is still wired only into the INI
+ * path; the per-id PrusaSlicer sync route doesn't yet clear stored parent-equal
+ * settings pins — tracked in GH #972.
  */
 function settingsSelfHealUnset(
   incoming: unknown,

@@ -948,11 +948,17 @@ export async function POST(
     // this, only `color` had echo suppression (resolveSyncBackColor). Reuse the
     // CSV importer's battle-tested split (GH #628 / #649): drop each inheritable
     // field whose incoming value equals the parent's (keep inheriting), and
-    // $unset a stale diverging local override so inheritance resumes. Variant-
+    // $unset a stale local override so inheritance resumes. Variant-
     // only + non-inheritable keys (color, colorName, name, settings, soluble,
     // …) pass through untouched. `calParent` is the already-fetched parent doc;
     // when it's null (standalone/parent, or a soft-deleted/missing parent —
     // nothing to inherit) the update is written verbatim.
+    // GH #971: because the fork ALWAYS sends resolveFilament-flattened values
+    // (per the docblock above), a parent-EQUAL incoming value is indistinguishable
+    // from a true inherit on this path exactly as on the CSV/INI bundle paths — so
+    // splitInheritedImportSet's presence-based clear (which now also drops a
+    // parent-equal pin, not just a divergent one) is the correct shared default
+    // here too, not a bundle-only concern.
     const mongoUpdate: Record<string, unknown> = { $set: update };
     if (filament.parentId && calParent) {
       const split = splitInheritedImportSet(

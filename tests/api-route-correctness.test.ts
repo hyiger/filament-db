@@ -1015,6 +1015,58 @@ describe("API route correctness", () => {
     expect(resolveFilament(fresh, freshParent).cost).toBe(30);
   });
 
+  it("#971 — syncing a variant CLEARS a parent-EQUAL local pin so future parent edits propagate", async () => {
+    const parent = await Filament.create({
+      name: "PEq Sync PLA",
+      vendor: "Acme",
+      type: "PLA",
+      cost: 25,
+      temperatures: { nozzle: 215 },
+    });
+    // The variant carries LOCAL pins that already EQUAL the parent's values.
+    const variant = await Filament.create({
+      name: "PEq Sync PLA — Green",
+      vendor: "Acme",
+      type: "PLA",
+      color: "#00FF00",
+      parentId: parent._id,
+      cost: 25, // parent-equal pin
+      temperatures: { nozzle: 215 }, // parent-equal pin
+    });
+
+    // The fork echoes the resolved (== parent) config; a parent-equal incoming
+    // value is indistinguishable from a true inherit, so the pin must be cleared.
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${variant._id}`, {
+        config: {
+          filamentdb_id: String(variant._id),
+          filament_type: "PLA",
+          filament_vendor: "Acme",
+          filament_cost: "25",
+          temperature: "215",
+        },
+      }),
+      { params: Promise.resolve({ id: String(variant._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Filament.findById(variant._id).lean();
+    // Parent-equal pins cleared ($unset removes the field) → truly inheriting.
+    expect(fresh.cost ?? null).toBeNull();
+    expect(fresh.temperatures?.nozzle ?? null).toBeNull();
+
+    // A later parent edit now propagates (GH #106 restored).
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { cost: 40, "temperatures.nozzle": 230 } },
+    );
+    const { resolveFilament } = await import("@/lib/resolveFilament");
+    const freshParent = await Filament.findById(parent._id).lean();
+    const resolved = resolveFilament(fresh, freshParent);
+    expect(resolved.cost).toBe(40);
+    expect(resolved.temperatures?.nozzle).toBe(230);
+  });
+
   it("#951 — a variant sync value that DIFFERS from the parent is written as a genuine override", async () => {
     const parent = await Filament.create({
       name: "Sync PETG",

@@ -252,6 +252,52 @@ bed_temperature = 60
       const freshParent = await Filament.findById(parent._id).lean();
       expect(resolveFilament(fresh, freshParent).cost).toBe(30);
     });
+
+    it("#971: re-importing clears a variant's parent-EQUAL scalar/temp pin so future parent edits propagate", async () => {
+      const parent = await Filament.create({
+        name: "PEq Base",
+        vendor: "Acme",
+        type: "PLA",
+        cost: 25,
+        temperatures: { nozzle: 215, bed: 60 },
+      });
+      // The variant PINS cost + nozzle to values that already EQUAL the parent.
+      const variant = await Filament.create({
+        name: "PEq Base — Blue",
+        vendor: "Acme",
+        type: "PLA",
+        color: "#0000FF",
+        parentId: parent._id,
+        cost: 25, // parent-equal pin
+        temperatures: { nozzle: 215 }, // parent-equal pin
+      });
+      // The flattened export section carries the resolved (== parent) values.
+      const ini = `[filament:PEq Base — Blue]
+filament_type = PLA
+filament_vendor = Acme
+filament_cost = 25
+temperature = 215
+`;
+      const file = new File([ini], "peq.ini", { type: "text/plain" });
+      const res = await importFilaments(
+        multipartReq("http://localhost/api/filaments/import", file),
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(variant._id).lean();
+      // Pins cleared ($unset removes the field entirely) → now truly inheriting.
+      expect(fresh.cost ?? null).toBeNull();
+      expect(fresh.temperatures?.nozzle ?? null).toBeNull();
+      // Prove propagation: a later parent edit now reaches the variant.
+      await Filament.updateOne(
+        { _id: parent._id },
+        { $set: { cost: 40, "temperatures.nozzle": 230 } },
+      );
+      const { resolveFilament } = await import("@/lib/resolveFilament");
+      const freshParent = await Filament.findById(parent._id).lean();
+      const resolved = resolveFilament(fresh, freshParent);
+      expect(resolved.cost).toBe(40);
+      expect(resolved.temperatures?.nozzle).toBe(230);
+    });
   });
 
   describe("POST /api/filaments/prusaslicer (bundle import)", () => {
