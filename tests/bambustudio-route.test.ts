@@ -486,6 +486,42 @@ describe("Bambu Studio importer routes", () => {
       expect(cal.pressureAdvance).toBe(0.02); // unrelated calibration data preserved
     });
 
+    it("GH #950 (Codex P2 r7): a chamber-disable-only sync carrying max-vol does NOT touch an existing calibration's other fields", async () => {
+      // maxVolumetricSpeed is excluded from hasAnyHint (it has a top-level home), so
+      // a disable-only profile carrying it is still chamberClearOnly. The row must
+      // carry JUST the chamber clear — it must NOT overwrite the existing row's
+      // max-vol. The profile's max-vol lands on the filament top level instead.
+      const { printer, nozzle } = await seedPrinterWithNozzle();
+      await Filament.create({
+        name: "QA Bambu PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        calibrations: [
+          { printer: printer._id, nozzle: nozzle._id, chamberTemp: 45, maxVolumetricSpeed: 12 },
+        ],
+      });
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+            activate_chamber_temp_control: ["0"], // disable only
+            filament_max_volumetric_speed: ["20"], // excluded from hasAnyHint → stays chamberClearOnly
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      const cal = stored.calibrations.find(
+        (c: { printer: unknown; nozzle: unknown }) =>
+          String(c.printer) === String(printer._id) && String(c.nozzle) === String(nozzle._id),
+      );
+      expect(cal.chamberTemp ?? null).toBeNull(); // chamber cleared
+      expect(cal.maxVolumetricSpeed).toBe(12); // existing calibration max-vol UNTOUCHED (not 20)
+      expect(stored.maxVolumetricSpeed).toBe(20); // profile's max-vol landed on the top level
+    });
+
     it("GH #950 (Codex P2 r6): a disable-only profile WITH temps but no existing row does not fabricate a calibration", async () => {
       // Typical Bambu profiles carry nozzle/bed temps. A chamber-disable-only sync
       // must NOT turn those into a per-nozzle calibration row (they belong on the

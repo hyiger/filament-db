@@ -404,12 +404,16 @@ export async function resolveAndApplyCalibration(
     return { applied: false, unresolved: hints.hasAnyHint };
   }
 
-  // GH #950 (Codex r5/r6): a "chamber-disable-only" sync — an explicit chamber
+  // GH #950 (Codex r5/r6/r7): a "chamber-disable-only" sync — an explicit chamber
   // disable with NO real calibration hint and no new chamber temp. Its ONLY job is
-  // to clear a pre-existing calibrations[].chamberTemp; it must NOT fabricate a new
-  // per-nozzle calibration row out of the profile's ordinary top-level temps
-  // (those already land on the filament via buildStructuredUpdate, and a fabricated
-  // row would later shadow user-edited top-level temps in /calibration).
+  // to CLEAR a pre-existing calibrations[].chamberTemp. It must therefore carry
+  // JUST the chamber clear: it must not fabricate a new per-nozzle calibration, nor
+  // update an existing row's OTHER fields. Every non-chamber value the profile
+  // carries (ordinary temps, and maxVolumetricSpeed — which is excluded from
+  // hasAnyHint precisely because it has a top-level home) already lands on the
+  // filament via buildStructuredUpdate, so gating ALL of them behind
+  // !chamberClearOnly is the root fix that closes this whole leak class at once
+  // (each round Codex found another individual field slipping through).
   const chamberClearOnly =
     hints.chamberDisabled === true && !hints.hasAnyHint && hints.chamberTemp == null;
 
@@ -417,23 +421,20 @@ export async function resolveAndApplyCalibration(
     printer: ctx.printerId,
     nozzle: ctx.nozzleId,
   };
-  if (hints.extrusionMultiplier != null) row.extrusionMultiplier = hints.extrusionMultiplier;
-  if (hints.maxVolumetricSpeed != null) row.maxVolumetricSpeed = hints.maxVolumetricSpeed;
-  if (hints.pressureAdvance != null) row.pressureAdvance = hints.pressureAdvance;
-  if (hints.retractLength != null) row.retractLength = hints.retractLength;
-  if (hints.retractSpeed != null) row.retractSpeed = hints.retractSpeed;
-  if (hints.retractLift != null) row.retractLift = hints.retractLift;
-  if (hints.fanMinSpeed != null) row.fanMinSpeed = hints.fanMinSpeed;
-  if (hints.fanMaxSpeed != null) row.fanMaxSpeed = hints.fanMaxSpeed;
-  if (hints.fanBridgeSpeed != null) row.fanBridgeSpeed = hints.fanBridgeSpeed;
+  // Chamber: write a new value, or (on an explicit disable) null to clear it.
   if (hints.chamberTemp != null) row.chamberTemp = hints.chamberTemp; // GH #950
-  // GH #950 (Codex r5): an explicit disable with no new temp CLEARS the chamber
-  // value on the matched row (null = the schema default / "off").
   else if (hints.chamberDisabled === true) row.chamberTemp = null;
-  // Copy top-level temps into the calibration only for a REAL calibration write —
-  // NOT a chamber-disable-only sync (Codex r6), so `row` then carries only the
-  // chamber clear and never fabricates a temp-bearing row.
+  // All non-chamber calibration values — ONLY for a real calibration write.
   if (!chamberClearOnly) {
+    if (hints.extrusionMultiplier != null) row.extrusionMultiplier = hints.extrusionMultiplier;
+    if (hints.maxVolumetricSpeed != null) row.maxVolumetricSpeed = hints.maxVolumetricSpeed;
+    if (hints.pressureAdvance != null) row.pressureAdvance = hints.pressureAdvance;
+    if (hints.retractLength != null) row.retractLength = hints.retractLength;
+    if (hints.retractSpeed != null) row.retractSpeed = hints.retractSpeed;
+    if (hints.retractLift != null) row.retractLift = hints.retractLift;
+    if (hints.fanMinSpeed != null) row.fanMinSpeed = hints.fanMinSpeed;
+    if (hints.fanMaxSpeed != null) row.fanMaxSpeed = hints.fanMaxSpeed;
+    if (hints.fanBridgeSpeed != null) row.fanBridgeSpeed = hints.fanBridgeSpeed;
     if (parsed.temperatures.nozzle != null) row.nozzleTemp = parsed.temperatures.nozzle;
     if (parsed.temperatures.nozzleFirstLayer != null) row.nozzleTempFirstLayer = parsed.temperatures.nozzleFirstLayer;
     if (parsed.temperatures.bed != null) row.bedTemp = parsed.temperatures.bed;
