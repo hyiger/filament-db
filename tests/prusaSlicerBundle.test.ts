@@ -1333,6 +1333,25 @@ describe("collapsePerNozzleImportSections (#872)", () => {
     expect(base.settings.compatible_printers_condition).toBeNull();
   });
 
+  it("#950 (Codex r4): KEEPS a user pin that merely REFERENCES nozzle_diameter (not the exact derived shape)", () => {
+    // A substring test would wrongly strip this legitimate compound restriction.
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\ncompatible_printers_condition = printer_model==MK4 and nozzle_diameter[0]==0.4\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    expect(base.settings.compatible_printers_condition).toBe(
+      "printer_model==MK4 and nozzle_diameter[0]==0.4",
+    );
+  });
+
+  it("#950 (Codex r4): STRIPS a multi-term auto-derived condition (nozzle_diameter or-joined)", () => {
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\ncompatible_printers_condition = nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    expect("compatible_printers_condition" in base.settings).toBe(false);
+  });
+
   it("#950 (Codex r3): a pinned condition survives a full multi-nozzle export→parse→collapse round-trip", () => {
     const filament = {
       name: "PLA",

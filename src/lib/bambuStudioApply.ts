@@ -180,15 +180,28 @@ export async function prepareBambuUpdate(
   // filament_soluble / slicer options. `settingsResult.settings` is always the
   // full {existing, ...incoming} bag. Skip when the merge errored (the route 400s
   // on it anyway) so we never build on a partial bag.
-  if (
-    parsed.calibrationHints.chamberTemp != null &&
-    !calibrationOutcome.applied &&
-    !settingsResult.error
-  ) {
-    const settings = { ...settingsResult.settings };
-    settings.chamber_temperature = String(parsed.calibrationHints.chamberTemp);
-    settings.activate_chamber_temp_control = "1";
-    update.settings = settings;
+  if (parsed.calibrationHints.chamberTemp != null && !settingsResult.error) {
+    if (!calibrationOutcome.applied) {
+      // Unresolved: no structural home → preserve the raw chamber keys in the bag.
+      const settings = { ...settingsResult.settings };
+      settings.chamber_temperature = String(parsed.calibrationHints.chamberTemp);
+      settings.activate_chamber_temp_control = "1";
+      update.settings = settings;
+    } else if (
+      "chamber_temperature" in settingsResult.settings ||
+      "activate_chamber_temp_control" in settingsResult.settings
+    ) {
+      // Codex P2 on PR #968 r4: the chamber value went to calibrations[].chamberTemp
+      // (authoritative, per-nozzle). Strip any STALE raw chamber keys the merged bag
+      // carried over from a PRIOR unresolved/disabled import — otherwise they'd
+      // re-export as a filament-global chamber value that double-counts the
+      // calibration. The parser already excludes the INCOMING chamber keys from the
+      // bag, so this only clears a carried-over value from `existing`.
+      const settings = { ...settingsResult.settings };
+      delete settings.chamber_temperature;
+      delete settings.activate_chamber_temp_control;
+      update.settings = settings;
+    }
   }
 
   // GH #892: reject an inverted nozzle range, mirroring the OrcaSlicer sync

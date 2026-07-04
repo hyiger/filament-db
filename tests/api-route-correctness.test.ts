@@ -1575,6 +1575,32 @@ describe("API route correctness", () => {
       expect(res.status).toBe(404);
     });
 
+    it("950.5 (sweep) — a per-id sync PURGES a stale structured key (filament_settings_id) from the existing settings bag", async () => {
+      // Latent 950.5 leak on the merge path: a legacy bag carrying a structured
+      // key would survive the merge (mergeSlicerSettings only skipped it from the
+      // INCOMING config) and shadow the re-derived value on the next export. The
+      // fix strips structured keys from the seeded existing bag too.
+      const f = await Filament.create({
+        name: "Sweep PLA",
+        vendor: "X",
+        type: "PLA",
+        settings: { filament_settings_id: "Stale Old Name", some_passthrough: "keep" },
+      });
+      const res = await slicerSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}`, {
+          config: { filament_density: "1.24" },
+        }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      // Stale structured shadow purged (export re-derives filament_settings_id from name).
+      expect(fresh.settings?.filament_settings_id).toBeUndefined();
+      // Genuine passthrough keys survive.
+      expect(fresh.settings?.some_passthrough).toBe("keep");
+      expect(fresh.density).toBe(1.24); // structured field still applied
+    });
+
     it("950.6 — spool-check resolves a 24-hex URL by _id FIRST, not a name that looks like an id", async () => {
       // The slicer-facing GET routes must resolve the same way as the id-first
       // sync/export routes, or a slicer addressing by id reads the WRONG row.

@@ -42,6 +42,20 @@ export function mergeSlicerSettings(
   structuredKeys: Set<string>,
 ): SettingsMergeResult {
   const settings: Record<string, unknown> = { ...existing };
+  // GH #950 (adversarial sweep on PR #968): a structured-owned key must never
+  // live in the settings bag — it's authoritative as a structured field, is
+  // re-derived on export (e.g. `filament_settings_id` from the CURRENT name), or
+  // is a pure routing hint (`filamentdb_id`/`filamentdb_nozzle`). The incoming
+  // loop below already skips these, but a STALE copy carried in `existing`
+  // (legacy data written before this rule) would otherwise survive the merge and
+  // shadow the structured value on the next export — the exact 950.5 leak, closed
+  // on the INI bulk-import path (which full-replaces a stripped bag) but not on
+  // the per-id merge paths. Strip them from the seeded `existing` bag too so the
+  // merge is source-agnostic. (Takes full effect where the caller writes
+  // update.settings unconditionally — the PrusaSlicer per-id sync; the OrcaSlicer
+  // per-id sync gates on `added`, so its purge lands whenever the sync also adds a
+  // passthrough key. Bambu passes an empty structuredKeys set → no-op there.)
+  for (const key of structuredKeys) delete settings[key];
   const added: string[] = [];
 
   for (const [key, value] of Object.entries(incoming)) {

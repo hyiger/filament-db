@@ -237,7 +237,15 @@ export function collapsePerNozzleImportSections(
       // round-trips there.)
       if (k === "compatible_printers_condition") {
         const v = settings[k];
-        const isDerived = typeof v === "string" && v.includes("nozzle_diameter[");
+        // Codex P2 on PR #968 r4: match ONLY the exact auto-derived shape — one or
+        // more `nozzle_diameter[<n>]==<number>` terms joined by ` or ` (the
+        // calibration bake emits a single term, the non-calibration derivation an
+        // ` or `-joined set). A substring test would wrongly strip a legitimate
+        // user pin that merely REFERENCES a nozzle diameter, e.g.
+        // `printer_model==MK4 and nozzle_diameter[0]==0.4`.
+        const isDerived =
+          typeof v === "string" &&
+          /^nozzle_diameter\[\d+\]==\d+(?:\.\d+)?(?: or nozzle_diameter\[\d+\]==\d+(?:\.\d+)?)*$/.test(v);
         const isEmpty = v === "" || v === undefined;
         if (isDerived || isEmpty) delete settings[k];
         // else: user pin (non-derived string) or nil (null) → keep for round-trip.

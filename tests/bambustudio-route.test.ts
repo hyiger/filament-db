@@ -414,6 +414,46 @@ describe("Bambu Studio importer routes", () => {
       expect(stored.settings?.chamber_temperature).toBeUndefined();
     });
 
+    it("GH #950 (Codex P2 r4): a resolved chamber import CLEARS a stale settings-bag chamber from a prior import", async () => {
+      const { printer, nozzle } = await seedPrinterWithNozzle();
+      // Existing filament carrying a STALE raw chamber value (from a prior
+      // unresolved/disabled import) plus an unrelated setting.
+      await Filament.create({
+        name: "QA Bambu PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        settings: {
+          chamber_temperature: "50",
+          activate_chamber_temp_control: "1",
+          filament_notes: "keep me",
+        },
+      });
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+            pressure_advance: ["0.028"], // ensures a calibration row resolves
+            chamber_temperature: ["45"],
+            activate_chamber_temp_control: ["1"],
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      const cal = stored.calibrations.find(
+        (c: { printer: unknown; nozzle: unknown }) =>
+          String(c.printer) === String(printer._id) && String(c.nozzle) === String(nozzle._id),
+      );
+      expect(cal.chamberTemp).toBe(45); // authoritative per-nozzle value
+      // The stale filament-global chamber keys are removed (no double-count on export).
+      expect(stored.settings.chamber_temperature).toBeUndefined();
+      expect(stored.settings.activate_chamber_temp_control).toBeUndefined();
+      // Unrelated existing settings are preserved.
+      expect(stored.settings.filament_notes).toBe("keep me");
+    });
+
     it("GH #950 (Codex P1 r2): the unresolved chamber fallback PRESERVES existing settings", async () => {
       // Regression guard: an existing filament with settings, updated by an
       // unresolved chamber-only profile that adds NO passthrough keys. Pre-fix the

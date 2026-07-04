@@ -43,6 +43,28 @@ describe("mergeSlicerSettings", () => {
     expect(existing).toEqual({ keep: "alpha" });
   });
 
+  it("#950: strips a STALE structured key already sitting in existing (not just incoming)", () => {
+    // A legacy bag can carry a structured-owned key (a shadow of a first-class
+    // field / re-derived export key). It must be purged from the seeded existing
+    // bag too, or it survives the merge and shadows the structured value on export.
+    const result = mergeSlicerSettings(
+      { compatible_printers: "Stale MK4", keep: "alpha" },
+      { add: "value" },
+      STRUCTURED,
+    );
+    expect(result.error).toBeNull();
+    expect("compatible_printers" in result.settings).toBe(false); // purged from existing
+    expect(result.settings).toEqual({ keep: "alpha", add: "value" });
+    // Stripping a stale existing key is not counted as an "added" incoming key.
+    expect(result.added).toEqual(["add"]);
+  });
+
+  it("#950: does not mutate the existing object when stripping a stale structured key", () => {
+    const existing: Record<string, unknown> = { compatible_printers: "Stale", keep: "alpha" };
+    mergeSlicerSettings(existing, {}, STRUCTURED);
+    expect(existing).toEqual({ compatible_printers: "Stale", keep: "alpha" }); // untouched
+  });
+
   it("preserves an incoming key over an existing key with the same name (last write wins)", () => {
     const result = mergeSlicerSettings(
       { shared: "old" },
