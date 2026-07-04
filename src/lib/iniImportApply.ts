@@ -30,6 +30,7 @@ import Filament from "@/models/Filament";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
 import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { INI_TOP_LEVEL_SETTING_KEYS } from "@/lib/parseIni";
+import { NEVER_BAGGED_KEYS } from "@/lib/slicerSettings";
 import type { CollapsedFilamentData } from "@/lib/prusaSlicerBundle";
 
 /**
@@ -174,42 +175,75 @@ function settingsSelfHealUnset(
 }
 
 /**
+ * GH #969 (Codex round 4): $unset never-bagged shadow keys
+ * (`filament_settings_id` / `filamentdb_id` / `filamentdb_nozzle`) still stored
+ * on the EXISTING doc. The incoming section already strips them and the dot-key
+ * merge (#950.8b) only writes keys it emits, so a LEGACY stored shadow survives
+ * — and `filamentToSlicerKeys` seeds from the bag then only sets
+ * `filament_settings_id` when absent, so the stale copy would keep overriding
+ * the re-derived current name on the next export. The pre-#950.8b whole-object
+ * replace dropped these for free (the incoming, stripped, replaced the bag);
+ * restore that purge explicitly. Disjoint from every $set path (the incoming
+ * never carries these) and from the self-heal/inheritance $unsets (different
+ * keys), so no path collision.
+ */
+function neverBaggedUnset(existing: LeanFilament): string[] {
+  const settings =
+    existing.settings && typeof existing.settings === "object" && !Array.isArray(existing.settings)
+      ? (existing.settings as Record<string, unknown>)
+      : null;
+  if (!settings) return [];
+  const unset: string[] = [];
+  for (const k of NEVER_BAGGED_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(settings, k)) unset.push(`settings.${k}`);
+  }
+  return unset;
+}
+
+/**
  * Build the atomic Mongo update body ({ $set } + optional { $unset }) for a
  * name-matched INI import target. For a variant it applies the inheritance
  * split; for a root (or a variant whose parent is missing/trashed — nothing to
- * inherit) it writes the flattened doc verbatim.
+ * inherit) it writes the flattened doc verbatim. Every UPDATE path also purges
+ * legacy never-bagged settings shadows (GH #969 r4, neverBaggedUnset).
  */
 async function buildIniUpdate(
   collapsed: CollapsedFilamentData,
   existing: LeanFilament,
 ): Promise<Record<string, unknown>> {
   const flat = toUpdateSet(collapsed);
+  const purge = neverBaggedUnset(existing);
+  // Attach the never-bagged purge (+ any caller unsets) to a `$set`-only body.
+  const withUnset = (
+    out: Record<string, unknown>,
+    extra: string[] = [],
+  ): Record<string, unknown> => {
+    const keys = [...extra, ...purge];
+    if (keys.length > 0) out.$unset = Object.fromEntries(keys.map((k) => [k, ""]));
+    return out;
+  };
+
   // Root (or a variant with no resolvable parent): merge settings via dot-keys so
   // the write doesn't replace the whole bag (GH #950.8b).
-  if (!existing.parentId) return { $set: mergeSettingsDotKeys(flat) };
+  if (!existing.parentId) return withUnset({ $set: mergeSettingsDotKeys(flat) });
 
   const parent = await Filament.findOne({ _id: existing.parentId, _deletedAt: null })
     .select(INI_INHERITANCE_PROJECTION)
     .lean();
-  if (!parent) return { $set: mergeSettingsDotKeys(flat) };
+  if (!parent) return withUnset({ $set: mergeSettingsDotKeys(flat) });
 
   const split = splitInheritedImportSet(flat, existing, parent as LeanFilament);
   // Dot-flatten AFTER the per-key inheritance diff so its settings branch saw the
   // whole object; the resulting keys then MERGE rather than replace (GH #950.8b).
-  const out: Record<string, unknown> = { $set: mergeSettingsDotKeys(split.set) };
   // GH #969: the dot-key merge only writes the keys it emits, so a stored variant
   // settings override the section now reports equal to the parent would stay
   // pinned. Clear those via per-key `settings.<k>` $unsets so the variant keeps
   // tracking the parent (disjoint from the $set dot-keys above — see the
   // settingsSelfHealUnset docblock).
-  const unsetKeys = [
+  return withUnset({ $set: mergeSettingsDotKeys(split.set) }, [
     ...split.unset,
     ...settingsSelfHealUnset(flat.settings, existing, parent as LeanFilament),
-  ];
-  if (unsetKeys.length > 0) {
-    out.$unset = Object.fromEntries(unsetKeys.map((k) => [k, ""]));
-  }
-  return out;
+  ]);
 }
 
 export type IniUpsertOutcome = "created" | "updated";

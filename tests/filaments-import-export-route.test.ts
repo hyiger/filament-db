@@ -414,6 +414,39 @@ filamentdb_nozzle = 0.6 Brass
       expect(fresh.settings.cooling).toBe("1");
     });
 
+    it("#969 (r4): purges a LEGACY never-bagged shadow already stored on the doc, keeping OPT keys", async () => {
+      // A pre-existing doc carrying stale never-bagged shadows (from an old
+      // import before they were stripped). The incoming section doesn't carry
+      // them, and the dot-key merge only writes present keys — so without an
+      // explicit purge they'd survive and keep overriding the re-derived name on
+      // the next export. They must be $unset; the OPT linkage must survive.
+      const existing = await Filament.create({
+        name: "Legacy PLA",
+        vendor: "X",
+        type: "PLA",
+        settings: {
+          filament_settings_id: "Old Stale Name",
+          filamentdb_nozzle: "0.4 Brass",
+          openprinttag_slug: "opt-keep",
+          cooling: "0",
+        },
+      });
+      const ini = `[filament:Legacy PLA]\nfilament_type = PLA\nfilament_vendor = X\ncooling = 1\n`;
+      const res = await prusaImport(
+        new NextRequest("http://localhost/api/filaments/prusaslicer", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: ini,
+        }),
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(existing._id).lean();
+      expect(fresh.settings.filament_settings_id).toBeUndefined(); // stale shadow purged
+      expect(fresh.settings.filamentdb_nozzle).toBeUndefined(); // stale hint purged
+      expect(fresh.settings.openprinttag_slug).toBe("opt-keep"); // OPT linkage preserved
+      expect(fresh.settings.cooling).toBe("1"); // section value applied
+    });
+
     it("#872: a hint-only collapsed section does NOT clobber the base's vendor/type/cost/density/color", async () => {
       const base = await Filament.create({
         name: "ABS",
