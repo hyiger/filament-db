@@ -1067,6 +1067,53 @@ describe("API route correctness", () => {
     expect(resolved.temperatures?.nozzle).toBe(230);
   });
 
+  it("#972 — per-id sync self-heals a parent-EQUAL SETTINGS pin while keeping variant-only settings", async () => {
+    // #972 was filed as a suspected gap (the per-id route never emits a
+    // settings.<k> $unset like the INI path's settingsSelfHealUnset). It's a
+    // FALSE POSITIVE: this route $sets the WHOLE settings object to
+    // splitInheritedImportSet's parent-filtered bag, so a stored parent-equal pin
+    // — excluded from `filtered` — is dropped by the whole-object replace, and
+    // variant-only keys (which differ from the parent) survive in `filtered`.
+    // (The INI path needs settingsSelfHealUnset only because #950.8b switched it
+    // to a non-replacing dot-key merge.) This test LOCKS that behavior so a future
+    // refactor of the route to a merge-style write can't silently reintroduce #972.
+    const parent = await Filament.create({
+      name: "S972 Parent",
+      vendor: "Acme",
+      type: "PLA",
+      settings: { cooling: "1" },
+    });
+    const variant = await Filament.create({
+      name: "S972 Variant",
+      vendor: "Acme",
+      type: "PLA",
+      color: "#123456",
+      parentId: parent._id,
+      settings: { cooling: "1", opt: "x" }, // cooling = parent-equal pin; opt = variant-only
+    });
+    // Fork echoes the resolved (== parent) config; cooling is a passthrough key.
+    const res = await slicerSync(
+      jsonReq(`http://localhost/api/filaments/${variant._id}`, {
+        config: {
+          filamentdb_id: String(variant._id),
+          filament_type: "PLA",
+          filament_vendor: "Acme",
+          cooling: "1",
+        },
+      }),
+      { params: Promise.resolve({ id: String(variant._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(variant._id).lean();
+    expect(fresh.settings?.cooling ?? null).toBeNull(); // parent-equal pin cleared → inherits
+    expect(fresh.settings?.opt).toBe("x"); // variant-only key preserved
+    // A later parent edit propagates through resolveFilament's shallow merge.
+    await Filament.updateOne({ _id: parent._id }, { $set: { "settings.cooling": "2" } });
+    const { resolveFilament } = await import("@/lib/resolveFilament");
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(resolveFilament(fresh, freshParent).settings.cooling).toBe("2");
+  });
+
   it("#951 — a variant sync value that DIFFERS from the parent is written as a genuine override", async () => {
     const parent = await Filament.create({
       name: "Sync PETG",
