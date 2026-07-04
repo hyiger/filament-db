@@ -53,9 +53,20 @@ const BED_TYPE_KEY_MAP: Record<string, { temp: string; initial: string }> = {
  * Map a resolved Filament DB document to OrcaSlicer JSON key-value pairs.
  * All values are wrapped in single-element arrays per OrcaSlicer convention.
  * Structured DB fields take precedence over the settings bag.
+ *
+ * GH #950.4: when a representative `calibration` is supplied, its tuned values
+ * (flow ratio, pressure advance, retraction, fan speeds, per-calibration temps)
+ * are BAKED on top of the base keys via calibrationToOrcaSlicerKeys. Unlike the
+ * PrusaSlicer fork (which applies calibration dynamically via GET .../calibration),
+ * stock Bambu Studio has no such module, so without baking those values never
+ * reach an exported preset and prints revert to defaults. Pressure advance IS
+ * baked here (calibrationToOrcaSlicerKeys emits it) — the opposite of PrusaSlicer's
+ * deliberate omission — precisely because there is no dynamic fallback for Bambu.
  */
 export function filamentToOrcaSlicerKeys(
   filament: FilamentDoc,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  calibration?: Record<string, any> | null,
 ): Record<string, string[]> {
   const keys: Record<string, string[]> = {};
 
@@ -130,6 +141,15 @@ export function filamentToOrcaSlicerKeys(
   if (filament.shrinkageXY != null) set("filament_shrink", String(filament.shrinkageXY) + "%");
   if (filament.shrinkageZ != null) set("filament_shrinkage_compensation_z", filament.shrinkageZ);
 
+  // GH #950.4: bake the representative calibration on top (flow/PA/retraction/fans/
+  // per-calibration temps). Calibration values WIN over the structured/settings
+  // defaults above — they're the tuned per-nozzle numbers the user dialed in.
+  if (calibration) {
+    for (const [k, v] of Object.entries(calibrationToOrcaSlicerKeys(calibration))) {
+      keys[k] = v;
+    }
+  }
+
   return keys;
 }
 
@@ -178,12 +198,46 @@ export function calibrationToOrcaSlicerKeys(
 }
 
 /**
+ * GH #950.4: pick the ONE calibration to bake into a filament's single exported
+ * preset — the any-printer / any-bed "default" entry (printer == null && bedType
+ * == null) preferred, else the first calibration. Orca/Bambu presets are a single
+ * .json, so a multi-nozzle filament collapses to this representative (the detail
+ * page shows a notice when >1 distinct nozzle calibration exists — see
+ * distinctNozzleCalibrationCount).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function pickRepresentativeCalibration(filament: FilamentDoc): Record<string, any> | null {
+  const cals = Array.isArray(filament.calibrations) ? filament.calibrations : [];
+  if (cals.length === 0) return null;
+  return cals.find((c) => c && c.printer == null && c.bedType == null) ?? cals[0];
+}
+
+/**
+ * GH #950.4: count DISTINCT nozzle calibrations (diameter + type + high-flow),
+ * mirroring the #872 grouping in prusaSlicerBundle. The detail page warns when
+ * this is >1 because the single Orca/Bambu .json export bakes only ONE
+ * (see pickRepresentativeCalibration) — the other nozzles' tuning is dropped.
+ */
+export function distinctNozzleCalibrationCount(filament: FilamentDoc): number {
+  const cals = Array.isArray(filament.calibrations) ? filament.calibrations : [];
+  const keys = new Set<string>();
+  for (const cal of cals) {
+    const nz = cal?.nozzle;
+    if (!nz || typeof nz !== "object" || nz.diameter == null) continue;
+    keys.add(`${nz.diameter}|${(nz.type ?? "").trim().toLowerCase()}|${nz.highFlow ? "HF" : ""}`);
+  }
+  return keys.size;
+}
+
+/**
  * Generate an array of OrcaSlicer-format filament profile objects
  * from resolved Filament DB documents.
  */
 export function generateOrcaSlicerProfiles(filaments: FilamentDoc[]): Record<string, string[] | string>[] {
   return filaments.map((filament) => {
-    const orcaKeys = filamentToOrcaSlicerKeys(filament);
+    // GH #950.4: bake the representative calibration so tuned flow/PA/retraction/
+    // fan values reach the exported preset (stock Bambu has no dynamic fallback).
+    const orcaKeys = filamentToOrcaSlicerKeys(filament, pickRepresentativeCalibration(filament));
 
     return {
       // Metadata fields (plain strings, not arrays)

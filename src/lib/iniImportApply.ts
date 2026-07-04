@@ -38,15 +38,18 @@ import type { CollapsedFilamentData } from "@/lib/prusaSlicerBundle";
  * vendor/type/cost/density/diameter/maxVolumetricSpeed/inherits/spoolWeight/
  * shrinkageXY/shrinkageZ + the four temp subfields). Projected on the variant
  * AND its parent so `splitInheritedImportSet` can compare incoming vs parent and
- * detect a stale variant override to clear. `settings` is deliberately NOT
- * projected: after `stripStructuredSettings` removes the top-level shadows the
- * bag holds only genuine passthrough keys, so `splitInheritedImportSet` writes it
- * through unchanged (its settings branch no-ops when the parent's settings are
- * absent). GH #951 (Codex).
+ * detect a stale variant override to clear. GH #950.8b: `settings` is now projected
+ * too so `splitInheritedImportSet`'s per-key merge runs for a variant — it stores
+ * only settings keys that DIFFER from the parent (parent-equal keys keep
+ * inheriting) instead of pinning the whole resolved bag. `buildIniUpdate` then
+ * dot-flattens the resulting `settings` object into `settings.<k>` `$set` keys, so
+ * the write MERGES into the stored subdocument — preserving both inheritance and
+ * keys the section omitted (e.g. openprinttag_slug/_uuid, the OPT re-sync linkage).
+ * `stripStructuredSettings` still removes the top-level shadows first. GH #951 / #950.8b.
  */
 const INI_INHERITANCE_PROJECTION =
   "_id parentId vendor type cost density diameter maxVolumetricSpeed inherits " +
-  "spoolWeight shrinkageXY shrinkageZ temperatures";
+  "spoolWeight shrinkageXY shrinkageZ temperatures settings";
 
 /** Loosely-typed lean filament — same posture as resolveFilament / importFilaments. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -74,6 +77,33 @@ function toUpdateSet(collapsed: CollapsedFilamentData): Record<string, unknown> 
 }
 
 /**
+ * GH #950.8b: convert a whole `settings` object in an update `$set` body into
+ * `settings.<key>` DOT-keys, so the write MERGES into the stored settings
+ * subdocument instead of REPLACING it. A whole-object `$set: { settings }` dropped
+ * every key the incoming section didn't carry — notably settings.openprinttag_slug
+ * / _uuid (the #607 OPT re-sync linkage) when importing a foreign/hand-crafted INI
+ * by name over an OPT-linked filament. Dot-keys preserve omitted keys, matching the
+ * per-id sync route's mergeSlicerSettings semantics (INI import is additive for
+ * settings; key DELETION is not expressible via bulk import). Runs AFTER
+ * `splitInheritedImportSet` so the variant per-key inheritance diff still operates
+ * on the whole object. An empty incoming bag emits no settings key → the stored bag
+ * is left untouched (an empty `$set:{settings:{}}` would previously have wiped it).
+ */
+function mergeSettingsDotKeys(setBody: Record<string, unknown>): Record<string, unknown> {
+  const settings = setBody.settings;
+  if (!settings || typeof settings !== "object" || Array.isArray(settings)) {
+    return setBody;
+  }
+  const { settings: _drop, ...rest } = setBody;
+  void _drop;
+  const out: Record<string, unknown> = { ...rest };
+  for (const [k, v] of Object.entries(settings as Record<string, unknown>)) {
+    out[`settings.${k}`] = v;
+  }
+  return out;
+}
+
+/**
  * Build the atomic Mongo update body ({ $set } + optional { $unset }) for a
  * name-matched INI import target. For a variant it applies the inheritance
  * split; for a root (or a variant whose parent is missing/trashed — nothing to
@@ -84,15 +114,19 @@ async function buildIniUpdate(
   existing: LeanFilament,
 ): Promise<Record<string, unknown>> {
   const flat = toUpdateSet(collapsed);
-  if (!existing.parentId) return { $set: flat };
+  // Root (or a variant with no resolvable parent): merge settings via dot-keys so
+  // the write doesn't replace the whole bag (GH #950.8b).
+  if (!existing.parentId) return { $set: mergeSettingsDotKeys(flat) };
 
   const parent = await Filament.findOne({ _id: existing.parentId, _deletedAt: null })
     .select(INI_INHERITANCE_PROJECTION)
     .lean();
-  if (!parent) return { $set: flat };
+  if (!parent) return { $set: mergeSettingsDotKeys(flat) };
 
   const split = splitInheritedImportSet(flat, existing, parent as LeanFilament);
-  const out: Record<string, unknown> = { $set: split.set };
+  // Dot-flatten AFTER the per-key inheritance diff so its settings branch saw the
+  // whole object; the resulting keys then MERGE rather than replace (GH #950.8b).
+  const out: Record<string, unknown> = { $set: mergeSettingsDotKeys(split.set) };
   if (split.unset.length > 0) {
     out.$unset = Object.fromEntries(split.unset.map((k) => [k, ""]));
   }

@@ -293,6 +293,87 @@ filamentdb_nozzle = 0.6 Brass
       expect(fresh.temperatures.nozzle).toBe(240); // not clobbered by 235/245
     });
 
+    it("#950.8b: a non-hinted import by name MERGES settings — omitted keys (openprinttag_slug/_uuid) survive", async () => {
+      const existing = await Filament.create({
+        name: "Prusament PLA",
+        vendor: "Prusa",
+        type: "PLA",
+        temperatures: { nozzle: 215 },
+        settings: { openprinttag_slug: "prusa-pla", openprinttag_uuid: "abc-123", some_fork_key: "keep" },
+      });
+      // A foreign/hand-crafted section (e.g. from stock PrusaSlicer) that OMITS the OPT keys.
+      const ini = `[filament:Prusament PLA]\nfilament_type = PLA\nfilament_vendor = Prusa\ntemperature = 220\ncooling = 1\n`;
+      const res = await prusaImport(
+        new NextRequest("http://localhost/api/filaments/prusaslicer", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: ini,
+        }),
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(existing._id);
+      // The OPT re-sync linkage the section didn't carry is PRESERVED (merge, not whole-replace).
+      expect(fresh.settings.openprinttag_slug).toBe("prusa-pla");
+      expect(fresh.settings.openprinttag_uuid).toBe("abc-123");
+      expect(fresh.settings.some_fork_key).toBe("keep");
+      expect(fresh.settings.cooling).toBe("1"); // the section's own passthrough key applied
+      // item5 guard: structured shadows still NOT persisted in the bag.
+      expect(fresh.settings.filament_type).toBeUndefined();
+      expect(fresh.settings.temperature).toBeUndefined();
+      expect(fresh.temperatures.nozzle).toBe(220); // incoming temp landed on the structured field
+    });
+
+    it("#950.8b: a variant re-import MERGES settings — the variant's own openprinttag_slug survives", async () => {
+      const parent = await Filament.create({
+        name: "Base PLA",
+        vendor: "Prusa",
+        type: "PLA",
+        temperatures: { nozzle: 215 },
+      });
+      const variant = await Filament.create({
+        name: "Base PLA Red",
+        vendor: "Prusa",
+        type: "PLA",
+        color: "#cc0000",
+        parentId: parent._id,
+        settings: { openprinttag_slug: "opt-red", some_key: "v" },
+      });
+      const ini = `[filament:Base PLA Red]\nfilament_type = PLA\nfilament_vendor = Prusa\nfilament_colour = #cc0000\ntemperature = 218\n`;
+      const res = await prusaImport(
+        new NextRequest("http://localhost/api/filaments/prusaslicer", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: ini,
+        }),
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(variant._id);
+      expect(fresh.settings.openprinttag_slug).toBe("opt-red"); // variant's own linkage preserved
+      expect(fresh.settings.some_key).toBe("v");
+    });
+
+    it("#950.8b: merge still does NOT persist a never-bagged key (filament_settings_id) into the bag", async () => {
+      const existing = await Filament.create({
+        name: "Guard PLA",
+        vendor: "X",
+        type: "PLA",
+        settings: { openprinttag_slug: "keep-me" },
+      });
+      const ini = `[filament:Guard PLA]\nfilament_type = PLA\nfilament_vendor = X\nfilament_settings_id = Guard PLA\ncooling = 1\n`;
+      const res = await prusaImport(
+        new NextRequest("http://localhost/api/filaments/prusaslicer", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: ini,
+        }),
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(existing._id);
+      expect(fresh.settings.filament_settings_id).toBeUndefined(); // stripped (item5/950.5)
+      expect(fresh.settings.openprinttag_slug).toBe("keep-me"); // preserved (950.8b merge)
+      expect(fresh.settings.cooling).toBe("1");
+    });
+
     it("#872: a hint-only collapsed section does NOT clobber the base's vendor/type/cost/density/color", async () => {
       const base = await Filament.create({
         name: "ABS",

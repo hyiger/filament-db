@@ -891,6 +891,7 @@
   "detail.slicerExport.orca": "OrcaSlicer-Filamentvorlage",
   "detail.slicerExport.bambu": "Bambu Studio-Filamentvorlage",
   "detail.slicerExport.multiColorNotice": "Slicer-Voreinstellungen unterstützen nur eine Farbe. Die Primärfarbe wird exportiert; Sekundärfarben werden verworfen.",
+  "detail.slicerExport.multiNozzleNotice": "Dieses Filament hat Kalibrierungen für mehr als eine Düse. Die einzelne Orca-/Bambu-Voreinstellung übernimmt nur die Abstimmung der Standarddüse; die anderen werden verworfen.",
   "detail.exportMenu": "Export",
   "detail.exportMenu.title": "Dieses Filament exportieren — Etikett drucken, auf NFC schreiben oder Slicer-Voreinstellung herunterladen",
   "detail.exportMenu.slicerSection": "Slicer-Voreinstellungen",

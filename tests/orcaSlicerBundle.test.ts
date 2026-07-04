@@ -3,6 +3,8 @@ import {
   filamentToOrcaSlicerKeys,
   calibrationToOrcaSlicerKeys,
   generateOrcaSlicerProfiles,
+  pickRepresentativeCalibration,
+  distinctNozzleCalibrationCount,
 } from "@/lib/orcaSlicerBundle";
 
 describe("filamentToOrcaSlicerKeys", () => {
@@ -668,5 +670,78 @@ describe("generateOrcaSlicerProfiles", () => {
     expect(profile.cool_plate_temp).toEqual(["0"]);
     expect(profile.hot_plate_temp).toEqual(["100"]);
     expect(profile.hot_plate_temp_initial_layer).toEqual(["110"]);
+  });
+});
+
+describe("GH #950.4 — bake calibration into the Orca/Bambu export", () => {
+  it("filamentToOrcaSlicerKeys bakes a supplied calibration (flow / PA / retraction / fans) over the base keys", () => {
+    const filament = { name: "PLA", vendor: "X", type: "PLA", diameter: 1.75, temperatures: {}, settings: {} };
+    const keys = filamentToOrcaSlicerKeys(filament, {
+      extrusionMultiplier: 0.978,
+      pressureAdvance: 0.028,
+      retractLength: 0.8,
+      fanMinSpeed: 60,
+      fanMaxSpeed: 100,
+    });
+    expect(keys.filament_flow_ratio).toEqual(["0.978"]);
+    expect(keys.pressure_advance).toEqual(["0.028"]); // baked for Bambu (no dynamic fallback)
+    expect(keys.filament_retraction_length).toEqual(["0.8"]);
+    expect(keys.overhang_fan_speed).toEqual(["60"]);
+    expect(keys.additional_cooling_fan_speed).toEqual(["100"]);
+  });
+
+  it("calibration values WIN over structured/settings defaults", () => {
+    const filament = {
+      name: "PLA", vendor: "X", type: "PLA", diameter: 1.75, maxVolumetricSpeed: 12,
+      temperatures: { nozzle: 210 }, settings: {},
+    };
+    const keys = filamentToOrcaSlicerKeys(filament, { maxVolumetricSpeed: 20, nozzleTemp: 225 });
+    expect(keys.filament_max_volumetric_speed).toEqual(["20"]); // calibration, not the 12 default
+    expect(keys.nozzle_temperature).toEqual(["225"]);
+  });
+
+  it("no calibration → base keys unchanged (backward compatible)", () => {
+    const filament = { name: "PLA", vendor: "X", type: "PLA", diameter: 1.75, temperatures: {}, settings: {} };
+    const keys = filamentToOrcaSlicerKeys(filament);
+    expect(keys.filament_flow_ratio).toBeUndefined();
+    expect(keys.pressure_advance).toBeUndefined();
+  });
+
+  it("generateOrcaSlicerProfiles bakes the representative (default) calibration", () => {
+    const filaments = [{
+      name: "PLA", vendor: "X", type: "PLA", diameter: 1.75, temperatures: {}, settings: {},
+      calibrations: [
+        { nozzle: { diameter: 0.4, type: "Brass" }, printer: { name: "MK4" }, extrusionMultiplier: 0.9 },
+        { nozzle: { diameter: 0.4, type: "Brass" }, printer: null, bedType: null, extrusionMultiplier: 0.978 }, // default
+      ],
+    }];
+    const profile = generateOrcaSlicerProfiles(filaments)[0];
+    expect(profile.filament_flow_ratio).toEqual(["0.978"]); // the printer==null/bedType==null default
+  });
+
+  it("pickRepresentativeCalibration prefers the any-printer/any-bed default, else the first", () => {
+    expect(pickRepresentativeCalibration({ calibrations: [] })).toBeNull();
+    const withDefault = {
+      calibrations: [
+        { printer: { name: "MK4" }, extrusionMultiplier: 0.9 },
+        { printer: null, bedType: null, extrusionMultiplier: 0.978 },
+      ],
+    };
+    expect(pickRepresentativeCalibration(withDefault)?.extrusionMultiplier).toBe(0.978);
+    const noDefault = { calibrations: [{ printer: { name: "MK4" }, extrusionMultiplier: 0.9 }] };
+    expect(pickRepresentativeCalibration(noDefault)?.extrusionMultiplier).toBe(0.9);
+  });
+
+  it("distinctNozzleCalibrationCount groups by diameter+type+highFlow", () => {
+    expect(distinctNozzleCalibrationCount({ calibrations: [] })).toBe(0);
+    const f = {
+      calibrations: [
+        { nozzle: { diameter: 0.4, type: "Brass" }, printer: null },
+        { nozzle: { diameter: 0.4, type: "brass" }, printer: { name: "MK4" } }, // case-fold → same
+        { nozzle: { diameter: 0.6, type: "Brass" }, printer: null }, // distinct
+        { nozzle: { diameter: 0.4, type: "Brass", highFlow: true }, printer: null }, // distinct (HF)
+      ],
+    };
+    expect(distinctNozzleCalibrationCount(f)).toBe(3);
   });
 });
