@@ -27,6 +27,7 @@ import { decodeFromNdefRecords, OPENPRINTTAG_MIME } from "../src/lib/tagCodecs";
 import { OPENTAG3D_MIME } from "../src/lib/opentag3d";
 import {
   parseNtagNdefBytesFromGetVersion,
+  resolveNtagWriteSize,
   NTAG_NAME_TO_NDEF_BYTES,
   type NtagSizeName,
 } from "../src/lib/ntagVersion";
@@ -93,16 +94,9 @@ const DEFAULT_BLOCK_COUNT = 80;
 const NTAG_CC_OFFSET = 12;
 const NTAG_TLV_OFFSET = 16;
 const NTAG_MAX_NDEF_BYTES = 1024;
-// Write/erase extent caps (Codex #927 — bound a corrupt/foreign CC size so a
-// write never runs off the chip / into config-lock pages). NTAG216 (the largest
-// real NTAG) holds 872 NDEF bytes → last user page 221 (< 256, no APDU wrap).
-const NTAG_MAX_NDEF_WRITE_BYTES = 872;
-// When the true chip size is UNKNOWN (GET_VERSION unsupported), bound the
-// hygiene zero-fill to NTAG213's user area (144 bytes) — safe on ANY chip, since
-// even the smallest NTAG's lock/config pages sit above its user area. The fresh
-// CC + empty-NDEF TLV already make the tag blank; the deeper wipe is just hygiene
-// and stale bytes past the TLV terminator are unreachable by NDEF readers.
-const NTAG_CONSERVATIVE_WIPE_BYTES = 144;
+// Write-side extent caps (Codex #927) now live in the pure, unit-tested
+// resolveNtagWriteSize (src/lib/ntagVersion.ts): NTAG216_MAX_NDEF_BYTES (872,
+// the largest real NTAG) and NTAG213_NDEF_BYTES (144, safe on ANY chip).
 // NTAG213's last user page (144 B ÷ 4 = pages 4–39). A write whose top page stays
 // ≤ this fits ANY NTAG (213/215/216); a write that goes BEYOND it needs a 215/216
 // and would run into a 213's lock/config pages — see the #973 brick-guard probe.
@@ -919,27 +913,6 @@ export class NfcService extends EventEmitter {
   }
 
   /**
-   * Resolve the SAFE NDEF byte capacity of a FORMATTED NTAG for write/size
-   * decisions (Codex P1, #927). GET_VERSION (`verSize`) is authoritative when
-   * available — take the smaller of it and the CC-claimed size. When GET_VERSION
-   * is UNAVAILABLE we must NOT trust a possibly-inflated CC: a corrupt CC claiming
-   * 215/216 on a real NTAG213 would let an Extended write run past the 213's user
-   * area into its lock/config pages — a brick the writeNtagPage [3,255] guard
-   * can't catch, since those pages sit INSIDE that range on a small chip. So fall
-   * back to the conservative NTAG213 extent (144 B), safe on ANY NTAG. Real
-   * 215/216 tags then degrade to Core-only writes when GET_VERSION is unsupported
-   * (the renderer surfaces the opentag3dCoreOnly notice) rather than risking a
-   * brick. In practice GET_VERSION works on the ACR1552U (a blank-NTAG write
-   * requires it), so this conservative branch is the rare edge case.
-   */
-  private safeNtagNdefBytes(ccByte2: number, verSize: number | null): number {
-    const ccBytes = Math.min(Math.max(0, ccByte2 * 8), NTAG_MAX_NDEF_WRITE_BYTES);
-    return verSize != null
-      ? Math.min(ccBytes, verSize)
-      : Math.min(ccBytes, NTAG_CONSERVATIVE_WIPE_BYTES);
-  }
-
-  /**
    * Read an NFC-Forum Type 2 (NTAG213/215/216) tag carrying an OpenTag3D (or any
    * registered) NDEF record. Returns:
    *   - the decoded tag on success,
@@ -1226,10 +1199,21 @@ export class NfcService extends EventEmitter {
       // family check rests on the byte-0 NXP guard (detectType2Head) + the CC 0xE1/
       // 0x00 guard above + the writeNtagPage [3,255] bound — exactly the guards the
       // hardware-proven dev CLI relies on (it never issued GET_VERSION at all).
+      // The size decision lives in the pure, unit-tested resolveNtagWriteSize
+      // (src/lib/ntagVersion.ts) — the electron path isn't CI-covered and this is
+      // the safety-critical branch. Key case (#973): formatted tag + GET_VERSION
+      // unavailable + a user-declared size ⇒ the user's size is authoritative and
+      // the CC is rewritten to it (needsFormat), so a tag an earlier write
+      // mis-sized gets corrected. The brick-guard probe below validates it.
       const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
       const hintBytes = ntagSize != null ? NTAG_NAME_TO_NDEF_BYTES[ntagSize] : null;
-      const resolvedSize = verSize ?? hintBytes;
-      if (resolvedSize == null) {
+      const sizing = resolveNtagWriteSize({
+        ccMagic,
+        ccSizeByte: head[NTAG_CC_OFFSET + 2],
+        verSize,
+        hintBytes,
+      });
+      if (!sizing.ok) {
         throw new Error(
           "NTAG_SIZE_UNKNOWN: Couldn't determine the NTAG's size — the reader didn't return a " +
             "recognized GET_VERSION response. Choose the tag type (NTAG213/215/216) and try again.",
@@ -1242,22 +1226,8 @@ export class NfcService extends EventEmitter {
       // permanently lock a tag out of our own write path. A GENUINELY locked NTAG
       // (its static lock bytes set, which WE never set) just fails the page write
       // below with an SW error. NTAG "set read-only" is unsupported for this reason.
-      let ndefBytes: number;
-      let needsFormat = false;
-      if (ccMagic === 0xe1) {
-        // Formatted: bound the payload by min(CC, resolvedSize) via safeNtagNdefBytes
-        // so a corrupt/inflated CC (a real 213 claiming 215/216) can't drive an
-        // Extended TLV past the chip's user area into its lock/config pages (the
-        // [3,255] page guard can't catch that, since config sits in that range on a
-        // small chip).
-        ndefBytes = this.safeNtagNdefBytes(head[NTAG_CC_OFFSET + 2], resolvedSize);
-      } else {
-        // Blank NTAG (CC magic 0x00 — the guard above ruled out every other
-        // non-0xE1 value): size from the resolved (GET_VERSION or user-declared)
-        // value; the fresh CC is written below, AFTER the capacity check.
-        ndefBytes = resolvedSize;
-        needsFormat = true; // CC written below — AFTER the capacity check (Codex #927)
-      }
+      const ndefBytes = sizing.ndefBytes;
+      const needsFormat = sizing.needsFormat;
 
       // Build the NDEF-message TLV (0x03 … one media record … 0xFE terminator)
       // and capacity-check it BEFORE writing anything, so a too-large payload
@@ -1653,12 +1623,16 @@ export class NfcService extends EventEmitter {
         // as existing OpenTag3D. Mirrors readNtagTag: 0 records ⇒ blank, an
         // opentag3d record ⇒ opentag3d, any other record(s) ⇒ foreign NDEF
         // (formatted but standard null). One connection so size + read-back agree.
-        // Capacity reporting stays via safeNtagNdefBytes (Codex P1): GET_VERSION
-        // when available (smaller of it and the CC) else the conservative NTAG213
-        // extent, so the renderer's Core/Extended choice matches the write's bound.
         return await this.withConnection(async (protocol) => {
           const verSize = await this.getNtagNdefBytesViaGetVersion(protocol);
-          const ndefCapacity = this.safeNtagNdefBytes(head[NTAG_CC_OFFSET + 2], verSize);
+          // GH #973 follow-up: report the chip's TRUE size when GET_VERSION knows
+          // it, else null = UNKNOWN. Do NOT fall back to a conservative 144 here:
+          // that number reads as a genuine NTAG213 to the renderer, suppressing the
+          // size picker and firing the misleading "small NTAG213" notice on a real
+          // 215/216 whose reader (e.g. the ACR1552U) just can't answer GET_VERSION.
+          // A null lets the renderer prompt for the size instead. The write path
+          // keeps its own conservative bound for the no-hint case.
+          const ndefCapacity = verSize;
           let standard: TagDetection["standard"] = null;
           let formatted = false;
           try {

@@ -668,12 +668,16 @@ function FilamentDetail() {
           typeof detected?.ndefCapacity === "number" && detected.ndefCapacity > 0
             ? detected.ndefCapacity
             : null;
-        // GH #973: a BLANK NTAG whose size GET_VERSION couldn't auto-detect
-        // reports a null capacity. Rather than silently downgrade to a 144-byte
-        // NTAG213 (dropping the spool id + weight and mislabelling the chip), ask
-        // the user which NTAG it is — the same posture as the dev CLI's --ntag.
+        // GH #973: an NTAG whose size GET_VERSION couldn't auto-detect reports a
+        // null capacity (some readers — e.g. the ACR1552U — reject GET_VERSION
+        // outright, so this is the NORMAL case there, for blank AND formatted
+        // tags). Rather than silently downgrade to a 144-byte NTAG213 (dropping
+        // the spool id + weight and mislabelling the chip), ask the user which
+        // NTAG it is — the same posture as the dev CLI's --ntag. The chosen size
+        // is authoritative on the write side (it rewrites the CC), so this also
+        // corrects a tag an earlier failed write mis-formatted.
         let ntagSize: NtagSizeName | undefined;
-        if (effectiveCapacity == null && detected?.formatted === false) {
+        if (effectiveCapacity == null) {
           const picked = await promptNtagSize();
           if (!picked) return null; // user cancelled the write
           ntagSize = picked;

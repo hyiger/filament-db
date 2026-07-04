@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseNtagNdefBytesFromGetVersion,
   isNtagSizeName,
+  resolveNtagWriteSize,
   NTAG_STORAGE_SIZE_TO_NDEF_BYTES,
   NTAG_NAME_TO_NDEF_BYTES,
 } from "@/lib/ntagVersion";
@@ -102,5 +103,74 @@ describe("parseNtagNdefBytesFromGetVersion", () => {
     expect(NTAG_NAME_TO_NDEF_BYTES.NTAG215).toBe(496);
     expect(NTAG_NAME_TO_NDEF_BYTES.NTAG213).toBe(144);
     expect(NTAG_NAME_TO_NDEF_BYTES.NTAG216).toBe(872);
+  });
+});
+
+describe("resolveNtagWriteSize (GH #973 follow-up)", () => {
+  const E1 = 0xe1; // formatted CC magic
+  const BLANK = 0x00; // blank CC magic
+  // CC size byte = NDEF bytes / 8: 144→18, 496→62, 872→109.
+
+  it("formatted + GET_VERSION confirmed → min(CC, chip), no reformat", () => {
+    expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 62, verSize: 496, hintBytes: null }))
+      .toEqual({ ok: true, ndefBytes: 496, needsFormat: false });
+    // A CC that over-claims (872) on a chip GET_VERSION says is 496 → capped to 496.
+    expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 109, verSize: 496, hintBytes: null }))
+      .toEqual({ ok: true, ndefBytes: 496, needsFormat: false });
+  });
+
+  it("formatted + GET_VERSION DEAD + user size → user size is authoritative, REWRITE the CC (#973 core)", () => {
+    // A real 215 an earlier write mis-formatted with a 144-byte CC (ccSizeByte 18):
+    // the user picks NTAG215 → we rewrite the CC to 496, not stay stuck at 144.
+    expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 18, verSize: null, hintBytes: 496 }))
+      .toEqual({ ok: true, ndefBytes: 496, needsFormat: true });
+    expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 18, verSize: null, hintBytes: 872 }))
+      .toEqual({ ok: true, ndefBytes: 872, needsFormat: true });
+  });
+
+  it("formatted + neither GET_VERSION nor hint → conservative min(CC, 144), no reformat (legacy)", () => {
+    expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 62, verSize: null, hintBytes: null }))
+      .toEqual({ ok: true, ndefBytes: 144, needsFormat: false });
+  });
+
+  it("blank + a size (GET_VERSION or user) → that size, reformat", () => {
+    expect(resolveNtagWriteSize({ ccMagic: BLANK, ccSizeByte: 0, verSize: 496, hintBytes: null }))
+      .toEqual({ ok: true, ndefBytes: 496, needsFormat: true });
+    expect(resolveNtagWriteSize({ ccMagic: BLANK, ccSizeByte: 0, verSize: null, hintBytes: 496 }))
+      .toEqual({ ok: true, ndefBytes: 496, needsFormat: true });
+    // GET_VERSION wins over a hint when both present.
+    expect(resolveNtagWriteSize({ ccMagic: BLANK, ccSizeByte: 0, verSize: 872, hintBytes: 496 }))
+      .toEqual({ ok: true, ndefBytes: 872, needsFormat: true });
+  });
+
+  it("blank + neither → size_unknown (never guess)", () => {
+    expect(resolveNtagWriteSize({ ccMagic: BLANK, ccSizeByte: 0, verSize: null, hintBytes: null }))
+      .toEqual({ ok: false, error: "size_unknown" });
+  });
+
+  it("formatted + GET_VERSION AND a user hint → GET_VERSION wins (chip size is authoritative)", () => {
+    // A good reader (GET_VERSION works) where the user ALSO over-picked to 872:
+    // the real chip size (496) must win so an over-declared size can't slip
+    // through. CC byte 62 (=496) doesn't under-cap, isolating the verSize-vs-hint
+    // precedence.
+    expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 62, verSize: 496, hintBytes: 872 }))
+      .toEqual({ ok: true, ndefBytes: 496, needsFormat: false });
+  });
+
+  it("treats a non-finite / negative CC size byte as 0 (total clamp)", () => {
+    // Can't occur from a real Uint8Array byte, but the bound must never yield NaN.
+    expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: NaN, verSize: null, hintBytes: null }))
+      .toEqual({ ok: true, ndefBytes: 0, needsFormat: false });
+    expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: -5, verSize: null, hintBytes: null }))
+      .toEqual({ ok: true, ndefBytes: 0, needsFormat: false });
+  });
+
+  it("clamps a wildly over-claiming CC to the NTAG216 ceiling (872)", () => {
+    // ccSizeByte 255 → 2040 bytes; formatted + confirmed verSize 872 → min = 872.
+    expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 255, verSize: 872, hintBytes: null }))
+      .toEqual({ ok: true, ndefBytes: 872, needsFormat: false });
+    // formatted + neither, CC 255 → min(872 ceiling, 144) = 144.
+    expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 255, verSize: null, hintBytes: null }))
+      .toEqual({ ok: true, ndefBytes: 144, needsFormat: false });
   });
 });
