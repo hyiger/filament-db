@@ -515,8 +515,8 @@ export interface OpenPrintTagInput {
   weightGrams?: number | null; // nominal net weight in grams
   actualWeightGrams?: number | null; // actual remaining filament weight (key 17); omitted when null (spec resolves absent → nominal)
   emptySpoolWeight?: number | null; // empty spool/container weight in grams
-  countryOfOrigin?: string;    // ISO 3166-1 alpha-2, default "US"
-  spoolUid?: string | null;    // brand-specific instance ID (e.g. "2acc21072a")
+  countryOfOrigin?: string;    // ISO 3166-1 alpha-2; omitted from the tag when unset (#952)
+  spoolUid?: string | null;    // brand-specific instance ID (e.g. "2acc21072a"); omitted when >16 chars (#952)
   dryingTemperature?: number | null;  // °C
   dryingTime?: number | null;         // minutes
   transmissionDistance?: number | null; // HueForge TD value
@@ -753,9 +753,14 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   encodeCBORKey(buf, OPT_KEY.MATERIAL_ABBREVIATION);
   encodeCBORText(buf, deriveMaterialAbbreviation(input.materialType));
 
-  // country_of_origin (ISO 3166-1 alpha-2)
-  encodeCBORKey(buf, OPT_KEY.COUNTRY_OF_ORIGIN);
-  encodeCBORText(buf, (input.countryOfOrigin ?? "US").slice(0, 2));
+  // country_of_origin (ISO 3166-1 alpha-2). GH #952: emit ONLY when the caller
+  // supplies one — no production caller does (the Filament model has no country
+  // field), so the old `?? "US"` default stamped a fabricated "US" onto every
+  // tag/re-write. Omit the key when unset (like material_type's unspecified case).
+  if (input.countryOfOrigin) {
+    encodeCBORKey(buf, OPT_KEY.COUNTRY_OF_ORIGIN);
+    encodeCBORText(buf, input.countryOfOrigin.slice(0, 2));
+  }
 
   // transmission_distance – HueForge TD value (type: number)
   if (input.transmissionDistance != null && input.transmissionDistance > 0) {
@@ -810,10 +815,15 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
     encodeCBORUint(buf, clampUint(input.dryingTime, 10080));
   }
 
-  // brand_specific_instance_id – unique spool/instance identifier (string, max 16 chars)
-  if (input.spoolUid) {
+  // brand_specific_instance_id – unique spool/instance identifier (string, max 16 chars).
+  // GH #952: OMIT it when it's too long rather than TRUNCATING — a truncated id
+  // reads back as a DIFFERENT id and breaks scan-back matching (matchFilament
+  // finds no spool, the detail-page own-tag check misfires). Auto-generated
+  // 10-hex ids always fit; only long custom/Prusament ids trip this. spoolUid is
+  // ASCII-validated (validateSpoolInstanceId), so char length == byte length.
+  if (input.spoolUid && input.spoolUid.length <= 16) {
     encodeCBORKey(buf, OPT_KEY.BRAND_SPECIFIC_INSTANCE_ID);
-    encodeCBORText(buf, input.spoolUid.slice(0, 16));
+    encodeCBORText(buf, input.spoolUid);
   }
 
   buf.push(0xff); // indefinite map end

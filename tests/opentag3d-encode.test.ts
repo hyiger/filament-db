@@ -67,14 +67,24 @@ describe("filamentToOpenTag3DFields → encode → decode round-trip", () => {
     expect(decoded.secondaryColors).toEqual(["#112233", "#445566"]);
   });
 
-  it("splits a combined material type into base + modifier (PA12-CF → PA12 / CF)", () => {
+  it("splits a combined material type into base + modifier and rejoins it on decode (PA12-CF)", () => {
     const { fields, notices } = filamentToOpenTag3DFields({ type: "PA12-CF" });
     expect(fields.material_base).toBe("PA12");
     expect(fields.material_mod).toBe("CF");
     expect(notices).toEqual([]); // both fit their 5-byte slots → no truncation
     const decoded = decodeOpenTag3DTag(encodeOpenTag3D(fields));
-    expect(decoded.materialType).toBe("PA12"); // base
-    expect(decoded.materialName).toContain("CF"); // modifier rejoined into the name
+    // GH #952: base+mod rejoin into the typed field so the round-trip preserves
+    // the full type (was a bare "PA12", breaking match + finish).
+    expect(decoded.materialType).toBe("PA12-CF");
+    expect(decoded.materialName).toContain("CF"); // modifier also in the display name
+  });
+
+  it("#952: clamps an over-capacity int to the field max instead of wrapping, with a notice", () => {
+    // max_vso is a 1-byte field (cap 255); 300 used to wrap to 44 (300 % 256).
+    const { fields, notices } = filamentToOpenTag3DFields({ maxVolumetricSpeed: 300 });
+    expect(notices.some((n) => /capacity|cap/i.test(n))).toBe(true);
+    const decoded = decodeOpenTag3DTag(encodeOpenTag3D(fields));
+    expect(decoded.maxVolumetricSpeed).toBe(255); // clamped, NOT the wrapped 44
   });
 
   it("flags a no-separator material type longer than the 5-byte base slot", () => {

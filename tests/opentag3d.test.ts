@@ -217,7 +217,8 @@ describe("ot3dToDecodedTag mapping → DecodedOpenPrintTag", () => {
 
   it("stamps the opentag3d source and identity fields", () => {
     expect(tag.tagSource).toBe("opentag3d");
-    expect(tag.materialType).toBe("PLA"); // bare base material
+    // GH #952: base+mod rejoin into the typed field (was a bare "PLA").
+    expect(tag.materialType).toBe("PLA-Silk");
     // color folded into the name so colors don't collide on the unique name key
     expect(tag.materialName).toBe("PLA Silk Electric Watermelon");
     expect(tag.brandName).toBe("Polar Filament");
