@@ -1725,4 +1725,32 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
     const fresh = await Filament.findById(f._id).lean();
     expect(fresh.optTags).toEqual([16]); // unchanged — Tags ignored on update
   });
+
+  it("RESURRECT with an empty Tags cell CLEARS the tombstone's tags (Codex)", async () => {
+    const trashed = await Filament.create({
+      name: "Resurrect Tagged",
+      vendor: "Acme",
+      type: "PLA",
+      optTags: [28, 16], // coextruded + matte
+      _deletedAt: new Date(),
+    });
+    // Re-import a solid/untagged row (empty Tags cell) over the tombstone.
+    const res = await upsertImportRows(
+      rows([["Resurrect Tagged", "Acme", "PLA", "#123456", "", ""]]),
+    );
+    expect(res.updated).toBe(1);
+    const fresh = await Filament.findById(trashed._id).lean();
+    expect(fresh._deletedAt).toBeNull();
+    expect(fresh.optTags).toEqual([]); // cleared, not left tagged
+  });
+
+  it("ignores empty tokens from a trailing/double comma — no phantom tag 0 (Codex)", async () => {
+    const res = await upsertImportRows(
+      rows([["Comma Tags", "Acme", "PLA", "#123456", "28,16,", ""]]),
+    );
+    expect(res.created).toBe(1);
+    const f = await Filament.findOne({ name: "Comma Tags" }).lean();
+    // Number("") === 0 (a valid tag id) — the empty token must be dropped first.
+    expect(f.optTags).toEqual([28, 16]);
+  });
 });

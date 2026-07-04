@@ -776,22 +776,28 @@ export async function upsertImportRows(
       }
     }
     // GH #954: parse the "Tags" column (comma-separated OpenPrintTag ids) into a
-    // numeric array. Mirrors the secondaryColors parse (only set when there are
-    // valid entries); the schema's sanitizeOptTags setter drops any stragglers.
-    // Honoured on CREATE/RESURRECT only — the update path deletes it below.
-    if (row.optTags !== undefined && row.optTags !== null) {
-      const raw = String(row.optTags).trim();
-      if (raw !== "") {
-        const tags = [
-          ...new Set(
-            raw
-              .split(",")
-              .map((tag) => Number(tag.trim()))
-              .filter((n) => Number.isInteger(n) && n >= 0),
-          ),
-        ];
-        if (tags.length > 0) doc.optTags = tags;
-      }
+    // numeric array. Honoured on CREATE/RESURRECT only — the update path deletes
+    // it below. `rowToImport` maps a PRESENT-but-empty cell to `null` and an
+    // ABSENT column to `undefined`: when the column is present (incl. an empty
+    // cell) we always set `doc.optTags` (empty → []), so re-importing a
+    // solid/untagged row CLEARS a tombstone's tags on resurrect rather than
+    // leaving them untouched (Codex). Empty tokens are dropped BEFORE Number()
+    // so a trailing/double comma ("28,16," / "28,,16") can't become
+    // `Number("") === 0` and add a phantom tag 0 (glass-fiber).
+    if (row.optTags !== undefined) {
+      doc.optTags =
+        row.optTags == null
+          ? []
+          : [
+              ...new Set(
+                String(row.optTags)
+                  .split(",")
+                  .map((tag) => tag.trim())
+                  .filter((tag) => tag !== "")
+                  .map(Number)
+                  .filter((n) => Number.isInteger(n) && n >= 0),
+              ),
+            ];
     }
     if (row.diameter !== undefined && row.diameter !== null) {
       doc.diameter = row.diameter;

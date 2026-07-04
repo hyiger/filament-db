@@ -107,6 +107,30 @@ describe("GH #223 — variant inheritance in slicer + analytics + restore routes
     expect(body.message).toBeUndefined();
   });
 
+  it("spool-check does NOT warn when an active (unweighed) spool exists alongside a retired weighed one (#954, Codex)", async () => {
+    const f = await Filament.create({
+      name: "SpoolCheck-ActiveUnweighed",
+      vendor: "V",
+      type: "PLA",
+      spoolWeight: 250,
+      spools: [
+        { label: "active" }, // no totalWeight — unmeasured active stock
+        { label: "old", totalWeight: 900, retired: true },
+      ],
+    });
+    const req = new NextRequest(
+      `http://localhost/api/filaments/${f._id}/spool-check?weight=100`,
+    );
+    const res = await spoolCheck(req, {
+      params: Promise.resolve({ id: String(f._id) }),
+    });
+    const body = await res.json();
+    // Active stock exists (just unmeasured) → no false warning.
+    expect(body.ok).toBe(true);
+    expect(body.message).toMatch(/no spool weight data/i);
+    expect(body.warning).toBeUndefined();
+  });
+
   it("spool-check still returns ok:true when NO spool has weight data at all (#954)", async () => {
     const f = await Filament.create({
       name: "SpoolCheck-NoData",
