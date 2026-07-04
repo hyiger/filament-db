@@ -384,7 +384,19 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
   // (in the route) applies size caps; here we just stringify.
   for (const [key, value] of Object.entries(json)) {
     if (STRUCTURED_KEYS.has(key)) continue;
-    if (CALIBRATION_KEYS.has(key)) continue;
+    if (CALIBRATION_KEYS.has(key)) {
+      // GH #950 (Codex P1 on PR #968 r2): the chamber keys are normally excluded
+      // here and routed structurally (calibrations[].chamberTemp) or via the
+      // applier's settings-bag fallback — but BOTH require an EFFECTIVE chamberTemp.
+      // When the chamber is DISABLED (activate_chamber_temp_control="0"), the parse
+      // above clears chamberTemp, so neither path carries the value and the settings
+      // bag is its ONLY home. Keep the raw chamber keys in the bag in that case so a
+      // disabled-chamber profile still round-trips (they rode the bag pre-#950.3).
+      const isChamberKey =
+        key === "chamber_temperature" || key === "activate_chamber_temp_control";
+      if (!isChamberKey || calibrationHints.chamberTemp != null) continue;
+      // else: disabled/ineffective chamber → fall through and store the raw key.
+    }
     // NOTE (#678, deferred): unwrap() collapses a multi-element array to its
     // first element, so a multi-printer `compatible_printers` loses the rest on
     // a Bambu/Orca round-trip. A faithful fix can't just store the array here —

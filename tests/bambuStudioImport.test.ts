@@ -273,6 +273,19 @@ describe("parseBambuStudioProfile", () => {
     expect(calibrationHints.hasAnyHint).toBe(false);
   });
 
+  it("GH #950: an ENABLED chamber_temperature is EXCLUDED from the settings bag (routed structurally)", () => {
+    const { calibrationHints, filament } = parseBambuStudioProfile({
+      name: ["X"],
+      chamber_temperature: ["45"],
+      activate_chamber_temp_control: ["1"],
+    });
+    expect(calibrationHints.chamberTemp).toBe(45);
+    // Enabled → the applier routes it (calibrations[].chamberTemp or settings
+    // fallback), so it must NOT also linger raw in the bag (would double-store).
+    expect(filament.settings.chamber_temperature).toBeUndefined();
+    expect(filament.settings.activate_chamber_temp_control).toBeUndefined();
+  });
+
   it("GH #950: chamber_temperature ALONGSIDE a real per-nozzle hint still trips hasAnyHint", () => {
     const { calibrationHints } = parseBambuStudioProfile({
       name: ["X"],
@@ -284,14 +297,20 @@ describe("parseBambuStudioProfile", () => {
   });
 
   it("GH #950: honors activate_chamber_temp_control='0' — chamber heating OFF, temp not imported", () => {
-    const { calibrationHints } = parseBambuStudioProfile({
+    const { calibrationHints, filament } = parseBambuStudioProfile({
       name: ["X"],
-      chamber_temperature: ["45"], // stale value with heating disabled
+      chamber_temperature: ["45"], // stored value with heating disabled
       activate_chamber_temp_control: ["0"],
     });
     expect(calibrationHints.chamberTemp).toBeUndefined();
     // chamber is the ONLY would-be hint and it's suppressed → no calibration row.
     expect(calibrationHints.hasAnyHint).toBe(false);
+    // GH #950 (Codex P1 r2): a DISABLED chamber has NO structural home (chamberTemp
+    // is cleared, so neither the calibration row nor the applier fallback carries
+    // it) — the raw keys must ride the settings bag so the profile round-trips
+    // instead of silently dropping "chamber temp 45 but off".
+    expect(filament.settings.chamber_temperature).toBe("45");
+    expect(filament.settings.activate_chamber_temp_control).toBe("0");
   });
 
   it("GH #950: parses chamber_temperature when the enable flag is absent (defaults to on)", () => {

@@ -171,8 +171,21 @@ export async function prepareBambuUpdate(
   // same no-data-loss guarantee maxVolumetricSpeed gets via its top-level field.
   // A RESOLVED profile keeps chamber cleanly in calibrations[].chamberTemp and
   // out of the filament-global bag (the #950 fix's whole point).
-  if (parsed.calibrationHints.chamberTemp != null && !calibrationOutcome.applied) {
-    const settings = { ...((update.settings as Record<string, unknown>) || {}) };
+  //
+  // Codex P1 on PR #968: base on the MERGED settings bag (existing + incoming
+  // passthrough), NOT `update.settings` — which is only assigned when
+  // `settingsResult.added.length > 0`, so for an existing filament whose profile
+  // adds no passthrough keys it is undefined here, and starting from {} would make
+  // the later `$set` REPLACE the whole bag, dropping existing filament_notes /
+  // filament_soluble / slicer options. `settingsResult.settings` is always the
+  // full {existing, ...incoming} bag. Skip when the merge errored (the route 400s
+  // on it anyway) so we never build on a partial bag.
+  if (
+    parsed.calibrationHints.chamberTemp != null &&
+    !calibrationOutcome.applied &&
+    !settingsResult.error
+  ) {
+    const settings = { ...settingsResult.settings };
     settings.chamber_temperature = String(parsed.calibrationHints.chamberTemp);
     settings.activate_chamber_temp_control = "1";
     update.settings = settings;
@@ -355,13 +368,23 @@ export async function resolveAndApplyCalibration(
   update: Record<string, unknown>,
   existing: { calibrations?: unknown[] } | null,
 ): Promise<CalibrationOutcome> {
-  if (!hints.hasAnyHint) {
+  // GH #950 (Codex P2 on PR #968): decouple "attempt resolution" from "warn".
+  // chamber_temperature has a structured home too — calibrations[].chamberTemp —
+  // so we must TRY to resolve a printer/nozzle whenever a chamber temp is present,
+  // even though chamber is excluded from `hasAnyHint`. The UNRESOLVED WARNING,
+  // however, stays gated on `hasAnyHint`: chamber has a settings-bag fallback (see
+  // prepareBambuUpdate), so a chamber-only profile that can't resolve loses
+  // nothing and must not surface a misleading "calibration unresolved" toast.
+  const wantsResolution = hints.hasAnyHint || hints.chamberTemp != null;
+  if (!wantsResolution) {
     return { applied: false, unresolved: false };
   }
 
   const ctx = await matchPrinterNozzle(hints);
   if (!ctx) {
-    return { applied: false, unresolved: true };
+    // Per-nozzle hints (if any) are dropped → warn. A chamber-only profile has
+    // its settings-bag fallback, so its presence alone does NOT warn.
+    return { applied: false, unresolved: hints.hasAnyHint };
   }
 
   const row: Record<string, unknown> = {
