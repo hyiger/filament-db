@@ -201,8 +201,10 @@ describe("decodeOpenPrintTagBinary", () => {
     expect(decoded.density).toBeCloseTo(1.24, 1);
     expect(decoded.diameter).toBe(1.75);
     expect(decoded.nozzleTemp).toBe(215);
-    // Encoder uses max(bedTempFirstLayer, bedTemp) = max(65, 60) = 65 as MAX_BED_TEMPERATURE
-    expect(decoded.bedTemp).toBe(65);
+    // GH #952.4: the EVERYDAY bed temp (60) now round-trips, not the first-layer
+    // temp (65). Pre-fix the encoder put max(65,60)=65 in MAX_BED and the decoder
+    // read bedTemp from MAX, inflating the everyday bed by the first-layer delta.
+    expect(decoded.bedTemp).toBe(60);
     expect(decoded.chamberTemp).toBe(20);
     expect(decoded.weightGrams).toBe(1000);
     expect(decoded.countryOfOrigin).toBe("CZ");
@@ -888,5 +890,41 @@ describe("decodeOpenPrintTagBinary", () => {
     ]);
     const decoded = decodeOpenPrintTagBinary(payload);
     expect(decoded.color).toBeUndefined();
+  });
+});
+
+describe("GH #952.4 — everyday temp round-trips as the primary (no first-layer inflation)", () => {
+  const base = { materialName: "Test PLA", brandName: "TestBrand", materialType: "PLA" };
+  const rt = (over: Partial<OpenPrintTagInput>) =>
+    decodeOpenPrintTagBinary(generateOpenPrintTagBinary({ ...base, ...over } as OpenPrintTagInput));
+
+  it("bed: first-layer HOTTER (the common convention) no longer inflates the everyday bed", () => {
+    const d = rt({ bedTemp: 85, bedTempFirstLayer: 90 });
+    expect(d.bedTemp).toBe(85); // everyday, not the 90 first-layer (pre-fix bug)
+    expect(d.bedTempMin).toBe(85); // MIN clamped to everyday (first-layer excess not stored)
+  });
+
+  it("bed: first-layer COOLER keeps the everyday temp in MAX and the floor in MIN", () => {
+    const d = rt({ bedTemp: 85, bedTempFirstLayer: 80 });
+    expect(d.bedTemp).toBe(85);
+    expect(d.bedTempMin).toBe(80);
+  });
+
+  it("bed: NO first-layer value still round-trips the everyday temp (no regression)", () => {
+    const d = rt({ bedTemp: 85 });
+    expect(d.bedTemp).toBe(85);
+    expect(d.bedTempMin).toBe(75); // synthesized everyday-10 floor
+  });
+
+  it("nozzle: first-layer > everyday + 20 no longer inflates the everyday nozzle temp", () => {
+    const d = rt({ nozzleTemp: 200, nozzleTempFirstLayer: 230 });
+    expect(d.nozzleTemp).toBe(200); // everyday, not firstLayer-20 = 210 (pre-fix bug)
+    expect(d.nozzleTempMin).toBe(200); // MIN clamped to everyday
+  });
+
+  it("nozzle: NO first-layer value still round-trips the everyday temp (no regression)", () => {
+    const d = rt({ nozzleTemp: 215 });
+    expect(d.nozzleTemp).toBe(215);
+    expect(d.nozzleTempMin).toBe(195); // synthesized everyday-20 floor
   });
 });
