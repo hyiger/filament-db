@@ -418,28 +418,24 @@ export async function resolveAndApplyCalibration(
     return { applied: false, unresolved: hints.hasAnyHint };
   }
 
-  // GH #950 (Codex r5/r6/r7): a "chamber-disable-only" sync — an explicit chamber
-  // disable with NO real calibration hint and no new chamber temp. Its ONLY job is
-  // to CLEAR a pre-existing calibrations[].chamberTemp. It must therefore carry
-  // JUST the chamber clear: it must not fabricate a new per-nozzle calibration, nor
-  // update an existing row's OTHER fields. Every non-chamber value the profile
-  // carries (ordinary temps, and maxVolumetricSpeed — which is excluded from
-  // hasAnyHint precisely because it has a top-level home) already lands on the
-  // filament via buildStructuredUpdate, so gating ALL of them behind
-  // !chamberClearOnly is the root fix that closes this whole leak class at once
-  // (each round Codex found another individual field slipping through).
-  const chamberClearOnly =
-    hints.chamberDisabled === true && !hints.hasAnyHint && hints.chamberTemp == null;
-
   const row: Record<string, unknown> = {
     printer: ctx.printerId,
     nozzle: ctx.nozzleId,
   };
-  // Chamber: write a new value, or (on an explicit disable) null to clear it.
+  // Chamber: write a new value, or (on an explicit disable) null to clear it. This
+  // is the ONE thing a chamber-only sync (enabled or disabled) writes to the row.
   if (hints.chamberTemp != null) row.chamberTemp = hints.chamberTemp; // GH #950
   else if (hints.chamberDisabled === true) row.chamberTemp = null;
-  // All non-chamber calibration values — ONLY for a real calibration write.
-  if (!chamberClearOnly) {
+  // All NON-chamber calibration values + ordinary temps: copied ONLY when there's
+  // a real per-nozzle hint (`hasAnyHint`). GH #950 (Codex r6/r7/r11): a chamber-only
+  // sync — whether it ENABLES chamber (chamberTemp != null) or disables it — must
+  // NOT pin the profile's top-level-homed temps / max-vol into calibrations[].
+  // Those already land on the filament via buildStructuredUpdate; a fabricated
+  // per-nozzle override would later shadow user-edited top-level values. Gating on
+  // `hasAnyHint` (not merely "chamber present") closes the enabled + disabled cases
+  // together — max-vol is excluded from hasAnyHint precisely because it has a
+  // top-level home, so a chamber+max-vol-only sync leaves max-vol at the top level.
+  if (hints.hasAnyHint) {
     if (hints.extrusionMultiplier != null) row.extrusionMultiplier = hints.extrusionMultiplier;
     if (hints.maxVolumetricSpeed != null) row.maxVolumetricSpeed = hints.maxVolumetricSpeed;
     if (hints.pressureAdvance != null) row.pressureAdvance = hints.pressureAdvance;
@@ -475,17 +471,15 @@ export async function resolveAndApplyCalibration(
   );
   const merged = [...existingRows];
   if (idx >= 0) {
-    // A chamber-disable-only sync merges ONLY `{ chamberTemp: null }` here — it
-    // clears the matched row's chamber value and leaves its temps/EM/PA intact.
+    // A chamber-only sync merges just its chamber value here (a real hint also
+    // brings its calibration fields); the matched row's other fields stay intact.
     merged[idx] = { ...merged[idx], ...row };
   } else {
-    // GH #950 (Codex r5/r6): a chamber-disable-only sync that matches NO existing
-    // row has nothing to clear — do NOT create a calibration row. `row` carries
-    // only identity + a null chamber (ordinary temps were intentionally not copied
-    // above), so this never drops real calibration data; the pre-existing
-    // "resolved, row carries only identity" behaviour for non-chamber syncs is
-    // unchanged.
-    if (chamberClearOnly) {
+    // GH #950 (Codex r5/r6/r11): create a row only when there's real data to store
+    // — a per-nozzle hint, or an ENABLED chamber value (chamberTemp != null, its
+    // structured home). A bare chamber CLEAR (chamberTemp === null) with no
+    // matching row has nothing to clear, so don't fabricate an empty row.
+    if (!hints.hasAnyHint && row.chamberTemp == null) {
       return { applied: false, unresolved: false };
     }
     merged.push(row);

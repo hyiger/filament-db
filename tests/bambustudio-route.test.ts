@@ -415,6 +415,36 @@ describe("Bambu Studio importer routes", () => {
       expect(stored.settings?.chamber_temperature).toBeUndefined();
     });
 
+    it("GH #950 (Codex P2 r11): a chamber-ENABLED-only sync does NOT pin ordinary temps into the calibration", async () => {
+      // A chamber-only profile carries normal nozzle/bed temps. Chamber goes to the
+      // calibration (its structured home), but the ordinary temps must NOT be pinned
+      // there (they belong on the filament top level; a per-nozzle override would
+      // later shadow user-edited top-level temps). minimalProfile has
+      // nozzle_temperature=210 + hot_plate_temp=60, and NO real per-nozzle hint.
+      const { printer, nozzle } = await seedPrinterWithNozzle();
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+            chamber_temperature: ["48"],
+            activate_chamber_temp_control: ["1"], // enabled, no EM/PA
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      const cal = stored.calibrations.find(
+        (c: { printer: unknown; nozzle: unknown }) =>
+          String(c.printer) === String(printer._id) && String(c.nozzle) === String(nozzle._id),
+      );
+      expect(cal.chamberTemp).toBe(48); // chamber IS in the calibration (its home)
+      expect(cal.nozzleTemp ?? null).toBeNull(); // ordinary temps NOT pinned into the calibration
+      expect(cal.bedTemp ?? null).toBeNull();
+      expect(stored.temperatures.nozzle).toBe(210); // temps landed on the filament top level
+    });
+
     it("GH #950 (Codex P2 r4): a resolved chamber import CLEARS a stale settings-bag chamber from a prior import", async () => {
       const { printer, nozzle } = await seedPrinterWithNozzle();
       // Existing filament carrying a STALE raw chamber value (from a prior
