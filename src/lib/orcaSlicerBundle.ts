@@ -122,8 +122,9 @@ export function filamentToOrcaSlicerKeys(
     set("filament_notes", filament.notes);
   }
 
-  // Soluble flag
-  if (filament.soluble != null) set("filament_soluble", filament.soluble ? "1" : "0");
+  // GH #950: filament_soluble lives only in the settings bag (no schema field);
+  // the settings passthrough above already carries it. The old
+  // `set(..., filament.soluble)` read an always-undefined field — removed.
 
   // Shrinkage
   if (filament.shrinkageXY != null) set("filament_shrink", String(filament.shrinkageXY) + "%");

@@ -148,6 +148,8 @@ const CALIBRATION_KEYS = new Set<string>([
   "fan_min_speed",
   "fan_max_speed",
   "bridge_fan_speed",
+  "chamber_temperature",
+  "activate_chamber_temp_control",
 ]);
 
 /**
@@ -230,6 +232,9 @@ export interface CalibrationHints {
   fanMinSpeed?: number;
   fanMaxSpeed?: number;
   fanBridgeSpeed?: number;
+  /** GH #950: chamber temperature → calibrations[].chamberTemp. The export
+   * emits it (orcaSlicerBundle), so parse it back for a lossless round-trip. */
+  chamberTemp?: number;
   /** True when at least one calibration-relevant value was present. The
    * route uses this to decide whether to upsert a calibrations[] row vs
    * leave the filament's calibration data alone. */
@@ -337,6 +342,13 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     fanMaxSpeed:
       num(json.additional_cooling_fan_speed) ?? num(json.fan_max_speed),
     fanBridgeSpeed: num(json.bridge_fan_speed),
+    // GH #950: honor the enable flag — activate_chamber_temp_control="0" means
+    // chamber heating is OFF, so don't import the temperature (matches the
+    // exporter, which only emits chamber_temperature when chamberTemp != null).
+    chamberTemp:
+      unwrap(json.activate_chamber_temp_control) === "0"
+        ? undefined
+        : num(json.chamber_temperature),
     hasAnyHint: false,
   };
   // Codex P3 on PR #387 round 6: `maxVolumetricSpeed` is the ONE
@@ -356,7 +368,8 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     calibrationHints.retractLift != null ||
     calibrationHints.fanMinSpeed != null ||
     calibrationHints.fanMaxSpeed != null ||
-    calibrationHints.fanBridgeSpeed != null;
+    calibrationHints.fanBridgeSpeed != null ||
+    calibrationHints.chamberTemp != null;
 
   // ── Settings bag passthrough ────────────────────────────────────────
   // Anything we didn't pluck into a structured field OR a calibration

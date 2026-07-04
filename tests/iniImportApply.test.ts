@@ -151,4 +151,66 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
     // no duplicate created
     expect(await Filament.countDocuments({ name: "Plain PLA" })).toBe(1);
   });
+
+  // ── GH #950: id-first refuse-ambiguous. A section round-tripping a
+  //    filamentdb_id that resolves to an ACTIVE filament with a DIFFERENT stored
+  //    name is ambiguous (rename vs copied/stale id) → refuse, don't guess. ────
+  describe("id-first refuse-ambiguous (GH #950)", () => {
+    it("refuses when filamentdb_id resolves to an active filament with a different name", async () => {
+      const target = await Filament.create({ name: "Real Name", vendor: "Acme", type: "PLA" });
+      // Section is NAMED differently but carries the target's id.
+      await expect(
+        upsertIniFilament({ ...section("Different Name"), filamentdbId: String(target._id) }),
+      ).rejects.toThrow(/resolves to "Real Name"/);
+      // Nothing mutated / created.
+      expect(await Filament.findById(target._id).lean()).toMatchObject({ name: "Real Name" });
+      expect(await Filament.findOne({ name: "Different Name" })).toBeNull();
+    });
+
+    it("proceeds normally when filamentdb_id resolves to a filament of the SAME name (a plain update)", async () => {
+      const target = await Filament.create({ name: "Match", vendor: "Old", type: "PLA" });
+      const outcome = await upsertIniFilament({
+        ...section("Match"),
+        vendor: "New",
+        filamentdbId: String(target._id),
+      });
+      expect(outcome).toBe("updated");
+      expect((await Filament.findById(target._id).lean()).vendor).toBe("New");
+    });
+
+    it("falls through to the name-based upsert when filamentdb_id is stale (resolves to nothing)", async () => {
+      const staleId = "64b0000000000000000000ff"; // no such filament
+      const outcome = await upsertIniFilament({
+        ...section("Fresh PLA"),
+        filamentdbId: staleId,
+      });
+      expect(outcome).toBe("created");
+      expect(await Filament.findOne({ name: "Fresh PLA", _deletedAt: null })).not.toBeNull();
+    });
+
+    it("ignores a non-24-hex filamentdb_id (no id-first check) and upserts by name", async () => {
+      const outcome = await upsertIniFilament({
+        ...section("Weird Id PLA"),
+        filamentdbId: "not-an-objectid",
+      });
+      expect(outcome).toBe("created");
+    });
+
+    it("does NOT refuse against a TRASHED id-match (only active rows are id-authoritative)", async () => {
+      // filamentdb_id points at a trashed row of a different name — the id-first
+      // check filters `_deletedAt: null`, so it doesn't fire; the name path wins.
+      const trashed = await Filament.create({
+        name: "Trashed Real",
+        vendor: "Acme",
+        type: "PLA",
+        _deletedAt: new Date(),
+      });
+      const outcome = await upsertIniFilament({
+        ...section("Live Name"),
+        filamentdbId: String(trashed._id),
+      });
+      expect(outcome).toBe("created");
+      expect(await Filament.findOne({ name: "Live Name", _deletedAt: null })).not.toBeNull();
+    });
+  });
 });

@@ -250,37 +250,56 @@ describe("filamentToOrcaSlicerKeys", () => {
     expect(Object.keys(keys).filter(k => k.includes("plate_temp"))).toHaveLength(0);
   });
 
-  it("maps soluble flag", () => {
+  it("GH #950: round-trips filament_soluble through the settings bag", () => {
+    // No schema field — the old top-level `soluble` boolean was never persisted,
+    // so the exporter's `set(..., filament.soluble)` was a no-op. It now rides the
+    // settings passthrough bag verbatim.
     const filament = {
       name: "PVA",
       vendor: "Test",
       type: "PVA",
       color: "#FFFFFF",
       diameter: 1.75,
-      soluble: true,
       temperatures: {},
-      settings: {},
+      settings: { filament_soluble: "1" },
     };
 
     const keys = filamentToOrcaSlicerKeys(filament);
     expect(keys.filament_soluble).toEqual(["1"]);
   });
 
-  it("maps soluble=false to filament_soluble '0'", () => {
+  it("GH #950: passes filament_soluble '0' through the settings bag", () => {
     const filament = {
       name: "Not Soluble",
       vendor: "Test",
       type: "PLA",
       color: "#FFFFFF",
       diameter: 1.75,
-      soluble: false,
       temperatures: {},
-      settings: {},
+      settings: { filament_soluble: "0" },
     };
 
     const keys = filamentToOrcaSlicerKeys(filament);
-    // false is non-null so the flag is emitted, and false → "0"
     expect(keys.filament_soluble).toEqual(["0"]);
+  });
+
+  it("GH #950: does NOT read a (dead) top-level soluble field — settings bag is authoritative", () => {
+    // Regression guard: no schema column, so the old
+    // `set("filament_soluble", filament.soluble ? "1" : "0")` reader was dead.
+    // If restored, a top-level flag would clobber the settings-bag value.
+    const filament = {
+      name: "Conflict",
+      vendor: "Test",
+      type: "PVA",
+      color: "#FFFFFF",
+      diameter: 1.75,
+      temperatures: {},
+      soluble: true, // dead field — must be ignored
+      settings: { filament_soluble: "0" },
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+    expect(keys.filament_soluble).toEqual(["0"]); // settings wins; top-level ignored
   });
 
   it("emits filament_notes from the notes field", () => {

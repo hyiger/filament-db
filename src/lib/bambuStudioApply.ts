@@ -358,6 +358,7 @@ export async function resolveAndApplyCalibration(
   if (hints.fanMinSpeed != null) row.fanMinSpeed = hints.fanMinSpeed;
   if (hints.fanMaxSpeed != null) row.fanMaxSpeed = hints.fanMaxSpeed;
   if (hints.fanBridgeSpeed != null) row.fanBridgeSpeed = hints.fanBridgeSpeed;
+  if (hints.chamberTemp != null) row.chamberTemp = hints.chamberTemp; // GH #950
   if (parsed.temperatures.nozzle != null) row.nozzleTemp = parsed.temperatures.nozzle;
   if (parsed.temperatures.nozzleFirstLayer != null) row.nozzleTempFirstLayer = parsed.temperatures.nozzleFirstLayer;
   if (parsed.temperatures.bed != null) row.bedTemp = parsed.temperatures.bed;

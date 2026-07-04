@@ -664,7 +664,10 @@ filament_shrinkage_compensation_xy = 0.3%
       // No top-level home in the INI mapping → must remain in the settings bag.
       expect(vs.filament_soluble).toBe("1");
       expect(vs.filament_notes).toBe("keep me");
-      expect(vs.filament_settings_id).toBe("MyPreset");
+      // GH #950: filament_settings_id is re-derived from the filament's current
+      // name on export, so it's stripped from the stored bag (a stale copy would
+      // make a renamed filament export its old name).
+      expect(vs.filament_settings_id).toBeUndefined();
       // GH #951 (R3): spool weight + shrinkage now HAVE a top-level home, so they
       // are stripped from the settings bag and stored as structured fields.
       expect(vs.filament_spool_weight).toBeUndefined();

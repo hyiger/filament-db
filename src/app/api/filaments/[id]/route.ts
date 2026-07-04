@@ -469,6 +469,22 @@ export async function POST(
         filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
         if (filament) matchedBy = "name";
       }
+      // GH #950: a #872 per-nozzle preset is named "<base> <Ø type [HF]>". When
+      // its filamentdb_id is stale/absent (DB-instance-specific) AND the full
+      // suffixed name misses, retry the BASE name (decodedName minus the hint)
+      // so the sync updates the base filament instead of 404 → the fork spawning
+      // a "<base> <hint>" orphan that swallows every later edit.
+      if (!filament) {
+        const hint =
+          typeof config.filamentdb_nozzle === "string" ? config.filamentdb_nozzle.trim() : "";
+        if (hint && decodedName.endsWith(` ${hint}`)) {
+          const baseName = decodedName.slice(0, -(hint.length + 1)).trim();
+          if (baseName) {
+            filament = await Filament.findOne({ name: baseName, _deletedAt: null });
+            if (filament) matchedBy = "name";
+          }
+        }
+      }
     }
 
     if (!filament) {
@@ -594,9 +610,10 @@ export async function POST(
     if (config.filament_shrinkage_compensation_xy) { const v = parseFloat(config.filament_shrinkage_compensation_xy); if (!isNaN(v)) update.shrinkageXY = v; }
     if (config.filament_shrinkage_compensation_z) { const v = parseFloat(config.filament_shrinkage_compensation_z); if (!isNaN(v)) update.shrinkageZ = v; }
 
-    // Flags
-    if (config.filament_soluble) update.soluble = config.filament_soluble === "1";
-    if (config.filament_abrasive) update.abrasive = config.filament_abrasive === "1";
+    // GH #950: filament_soluble / filament_abrasive are NOT written as structured
+    // fields (the schema has no such columns — a Mongoose strict write dropped
+    // them). They now ride the settings bag (removed from STRUCTURED_KEYS below),
+    // which the slicer exports' settings seed and the OPT encoder read.
 
     // #859: write ONLY the temperature keys PrusaSlicer actually sent, as
     // dotted paths — never a $set of the whole `temperatures` object. #645 added
@@ -815,7 +832,12 @@ export async function POST(
       "filament_max_volumetric_speed", "temperature", "first_layer_temperature",
       "bed_temperature", "first_layer_bed_temperature",
       "filament_shrinkage_compensation_xy", "filament_shrinkage_compensation_z",
-      "filament_soluble", "filament_abrasive", "filament_settings_id",
+      // GH #950: filament_soluble / filament_abrasive are NOT structured — the
+      // Filament schema has no such fields, so a sync that pulled them out here
+      // (and wrote a stripped-by-Mongoose update.soluble) persisted them
+      // NOWHERE. Let them ride the settings bag, which is where the exports'
+      // settings seed and the OPT encoder already read them from.
+      "filament_settings_id",
       // #867: a routing hint, not filament data — consumed for id-first matching
       // above and re-emitted from the row's _id on export, so never stored in
       // the settings bag (avoids a stale duplicate of the canonical _id).

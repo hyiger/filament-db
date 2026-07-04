@@ -259,6 +259,43 @@ describe("parseBambuStudioProfile", () => {
     expect(calibrationHints.fanBridgeSpeed).toBe(original.fanBridgeSpeed);
   });
 
+  it("GH #950: parses chamber_temperature into a chamberTemp calibration hint", () => {
+    const { calibrationHints } = parseBambuStudioProfile({
+      name: ["X"],
+      chamber_temperature: ["45"],
+      activate_chamber_temp_control: ["1"],
+    });
+    expect(calibrationHints.chamberTemp).toBe(45);
+    expect(calibrationHints.hasAnyHint).toBe(true);
+  });
+
+  it("GH #950: honors activate_chamber_temp_control='0' — chamber heating OFF, temp not imported", () => {
+    const { calibrationHints } = parseBambuStudioProfile({
+      name: ["X"],
+      chamber_temperature: ["45"], // stale value with heating disabled
+      activate_chamber_temp_control: ["0"],
+    });
+    expect(calibrationHints.chamberTemp).toBeUndefined();
+    // chamber is the ONLY would-be hint and it's suppressed → no calibration row.
+    expect(calibrationHints.hasAnyHint).toBe(false);
+  });
+
+  it("GH #950: parses chamber_temperature when the enable flag is absent (defaults to on)", () => {
+    const { calibrationHints } = parseBambuStudioProfile({
+      name: ["X"],
+      chamber_temperature: ["50"],
+    });
+    expect(calibrationHints.chamberTemp).toBe(50);
+    expect(calibrationHints.hasAnyHint).toBe(true);
+  });
+
+  it("GH #950: round-trips chamberTemp via calibrationToOrcaSlicerKeys", async () => {
+    const { calibrationToOrcaSlicerKeys } = await import("@/lib/orcaSlicerBundle");
+    const exported = calibrationToOrcaSlicerKeys({ chamberTemp: 55 });
+    const { calibrationHints } = parseBambuStudioProfile({ name: ["X"], ...exported });
+    expect(calibrationHints.chamberTemp).toBe(55);
+  });
+
   it("stashes unknown keys in the settings passthrough bag", () => {
     const { filament } = parseBambuStudioProfile({
       name: ["X"],
