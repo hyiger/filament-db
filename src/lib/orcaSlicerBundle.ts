@@ -201,9 +201,9 @@ export function calibrationToOrcaSlicerKeys(
  * GH #950.4: pick the ONE calibration to bake into a filament's single exported
  * preset — the any-printer / any-bed "default" entry (printer == null && bedType
  * == null) preferred, else the first calibration. Orca/Bambu presets are a single
- * .json, so a multi-nozzle filament collapses to this representative (the detail
- * page shows a notice when >1 distinct nozzle calibration exists — see
- * distinctNozzleCalibrationCount).
+ * .json, so a filament with more than one calibration collapses to this
+ * representative (the detail page shows a notice whenever any calibration is
+ * dropped — see droppedCalibrationCount).
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function pickRepresentativeCalibration(filament: FilamentDoc): Record<string, any> | null {
@@ -213,20 +213,16 @@ export function pickRepresentativeCalibration(filament: FilamentDoc): Record<str
 }
 
 /**
- * GH #950.4: count DISTINCT nozzle calibrations (diameter + type + high-flow),
- * mirroring the #872 grouping in prusaSlicerBundle. The detail page warns when
- * this is >1 because the single Orca/Bambu .json export bakes only ONE
- * (see pickRepresentativeCalibration) — the other nozzles' tuning is dropped.
+ * GH #950.4 / #969 (Codex round 3): how many calibrations the single Orca/Bambu
+ * .json export will DROP. `pickRepresentativeCalibration` bakes exactly one, so
+ * every other calibration is lost — regardless of whether it's on a different
+ * nozzle OR the SAME nozzle with a different bed type / printer. The detail page
+ * warns when this is > 0. (The original counted DISTINCT nozzles, which silently
+ * collapsed same-nozzle tuning contexts and under-warned — the bug this fixes.)
  */
-export function distinctNozzleCalibrationCount(filament: FilamentDoc): number {
+export function droppedCalibrationCount(filament: FilamentDoc): number {
   const cals = Array.isArray(filament.calibrations) ? filament.calibrations : [];
-  const keys = new Set<string>();
-  for (const cal of cals) {
-    const nz = cal?.nozzle;
-    if (!nz || typeof nz !== "object" || nz.diameter == null) continue;
-    keys.add(`${nz.diameter}|${(nz.type ?? "").trim().toLowerCase()}|${nz.highFlow ? "HF" : ""}`);
-  }
-  return keys.size;
+  return Math.max(0, cals.length - 1);
 }
 
 /**

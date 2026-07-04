@@ -1117,17 +1117,13 @@ function FilamentDetail() {
   const inherited = new Set(filament._inherited || []);
   const isVariant = !!filament.parentId;
   const isParent = (filament._variants?.length ?? 0) > 0;
-  // GH #950.4: the single Orca/Bambu .json export bakes only ONE representative
-  // calibration (the any-printer/any-bed default). Warn when >1 DISTINCT nozzle
-  // calibration exists so the user knows the others' tuning is dropped. Mirrors
-  // distinctNozzleCalibrationCount in src/lib/orcaSlicerBundle.ts (kept inline to
+  // GH #950.4 / #969 (Codex round 3): the single Orca/Bambu .json export bakes
+  // only ONE representative calibration (the any-printer/any-bed default), so any
+  // other calibration is dropped — whether on a different nozzle OR the same
+  // nozzle with a different bed type / printer. Warn whenever ≥1 is dropped.
+  // Mirrors droppedCalibrationCount in src/lib/orcaSlicerBundle.ts (kept inline to
   // avoid pulling the export lib into the client bundle).
-  const distinctNozzleCalibrations = new Set(
-    (filament.calibrations ?? [])
-      .map((c) => c.nozzle)
-      .filter((nz) => nz && nz.diameter != null)
-      .map((nz) => `${nz.diameter}|${(nz.type ?? "").trim().toLowerCase()}|${nz.highFlow ? "HF" : ""}`),
-  ).size;
+  const droppedCalibrations = Math.max(0, (filament.calibrations?.length ?? 0) - 1);
   // Parents are finish-agnostic — only variants/standalones carry a
   // texture treatment + chip. resolveFilament() doesn't inherit optTags,
   // so a variant only shows a finish when its own optTags include one
@@ -1298,9 +1294,9 @@ function FilamentDetail() {
                   {t("detail.slicerExport.multiColorNotice")}
                 </p>
               )}
-              {distinctNozzleCalibrations > 1 && (
+              {droppedCalibrations > 0 && (
                 <p className="px-3 py-2 my-1 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border-y border-amber-200 dark:border-amber-800">
-                  {t("detail.slicerExport.multiNozzleNotice")}
+                  {t("detail.slicerExport.multiCalibrationNotice")}
                 </p>
               )}
               {([

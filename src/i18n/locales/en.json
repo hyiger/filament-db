@@ -891,7 +891,7 @@
   "detail.slicerExport.orca": "OrcaSlicer filament preset",
   "detail.slicerExport.bambu": "Bambu Studio filament preset",
   "detail.slicerExport.multiColorNotice": "Slicer presets only support one color. The primary will be exported; secondaries are dropped.",
-  "detail.slicerExport.multiNozzleNotice": "This filament has calibrations for more than one nozzle. The single Orca/Bambu preset bakes only the default nozzle's tuning; the others are dropped.",
+  "detail.slicerExport.multiCalibrationNotice": "This filament has more than one calibration. The single Orca/Bambu preset bakes only the default (any-printer/any-bed) one; the other printer, bed-type, and nozzle tuning contexts are dropped.",
   "detail.exportMenu": "Export",
   "detail.exportMenu.title": "Export this filament — print a label, write to NFC, or download a slicer preset",
   "detail.exportMenu.slicerSection": "Slicer presets",

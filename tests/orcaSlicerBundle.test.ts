@@ -4,7 +4,7 @@ import {
   calibrationToOrcaSlicerKeys,
   generateOrcaSlicerProfiles,
   pickRepresentativeCalibration,
-  distinctNozzleCalibrationCount,
+  droppedCalibrationCount,
 } from "@/lib/orcaSlicerBundle";
 
 describe("filamentToOrcaSlicerKeys", () => {
@@ -732,16 +732,33 @@ describe("GH #950.4 — bake calibration into the Orca/Bambu export", () => {
     expect(pickRepresentativeCalibration(noDefault)?.extrusionMultiplier).toBe(0.9);
   });
 
-  it("distinctNozzleCalibrationCount groups by diameter+type+highFlow", () => {
-    expect(distinctNozzleCalibrationCount({ calibrations: [] })).toBe(0);
+  it("droppedCalibrationCount is calibrations beyond the one baked representative", () => {
+    // 0 or 1 calibration → nothing dropped.
+    expect(droppedCalibrationCount({ calibrations: [] })).toBe(0);
+    expect(droppedCalibrationCount({})).toBe(0);
+    expect(
+      droppedCalibrationCount({ calibrations: [{ nozzle: { diameter: 0.4, type: "Brass" } }] }),
+    ).toBe(0);
+    // GH #969 (Codex r3): two calibrations on the SAME nozzle but different bed
+    // types must count as a drop — the old distinct-nozzle count collapsed these
+    // to 1 and under-warned. Only one is baked, so one is dropped.
+    expect(
+      droppedCalibrationCount({
+        calibrations: [
+          { nozzle: { diameter: 0.4, type: "Brass" }, printer: null, bedType: null },
+          { nozzle: { diameter: 0.4, type: "Brass" }, printer: null, bedType: { name: "Textured PEI" } },
+        ],
+      }),
+    ).toBe(1);
+    // Multiple across nozzles + contexts → all but the representative dropped.
     const f = {
       calibrations: [
         { nozzle: { diameter: 0.4, type: "Brass" }, printer: null },
-        { nozzle: { diameter: 0.4, type: "brass" }, printer: { name: "MK4" } }, // case-fold → same
-        { nozzle: { diameter: 0.6, type: "Brass" }, printer: null }, // distinct
-        { nozzle: { diameter: 0.4, type: "Brass", highFlow: true }, printer: null }, // distinct (HF)
+        { nozzle: { diameter: 0.4, type: "brass" }, printer: { name: "MK4" } },
+        { nozzle: { diameter: 0.6, type: "Brass" }, printer: null },
+        { nozzle: { diameter: 0.4, type: "Brass", highFlow: true }, printer: null },
       ],
     };
-    expect(distinctNozzleCalibrationCount(f)).toBe(3);
+    expect(droppedCalibrationCount(f)).toBe(3);
   });
 });
