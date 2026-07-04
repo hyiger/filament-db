@@ -347,6 +347,7 @@
   "share.public.importing": "Importiere...",
   "share.public.imported": "{count} Filament(e) importiert",
   "share.public.conflicts": "{count} Konflikt(e):",
+  "share.public.orphanVariant": "Variante \"{name}\" übersprungen — das übergeordnete Filament wurde nicht importiert",
   "share.public.importError": "Import fehlgeschlagen. Bitte erneut versuchen.",
   "analytics.title": "Analyse",
   "analytics.subtitle": "Filamentverbrauch über kürzliche Drucke.",

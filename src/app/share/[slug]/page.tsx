@@ -7,6 +7,12 @@ import { useToast } from "@/components/Toast";
 import FilamentPicker from "@/components/FilamentPicker";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { formatDate } from "@/lib/dateFormat";
+import {
+  partitionByParent,
+  buildFilamentImportBody,
+  buildPrinterImportBody,
+  type ShareImportPrinter,
+} from "@/lib/shareImport";
 
 interface SharedFilament {
   _id: string;
@@ -141,6 +147,11 @@ export default function SharedCatalogPage() {
         endpoint: string,
         records: SharedRef[],
         idSet: Set<string>,
+        // GH #956: printers carry source-DB installedNozzles/installedBedTypes/
+        // amsSlots refs that must be remapped/stripped before POST (they'd 400
+        // otherwise). An optional per-endpoint transform builds the POST body;
+        // the default just strips the source `_id`.
+        transform?: (r: SharedRef) => Record<string, unknown>,
       ): Promise<Map<string, string>> {
         const map = new Map<string, string>();
         for (const r of records) {
@@ -148,7 +159,7 @@ export default function SharedCatalogPage() {
           const res = await fetch(endpoint, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...r, _id: undefined }),
+            body: JSON.stringify(transform ? transform(r) : { ...r, _id: undefined }),
             signal: ac.signal,
           });
           if (res.ok) {
@@ -176,52 +187,84 @@ export default function SharedCatalogPage() {
         return map;
       }
 
-      const [nozzleMap, printerMap, bedTypeMap] = await Promise.all([
+      // GH #956: import nozzles + bed types FIRST, then printers — a printer's
+      // installedNozzles/installedBedTypes must be remapped through those maps,
+      // and `buildPrinterImportBody` also strips amsSlots (source spool ids are
+      // meaningless on the destination). Without this the printer POST 400s, the
+      // printerMap stays empty, and every printer-scoped calibration silently
+      // degrades to `printer: null`.
+      const [nozzleMap, bedTypeMap] = await Promise.all([
         rehydrate("/api/nozzles", data.payload.nozzles ?? [], neededNozzleIds),
-        rehydrate("/api/printers", data.payload.printers ?? [], neededPrinterIds),
         rehydrate("/api/bed-types", data.payload.bedTypes ?? [], neededBedTypeIds),
       ]);
+      const printerMap = await rehydrate(
+        "/api/printers",
+        data.payload.printers ?? [],
+        neededPrinterIds,
+        (p) => buildPrinterImportBody(p as ShareImportPrinter, nozzleMap, bedTypeMap),
+      );
 
-      // Remap every id reference on each filament so the destination
-      // calibrations/compatibleNozzles point at real local records.
-      // Unresolved ids are dropped — better a missing reference than a
-      // pointer to a random document on the destination.
-      const remapped = filtered.map((f) => {
-        const compatibleNozzles = (f.compatibleNozzles || [])
-          .map((nid) => nozzleMap.get(String(nid)))
-          .filter((x): x is string => Boolean(x));
-        const calibrations = (f.calibrations || [])
-          .map((cal) => ({
-            ...cal,
-            nozzle: cal.nozzle ? nozzleMap.get(String(cal.nozzle)) ?? null : null,
-            printer: cal.printer ? printerMap.get(String(cal.printer)) ?? null : null,
-            bedType: cal.bedType ? bedTypeMap.get(String(cal.bedType)) ?? null : null,
-          }))
-          // Calibrations require a nozzle; drop any that we couldn't map.
-          .filter((cal) => cal.nozzle);
-        return {
-          ...f,
-          _id: undefined,
-          compatibleNozzles,
-          calibrations,
-        };
-      });
-
+      // GH #956: two-phase filament import. ROOTS first (to build the
+      // source→local id map), then VARIANTS with `parentId` remapped through
+      // it. `buildFilamentImportBody` also remaps compatibleNozzles +
+      // calibration refs (dropping unresolved) so the destination points at
+      // real local records. A variant whose parent wasn't imported (not
+      // selected, or its create failed and it doesn't exist locally) is SKIPPED
+      // and surfaced — importing it standalone would drop every inherited value.
+      const { roots, variants } = partitionByParent(filtered);
+      const filamentIdMap = new Map<string, string>();
       let created = 0;
       const conflicts: string[] = [];
-      for (const f of remapped) {
+
+      // POST one filament; on success record source→local id so variants can
+      // resolve their parent. On a 409 (name already exists on the destination)
+      // resolve the existing local filament by name into the map, so a variant
+      // still attaches to a parent the recipient already owns — mirrors the
+      // reference rehydrate's 409-reuse path.
+      const postFilament = async (
+        sourceId: string,
+        body: Record<string, unknown>,
+      ): Promise<boolean> => {
         const res = await fetch("/api/filaments", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(f),
+          body: JSON.stringify(body),
           signal: ac.signal,
         });
         if (res.ok) {
-          created++;
-        } else {
-          const body = await res.json().catch(() => null);
-          conflicts.push(body?.error || f.name);
+          const c = await res.json();
+          filamentIdMap.set(sourceId, String(c._id));
+          return true;
         }
+        if (res.status === 409) {
+          const listRes = await fetch("/api/filaments", { signal: ac.signal });
+          if (listRes.ok) {
+            const list = await listRes.json();
+            const match = Array.isArray(list)
+              ? list.find((x: { name?: string }) => x.name === body.name)
+              : null;
+            if (match?._id) filamentIdMap.set(sourceId, String(match._id));
+          }
+        }
+        const errBody = await res.json().catch(() => null);
+        conflicts.push(errBody?.error || String(body.name));
+        return false;
+      };
+
+      for (const f of roots) {
+        if (ac.signal.aborted) return;
+        const body = buildFilamentImportBody(f, nozzleMap, printerMap, bedTypeMap, undefined);
+        if (await postFilament(String(f._id), body)) created++;
+      }
+      for (const v of variants) {
+        if (ac.signal.aborted) return;
+        const localParent = filamentIdMap.get(String(v.parentId));
+        if (!localParent) {
+          conflicts.push(t("share.public.orphanVariant", { name: v.name }));
+          continue;
+        }
+        const body = buildFilamentImportBody(v, nozzleMap, printerMap, bedTypeMap, localParent);
+        if (await postFilament(String(v._id), body)) created++;
       }
       if (ac.signal.aborted) return;
       toast(t("share.public.imported", { count: created }));
