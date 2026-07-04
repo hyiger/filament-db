@@ -577,6 +577,29 @@ describe("Bambu Studio importer routes", () => {
       expect(stored.settings.chamber_temperature).toBeUndefined();
     });
 
+    it("GH #950 (Codex P2 r10): a bambu sync persists a never-baggable purge even with no new passthrough key", async () => {
+      // The bambu path gated its settings write on `added`; without honoring
+      // `removed`, a sync that only updates structured fields discards the purge
+      // and a stale filament_settings_id survives to shadow the re-derived name.
+      await Filament.create({
+        name: "QA Bambu PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        settings: { filament_settings_id: "Stale Name", filament_notes: "keep" },
+      });
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({ nozzle_temperature: ["225"] }), // structured only; no passthrough added
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      expect(stored.settings.filament_settings_id).toBeUndefined(); // stale never-baggable purged
+      expect(stored.settings.filament_notes).toBe("keep"); // real passthrough preserved
+    });
+
     it("GH #950 (Codex P2 r5): a disable-only profile matching NO existing row does not create an empty calibration row", async () => {
       await seedPrinterWithNozzle();
       const { POST } = await import("@/app/api/filaments/bambustudio/route");

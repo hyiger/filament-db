@@ -148,7 +148,12 @@ export async function prepareBambuUpdate(
     // to strip).
     new Set<string>(),
   );
-  if (settingsResult.added.length > 0) {
+  // GH #950 (Codex r10): also write when the merge PURGED a never-baggable key
+  // from the existing bag (`removed`) — matching the OrcaSlicer route. Otherwise a
+  // Bambu sync that only updates structured fields on a row with a stale
+  // filament_settings_id/filamentdb_id returns 200 but never persists the cleaned
+  // bag, so the stale key keeps shadowing the re-derived name/id on later exports.
+  if (settingsResult.added.length > 0 || settingsResult.removed.length > 0) {
     update.settings = settingsResult.settings;
   }
 
