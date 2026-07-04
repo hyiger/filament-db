@@ -148,7 +148,12 @@ export async function prepareBambuUpdate(
     // to strip).
     new Set<string>(),
   );
-  if (settingsResult.added.length > 0) {
+  // GH #950 (Codex r10): also write when the merge PURGED a never-baggable key
+  // from the existing bag (`removed`) — matching the OrcaSlicer route. Otherwise a
+  // Bambu sync that only updates structured fields on a row with a stale
+  // filament_settings_id/filamentdb_id returns 200 but never persists the cleaned
+  // bag, so the stale key keeps shadowing the re-derived name/id on later exports.
+  if (settingsResult.added.length > 0 || settingsResult.removed.length > 0) {
     update.settings = settingsResult.settings;
   }
 
@@ -158,6 +163,60 @@ export async function prepareBambuUpdate(
     update,
     existing,
   );
+
+  // GH #950 (Codex P2 on PR #968): chamber_temperature has NO top-level filament
+  // field — its only structured home is calibrations[].chamberTemp, which
+  // `resolveAndApplyCalibration` writes ONLY when it resolves a printer/nozzle
+  // context. Because the parser excludes chamber_temperature/activate_chamber_
+  // temp_control from the settings passthrough bag (they're in CALIBRATION_KEYS),
+  // a standalone profile whose calibration context can't be resolved would
+  // silently DROP the value. When no calibration row was written, fall back to
+  // preserving the raw chamber keys in the settings bag — the "misfiled but
+  // survives" state the #950 finding explicitly rates acceptable (P2), and the
+  // same no-data-loss guarantee maxVolumetricSpeed gets via its top-level field.
+  // A RESOLVED profile keeps chamber cleanly in calibrations[].chamberTemp and
+  // out of the filament-global bag (the #950 fix's whole point).
+  //
+  // Codex P1 on PR #968: base on the MERGED settings bag (existing + incoming
+  // passthrough), NOT `update.settings` — which is only assigned when
+  // `settingsResult.added.length > 0`, so for an existing filament whose profile
+  // adds no passthrough keys it is undefined here, and starting from {} would make
+  // the later `$set` REPLACE the whole bag, dropping existing filament_notes /
+  // filament_soluble / slicer options. `settingsResult.settings` is always the
+  // full {existing, ...incoming} bag. Skip when the merge errored (the route 400s
+  // on it anyway) so we never build on a partial bag.
+  if (parsed.calibrationHints.chamberTemp != null && !settingsResult.error) {
+    if (!calibrationOutcome.applied) {
+      // Unresolved: no structural home → preserve the raw chamber keys in the bag.
+      // Route them through the CAPPED merge (Codex r7) so appending them can't
+      // bypass MAX_SETTINGS_KEYS; a genuinely over-cap result surfaces as
+      // settingsResult.error → the route 400s instead of silently over-filling.
+      const chamberMerge = mergeSlicerSettings(
+        settingsResult.settings,
+        {
+          chamber_temperature: String(parsed.calibrationHints.chamberTemp),
+          activate_chamber_temp_control: "1",
+        },
+        new Set(),
+      );
+      if (chamberMerge.error) settingsResult.error = chamberMerge.error;
+      else update.settings = chamberMerge.settings;
+    } else if (
+      "chamber_temperature" in settingsResult.settings ||
+      "activate_chamber_temp_control" in settingsResult.settings
+    ) {
+      // Codex P2 on PR #968 r4: the chamber value went to calibrations[].chamberTemp
+      // (authoritative, per-nozzle). Strip any STALE raw chamber keys the merged bag
+      // carried over from a PRIOR unresolved/disabled import — otherwise they'd
+      // re-export as a filament-global chamber value that double-counts the
+      // calibration. The parser already excludes the INCOMING chamber keys from the
+      // bag, so this only clears a carried-over value from `existing`.
+      const settings = { ...settingsResult.settings };
+      delete settings.chamber_temperature;
+      delete settings.activate_chamber_temp_control;
+      update.settings = settings;
+    }
+  }
 
   // GH #892: reject an inverted nozzle range, mirroring the OrcaSlicer sync
   // route. `update.temperatures` is a full replace (built from existing +
@@ -336,42 +395,93 @@ export async function resolveAndApplyCalibration(
   update: Record<string, unknown>,
   existing: { calibrations?: unknown[] } | null,
 ): Promise<CalibrationOutcome> {
-  if (!hints.hasAnyHint) {
+  // GH #950 (Codex P2 on PR #968): decouple "attempt resolution" from "warn".
+  // chamber_temperature has a structured home too — calibrations[].chamberTemp —
+  // so we must TRY to resolve a printer/nozzle whenever a chamber temp is present,
+  // even though chamber is excluded from `hasAnyHint`. The UNRESOLVED WARNING,
+  // however, stays gated on `hasAnyHint`: chamber has a settings-bag fallback (see
+  // prepareBambuUpdate), so a chamber-only profile that can't resolve loses
+  // nothing and must not surface a misleading "calibration unresolved" toast.
+  // GH #950 (Codex r5): also attempt resolution when the profile DISABLES chamber
+  // heating — a resolved context lets us CLEAR a pre-existing calibrations[].
+  // chamberTemp so the disable actually takes (else /calibration re-enables it).
+  const wantsResolution =
+    hints.hasAnyHint || hints.chamberTemp != null || hints.chamberDisabled === true;
+  if (!wantsResolution) {
     return { applied: false, unresolved: false };
   }
 
   const ctx = await matchPrinterNozzle(hints);
   if (!ctx) {
-    return { applied: false, unresolved: true };
+    // Per-nozzle hints (if any) are dropped → warn. A chamber-only profile has
+    // its settings-bag fallback, so its presence alone does NOT warn.
+    return { applied: false, unresolved: hints.hasAnyHint };
   }
 
   const row: Record<string, unknown> = {
     printer: ctx.printerId,
     nozzle: ctx.nozzleId,
   };
-  if (hints.extrusionMultiplier != null) row.extrusionMultiplier = hints.extrusionMultiplier;
-  if (hints.maxVolumetricSpeed != null) row.maxVolumetricSpeed = hints.maxVolumetricSpeed;
-  if (hints.pressureAdvance != null) row.pressureAdvance = hints.pressureAdvance;
-  if (hints.retractLength != null) row.retractLength = hints.retractLength;
-  if (hints.retractSpeed != null) row.retractSpeed = hints.retractSpeed;
-  if (hints.retractLift != null) row.retractLift = hints.retractLift;
-  if (hints.fanMinSpeed != null) row.fanMinSpeed = hints.fanMinSpeed;
-  if (hints.fanMaxSpeed != null) row.fanMaxSpeed = hints.fanMaxSpeed;
-  if (hints.fanBridgeSpeed != null) row.fanBridgeSpeed = hints.fanBridgeSpeed;
-  if (parsed.temperatures.nozzle != null) row.nozzleTemp = parsed.temperatures.nozzle;
-  if (parsed.temperatures.nozzleFirstLayer != null) row.nozzleTempFirstLayer = parsed.temperatures.nozzleFirstLayer;
-  if (parsed.temperatures.bed != null) row.bedTemp = parsed.temperatures.bed;
-  if (parsed.temperatures.bedFirstLayer != null) row.bedTempFirstLayer = parsed.temperatures.bedFirstLayer;
+  // Chamber: write a new value, or (on an explicit disable) null to clear it. This
+  // is the ONE thing a chamber-only sync (enabled or disabled) writes to the row.
+  if (hints.chamberTemp != null) row.chamberTemp = hints.chamberTemp; // GH #950
+  else if (hints.chamberDisabled === true) row.chamberTemp = null;
+  // All NON-chamber calibration values + ordinary temps: copied ONLY when there's
+  // a real per-nozzle hint (`hasAnyHint`). GH #950 (Codex r6/r7/r11): a chamber-only
+  // sync — whether it ENABLES chamber (chamberTemp != null) or disables it — must
+  // NOT pin the profile's top-level-homed temps / max-vol into calibrations[].
+  // Those already land on the filament via buildStructuredUpdate; a fabricated
+  // per-nozzle override would later shadow user-edited top-level values. Gating on
+  // `hasAnyHint` (not merely "chamber present") closes the enabled + disabled cases
+  // together — max-vol is excluded from hasAnyHint precisely because it has a
+  // top-level home, so a chamber+max-vol-only sync leaves max-vol at the top level.
+  if (hints.hasAnyHint) {
+    if (hints.extrusionMultiplier != null) row.extrusionMultiplier = hints.extrusionMultiplier;
+    if (hints.maxVolumetricSpeed != null) row.maxVolumetricSpeed = hints.maxVolumetricSpeed;
+    if (hints.pressureAdvance != null) row.pressureAdvance = hints.pressureAdvance;
+    if (hints.retractLength != null) row.retractLength = hints.retractLength;
+    if (hints.retractSpeed != null) row.retractSpeed = hints.retractSpeed;
+    if (hints.retractLift != null) row.retractLift = hints.retractLift;
+    if (hints.fanMinSpeed != null) row.fanMinSpeed = hints.fanMinSpeed;
+    if (hints.fanMaxSpeed != null) row.fanMaxSpeed = hints.fanMaxSpeed;
+    if (hints.fanBridgeSpeed != null) row.fanBridgeSpeed = hints.fanBridgeSpeed;
+    if (parsed.temperatures.nozzle != null) row.nozzleTemp = parsed.temperatures.nozzle;
+    if (parsed.temperatures.nozzleFirstLayer != null) row.nozzleTempFirstLayer = parsed.temperatures.nozzleFirstLayer;
+    if (parsed.temperatures.bed != null) row.bedTemp = parsed.temperatures.bed;
+    if (parsed.temperatures.bedFirstLayer != null) row.bedTempFirstLayer = parsed.temperatures.bedFirstLayer;
+  }
 
-  const existingRows = (existing?.calibrations as Array<Record<string, unknown>>) || [];
+  // Normalize to PLAIN objects before spreading: the bulk/per-id routes pass a
+  // HYDRATED Mongoose doc, so `existing.calibrations[i]` are Mongoose subdocuments
+  // whose schema-field data lives in `_doc` (exposed via prototype getters, NOT own
+  // enumerable props). `{ ...subdoc }` would drop that data, so merging a new value
+  // onto an existing row silently lost the row's other fields (latent pre-#950 bug,
+  // only reachable when a re-sync updates an EXISTING calibration row — now exercised
+  // by the chamber-disable clear). `.toObject()` materialises the real data; plain
+  // objects (unit tests) have no toObject and pass through unchanged.
+  const existingRows = ((existing?.calibrations as Array<Record<string, unknown>>) || []).map(
+    (c) => {
+      const maybe = c as { toObject?: () => Record<string, unknown> };
+      return typeof maybe?.toObject === "function" ? maybe.toObject() : c;
+    },
+  );
   const idx = existingRows.findIndex(
     (c) =>
       String(c.printer) === ctx.printerId && String(c.nozzle) === ctx.nozzleId,
   );
   const merged = [...existingRows];
   if (idx >= 0) {
+    // A chamber-only sync merges just its chamber value here (a real hint also
+    // brings its calibration fields); the matched row's other fields stay intact.
     merged[idx] = { ...merged[idx], ...row };
   } else {
+    // GH #950 (Codex r5/r6/r11): create a row only when there's real data to store
+    // — a per-nozzle hint, or an ENABLED chamber value (chamberTemp != null, its
+    // structured home). A bare chamber CLEAR (chamberTemp === null) with no
+    // matching row has nothing to clear, so don't fabricate an empty row.
+    if (!hints.hasAnyHint && row.chamberTemp == null) {
+      return { applied: false, unresolved: false };
+    }
     merged.push(row);
   }
   update.calibrations = merged;

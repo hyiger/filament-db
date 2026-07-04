@@ -1516,4 +1516,215 @@ describe("API route correctness", () => {
       expect(res.status).toBe(400);
     });
   });
+
+  // ── #950: slicer round-trip fidelity + id-first addressing ──────────
+
+  describe("#950 — slicer round-trip fidelity + id-first addressing", () => {
+    it("950.1 — a per-id sync keeps filament_soluble/abrasive in the settings bag (no dead structured write)", async () => {
+      const f = await Filament.create({ name: "PVA", vendor: "X", type: "PVA" });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/PVA", {
+          config: { filament_soluble: "1", filament_abrasive: "0", filament_density: "1.23" },
+        }),
+        { params: Promise.resolve({ id: "PVA" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      // The schema has no soluble/abrasive columns, so the old structured write
+      // dropped them into the void. They now ride the settings bag, so a later
+      // slicer export re-emits them (round-trip preserved).
+      expect(fresh.settings?.filament_soluble).toBe("1");
+      expect(fresh.settings?.filament_abrasive).toBe("0");
+      // A genuinely structured key still lands on its top-level field.
+      expect(fresh.density).toBe(1.23);
+    });
+
+    it("950.5 (sweep r8) — a per-nozzle sync PRESERVES a shared calibration default in the settings bag", async () => {
+      // The per-id calibration sync adds context keys (extrusion_multiplier /
+      // retraction / fans) to STRUCTURED_KEYS. A prior over-broad purge stripped
+      // ALL structuredKeys from the existing bag, erasing a filament-wide shared EM
+      // default on every per-nozzle sync. The purge is now narrow (never-baggable
+      // only), so shared bag defaults the incoming preset didn't touch survive.
+      const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+      const f = await Filament.create({
+        name: "PLA",
+        vendor: "X",
+        type: "PLA",
+        compatibleNozzles: [brass._id],
+        settings: { extrusion_multiplier: "0.98", some_passthrough: "keep" },
+      });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/PLA%200.4%20Brass", {
+          config: {
+            filamentdb_id: String(f._id),
+            filamentdb_nozzle: "0.4 Brass",
+            pressure_advance: "0.03", // routes to the calibration entry, not the bag
+          },
+        }),
+        { params: Promise.resolve({ id: "PLA 0.4 Brass" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      // The shared EM default (a structuredKey in calibration mode, but with no
+      // top-level home) is NOT erased by the per-nozzle sync.
+      expect(fresh.settings?.extrusion_multiplier).toBe("0.98");
+      expect(fresh.settings?.some_passthrough).toBe("keep");
+    });
+
+    it("950.7 — a per-nozzle preset sync with an absent filamentdb_id falls back to the BASE name (no orphan)", async () => {
+      const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+      const f = await Filament.create({
+        name: "PLA",
+        vendor: "X",
+        type: "PLA",
+        compatibleNozzles: [brass._id],
+      });
+      // Suffixed URL, filamentdb_nozzle hint, but NO filamentdb_id (DB-instance-
+      // specific; stale/absent after a fresh install). Pre-fix the full suffixed
+      // name missed → 404 → the fork spawned a "PLA 0.4 Brass" orphan.
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/PLA%200.4%20Brass", {
+          config: { filamentdb_nozzle: "0.4 Brass", extrusion_multiplier: "1.03" },
+        }),
+        { params: Promise.resolve({ id: "PLA 0.4 Brass" }) },
+      );
+      expect(res.status).toBe(200);
+      expect((await res.json()).matchedBy).toBe("name");
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.name).toBe("PLA"); // base filament resolved + name untouched
+      expect(fresh.calibrations).toHaveLength(1);
+      expect(fresh.calibrations[0].extrusionMultiplier).toBe(1.03);
+      expect(String(fresh.calibrations[0].nozzle)).toBe(String(brass._id));
+      // No orphan created under the suffixed name.
+      expect(await Filament.findOne({ name: "PLA 0.4 Brass" })).toBeNull();
+    });
+
+    it("950.7 — a suffixed name whose base ALSO misses still 404s (no false base match)", async () => {
+      // No "PLA" filament exists; the base-name retry finds nothing → 404, and the
+      // fork's create path is the correct outcome here (genuinely new preset).
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/PLA%200.4%20Brass", {
+          config: { filamentdb_nozzle: "0.4 Brass", extrusion_multiplier: "1.03" },
+        }),
+        { params: Promise.resolve({ id: "PLA 0.4 Brass" }) },
+      );
+      expect(res.status).toBe(404);
+    });
+
+    it("950.5 (sweep) — a per-id sync PURGES a stale structured key (filament_settings_id) from the existing settings bag", async () => {
+      // Latent 950.5 leak on the merge path: a legacy bag carrying a structured
+      // key would survive the merge (mergeSlicerSettings only skipped it from the
+      // INCOMING config) and shadow the re-derived value on the next export. The
+      // fix strips structured keys from the seeded existing bag too.
+      const f = await Filament.create({
+        name: "Sweep PLA",
+        vendor: "X",
+        type: "PLA",
+        settings: { filament_settings_id: "Stale Old Name", some_passthrough: "keep" },
+      });
+      const res = await slicerSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}`, {
+          config: { filament_density: "1.24" },
+        }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      // Stale structured shadow purged (export re-derives filament_settings_id from name).
+      expect(fresh.settings?.filament_settings_id).toBeUndefined();
+      // Genuine passthrough keys survive.
+      expect(fresh.settings?.some_passthrough).toBe("keep");
+      expect(fresh.density).toBe(1.24); // structured field still applied
+    });
+
+    it("950.5 (sweep r9) — an orca sync does NOT persist an INCOMING filament_settings_id into the bag", async () => {
+      // orca's STRUCTURED_KEYS omits filament_settings_id, so without skipping
+      // never-baggable keys from incoming, the exported preset-name key would land
+      // in the bag and shadow the re-derived name on the next export.
+      const f = await Filament.create({ name: "Orca Incoming PLA", vendor: "X", type: "PLA" });
+      const res = await orcaSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}/orcaslicer`, {
+          type: "PLA",
+          filament_settings_id: "Some Preset Name", // incoming never-baggable key
+        }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.settings?.filament_settings_id).toBeUndefined(); // not persisted
+    });
+
+    it("950.5 (sweep r5/r8) — an orca sync purges a stale filament_settings_id even with no new passthrough key, but preserves other bag keys", async () => {
+      // The orca per-id route gates its settings write on `added`; without honoring
+      // `removed`, a structured-only sync discards the purge and the stale
+      // never-baggable key survives. And per r8 the purge must be NARROW — a
+      // non-never-baggable stale shadow (density) must survive.
+      const f = await Filament.create({
+        name: "Orca Sweep PLA",
+        vendor: "X",
+        type: "PLA",
+        settings: { filament_settings_id: "Stale Name", density: "9.9", filament_notes: "keep" },
+      });
+      const res = await orcaSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}/orcaslicer`, { type: "PETG" }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      // Never-baggable key purged despite no passthrough key being added...
+      expect(fresh.settings?.filament_settings_id).toBeUndefined();
+      // ...but a non-never-baggable shadow + real passthrough survive (narrow purge).
+      expect(fresh.settings?.density).toBe("9.9");
+      expect(fresh.settings?.filament_notes).toBe("keep");
+      expect(fresh.type).toBe("PETG");
+    });
+
+    it("950.6 — spool-check resolves a 24-hex URL by _id FIRST, not a name that looks like an id", async () => {
+      // The slicer-facing GET routes must resolve the same way as the id-first
+      // sync/export routes, or a slicer addressing by id reads the WRONG row.
+      const real = await Filament.create({
+        name: "Real Spool PLA",
+        vendor: "X",
+        type: "PLA",
+        totalWeight: 1000,
+        spoolWeight: 200,
+      });
+      // A DIFFERENT filament NAMED with the real one's 24-hex _id, with NO stock.
+      await Filament.create({
+        name: String(real._id),
+        vendor: "X",
+        type: "ABS",
+        totalWeight: 0,
+        spoolWeight: 200,
+      });
+      const res = await spoolCheck(
+        getReq(`http://localhost/api/filaments/${real._id}/spool-check?weight=100`),
+        { params: Promise.resolve({ id: String(real._id) }) },
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // The _id lookup wins: we check the real (stocked) filament, not the empty decoy.
+      expect(body.ok).toBe(true);
+      expect(body.spools.length).toBe(1);
+    });
+
+    it("950.6 — orcaslicer sync resolves a 24-hex URL by _id FIRST, not a name that looks like an id", async () => {
+      const real = await Filament.create({ name: "Real PLA", vendor: "X", type: "PLA" });
+      // A DIFFERENT filament whose NAME happens to be the real one's 24-hex _id.
+      await Filament.create({ name: String(real._id), vendor: "X", type: "ABS" });
+      const res = await orcaSync(
+        jsonReq(`http://localhost/api/filaments/${real._id}/orcaslicer`, {
+          filament_settings_id: String(real._id),
+          name: String(real._id),
+          type: "PETG",
+        }),
+        { params: Promise.resolve({ id: String(real._id) }) },
+      );
+      expect(res.status).toBe(200);
+      // The _id lookup wins: the sync targets "Real PLA", not the hex-named decoy.
+      expect((await res.json()).filament).toBe("Real PLA");
+      expect((await Filament.findById(real._id)).type).toBe("PETG");
+      expect((await Filament.findOne({ name: String(real._id) })).type).toBe("ABS"); // decoy untouched
+    });
+  });
 });

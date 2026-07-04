@@ -142,6 +142,14 @@ const PER_NOZZLE_BAKED_SETTING_KEYS = [
 const IMPORT_ROUTING_HINT_KEYS = ["filamentdb_id", "filamentdb_nozzle"];
 
 /**
+ * Keys stripped from a collapsed section's stored settings bag: the routing
+ * hints (never data) plus `filament_settings_id` — GH #950: the export
+ * re-derives filament_settings_id from the filament's CURRENT name, so keeping a
+ * stale copy in the bag would make a renamed filament export its old name.
+ */
+const SETTINGS_STRIP_KEYS = [...IMPORT_ROUTING_HINT_KEYS, "filament_settings_id"];
+
+/**
  * A parsed INI section after collapsing. `temperatures`/`maxVolumetricSpeed` are
  * OPTIONAL because a collapsed per-nozzle section omits them (they were baked
  * per-nozzle, so an UPDATE must not overwrite the base filament's shared values).
@@ -158,6 +166,10 @@ export type CollapsedFilamentData = Omit<
   color?: string;
   vendor?: string;
   type?: string;
+  /** GH #950: the section's round-tripped `filamentdb_id` routing hint (the
+   *  filament _id). Carried for id-first resolution in `upsertIniFilament`;
+   *  NEVER persisted (stripped from the settings bag above). */
+  filamentdbId?: string;
 };
 
 /**
@@ -180,10 +192,26 @@ export function collapsePerNozzleImportSections(
   for (const f of filaments) {
     const hint = (f.settings.filamentdb_nozzle ?? "").trim();
     if (!hint) {
-      // Pass through, but never persist routing hints as settings data.
+      // Pass through, but never persist routing hints / re-derived keys.
       const settings = { ...f.settings };
-      for (const k of IMPORT_ROUTING_HINT_KEYS) delete settings[k];
-      out.push({ ...f, settings });
+      for (const k of SETTINGS_STRIP_KEYS) delete settings[k];
+      const collapsed: CollapsedFilamentData = { ...f, settings };
+      // GH #950: leave-when-omitted. parseIni fills absent fields with defaults
+      // (null / "#808080" / 1.75 / "Unknown"); $set-ing those over a name-matched
+      // existing filament CLOBBERS its real values on a partial/hand-crafted
+      // section. Drop each field the section didn't actually supply (same idiom
+      // the hinted branch below uses). The normal export writes all of them, so
+      // a full round-trip is unaffected.
+      if (!("filament_cost" in f.settings)) delete collapsed.cost;
+      if (!("filament_density" in f.settings)) delete collapsed.density;
+      if (!("filament_diameter" in f.settings)) delete collapsed.diameter;
+      if (!("filament_colour" in f.settings)) delete collapsed.color;
+      if (!("filament_vendor" in f.settings)) delete collapsed.vendor;
+      if (!("filament_type" in f.settings)) delete collapsed.type;
+      if (!("filament_max_volumetric_speed" in f.settings)) delete collapsed.maxVolumetricSpeed;
+      const fid = (f.settings.filamentdb_id ?? "").trim();
+      if (fid) collapsed.filamentdbId = fid; // GH #950: id-first resolution hint
+      out.push(collapsed);
       continue;
     }
     // Per-nozzle suffixed section → fold back into its base filament.
@@ -195,7 +223,34 @@ export function collapsePerNozzleImportSections(
     if (seenGroups.has(groupKey)) continue; // a sibling already represents the base
     seenGroups.add(groupKey);
     const settings = { ...f.settings };
-    for (const k of [...PER_NOZZLE_BAKED_SETTING_KEYS, ...IMPORT_ROUTING_HINT_KEYS]) {
+    for (const k of [...PER_NOZZLE_BAKED_SETTING_KEYS, ...SETTINGS_STRIP_KEYS]) {
+      // GH #950 (Codex P2 on PR #968 r3): compatible_printers_condition is
+      // normally "baked" (an auto-derived nozzle_diameter[...] value, different per
+      // suffixed section) so it's stripped and re-derived on the next export. But
+      // the 950.2 export now also carries a USER PIN (a non-derived restriction) or
+      // the `nil` inheritance marker through the per-nozzle sections — and since the
+      // importer $set-s the WHOLE settings bag, unconditionally stripping those
+      // would DESTROY the pin on export→import (lossy). Strip ONLY the auto-derived
+      // shape (contains `nozzle_diameter[`) or an empty "no restriction"; preserve a
+      // user pin (any other non-empty string) and nil (null) so they round-trip.
+      // (The single-nozzle / non-hinted branch never strips this key, so it already
+      // round-trips there.)
+      if (k === "compatible_printers_condition") {
+        const v = settings[k];
+        // Codex P2 on PR #968 r4: match ONLY the exact auto-derived shape — one or
+        // more `nozzle_diameter[<n>]==<number>` terms joined by ` or ` (the
+        // calibration bake emits a single term, the non-calibration derivation an
+        // ` or `-joined set). A substring test would wrongly strip a legitimate
+        // user pin that merely REFERENCES a nozzle diameter, e.g.
+        // `printer_model==MK4 and nozzle_diameter[0]==0.4`.
+        const isDerived =
+          typeof v === "string" &&
+          /^nozzle_diameter\[\d+\]==\d+(?:\.\d+)?(?: or nozzle_diameter\[\d+\]==\d+(?:\.\d+)?)*$/.test(v);
+        const isEmpty = v === "" || v === undefined;
+        if (isDerived || isEmpty) delete settings[k];
+        // else: user pin (non-derived string) or nil (null) → keep for round-trip.
+        continue;
+      }
       delete settings[k];
     }
     // Drop temperatures + maxVolumetricSpeed (baked per-nozzle): omitting the keys
@@ -204,6 +259,7 @@ export function collapsePerNozzleImportSections(
     void temperatures;
     void maxVolumetricSpeed;
     const collapsed: CollapsedFilamentData = { ...sharedFields, name: baseName, settings };
+    if (id) collapsed.filamentdbId = id; // GH #950: id-first resolution hint
     // Carry a shared field ONLY when the suffixed section actually SUPPLIED it (the
     // source INI key is present) — otherwise parseIni's defaults (null / "#808080" /
     // 1.75 / "Unknown") would $set over the base filament's real cost/density/color/
@@ -293,9 +349,10 @@ export function filamentToSlicerKeys(
     keys.filament_notes = filament.notes;
   }
 
-  // Soluble / abrasive flags
-  if (filament.soluble != null) set("filament_soluble", filament.soluble ? "1" : "0");
-  if (filament.abrasive != null) set("filament_abrasive", filament.abrasive ? "1" : "0");
+  // GH #950: filament_soluble / filament_abrasive live ONLY in the settings bag
+  // (the schema has no such fields), and the `keys` seed above already carries
+  // them from `filament.settings`. The old `set(..., filament.soluble)` read a
+  // field that's always undefined — a dead no-op — so it's removed.
 
   // Shrinkage
   if (filament.shrinkageXY != null)
@@ -328,7 +385,17 @@ export function filamentToSlicerKeys(
     set("bridge_fan_speed", calibration.fanBridgeSpeed);
     const nz = calibration.nozzle;
     if (nz && typeof nz === "object" && nz.diameter != null) {
-      keys.compatible_printers_condition = `nozzle_diameter[0]==${nz.diameter}`;
+      // GH #950: gate the baked condition the same way the non-calibration
+      // derivation below is — a round-tripped user pin (non-empty string) or the
+      // `nil` inheritance marker (null) must win. Only set when the key is absent
+      // or an empty-string "no restriction". `filamentdb_nozzle` stays
+      // unconditional — it's a routing hint for THIS nozzle, not a user setting.
+      if (
+        !("compatible_printers_condition" in keys) ||
+        keys.compatible_printers_condition === ""
+      ) {
+        keys.compatible_printers_condition = `nozzle_diameter[0]==${nz.diameter}`;
+      }
       keys.filamentdb_nozzle = nozzleSuffix(nz);
     }
   }

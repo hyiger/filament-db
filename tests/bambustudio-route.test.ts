@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
+import { MAX_SETTINGS_KEYS } from "@/lib/slicerSettings";
 
 /**
  * Route-level tests for the Bambu Studio importer (`POST
@@ -358,6 +359,376 @@ describe("Bambu Studio importer routes", () => {
       expect(cal.extrusionMultiplier).toBe(0.978);
       expect(cal.pressureAdvance).toBe(0.028);
       expect(cal.retractLength).toBe(0.8);
+    });
+
+    it("GH #950: a resolved chamber_temperature lands in calibrations[].chamberTemp, NOT the settings bag", async () => {
+      const { printer, nozzle } = await seedPrinterWithNozzle();
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+            pressure_advance: ["0.028"], // a real per-nozzle hint so calibration resolves
+            chamber_temperature: ["45"],
+            activate_chamber_temp_control: ["1"],
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      const cal = stored.calibrations.find(
+        (c: { printer: unknown; nozzle: unknown }) =>
+          String(c.printer) === String(printer._id) && String(c.nozzle) === String(nozzle._id),
+      );
+      expect(cal.chamberTemp).toBe(45); // structured per-nozzle home
+      // Out of the filament-global settings bag (the #950 fix's whole point).
+      expect(stored.settings?.chamber_temperature).toBeUndefined();
+      expect(stored.settings?.activate_chamber_temp_control).toBeUndefined();
+    });
+
+    it("GH #950 (Codex P2 r2): a chamber-ONLY profile with a resolvable printer lands in calibrations[].chamberTemp", async () => {
+      // Decoupling resolution from the warning: chamber is excluded from
+      // hasAnyHint (so it never spuriously warns), but when a printer context IS
+      // available the structured home must still be used — not the settings bag.
+      const { printer, nozzle } = await seedPrinterWithNozzle();
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+            chamber_temperature: ["48"], // the ONLY calibration-ish value
+            activate_chamber_temp_control: ["1"],
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.calibrationUnresolved).toBeFalsy(); // resolved → no warning
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      const cal = stored.calibrations.find(
+        (c: { printer: unknown; nozzle: unknown }) =>
+          String(c.printer) === String(printer._id) && String(c.nozzle) === String(nozzle._id),
+      );
+      expect(cal.chamberTemp).toBe(48); // structured home used, not the bag
+      expect(stored.settings?.chamber_temperature).toBeUndefined();
+    });
+
+    it("GH #950 (Codex P2 r11): a chamber-ENABLED-only sync does NOT pin ordinary temps into the calibration", async () => {
+      // A chamber-only profile carries normal nozzle/bed temps. Chamber goes to the
+      // calibration (its structured home), but the ordinary temps must NOT be pinned
+      // there (they belong on the filament top level; a per-nozzle override would
+      // later shadow user-edited top-level temps). minimalProfile has
+      // nozzle_temperature=210 + hot_plate_temp=60, and NO real per-nozzle hint.
+      const { printer, nozzle } = await seedPrinterWithNozzle();
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+            chamber_temperature: ["48"],
+            activate_chamber_temp_control: ["1"], // enabled, no EM/PA
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      const cal = stored.calibrations.find(
+        (c: { printer: unknown; nozzle: unknown }) =>
+          String(c.printer) === String(printer._id) && String(c.nozzle) === String(nozzle._id),
+      );
+      expect(cal.chamberTemp).toBe(48); // chamber IS in the calibration (its home)
+      expect(cal.nozzleTemp ?? null).toBeNull(); // ordinary temps NOT pinned into the calibration
+      expect(cal.bedTemp ?? null).toBeNull();
+      expect(stored.temperatures.nozzle).toBe(210); // temps landed on the filament top level
+    });
+
+    it("GH #950 (Codex P2 r4): a resolved chamber import CLEARS a stale settings-bag chamber from a prior import", async () => {
+      const { printer, nozzle } = await seedPrinterWithNozzle();
+      // Existing filament carrying a STALE raw chamber value (from a prior
+      // unresolved/disabled import) plus an unrelated setting.
+      await Filament.create({
+        name: "QA Bambu PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        settings: {
+          chamber_temperature: "50",
+          activate_chamber_temp_control: "1",
+          filament_notes: "keep me",
+        },
+      });
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+            pressure_advance: ["0.028"], // ensures a calibration row resolves
+            chamber_temperature: ["45"],
+            activate_chamber_temp_control: ["1"],
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      const cal = stored.calibrations.find(
+        (c: { printer: unknown; nozzle: unknown }) =>
+          String(c.printer) === String(printer._id) && String(c.nozzle) === String(nozzle._id),
+      );
+      expect(cal.chamberTemp).toBe(45); // authoritative per-nozzle value
+      // The stale filament-global chamber keys are removed (no double-count on export).
+      expect(stored.settings.chamber_temperature).toBeUndefined();
+      expect(stored.settings.activate_chamber_temp_control).toBeUndefined();
+      // Unrelated existing settings are preserved.
+      expect(stored.settings.filament_notes).toBe("keep me");
+    });
+
+    it("GH #950 (Codex P2 r5): a DISABLED chamber import CLEARS a pre-existing calibrations[].chamberTemp", async () => {
+      const { printer, nozzle } = await seedPrinterWithNozzle();
+      // Existing filament with a resolved chamber calibration (from a prior enabled import).
+      await Filament.create({
+        name: "QA Bambu PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        calibrations: [
+          { printer: printer._id, nozzle: nozzle._id, chamberTemp: 45, pressureAdvance: 0.02 },
+        ],
+      });
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+            chamber_temperature: ["45"],
+            activate_chamber_temp_control: ["0"], // disabled → must clear the calibration value
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      const cal = stored.calibrations.find(
+        (c: { printer: unknown; nozzle: unknown }) =>
+          String(c.printer) === String(printer._id) && String(c.nozzle) === String(nozzle._id),
+      );
+      expect(cal.chamberTemp ?? null).toBeNull(); // cleared, not left at 45 (no re-enable on round-trip)
+      expect(cal.pressureAdvance).toBe(0.02); // unrelated calibration data preserved
+    });
+
+    it("GH #950 (Codex P2 r7): a chamber-disable-only sync carrying max-vol does NOT touch an existing calibration's other fields", async () => {
+      // maxVolumetricSpeed is excluded from hasAnyHint (it has a top-level home), so
+      // a disable-only profile carrying it is still chamberClearOnly. The row must
+      // carry JUST the chamber clear — it must NOT overwrite the existing row's
+      // max-vol. The profile's max-vol lands on the filament top level instead.
+      const { printer, nozzle } = await seedPrinterWithNozzle();
+      await Filament.create({
+        name: "QA Bambu PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        calibrations: [
+          { printer: printer._id, nozzle: nozzle._id, chamberTemp: 45, maxVolumetricSpeed: 12 },
+        ],
+      });
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+            activate_chamber_temp_control: ["0"], // disable only
+            filament_max_volumetric_speed: ["20"], // excluded from hasAnyHint → stays chamberClearOnly
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      const cal = stored.calibrations.find(
+        (c: { printer: unknown; nozzle: unknown }) =>
+          String(c.printer) === String(printer._id) && String(c.nozzle) === String(nozzle._id),
+      );
+      expect(cal.chamberTemp ?? null).toBeNull(); // chamber cleared
+      expect(cal.maxVolumetricSpeed).toBe(12); // existing calibration max-vol UNTOUCHED (not 20)
+      expect(stored.maxVolumetricSpeed).toBe(20); // profile's max-vol landed on the top level
+    });
+
+    it("GH #950 (Codex P2 r6): a disable-only profile WITH temps but no existing row does not fabricate a calibration", async () => {
+      // Typical Bambu profiles carry nozzle/bed temps. A chamber-disable-only sync
+      // must NOT turn those into a per-nozzle calibration row (they belong on the
+      // filament top level; a fabricated row would later shadow user-edited temps
+      // in /calibration). minimalProfile includes nozzle_temperature + hot_plate_temp.
+      await seedPrinterWithNozzle();
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+            activate_chamber_temp_control: ["0"], // disable only — no EM/PA/chamber temp
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      expect(stored.calibrations ?? []).toHaveLength(0); // no fabricated per-nozzle row
+      // The temps landed on the filament top level instead.
+      expect(stored.temperatures.nozzle).toBe(210);
+      expect(stored.settings.activate_chamber_temp_control).toBe("0"); // disable marker in bag
+    });
+
+    it("GH #950 (Codex P2 r7): the unresolved chamber fallback respects the settings-bag cap", async () => {
+      // The chamber-fallback keys are appended after mergeSlicerSettings enforced
+      // the cap; routing them through a capped merge means an at-cap bag + chamber
+      // fallback rejects with 400 instead of silently over-filling the bag.
+      const bigSettings: Record<string, string> = {};
+      for (let i = 0; i < MAX_SETTINGS_KEYS; i++) bigSettings[`k_${i}`] = "v";
+      await Filament.create({
+        name: "QA Cap PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        settings: bigSettings, // exactly at the cap
+      });
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq("http://localhost/api/filaments/bambustudio", {
+          type: "filament",
+          from: "User",
+          filament_settings_id: ["QA Cap PLA"],
+          filament_type: ["PLA"],
+          filament_vendor: ["QA Labs"],
+          chamber_temperature: ["50"], // unresolved (no printer) → fallback would push over the cap
+        }),
+      );
+      expect(res.status).toBe(400); // rejected, not silently over-filled
+      // The saved row is unchanged (still at the cap, no chamber key sneaked in).
+      const stored = await Filament.findOne({ name: "QA Cap PLA" });
+      expect(Object.keys(stored.settings).length).toBe(MAX_SETTINGS_KEYS);
+      expect(stored.settings.chamber_temperature).toBeUndefined();
+    });
+
+    it("GH #950 (Codex P2 r10): a bambu sync persists a never-baggable purge even with no new passthrough key", async () => {
+      // The bambu path gated its settings write on `added`; without honoring
+      // `removed`, a sync that only updates structured fields discards the purge
+      // and a stale filament_settings_id survives to shadow the re-derived name.
+      await Filament.create({
+        name: "QA Bambu PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        settings: { filament_settings_id: "Stale Name", filament_notes: "keep" },
+      });
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({ nozzle_temperature: ["225"] }), // structured only; no passthrough added
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      expect(stored.settings.filament_settings_id).toBeUndefined(); // stale never-baggable purged
+      expect(stored.settings.filament_notes).toBe("keep"); // real passthrough preserved
+    });
+
+    it("GH #950 (Codex P2 r5): a disable-only profile matching NO existing row does not create an empty calibration row", async () => {
+      await seedPrinterWithNozzle();
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      // Bare profile: a resolvable printer + disable flag, but NO temps / hints and
+      // no pre-existing calibration to clear → nothing to persist.
+      const res = await POST(
+        jsonReq("http://localhost/api/filaments/bambustudio", {
+          type: "filament",
+          from: "User",
+          filament_settings_id: ["QA Guard PLA"],
+          filament_type: ["PLA"],
+          filament_vendor: ["QA Labs"],
+          printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+          activate_chamber_temp_control: ["0"],
+        }),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Guard PLA" });
+      expect(stored.calibrations ?? []).toHaveLength(0); // no empty row created
+      // The disable marker still rides the settings bag for round-trip.
+      expect(stored.settings.activate_chamber_temp_control).toBe("0");
+    });
+
+    it("GH #950 (Codex P1 r2): the unresolved chamber fallback PRESERVES existing settings", async () => {
+      // Regression guard: an existing filament with settings, updated by an
+      // unresolved chamber-only profile that adds NO passthrough keys. Pre-fix the
+      // fallback started from an undefined update.settings ({}), so the $set
+      // REPLACED the whole bag and dropped existing filament_notes/soluble.
+      await Filament.create({
+        name: "QA Bambu PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        settings: { filament_notes: "keep me", filament_soluble: "1" },
+      });
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            chamber_temperature: ["50"], // no printer_settings_id → unresolved
+            activate_chamber_temp_control: ["1"],
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      // Existing settings survive AND the chamber keys are added.
+      expect(stored.settings.filament_notes).toBe("keep me");
+      expect(stored.settings.filament_soluble).toBe("1");
+      expect(stored.settings.chamber_temperature).toBe("50");
+      expect(stored.settings.activate_chamber_temp_control).toBe("1");
+    });
+
+    it("GH #950 (Codex P2): an UNRESOLVED chamber_temperature falls back to the settings bag (not dropped)", async () => {
+      // Standalone profile: chamber temp present, no matchable printer → no
+      // calibration row. Pre-fix this silently DROPPED the value (it was pulled
+      // out of the passthrough bag but never written anywhere). It must survive.
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            chamber_temperature: ["50"],
+            activate_chamber_temp_control: ["1"],
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // chamber alone must NOT trip the unresolved warning (it has a fallback home).
+      expect(body.calibrationUnresolved).toBeFalsy();
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      expect(stored.settings?.chamber_temperature).toBe("50"); // preserved for round-trip
+      expect(stored.settings?.activate_chamber_temp_control).toBe("1");
+      // No calibration row was invented (nothing to attach it to).
+      expect(stored.calibrations ?? []).toHaveLength(0);
+    });
+
+    it("GH #950 (Codex P1 r2): a DISABLED chamber (activate=0) round-trips via the settings bag", async () => {
+      // chamber temp present but heating OFF → chamberTemp is cleared, so it has
+      // no structural home; the raw keys must survive in the settings bag rather
+      // than being dropped (they rode the bag before the #950.3 change).
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            chamber_temperature: ["45"],
+            activate_chamber_temp_control: ["0"], // disabled
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.calibrationUnresolved).toBeFalsy();
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      expect(stored.settings.chamber_temperature).toBe("45");
+      expect(stored.settings.activate_chamber_temp_control).toBe("0");
+      expect(stored.calibrations ?? []).toHaveLength(0); // nothing structured
     });
 
     it("flags calibrationUnresolved when no printer matches the hint", async () => {

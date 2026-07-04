@@ -42,12 +42,19 @@ export async function GET(
       return errorResponse("weight must be a non-negative number", 400);
     }
 
-    // Find filament by name or ObjectId. `params.id` is ALREADY URL-decoded —
-    // re-decoding throws URIError on a name with a literal `%` (#671).
+    // GH #950 / #867: a 24-hex param is an ObjectId and is AUTHORITATIVE — try
+    // it FIRST, name lookup only when that _id misses (a preset legitimately
+    // NAMED with 24 hex chars). Name-first let such a name shadow another
+    // filament's real _id, so a slicer addressing this endpoint by id checked
+    // the WRONG row's spool availability — inconsistent with the id-first
+    // sync/export routes. `params.id` is ALREADY URL-decoded — do NOT re-decode
+    // (a literal `%` like "ABS 100%" throws URIError and 500s the request, #671).
     const decodedName = id;
-    let filament = await Filament.findOne({ name: decodedName, _deletedAt: null }).lean();
-    if (!filament && /^[a-f0-9]{24}$/i.test(id)) {
-      filament = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
+    let filament = /^[a-f0-9]{24}$/i.test(id)
+      ? await Filament.findOne({ _id: id, _deletedAt: null }).lean()
+      : null;
+    if (!filament) {
+      filament = await Filament.findOne({ name: decodedName, _deletedAt: null }).lean();
     }
 
     if (!filament) {

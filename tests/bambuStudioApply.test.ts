@@ -516,6 +516,7 @@ describe("resolveAndApplyCalibration (DB-backed)", () => {
         fanMinSpeed: 20,
         fanMaxSpeed: 100,
         fanBridgeSpeed: 80,
+        chamberTemp: 45, // GH #950
       }),
       update,
       null,
@@ -540,6 +541,7 @@ describe("resolveAndApplyCalibration (DB-backed)", () => {
     expect(row.fanMinSpeed).toBe(20);
     expect(row.fanMaxSpeed).toBe(100);
     expect(row.fanBridgeSpeed).toBe(80);
+    expect(row.chamberTemp).toBe(45); // GH #950
     expect(row.nozzleTemp).toBe(210);
     expect(row.nozzleTempFirstLayer).toBe(215);
     expect(row.bedTemp).toBe(60);

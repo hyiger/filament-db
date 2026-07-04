@@ -173,4 +173,34 @@ describe("GET /api/filaments/[id]/calibration", () => {
     const json = await res.json();
     expect(json.available).toEqual([{ diameter: 0.4, name: "0.4 Brass", type: "Brass", highFlow: false }]);
   });
+
+  it("GH #950: a 24-hex id param resolves by _id FIRST, not a name that looks like an id", async () => {
+    // The slicer calls this endpoint by the same {id} the id-first sync/export
+    // routes use — so it must resolve id-first too, or the slicer reads the
+    // WRONG filament's per-nozzle calibration (silently mis-calibrating).
+    const noz = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+    const real = await Filament.create({
+      name: "Real Cal PLA",
+      vendor: "X",
+      type: "PLA",
+      calibrations: [{ nozzle: noz._id, pressureAdvance: 0.042, extrusionMultiplier: 0.97 }],
+    });
+    // A DIFFERENT filament NAMED with the real one's 24-hex _id, with its OWN
+    // (distinct) calibration — the decoy the name-first lookup would have hit.
+    await Filament.create({
+      name: String(real._id),
+      vendor: "X",
+      type: "ABS",
+      calibrations: [{ nozzle: noz._id, pressureAdvance: 0.099, extrusionMultiplier: 1.5 }],
+    });
+    const res = await getCalibration(
+      getReq(`http://localhost/api/filaments/${real._id}/calibration?nozzle_diameter=0.4`),
+      { params: Promise.resolve({ id: String(real._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    // The _id lookup wins: we read the real filament's PA, not the decoy's 0.099.
+    expect(json.calibration.pressureAdvance).toBe(0.042);
+    expect(json.calibration.extrusionMultiplier).toBe(0.97);
+  });
 });

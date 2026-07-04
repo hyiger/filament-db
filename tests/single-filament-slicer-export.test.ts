@@ -177,6 +177,32 @@ describe("single-filament slicer export routes", () => {
     expect(byId.status).toBe(200);
   });
 
+  it("GH #950: a 24-hex id param resolves by _id FIRST, not a name that looks like an id", async () => {
+    const real = await Filament.create({
+      name: "Real Export PLA",
+      vendor: "TestCo",
+      type: "PLA",
+      temperatures: { nozzle: 211, bed: 60 },
+    });
+    // A DIFFERENT filament NAMED with the real one's 24-hex _id. Pre-fix the
+    // name lookup ran first and this decoy would shadow the real _id.
+    await Filament.create({
+      name: String(real._id),
+      vendor: "TestCo",
+      type: "ABS",
+      temperatures: { nozzle: 255, bed: 100 },
+    });
+    const res = await exportPrusa(req(String(real._id)), {
+      params: Promise.resolve({ id: String(real._id) }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.text();
+    // The _id lookup wins: we export "Real Export PLA", not the ABS decoy.
+    expect(body).toContain("[filament:Real Export PLA]");
+    expect(body).toContain("filament_type = PLA");
+    expect(body).not.toContain("filament_type = ABS");
+  });
+
   // ── Variant inheritance ───────────────────────────────────────────
 
   it("resolves variant inheritance — an exported variant carries the parent's values", async () => {

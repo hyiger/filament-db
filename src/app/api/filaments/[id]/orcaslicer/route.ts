@@ -131,13 +131,17 @@ export async function POST(
     await dbConnect();
     const { id } = await params;
 
-    // Find filament by name or ObjectId. The App Router `params.id` is ALREADY
-    // URL-decoded — re-decoding throws URIError on a name with a literal `%`
-    // ("ABS 100%") and 500s the sync-back (#671; cf. resolveFilamentForExport).
+    // GH #950 / #867: a 24-hex param is an ObjectId and is AUTHORITATIVE — try it
+    // FIRST, name lookup only when that _id misses (a preset named with 24 hex
+    // chars). Name-first let such a name shadow another filament's real _id. The
+    // App Router `params.id` is ALREADY URL-decoded — do NOT re-decode (a literal
+    // `%` like "ABS 100%" would throw URIError and 500 the sync, #671).
     const decodedName = id;
-    let filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
-    if (!filament && /^[a-f0-9]{24}$/i.test(id)) {
-      filament = await Filament.findOne({ _id: id, _deletedAt: null });
+    let filament = /^[a-f0-9]{24}$/i.test(id)
+      ? await Filament.findOne({ _id: id, _deletedAt: null })
+      : null;
+    if (!filament) {
+      filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
     }
 
     if (!filament) {
@@ -236,7 +240,12 @@ export async function POST(
       return errorResponse(merge.error, 400);
     }
     const settingsAdded = merge.added;
-    if (settingsAdded.length > 0) {
+    // GH #950 (Codex P2 on PR #968 r5): also write when the merge PURGED a stale
+    // structured key from the existing bag (`removed`) — otherwise a sync that
+    // only changes structured fields discards the cleaned bag and the stale
+    // shadow (e.g. a legacy filament_settings_id) survives to shadow the
+    // re-derived export value.
+    if (settingsAdded.length > 0 || merge.removed.length > 0) {
       update.settings = merge.settings;
     }
 

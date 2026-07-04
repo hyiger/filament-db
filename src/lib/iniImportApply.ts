@@ -146,6 +146,28 @@ export async function upsertIniFilament(
   const collapsed = stripStructuredSettings(section);
   const name = collapsed.name;
 
+  // GH #950: id-first refuse-ambiguous. When the section round-trips a
+  // `filamentdb_id` (the filament _id) that resolves to an ACTIVE filament whose
+  // stored name DIFFERS from the section name, the case is ambiguous — a renamed
+  // preset (id right) vs a copied/stale id pointing at the wrong row,
+  // indistinguishable here. Refuse (throw → per-row skip) rather than silently
+  // renaming/mutating the wrong filament OR creating an orphan under the section
+  // name. Mirrors the per-id sync route's name_id_mismatch conservatism. A
+  // matching name — or a stale/absent id — falls through to the name-based
+  // upsert below.
+  const fid = collapsed.filamentdbId;
+  if (fid && /^[a-f0-9]{24}$/i.test(fid)) {
+    const byId = await Filament.findOne({ _id: fid, _deletedAt: null })
+      .select("_id name")
+      .lean();
+    if (byId && byId.name !== name) {
+      throw new Error(
+        `filamentdb_id ${fid} resolves to "${byId.name}", but this section is named ` +
+          `"${name}" — not imported (rename the section to match, or resolve the id/name conflict).`,
+      );
+    }
+  }
+
   // Phase 1 — update an existing ACTIVE row.
   const existingActive = await Filament.findOne({ name, _deletedAt: null })
     .select(INI_INHERITANCE_PROJECTION)
