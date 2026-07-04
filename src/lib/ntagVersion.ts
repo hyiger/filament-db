@@ -73,12 +73,17 @@ export type NtagWriteSizeDecision =
  * enough before any write.
  *
  * Rules:
- *  - Formatted (CC 0xE1) + GET_VERSION confirmed → min(CC, chip): a corrupt or
- *    inflated CC can't outrun the real chip size.
+ *  - Formatted (CC 0xE1) + GET_VERSION confirmed → GET_VERSION is authoritative
+ *    for the chip's TRUE size, so use it directly (not min(CC, verSize)) and
+ *    REWRITE the CC when it disagrees. This corrects a wrong CC in BOTH
+ *    directions: an inflated CC (a real 213 claiming 215) shrinks to the real
+ *    size, and an under-sized CC (a real 215 stamped 144 by a prior bad write)
+ *    grows back so its Extended image isn't wrongly rejected as TAG_TOO_SMALL.
+ *    The caller's page-read probe guards against a mis-reported (too-large) size.
  *  - Formatted + GET_VERSION unavailable + user size → the USER SIZE is
  *    authoritative and the CC is REWRITTEN to it (needsFormat=true) — this
- *    corrects a tag an earlier failed write mis-sized (e.g. a real 215 stamped
- *    with a 144-byte CC that would otherwise stay stuck at NTAG213).
+ *    corrects a tag an earlier failed write mis-sized on a GET_VERSION-dead
+ *    reader (e.g. a real 215 stamped with a 144-byte CC stuck at NTAG213).
  *  - Formatted + neither → conservative min(CC, 144), no reformat (legacy).
  *  - Blank (CC 0x00) + a size (GET_VERSION or user) → that size, reformat.
  *  - Blank + neither → { ok:false, size_unknown } — never guess.
@@ -96,7 +101,9 @@ export function resolveNtagWriteSize(opts: {
   const safeCcByte = Number.isFinite(ccSizeByte) ? Math.trunc(ccSizeByte) : 0;
   const ccBytes = Math.min(Math.max(0, safeCcByte * 8), NTAG216_MAX_NDEF_BYTES);
   if (ccMagic === 0xe1) {
-    if (verSize != null) return { ok: true, ndefBytes: Math.min(ccBytes, verSize), needsFormat: false };
+    // GET_VERSION is authoritative for the true chip size: use it directly and
+    // rewrite the CC when it disagrees (fixes an under-sized OR inflated CC).
+    if (verSize != null) return { ok: true, ndefBytes: verSize, needsFormat: ccBytes !== verSize };
     if (hintBytes != null) return { ok: true, ndefBytes: hintBytes, needsFormat: true };
     return { ok: true, ndefBytes: Math.min(ccBytes, NTAG213_NDEF_BYTES), needsFormat: false };
   }

@@ -111,12 +111,22 @@ describe("resolveNtagWriteSize (GH #973 follow-up)", () => {
   const BLANK = 0x00; // blank CC magic
   // CC size byte = NDEF bytes / 8: 144→18, 496→62, 872→109.
 
-  it("formatted + GET_VERSION confirmed → min(CC, chip), no reformat", () => {
+  it("formatted + GET_VERSION confirmed → chip size, reformat only when CC disagrees", () => {
+    // CC already matches the chip → no reformat.
     expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 62, verSize: 496, hintBytes: null }))
       .toEqual({ ok: true, ndefBytes: 496, needsFormat: false });
-    // A CC that over-claims (872) on a chip GET_VERSION says is 496 → capped to 496.
+    // CC over-claims (872) but GET_VERSION says 496 → use 496 AND rewrite the CC down.
     expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 109, verSize: 496, hintBytes: null }))
-      .toEqual({ ok: true, ndefBytes: 496, needsFormat: false });
+      .toEqual({ ok: true, ndefBytes: 496, needsFormat: true });
+  });
+
+  it("formatted + UNDER-sized CC + GET_VERSION works → grows to the real size, rewrites CC (Codex P2)", () => {
+    // A real NTAG215 an earlier bad write stamped with a 144-byte CC (ccSizeByte
+    // 18), now read on a GET_VERSION-CAPABLE reader (verSize 496). Detect reports
+    // 496 (→ Extended); the writer must ALSO use 496 (not min(144,496)=144) and
+    // rewrite the CC, or the Extended image is wrongly rejected as TAG_TOO_SMALL.
+    expect(resolveNtagWriteSize({ ccMagic: E1, ccSizeByte: 18, verSize: 496, hintBytes: null }))
+      .toEqual({ ok: true, ndefBytes: 496, needsFormat: true });
   });
 
   it("formatted + GET_VERSION DEAD + user size → user size is authoritative, REWRITE the CC (#973 core)", () => {
