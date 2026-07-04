@@ -159,6 +159,25 @@ export async function prepareBambuUpdate(
     existing,
   );
 
+  // GH #950 (Codex P2 on PR #968): chamber_temperature has NO top-level filament
+  // field — its only structured home is calibrations[].chamberTemp, which
+  // `resolveAndApplyCalibration` writes ONLY when it resolves a printer/nozzle
+  // context. Because the parser excludes chamber_temperature/activate_chamber_
+  // temp_control from the settings passthrough bag (they're in CALIBRATION_KEYS),
+  // a standalone profile whose calibration context can't be resolved would
+  // silently DROP the value. When no calibration row was written, fall back to
+  // preserving the raw chamber keys in the settings bag — the "misfiled but
+  // survives" state the #950 finding explicitly rates acceptable (P2), and the
+  // same no-data-loss guarantee maxVolumetricSpeed gets via its top-level field.
+  // A RESOLVED profile keeps chamber cleanly in calibrations[].chamberTemp and
+  // out of the filament-global bag (the #950 fix's whole point).
+  if (parsed.calibrationHints.chamberTemp != null && !calibrationOutcome.applied) {
+    const settings = { ...((update.settings as Record<string, unknown>) || {}) };
+    settings.chamber_temperature = String(parsed.calibrationHints.chamberTemp);
+    settings.activate_chamber_temp_control = "1";
+    update.settings = settings;
+  }
+
   // GH #892: reject an inverted nozzle range, mirroring the OrcaSlicer sync
   // route. `update.temperatures` is a full replace (built from existing +
   // parsed), so it IS the effective own range; the variant inherits any null

@@ -266,6 +266,20 @@ describe("parseBambuStudioProfile", () => {
       activate_chamber_temp_control: ["1"],
     });
     expect(calibrationHints.chamberTemp).toBe(45);
+    // chamber alone does NOT trip hasAnyHint (Codex P2 PR #968): it has a
+    // settings-bag fallback when calibration can't resolve, so a chamber-only
+    // profile must not surface a misleading "calibration unresolved" warning —
+    // same posture as maxVolumetricSpeed.
+    expect(calibrationHints.hasAnyHint).toBe(false);
+  });
+
+  it("GH #950: chamber_temperature ALONGSIDE a real per-nozzle hint still trips hasAnyHint", () => {
+    const { calibrationHints } = parseBambuStudioProfile({
+      name: ["X"],
+      chamber_temperature: ["45"],
+      pressure_advance: ["0.02"], // a genuine per-nozzle value with no other home
+    });
+    expect(calibrationHints.chamberTemp).toBe(45);
     expect(calibrationHints.hasAnyHint).toBe(true);
   });
 
@@ -286,7 +300,7 @@ describe("parseBambuStudioProfile", () => {
       chamber_temperature: ["50"],
     });
     expect(calibrationHints.chamberTemp).toBe(50);
-    expect(calibrationHints.hasAnyHint).toBe(true);
+    expect(calibrationHints.hasAnyHint).toBe(false); // chamber alone → no unresolved warning
   });
 
   it("GH #950: round-trips chamberTemp via calibrationToOrcaSlicerKeys", async () => {

@@ -360,6 +360,14 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
   // warning toast on successful imports. Exclude it from `hasAnyHint`
   // so we only enter the unresolved path when there's per-nozzle data
   // that would actually be dropped.
+  //
+  // GH #950 (Codex P2 on PR #968): `chamberTemp` is EXCLUDED for the same
+  // reason. Its structured home (calibrations[].chamberTemp) needs a resolved
+  // printer/nozzle, but when that can't be resolved `prepareBambuUpdate` falls
+  // back to preserving the raw chamber keys in the settings passthrough bag
+  // (the "misfiled but survives" state #950 rates acceptable) — so a
+  // chamber-only standalone profile loses nothing and must NOT trip the
+  // unresolved warning.
   calibrationHints.hasAnyHint =
     calibrationHints.extrusionMultiplier != null ||
     calibrationHints.pressureAdvance != null ||
@@ -368,8 +376,7 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     calibrationHints.retractLift != null ||
     calibrationHints.fanMinSpeed != null ||
     calibrationHints.fanMaxSpeed != null ||
-    calibrationHints.fanBridgeSpeed != null ||
-    calibrationHints.chamberTemp != null;
+    calibrationHints.fanBridgeSpeed != null;
 
   // ── Settings bag passthrough ────────────────────────────────────────
   // Anything we didn't pluck into a structured field OR a calibration
