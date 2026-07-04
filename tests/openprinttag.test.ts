@@ -1179,11 +1179,11 @@ describe("generateOpenPrintTagBinary", () => {
     expect(bytes[dIdx + 3]).toBe(100); // capped to the Shore scale
   });
 
-  it("orders min <= max print temps when first-layer >= nozzle+20 (GH #634)", () => {
+  it("keeps the everyday nozzle temp in MAX even when first-layer >= nozzle+20 (GH #634 / #952.4)", () => {
     const input: OpenPrintTagInput = {
       ...minimalInput,
       nozzleTemp: 230,
-      nozzleTempFirstLayer: 260, // derived min would be 240 > max 230
+      nozzleTempFirstLayer: 260, // derived min would be 240 > everyday 230
     };
     const result = generateOpenPrintTagBinary(input);
     const bytes = Array.from(result);
@@ -1192,11 +1192,13 @@ describe("generateOpenPrintTagBinary", () => {
     const maxIdx = findCBORKey(bytes, OPT_KEY.MAX_PRINT_TEMPERATURE);
     expect(minIdx).not.toBe(-1);
     expect(maxIdx).not.toBe(-1);
-    // Mirrors the bed-temp Math.min/Math.max guard: min 230, max 240
+    // GH #952.4: MAX is pinned to the EVERYDAY temp (230) so the decoder reads it
+    // back correctly; MIN is clamped to it (min ≤ max holds — the #634 invariant).
+    // The first-layer excess (260) can't extend a pinned MAX, so it isn't stored.
     expect(bytes[minIdx + 2]).toBe(0x18);
     expect(bytes[minIdx + 3]).toBe(230);
     expect(bytes[maxIdx + 2]).toBe(0x18);
-    expect(bytes[maxIdx + 3]).toBe(240);
+    expect(bytes[maxIdx + 3]).toBe(230);
 
     // Preheat derives from the effective min: 230 - 20 = 210
     const preheatIdx = findCBORKey(bytes, OPT_KEY.PREHEAT_TEMPERATURE);

@@ -57,7 +57,8 @@ describe("NFC round-trip: encode → NDEF wrap → NDEF parse → decode", () =>
     expect(decoded.density).toBeCloseTo(1.24, 1);
     expect(decoded.diameter).toBe(1.75);
     expect(decoded.nozzleTemp).toBe(215);
-    expect(decoded.bedTemp).toBe(65);
+    // GH #952.4: the everyday bed temp (60) round-trips, not the first-layer (65).
+    expect(decoded.bedTemp).toBe(60);
     expect(decoded.chamberTemp).toBe(20);
     expect(decoded.weightGrams).toBe(1000);
     expect(decoded.countryOfOrigin).toBe("CZ");
