@@ -486,6 +486,30 @@ describe("Bambu Studio importer routes", () => {
       expect(cal.pressureAdvance).toBe(0.02); // unrelated calibration data preserved
     });
 
+    it("GH #950 (Codex P2 r6): a disable-only profile WITH temps but no existing row does not fabricate a calibration", async () => {
+      // Typical Bambu profiles carry nozzle/bed temps. A chamber-disable-only sync
+      // must NOT turn those into a per-nozzle calibration row (they belong on the
+      // filament top level; a fabricated row would later shadow user-edited temps
+      // in /calibration). minimalProfile includes nozzle_temperature + hot_plate_temp.
+      await seedPrinterWithNozzle();
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({
+            printer_settings_id: ["Bambu Lab P1S 0.4 nozzle"],
+            activate_chamber_temp_control: ["0"], // disable only — no EM/PA/chamber temp
+          }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findOne({ name: "QA Bambu PLA" });
+      expect(stored.calibrations ?? []).toHaveLength(0); // no fabricated per-nozzle row
+      // The temps landed on the filament top level instead.
+      expect(stored.temperatures.nozzle).toBe(210);
+      expect(stored.settings.activate_chamber_temp_control).toBe("0"); // disable marker in bag
+    });
+
     it("GH #950 (Codex P2 r5): a disable-only profile matching NO existing row does not create an empty calibration row", async () => {
       await seedPrinterWithNozzle();
       const { POST } = await import("@/app/api/filaments/bambustudio/route");

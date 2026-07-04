@@ -404,6 +404,15 @@ export async function resolveAndApplyCalibration(
     return { applied: false, unresolved: hints.hasAnyHint };
   }
 
+  // GH #950 (Codex r5/r6): a "chamber-disable-only" sync — an explicit chamber
+  // disable with NO real calibration hint and no new chamber temp. Its ONLY job is
+  // to clear a pre-existing calibrations[].chamberTemp; it must NOT fabricate a new
+  // per-nozzle calibration row out of the profile's ordinary top-level temps
+  // (those already land on the filament via buildStructuredUpdate, and a fabricated
+  // row would later shadow user-edited top-level temps in /calibration).
+  const chamberClearOnly =
+    hints.chamberDisabled === true && !hints.hasAnyHint && hints.chamberTemp == null;
+
   const row: Record<string, unknown> = {
     printer: ctx.printerId,
     nozzle: ctx.nozzleId,
@@ -421,10 +430,15 @@ export async function resolveAndApplyCalibration(
   // GH #950 (Codex r5): an explicit disable with no new temp CLEARS the chamber
   // value on the matched row (null = the schema default / "off").
   else if (hints.chamberDisabled === true) row.chamberTemp = null;
-  if (parsed.temperatures.nozzle != null) row.nozzleTemp = parsed.temperatures.nozzle;
-  if (parsed.temperatures.nozzleFirstLayer != null) row.nozzleTempFirstLayer = parsed.temperatures.nozzleFirstLayer;
-  if (parsed.temperatures.bed != null) row.bedTemp = parsed.temperatures.bed;
-  if (parsed.temperatures.bedFirstLayer != null) row.bedTempFirstLayer = parsed.temperatures.bedFirstLayer;
+  // Copy top-level temps into the calibration only for a REAL calibration write —
+  // NOT a chamber-disable-only sync (Codex r6), so `row` then carries only the
+  // chamber clear and never fabricates a temp-bearing row.
+  if (!chamberClearOnly) {
+    if (parsed.temperatures.nozzle != null) row.nozzleTemp = parsed.temperatures.nozzle;
+    if (parsed.temperatures.nozzleFirstLayer != null) row.nozzleTempFirstLayer = parsed.temperatures.nozzleFirstLayer;
+    if (parsed.temperatures.bed != null) row.bedTemp = parsed.temperatures.bed;
+    if (parsed.temperatures.bedFirstLayer != null) row.bedTempFirstLayer = parsed.temperatures.bedFirstLayer;
+  }
 
   // Normalize to PLAIN objects before spreading: the bulk/per-id routes pass a
   // HYDRATED Mongoose doc, so `existing.calibrations[i]` are Mongoose subdocuments
@@ -446,19 +460,17 @@ export async function resolveAndApplyCalibration(
   );
   const merged = [...existingRows];
   if (idx >= 0) {
+    // A chamber-disable-only sync merges ONLY `{ chamberTemp: null }` here — it
+    // clears the matched row's chamber value and leaves its temps/EM/PA intact.
     merged[idx] = { ...merged[idx], ...row };
   } else {
-    // GH #950 (Codex r5): a chamber-DISABLE-only profile (no hints/temp, resolved
-    // purely to clear chamber) that matches NO existing row has nothing to clear —
-    // don't create an empty {printer,nozzle,chamberTemp:null} row. Scoped strictly
-    // to that case so the pre-existing "resolved, row carries only identity"
-    // behaviour (e.g. a printer-match with no concrete values) is unchanged.
-    const chamberClearOnly =
-      hints.chamberDisabled === true && !hints.hasAnyHint && hints.chamberTemp == null;
-    const carriesData = Object.entries(row).some(
-      ([k, v]) => k !== "printer" && k !== "nozzle" && !(k === "chamberTemp" && v == null),
-    );
-    if (chamberClearOnly && !carriesData) {
+    // GH #950 (Codex r5/r6): a chamber-disable-only sync that matches NO existing
+    // row has nothing to clear — do NOT create a calibration row. `row` carries
+    // only identity + a null chamber (ordinary temps were intentionally not copied
+    // above), so this never drops real calibration data; the pre-existing
+    // "resolved, row carries only identity" behaviour for non-chamber syncs is
+    // unchanged.
+    if (chamberClearOnly) {
       return { applied: false, unresolved: false };
     }
     merged.push(row);
