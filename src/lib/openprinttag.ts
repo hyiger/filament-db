@@ -716,14 +716,22 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   // before it reaches the encoder so a bad input can't crash the whole
   // NFC-write path.
   if (input.nozzleTemp != null) {
-    // Use nozzle temp as max, derive min as temp - 20.
-    // GH #634: a first-layer temp ≥ nozzle+20 made the derived min exceed
-    // the max — order the pair with Math.min/Math.max exactly like the
-    // bed temps below, and derive preheat from the effective min.
+    // GH #952.4: the EVERYDAY nozzle temp must ALWAYS land in MAX_PRINT — the
+    // decoder reads it back from MAX as the primary nozzleTemp (openprinttag-
+    // decode.ts). GH #634 derived MIN from the first-layer temp and Math.max-ordered
+    // the pair, which SWAPPED them when firstLayer > nozzle+20: the everyday temp
+    // fell into MIN and the decoder read the inflated first-layer value as everyday.
+    // Fix: pin MAX to the everyday temp and clamp MIN so it never exceeds it (min ≤
+    // max still holds — the #634 invariant). A first-layer temp above the everyday
+    // temp can't extend a pinned MAX, so its excess isn't stored — but the everyday
+    // temp (the primary) now round-trips correctly, and first-layer was already
+    // dropped on decode (OPT has no first-layer field). Tags written BEFORE this
+    // fix keep the old swapped reading; there is no OPT version field to tell them
+    // apart, so this only corrects newly-written tags.
     const nozzleMax = clampTemp(input.nozzleTemp);
     const derivedMin = clampTemp((input.nozzleTempFirstLayer ?? nozzleMax) - 20);
     const minTemp = Math.min(derivedMin, nozzleMax);
-    const maxTemp = Math.max(derivedMin, nozzleMax);
+    const maxTemp = nozzleMax;
     const preheatTemp = clampTemp(minTemp - 20);
 
     encodeCBORKey(buf, OPT_KEY.MIN_PRINT_TEMPERATURE);
@@ -735,13 +743,19 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   }
 
   if (input.bedTemp != null) {
-    const maxBed = clampTemp(input.bedTemp);
-    const minBed = clampTemp(input.bedTempFirstLayer ?? maxBed - 10);
+    // GH #952.4: same fix as the nozzle above — the EVERYDAY bed temp must always
+    // land in MAX_BED (the decoder reads bedTemp from MAX). The prior Math.max
+    // ordering swapped everyday↔first-layer on the COMMON first-layer-hotter bed
+    // profile (e.g. bed 85 / first-layer 90), decoding the everyday bed as 90.
+    // Pin MAX to the everyday temp; MIN is the range floor (min of everyday and the
+    // first-layer temp, or everyday-10 when no first-layer is given).
+    const everydayBed = clampTemp(input.bedTemp);
+    const firstLayerBed = clampTemp(input.bedTempFirstLayer ?? everydayBed - 10);
 
     encodeCBORKey(buf, OPT_KEY.MIN_BED_TEMPERATURE);
-    encodeCBORUint(buf, Math.min(minBed, maxBed));
+    encodeCBORUint(buf, Math.min(firstLayerBed, everydayBed));
     encodeCBORKey(buf, OPT_KEY.MAX_BED_TEMPERATURE);
-    encodeCBORUint(buf, Math.max(minBed, maxBed));
+    encodeCBORUint(buf, everydayBed);
   }
 
   if (input.chamberTemp != null && input.chamberTemp > 0) {
