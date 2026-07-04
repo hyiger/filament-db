@@ -1274,24 +1274,28 @@ export class NfcService extends EventEmitter {
       // Write the TLV from page 4, 4 bytes per page (FF D6 UPDATE BINARY).
       const tlvBuf = Buffer.from(tlv);
       const numPages = Math.ceil(tlvBuf.length / 4);
-      const topPage = 4 + numPages - 1;
 
-      // GH #973 BRICK-GUARD: before writing anything, if the write would run past
-      // NTAG213's user area (needs a real 215/216), PROBE-READ the top target page
-      // to prove the chip is physically that big. A page read is non-mutating; a
-      // NAK means the size — whether from a wrong user pick OR a mis-read
-      // GET_VERSION — overstated the chip, and writing on would push the TLV into
-      // the smaller chip's dynamic-lock/config pages (a permanent brick the
-      // writeNtagPage [3,255] bound can't catch). Refuse instead. Writes that stay
-      // within the 213 extent fit any NTAG and skip the probe.
-      if (topPage > NTAG213_LAST_USER_PAGE) {
-        const probeStart = Math.max(4, topPage - 3); // burst of 4 pages ending at topPage
+      // GH #973 BRICK-GUARD: before writing anything, if the target capacity runs
+      // past NTAG213's user area (needs a real 215/216), PROBE-READ the last page
+      // that capacity implies to prove the chip is physically that big. A page
+      // read is non-mutating; a NAK means the size — whether from a wrong user
+      // pick OR a mis-read GET_VERSION — overstated the chip. We probe the page
+      // the advertised `ndefBytes` CC reaches, NOT just the current TLV's extent
+      // (Codex #973: an over-picked NTAG216 has a TLV that fits a 215 fine, but
+      // its 872-byte CC would then advertise capacity past the 215's end — and a
+      // TLV-only probe wouldn't catch that). Refusing here avoids both writing
+      // into a smaller chip's lock/config pages (a brick the [3,255] page bound
+      // can't catch) AND stamping a CC that lies about the chip's size. Writes
+      // that stay within the 213 extent fit any NTAG and skip the probe.
+      const capacityTopPage = 4 + Math.ceil(ndefBytes / 4) - 1;
+      if (capacityTopPage > NTAG213_LAST_USER_PAGE) {
+        const probeStart = Math.max(4, capacityTopPage - 3); // burst of 4 pages ending at capacityTopPage
         try {
           await this.readNtagBurst(protocol, probeStart);
         } catch {
           throw new Error(
-            `NTAG_TOO_SMALL_FOR_DATA: This tag can't hold ${tlvBuf.length} bytes — it's smaller ` +
-              `than an NTAG215. Nothing was written; re-check the tag type` +
+            `NTAG_TOO_SMALL_FOR_DATA: This tag is smaller than an NTAG215 — it can't hold ` +
+              `${ndefBytes} bytes. Nothing was written; re-check the tag type` +
               `${ntagSize ? ` (you selected ${ntagSize})` : ""}.`,
           );
         }
