@@ -131,16 +131,6 @@ export async function GET(
       });
     }
 
-    // If no spools or no spool weight configured, we can't check — assume OK
-    if (rawSpools.length === 0 || spoolWeight == null) {
-      return NextResponse.json({
-        ok: true,
-        filament: filament.name,
-        message: "No spool weight data available — skipping check",
-        spools: [],
-      });
-    }
-
     // Compute remaining length in meters from weight
     function weightToLengthM(weightG: number): number | null {
       if (!density || density <= 0 || !diameter || diameter <= 0) return null;
@@ -151,6 +141,42 @@ export async function GET(
     }
 
     const requiredLengthM = weightToLengthM(requiredWeight);
+
+    // GH #954 (Codex): the "all measured stock is retired" warning does NOT need
+    // the spool tare (it's a pure retired-vs-active question), so check it BEFORE
+    // the tare guard below — otherwise a filament with only retired weighed stock
+    // and a null/inherited-missing spoolWeight would hit the `spoolWeight == null`
+    // guard and return ok:true, silently suppressing PrusaSlicer's warning for
+    // null-tare legacy data. An active spool that is merely UNWEIGHED counts as
+    // active stock (just unmeasured), so `hasActiveSpool` keeps this from firing a
+    // false warning — that case falls through to the "no data → ok:true" guard.
+    const hasActiveSpool = rawSpools.some((s) => !s.retired);
+    const hasRetiredWeightData = rawSpools.some(
+      (s) => s.totalWeight != null && s.retired,
+    );
+    if (!hasActiveSpool && hasRetiredWeightData) {
+      return NextResponse.json({
+        ok: false,
+        filament: filament.name,
+        requiredWeightG: Math.round(requiredWeight * 10) / 10,
+        requiredLengthM:
+          requiredLengthM !== null ? Math.round(requiredLengthM * 100) / 100 : null,
+        warning: "No active spools — all spools with weight data are retired",
+        spools: [],
+      });
+    }
+
+    // If no spools or no spool weight configured, we can't check — assume OK.
+    // (An active-but-unweighed spool lands here too: active stock exists, just
+    // unmeasured — keep the original no-data → ok:true behavior, no false warning.)
+    if (rawSpools.length === 0 || spoolWeight == null) {
+      return NextResponse.json({
+        ok: true,
+        filament: filament.name,
+        message: "No spool weight data available — skipping check",
+        spools: [],
+      });
+    }
 
     // Check each spool. Retired spools are intentionally out of service
     // and must not satisfy the check (Codex review) — otherwise a
@@ -173,29 +199,9 @@ export async function GET(
         };
       });
 
+    // Active spools exist but none carries a totalWeight (the all-retired case was
+    // already handled before the tare guard above) → no measurable data → ok:true.
     if (spoolResults.length === 0) {
-      // GH #954: warn (ok:false) ONLY in the true zero-active-stock case —
-      // there are NO active spools AND the only weight data is on retired ones.
-      // If an ACTIVE spool exists but is simply unweighed, active stock exists
-      // (just unmeasured), so keep the original "no data → ok:true" behavior and
-      // don't emit a false warning (Codex). The retired exclusion still stops a
-      // retired spool from silently satisfying the check.
-      const hasActiveSpool = rawSpools.some((s) => !s.retired);
-      const hasRetiredWeightData = rawSpools.some(
-        (s) => s.totalWeight != null && s.retired,
-      );
-      if (!hasActiveSpool && hasRetiredWeightData) {
-        return NextResponse.json({
-          ok: false,
-          filament: filament.name,
-          requiredWeightG: Math.round(requiredWeight * 10) / 10,
-          requiredLengthM:
-            requiredLengthM !== null ? Math.round(requiredLengthM * 100) / 100 : null,
-          warning: "No active spools — all spools with weight data are retired",
-          spools: [],
-        });
-      }
-      // Genuinely no weight data on any spool — can't check, assume OK.
       return NextResponse.json({
         ok: true,
         filament: filament.name,

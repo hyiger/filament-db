@@ -267,6 +267,55 @@ describe("API route correctness", () => {
     expect(body.message).toBeUndefined();
   });
 
+  it("#954 (Codex): all-retired stock warns even with a null tare (retired check runs before the tare guard)", async () => {
+    // No spoolWeight anywhere (null tare, no parent) + the only weighed stock is
+    // retired. The tare guard would return ok:true first; the retired detection
+    // must run before it so PrusaSlicer still gets the warning.
+    const f = await Filament.create({
+      name: "Null-Tare Retired PLA",
+      vendor: "Prusa",
+      type: "PLA",
+      density: 1.24,
+      diameter: 1.75,
+      // spoolWeight intentionally omitted (null) — no tare.
+      spools: [{ label: "Old", totalWeight: 1000, retired: true }],
+    });
+    const res = await spoolCheck(
+      getReq(`http://localhost/api/filaments/${f._id}/spool-check?weight=100`),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.warning).toMatch(/retired/i);
+  });
+
+  it("#954 (Codex): an UNWEIGHED active spool + a weighed retired spool stays ok:true (no false warning)", async () => {
+    // Active stock exists — it's just unmeasured. The retired spool has weight but
+    // is out of service. This must NOT warn (active stock exists), it's a no-data case.
+    const f = await Filament.create({
+      name: "Unweighed-Active PLA",
+      vendor: "Prusa",
+      type: "PLA",
+      spoolWeight: 200,
+      density: 1.24,
+      diameter: 1.75,
+      spools: [
+        { label: "Fresh", retired: false }, // active but no totalWeight (unweighed)
+        { label: "Old", totalWeight: 1000, retired: true }, // weighed but retired
+      ],
+    });
+    const res = await spoolCheck(
+      getReq(`http://localhost/api/filaments/${f._id}/spool-check?weight=100`),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true); // active stock exists (unmeasured) → no false warning
+    expect(body.warning).toBeUndefined();
+    expect(body.message).toMatch(/no spool weight data/i);
+  });
+
   // ── #305: print history never debits a retired spool ───────────────
 
   it("#305 — print-history records spoolId:null rather than debiting a retired spool", async () => {
