@@ -1535,6 +1535,38 @@ describe("API route correctness", () => {
       expect(fresh.density).toBe(1.23);
     });
 
+    it("950.5 (sweep r8) — a per-nozzle sync PRESERVES a shared calibration default in the settings bag", async () => {
+      // The per-id calibration sync adds context keys (extrusion_multiplier /
+      // retraction / fans) to STRUCTURED_KEYS. A prior over-broad purge stripped
+      // ALL structuredKeys from the existing bag, erasing a filament-wide shared EM
+      // default on every per-nozzle sync. The purge is now narrow (never-baggable
+      // only), so shared bag defaults the incoming preset didn't touch survive.
+      const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
+      const f = await Filament.create({
+        name: "PLA",
+        vendor: "X",
+        type: "PLA",
+        compatibleNozzles: [brass._id],
+        settings: { extrusion_multiplier: "0.98", some_passthrough: "keep" },
+      });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/PLA%200.4%20Brass", {
+          config: {
+            filamentdb_id: String(f._id),
+            filamentdb_nozzle: "0.4 Brass",
+            pressure_advance: "0.03", // routes to the calibration entry, not the bag
+          },
+        }),
+        { params: Promise.resolve({ id: "PLA 0.4 Brass" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      // The shared EM default (a structuredKey in calibration mode, but with no
+      // top-level home) is NOT erased by the per-nozzle sync.
+      expect(fresh.settings?.extrusion_multiplier).toBe("0.98");
+      expect(fresh.settings?.some_passthrough).toBe("keep");
+    });
+
     it("950.7 — a per-nozzle preset sync with an absent filamentdb_id falls back to the BASE name (no orphan)", async () => {
       const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
       const f = await Filament.create({
@@ -1601,15 +1633,16 @@ describe("API route correctness", () => {
       expect(fresh.density).toBe(1.24); // structured field still applied
     });
 
-    it("950.5 (sweep r5) — an orca sync changing ONLY structured fields still purges a stale structured shadow from the bag", async () => {
+    it("950.5 (sweep r5/r8) — an orca sync purges a stale filament_settings_id even with no new passthrough key, but preserves other bag keys", async () => {
       // The orca per-id route gates its settings write on `added`; without honoring
-      // `removed`, a structured-only sync discards the purge and the stale shadow
-      // survives. Pin that the purge lands even with no incoming passthrough key.
+      // `removed`, a structured-only sync discards the purge and the stale
+      // never-baggable key survives. And per r8 the purge must be NARROW — a
+      // non-never-baggable stale shadow (density) must survive.
       const f = await Filament.create({
         name: "Orca Sweep PLA",
         vendor: "X",
         type: "PLA",
-        settings: { density: "9.9", filament_notes: "keep" },
+        settings: { filament_settings_id: "Stale Name", density: "9.9", filament_notes: "keep" },
       });
       const res = await orcaSync(
         jsonReq(`http://localhost/api/filaments/${f._id}/orcaslicer`, { type: "PETG" }),
@@ -1617,9 +1650,10 @@ describe("API route correctness", () => {
       );
       expect(res.status).toBe(200);
       const fresh = await Filament.findById(f._id).lean();
-      // Stale structured shadow purged despite no passthrough key being added.
-      expect(fresh.settings?.density).toBeUndefined();
-      // Real passthrough survives; the structured field is applied.
+      // Never-baggable key purged despite no passthrough key being added...
+      expect(fresh.settings?.filament_settings_id).toBeUndefined();
+      // ...but a non-never-baggable shadow + real passthrough survive (narrow purge).
+      expect(fresh.settings?.density).toBe("9.9");
       expect(fresh.settings?.filament_notes).toBe("keep");
       expect(fresh.type).toBe("PETG");
     });

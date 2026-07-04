@@ -39,6 +39,28 @@ export interface SettingsMergeResult {
 }
 
 /**
+ * Keys that must NEVER persist in the settings bag, regardless of the caller's
+ * `structuredKeys`: `filament_settings_id` is re-derived from the filament's
+ * CURRENT name on export, and `filamentdb_id`/`filamentdb_nozzle` are pure routing
+ * hints. A STALE copy of any of these in `existing` shadows the re-derived value
+ * on the next export (the 950.5 leak), so they are purged from the seeded bag.
+ *
+ * This is DELIBERATELY narrower than `structuredKeys`. GH #950 Codex r8: the Prusa
+ * per-id calibration sync adds context-only keys (`extrusion_multiplier`,
+ * retraction, fan speeds) to its `structuredKeys` — but those have NO top-level
+ * filament home and can legitimately live in the bag as shared filament-wide
+ * defaults, so purging the whole `structuredKeys` set erased them on every
+ * per-nozzle sync. Purge ONLY the truly never-baggable keys here; the other
+ * structured keys either have a top-level field that overrides any stale bag
+ * shadow on export (harmless) or are legit shared defaults (must survive).
+ */
+export const NEVER_BAGGED_KEYS = new Set([
+  "filament_settings_id",
+  "filamentdb_id",
+  "filamentdb_nozzle",
+]);
+
+/**
  * Merge `incoming` config keys into a copy of `existing`, skipping any
  * key in `structuredKeys` (those map to first-class Filament fields).
  * Enforces {@link MAX_SETTING_VALUE_LENGTH} per value and
@@ -50,21 +72,16 @@ export function mergeSlicerSettings(
   structuredKeys: Set<string>,
 ): SettingsMergeResult {
   const settings: Record<string, unknown> = { ...existing };
-  // GH #950 (adversarial sweep on PR #968): a structured-owned key must never
-  // live in the settings bag — it's authoritative as a structured field, is
-  // re-derived on export (e.g. `filament_settings_id` from the CURRENT name), or
-  // is a pure routing hint (`filamentdb_id`/`filamentdb_nozzle`). The incoming
-  // loop below already skips these, but a STALE copy carried in `existing`
-  // (legacy data written before this rule) would otherwise survive the merge and
-  // shadow the structured value on the next export — the exact 950.5 leak, closed
-  // on the INI bulk-import path (which full-replaces a stripped bag) but not on
-  // the per-id merge paths. Strip them from the seeded `existing` bag too so the
-  // merge is source-agnostic, and report them in `removed` so a caller that only
-  // conditionally writes update.settings (the OrcaSlicer per-id sync gates on
-  // `added`) still persists the purge. Bambu passes an empty structuredKeys set →
-  // no-op there.
+  // GH #950 (sweep + Codex r8): purge only the truly never-baggable keys
+  // ({@link NEVER_BAGGED_KEYS}) from the seeded `existing` bag — a stale copy of
+  // those shadows the re-derived export value. Report them in `removed` so a
+  // caller that only conditionally writes update.settings (the OrcaSlicer per-id
+  // sync gates on `added`) still persists the purge. Crucially this does NOT strip
+  // the whole `structuredKeys` set: per-id calibration syncs list context keys
+  // (extrusion_multiplier / retraction / fans) there which can be legit shared
+  // bag defaults and must survive.
   const removed: string[] = [];
-  for (const key of structuredKeys) {
+  for (const key of NEVER_BAGGED_KEYS) {
     if (key in settings) {
       delete settings[key];
       removed.push(key);
