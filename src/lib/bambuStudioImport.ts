@@ -235,6 +235,11 @@ export interface CalibrationHints {
   /** GH #950: chamber temperature → calibrations[].chamberTemp. The export
    * emits it (orcaSlicerBundle), so parse it back for a lossless round-trip. */
   chamberTemp?: number;
+  /** GH #950 (Codex r5): the profile EXPLICITLY disabled chamber heating
+   * (activate_chamber_temp_control="0"). Distinct from chamberTemp being absent —
+   * a disable must CLEAR a pre-existing calibrations[].chamberTemp on the resolved
+   * path, else /calibration re-enables chamber heat on the next round-trip. */
+  chamberDisabled?: boolean;
   /** True when at least one calibration-relevant value was present. The
    * route uses this to decide whether to upsert a calibrations[] row vs
    * leave the filament's calibration data alone. */
@@ -349,6 +354,9 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
       unwrap(json.activate_chamber_temp_control) === "0"
         ? undefined
         : num(json.chamber_temperature),
+    // GH #950 (Codex r5): record an explicit disable so the applier can CLEAR a
+    // pre-existing calibrations[].chamberTemp (a bare absence must not clear).
+    chamberDisabled: unwrap(json.activate_chamber_temp_control) === "0",
     hasAnyHint: false,
   };
   // Codex P3 on PR #387 round 6: `maxVolumetricSpeed` is the ONE

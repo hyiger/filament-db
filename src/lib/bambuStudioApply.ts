@@ -388,7 +388,11 @@ export async function resolveAndApplyCalibration(
   // however, stays gated on `hasAnyHint`: chamber has a settings-bag fallback (see
   // prepareBambuUpdate), so a chamber-only profile that can't resolve loses
   // nothing and must not surface a misleading "calibration unresolved" toast.
-  const wantsResolution = hints.hasAnyHint || hints.chamberTemp != null;
+  // GH #950 (Codex r5): also attempt resolution when the profile DISABLES chamber
+  // heating — a resolved context lets us CLEAR a pre-existing calibrations[].
+  // chamberTemp so the disable actually takes (else /calibration re-enables it).
+  const wantsResolution =
+    hints.hasAnyHint || hints.chamberTemp != null || hints.chamberDisabled === true;
   if (!wantsResolution) {
     return { applied: false, unresolved: false };
   }
@@ -414,12 +418,28 @@ export async function resolveAndApplyCalibration(
   if (hints.fanMaxSpeed != null) row.fanMaxSpeed = hints.fanMaxSpeed;
   if (hints.fanBridgeSpeed != null) row.fanBridgeSpeed = hints.fanBridgeSpeed;
   if (hints.chamberTemp != null) row.chamberTemp = hints.chamberTemp; // GH #950
+  // GH #950 (Codex r5): an explicit disable with no new temp CLEARS the chamber
+  // value on the matched row (null = the schema default / "off").
+  else if (hints.chamberDisabled === true) row.chamberTemp = null;
   if (parsed.temperatures.nozzle != null) row.nozzleTemp = parsed.temperatures.nozzle;
   if (parsed.temperatures.nozzleFirstLayer != null) row.nozzleTempFirstLayer = parsed.temperatures.nozzleFirstLayer;
   if (parsed.temperatures.bed != null) row.bedTemp = parsed.temperatures.bed;
   if (parsed.temperatures.bedFirstLayer != null) row.bedTempFirstLayer = parsed.temperatures.bedFirstLayer;
 
-  const existingRows = (existing?.calibrations as Array<Record<string, unknown>>) || [];
+  // Normalize to PLAIN objects before spreading: the bulk/per-id routes pass a
+  // HYDRATED Mongoose doc, so `existing.calibrations[i]` are Mongoose subdocuments
+  // whose schema-field data lives in `_doc` (exposed via prototype getters, NOT own
+  // enumerable props). `{ ...subdoc }` would drop that data, so merging a new value
+  // onto an existing row silently lost the row's other fields (latent pre-#950 bug,
+  // only reachable when a re-sync updates an EXISTING calibration row — now exercised
+  // by the chamber-disable clear). `.toObject()` materialises the real data; plain
+  // objects (unit tests) have no toObject and pass through unchanged.
+  const existingRows = ((existing?.calibrations as Array<Record<string, unknown>>) || []).map(
+    (c) => {
+      const maybe = c as { toObject?: () => Record<string, unknown> };
+      return typeof maybe?.toObject === "function" ? maybe.toObject() : c;
+    },
+  );
   const idx = existingRows.findIndex(
     (c) =>
       String(c.printer) === ctx.printerId && String(c.nozzle) === ctx.nozzleId,
@@ -428,6 +448,19 @@ export async function resolveAndApplyCalibration(
   if (idx >= 0) {
     merged[idx] = { ...merged[idx], ...row };
   } else {
+    // GH #950 (Codex r5): a chamber-DISABLE-only profile (no hints/temp, resolved
+    // purely to clear chamber) that matches NO existing row has nothing to clear —
+    // don't create an empty {printer,nozzle,chamberTemp:null} row. Scoped strictly
+    // to that case so the pre-existing "resolved, row carries only identity"
+    // behaviour (e.g. a printer-match with no concrete values) is unchanged.
+    const chamberClearOnly =
+      hints.chamberDisabled === true && !hints.hasAnyHint && hints.chamberTemp == null;
+    const carriesData = Object.entries(row).some(
+      ([k, v]) => k !== "printer" && k !== "nozzle" && !(k === "chamberTemp" && v == null),
+    );
+    if (chamberClearOnly && !carriesData) {
+      return { applied: false, unresolved: false };
+    }
     merged.push(row);
   }
   update.calibrations = merged;

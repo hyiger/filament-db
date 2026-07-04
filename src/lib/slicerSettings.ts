@@ -26,6 +26,14 @@ export interface SettingsMergeResult {
   settings: Record<string, unknown>;
   /** Keys that were added/updated from `incoming`. */
   added: string[];
+  /**
+   * Structured-owned keys that were PURGED from the seeded `existing` bag
+   * (GH #950 sweep). A caller that only conditionally writes `update.settings`
+   * (e.g. the OrcaSlicer per-id sync gates on `added`) MUST also write when
+   * `removed` is non-empty, or the cleaned bag is discarded and the stale
+   * shadow survives.
+   */
+  removed: string[];
   /** Non-null when a cap was exceeded — the caller should reject with 400. */
   error: string | null;
 }
@@ -51,11 +59,17 @@ export function mergeSlicerSettings(
   // shadow the structured value on the next export — the exact 950.5 leak, closed
   // on the INI bulk-import path (which full-replaces a stripped bag) but not on
   // the per-id merge paths. Strip them from the seeded `existing` bag too so the
-  // merge is source-agnostic. (Takes full effect where the caller writes
-  // update.settings unconditionally — the PrusaSlicer per-id sync; the OrcaSlicer
-  // per-id sync gates on `added`, so its purge lands whenever the sync also adds a
-  // passthrough key. Bambu passes an empty structuredKeys set → no-op there.)
-  for (const key of structuredKeys) delete settings[key];
+  // merge is source-agnostic, and report them in `removed` so a caller that only
+  // conditionally writes update.settings (the OrcaSlicer per-id sync gates on
+  // `added`) still persists the purge. Bambu passes an empty structuredKeys set →
+  // no-op there.
+  const removed: string[] = [];
+  for (const key of structuredKeys) {
+    if (key in settings) {
+      delete settings[key];
+      removed.push(key);
+    }
+  }
   const added: string[] = [];
 
   for (const [key, value] of Object.entries(incoming)) {
@@ -65,6 +79,7 @@ export function mergeSlicerSettings(
       return {
         settings,
         added,
+        removed,
         error: `settings.${key} value exceeds the ${MAX_SETTING_VALUE_LENGTH}-character limit`,
       };
     }
@@ -76,9 +91,10 @@ export function mergeSlicerSettings(
     return {
       settings,
       added,
+      removed,
       error: `settings bag exceeds the ${MAX_SETTINGS_KEYS}-key limit`,
     };
   }
 
-  return { settings, added, error: null };
+  return { settings, added, removed, error: null };
 }

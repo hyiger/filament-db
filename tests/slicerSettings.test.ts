@@ -57,6 +57,13 @@ describe("mergeSlicerSettings", () => {
     expect(result.settings).toEqual({ keep: "alpha", add: "value" });
     // Stripping a stale existing key is not counted as an "added" incoming key.
     expect(result.added).toEqual(["add"]);
+    // …but it IS reported in `removed` so a conditional-writing caller persists it.
+    expect(result.removed).toEqual(["compatible_printers"]);
+  });
+
+  it("#950: reports an empty `removed` when existing carried no structured key", () => {
+    const result = mergeSlicerSettings({ keep: "alpha" }, { add: "value" }, STRUCTURED);
+    expect(result.removed).toEqual([]);
   });
 
   it("#950: does not mutate the existing object when stripping a stale structured key", () => {

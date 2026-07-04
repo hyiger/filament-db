@@ -1601,6 +1601,29 @@ describe("API route correctness", () => {
       expect(fresh.density).toBe(1.24); // structured field still applied
     });
 
+    it("950.5 (sweep r5) — an orca sync changing ONLY structured fields still purges a stale structured shadow from the bag", async () => {
+      // The orca per-id route gates its settings write on `added`; without honoring
+      // `removed`, a structured-only sync discards the purge and the stale shadow
+      // survives. Pin that the purge lands even with no incoming passthrough key.
+      const f = await Filament.create({
+        name: "Orca Sweep PLA",
+        vendor: "X",
+        type: "PLA",
+        settings: { density: "9.9", filament_notes: "keep" },
+      });
+      const res = await orcaSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}/orcaslicer`, { type: "PETG" }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      // Stale structured shadow purged despite no passthrough key being added.
+      expect(fresh.settings?.density).toBeUndefined();
+      // Real passthrough survives; the structured field is applied.
+      expect(fresh.settings?.filament_notes).toBe("keep");
+      expect(fresh.type).toBe("PETG");
+    });
+
     it("950.6 — spool-check resolves a 24-hex URL by _id FIRST, not a name that looks like an id", async () => {
       // The slicer-facing GET routes must resolve the same way as the id-first
       // sync/export routes, or a slicer addressing by id reads the WRONG row.

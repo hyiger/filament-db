@@ -240,7 +240,12 @@ export async function POST(
       return errorResponse(merge.error, 400);
     }
     const settingsAdded = merge.added;
-    if (settingsAdded.length > 0) {
+    // GH #950 (Codex P2 on PR #968 r5): also write when the merge PURGED a stale
+    // structured key from the existing bag (`removed`) — otherwise a sync that
+    // only changes structured fields discards the cleaned bag and the stale
+    // shadow (e.g. a legacy filament_settings_id) survives to shadow the
+    // re-derived export value.
+    if (settingsAdded.length > 0 || merge.removed.length > 0) {
       update.settings = merge.settings;
     }
 

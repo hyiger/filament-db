@@ -305,12 +305,25 @@ describe("parseBambuStudioProfile", () => {
     expect(calibrationHints.chamberTemp).toBeUndefined();
     // chamber is the ONLY would-be hint and it's suppressed → no calibration row.
     expect(calibrationHints.hasAnyHint).toBe(false);
+    // GH #950 (Codex r5): the explicit disable is recorded so the applier can
+    // CLEAR a pre-existing calibrations[].chamberTemp (a bare absence must not).
+    expect(calibrationHints.chamberDisabled).toBe(true);
     // GH #950 (Codex P1 r2): a DISABLED chamber has NO structural home (chamberTemp
     // is cleared, so neither the calibration row nor the applier fallback carries
     // it) — the raw keys must ride the settings bag so the profile round-trips
     // instead of silently dropping "chamber temp 45 but off".
     expect(filament.settings.chamber_temperature).toBe("45");
     expect(filament.settings.activate_chamber_temp_control).toBe("0");
+  });
+
+  it("GH #950 (Codex r5): chamberDisabled is false when chamber is enabled or the flag is absent", () => {
+    expect(
+      parseBambuStudioProfile({ name: ["X"], chamber_temperature: ["45"], activate_chamber_temp_control: ["1"] })
+        .calibrationHints.chamberDisabled,
+    ).toBe(false);
+    expect(
+      parseBambuStudioProfile({ name: ["X"], chamber_temperature: ["45"] }).calibrationHints.chamberDisabled,
+    ).toBe(false);
   });
 
   it("GH #950: parses chamber_temperature when the enable flag is absent (defaults to on)", () => {
