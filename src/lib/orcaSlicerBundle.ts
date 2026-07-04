@@ -229,11 +229,28 @@ export function droppedCalibrationCount(filament: FilamentDoc): number {
  * Generate an array of OrcaSlicer-format filament profile objects
  * from resolved Filament DB documents.
  */
-export function generateOrcaSlicerProfiles(filaments: FilamentDoc[]): Record<string, string[] | string>[] {
+/**
+ * GH #950.4 / #969 (Codex round 5): `bakeCalibration` is OPT-IN and defaults to
+ * false. Baking is only correct for the SINGLE-preset download paths
+ * (`GET /api/filaments/{id}/{orcaslicer,bambustudio}`), which are manual imports
+ * with no dynamic calibration module. The BULK bundle (`GET /api/filaments/orcaslicer`)
+ * feeds the OrcaSlicer FilamentDB module, which fetches `/calibration?format=orcaslicer`
+ * for the ACTIVE nozzle/bed at print time — baking the any-printer/any-bed
+ * representative there would seed every profile with wrong-context tuning until
+ * (or unless) the dynamic fetch overwrites it. So the bulk route leaves this off.
+ */
+export function generateOrcaSlicerProfiles(
+  filaments: FilamentDoc[],
+  { bakeCalibration = false }: { bakeCalibration?: boolean } = {},
+): Record<string, string[] | string>[] {
   return filaments.map((filament) => {
-    // GH #950.4: bake the representative calibration so tuned flow/PA/retraction/
-    // fan values reach the exported preset (stock Bambu has no dynamic fallback).
-    const orcaKeys = filamentToOrcaSlicerKeys(filament, pickRepresentativeCalibration(filament));
+    // Bake the representative calibration only on the opt-in single-preset path
+    // so tuned flow/PA/retraction/fan values reach a standalone preset (stock
+    // Bambu / a manually-imported Orca .json has no dynamic fallback).
+    const orcaKeys = filamentToOrcaSlicerKeys(
+      filament,
+      bakeCalibration ? pickRepresentativeCalibration(filament) : null,
+    );
 
     return {
       // Metadata fields (plain strings, not arrays)

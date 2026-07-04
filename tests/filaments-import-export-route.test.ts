@@ -414,12 +414,14 @@ filamentdb_nozzle = 0.6 Brass
       expect(fresh.settings.cooling).toBe("1");
     });
 
-    it("#969 (r4): purges a LEGACY never-bagged shadow already stored on the doc, keeping OPT keys", async () => {
-      // A pre-existing doc carrying stale never-bagged shadows (from an old
-      // import before they were stripped). The incoming section doesn't carry
-      // them, and the dot-key merge only writes present keys — so without an
-      // explicit purge they'd survive and keep overriding the re-derived name on
-      // the next export. They must be $unset; the OPT linkage must survive.
+    it("#969 (r4/r5): purges LEGACY never-bagged AND top-level-field shadows on the doc, keeping OPT keys", async () => {
+      // A pre-existing doc carrying stale shadows (from old import code): both
+      // never-bagged hints (filament_settings_id / filamentdb_nozzle) and
+      // top-level-field shadows (temperature / filament_cost). The incoming
+      // section doesn't carry them and the dot-key merge only writes present
+      // keys — so without an explicit purge they'd survive and keep overriding
+      // the re-derived / inherited values on the next export. All must be $unset;
+      // the OPT linkage must survive.
       const existing = await Filament.create({
         name: "Legacy PLA",
         vendor: "X",
@@ -427,6 +429,8 @@ filamentdb_nozzle = 0.6 Brass
         settings: {
           filament_settings_id: "Old Stale Name",
           filamentdb_nozzle: "0.4 Brass",
+          temperature: "999", // stale top-level-field shadow (r5)
+          filament_cost: "5", // stale top-level-field shadow (r5)
           openprinttag_slug: "opt-keep",
           cooling: "0",
         },
@@ -441,8 +445,10 @@ filamentdb_nozzle = 0.6 Brass
       );
       expect(res.status).toBe(200);
       const fresh = await Filament.findById(existing._id).lean();
-      expect(fresh.settings.filament_settings_id).toBeUndefined(); // stale shadow purged
-      expect(fresh.settings.filamentdb_nozzle).toBeUndefined(); // stale hint purged
+      expect(fresh.settings.filament_settings_id).toBeUndefined(); // never-bagged shadow purged
+      expect(fresh.settings.filamentdb_nozzle).toBeUndefined(); // never-bagged hint purged
+      expect(fresh.settings.temperature).toBeUndefined(); // top-level shadow purged (r5)
+      expect(fresh.settings.filament_cost).toBeUndefined(); // top-level shadow purged (r5)
       expect(fresh.settings.openprinttag_slug).toBe("opt-keep"); // OPT linkage preserved
       expect(fresh.settings.cooling).toBe("1"); // section value applied
     });

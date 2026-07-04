@@ -707,7 +707,7 @@ describe("GH #950.4 — bake calibration into the Orca/Bambu export", () => {
     expect(keys.pressure_advance).toBeUndefined();
   });
 
-  it("generateOrcaSlicerProfiles bakes the representative (default) calibration", () => {
+  it("generateOrcaSlicerProfiles bakes the representative calibration ONLY when opted in (GH #969 r5)", () => {
     const filaments = [{
       name: "PLA", vendor: "X", type: "PLA", diameter: 1.75, temperatures: {}, settings: {},
       calibrations: [
@@ -715,8 +715,14 @@ describe("GH #950.4 — bake calibration into the Orca/Bambu export", () => {
         { nozzle: { diameter: 0.4, type: "Brass" }, printer: null, bedType: null, extrusionMultiplier: 0.978 }, // default
       ],
     }];
-    const profile = generateOrcaSlicerProfiles(filaments)[0];
-    expect(profile.filament_flow_ratio).toEqual(["0.978"]); // the printer==null/bedType==null default
+    // Bulk bundle (default): must NOT bake — the OrcaSlicer module fetches
+    // /calibration dynamically for the active nozzle/bed, so a baked static
+    // representative would seed wrong-context tuning.
+    const bulk = generateOrcaSlicerProfiles(filaments)[0];
+    expect(bulk.filament_flow_ratio).toBeUndefined();
+    // Single-preset download (opt-in): bakes the any-printer/any-bed default.
+    const single = generateOrcaSlicerProfiles(filaments, { bakeCalibration: true })[0];
+    expect(single.filament_flow_ratio).toEqual(["0.978"]);
   });
 
   it("pickRepresentativeCalibration prefers the any-printer/any-bed default, else the first", () => {

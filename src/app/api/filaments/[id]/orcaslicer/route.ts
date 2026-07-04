@@ -84,8 +84,10 @@ export async function GET(
 
     // generateOrcaSlicerProfiles works on an array — take the single
     // profile object, not the [obj] wrapper, so the file imports as one
-    // preset rather than a list.
-    const profile = generateOrcaSlicerProfiles([filament])[0];
+    // preset rather than a list. bakeCalibration: this single-preset download is
+    // a manual import with no dynamic calibration module, so bake the
+    // representative calibration in (GH #950.4 / #969 r5).
+    const profile = generateOrcaSlicerProfiles([filament], { bakeCalibration: true })[0];
     const stem = exportFilenameStem(filament.name);
 
     return new NextResponse(JSON.stringify(profile, null, 2), {

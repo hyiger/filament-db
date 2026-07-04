@@ -175,26 +175,43 @@ function settingsSelfHealUnset(
 }
 
 /**
- * GH #969 (Codex round 4): $unset never-bagged shadow keys
- * (`filament_settings_id` / `filamentdb_id` / `filamentdb_nozzle`) still stored
- * on the EXISTING doc. The incoming section already strips them and the dot-key
- * merge (#950.8b) only writes keys it emits, so a LEGACY stored shadow survives
- * — and `filamentToSlicerKeys` seeds from the bag then only sets
- * `filament_settings_id` when absent, so the stale copy would keep overriding
- * the re-derived current name on the next export. The pre-#950.8b whole-object
- * replace dropped these for free (the incoming, stripped, replaced the bag);
- * restore that purge explicitly. Disjoint from every $set path (the incoming
- * never carries these) and from the self-heal/inheritance $unsets (different
- * keys), so no path collision.
+ * Keys that must never persist in the settings bag on an INI import — the exact
+ * set the incoming section is stripped of, so the existing-doc purge mirrors it:
+ *   - NEVER_BAGGED_KEYS: routing/id hints (filament_settings_id / filamentdb_id
+ *     / filamentdb_nozzle) — stripped from incoming by the collapse step.
+ *   - INI_TOP_LEVEL_SETTING_KEYS: settings-bag SHADOWS of top-level fields
+ *     (temperature, filament_cost, filament_type, …) — stripped from incoming by
+ *     `stripStructuredSettings`.
  */
-function neverBaggedUnset(existing: LeanFilament): string[] {
+const STALE_SETTINGS_SHADOW_KEYS = new Set<string>([
+  ...NEVER_BAGGED_KEYS,
+  ...INI_TOP_LEVEL_SETTING_KEYS,
+]);
+
+/**
+ * GH #969 (Codex rounds 4 & 5): $unset stale shadow keys still stored on the
+ * EXISTING doc's settings. The incoming section is already stripped of both key
+ * classes (routing/id hints AND top-level-field shadows), and the dot-key merge
+ * (#950.8b) only writes keys it emits — so a LEGACY stored shadow (from older
+ * import code) SURVIVES. That's harmful because `filamentToSlicerKeys` seeds the
+ * export from the settings bag and only overrides a key when the resolved
+ * top-level value is truthy: a stale `settings.filament_settings_id` keeps
+ * overriding the re-derived current name, and a stale `settings.temperature`
+ * resurfaces once the canonical top-level field goes null/inherited. The
+ * pre-#950.8b whole-object replace dropped these for free (the stripped incoming
+ * replaced the bag); restore that purge explicitly. OPT keys
+ * (openprinttag_slug/_uuid) are NOT in either set, so they're preserved. Disjoint
+ * from every $set path (the incoming never carries these keys) and from the
+ * self-heal/inheritance $unsets (different keys), so no path collision.
+ */
+function staleSettingsShadowUnset(existing: LeanFilament): string[] {
   const settings =
     existing.settings && typeof existing.settings === "object" && !Array.isArray(existing.settings)
       ? (existing.settings as Record<string, unknown>)
       : null;
   if (!settings) return [];
   const unset: string[] = [];
-  for (const k of NEVER_BAGGED_KEYS) {
+  for (const k of STALE_SETTINGS_SHADOW_KEYS) {
     if (Object.prototype.hasOwnProperty.call(settings, k)) unset.push(`settings.${k}`);
   }
   return unset;
@@ -205,15 +222,15 @@ function neverBaggedUnset(existing: LeanFilament): string[] {
  * name-matched INI import target. For a variant it applies the inheritance
  * split; for a root (or a variant whose parent is missing/trashed — nothing to
  * inherit) it writes the flattened doc verbatim. Every UPDATE path also purges
- * legacy never-bagged settings shadows (GH #969 r4, neverBaggedUnset).
+ * legacy stale settings shadows (GH #969 r4/r5, staleSettingsShadowUnset).
  */
 async function buildIniUpdate(
   collapsed: CollapsedFilamentData,
   existing: LeanFilament,
 ): Promise<Record<string, unknown>> {
   const flat = toUpdateSet(collapsed);
-  const purge = neverBaggedUnset(existing);
-  // Attach the never-bagged purge (+ any caller unsets) to a `$set`-only body.
+  const purge = staleSettingsShadowUnset(existing);
+  // Attach the stale-shadow purge (+ any caller unsets) to a `$set`-only body.
   const withUnset = (
     out: Record<string, unknown>,
     extra: string[] = [],
