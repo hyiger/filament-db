@@ -104,39 +104,45 @@ function mergeSettingsDotKeys(setBody: Record<string, unknown>): Record<string, 
 }
 
 /**
- * GH #969 (Codex on #950.8b): compute the `settings.<k>` $unset keys that
- * restore variant settings inheritance under the dot-key MERGE.
+ * GH #969 (Codex on #950.8b): compute the `settings.<k>` $unset keys that keep a
+ * variant tracking its parent for section-carried settings keys under the
+ * dot-key MERGE.
  *
- * `splitInheritedImportSet` filters a settings key OUT of `set.settings` when
- * the incoming value equals the parent's — meaning "the variant should inherit
- * this key". Under the OLD whole-object `$set: { settings: filtered }` that was
- * self-enforcing: the replace dropped EVERY key not in `filtered`, so any local
- * override of an inherited key vanished for free. #950.8b switched to a dot-key
- * merge (`mergeSettingsDotKeys`) to preserve keys the section OMITS (e.g.
- * `openprinttag_slug` — the #607 OPT linkage), but the merge emits nothing for a
- * filtered-out key, so a stored variant override SURVIVES. That regresses
- * inheritance for section-carried keys: an override like `settings.cooling = "0"`
- * (round 1) — OR one that already equals the parent, e.g. `settings.cooling = "1"`
- * (round 2, this fix) — stays pinned. The parent-EQUAL pin resolves to the right
- * value today but is still a stored local override, so a later parent edit would
- * NOT propagate through `resolveFilament`'s shallow settings merge.
+ * Why clearing is correct: a bundle export resolves a variant through
+ * `resolveFilament`, so a *pinned* key (`variant.settings.cooling = "1"`) and an
+ * *inherited* one (variant blank, parent `"1"`) BOTH flatten to the same
+ * `cooling = 1` in the exported section. The INI format can't express pin-vs-
+ * inherit intent, so on re-import the only safe default for a key the section
+ * reports equal to the parent is to drop the local override and let the variant
+ * track the parent live (GH #106).
  *
- * So for every incoming settings key whose value matches the parent (i.e. the
- * variant should inherit it) that the variant STILL has as a local override,
- * emit a `settings.<k>` $unset — restoring the pre-#950.8b drop while keeping
- * #950.8b's omitted-key preservation (the loop only touches section keys). A
- * PRESENCE check (`hasOwnProperty`), not a value comparison: settings values are
- * `string | null` and `resolveFilament` merges them shallowly with no
- * empty=inherit rule, so any present key is a genuine override worth clearing.
- * The keys this returns are disjoint from `mergeSettingsDotKeys`'s emitted
- * `settings.<k>` $set keys (matches-parent vs differs-from-parent), so $set and
- * $unset never collide on the same path.
+ * Why a dedicated $unset is needed: `splitInheritedImportSet` already filters a
+ * parent-equal key OUT of `set.settings` (so `mergeSettingsDotKeys` never writes
+ * it). But #950.8b switched the settings write from a whole-object `$set` to a
+ * per-key dot-key merge so keys the section OMITS survive (e.g.
+ * `openprinttag_slug` — the #607 OPT linkage). The merge only touches keys it
+ * emits, so a *stored* variant override of a now-inherited key SURVIVES — whether
+ * it diverges (`cooling = "0"`, round 1) or already equals the parent
+ * (`cooling = "1"`, round 2, this fix; resolves right today but wouldn't track a
+ * later parent edit through resolveFilament's shallow settings merge). So for
+ * every incoming settings key the section reports equal to the parent that the
+ * variant STILL has locally, emit a `settings.<k>` $unset. A PRESENCE check
+ * (`hasOwnProperty`), not a value comparison: settings values are `string | null`
+ * and resolveFilament merges them shallowly with NO empty=inherit rule, so any
+ * present key is a genuine override worth clearing.
  *
- * Note the intentional divergence from the SCALAR inheritance path
- * (`splitInheritedImportSet`), which clears only a DIVERGENT override and leaves
- * a parent-equal one pinned: scalars were always field-level (never a
- * whole-object replace), so that's their established semantics; settings had
- * whole-object semantics, and this restores them.
+ * Disjointness: the loop only ever touches keys the section carries (so OMITTED
+ * keys stay put), and it emits ONLY parent-equal keys while `mergeSettingsDotKeys`
+ * emits ONLY differs-from-parent keys — disjoint, so $set and $unset never
+ * collide on one path. That invariant holds because BOTH sides key off the same
+ * strict parent-equality predicate (`splitInheritedImportSet`'s `!==`); a future
+ * change to one must keep the other in lockstep.
+ *
+ * Known scope gap (GH #971): the SCALAR path (`splitInheritedImportSet`) clears
+ * only a DIVERGENT parent-equal override and leaves a parent-*equal* scalar pin
+ * in place — the same latent gap this fixes for settings. It's shared by three
+ * call sites (CSV import, per-id sync, INI import), so aligning it is tracked
+ * separately rather than widened into this PR.
  */
 function settingsSelfHealUnset(
   incoming: unknown,
@@ -191,9 +197,11 @@ async function buildIniUpdate(
   // Dot-flatten AFTER the per-key inheritance diff so its settings branch saw the
   // whole object; the resulting keys then MERGE rather than replace (GH #950.8b).
   const out: Record<string, unknown> = { $set: mergeSettingsDotKeys(split.set) };
-  // GH #969: the dot-key merge preserves omitted keys but no longer wipes a stale
-  // variant settings override that now matches the parent — restore that self-heal
-  // with per-key `settings.<k>` $unsets (disjoint from the $set dot-keys above).
+  // GH #969: the dot-key merge only writes the keys it emits, so a stored variant
+  // settings override the section now reports equal to the parent would stay
+  // pinned. Clear those via per-key `settings.<k>` $unsets so the variant keeps
+  // tracking the parent (disjoint from the $set dot-keys above — see the
+  // settingsSelfHealUnset docblock).
   const unsetKeys = [
     ...split.unset,
     ...settingsSelfHealUnset(flat.settings, existing, parent as LeanFilament),

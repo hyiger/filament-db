@@ -259,17 +259,19 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
         type: "PLA",
         color: "#00cc00",
         parentId: parent._id,
-        settings: {}, // no local overrides
+        settings: { extra: "old" }, // a variant-only key absent from the parent
       });
       // fan differs from parent → written; theme matches parent AND the variant
-      // has no local override → neither set nor unset (keeps inheriting).
+      // has no local override → neither set nor unset (keeps inheriting); extra is
+      // absent from the parent → a genuine override, written through (not unset).
       const outcome = await upsertIniFilament(
-        variantSection("Diff Variant", { fan: "80", theme: "dark" }),
+        variantSection("Diff Variant", { fan: "80", theme: "dark", extra: "new" }),
       );
       expect(outcome).toBe("updated");
       const fresh = await Filament.findById(variant._id).lean();
       expect(fresh.settings.fan).toBe("80"); // divergent value written through
       expect(fresh.settings.theme).toBeUndefined(); // matches parent, unowned → inherits
+      expect(fresh.settings.extra).toBe("new"); // absent from parent → override written, not healed
     });
 
     it("clears a parent-EQUAL local override so a future parent edit propagates (GH #969 round 2)", async () => {
@@ -300,6 +302,30 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
       const freshParent = await Filament.findById(parent._id).lean();
       const freshVariant = await Filament.findById(variant._id).lean();
       expect(resolveFilament(freshVariant, freshParent).settings.cooling).toBe("2");
+    });
+
+    it("self-heals on the RESURRECT path — a trashed variant's pin is cleared alongside the tombstone (phase 2)", async () => {
+      const parent = await Filament.create({
+        name: "Res Parent",
+        vendor: "Acme",
+        type: "PLA",
+        settings: { cooling: "1" },
+      });
+      // A TRASHED variant with a parent-equal pin — resurrected by the import.
+      const variant = await Filament.create({
+        name: "Res Variant",
+        vendor: "Acme",
+        type: "PLA",
+        color: "#cccc00",
+        parentId: parent._id,
+        settings: { cooling: "1" },
+        _deletedAt: new Date(),
+      });
+      const outcome = await upsertIniFilament(variantSection("Res Variant", { cooling: "1" }));
+      expect(outcome).toBe("updated");
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh._deletedAt).toBeNull(); // resurrected
+      expect(fresh.settings.cooling).toBeUndefined(); // pin cleared on resurrect ($unset rode along)
     });
 
     it("does not throw when the variant carries no settings at all", async () => {
