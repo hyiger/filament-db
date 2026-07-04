@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
+import { MAX_SETTINGS_KEYS } from "@/lib/slicerSettings";
 
 /**
  * Route-level tests for the Bambu Studio importer (`POST
@@ -544,6 +545,36 @@ describe("Bambu Studio importer routes", () => {
       // The temps landed on the filament top level instead.
       expect(stored.temperatures.nozzle).toBe(210);
       expect(stored.settings.activate_chamber_temp_control).toBe("0"); // disable marker in bag
+    });
+
+    it("GH #950 (Codex P2 r7): the unresolved chamber fallback respects the settings-bag cap", async () => {
+      // The chamber-fallback keys are appended after mergeSlicerSettings enforced
+      // the cap; routing them through a capped merge means an at-cap bag + chamber
+      // fallback rejects with 400 instead of silently over-filling the bag.
+      const bigSettings: Record<string, string> = {};
+      for (let i = 0; i < MAX_SETTINGS_KEYS; i++) bigSettings[`k_${i}`] = "v";
+      await Filament.create({
+        name: "QA Cap PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        settings: bigSettings, // exactly at the cap
+      });
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq("http://localhost/api/filaments/bambustudio", {
+          type: "filament",
+          from: "User",
+          filament_settings_id: ["QA Cap PLA"],
+          filament_type: ["PLA"],
+          filament_vendor: ["QA Labs"],
+          chamber_temperature: ["50"], // unresolved (no printer) → fallback would push over the cap
+        }),
+      );
+      expect(res.status).toBe(400); // rejected, not silently over-filled
+      // The saved row is unchanged (still at the cap, no chamber key sneaked in).
+      const stored = await Filament.findOne({ name: "QA Cap PLA" });
+      expect(Object.keys(stored.settings).length).toBe(MAX_SETTINGS_KEYS);
+      expect(stored.settings.chamber_temperature).toBeUndefined();
     });
 
     it("GH #950 (Codex P2 r5): a disable-only profile matching NO existing row does not create an empty calibration row", async () => {

@@ -183,10 +183,19 @@ export async function prepareBambuUpdate(
   if (parsed.calibrationHints.chamberTemp != null && !settingsResult.error) {
     if (!calibrationOutcome.applied) {
       // Unresolved: no structural home → preserve the raw chamber keys in the bag.
-      const settings = { ...settingsResult.settings };
-      settings.chamber_temperature = String(parsed.calibrationHints.chamberTemp);
-      settings.activate_chamber_temp_control = "1";
-      update.settings = settings;
+      // Route them through the CAPPED merge (Codex r7) so appending them can't
+      // bypass MAX_SETTINGS_KEYS; a genuinely over-cap result surfaces as
+      // settingsResult.error → the route 400s instead of silently over-filling.
+      const chamberMerge = mergeSlicerSettings(
+        settingsResult.settings,
+        {
+          chamber_temperature: String(parsed.calibrationHints.chamberTemp),
+          activate_chamber_temp_control: "1",
+        },
+        new Set(),
+      );
+      if (chamberMerge.error) settingsResult.error = chamberMerge.error;
+      else update.settings = chamberMerge.settings;
     } else if (
       "chamber_temperature" in settingsResult.settings ||
       "activate_chamber_temp_control" in settingsResult.settings

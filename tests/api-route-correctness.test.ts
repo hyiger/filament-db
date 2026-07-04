@@ -1633,6 +1633,23 @@ describe("API route correctness", () => {
       expect(fresh.density).toBe(1.24); // structured field still applied
     });
 
+    it("950.5 (sweep r9) — an orca sync does NOT persist an INCOMING filament_settings_id into the bag", async () => {
+      // orca's STRUCTURED_KEYS omits filament_settings_id, so without skipping
+      // never-baggable keys from incoming, the exported preset-name key would land
+      // in the bag and shadow the re-derived name on the next export.
+      const f = await Filament.create({ name: "Orca Incoming PLA", vendor: "X", type: "PLA" });
+      const res = await orcaSync(
+        jsonReq(`http://localhost/api/filaments/${f._id}/orcaslicer`, {
+          type: "PLA",
+          filament_settings_id: "Some Preset Name", // incoming never-baggable key
+        }),
+        { params: Promise.resolve({ id: String(f._id) }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.settings?.filament_settings_id).toBeUndefined(); // not persisted
+    });
+
     it("950.5 (sweep r5/r8) — an orca sync purges a stale filament_settings_id even with no new passthrough key, but preserves other bag keys", async () => {
       // The orca per-id route gates its settings write on `added`; without honoring
       // `removed`, a structured-only sync discards the purge and the stale

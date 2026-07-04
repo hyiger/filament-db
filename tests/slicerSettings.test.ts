@@ -61,6 +61,22 @@ describe("mergeSlicerSettings", () => {
     expect(result.removed).toEqual(["filament_settings_id"]);
   });
 
+  it("#950 (Codex r9): skips a never-baggable key from INCOMING even when the caller's structuredKeys omits it", () => {
+    // The OrcaSlicer per-id route's structured set does not include
+    // filament_settings_id, so without this the incoming copy would be added to the
+    // bag and shadow the re-derived export value. Never-baggable keys stay out of
+    // the bag regardless of source.
+    const result = mergeSlicerSettings(
+      { keep: "alpha" },
+      { filament_settings_id: "Incoming Name", add: "value" },
+      new Set(), // caller lists NO structured keys
+    );
+    expect(result.error).toBeNull();
+    expect("filament_settings_id" in result.settings).toBe(false); // not added from incoming
+    expect(result.settings).toEqual({ keep: "alpha", add: "value" });
+    expect(result.added).toEqual(["add"]); // filament_settings_id not counted as added
+  });
+
   it("#950 (Codex r8): does NOT purge a structuredKey that is not never-baggable — shared bag defaults survive", () => {
     // The per-id calibration sync lists context keys (extrusion_multiplier,
     // retraction, fans) in structuredKeys, but those have no top-level home and can

@@ -90,7 +90,13 @@ export function mergeSlicerSettings(
   const added: string[] = [];
 
   for (const [key, value] of Object.entries(incoming)) {
-    if (structuredKeys.has(key)) continue;
+    // Skip caller-structured keys AND the never-baggable keys (GH #950 Codex r9):
+    // purging them only from `existing` is not enough — a caller whose
+    // structuredKeys omits e.g. `filament_settings_id` (the OrcaSlicer per-id sync)
+    // would otherwise re-add an incoming copy to the bag, re-shadowing the
+    // re-derived export value. Keeping them out of BOTH sources makes the
+    // never-baggable guarantee hold regardless of the caller's structured set.
+    if (structuredKeys.has(key) || NEVER_BAGGED_KEYS.has(key)) continue;
     const serialized = JSON.stringify(value ?? null);
     if (serialized.length > MAX_SETTING_VALUE_LENGTH) {
       return {
