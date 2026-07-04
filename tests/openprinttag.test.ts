@@ -662,10 +662,24 @@ describe("generateOpenPrintTagBinary", () => {
     expect(text).toContain("PLA");
   });
 
-  it("includes country_of_origin defaulting to US", () => {
-    const result = generateOpenPrintTagBinary(minimalInput);
-    const text = new TextDecoder().decode(result);
-    expect(text).toContain("US");
+  it("#952: OMITS country_of_origin when the caller supplies none (no fabricated US)", () => {
+    const bytes = Array.from(generateOpenPrintTagBinary(minimalInput));
+    expect(findCBORKey(bytes, OPT_KEY.COUNTRY_OF_ORIGIN)).toBe(-1);
+  });
+
+  it("#952: writes a spoolUid that fits (<=16 chars)", () => {
+    const bytes = Array.from(
+      generateOpenPrintTagBinary({ ...minimalInput, spoolUid: "2acc21072a" }),
+    );
+    expect(findCBORKey(bytes, OPT_KEY.BRAND_SPECIFIC_INSTANCE_ID)).not.toBe(-1);
+  });
+
+  it("#952: OMITS an over-length spoolUid (>16) rather than truncating it", () => {
+    const bytes = Array.from(
+      generateOpenPrintTagBinary({ ...minimalInput, spoolUid: "custom-id-01234567890" }),
+    );
+    // A truncated id would read back as a DIFFERENT id → omit entirely.
+    expect(findCBORKey(bytes, OPT_KEY.BRAND_SPECIFIC_INSTANCE_ID)).toBe(-1);
   });
 
   it("encodes temperature fields when provided", () => {

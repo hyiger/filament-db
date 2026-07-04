@@ -65,7 +65,14 @@ export function ot3dToDecodedTag(decoded: Ot3dDecoded): DecodedOpenPrintTag {
   const base = str(f.material_base);
   const mod = str(f.material_mod);
   const colorNameStr = str(f.color_name);
-  const materialType = base; // bare base material (e.g. "PLA") — the typed field
+  // GH #952: rejoin base + modifier into the typed materialType (the encoder
+  // splits "PC-ABS"/"PETG-CF" into the separate 5-byte base/mod slots). Dropping
+  // the modifier made the typed field a bare "PC"/"PETG", which broke the
+  // anchored (^type$) vendor+type match and the finish/arrangement derivation.
+  // Hyphen is the canonical rejoin separator, matching stored types like
+  // "PETG-CF"; a space-separated original ("TPU 95A") round-trips as "TPU-95A"
+  // (the encoder can't record which separator was used — accepted trade-off).
+  const materialType = mod ? `${base}-${mod}` : base;
   // Fold the color into the display/default NAME so two colors of the same
   // brand+material don't both default to the same (unique-constrained) filament
   // name on create — otherwise every Polar Filament PLA color decodes to "PLA"
