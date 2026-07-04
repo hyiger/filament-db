@@ -7,6 +7,7 @@ import { useNfcContext } from "@/components/NfcProvider";
 import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
 import { encodeOpenTag3D } from "@/lib/opentag3d";
 import { filamentToOpenTag3DFields, wrapOpenTag3DType2 } from "@/lib/opentag3d-encode";
+import { NTAG_NAME_TO_NDEF_BYTES, type NtagSizeName } from "@/lib/ntagVersion";
 import { selectSpoolForWrite } from "@/lib/selectSpoolForWrite";
 import { safeHttpUrl } from "@/lib/safeRenderUrl";
 import { useToast } from "@/components/Toast";
@@ -168,6 +169,36 @@ function FilamentDetail() {
   const nfcWriteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { toast } = useToast();
   const confirm = useConfirm();
+
+  // GH #973: NTAG size picker — a promise-based modal used when writing a blank
+  // NTAG whose size GET_VERSION couldn't auto-detect. Resolves to the chosen
+  // size, or null when cancelled. Kept local to this page (the only consumer).
+  // The pending resolver lives in a ref (not state) so an unmount mid-prompt can
+  // settle the awaiting write chain with null instead of leaking a hung promise.
+  const [ntagSizePromptOpen, setNtagSizePromptOpen] = useState(false);
+  const ntagSizeResolverRef = useRef<((v: NtagSizeName | null) => void) | null>(null);
+  const ntagDialogRef = useRef<HTMLDivElement>(null);
+  const promptNtagSize = useCallback(
+    () =>
+      new Promise<NtagSizeName | null>((resolve) => {
+        ntagSizeResolverRef.current = resolve;
+        setNtagSizePromptOpen(true);
+      }),
+    [],
+  );
+  const resolveNtagSize = useCallback((v: NtagSizeName | null) => {
+    setNtagSizePromptOpen(false);
+    ntagSizeResolverRef.current?.(v);
+    ntagSizeResolverRef.current = null;
+  }, []);
+  // Settle any pending prompt on unmount so `await promptNtagSize()` can't hang.
+  useEffect(
+    () => () => {
+      ntagSizeResolverRef.current?.(null);
+      ntagSizeResolverRef.current = null;
+    },
+    [],
+  );
 
   const [notFound, setNotFound] = useState(false);
 
@@ -573,7 +604,12 @@ function FilamentDetail() {
        * a Core-only fallback on a tiny NTAG213 would drop them (Codex #927). */
       requireExtended?: boolean;
     }): Promise<
-      | { payload: Uint8Array; standard: "openprinttag" | "opentag3d"; productUrl?: string }
+      | {
+          payload: Uint8Array;
+          standard: "openprinttag" | "opentag3d";
+          productUrl?: string;
+          ntagSize?: NtagSizeName;
+        }
       | null
     > => {
       if (!filament) return null;
@@ -628,10 +664,25 @@ function FilamentDetail() {
         // detected NDEF capacity — the Extended TLV (~214B) overflows a small
         // NTAG213 (144B), so fall back to Core-only there instead of letting the
         // write fail with TAG_TOO_SMALL.
+        let effectiveCapacity =
+          typeof detected?.ndefCapacity === "number" && detected.ndefCapacity > 0
+            ? detected.ndefCapacity
+            : null;
+        // GH #973: a BLANK NTAG whose size GET_VERSION couldn't auto-detect
+        // reports a null capacity. Rather than silently downgrade to a 144-byte
+        // NTAG213 (dropping the spool id + weight and mislabelling the chip), ask
+        // the user which NTAG it is — the same posture as the dev CLI's --ntag.
+        let ntagSize: NtagSizeName | undefined;
+        if (effectiveCapacity == null && detected?.formatted === false) {
+          const picked = await promptNtagSize();
+          if (!picked) return null; // user cancelled the write
+          ntagSize = picked;
+          effectiveCapacity = NTAG_NAME_TO_NDEF_BYTES[picked];
+        }
         let includeExtended = true;
-        if (typeof detected?.ndefCapacity === "number" && detected.ndefCapacity > 0) {
+        if (effectiveCapacity != null) {
           const ext = wrapOpenTag3DType2(fields, { includeExtended: true });
-          if (ext.tlv.length > detected.ndefCapacity) includeExtended = false;
+          if (ext.tlv.length > effectiveCapacity) includeExtended = false;
         }
         if (!includeExtended) {
           // Codex #927: the weight-update path's remaining weight + spool id live
@@ -646,7 +697,7 @@ function FilamentDetail() {
           // scan that doesn't match the spool isn't a surprise (Codex #927 r5).
           toast(t("detail.nfc.opentag3dCoreOnly"), "info");
         }
-        return { payload: encodeOpenTag3D(fields, { includeExtended }), standard: "opentag3d" };
+        return { payload: encodeOpenTag3D(fields, { includeExtended }), standard: "opentag3d", ntagSize };
       }
 
       // Default / SLIX2 / blank → OpenPrintTag CBOR (unchanged behaviour).
@@ -686,7 +737,7 @@ function FilamentDetail() {
         || `https://filamentdb.app/filament/${encodeURIComponent(filament.vendor)}/${encodeURIComponent(filament.name)}`;
       return { payload, standard: "openprinttag", productUrl };
     },
-    [filament, toast, t],
+    [filament, toast, t, promptNtagSize],
   );
 
   const handleNfcWrite = async () => {
@@ -726,7 +777,7 @@ function FilamentDetail() {
         actualWeightGrams,
       });
       if (!built) return; // detection refused (e.g. Bambu) — toast already shown
-      await writeTag(built.payload, { standard: built.standard, productUrl: built.productUrl });
+      await writeTag(built.payload, { standard: built.standard, productUrl: built.productUrl, ntagSize: built.ntagSize });
       notifyTagWritten({
         _id: String(filament._id),
         name: filament.name,
@@ -768,7 +819,7 @@ function FilamentDetail() {
         requireExtended: true, // Codex #927: remaining weight is Extended-only
       });
       if (!built) return; // detection refused — toast already shown
-      await writeTag(built.payload, { standard: built.standard, productUrl: built.productUrl });
+      await writeTag(built.payload, { standard: built.standard, productUrl: built.productUrl, ntagSize: built.ntagSize });
       notifyTagWritten({
         _id: String(filament._id),
         name: filament.name,
@@ -2223,6 +2274,75 @@ function FilamentDetail() {
           onLinked={refetchFilament}
           onClose={() => setLinkOpen(false)}
         />
+      )}
+      {ntagSizePromptOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onMouseDown={(e) => {
+            // Backdrop click cancels (matches ConfirmDialog). mouseDown on the
+            // overlay itself only — not a drag that ends there from inside.
+            if (e.target === e.currentTarget) resolveNtagSize(null);
+          }}
+        >
+          <div
+            ref={ntagDialogRef}
+            className="w-full max-w-sm rounded-lg bg-white dark:bg-gray-800 p-5 shadow-xl"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ntag-size-title"
+            aria-describedby="ntag-size-body"
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                resolveNtagSize(null);
+                return;
+              }
+              // Focus trap: cycle Tab/Shift+Tab within the dialog's buttons.
+              if (e.key !== "Tab") return;
+              const focusables = ntagDialogRef.current?.querySelectorAll<HTMLButtonElement>("button");
+              if (!focusables || focusables.length === 0) return;
+              const first = focusables[0];
+              const last = focusables[focusables.length - 1];
+              if (e.shiftKey && document.activeElement === first) {
+                e.preventDefault();
+                last.focus();
+              } else if (!e.shiftKey && document.activeElement === last) {
+                e.preventDefault();
+                first.focus();
+              }
+            }}
+          >
+            <h2 id="ntag-size-title" className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+              {t("detail.nfc.ntagSize.title")}
+            </h2>
+            <p id="ntag-size-body" className="mt-2 text-sm text-gray-600 dark:text-gray-300">
+              {t("detail.nfc.ntagSize.body")}
+            </p>
+            <div className="mt-4 flex flex-col gap-2">
+              {(["NTAG213", "NTAG215", "NTAG216"] as NtagSizeName[]).map((size) => (
+                <button
+                  key={size}
+                  type="button"
+                  autoFocus={size === "NTAG215"}
+                  onClick={() => resolveNtagSize(size)}
+                  className="flex items-center justify-between rounded-md border border-gray-300 dark:border-gray-600 px-4 py-2 text-left hover:bg-gray-50 dark:hover:bg-gray-700"
+                >
+                  <span className="font-medium text-gray-900 dark:text-gray-100">{size}</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">
+                    {NTAG_NAME_TO_NDEF_BYTES[size]} B
+                    {size === "NTAG213" ? ` · ${t("detail.nfc.ntagSize.coreOnly")}` : ""}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => resolveNtagSize(null)}
+              className="mt-4 w-full rounded-md px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              {t("detail.nfc.ntagSize.cancel")}
+            </button>
+          </div>
+        </div>
       )}
     </main>
   );
