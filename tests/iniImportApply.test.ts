@@ -213,4 +213,85 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
       expect(await Filament.findOne({ name: "Live Name", _deletedAt: null })).not.toBeNull();
     });
   });
+
+  // ── GH #969: the dot-key settings merge (#950.8b) preserves omitted keys but
+  //    no longer wipes a stale variant override that now matches the parent.
+  //    `buildIniUpdate` restores that self-heal with per-key `settings.<k>`
+  //    $unsets, disjoint from the merge's $set dot-keys. ──────────────────────
+  describe("variant settings self-heal (GH #969)", () => {
+    const variantSection = (
+      name: string,
+      settings: Record<string, string>,
+    ): CollapsedFilamentData => ({ name, settings, inherits: null });
+
+    it("unsets a stale override that now matches the parent, preserves an omitted key", async () => {
+      const parent = await Filament.create({
+        name: "SH Parent",
+        vendor: "Acme",
+        type: "PLA",
+        settings: { cooling: "1" },
+      });
+      const variant = await Filament.create({
+        name: "SH Variant",
+        vendor: "Acme",
+        type: "PLA",
+        color: "#cc0000",
+        parentId: parent._id,
+        settings: { cooling: "0", keep_me: "v" },
+      });
+      const outcome = await upsertIniFilament(variantSection("SH Variant", { cooling: "1" }));
+      expect(outcome).toBe("updated");
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings.cooling).toBeUndefined(); // self-healed → inherits parent "1"
+      expect(fresh.settings.keep_me).toBe("v"); // omitted key preserved (merge, not replace)
+    });
+
+    it("writes a differing key while leaving a matching-but-unowned key to inherit", async () => {
+      const parent = await Filament.create({
+        name: "Diff Parent",
+        vendor: "Acme",
+        type: "PLA",
+        settings: { fan: "50", theme: "dark" },
+      });
+      const variant = await Filament.create({
+        name: "Diff Variant",
+        vendor: "Acme",
+        type: "PLA",
+        color: "#00cc00",
+        parentId: parent._id,
+        settings: {}, // no local overrides
+      });
+      // fan differs from parent → written; theme matches parent AND the variant
+      // has no local override → neither set nor unset (keeps inheriting).
+      const outcome = await upsertIniFilament(
+        variantSection("Diff Variant", { fan: "80", theme: "dark" }),
+      );
+      expect(outcome).toBe("updated");
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings.fan).toBe("80"); // divergent value written through
+      expect(fresh.settings.theme).toBeUndefined(); // matches parent, unowned → inherits
+    });
+
+    it("does not throw when the variant carries no settings at all", async () => {
+      const parent = await Filament.create({
+        name: "NoSet Parent",
+        vendor: "Acme",
+        type: "PLA",
+        settings: { cooling: "1" },
+      });
+      const variant = await Filament.create({
+        name: "NoSet Variant",
+        vendor: "Acme",
+        type: "PLA",
+        color: "#0000cc",
+        parentId: parent._id,
+        // no settings field
+      });
+      const outcome = await upsertIniFilament(variantSection("NoSet Variant", { cooling: "1" }));
+      expect(outcome).toBe("updated");
+      const fresh = await Filament.findById(variant._id).lean();
+      // Nothing to heal; the matching key keeps inheriting (no phantom local write).
+      expect(fresh.settings?.cooling).toBeUndefined();
+    });
+  });
 });

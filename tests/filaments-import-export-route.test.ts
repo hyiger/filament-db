@@ -352,6 +352,46 @@ filamentdb_nozzle = 0.6 Brass
       expect(fresh.settings.some_key).toBe("v");
     });
 
+    it("#969: a variant's stale settings override that now matches the parent SELF-HEALS (merge-safe $unset)", async () => {
+      const parent = await Filament.create({
+        name: "Heal PLA",
+        vendor: "Prusa",
+        type: "PLA",
+        temperatures: { nozzle: 215 },
+        settings: { cooling: "1" },
+      });
+      const variant = await Filament.create({
+        name: "Heal PLA Red",
+        vendor: "Prusa",
+        type: "PLA",
+        color: "#cc0000",
+        parentId: parent._id,
+        // A stale local override that DIVERGES from the parent, plus an OPT
+        // linkage the imported section will NOT carry.
+        settings: { cooling: "0", openprinttag_slug: "opt-red" },
+      });
+      // The imported section carries cooling = 1, matching the parent — so the
+      // variant should stop overriding it and resume inheriting the parent's "1".
+      const ini = `[filament:Heal PLA Red]\nfilament_type = PLA\nfilament_vendor = Prusa\nfilament_colour = #cc0000\ncooling = 1\n`;
+      const res = await prusaImport(
+        new NextRequest("http://localhost/api/filaments/prusaslicer", {
+          method: "POST",
+          headers: { "content-type": "text/plain" },
+          body: ini,
+        }),
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(variant._id).lean();
+      // Self-heal: the stale local override is cleared so inheritance resumes.
+      expect(fresh?.settings?.cooling).toBeUndefined();
+      // Omitted-key preservation still holds — the OPT linkage survives.
+      expect(fresh?.settings?.openprinttag_slug).toBe("opt-red");
+      // And the effective (resolved) value now tracks the parent's "1".
+      const { resolveFilament } = await import("@/lib/resolveFilament");
+      const resolved = resolveFilament(fresh, parent.toObject());
+      expect(resolved.settings?.cooling).toBe("1");
+    });
+
     it("#950.8b: merge still does NOT persist a never-bagged key (filament_settings_id) into the bag", async () => {
       const existing = await Filament.create({
         name: "Guard PLA",

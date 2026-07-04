@@ -104,6 +104,50 @@ function mergeSettingsDotKeys(setBody: Record<string, unknown>): Record<string, 
 }
 
 /**
+ * GH #969 (Codex on #950.8b): compute the `settings.<k>` $unset keys that
+ * restore variant self-heal under the dot-key MERGE.
+ *
+ * `splitInheritedImportSet` filters a settings key OUT of `set.settings` when
+ * the incoming value equals the parent's (so the variant keeps inheriting it).
+ * Under the OLD whole-object `$set: { settings: filtered }` that dropped a stale
+ * variant override for free (the replace wiped it). Under the dot-key merge
+ * (`mergeSettingsDotKeys`) no `settings.<k>` key is emitted for a filtered-out
+ * key, so an existing variant override such as `settings.cooling = "0"` SURVIVES
+ * even when the imported INI's `cooling` now matches the parent — inheritance
+ * never resumes. So for every incoming settings key whose value equals the
+ * parent AND that the variant still overrides locally with a DIFFERENT value,
+ * emit a `settings.<k>` $unset. Keys the incoming section OMITS are left
+ * untouched (the omitted-key preservation #950.8b added — e.g. openprinttag_slug).
+ * The keys this returns are disjoint from `mergeSettingsDotKeys`'s emitted
+ * `settings.<k>` $set keys (matches-parent vs differs-from-parent), so $set and
+ * $unset never collide on the same path.
+ */
+function settingsSelfHealUnset(
+  incoming: unknown,
+  variant: LeanFilament,
+  parent: LeanFilament,
+): string[] {
+  if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) return [];
+  const parentSettings =
+    parent.settings && typeof parent.settings === "object" && !Array.isArray(parent.settings)
+      ? (parent.settings as Record<string, unknown>)
+      : null;
+  const variantSettings =
+    variant.settings && typeof variant.settings === "object" && !Array.isArray(variant.settings)
+      ? (variant.settings as Record<string, unknown>)
+      : null;
+  if (!parentSettings || !variantSettings) return [];
+  const unset: string[] = [];
+  for (const [sk, sv] of Object.entries(incoming as Record<string, unknown>)) {
+    if (parentSettings[sk] !== sv) continue; // differs from parent → written via $set, not healed
+    const local = variantSettings[sk];
+    // Mirror the scalar path's `hasLocalValue`: null/"" is already inheriting.
+    if (local != null && local !== "" && local !== sv) unset.push(`settings.${sk}`);
+  }
+  return unset;
+}
+
+/**
  * Build the atomic Mongo update body ({ $set } + optional { $unset }) for a
  * name-matched INI import target. For a variant it applies the inheritance
  * split; for a root (or a variant whose parent is missing/trashed — nothing to
@@ -127,8 +171,15 @@ async function buildIniUpdate(
   // Dot-flatten AFTER the per-key inheritance diff so its settings branch saw the
   // whole object; the resulting keys then MERGE rather than replace (GH #950.8b).
   const out: Record<string, unknown> = { $set: mergeSettingsDotKeys(split.set) };
-  if (split.unset.length > 0) {
-    out.$unset = Object.fromEntries(split.unset.map((k) => [k, ""]));
+  // GH #969: the dot-key merge preserves omitted keys but no longer wipes a stale
+  // variant settings override that now matches the parent — restore that self-heal
+  // with per-key `settings.<k>` $unsets (disjoint from the $set dot-keys above).
+  const unsetKeys = [
+    ...split.unset,
+    ...settingsSelfHealUnset(flat.settings, existing, parent as LeanFilament),
+  ];
+  if (unsetKeys.length > 0) {
+    out.$unset = Object.fromEntries(unsetKeys.map((k) => [k, ""]));
   }
   return out;
 }
