@@ -105,22 +105,38 @@ function mergeSettingsDotKeys(setBody: Record<string, unknown>): Record<string, 
 
 /**
  * GH #969 (Codex on #950.8b): compute the `settings.<k>` $unset keys that
- * restore variant self-heal under the dot-key MERGE.
+ * restore variant settings inheritance under the dot-key MERGE.
  *
  * `splitInheritedImportSet` filters a settings key OUT of `set.settings` when
- * the incoming value equals the parent's (so the variant keeps inheriting it).
- * Under the OLD whole-object `$set: { settings: filtered }` that dropped a stale
- * variant override for free (the replace wiped it). Under the dot-key merge
- * (`mergeSettingsDotKeys`) no `settings.<k>` key is emitted for a filtered-out
- * key, so an existing variant override such as `settings.cooling = "0"` SURVIVES
- * even when the imported INI's `cooling` now matches the parent — inheritance
- * never resumes. So for every incoming settings key whose value equals the
- * parent AND that the variant still overrides locally with a DIFFERENT value,
- * emit a `settings.<k>` $unset. Keys the incoming section OMITS are left
- * untouched (the omitted-key preservation #950.8b added — e.g. openprinttag_slug).
+ * the incoming value equals the parent's — meaning "the variant should inherit
+ * this key". Under the OLD whole-object `$set: { settings: filtered }` that was
+ * self-enforcing: the replace dropped EVERY key not in `filtered`, so any local
+ * override of an inherited key vanished for free. #950.8b switched to a dot-key
+ * merge (`mergeSettingsDotKeys`) to preserve keys the section OMITS (e.g.
+ * `openprinttag_slug` — the #607 OPT linkage), but the merge emits nothing for a
+ * filtered-out key, so a stored variant override SURVIVES. That regresses
+ * inheritance for section-carried keys: an override like `settings.cooling = "0"`
+ * (round 1) — OR one that already equals the parent, e.g. `settings.cooling = "1"`
+ * (round 2, this fix) — stays pinned. The parent-EQUAL pin resolves to the right
+ * value today but is still a stored local override, so a later parent edit would
+ * NOT propagate through `resolveFilament`'s shallow settings merge.
+ *
+ * So for every incoming settings key whose value matches the parent (i.e. the
+ * variant should inherit it) that the variant STILL has as a local override,
+ * emit a `settings.<k>` $unset — restoring the pre-#950.8b drop while keeping
+ * #950.8b's omitted-key preservation (the loop only touches section keys). A
+ * PRESENCE check (`hasOwnProperty`), not a value comparison: settings values are
+ * `string | null` and `resolveFilament` merges them shallowly with no
+ * empty=inherit rule, so any present key is a genuine override worth clearing.
  * The keys this returns are disjoint from `mergeSettingsDotKeys`'s emitted
  * `settings.<k>` $set keys (matches-parent vs differs-from-parent), so $set and
  * $unset never collide on the same path.
+ *
+ * Note the intentional divergence from the SCALAR inheritance path
+ * (`splitInheritedImportSet`), which clears only a DIVERGENT override and leaves
+ * a parent-equal one pinned: scalars were always field-level (never a
+ * whole-object replace), so that's their established semantics; settings had
+ * whole-object semantics, and this restores them.
  */
 function settingsSelfHealUnset(
   incoming: unknown,
@@ -139,10 +155,14 @@ function settingsSelfHealUnset(
   if (!parentSettings || !variantSettings) return [];
   const unset: string[] = [];
   for (const [sk, sv] of Object.entries(incoming as Record<string, unknown>)) {
-    if (parentSettings[sk] !== sv) continue; // differs from parent → written via $set, not healed
-    const local = variantSettings[sk];
-    // Mirror the scalar path's `hasLocalValue`: null/"" is already inheriting.
-    if (local != null && local !== "" && local !== sv) unset.push(`settings.${sk}`);
+    // Only keys the section says should INHERIT (incoming matches parent); a
+    // divergent value is written through mergeSettingsDotKeys' $set instead.
+    if (parentSettings[sk] !== sv) continue;
+    // Clear ANY local override of that key — divergent OR parent-equal — so the
+    // variant truly inherits and future parent edits propagate.
+    if (Object.prototype.hasOwnProperty.call(variantSettings, sk)) {
+      unset.push(`settings.${sk}`);
+    }
   }
   return unset;
 }

@@ -272,6 +272,36 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
       expect(fresh.settings.theme).toBeUndefined(); // matches parent, unowned → inherits
     });
 
+    it("clears a parent-EQUAL local override so a future parent edit propagates (GH #969 round 2)", async () => {
+      const parent = await Filament.create({
+        name: "Eq Parent",
+        vendor: "Acme",
+        type: "PLA",
+        settings: { cooling: "1" },
+      });
+      const variant = await Filament.create({
+        name: "Eq Variant",
+        vendor: "Acme",
+        type: "PLA",
+        color: "#cc00cc",
+        parentId: parent._id,
+        // Local override that ALREADY equals the parent — functionally
+        // inheriting now, but pinned: a future parent edit wouldn't propagate.
+        settings: { cooling: "1" },
+      });
+      const outcome = await upsertIniFilament(variantSection("Eq Variant", { cooling: "1" }));
+      expect(outcome).toBe("updated");
+      const fresh = await Filament.findById(variant._id).lean();
+      // Pin cleared → the key is truly inherited now.
+      expect(fresh.settings.cooling).toBeUndefined();
+      // Prove propagation: edit the parent, the variant now tracks it.
+      await Filament.updateOne({ _id: parent._id }, { $set: { "settings.cooling": "2" } });
+      const { resolveFilament } = await import("@/lib/resolveFilament");
+      const freshParent = await Filament.findById(parent._id).lean();
+      const freshVariant = await Filament.findById(variant._id).lean();
+      expect(resolveFilament(freshVariant, freshParent).settings.cooling).toBe("2");
+    });
+
     it("does not throw when the variant carries no settings at all", async () => {
       const parent = await Filament.create({
         name: "NoSet Parent",
