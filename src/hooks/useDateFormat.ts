@@ -146,11 +146,16 @@ export function useDateFormat() {
 
   const { config, ready, osLocale } = snap;
   const pattern = ready ? resolveDatePattern(config) : null;
-  // `system` mode renders in the device region; every other mode (and the
-  // pre-`ready` phase) uses the app locale, which is also the fallback when
-  // the device locale is unavailable.
+  // When there's no token pattern — `system` mode, OR a `custom` pattern that
+  // was empty/invalid and so collapsed to null — render in the device region.
+  // That's the documented "system" fallback; keying it on `pattern === null`
+  // (not `mode === "system"`) stops an invalid custom pattern from silently
+  // reverting to app-locale date ordering (Codex P2). A non-null pattern
+  // renders locale-independently, so `locale` there is moot. Pre-`ready` we
+  // use the app locale so the first render matches the server (no hydration
+  // mismatch); `osLocale` is only set post-mount.
   const dateLocale =
-    ready && config.mode === "system" ? osLocale ?? locale : locale;
+    ready && pattern === null ? osLocale ?? locale : locale;
 
   const formatDate = useCallback(
     (input: Parameters<typeof libFormatDate>[0], opts?: { timeZone?: string }) =>
