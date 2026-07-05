@@ -6,7 +6,7 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 import { niceAxisScale } from "@/lib/chartScale";
-import { formatGrams } from "@/lib/formatWeight";
+import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { useDateFormat } from "@/hooks/useDateFormat";
 
 interface DayFilamentSegment {
@@ -42,6 +42,7 @@ export default function AnalyticsPage() {
   const { t } = useTranslation();
   const { formatDate } = useDateFormat();
   const { format: formatCurrency } = useCurrency();
+  const { formatGrams } = useNumberFormat();
   const [days, setDays] = useState<number>(30);
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);

@@ -8,6 +8,7 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import { LOCALES } from "@/i18n";
 import ThemeSection from "@/components/ThemeSection";
 import DateFormatSection from "@/components/DateFormatSection";
+import NumberFormatSection from "@/components/NumberFormatSection";
 
 export default function UiSettingsPage() {
   const { t, locale, setLocale } = useTranslation();
@@ -175,6 +176,9 @@ export default function UiSettingsPage() {
 
         {/* Date format */}
         <DateFormatSection />
+
+        {/* Number format */}
+        <NumberFormatSection />
 
         {/* Language */}
         <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-5">

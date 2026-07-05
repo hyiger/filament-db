@@ -17,7 +17,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
 import { getRemainingGrams, getRemainingPct, getSpoolCount } from "@/lib/inventoryStats";
-import { formatGrams } from "@/lib/formatWeight";
+import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { compareFilaments, nextSortState, earliestSpoolDate, type SortKey, type SortDir } from "@/lib/sortFilamentList";
 import { useDateFormat } from "@/hooks/useDateFormat";
 import { buildFilamentGroups } from "@/lib/groupFilaments";
@@ -181,6 +181,7 @@ export default function Home() {
   const { t } = useTranslation();
   const { format: formatCurrency } = useCurrency();
   const { formatDate } = useDateFormat();
+  const { formatGrams } = useNumberFormat();
   const [filaments, setFilaments] = useState<Filament[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");

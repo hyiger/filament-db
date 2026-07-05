@@ -13,6 +13,8 @@ import {
   type ValidationError,
 } from "@/lib/customCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { useNumberFormat } from "@/hooks/useNumberFormat";
+import { formatWithSeparators } from "@/lib/numberFormatPref";
 
 /**
  * Built-in currencies. v1.12 expanded the list from 4 to 13 to cover the
@@ -105,6 +107,12 @@ export function useCurrency() {
   // grouping/decimals follow it (the GH #447 intent), matching the locale-aware
   // dateFormat. Callers can still pass an explicit override to format().
   const { locale } = useTranslation();
+  // The number-format preference also governs currency grouping/decimals.
+  // `separators` is null in system mode (and pre-hydration), where currency
+  // keeps its locale-aware Intl formatting unchanged.
+  const { separators } = useNumberFormat();
+  const numGroup = separators?.group;
+  const numDecimal = separators?.decimal;
   const [customCurrencies, setCustomCurrenciesState] = useState<CustomCurrency[]>([]);
   const [currency, setCurrencyState] = useState<string>(DEFAULT_CURRENCY);
 
@@ -267,10 +275,26 @@ export function useCurrency() {
       const isBuiltin = CURRENCIES.some((c) => c.code === currency);
       if (isBuiltin) {
         try {
-          return new Intl.NumberFormat(effectiveLocale, {
+          const fmt = new Intl.NumberFormat(effectiveLocale, {
             style: "currency",
             currency,
-          }).format(value);
+          });
+          // When a non-system number format is active, swap ONLY the group /
+          // decimal separators via formatToParts — this preserves Intl's
+          // per-currency decimal count (JPY=0, BHD=3) and symbol placement.
+          if (numGroup !== undefined && numDecimal !== undefined) {
+            return fmt
+              .formatToParts(value)
+              .map((p) =>
+                p.type === "group"
+                  ? numGroup
+                  : p.type === "decimal"
+                    ? numDecimal
+                    : p.value,
+              )
+              .join("");
+          }
+          return fmt.format(value);
         } catch {
           // fall through
         }
@@ -282,9 +306,16 @@ export function useCurrency() {
       // migration of cost render sites would have left custom-currency
       // users with unformatted amounts. Locale-aware Intl is reserved
       // for the built-in ISO 4217 codes above.
+      if (numGroup !== undefined && numDecimal !== undefined) {
+        return `${symbol}${formatWithSeparators(
+          value,
+          { group: numGroup, decimal: numDecimal },
+          { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false },
+        )}`;
+      }
       return `${symbol}${value.toFixed(2)}`;
     },
-    [currency, symbol, locale],
+    [currency, symbol, locale, numGroup, numDecimal],
   );
 
   return {

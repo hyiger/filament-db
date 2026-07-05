@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useDateFormat } from "@/hooks/useDateFormat";
-import { formatGrams } from "@/lib/formatWeight";
+import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 
@@ -47,6 +47,7 @@ interface DashboardData {
 export default function DashboardPage() {
   const { t } = useTranslation();
   const { formatDate, formatDateTime } = useDateFormat();
+  const { formatGrams, formatNumber } = useNumberFormat();
   useCurrency(); // reserved for per-vendor cost summaries later
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -141,7 +142,11 @@ export default function DashboardPage() {
     );
   }
 
-  const kg = (data.totalGrams / 1000).toFixed(2);
+  const kg = formatNumber(data.totalGrams / 1000, {
+    minDecimals: 2,
+    maxDecimals: 2,
+    trimTrailingZeros: false,
+  });
 
   return (
     <main id="main-content" className="w-full px-4 py-8">

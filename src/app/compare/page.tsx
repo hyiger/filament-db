@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import FilamentPicker from "@/components/FilamentPicker";
-import { formatGrams } from "@/lib/formatWeight";
+import { useNumberFormat } from "@/hooks/useNumberFormat";
 
 interface FilamentOption {
   _id: string;
@@ -60,6 +60,7 @@ export default function ComparePage() {
 function ComparePageInner() {
   const { t } = useTranslation();
   const { format: formatCurrency } = useCurrency();
+  const { formatGrams } = useNumberFormat();
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialIds = (searchParams.get("ids") || "")

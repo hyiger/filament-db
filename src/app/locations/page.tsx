@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
-import { formatGrams } from "@/lib/formatWeight";
+import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { isKnownLocationKind } from "@/lib/locationKind";
 
 interface Location {
@@ -26,6 +26,7 @@ export default function LocationsPage() {
   const { toast } = useToast();
   const confirm = useConfirm();
   const { t } = useTranslation();
+  const { formatGrams } = useNumberFormat();
 
   const fetchLocations = useCallback(
     async (signal?: AbortSignal) => {

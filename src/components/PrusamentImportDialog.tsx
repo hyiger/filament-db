@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
-import { formatGrams } from "@/lib/formatWeight";
+import { useNumberFormat } from "@/hooks/useNumberFormat";
 
 interface PrusamentScrapeResult {
   spoolId: string;
@@ -54,6 +54,7 @@ export default function PrusamentImportDialog({
   targetFilamentId,
 }: Props) {
   const { t } = useTranslation();
+  const { formatGrams, formatNumber } = useNumberFormat();
   const [step, setStep] = useState<Step>("input");
   const [spoolInput, setSpoolInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -324,8 +325,11 @@ export default function PrusamentImportDialog({
                   <div>{spool.material}</div>
                   <div className="text-zinc-500">{t("prusament.import.diameter")}</div>
                   <div>
-                    {spool.diameterAvg.toFixed(2)} mm (avg) &plusmn;{" "}
-                    {spool.diameterStdDev?.toFixed(1) ?? "?"} &micro;m
+                    {formatNumber(spool.diameterAvg, { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false })} mm (avg) &plusmn;{" "}
+                    {spool.diameterStdDev != null
+                      ? formatNumber(spool.diameterStdDev, { minDecimals: 1, maxDecimals: 1, trimTrailingZeros: false })
+                      : "?"}{" "}
+                    &micro;m
                   </div>
                   <div className="text-zinc-500">{t("prusament.import.netWeight")}</div>
                   <div>{formatGrams(spool.netWeight)} g</div>
@@ -334,7 +338,7 @@ export default function PrusamentImportDialog({
                   <div className="text-zinc-500">{t("prusament.import.totalWeight")}</div>
                   <div className="font-medium">{formatGrams(spool.totalWeight)} g</div>
                   <div className="text-zinc-500">{t("prusament.import.length")}</div>
-                  <div>{Math.round(spool.lengthMeters)} m</div>
+                  <div>{formatNumber(spool.lengthMeters, { maxDecimals: 0 })} m</div>
                   <div className="text-zinc-500">{t("prusament.import.nozzleTemp")}</div>
                   <div>
                     {spool.nozzleTempMin}&ndash;{spool.nozzleTempMax} &deg;C

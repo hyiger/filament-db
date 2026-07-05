@@ -5,6 +5,7 @@ import Link from "next/link";
 import { List, type RowComponentProps } from "react-window";
 import { useToast } from "@/components/Toast";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { safeHttpUrl } from "@/lib/safeRenderUrl";
 import { formatMinutesAsHm } from "@/lib/formatDuration";
 
@@ -419,6 +420,7 @@ function formatRelativeTime(
 
 export default function OpenPrintTagBrowser() {
   const { t } = useTranslation();
+  const { formatNumber } = useNumberFormat();
   const [db, setDb] = useState<OPTDatabase | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -721,9 +723,9 @@ export default function OpenPrintTagBrowser() {
               <div>
                 <h1 className="text-lg font-semibold">{t("openprinttag.title")}</h1>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                  {t("openprinttag.subtitle", { fdmCount: db.totalFFF.toLocaleString(), brandCount: db.brands.length })}
+                  {t("openprinttag.subtitle", { fdmCount: formatNumber(db.totalFFF, { maxDecimals: 0 }), brandCount: db.brands.length })}
                   <span className="ml-2 text-gray-400">•</span>
-                  <span className="ml-2">{t("openprinttag.slaFiltered", { slaCount: db.totalSLA.toLocaleString() })}</span>
+                  <span className="ml-2">{t("openprinttag.slaFiltered", { slaCount: formatNumber(db.totalSLA, { maxDecimals: 0 }) })}</span>
                 </p>
                 {/* #931: surface the upstream-commit provenance — the SHA the
                     cached data was parsed from + when we last confirmed it
@@ -937,7 +939,7 @@ export default function OpenPrintTagBrowser() {
                 {t("openprinttag.selectAll")}
               </label>
               <span className="text-sm text-gray-500 dark:text-gray-400">
-                {t("openprinttag.filamentCount", { count: filteredMaterials.length.toLocaleString() })}
+                {t("openprinttag.filamentCount", { count: formatNumber(filteredMaterials.length, { maxDecimals: 0 }) })}
               </span>
               {(brandFilter || typeFilter || searchQuery || tierFilter) && (
                 <button

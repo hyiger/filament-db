@@ -847,6 +847,7 @@ ipcMain.handle("get-config", (event) => {
     locale: store.get("locale") as string,
     labelFormat: store.get("labelFormat") as string,
     dateFormat: store.get("dateFormat") as string,
+    numberFormat: store.get("numberFormat") as string,
     ntagDefaultSize: store.get("ntagDefaultSize") as string,
     exposeToLan: store.get("exposeToLan") as boolean,
   };
@@ -885,6 +886,7 @@ ipcMain.handle("save-config", async (event, config: {
   locale?: string;
   labelFormat?: string;
   dateFormat?: string;
+  numberFormat?: string;
   ntagDefaultSize?: string;
   exposeToLan?: boolean;
 }) => {
@@ -933,6 +935,10 @@ ipcMain.handle("save-config", async (event, config: {
   // currency/locale/labelFormat; no server restart).
   if (config.dateFormat !== undefined) {
     store.set("dateFormat", config.dateFormat);
+  }
+  // The user's number-format preference (cosmetic local pref; no server restart).
+  if (config.numberFormat !== undefined) {
+    store.set("numberFormat", config.numberFormat);
   }
   // #973: the default NTAG type for GET_VERSION-less readers (a local pref;
   // no server restart).

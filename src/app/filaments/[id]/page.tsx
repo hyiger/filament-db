@@ -27,7 +27,7 @@ import { deriveArrangement } from "@/lib/filamentColors";
 import type { FilamentDetail, FilamentCalibration } from "@/types/filament";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useDateFormat } from "@/hooks/useDateFormat";
-import { formatGrams } from "@/lib/formatWeight";
+import { useNumberFormat } from "@/hooks/useNumberFormat";
 
 type Filament = FilamentDetail;
 
@@ -101,6 +101,7 @@ export default function FilamentDetailPage() {
 function FilamentDetail() {
   const { t } = useTranslation();
   const { format: formatCurrency } = useCurrency();
+  const { formatGrams, formatNumber } = useNumberFormat();
   const params = useParams();
   const router = useRouter();
   const [filament, setFilament] = useState<Filament | null>(null);
@@ -1604,8 +1605,8 @@ function FilamentDetail() {
         <InfoCard label={t("detail.field.bedTemp")} value={filament.temperatures.bed ? `${filament.temperatures.bed}°C` : "—"} inherited={inherited.has("temperatures.bed")} />
         <InfoCard label={t("detail.field.bedFirstLayer")} value={filament.temperatures.bedFirstLayer ? `${filament.temperatures.bedFirstLayer}°C` : "—"} inherited={inherited.has("temperatures.bedFirstLayer")} />
         <InfoCard label={t("detail.field.cost")} value={filament.cost != null ? `${formatCurrency(filament.cost)}/kg` : "—"} inherited={inherited.has("cost")} />
-        <InfoCard label={t("detail.field.density")} value={filament.density ? `${filament.density.toFixed(2)} g/cm³` : "—"} inherited={inherited.has("density")} />
-        <InfoCard label={t("detail.field.diameter")} value={filament.diameter != null ? `${filament.diameter.toFixed(2)} mm` : "—"} inherited={inherited.has("diameter")} />
+        <InfoCard label={t("detail.field.density")} value={filament.density ? `${formatNumber(filament.density, { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false })} g/cm³` : "—"} inherited={inherited.has("density")} />
+        <InfoCard label={t("detail.field.diameter")} value={filament.diameter != null ? `${formatNumber(filament.diameter, { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false })} mm` : "—"} inherited={inherited.has("diameter")} />
         {/* #872: Max Vol. Speed removed from the top tiles — it is nozzle-specific
             and shown per-nozzle in the Calibrations table below. Min/Max print speed
             + Min/Max fan speed shown here instead (fan values ride the settings bag). */}
@@ -1697,7 +1698,7 @@ function FilamentDetail() {
                 <InfoCard label={t("detail.field.remaining")} value={`${formatGrams(legacyRemaining.remainingWeight)}g${legacyRemaining.pct != null ? ` (${legacyRemaining.pct}%)` : ""}`} />
               )}
               {!hasSpools && legacyRemaining?.lengthMeters != null && (
-                <InfoCard label={t("detail.field.lengthLeft")} value={`${legacyRemaining.lengthMeters.toFixed(1)}m`} />
+                <InfoCard label={t("detail.field.lengthLeft")} value={`${formatNumber(legacyRemaining.lengthMeters, { minDecimals: 1, maxDecimals: 1, trimTrailingZeros: false })}m`} />
               )}
             </div>
 
@@ -2465,6 +2466,7 @@ function SpoolCard({
 }: SpoolCardProps) {
   const { t } = useTranslation();
   const { formatDate } = useDateFormat();
+  const { formatGrams, formatNumber } = useNumberFormat();
   const [weightInput, setWeightInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [editingLabel, setEditingLabel] = useState(false);
@@ -2694,7 +2696,7 @@ function SpoolCard({
           <span>{formatGrams(remaining.remainingWeight)}g {t("detail.spool.remaining")}{remaining.pct != null ? ` (${remaining.pct}%)` : ""}</span>
         )}
         {remaining?.lengthMeters != null && (
-          <span>{remaining.lengthMeters.toFixed(1)}m {t("detail.spool.left")}</span>
+          <span>{formatNumber(remaining.lengthMeters, { minDecimals: 1, maxDecimals: 1, trimTrailingZeros: false })}m {t("detail.spool.left")}</span>
         )}
         {!remaining && spool.totalWeight != null && (
           <span>{formatGrams(spool.totalWeight)}g {t("detail.spool.onScale")}</span>

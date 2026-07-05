@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useNfcContext, type NfcTagReadResult } from "./NfcProvider";
 import CopyButton from "./CopyButton";
 import { useTranslation } from "@/i18n/TranslationProvider";
-import { formatGrams } from "@/lib/formatWeight";
+import { useNumberFormat } from "@/hooks/useNumberFormat";
 
 export default function NfcReadDialog() {
   const router = useRouter();
@@ -342,6 +342,7 @@ export default function NfcReadDialog() {
 
 function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) {
   const { t } = useTranslation();
+  const { formatGrams, formatNumber } = useNumberFormat();
   return (
     <div className="grid grid-cols-2 gap-2 text-sm">
       {data.tagSource === "bambu" && (
@@ -394,10 +395,10 @@ function TagDataGrid({ data }: { data: NonNullable<NfcTagReadResult["data"]> }) 
         <Stat label={t("nfc.readDialog.labelColorName")} value={data.colorName} />
       )}
       {data.diameter != null && (
-        <Stat label={t("nfc.readDialog.labelDiameter")} value={`${data.diameter.toFixed(2)} mm`} />
+        <Stat label={t("nfc.readDialog.labelDiameter")} value={`${formatNumber(data.diameter, { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false })} mm`} />
       )}
       {data.density != null && (
-        <Stat label={t("nfc.readDialog.labelDensity")} value={`${data.density.toFixed(2)} g/cm³`} />
+        <Stat label={t("nfc.readDialog.labelDensity")} value={`${formatNumber(data.density, { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false })} g/cm³`} />
       )}
       {data.weightGrams != null && (
         <Stat label={t("nfc.readDialog.labelNetWeight")} value={`${formatGrams(data.weightGrams)} g`} />

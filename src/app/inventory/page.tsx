@@ -14,7 +14,7 @@ import {
   type InventorySortKey,
   type InventorySortDir,
 } from "@/lib/inventorySort";
-import { formatGrams } from "@/lib/formatWeight";
+import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { isKnownLocationKind } from "@/lib/locationKind";
 
 /**
@@ -164,6 +164,7 @@ function loadInventoryPrefs(): InventoryPrefs {
 
 export default function InventoryPage() {
   const { t } = useTranslation();
+  const { formatNumber } = useNumberFormat();
   const { toast } = useToast();
   const confirm = useConfirm();
 
@@ -527,7 +528,7 @@ export default function InventoryPage() {
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-6">
         <StatCard label={t("inventory.stats.spools")} value={stats.spoolCount.toString()} />
         <StatCard label={t("inventory.stats.locations")} value={stats.locationCount.toString()} />
-        <StatCard label={t("inventory.stats.totalWeight")} value={`${(stats.totalGrams / 1000).toFixed(2)} kg`} />
+        <StatCard label={t("inventory.stats.totalWeight")} value={`${formatNumber(stats.totalGrams / 1000, { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false })} kg`} />
       </div>
 
       {/* Filters */}
@@ -813,7 +814,7 @@ export default function InventoryPage() {
                       group.count === 1
                         ? "inventory.group.summary.one"
                         : "inventory.group.summary.other",
-                      { count: group.count, grams: Math.round(group.totalGrams) },
+                      { count: group.count, grams: formatNumber(group.totalGrams, { maxDecimals: 0 }) },
                     )}
                   </div>
                 </button>
@@ -906,6 +907,7 @@ function SpoolEditRow({
 }: RowProps) {
   const { t } = useTranslation();
   const { formatDate } = useDateFormat();
+  const { formatGrams } = useNumberFormat();
   const grams = remainingGrams(row);
   const pct = remainingPct(row);
 
