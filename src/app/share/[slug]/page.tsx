@@ -6,7 +6,7 @@ import Link from "next/link";
 import { useToast } from "@/components/Toast";
 import FilamentPicker from "@/components/FilamentPicker";
 import { useTranslation } from "@/i18n/TranslationProvider";
-import { formatDate } from "@/lib/dateFormat";
+import { useDateFormat } from "@/hooks/useDateFormat";
 
 interface SharedFilament {
   _id: string;
@@ -50,7 +50,8 @@ interface SharedPayload {
 }
 
 export default function SharedCatalogPage() {
-  const { t, locale } = useTranslation();
+  const { t } = useTranslation();
+  const { formatDate } = useDateFormat();
   const { toast } = useToast();
   const params = useParams();
   const slug = params.slug as string;
@@ -252,8 +253,8 @@ export default function SharedCatalogPage() {
 
   const publishedDate = useMemo(() => {
     if (!data) return "";
-    return formatDate(data.createdAt, locale);
-  }, [data, locale]);
+    return formatDate(data.createdAt);
+  }, [data, formatDate]);
 
   if (error) {
     return (

@@ -7,7 +7,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 import { niceAxisScale } from "@/lib/chartScale";
 import { formatGrams } from "@/lib/formatWeight";
-import { formatDate } from "@/lib/dateFormat";
+import { useDateFormat } from "@/hooks/useDateFormat";
 
 interface DayFilamentSegment {
   id: string;
@@ -39,7 +39,8 @@ const DETAILED_STORAGE_KEY = "filamentdb-analytics-usage-detailed";
 const LEGEND_TOP_N = 10;
 
 export default function AnalyticsPage() {
-  const { t, locale } = useTranslation();
+  const { t } = useTranslation();
+  const { formatDate } = useDateFormat();
   const { format: formatCurrency } = useCurrency();
   const [days, setDays] = useState<number>(30);
   const [data, setData] = useState<AnalyticsData | null>(null);
@@ -132,10 +133,10 @@ export default function AnalyticsPage() {
     const map = new Map<string, string>();
     if (!data) return map;
     for (const d of data.usageByDay) {
-      map.set(d.date, formatDate(d.date, locale, { timeZone: "UTC" }));
+      map.set(d.date, formatDate(d.date, { timeZone: "UTC" }));
     }
     return map;
-  }, [data, locale]);
+  }, [data, formatDate]);
 
   /** GH #934: legend chips for the Detailed mode — one entry per filament
    *  that appears anywhere in the window, sorted DESC by total grams, with

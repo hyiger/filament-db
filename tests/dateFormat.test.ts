@@ -101,6 +101,61 @@ describe("formatDate", () => {
   });
 });
 
+describe("formatDate with a pattern (GH #983)", () => {
+  it("renders via the token formatter, ignoring locale ordering", () => {
+    const d = new Date("2026-05-30T12:00:00Z");
+    const en = formatDate(d, "en-US", { pattern: "YYYY-MM-DD", timeZone: "UTC" });
+    const de = formatDate(d, "de-DE", { pattern: "YYYY-MM-DD", timeZone: "UTC" });
+    // A fixed pattern is locale-INDEPENDENT — the whole point of the presets.
+    expect(en).toBe("2026-05-30");
+    expect(de).toBe("2026-05-30");
+  });
+
+  it("composes the pattern with the timeZone option", () => {
+    // 02:30 UTC would be the previous day west of UTC; timeZone: UTC keeps it.
+    const d = new Date("2026-05-30T02:30:00Z");
+    expect(formatDate(d, "en-US", { pattern: "DD/MM/YYYY", timeZone: "UTC" })).toBe(
+      "30/05/2026",
+    );
+  });
+
+  it("still returns empty string for invalid input even with a pattern", () => {
+    expect(formatDate(null, "en-US", { pattern: "YYYY-MM-DD" })).toBe("");
+    expect(formatDate("nope", "en-US", { pattern: "YYYY-MM-DD" })).toBe("");
+  });
+
+  it("falls back to the locale-aware Intl path when pattern is null/absent", () => {
+    const d = new Date("2026-05-30T12:00:00Z");
+    const withNull = formatDate(d, "en-US", { pattern: null, timeZone: "UTC" });
+    const without = formatDate(d, "en-US", { timeZone: "UTC" });
+    expect(withNull).toBe(without);
+    // Intl short form uses locale separators, not the ISO dashes.
+    expect(withNull).toMatch(/\//);
+  });
+});
+
+describe("formatDateTime with a pattern (GH #983)", () => {
+  it("applies the pattern to the date part and keeps a locale time part", () => {
+    const d = new Date("2026-05-30T14:30:00Z");
+    const out = formatDateTime(d, "en-US", { pattern: "YYYY/MM/DD" });
+    // Date part follows the fixed pattern shape; time follows, comma-joined.
+    // Day value isn't pinned (time part renders in the local zone) — only the
+    // deterministic YYYY/MM/DD shape + join is asserted.
+    expect(out).toMatch(/^\d{4}\/\d{2}\/\d{2}, .+/);
+  });
+
+  it("returns empty string for invalid input", () => {
+    expect(formatDateTime(null, "en-US", { pattern: "YYYY-MM-DD" })).toBe("");
+  });
+
+  it("falls back to the combined Intl output when pattern is null/absent", () => {
+    const d = new Date("2026-05-30T14:30:00Z");
+    expect(formatDateTime(d, "en-US", { pattern: null })).toBe(
+      formatDateTime(d, "en-US"),
+    );
+  });
+});
+
 describe("formatTime", () => {
   it("returns a time-only string (no slash / dot date separator)", () => {
     const out = formatTime(SAMPLE, "en-US");

@@ -19,7 +19,7 @@ import type { FilamentSummary } from "@/types/filament";
 import { getRemainingGrams, getRemainingPct, getSpoolCount } from "@/lib/inventoryStats";
 import { formatGrams } from "@/lib/formatWeight";
 import { compareFilaments, nextSortState, earliestSpoolDate, type SortKey, type SortDir } from "@/lib/sortFilamentList";
-import { formatDate } from "@/lib/dateFormat";
+import { useDateFormat } from "@/hooks/useDateFormat";
 import { buildFilamentGroups } from "@/lib/groupFilaments";
 
 type Filament = FilamentSummary;
@@ -178,8 +178,9 @@ function loadHomePrefs(): { sortKey: SortKey; sortDir: SortDir } {
 }
 
 export default function Home() {
-  const { t, locale } = useTranslation();
+  const { t } = useTranslation();
   const { format: formatCurrency } = useCurrency();
+  const { formatDate } = useDateFormat();
   const [filaments, setFilaments] = useState<Filament[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -952,7 +953,7 @@ export default function Home() {
     // (the SpoolCard date picker sends a bare YYYY-MM-DD → Mongoose casts it to
     // UTC midnight). Format in UTC so the day matches the detail page + CSV
     // export and doesn't shift back a day for users west of UTC (#941 review).
-    const fmt = (iso: string) => formatDate(iso, locale, { timeZone: "UTC" });
+    const fmt = (iso: string) => formatDate(iso, { timeZone: "UTC" });
     return (
       <>
         <td className={cls}>{purchased ? fmt(purchased) : "—"}</td>

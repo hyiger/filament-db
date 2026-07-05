@@ -18,6 +18,8 @@
  * throwing "Invalid Date" into the render tree.
  */
 
+import { formatWithPattern } from "./dateFormatPref";
+
 type DateInput = Date | string | number | null | undefined;
 
 function normalise(input: DateInput): Date | null {
@@ -34,14 +36,25 @@ function normalise(input: DateInput): Date | null {
  * are semantically CALENDAR DAYS in UTC (e.g. a `YYYY-MM-DD` day key
  * from a server aggregation) — the default local-timezone rendering
  * shifts them by up to ±1 day west/east of UTC.
+ *
+ * When the caller passes a `pattern` (GH #983 — the user picked a fixed
+ * preset like ISO/US/European or a custom pattern), the date is rendered
+ * via the deterministic token formatter in `dateFormatPref.ts` instead of
+ * the locale-aware `Intl` short form. `pattern` composes with `timeZone`
+ * (the pattern controls the shape, `timeZone` the zone). A null/undefined
+ * pattern keeps the original locale-aware behaviour, so every existing
+ * caller is unchanged.
  */
 export function formatDate(
   input: DateInput,
   locale: string,
-  options?: { timeZone?: string },
+  options?: { timeZone?: string; pattern?: string | null },
 ): string {
   const d = normalise(input);
   if (!d) return "";
+  if (options?.pattern) {
+    return formatWithPattern(d, options.pattern, options.timeZone);
+  }
   try {
     return new Intl.DateTimeFormat(locale, {
       dateStyle: "short",
@@ -73,10 +86,26 @@ export function formatTime(input: DateInput, locale: string): string {
   }
 }
 
-/** Locale-aware datetime — short date + short time. */
-export function formatDateTime(input: DateInput, locale: string): string {
+/**
+ * Locale-aware datetime — short date + short time.
+ *
+ * GH #983: when a `pattern` is supplied the DATE part follows it while the
+ * TIME part stays locale-short (the date-format preference is date-only —
+ * time formatting, incl. 12h/24h, is left to the locale). A null/undefined
+ * pattern preserves the original combined `Intl` output.
+ */
+export function formatDateTime(
+  input: DateInput,
+  locale: string,
+  options?: { pattern?: string | null },
+): string {
   const d = normalise(input);
   if (!d) return "";
+  if (options?.pattern) {
+    // Date part follows the pattern; time part stays locale-short. `d` is
+    // already validated, so formatTime always yields a non-empty time.
+    return `${formatWithPattern(d, options.pattern)}, ${formatTime(d, locale)}`;
+  }
   try {
     return new Intl.DateTimeFormat(locale, {
       dateStyle: "short",
