@@ -18,10 +18,15 @@ interface NfcContextValue {
   writing: boolean;
   writeError: string | null;
   /** OpenTag3D write: `standard` picks the wrapping/transport (default
-   *  "openprinttag"); `productUrl` rides the SLIX2/OpenPrintTag path only. */
+   *  "openprinttag"); `productUrl` rides the SLIX2/OpenPrintTag path only;
+   *  `ntagSize` (GH #973) sizes a blank NTAG when GET_VERSION can't auto-detect. */
   writeTag: (
     payload: Uint8Array,
-    opts?: { standard?: "openprinttag" | "opentag3d"; productUrl?: string },
+    opts?: {
+      standard?: "openprinttag" | "opentag3d";
+      productUrl?: string;
+      ntagSize?: "NTAG213" | "NTAG215" | "NTAG216";
+    },
   ) => Promise<void>;
   /**
    * Last decoded scan result. Survives dialog dismissal so the dialog's
@@ -220,7 +225,11 @@ export default function NfcProvider({ children }: { children: ReactNode }) {
   const writeTag = useCallback(
     async (
       payload: Uint8Array,
-      opts: { standard?: "openprinttag" | "opentag3d"; productUrl?: string } = {},
+      opts: {
+        standard?: "openprinttag" | "opentag3d";
+        productUrl?: string;
+        ntagSize?: "NTAG213" | "NTAG215" | "NTAG216";
+      } = {},
     ) => {
       writingRef.current = true;
       setDialogOpen(false); // hide any read modal the background scan opened

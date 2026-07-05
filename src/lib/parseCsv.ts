@@ -7,7 +7,9 @@
  *   - quoted fields with embedded commas and newlines
  *   - doubled quotes ("") as an escaped quote inside a quoted field
  *   - LF, CR, and CRLF line endings
- *   - leading/trailing whitespace around unquoted values (trimmed)
+ *   - leading/trailing whitespace around unquoted values (trimmed); a QUOTED
+ *     field keeps its whitespace verbatim so round-tripped values survive
+ *     (#955.1)
  *
  * Does NOT handle:
  *   - BOMs (caller should strip if needed)
@@ -48,6 +50,12 @@ export function parseCsv(
   // turning `maxRows: N` into an `N-1` data-row ceiling in header mode.
   const rawRowCap = opts.header ? maxRows + 1 : maxRows;
   const rows: string[][] = [];
+  // #955.1: track per-field quoted-ness in lockstep with `rows` so the final
+  // trim pass can leave quoted fields untouched (as the docblock claims). A
+  // field is "quoted" if the parser entered a quoted section anywhere while
+  // accumulating it — csvCell only ever emits fully-quoted values, so this is
+  // exact for round-trips; a hand-authored mixed field errs toward preserving.
+  const rowsQuoted: boolean[][] = [];
   // A blank row from a spreadsheet export can carry delimiters — `,\n`
   // parses to `["", ""]`, not `[""]` — so "blank" means every field is
   // empty after trimming (matches the header-mode output skip below).
@@ -84,18 +92,25 @@ export function parseCsv(
   // while an abusive flood trips it.
   const physicalRowCap = rawRowCap + maxRows;
   let physicalRowCount = 0;
-  const commitRow = (r: string[]): void => {
+  // `q` is the parallel quoted-ness for the fields of `r` — pushed/discarded in
+  // lockstep so `rowsQuoted[i]` always lines up with `rows[i]`.
+  const commitRow = (r: string[], q: boolean[]): void => {
     physicalRowCount++;
     if (physicalRowCount > physicalRowCap) {
       throw new CsvRowLimitExceededError(maxRows);
     }
     if (opts.header && isBlankRow(r)) return; // discard — never buffered
     rows.push(r);
+    rowsQuoted.push(q);
     if (rows.length > rawRowCap) throw new CsvRowLimitExceededError(maxRows);
   };
 
   let row: string[] = [];
+  let rowQuoted: boolean[] = [];
   let field = "";
+  // Set true when a quoted section opens while accumulating the current field;
+  // reset when the field is pushed. Preserves whitespace in quoted fields.
+  let fieldQuoted = false;
   let i = 0;
   let inQuotes = false;
 
@@ -122,31 +137,40 @@ export function parseCsv(
     // Not in quotes
     if (ch === '"') {
       inQuotes = true;
+      fieldQuoted = true;
       i++;
       continue;
     }
     if (ch === ",") {
       row.push(field);
+      rowQuoted.push(fieldQuoted);
       field = "";
+      fieldQuoted = false;
       i++;
       continue;
     }
     if (ch === "\r") {
       // Handle CRLF by skipping the LF; bare CR also treated as a line end.
       row.push(field);
+      rowQuoted.push(fieldQuoted);
       field = "";
+      fieldQuoted = false;
       i++;
       if (input[i] === "\n") i++;
-      commitRow(row);
+      commitRow(row, rowQuoted);
       row = [];
+      rowQuoted = [];
       continue;
     }
     if (ch === "\n") {
       row.push(field);
+      rowQuoted.push(fieldQuoted);
       field = "";
+      fieldQuoted = false;
       i++;
-      commitRow(row);
+      commitRow(row, rowQuoted);
       row = [];
+      rowQuoted = [];
       continue;
     }
     field += ch;
@@ -156,13 +180,17 @@ export function parseCsv(
   // Flush any trailing field/row that didn't end with a newline
   if (field.length > 0 || row.length > 0) {
     row.push(field);
-    commitRow(row);
+    rowQuoted.push(fieldQuoted);
+    commitRow(row, rowQuoted);
   }
 
-  // Strip outer whitespace from unquoted strings — we keep quoted values
-  // untouched for callers that need literal content.
-  // (This is a compromise; full CSV semantics would preserve all whitespace.)
-  const trimmed = rows.map((r) => r.map((v) => v.trim()));
+  // Strip outer whitespace from UNQUOTED fields only — a quoted value is kept
+  // verbatim so a round-tripped value with intentional leading/trailing
+  // whitespace (csvCell quoted it) survives re-import (#955.1). Unquoted
+  // trimming stays a deliberate compromise for spreadsheet-paste ergonomics.
+  const trimmed = rows.map((r, ri) =>
+    r.map((v, ci) => (rowsQuoted[ri][ci] ? v : v.trim())),
+  );
 
   if (!opts.header) return trimmed;
 

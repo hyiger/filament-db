@@ -160,9 +160,16 @@ export function normalizeLabelFormat(input: unknown): LabelFormat {
   const font = (o.font ?? {}) as Record<string, unknown>;
 
   const rawLines = Array.isArray(o.lines) ? o.lines : DEFAULT_LABEL_FORMAT.lines;
-  const lines = (rawLines as unknown[]).filter(
-    (l): l is LabelFieldId => typeof l === "string" && (FIELD_IDS as string[]).includes(l),
-  );
+  // GH #954: dedupe (a field is either shown or not — never stacked) so a
+  // persisted/hand-edited format can't repeat a field N times and overflow the
+  // print head. A Set also caps the list at the number of valid field ids.
+  const lines = [
+    ...new Set(
+      (rawLines as unknown[]).filter(
+        (l): l is LabelFieldId => typeof l === "string" && (FIELD_IDS as string[]).includes(l),
+      ),
+    ),
+  ];
 
   return {
     qr: {

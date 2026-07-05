@@ -26,6 +26,7 @@ import {
   hexToRgba,
   OPENTAG3D_MIME,
   ot3dField,
+  uintCapacity,
   type Ot3dValue,
 } from "./opentag3d";
 import { buildMediaNdefRecord, buildNdefMessageTlv } from "./ndef";
@@ -107,10 +108,24 @@ function setStr(
 
 function setNum(
   out: Record<string, Ot3dValue>,
+  notices: string[],
   id: string,
   value: number | null | undefined,
 ): void {
   if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    // GH #952: the encoder clamps an over-capacity int to the field max
+    // (writeUintBE) rather than silently wrapping — surface a notice so the user
+    // knows a value was capped. The written raw value is `real / scaling`; check
+    // that against the field's byte capacity.
+    const field = ot3dField(id);
+    if (field.type === "int") {
+      const raw = Math.round(field.scaling ? value / field.scaling : value);
+      if (raw > uintCapacity(field.length)) {
+        notices.push(
+          `${id} value ${value} exceeds this tag's capacity and will be capped.`,
+        );
+      }
+    }
     out[id] = value;
   }
 }
@@ -157,27 +172,27 @@ export function filamentToOpenTag3DFields(
   }
 
   // ── physical ──
-  setNum(fields, "target_diameter", f.diameter);
-  setNum(fields, "target_weight", f.netFilamentWeight);
-  setNum(fields, "density", f.density);
-  setNum(fields, "empty_spool_weight", f.spoolWeight);
+  setNum(fields, notices, "target_diameter", f.diameter);
+  setNum(fields, notices, "target_weight", f.netFilamentWeight);
+  setNum(fields, notices, "density", f.density);
+  setNum(fields, notices, "empty_spool_weight", f.spoolWeight);
 
   // ── temperatures ── recommended on Core, range on Extended (decoder reads
   // nozzleTemp = max_print_temp ?? print_temp).
   const t = f.temperatures ?? {};
-  setNum(fields, "print_temp", t.nozzle);
-  setNum(fields, "min_print_temp", t.nozzleRangeMin);
-  setNum(fields, "max_print_temp", t.nozzleRangeMax);
-  setNum(fields, "bed_temp", t.bed);
+  setNum(fields, notices, "print_temp", t.nozzle);
+  setNum(fields, notices, "min_print_temp", t.nozzleRangeMin);
+  setNum(fields, notices, "max_print_temp", t.nozzleRangeMax);
+  setNum(fields, notices, "bed_temp", t.bed);
 
   // ── drying ── dryingTime is MINUTES; the tag stores HOURS (decoder ×60).
-  setNum(fields, "max_dry_temp", f.dryingTemperature);
+  setNum(fields, notices, "max_dry_temp", f.dryingTemperature);
   if (typeof f.dryingTime === "number" && Number.isFinite(f.dryingTime) && f.dryingTime > 0) {
     fields.dry_time = Math.round(f.dryingTime / 60);
   }
 
   // ── volumetric speed ── decoder reads maxVolumetricSpeed = max_vso ?? target_vso.
-  setNum(fields, "max_vso", f.maxVolumetricSpeed);
+  setNum(fields, notices, "max_vso", f.maxVolumetricSpeed);
 
   // ── identity / remaining ──
   // The serial drives EXACT per-spool matching on scan (decoder → spoolUid), so
@@ -196,7 +211,7 @@ export function filamentToOpenTag3DFields(
       fields.serial = serial;
     }
   }
-  setNum(fields, "measured_filament_weight", opts.actualWeightGrams);
+  setNum(fields, notices, "measured_filament_weight", opts.actualWeightGrams);
 
   return { fields, notices };
 }

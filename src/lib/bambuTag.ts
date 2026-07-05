@@ -142,13 +142,17 @@ export function parseBambuBlocks(blocks: (Buffer | undefined)[]): BambuTagData {
   const b14 = block(14);
   const filamentLength = b14.readUInt16LE(4);
 
-  // Block 16: Format ID uint16 LE (0-1) + Color Count uint16 LE (2-3) + Second Color RGBA (4-7)
+  // Block 16: Format ID uint16 LE (0-1) + Color Count uint16 LE (2-3) + Second
+  // Color at 4-7. GH #952: the block-5 PRIMARY color is stored RGBA, but the
+  // Bambu-Research-Group RFID-Tag-Guide documents this block-16 SECONDARY color
+  // in REVERSE ABGR order — so read bytes 7..4 as [r,g,b,a]. (Reference-derived;
+  // pending on-hardware confirmation on a real dual-color Bambu spool.)
   const b16 = block(16);
   const formatId = b16.readUInt16LE(0);
   const colorCount = b16.readUInt16LE(2);
   const secondColorRGBA: [number, number, number, number] | null =
     formatId === 0x0002 && colorCount >= 2
-      ? [b16[4], b16[5], b16[6], b16[7]]
+      ? [b16[7], b16[6], b16[5], b16[4]]
       : null;
 
   return {

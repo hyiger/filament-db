@@ -42,12 +42,19 @@ export async function GET(
       return errorResponse("weight must be a non-negative number", 400);
     }
 
-    // Find filament by name or ObjectId. `params.id` is ALREADY URL-decoded —
-    // re-decoding throws URIError on a name with a literal `%` (#671).
+    // GH #950 / #867: a 24-hex param is an ObjectId and is AUTHORITATIVE — try
+    // it FIRST, name lookup only when that _id misses (a preset legitimately
+    // NAMED with 24 hex chars). Name-first let such a name shadow another
+    // filament's real _id, so a slicer addressing this endpoint by id checked
+    // the WRONG row's spool availability — inconsistent with the id-first
+    // sync/export routes. `params.id` is ALREADY URL-decoded — do NOT re-decode
+    // (a literal `%` like "ABS 100%" throws URIError and 500s the request, #671).
     const decodedName = id;
-    let filament = await Filament.findOne({ name: decodedName, _deletedAt: null }).lean();
-    if (!filament && /^[a-f0-9]{24}$/i.test(id)) {
-      filament = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
+    let filament = /^[a-f0-9]{24}$/i.test(id)
+      ? await Filament.findOne({ _id: id, _deletedAt: null }).lean()
+      : null;
+    if (!filament) {
+      filament = await Filament.findOne({ name: decodedName, _deletedAt: null }).lean();
     }
 
     if (!filament) {
@@ -124,16 +131,6 @@ export async function GET(
       });
     }
 
-    // If no spools or no spool weight configured, we can't check — assume OK
-    if (rawSpools.length === 0 || spoolWeight == null) {
-      return NextResponse.json({
-        ok: true,
-        filament: filament.name,
-        message: "No spool weight data available — skipping check",
-        spools: [],
-      });
-    }
-
     // Compute remaining length in meters from weight
     function weightToLengthM(weightG: number): number | null {
       if (!density || density <= 0 || !diameter || diameter <= 0) return null;
@@ -144,6 +141,42 @@ export async function GET(
     }
 
     const requiredLengthM = weightToLengthM(requiredWeight);
+
+    // GH #954 (Codex): the "all measured stock is retired" warning does NOT need
+    // the spool tare (it's a pure retired-vs-active question), so check it BEFORE
+    // the tare guard below — otherwise a filament with only retired weighed stock
+    // and a null/inherited-missing spoolWeight would hit the `spoolWeight == null`
+    // guard and return ok:true, silently suppressing PrusaSlicer's warning for
+    // null-tare legacy data. An active spool that is merely UNWEIGHED counts as
+    // active stock (just unmeasured), so `hasActiveSpool` keeps this from firing a
+    // false warning — that case falls through to the "no data → ok:true" guard.
+    const hasActiveSpool = rawSpools.some((s) => !s.retired);
+    const hasRetiredWeightData = rawSpools.some(
+      (s) => s.totalWeight != null && s.retired,
+    );
+    if (!hasActiveSpool && hasRetiredWeightData) {
+      return NextResponse.json({
+        ok: false,
+        filament: filament.name,
+        requiredWeightG: Math.round(requiredWeight * 10) / 10,
+        requiredLengthM:
+          requiredLengthM !== null ? Math.round(requiredLengthM * 100) / 100 : null,
+        warning: "No active spools — all spools with weight data are retired",
+        spools: [],
+      });
+    }
+
+    // If no spools or no spool weight configured, we can't check — assume OK.
+    // (An active-but-unweighed spool lands here too: active stock exists, just
+    // unmeasured — keep the original no-data → ok:true behavior, no false warning.)
+    if (rawSpools.length === 0 || spoolWeight == null) {
+      return NextResponse.json({
+        ok: true,
+        filament: filament.name,
+        message: "No spool weight data available — skipping check",
+        spools: [],
+      });
+    }
 
     // Check each spool. Retired spools are intentionally out of service
     // and must not satisfy the check (Codex review) — otherwise a
@@ -166,7 +199,8 @@ export async function GET(
         };
       });
 
-    // If no spools had totalWeight set, assume OK
+    // Active spools exist but none carries a totalWeight (the all-retired case was
+    // already handled before the tare guard above) → no measurable data → ok:true.
     if (spoolResults.length === 0) {
       return NextResponse.json({
         ok: true,

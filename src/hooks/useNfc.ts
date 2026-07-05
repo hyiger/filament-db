@@ -66,13 +66,23 @@ export function useNfc() {
   const writeTag = useCallback(
     async (
       payload: Uint8Array,
-      opts: { standard?: "openprinttag" | "opentag3d"; productUrl?: string } = {},
+      opts: {
+        standard?: "openprinttag" | "opentag3d";
+        productUrl?: string;
+        /** GH #973: user-declared NTAG size when GET_VERSION can't auto-detect. */
+        ntagSize?: "NTAG213" | "NTAG215" | "NTAG216";
+      } = {},
     ) => {
       if (!isElectron) throw new Error("NFC only available in Electron");
       setError(null);
       setWriting(true);
       try {
-        await window.electronAPI!.nfcWriteTag(Array.from(payload), opts.standard, opts.productUrl);
+        await window.electronAPI!.nfcWriteTag(
+          Array.from(payload),
+          opts.standard,
+          opts.productUrl,
+          opts.ntagSize,
+        );
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         setError(message);

@@ -76,6 +76,19 @@ describe("getExportRows", () => {
     expect(row.tdsUrl).toBe("https://example.com/tds.pdf");
   });
 
+  it("#954: exports optTags as a comma-separated Tags column", async () => {
+    await Filament.create({
+      name: "Coex PLA",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      secondaryColors: ["#ff0000", "#00ff00"],
+      optTags: [28, 16], // dual_color + matte
+    });
+    const rows = await getExportRows();
+    expect(rows[0].optTags).toBe("28,16");
+  });
+
   it("GH #955: spoolCount excludes retired spools (matches getSpoolCount / the UI)", async () => {
     await Filament.create({
       name: "Retired Count PLA",

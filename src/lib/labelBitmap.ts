@@ -201,6 +201,17 @@ async function composeLabelCanvas(opts: RenderLabelOpts): Promise<HTMLCanvasElem
     }
   }
 
+  // GH #954: the 8px font floor (renderTextBlock) can make the text block
+  // taller than the 128-dot print head; the canvas height is fixed at
+  // PRINT_HEAD_DOTS and the centering offset would go negative, silently
+  // clipping the first/last lines. Fail loud instead — mirrors renderQr, and
+  // the print dialog already surfaces the thrown message.
+  if (textFootH > PRINT_HEAD_DOTS) {
+    throw new Error(
+      "Label text does not fit the tape at the minimum font size — reduce the number of fields/lines or shorten the text.",
+    );
+  }
+
   // Label length = padding + [QR + gap] + textFootW + padding.
   const qrSlot = qrCanvas ? qrDots + QR_TEXT_GAP_DOTS : 0;
   const labelWidthDots = Math.max(

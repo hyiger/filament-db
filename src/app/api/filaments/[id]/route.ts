@@ -9,6 +9,7 @@ import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDupl
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
 import { resolveSyncBackColor } from "@/lib/prusaSlicerBundle";
+import { splitInheritedImportSet } from "@/lib/importFilaments";
 import { escapeRegex } from "@/lib/matchFilament";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import {
@@ -468,6 +469,22 @@ export async function POST(
         filament = await Filament.findOne({ name: decodedName, _deletedAt: null });
         if (filament) matchedBy = "name";
       }
+      // GH #950: a #872 per-nozzle preset is named "<base> <Ø type [HF]>". When
+      // its filamentdb_id is stale/absent (DB-instance-specific) AND the full
+      // suffixed name misses, retry the BASE name (decodedName minus the hint)
+      // so the sync updates the base filament instead of 404 → the fork spawning
+      // a "<base> <hint>" orphan that swallows every later edit.
+      if (!filament) {
+        const hint =
+          typeof config.filamentdb_nozzle === "string" ? config.filamentdb_nozzle.trim() : "";
+        if (hint && decodedName.endsWith(` ${hint}`)) {
+          const baseName = decodedName.slice(0, -(hint.length + 1)).trim();
+          if (baseName) {
+            filament = await Filament.findOne({ name: baseName, _deletedAt: null });
+            if (filament) matchedBy = "name";
+          }
+        }
+      }
     }
 
     if (!filament) {
@@ -593,9 +610,10 @@ export async function POST(
     if (config.filament_shrinkage_compensation_xy) { const v = parseFloat(config.filament_shrinkage_compensation_xy); if (!isNaN(v)) update.shrinkageXY = v; }
     if (config.filament_shrinkage_compensation_z) { const v = parseFloat(config.filament_shrinkage_compensation_z); if (!isNaN(v)) update.shrinkageZ = v; }
 
-    // Flags
-    if (config.filament_soluble) update.soluble = config.filament_soluble === "1";
-    if (config.filament_abrasive) update.abrasive = config.filament_abrasive === "1";
+    // GH #950: filament_soluble / filament_abrasive are NOT written as structured
+    // fields (the schema has no such columns — a Mongoose strict write dropped
+    // them). They now ride the settings bag (removed from STRUCTURED_KEYS below),
+    // which the slicer exports' settings seed and the OPT encoder read.
 
     // #859: write ONLY the temperature keys PrusaSlicer actually sent, as
     // dotted paths — never a $set of the whole `temperatures` object. #645 added
@@ -814,7 +832,12 @@ export async function POST(
       "filament_max_volumetric_speed", "temperature", "first_layer_temperature",
       "bed_temperature", "first_layer_bed_temperature",
       "filament_shrinkage_compensation_xy", "filament_shrinkage_compensation_z",
-      "filament_soluble", "filament_abrasive", "filament_settings_id",
+      // GH #950: filament_soluble / filament_abrasive are NOT structured — the
+      // Filament schema has no such fields, so a sync that pulled them out here
+      // (and wrote a stripped-by-Mongoose update.soluble) persisted them
+      // NOWHERE. Let them ride the settings bag, which is where the exports'
+      // settings seed and the OPT encoder already read them from.
+      "filament_settings_id",
       // #867: a routing hint, not filament data — consumed for id-first matching
       // above and re-emitted from the row's _id on export, so never stored in
       // the settings bag (avoids a stale duplicate of the canonical _id).
@@ -917,6 +940,38 @@ export async function POST(
       }
     }
 
+    // GH #951: a variant's PrusaSlicer export flattens its inherited values
+    // through resolveFilament, so the fork echoes the parent's
+    // density/cost/temps/spoolWeight/diameter/… back on every sync. Blindly
+    // $set-ing them onto the variant pins each as a local override and severs
+    // GH #106 live inheritance — a later parent edit stops propagating. Before
+    // this, only `color` had echo suppression (resolveSyncBackColor). Reuse the
+    // CSV importer's battle-tested split (GH #628 / #649): drop each inheritable
+    // field whose incoming value equals the parent's (keep inheriting), and
+    // $unset a stale local override so inheritance resumes. Variant-
+    // only + non-inheritable keys (color, colorName, name, settings, soluble,
+    // …) pass through untouched. `calParent` is the already-fetched parent doc;
+    // when it's null (standalone/parent, or a soft-deleted/missing parent —
+    // nothing to inherit) the update is written verbatim.
+    // GH #971: because the fork ALWAYS sends resolveFilament-flattened values
+    // (per the docblock above), a parent-EQUAL incoming value is indistinguishable
+    // from a true inherit on this path exactly as on the CSV/INI bundle paths — so
+    // splitInheritedImportSet's presence-based clear (which now also drops a
+    // parent-equal pin, not just a divergent one) is the correct shared default
+    // here too, not a bundle-only concern.
+    const mongoUpdate: Record<string, unknown> = { $set: update };
+    if (filament.parentId && calParent) {
+      const split = splitInheritedImportSet(
+        update,
+        filament.toObject(),
+        calParent.toObject(),
+      );
+      mongoUpdate.$set = split.set;
+      if (split.unset.length > 0) {
+        mongoUpdate.$unset = Object.fromEntries(split.unset.map((k) => [k, ""]));
+      }
+    }
+
     // GH #618: `runValidators` so the numeric range validators (#337)
     // actually fire on a PrusaSlicer sync — without it a config like
     // `filament_cost = -3` parses clean and persists a negative cost the
@@ -926,7 +981,7 @@ export async function POST(
     try {
       await Filament.findByIdAndUpdate(
         filament._id,
-        { $set: update },
+        mongoUpdate,
         { runValidators: true, context: "query" },
       );
     } catch (validationErr) {

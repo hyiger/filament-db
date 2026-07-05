@@ -43,6 +43,66 @@ describe("mergeSlicerSettings", () => {
     expect(existing).toEqual({ keep: "alpha" });
   });
 
+  it("#950: purges a never-baggable key (filament_settings_id) already sitting in existing", () => {
+    // filament_settings_id is re-derived from the filament name on export, so a
+    // stale copy in the bag shadows it. It must be purged from the seeded existing
+    // bag regardless of the caller's structuredKeys (NEVER_BAGGED_KEYS).
+    const result = mergeSlicerSettings(
+      { filament_settings_id: "Stale Name", keep: "alpha" },
+      { add: "value" },
+      STRUCTURED,
+    );
+    expect(result.error).toBeNull();
+    expect("filament_settings_id" in result.settings).toBe(false); // purged from existing
+    expect(result.settings).toEqual({ keep: "alpha", add: "value" });
+    // Purging a stale existing key is not counted as an "added" incoming key.
+    expect(result.added).toEqual(["add"]);
+    // …but it IS reported in `removed` so a conditional-writing caller persists it.
+    expect(result.removed).toEqual(["filament_settings_id"]);
+  });
+
+  it("#950 (Codex r9): skips a never-baggable key from INCOMING even when the caller's structuredKeys omits it", () => {
+    // The OrcaSlicer per-id route's structured set does not include
+    // filament_settings_id, so without this the incoming copy would be added to the
+    // bag and shadow the re-derived export value. Never-baggable keys stay out of
+    // the bag regardless of source.
+    const result = mergeSlicerSettings(
+      { keep: "alpha" },
+      { filament_settings_id: "Incoming Name", add: "value" },
+      new Set(), // caller lists NO structured keys
+    );
+    expect(result.error).toBeNull();
+    expect("filament_settings_id" in result.settings).toBe(false); // not added from incoming
+    expect(result.settings).toEqual({ keep: "alpha", add: "value" });
+    expect(result.added).toEqual(["add"]); // filament_settings_id not counted as added
+  });
+
+  it("#950 (Codex r8): does NOT purge a structuredKey that is not never-baggable — shared bag defaults survive", () => {
+    // The per-id calibration sync lists context keys (extrusion_multiplier,
+    // retraction, fans) in structuredKeys, but those have no top-level home and can
+    // be legit shared filament-wide defaults in the bag — they must NOT be purged.
+    const result = mergeSlicerSettings(
+      { compatible_printers: "MK4", extrusion_multiplier: "0.98", keep: "alpha" },
+      { add: "value" },
+      new Set(["compatible_printers", "extrusion_multiplier"]),
+    );
+    expect(result.error).toBeNull();
+    expect(result.settings.compatible_printers).toBe("MK4"); // preserved
+    expect(result.settings.extrusion_multiplier).toBe("0.98"); // preserved (shared default)
+    expect(result.removed).toEqual([]); // nothing never-baggable was present
+  });
+
+  it("#950: reports an empty `removed` when existing carried no never-baggable key", () => {
+    const result = mergeSlicerSettings({ keep: "alpha" }, { add: "value" }, STRUCTURED);
+    expect(result.removed).toEqual([]);
+  });
+
+  it("#950: does not mutate the existing object when purging a never-baggable key", () => {
+    const existing: Record<string, unknown> = { filament_settings_id: "Stale", keep: "alpha" };
+    mergeSlicerSettings(existing, {}, STRUCTURED);
+    expect(existing).toEqual({ filament_settings_id: "Stale", keep: "alpha" }); // untouched
+  });
+
   it("preserves an incoming key over an existing key with the same name (last write wins)", () => {
     const result = mergeSlicerSettings(
       { shared: "old" },

@@ -145,9 +145,20 @@ function readUintBE(buf: Uint8Array, start: number, length: number): number {
   return v;
 }
 
-/** Write an unsigned big-endian integer of `length` bytes (value clamped ≥ 0). */
+/** Max unsigned value representable in `length` bytes (256^length − 1). */
+export function uintCapacity(length: number): number {
+  return 256 ** length - 1;
+}
+
+/**
+ * Write an unsigned big-endian integer of `length` bytes. GH #952: clamp to the
+ * field's capacity (256^length − 1) as well as ≥ 0 — an over-width value used to
+ * silently WRAP (e.g. maxVolumetricSpeed 300 into a 1-byte field → 44). Clamping
+ * writes a wrong-but-bounded value instead of a garbage wrap; the mapping layer
+ * (`setNum`) surfaces a notice when it clamps.
+ */
 function writeUintBE(buf: Uint8Array, start: number, length: number, value: number): void {
-  let v = Math.max(0, Math.round(value));
+  let v = Math.min(uintCapacity(length), Math.max(0, Math.round(value)));
   for (let i = length - 1; i >= 0; i--) {
     buf[start + i] = v & 0xff;
     v = Math.floor(v / 256);

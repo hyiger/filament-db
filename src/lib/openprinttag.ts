@@ -515,8 +515,8 @@ export interface OpenPrintTagInput {
   weightGrams?: number | null; // nominal net weight in grams
   actualWeightGrams?: number | null; // actual remaining filament weight (key 17); omitted when null (spec resolves absent → nominal)
   emptySpoolWeight?: number | null; // empty spool/container weight in grams
-  countryOfOrigin?: string;    // ISO 3166-1 alpha-2, default "US"
-  spoolUid?: string | null;    // brand-specific instance ID (e.g. "2acc21072a")
+  countryOfOrigin?: string;    // ISO 3166-1 alpha-2; omitted from the tag when unset (#952)
+  spoolUid?: string | null;    // brand-specific instance ID (e.g. "2acc21072a"); omitted when >16 chars (#952)
   dryingTemperature?: number | null;  // °C
   dryingTime?: number | null;         // minutes
   transmissionDistance?: number | null; // HueForge TD value
@@ -716,14 +716,22 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   // before it reaches the encoder so a bad input can't crash the whole
   // NFC-write path.
   if (input.nozzleTemp != null) {
-    // Use nozzle temp as max, derive min as temp - 20.
-    // GH #634: a first-layer temp ≥ nozzle+20 made the derived min exceed
-    // the max — order the pair with Math.min/Math.max exactly like the
-    // bed temps below, and derive preheat from the effective min.
+    // GH #952.4: the EVERYDAY nozzle temp must ALWAYS land in MAX_PRINT — the
+    // decoder reads it back from MAX as the primary nozzleTemp (openprinttag-
+    // decode.ts). GH #634 derived MIN from the first-layer temp and Math.max-ordered
+    // the pair, which SWAPPED them when firstLayer > nozzle+20: the everyday temp
+    // fell into MIN and the decoder read the inflated first-layer value as everyday.
+    // Fix: pin MAX to the everyday temp and clamp MIN so it never exceeds it (min ≤
+    // max still holds — the #634 invariant). A first-layer temp above the everyday
+    // temp can't extend a pinned MAX, so its excess isn't stored — but the everyday
+    // temp (the primary) now round-trips correctly, and first-layer was already
+    // dropped on decode (OPT has no first-layer field). Tags written BEFORE this
+    // fix keep the old swapped reading; there is no OPT version field to tell them
+    // apart, so this only corrects newly-written tags.
     const nozzleMax = clampTemp(input.nozzleTemp);
     const derivedMin = clampTemp((input.nozzleTempFirstLayer ?? nozzleMax) - 20);
     const minTemp = Math.min(derivedMin, nozzleMax);
-    const maxTemp = Math.max(derivedMin, nozzleMax);
+    const maxTemp = nozzleMax;
     const preheatTemp = clampTemp(minTemp - 20);
 
     encodeCBORKey(buf, OPT_KEY.MIN_PRINT_TEMPERATURE);
@@ -735,13 +743,19 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   }
 
   if (input.bedTemp != null) {
-    const maxBed = clampTemp(input.bedTemp);
-    const minBed = clampTemp(input.bedTempFirstLayer ?? maxBed - 10);
+    // GH #952.4: same fix as the nozzle above — the EVERYDAY bed temp must always
+    // land in MAX_BED (the decoder reads bedTemp from MAX). The prior Math.max
+    // ordering swapped everyday↔first-layer on the COMMON first-layer-hotter bed
+    // profile (e.g. bed 85 / first-layer 90), decoding the everyday bed as 90.
+    // Pin MAX to the everyday temp; MIN is the range floor (min of everyday and the
+    // first-layer temp, or everyday-10 when no first-layer is given).
+    const everydayBed = clampTemp(input.bedTemp);
+    const firstLayerBed = clampTemp(input.bedTempFirstLayer ?? everydayBed - 10);
 
     encodeCBORKey(buf, OPT_KEY.MIN_BED_TEMPERATURE);
-    encodeCBORUint(buf, Math.min(minBed, maxBed));
+    encodeCBORUint(buf, Math.min(firstLayerBed, everydayBed));
     encodeCBORKey(buf, OPT_KEY.MAX_BED_TEMPERATURE);
-    encodeCBORUint(buf, Math.max(minBed, maxBed));
+    encodeCBORUint(buf, everydayBed);
   }
 
   if (input.chamberTemp != null && input.chamberTemp > 0) {
@@ -753,9 +767,14 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
   encodeCBORKey(buf, OPT_KEY.MATERIAL_ABBREVIATION);
   encodeCBORText(buf, deriveMaterialAbbreviation(input.materialType));
 
-  // country_of_origin (ISO 3166-1 alpha-2)
-  encodeCBORKey(buf, OPT_KEY.COUNTRY_OF_ORIGIN);
-  encodeCBORText(buf, (input.countryOfOrigin ?? "US").slice(0, 2));
+  // country_of_origin (ISO 3166-1 alpha-2). GH #952: emit ONLY when the caller
+  // supplies one — no production caller does (the Filament model has no country
+  // field), so the old `?? "US"` default stamped a fabricated "US" onto every
+  // tag/re-write. Omit the key when unset (like material_type's unspecified case).
+  if (input.countryOfOrigin) {
+    encodeCBORKey(buf, OPT_KEY.COUNTRY_OF_ORIGIN);
+    encodeCBORText(buf, input.countryOfOrigin.slice(0, 2));
+  }
 
   // transmission_distance – HueForge TD value (type: number)
   if (input.transmissionDistance != null && input.transmissionDistance > 0) {
@@ -810,10 +829,15 @@ function buildMainMap(input: OpenPrintTagInput): number[] {
     encodeCBORUint(buf, clampUint(input.dryingTime, 10080));
   }
 
-  // brand_specific_instance_id – unique spool/instance identifier (string, max 16 chars)
-  if (input.spoolUid) {
+  // brand_specific_instance_id – unique spool/instance identifier (string, max 16 chars).
+  // GH #952: OMIT it when it's too long rather than TRUNCATING — a truncated id
+  // reads back as a DIFFERENT id and breaks scan-back matching (matchFilament
+  // finds no spool, the detail-page own-tag check misfires). Auto-generated
+  // 10-hex ids always fit; only long custom/Prusament ids trip this. spoolUid is
+  // ASCII-validated (validateSpoolInstanceId), so char length == byte length.
+  if (input.spoolUid && input.spoolUid.length <= 16) {
     encodeCBORKey(buf, OPT_KEY.BRAND_SPECIFIC_INSTANCE_ID);
-    encodeCBORText(buf, input.spoolUid.slice(0, 16));
+    encodeCBORText(buf, input.spoolUid);
   }
 
   buf.push(0xff); // indefinite map end

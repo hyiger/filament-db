@@ -1,7 +1,7 @@
 interface ElectronAPI {
   // Config
-  getConfig: () => Promise<{ mongodbUri: string; connectionMode: string; atlasUri: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string; labelFormat?: string; dateFormat?: string; exposeToLan?: boolean }>;
-  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string; labelFormat?: string; dateFormat?: string; exposeToLan?: boolean }) => Promise<{ success: boolean }>;
+  getConfig: () => Promise<{ mongodbUri: string; connectionMode: string; atlasUri: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string; labelFormat?: string; dateFormat?: string; ntagDefaultSize?: string; exposeToLan?: boolean }>;
+  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string; labelFormat?: string; dateFormat?: string; ntagDefaultSize?: string; exposeToLan?: boolean }) => Promise<{ success: boolean }>;
   getLanInfo: () => Promise<{ ips: string[]; port: number }>;
   resetConfig: () => Promise<{ success: boolean }>;
   testConnection: (uri: string) => Promise<{ success: boolean; error?: string }>;
@@ -53,11 +53,14 @@ interface ElectronAPI {
     ndefCapacity: number | null;
   }>;
   /** OpenTag3D write: `standard` selects the wrapping/transport (default
-   *  "openprinttag"); `productUrl` rides the SLIX2/OpenPrintTag path only. */
+   *  "openprinttag"); `productUrl` rides the SLIX2/OpenPrintTag path only;
+   *  `ntagSize` (GH #973) is the user-declared NTAG type used to size a blank
+   *  NTAG when GET_VERSION auto-detect is unavailable. */
   nfcWriteTag: (
     payload: number[],
     standard?: "openprinttag" | "opentag3d",
     productUrl?: string,
+    ntagSize?: "NTAG213" | "NTAG215" | "NTAG216",
   ) => Promise<{ success: boolean }>;
   nfcFormatTag: () => Promise<{ success: boolean }>;
   nfcSetReadOnly: (readOnly: boolean) => Promise<{ success: boolean }>;

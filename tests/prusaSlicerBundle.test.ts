@@ -229,6 +229,55 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.compatible_printers_condition).toBe("");
   });
 
+  it("#950: a per-nozzle calibration bake derives the nozzle-diameter condition when unpinned", () => {
+    const keys = filamentToSlicerKeys(
+      {
+        name: "PLA",
+        vendor: "X",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: {},
+        settings: {},
+      },
+      { nozzle: { diameter: 0.4, type: "Brass" }, extrusionMultiplier: 1.02 } as never,
+    );
+    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+    expect(keys.filamentdb_nozzle).toBe("0.4 Brass");
+  });
+
+  it("#950: a user-pinned condition survives the per-nozzle calibration bake (not overwritten)", () => {
+    const keys = filamentToSlicerKeys(
+      {
+        name: "PLA",
+        vendor: "X",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: {},
+        // A round-tripped user pin — the calibration bake must NOT clobber it.
+        settings: { compatible_printers_condition: "printer_model==MK4" },
+      },
+      { nozzle: { diameter: 0.4, type: "Brass" }, extrusionMultiplier: 1.02 } as never,
+    );
+    expect(keys.compatible_printers_condition).toBe("printer_model==MK4");
+    // The routing hint is still emitted (it's a hint for THIS nozzle, not a user setting).
+    expect(keys.filamentdb_nozzle).toBe("0.4 Brass");
+  });
+
+  it("#950: a nil (inherit) condition survives the per-nozzle calibration bake", () => {
+    const keys = filamentToSlicerKeys(
+      {
+        name: "PLA",
+        vendor: "X",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: {},
+        settings: { compatible_printers_condition: null },
+      },
+      { nozzle: { diameter: 0.4, type: "Brass" }, extrusionMultiplier: 1.02 } as never,
+    );
+    expect(keys.compatible_printers_condition).toBeNull();
+  });
+
   it("preserves a user-set compatible_printers from the settings bag", () => {
     // If a previous import (or hand-edit) pinned the preset to a
     // specific printer, the default-blanking must NOT clobber that.
@@ -435,15 +484,17 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.filament_notes).toBe("preset notes win");
   });
 
-  it("emits filament_soluble / filament_abrasive from the boolean flags (lines 297-298)", () => {
+  it("GH #950: round-trips filament_soluble / filament_abrasive through the settings bag", () => {
+    // These keys have no schema field — the old top-level `soluble`/`abrasive`
+    // booleans were never persisted (Mongoose stripped them) so the exporter's
+    // `set(..., filament.soluble)` was always a no-op. They now ride the settings
+    // passthrough bag verbatim, so an import→export round-trip preserves them.
     const solubleTrue = filamentToSlicerKeys({
       name: "PVA",
       vendor: "V",
       type: "PVA",
-      soluble: true,
-      abrasive: false,
       temperatures: {},
-      settings: {},
+      settings: { filament_soluble: "1", filament_abrasive: "0" },
     });
     expect(solubleTrue.filament_soluble).toBe("1");
     expect(solubleTrue.filament_abrasive).toBe("0");
@@ -452,16 +503,14 @@ describe("filamentToSlicerKeys", () => {
       name: "CF",
       vendor: "V",
       type: "PA-CF",
-      soluble: false,
-      abrasive: true,
       temperatures: {},
-      settings: {},
+      settings: { filament_soluble: "0", filament_abrasive: "1" },
     });
     expect(abrasiveTrue.filament_soluble).toBe("0");
     expect(abrasiveTrue.filament_abrasive).toBe("1");
   });
 
-  it("omits soluble/abrasive keys entirely when the flags are absent (297-298 false branch)", () => {
+  it("GH #950: omits soluble/abrasive keys entirely when the settings bag has neither", () => {
     const keys = filamentToSlicerKeys({
       name: "Plain",
       vendor: "V",
@@ -471,6 +520,24 @@ describe("filamentToSlicerKeys", () => {
     });
     expect(keys).not.toHaveProperty("filament_soluble");
     expect(keys).not.toHaveProperty("filament_abrasive");
+  });
+
+  it("GH #950: does NOT read a (dead) top-level soluble/abrasive field — settings bag is authoritative", () => {
+    // Regression guard: the schema has no soluble/abrasive column, so the old
+    // `set("filament_soluble", filament.soluble ? "1" : "0")` reader was dead.
+    // If it were restored, a top-level flag would CLOBBER the settings-bag value.
+    // Pin the settings bag as authoritative so a revert fails here.
+    const keys = filamentToSlicerKeys({
+      name: "Conflict",
+      vendor: "V",
+      type: "PVA",
+      temperatures: {},
+      soluble: true, // dead field — must be ignored
+      abrasive: true, // dead field — must be ignored
+      settings: { filament_soluble: "0", filament_abrasive: "0" },
+    });
+    expect(keys.filament_soluble).toBe("0"); // settings wins; top-level ignored
+    expect(keys.filament_abrasive).toBe("0");
   });
 
   it("emits shrinkage compensation keys from shrinkageXY / shrinkageZ (lines 301-304)", () => {
@@ -1131,6 +1198,57 @@ describe("collapsePerNozzleImportSections (#872)", () => {
     expect(collapsed[0].name).toBe("PLA");
   });
 
+  it("#950: strips filament_settings_id from a non-hinted section's settings bag", () => {
+    // filament_settings_id is re-derived from the filament name on export; a stale
+    // copy in the bag would make a renamed filament export its old name.
+    const parsed = parseIniFilaments(
+      `[filament:Plain PLA]\nfilament_type = PLA\nfilament_vendor = Acme\nfilament_settings_id = Plain PLA\ncooling = 1\n`,
+    );
+    const f = collapsePerNozzleImportSections(parsed)[0];
+    expect(f.settings.filament_settings_id).toBeUndefined();
+    expect(f.settings.cooling).toBe("1"); // genuine passthrough key survives
+  });
+
+  it("#950: a non-hinted section drops scalar fields it did NOT supply (leave-when-omitted)", () => {
+    // A hand-crafted / partial section that supplies only identity: parseIni
+    // defaults cost/density/color/diameter/max-vol, but $set-ing those defaults
+    // over a name-matched existing filament would CLOBBER its real values.
+    const parsed = parseIniFilaments(
+      `[filament:Plain PLA]\nfilament_type = PLA\nfilament_vendor = Acme\ntemperature = 210\n`,
+    );
+    const f = collapsePerNozzleImportSections(parsed)[0];
+    expect("cost" in f).toBe(false);
+    expect("density" in f).toBe(false);
+    expect("color" in f).toBe(false);
+    expect("diameter" in f).toBe(false);
+    expect("maxVolumetricSpeed" in f).toBe(false);
+    // Supplied identity + temps are kept.
+    expect(f.vendor).toBe("Acme");
+    expect(f.type).toBe("PLA");
+    expect(f.temperatures?.nozzle).toBe(210);
+  });
+
+  it("#950: a non-hinted section KEEPS scalars it DID supply (normal full export)", () => {
+    const parsed = parseIniFilaments(
+      `[filament:Full PLA]\nfilament_type = PLA\nfilament_vendor = Acme\nfilament_cost = 22\nfilament_density = 1.24\nfilament_colour = #445566\nfilament_diameter = 1.75\nfilament_max_volumetric_speed = 15\n`,
+    );
+    const f = collapsePerNozzleImportSections(parsed)[0];
+    expect(f.cost).toBe(22);
+    expect(f.density).toBe(1.24);
+    expect(f.color).toBe("#445566");
+    expect(f.diameter).toBe(1.75);
+    expect(f.maxVolumetricSpeed).toBe(15);
+  });
+
+  it("#950: captures a non-hinted section's filamentdb_id as filamentdbId (routing hint, not settings data)", () => {
+    const parsed = parseIniFilaments(
+      `[filament:Plain PLA]\nfilament_type = PLA\nfilamentdb_id = 64b000000000000000000abc\n`,
+    );
+    const f = collapsePerNozzleImportSections(parsed)[0];
+    expect(f.filamentdbId).toBe("64b000000000000000000abc"); // captured for id-first resolution
+    expect(f.settings.filamentdb_id).toBeUndefined(); // never stored as data
+  });
+
   it("omits a shared scalar a collapsed section did NOT supply (no clobber of base cost/density/color/diameter)", () => {
     // A hint-only suffixed section that omits filament_cost/density/colour/diameter:
     // parseIni would default them (null / null / #808080 / 1.75), but the collapse
@@ -1148,6 +1266,9 @@ describe("collapsePerNozzleImportSections (#872)", () => {
     // Identity that WAS supplied is kept.
     expect(base.vendor).toBe("Generic");
     expect(base.type).toBe("PLA");
+    // GH #950: the hinted branch also captures filamentdb_id for id-first resolution.
+    expect(base.filamentdbId).toBe("64b000000000000000000002");
+    expect(base.settings.filamentdb_id).toBeUndefined();
   });
 
   it("omits vendor/type a collapsed section did NOT supply (no clobber of base identity)", () => {
@@ -1180,6 +1301,76 @@ describe("collapsePerNozzleImportSections (#872)", () => {
     expect(base.cost).toBe(25);
     expect(base.density).toBe(1.24);
     expect(base.diameter).toBe(1.75);
+  });
+
+  it("#950 (Codex r3): KEEPS a user-pinned compatible_printers_condition on a hinted collapse (round-trip)", () => {
+    // 950.2 makes the export carry a user pin through per-nozzle sections; the
+    // import must NOT strip it (the $set replaces the whole bag), else the pin is
+    // destroyed on export→import.
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\ncompatible_printers_condition = printer_model==MK4\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    expect(base.settings.compatible_printers_condition).toBe("printer_model==MK4");
+  });
+
+  it("#950 (Codex r3): STRIPS an auto-derived nozzle_diameter condition on a hinted collapse (re-derived on export)", () => {
+    // The baked per-nozzle value differs per section, so pinning it onto the base
+    // would be wrong — it's stripped and re-derived from compatibleNozzles.
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\ncompatible_printers_condition = nozzle_diameter[0]==0.4\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    expect("compatible_printers_condition" in base.settings).toBe(false);
+  });
+
+  it("#950 (Codex r3): KEEPS a nil (inherit) compatible_printers_condition on a hinted collapse", () => {
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\ncompatible_printers_condition = nil\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    // nil parses to null (the inheritance marker) and must survive the collapse.
+    expect(base.settings.compatible_printers_condition).toBeNull();
+  });
+
+  it("#950 (Codex r4): KEEPS a user pin that merely REFERENCES nozzle_diameter (not the exact derived shape)", () => {
+    // A substring test would wrongly strip this legitimate compound restriction.
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\ncompatible_printers_condition = printer_model==MK4 and nozzle_diameter[0]==0.4\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    expect(base.settings.compatible_printers_condition).toBe(
+      "printer_model==MK4 and nozzle_diameter[0]==0.4",
+    );
+  });
+
+  it("#950 (Codex r4): STRIPS a multi-term auto-derived condition (nozzle_diameter or-joined)", () => {
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\ncompatible_printers_condition = nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    expect("compatible_printers_condition" in base.settings).toBe(false);
+  });
+
+  it("#950 (Codex r3): a pinned condition survives a full multi-nozzle export→parse→collapse round-trip", () => {
+    const filament = {
+      name: "PLA",
+      vendor: "Generic",
+      type: "PLA",
+      _id: "64b000000000000000000010",
+      temperatures: { nozzle: 210, bed: 60 },
+      // User pin at filament scope.
+      settings: { compatible_printers_condition: "printer_model==MK4" },
+      calibrations: [
+        { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95, nozzleTemp: 205 },
+        { nozzle: { name: "0.6 Brass", diameter: 0.6, type: "Brass" }, printer: null, maxVolumetricSpeed: 20, nozzleTemp: 215 },
+      ],
+    };
+    const bundle = generatePrusaSlicerBundle([filament]);
+    // The export carries the user pin (not the derived diameter condition) in each section.
+    expect(bundle).toContain("compatible_printers_condition = printer_model==MK4");
+    const base = collapsePerNozzleImportSections(parseIniFilaments(bundle))[0];
+    expect(base.settings.compatible_printers_condition).toBe("printer_model==MK4"); // survived
   });
 });
 

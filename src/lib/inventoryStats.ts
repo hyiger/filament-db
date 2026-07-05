@@ -44,13 +44,18 @@ export function getSpoolCount(f: InventoryFilament): number {
  * the calculation actually uses. */
 export function getRemainingGrams(f: InventoryFilament): number | null {
   if (f.spools && f.spools.length > 0) {
-    if (f.spoolWeight == null) return null;
+    // GH #954: fall back to a 0g tare when spoolWeight is unset, matching the
+    // 0-tare posture the by-location / dashboard / locations surfaces already
+    // use — so a legacy null-spoolWeight filament reports remaining grams (and
+    // can trip the home-list low-stock badge) instead of reading as "not
+    // weight-tracked" on the home list while every other surface counts it.
+    const tare = f.spoolWeight ?? 0;
     let grams = 0;
     let any = false;
     for (const s of f.spools) {
       if (s.retired) continue;
       if (s.totalWeight != null) {
-        grams += Math.max(0, s.totalWeight - f.spoolWeight);
+        grams += Math.max(0, s.totalWeight - tare);
         any = true;
       }
     }

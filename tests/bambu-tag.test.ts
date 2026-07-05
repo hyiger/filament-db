@@ -165,19 +165,22 @@ describe("Bambu Tag Decoder", () => {
       expect(data.filamentLength).toBe(330);
     });
 
-    it("parses second color when format ID is 0x0002 and count >= 2", () => {
+    it("parses second color from REVERSE ABGR byte order (#952)", () => {
       const blocks = makeBlocks();
       blocks[16] = Buffer.alloc(16);
       blocks[16]!.writeUInt16LE(0x0002, 0);
       blocks[16]!.writeUInt16LE(2, 2);
-      blocks[16]![4] = 0x00;
-      blocks[16]![5] = 0xff;
-      blocks[16]![6] = 0x00;
-      blocks[16]![7] = 0xff;
+      // Tag stores the secondary color reverse-ABGR at bytes 4-7 = [A,B,G,R].
+      // For RGB (0x11,0x22,0x33) alpha 0xff → bytes [0xff,0x33,0x22,0x11].
+      blocks[16]![4] = 0xff; // A
+      blocks[16]![5] = 0x33; // B
+      blocks[16]![6] = 0x22; // G
+      blocks[16]![7] = 0x11; // R
 
       const data = parseBambuBlocks(blocks);
       expect(data.colorCount).toBe(2);
-      expect(data.secondColorRGBA).toEqual([0x00, 0xff, 0x00, 0xff]);
+      // Decoded back to RGBA order.
+      expect(data.secondColorRGBA).toEqual([0x11, 0x22, 0x33, 0xff]);
     });
 
     it("returns null second color when format ID is 0", () => {
@@ -259,14 +262,15 @@ describe("Bambu Tag Decoder", () => {
     // (Galaxy line etc.).
     it("forwards the parsed second color as secondaryColors", () => {
       const blocks = buildFullBlocks();
-      // Block 16: format 0x0002, count 2, green secondary
+      // Block 16: format 0x0002, count 2, green secondary in REVERSE ABGR
+      // ([A,B,G,R] = [0xff,0x00,0xff,0x00] → RGB #00ff00). GH #952.
       blocks[16] = Buffer.alloc(16);
       blocks[16]!.writeUInt16LE(0x0002, 0);
       blocks[16]!.writeUInt16LE(2, 2);
-      blocks[16]![4] = 0x00;
-      blocks[16]![5] = 0xff;
-      blocks[16]![6] = 0x00;
-      blocks[16]![7] = 0xff;
+      blocks[16]![4] = 0xff; // A
+      blocks[16]![5] = 0x00; // B
+      blocks[16]![6] = 0xff; // G
+      blocks[16]![7] = 0x00; // R
       const result = bambuToDecodedTag(parseBambuBlocks(blocks));
       expect(result.secondaryColors).toEqual(["#00ff00"]);
     });

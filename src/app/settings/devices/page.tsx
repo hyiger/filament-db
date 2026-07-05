@@ -7,11 +7,13 @@ import { useIsElectron } from "@/hooks/useIsElectron";
 import { useNfcContext } from "@/components/NfcProvider";
 import LabelPrinterSettings from "@/components/LabelPrinterSettings";
 import LabelFormatEditor from "@/components/LabelFormatEditor";
+import { useNtagDefaultSize, type NtagDefaultSize } from "@/hooks/useNtagDefaultSize";
 
 export default function DevicesSettingsPage() {
   const { t } = useTranslation();
   const isElectron = useIsElectron();
   const { notifyTagErased } = useNfcContext();
+  const { defaultSize: ntagDefaultSize, setDefaultSize: setNtagDefaultSize } = useNtagDefaultSize();
 
   const [nfcStatus, setNfcStatus] = useState<{
     readerConnected: boolean;
@@ -222,6 +224,33 @@ export default function DevicesSettingsPage() {
               </p>
             )}
             <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">{t("settings.nfcReadOnlyHint")}</p>
+
+            {/* #973: default NTAG type for readers that can't auto-detect the
+                chip size (they reject GET_VERSION). "Ask each time" prompts a
+                size picker on write; a specific type skips the prompt so a batch
+                of same-type tags writes without re-picking. */}
+            <div className="mt-4 border-t border-gray-100 dark:border-gray-800 pt-4">
+              <label
+                htmlFor="ntag-default-size"
+                className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1"
+              >
+                {t("settings.nfcNtagDefaultSize")}
+              </label>
+              <select
+                id="ntag-default-size"
+                value={ntagDefaultSize}
+                onChange={(e) => setNtagDefaultSize(e.target.value as NtagDefaultSize)}
+                className="w-full sm:w-64 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 px-3 py-2 text-sm"
+              >
+                <option value="ask">{t("settings.nfcNtagDefaultAsk")}</option>
+                <option value="NTAG213">NTAG213 (144 B)</option>
+                <option value="NTAG215">NTAG215 (496 B)</option>
+                <option value="NTAG216">NTAG216 (872 B)</option>
+              </select>
+              <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                {t("settings.nfcNtagDefaultSizeHint")}
+              </p>
+            </div>
 
             {formatResult && (
               <div className={`mt-3 text-sm px-3 py-2 rounded ${

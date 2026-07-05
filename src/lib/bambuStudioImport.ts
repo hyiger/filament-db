@@ -148,6 +148,8 @@ const CALIBRATION_KEYS = new Set<string>([
   "fan_min_speed",
   "fan_max_speed",
   "bridge_fan_speed",
+  "chamber_temperature",
+  "activate_chamber_temp_control",
 ]);
 
 /**
@@ -230,6 +232,14 @@ export interface CalibrationHints {
   fanMinSpeed?: number;
   fanMaxSpeed?: number;
   fanBridgeSpeed?: number;
+  /** GH #950: chamber temperature → calibrations[].chamberTemp. The export
+   * emits it (orcaSlicerBundle), so parse it back for a lossless round-trip. */
+  chamberTemp?: number;
+  /** GH #950 (Codex r5): the profile EXPLICITLY disabled chamber heating
+   * (activate_chamber_temp_control="0"). Distinct from chamberTemp being absent —
+   * a disable must CLEAR a pre-existing calibrations[].chamberTemp on the resolved
+   * path, else /calibration re-enables chamber heat on the next round-trip. */
+  chamberDisabled?: boolean;
   /** True when at least one calibration-relevant value was present. The
    * route uses this to decide whether to upsert a calibrations[] row vs
    * leave the filament's calibration data alone. */
@@ -337,6 +347,16 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     fanMaxSpeed:
       num(json.additional_cooling_fan_speed) ?? num(json.fan_max_speed),
     fanBridgeSpeed: num(json.bridge_fan_speed),
+    // GH #950: honor the enable flag — activate_chamber_temp_control="0" means
+    // chamber heating is OFF, so don't import the temperature (matches the
+    // exporter, which only emits chamber_temperature when chamberTemp != null).
+    chamberTemp:
+      unwrap(json.activate_chamber_temp_control) === "0"
+        ? undefined
+        : num(json.chamber_temperature),
+    // GH #950 (Codex r5): record an explicit disable so the applier can CLEAR a
+    // pre-existing calibrations[].chamberTemp (a bare absence must not clear).
+    chamberDisabled: unwrap(json.activate_chamber_temp_control) === "0",
     hasAnyHint: false,
   };
   // Codex P3 on PR #387 round 6: `maxVolumetricSpeed` is the ONE
@@ -348,6 +368,14 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
   // warning toast on successful imports. Exclude it from `hasAnyHint`
   // so we only enter the unresolved path when there's per-nozzle data
   // that would actually be dropped.
+  //
+  // GH #950 (Codex P2 on PR #968): `chamberTemp` is EXCLUDED for the same
+  // reason. Its structured home (calibrations[].chamberTemp) needs a resolved
+  // printer/nozzle, but when that can't be resolved `prepareBambuUpdate` falls
+  // back to preserving the raw chamber keys in the settings passthrough bag
+  // (the "misfiled but survives" state #950 rates acceptable) — so a
+  // chamber-only standalone profile loses nothing and must NOT trip the
+  // unresolved warning.
   calibrationHints.hasAnyHint =
     calibrationHints.extrusionMultiplier != null ||
     calibrationHints.pressureAdvance != null ||
@@ -364,7 +392,19 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
   // (in the route) applies size caps; here we just stringify.
   for (const [key, value] of Object.entries(json)) {
     if (STRUCTURED_KEYS.has(key)) continue;
-    if (CALIBRATION_KEYS.has(key)) continue;
+    if (CALIBRATION_KEYS.has(key)) {
+      // GH #950 (Codex P1 on PR #968 r2): the chamber keys are normally excluded
+      // here and routed structurally (calibrations[].chamberTemp) or via the
+      // applier's settings-bag fallback — but BOTH require an EFFECTIVE chamberTemp.
+      // When the chamber is DISABLED (activate_chamber_temp_control="0"), the parse
+      // above clears chamberTemp, so neither path carries the value and the settings
+      // bag is its ONLY home. Keep the raw chamber keys in the bag in that case so a
+      // disabled-chamber profile still round-trips (they rode the bag pre-#950.3).
+      const isChamberKey =
+        key === "chamber_temperature" || key === "activate_chamber_temp_control";
+      if (!isChamberKey || calibrationHints.chamberTemp != null) continue;
+      // else: disabled/ineffective chamber → fall through and store the raw key.
+    }
     // NOTE (#678, deferred): unwrap() collapses a multi-element array to its
     // first element, so a multi-printer `compatible_printers` loses the rest on
     // a Bambu/Orca round-trip. A faithful fix can't just store the array here —

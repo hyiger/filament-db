@@ -53,9 +53,20 @@ const BED_TYPE_KEY_MAP: Record<string, { temp: string; initial: string }> = {
  * Map a resolved Filament DB document to OrcaSlicer JSON key-value pairs.
  * All values are wrapped in single-element arrays per OrcaSlicer convention.
  * Structured DB fields take precedence over the settings bag.
+ *
+ * GH #950.4: when a representative `calibration` is supplied, its tuned values
+ * (flow ratio, pressure advance, retraction, fan speeds, per-calibration temps)
+ * are BAKED on top of the base keys via calibrationToOrcaSlicerKeys. Unlike the
+ * PrusaSlicer fork (which applies calibration dynamically via GET .../calibration),
+ * stock Bambu Studio has no such module, so without baking those values never
+ * reach an exported preset and prints revert to defaults. Pressure advance IS
+ * baked here (calibrationToOrcaSlicerKeys emits it) — the opposite of PrusaSlicer's
+ * deliberate omission — precisely because there is no dynamic fallback for Bambu.
  */
 export function filamentToOrcaSlicerKeys(
   filament: FilamentDoc,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  calibration?: Record<string, any> | null,
 ): Record<string, string[]> {
   const keys: Record<string, string[]> = {};
 
@@ -122,12 +133,22 @@ export function filamentToOrcaSlicerKeys(
     set("filament_notes", filament.notes);
   }
 
-  // Soluble flag
-  if (filament.soluble != null) set("filament_soluble", filament.soluble ? "1" : "0");
+  // GH #950: filament_soluble lives only in the settings bag (no schema field);
+  // the settings passthrough above already carries it. The old
+  // `set(..., filament.soluble)` read an always-undefined field — removed.
 
   // Shrinkage
   if (filament.shrinkageXY != null) set("filament_shrink", String(filament.shrinkageXY) + "%");
   if (filament.shrinkageZ != null) set("filament_shrinkage_compensation_z", filament.shrinkageZ);
+
+  // GH #950.4: bake the representative calibration on top (flow/PA/retraction/fans/
+  // per-calibration temps). Calibration values WIN over the structured/settings
+  // defaults above — they're the tuned per-nozzle numbers the user dialed in.
+  if (calibration) {
+    for (const [k, v] of Object.entries(calibrationToOrcaSlicerKeys(calibration))) {
+      keys[k] = v;
+    }
+  }
 
   return keys;
 }
@@ -177,12 +198,59 @@ export function calibrationToOrcaSlicerKeys(
 }
 
 /**
+ * GH #950.4: pick the ONE calibration to bake into a filament's single exported
+ * preset — the any-printer / any-bed "default" entry (printer == null && bedType
+ * == null) preferred, else the first calibration. Orca/Bambu presets are a single
+ * .json, so a filament with more than one calibration collapses to this
+ * representative (the detail page shows a notice whenever any calibration is
+ * dropped — see droppedCalibrationCount).
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function pickRepresentativeCalibration(filament: FilamentDoc): Record<string, any> | null {
+  const cals = Array.isArray(filament.calibrations) ? filament.calibrations : [];
+  if (cals.length === 0) return null;
+  return cals.find((c) => c && c.printer == null && c.bedType == null) ?? cals[0];
+}
+
+/**
+ * GH #950.4 / #969 (Codex round 3): how many calibrations the single Orca/Bambu
+ * .json export will DROP. `pickRepresentativeCalibration` bakes exactly one, so
+ * every other calibration is lost — regardless of whether it's on a different
+ * nozzle OR the SAME nozzle with a different bed type / printer. The detail page
+ * warns when this is > 0. (The original counted DISTINCT nozzles, which silently
+ * collapsed same-nozzle tuning contexts and under-warned — the bug this fixes.)
+ */
+export function droppedCalibrationCount(filament: FilamentDoc): number {
+  const cals = Array.isArray(filament.calibrations) ? filament.calibrations : [];
+  return Math.max(0, cals.length - 1);
+}
+
+/**
  * Generate an array of OrcaSlicer-format filament profile objects
  * from resolved Filament DB documents.
  */
-export function generateOrcaSlicerProfiles(filaments: FilamentDoc[]): Record<string, string[] | string>[] {
+/**
+ * GH #950.4 / #969 (Codex round 5): `bakeCalibration` is OPT-IN and defaults to
+ * false. Baking is only correct for the SINGLE-preset download paths
+ * (`GET /api/filaments/{id}/{orcaslicer,bambustudio}`), which are manual imports
+ * with no dynamic calibration module. The BULK bundle (`GET /api/filaments/orcaslicer`)
+ * feeds the OrcaSlicer FilamentDB module, which fetches `/calibration?format=orcaslicer`
+ * for the ACTIVE nozzle/bed at print time — baking the any-printer/any-bed
+ * representative there would seed every profile with wrong-context tuning until
+ * (or unless) the dynamic fetch overwrites it. So the bulk route leaves this off.
+ */
+export function generateOrcaSlicerProfiles(
+  filaments: FilamentDoc[],
+  { bakeCalibration = false }: { bakeCalibration?: boolean } = {},
+): Record<string, string[] | string>[] {
   return filaments.map((filament) => {
-    const orcaKeys = filamentToOrcaSlicerKeys(filament);
+    // Bake the representative calibration only on the opt-in single-preset path
+    // so tuned flow/PA/retraction/fan values reach a standalone preset (stock
+    // Bambu / a manually-imported Orca .json has no dynamic fallback).
+    const orcaKeys = filamentToOrcaSlicerKeys(
+      filament,
+      bakeCalibration ? pickRepresentativeCalibration(filament) : null,
+    );
 
     return {
       // Metadata fields (plain strings, not arrays)

@@ -56,7 +56,9 @@ export async function GET(
       return errorResponse("Filament not found", 404);
     }
 
-    const profile = generateOrcaSlicerProfiles([filament])[0];
+    // bakeCalibration: stock Bambu Studio has no dynamic calibration module, so
+    // bake the representative calibration into this single preset (GH #950.4 / #969 r5).
+    const profile = generateOrcaSlicerProfiles([filament], { bakeCalibration: true })[0];
     // Bambu-specific: mark as a user preset so Bambu Studio files it
     // under the user's custom filaments on import.
     profile.from = "User";

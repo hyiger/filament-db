@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseIniFilaments } from "@/lib/parseIni";
+import { parseIniFilaments, INI_TOP_LEVEL_SETTING_KEYS } from "@/lib/parseIni";
 
 describe("parseIniFilaments", () => {
   it("returns empty array for empty content", () => {
@@ -325,5 +325,89 @@ temperature = 200
 `;
     const result = parseIniFilaments(content);
     expect(result).toHaveLength(0);
+  });
+
+  // GH #951 (Codex R2-B): INI_TOP_LEVEL_SETTING_KEYS is the source of truth the
+  // bulk importers use to strip settings-bag shadows of top-level fields. It
+  // MUST list exactly the keys flushFilament lifts into a top-level FilamentData
+  // field — otherwise a listed-but-not-extracted key would be lost on import, or
+  // an extracted-but-unlisted key would keep leaking a stale shadow.
+  it("INI_TOP_LEVEL_SETTING_KEYS matches the keys parseIni lifts to top-level fields", () => {
+    const ini = `[filament:Lockstep]
+filament_vendor = Acme
+filament_type = PLA
+filament_colour = #123456
+filament_cost = 25
+filament_density = 1.24
+filament_diameter = 1.6
+filament_max_volumetric_speed = 15
+temperature = 210
+first_layer_temperature = 215
+bed_temperature = 60
+first_layer_bed_temperature = 65
+inherits = *PLA*
+`;
+    const [f] = parseIniFilaments(ini);
+    // Every listed key resolves to a populated (non-default) top-level field.
+    expect(f.vendor).toBe("Acme");
+    expect(f.type).toBe("PLA");
+    expect(f.color).toBe("#123456");
+    expect(f.cost).toBe(25);
+    expect(f.density).toBe(1.24);
+    expect(f.diameter).toBe(1.6);
+    expect(f.maxVolumetricSpeed).toBe(15);
+    expect(f.temperatures.nozzle).toBe(210);
+    expect(f.temperatures.nozzleFirstLayer).toBe(215);
+    expect(f.temperatures.bed).toBe(60);
+    expect(f.temperatures.bedFirstLayer).toBe(65);
+    expect(f.inherits).toBe("*PLA*");
+    // The exact set (guards drift in either direction).
+    expect([...INI_TOP_LEVEL_SETTING_KEYS].sort()).toEqual([
+      "bed_temperature",
+      "filament_colour",
+      "filament_cost",
+      "filament_density",
+      "filament_diameter",
+      "filament_max_volumetric_speed",
+      "filament_shrinkage_compensation_xy",
+      "filament_shrinkage_compensation_z",
+      "filament_spool_weight",
+      "filament_type",
+      "filament_vendor",
+      "first_layer_bed_temperature",
+      "first_layer_temperature",
+      "inherits",
+      "temperature",
+    ]);
+  });
+
+  // GH #951 (Codex R3): spool weight + shrinkage are lifted to top-level so
+  // their settings-bag shadow can be stripped without data loss.
+  it("lifts filament_spool_weight and filament_shrinkage_* to top-level fields", () => {
+    const ini = `[filament:Lift]
+filament_type = PLA
+filament_vendor = Acme
+filament_spool_weight = 250
+filament_shrinkage_compensation_xy = 0.3%
+filament_shrinkage_compensation_z = 0.5%
+`;
+    const [f] = parseIniFilaments(ini);
+    expect(f.spoolWeight).toBe(250);
+    // parseNum strips the trailing '%', matching the form + per-id sync handling.
+    expect(f.shrinkageXY).toBe(0.3);
+    expect(f.shrinkageZ).toBe(0.5);
+  });
+
+  it("leaves spool weight + shrinkage UNDEFINED (not null) when the INI omits them — no-clobber guard", () => {
+    const ini = `[filament:NoLift]
+filament_type = PLA
+filament_vendor = Acme
+`;
+    const [f] = parseIniFilaments(ini);
+    // undefined (key absent) — NOT null — so the importer's $set omits them and
+    // can't clobber an existing top-level value on a root/resurrected filament.
+    expect("spoolWeight" in f).toBe(false);
+    expect("shrinkageXY" in f).toBe(false);
+    expect("shrinkageZ" in f).toBe(false);
   });
 });

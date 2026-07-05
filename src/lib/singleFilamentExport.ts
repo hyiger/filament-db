@@ -51,15 +51,19 @@ export async function resolveFilamentForExport(
   // dangling `%` — turning a valid export into a 500 (Codex P2 on
   // PR #247).
 
-  // Name lookup first (the slicer modules address filaments by name),
-  // then ObjectId fallback when the param looks like one.
-  let filament = (await withPopulate(
-    Filament.findOne({ name: idOrName, _deletedAt: null }),
-  ).lean()) as FilamentDoc | null;
-
-  if (!filament && /^[a-f0-9]{24}$/i.test(idOrName)) {
+  // GH #950 / #867: a 24-hex param is an ObjectId and is AUTHORITATIVE — try it
+  // FIRST, falling back to a name lookup only when that _id misses (a preset
+  // legitimately NAMED with 24 hex chars). Name-first would let such a name
+  // shadow another filament's real _id.
+  let filament: FilamentDoc | null = null;
+  if (/^[a-f0-9]{24}$/i.test(idOrName)) {
     filament = (await withPopulate(
       Filament.findOne({ _id: idOrName, _deletedAt: null }),
+    ).lean()) as FilamentDoc | null;
+  }
+  if (!filament) {
+    filament = (await withPopulate(
+      Filament.findOne({ name: idOrName, _deletedAt: null }),
     ).lean()) as FilamentDoc | null;
   }
 

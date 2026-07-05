@@ -3,6 +3,8 @@ import {
   filamentToOrcaSlicerKeys,
   calibrationToOrcaSlicerKeys,
   generateOrcaSlicerProfiles,
+  pickRepresentativeCalibration,
+  droppedCalibrationCount,
 } from "@/lib/orcaSlicerBundle";
 
 describe("filamentToOrcaSlicerKeys", () => {
@@ -250,37 +252,56 @@ describe("filamentToOrcaSlicerKeys", () => {
     expect(Object.keys(keys).filter(k => k.includes("plate_temp"))).toHaveLength(0);
   });
 
-  it("maps soluble flag", () => {
+  it("GH #950: round-trips filament_soluble through the settings bag", () => {
+    // No schema field — the old top-level `soluble` boolean was never persisted,
+    // so the exporter's `set(..., filament.soluble)` was a no-op. It now rides the
+    // settings passthrough bag verbatim.
     const filament = {
       name: "PVA",
       vendor: "Test",
       type: "PVA",
       color: "#FFFFFF",
       diameter: 1.75,
-      soluble: true,
       temperatures: {},
-      settings: {},
+      settings: { filament_soluble: "1" },
     };
 
     const keys = filamentToOrcaSlicerKeys(filament);
     expect(keys.filament_soluble).toEqual(["1"]);
   });
 
-  it("maps soluble=false to filament_soluble '0'", () => {
+  it("GH #950: passes filament_soluble '0' through the settings bag", () => {
     const filament = {
       name: "Not Soluble",
       vendor: "Test",
       type: "PLA",
       color: "#FFFFFF",
       diameter: 1.75,
-      soluble: false,
       temperatures: {},
-      settings: {},
+      settings: { filament_soluble: "0" },
     };
 
     const keys = filamentToOrcaSlicerKeys(filament);
-    // false is non-null so the flag is emitted, and false → "0"
     expect(keys.filament_soluble).toEqual(["0"]);
+  });
+
+  it("GH #950: does NOT read a (dead) top-level soluble field — settings bag is authoritative", () => {
+    // Regression guard: no schema column, so the old
+    // `set("filament_soluble", filament.soluble ? "1" : "0")` reader was dead.
+    // If restored, a top-level flag would clobber the settings-bag value.
+    const filament = {
+      name: "Conflict",
+      vendor: "Test",
+      type: "PVA",
+      color: "#FFFFFF",
+      diameter: 1.75,
+      temperatures: {},
+      soluble: true, // dead field — must be ignored
+      settings: { filament_soluble: "0" },
+    };
+
+    const keys = filamentToOrcaSlicerKeys(filament);
+    expect(keys.filament_soluble).toEqual(["0"]); // settings wins; top-level ignored
   });
 
   it("emits filament_notes from the notes field", () => {
@@ -649,5 +670,101 @@ describe("generateOrcaSlicerProfiles", () => {
     expect(profile.cool_plate_temp).toEqual(["0"]);
     expect(profile.hot_plate_temp).toEqual(["100"]);
     expect(profile.hot_plate_temp_initial_layer).toEqual(["110"]);
+  });
+});
+
+describe("GH #950.4 — bake calibration into the Orca/Bambu export", () => {
+  it("filamentToOrcaSlicerKeys bakes a supplied calibration (flow / PA / retraction / fans) over the base keys", () => {
+    const filament = { name: "PLA", vendor: "X", type: "PLA", diameter: 1.75, temperatures: {}, settings: {} };
+    const keys = filamentToOrcaSlicerKeys(filament, {
+      extrusionMultiplier: 0.978,
+      pressureAdvance: 0.028,
+      retractLength: 0.8,
+      fanMinSpeed: 60,
+      fanMaxSpeed: 100,
+    });
+    expect(keys.filament_flow_ratio).toEqual(["0.978"]);
+    expect(keys.pressure_advance).toEqual(["0.028"]); // baked for Bambu (no dynamic fallback)
+    expect(keys.filament_retraction_length).toEqual(["0.8"]);
+    expect(keys.overhang_fan_speed).toEqual(["60"]);
+    expect(keys.additional_cooling_fan_speed).toEqual(["100"]);
+  });
+
+  it("calibration values WIN over structured/settings defaults", () => {
+    const filament = {
+      name: "PLA", vendor: "X", type: "PLA", diameter: 1.75, maxVolumetricSpeed: 12,
+      temperatures: { nozzle: 210 }, settings: {},
+    };
+    const keys = filamentToOrcaSlicerKeys(filament, { maxVolumetricSpeed: 20, nozzleTemp: 225 });
+    expect(keys.filament_max_volumetric_speed).toEqual(["20"]); // calibration, not the 12 default
+    expect(keys.nozzle_temperature).toEqual(["225"]);
+  });
+
+  it("no calibration → base keys unchanged (backward compatible)", () => {
+    const filament = { name: "PLA", vendor: "X", type: "PLA", diameter: 1.75, temperatures: {}, settings: {} };
+    const keys = filamentToOrcaSlicerKeys(filament);
+    expect(keys.filament_flow_ratio).toBeUndefined();
+    expect(keys.pressure_advance).toBeUndefined();
+  });
+
+  it("generateOrcaSlicerProfiles bakes the representative calibration ONLY when opted in (GH #969 r5)", () => {
+    const filaments = [{
+      name: "PLA", vendor: "X", type: "PLA", diameter: 1.75, temperatures: {}, settings: {},
+      calibrations: [
+        { nozzle: { diameter: 0.4, type: "Brass" }, printer: { name: "MK4" }, extrusionMultiplier: 0.9 },
+        { nozzle: { diameter: 0.4, type: "Brass" }, printer: null, bedType: null, extrusionMultiplier: 0.978 }, // default
+      ],
+    }];
+    // Bulk bundle (default): must NOT bake — the OrcaSlicer module fetches
+    // /calibration dynamically for the active nozzle/bed, so a baked static
+    // representative would seed wrong-context tuning.
+    const bulk = generateOrcaSlicerProfiles(filaments)[0];
+    expect(bulk.filament_flow_ratio).toBeUndefined();
+    // Single-preset download (opt-in): bakes the any-printer/any-bed default.
+    const single = generateOrcaSlicerProfiles(filaments, { bakeCalibration: true })[0];
+    expect(single.filament_flow_ratio).toEqual(["0.978"]);
+  });
+
+  it("pickRepresentativeCalibration prefers the any-printer/any-bed default, else the first", () => {
+    expect(pickRepresentativeCalibration({ calibrations: [] })).toBeNull();
+    const withDefault = {
+      calibrations: [
+        { printer: { name: "MK4" }, extrusionMultiplier: 0.9 },
+        { printer: null, bedType: null, extrusionMultiplier: 0.978 },
+      ],
+    };
+    expect(pickRepresentativeCalibration(withDefault)?.extrusionMultiplier).toBe(0.978);
+    const noDefault = { calibrations: [{ printer: { name: "MK4" }, extrusionMultiplier: 0.9 }] };
+    expect(pickRepresentativeCalibration(noDefault)?.extrusionMultiplier).toBe(0.9);
+  });
+
+  it("droppedCalibrationCount is calibrations beyond the one baked representative", () => {
+    // 0 or 1 calibration → nothing dropped.
+    expect(droppedCalibrationCount({ calibrations: [] })).toBe(0);
+    expect(droppedCalibrationCount({})).toBe(0);
+    expect(
+      droppedCalibrationCount({ calibrations: [{ nozzle: { diameter: 0.4, type: "Brass" } }] }),
+    ).toBe(0);
+    // GH #969 (Codex r3): two calibrations on the SAME nozzle but different bed
+    // types must count as a drop — the old distinct-nozzle count collapsed these
+    // to 1 and under-warned. Only one is baked, so one is dropped.
+    expect(
+      droppedCalibrationCount({
+        calibrations: [
+          { nozzle: { diameter: 0.4, type: "Brass" }, printer: null, bedType: null },
+          { nozzle: { diameter: 0.4, type: "Brass" }, printer: null, bedType: { name: "Textured PEI" } },
+        ],
+      }),
+    ).toBe(1);
+    // Multiple across nozzles + contexts → all but the representative dropped.
+    const f = {
+      calibrations: [
+        { nozzle: { diameter: 0.4, type: "Brass" }, printer: null },
+        { nozzle: { diameter: 0.4, type: "brass" }, printer: { name: "MK4" } },
+        { nozzle: { diameter: 0.6, type: "Brass" }, printer: null },
+        { nozzle: { diameter: 0.4, type: "Brass", highFlow: true }, printer: null },
+      ],
+    };
+    expect(droppedCalibrationCount(f)).toBe(3);
   });
 });

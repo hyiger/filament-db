@@ -8,6 +8,7 @@ import { NfcService } from "./nfc-service";
 import { listLabelPrinters, printLabel as printLabelToDevice, disableBidi } from "./label-printer";
 import { isLoopbackHostname } from "../src/lib/loopbackHost";
 import { listLanIpv4 } from "../src/lib/getLanIp";
+import { isNtagSizeName, type NtagSizeName } from "../src/lib/ntagVersion";
 import { startMdnsAdvertisement, stopMdnsAdvertisement } from "./mdns-service";
 import { startLocalMongo, stopLocalMongo } from "./local-mongo";
 import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
@@ -845,6 +846,7 @@ ipcMain.handle("get-config", (event) => {
     customCurrencies: store.get("customCurrencies") as string,
     locale: store.get("locale") as string,
     labelFormat: store.get("labelFormat") as string,
+    ntagDefaultSize: store.get("ntagDefaultSize") as string,
     exposeToLan: store.get("exposeToLan") as boolean,
   };
 });
@@ -881,6 +883,7 @@ ipcMain.handle("save-config", async (event, config: {
   customCurrencies?: string;
   locale?: string;
   labelFormat?: string;
+  ntagDefaultSize?: string;
   exposeToLan?: boolean;
 }) => {
   assertTrustedSender(event, "save-config");
@@ -923,6 +926,11 @@ ipcMain.handle("save-config", async (event, config: {
   // not affect the DB connection so it never triggers a server restart).
   if (config.labelFormat !== undefined) {
     store.set("labelFormat", config.labelFormat);
+  }
+  // #973: the default NTAG type for GET_VERSION-less readers (a local pref;
+  // no server restart).
+  if (config.ntagDefaultSize !== undefined) {
+    store.set("ntagDefaultSize", config.ntagDefaultSize);
   }
 
   // "Share on local network": flips the embedded server's bind address
@@ -1193,7 +1201,7 @@ ipcMain.handle("nfc-detect-tag", async (event) => {
   return withIpcTimeout((signal) => nfcService!.detectTag(signal), "nfc-detect-tag");
 });
 
-ipcMain.handle("nfc-write-tag", async (event, payload: number[], standard?: unknown, productUrl?: unknown) => {
+ipcMain.handle("nfc-write-tag", async (event, payload: number[], standard?: unknown, productUrl?: unknown, ntagSize?: unknown) => {
   assertTrustedSender(event, "nfc-write-tag");
   if (!nfcService) throw new Error("NFC not initialized");
 
@@ -1224,12 +1232,19 @@ ipcMain.handle("nfc-write-tag", async (event, payload: number[], standard?: unkn
     throw new Error("nfc-write-tag: productUrl must be an http(s) URL");
   }
   const writeUrl = productUrl as string | undefined;
+  // GH #973: optional user-declared NTAG size (the renderer's size picker) used
+  // to size a blank NTAG when GET_VERSION can't auto-detect it. Validated to the
+  // exact enum so an arbitrary string can't reach the writer.
+  if (ntagSize !== undefined && !isNtagSizeName(ntagSize)) {
+    throw new Error("nfc-write-tag: ntagSize must be 'NTAG213', 'NTAG215', or 'NTAG216'");
+  }
+  const writeNtagSize = ntagSize as NtagSizeName | undefined;
 
   await withIpcTimeout(
     (signal) =>
       nfcService!.writeTag(
         new Uint8Array(payload),
-        { standard: writeStandard, productUrl: writeUrl },
+        { standard: writeStandard, productUrl: writeUrl, ntagSize: writeNtagSize },
         signal,
       ),
     "nfc-write-tag",
