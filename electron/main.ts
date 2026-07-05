@@ -846,6 +846,7 @@ ipcMain.handle("get-config", (event) => {
     customCurrencies: store.get("customCurrencies") as string,
     locale: store.get("locale") as string,
     labelFormat: store.get("labelFormat") as string,
+    ntagDefaultSize: store.get("ntagDefaultSize") as string,
     exposeToLan: store.get("exposeToLan") as boolean,
   };
 });
@@ -882,6 +883,7 @@ ipcMain.handle("save-config", async (event, config: {
   customCurrencies?: string;
   locale?: string;
   labelFormat?: string;
+  ntagDefaultSize?: string;
   exposeToLan?: boolean;
 }) => {
   assertTrustedSender(event, "save-config");
@@ -924,6 +926,11 @@ ipcMain.handle("save-config", async (event, config: {
   // not affect the DB connection so it never triggers a server restart).
   if (config.labelFormat !== undefined) {
     store.set("labelFormat", config.labelFormat);
+  }
+  // #973: the default NTAG type for GET_VERSION-less readers (a local pref;
+  // no server restart).
+  if (config.ntagDefaultSize !== undefined) {
+    store.set("ntagDefaultSize", config.ntagDefaultSize);
   }
 
   // "Share on local network": flips the embedded server's bind address

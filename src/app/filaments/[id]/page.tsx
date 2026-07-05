@@ -8,6 +8,7 @@ import { generateOpenPrintTagBinary } from "@/lib/openprinttag";
 import { encodeOpenTag3D } from "@/lib/opentag3d";
 import { filamentToOpenTag3DFields, wrapOpenTag3DType2 } from "@/lib/opentag3d-encode";
 import { NTAG_NAME_TO_NDEF_BYTES, type NtagSizeName } from "@/lib/ntagVersion";
+import { useNtagDefaultSize } from "@/hooks/useNtagDefaultSize";
 import { selectSpoolForWrite } from "@/lib/selectSpoolForWrite";
 import { safeHttpUrl } from "@/lib/safeRenderUrl";
 import { useToast } from "@/components/Toast";
@@ -170,25 +171,38 @@ function FilamentDetail() {
   const { toast } = useToast();
   const confirm = useConfirm();
 
-  // GH #973: NTAG size picker — a promise-based modal used when writing a blank
-  // NTAG whose size GET_VERSION couldn't auto-detect. Resolves to the chosen
-  // size, or null when cancelled. Kept local to this page (the only consumer).
-  // The pending resolver lives in a ref (not state) so an unmount mid-prompt can
-  // settle the awaiting write chain with null instead of leaking a hung promise.
+  // GH #973: NTAG size picker — a promise-based modal used when a reader can't
+  // auto-detect the chip size (GET_VERSION rejected). Resolves to the chosen size
+  // + whether to remember it as the default, or null when cancelled. Kept local
+  // to this page (the only consumer). The pending resolver lives in a ref (not
+  // state) so an unmount mid-prompt can settle the awaiting write chain with null
+  // instead of leaking a hung promise.
+  type NtagPickResult = { size: NtagSizeName; remember: boolean };
+  const { defaultSize: ntagDefaultSize, setDefaultSize: setNtagDefaultSize } = useNtagDefaultSize();
   const [ntagSizePromptOpen, setNtagSizePromptOpen] = useState(false);
-  const ntagSizeResolverRef = useRef<((v: NtagSizeName | null) => void) | null>(null);
+  const [ntagRemember, setNtagRemember] = useState(false);
+  const ntagRememberRef = useRef(false); // read synchronously in resolveNtagSize (avoids stale closure)
+  const ntagSizeResolverRef = useRef<((v: NtagPickResult | null) => void) | null>(null);
   const ntagDialogRef = useRef<HTMLDivElement>(null);
+  const setNtagRememberChecked = useCallback((v: boolean) => {
+    ntagRememberRef.current = v;
+    setNtagRemember(v);
+  }, []);
   const promptNtagSize = useCallback(
     () =>
-      new Promise<NtagSizeName | null>((resolve) => {
+      new Promise<NtagPickResult | null>((resolve) => {
         ntagSizeResolverRef.current = resolve;
+        setNtagRememberChecked(false); // reset the checkbox each time the picker opens
         setNtagSizePromptOpen(true);
       }),
-    [],
+    [setNtagRememberChecked],
   );
-  const resolveNtagSize = useCallback((v: NtagSizeName | null) => {
+  // Called by the size buttons (with a size) or cancel/Escape/backdrop (null).
+  const resolveNtagSize = useCallback((size: NtagSizeName | null) => {
     setNtagSizePromptOpen(false);
-    ntagSizeResolverRef.current?.(v);
+    ntagSizeResolverRef.current?.(
+      size == null ? null : { size, remember: ntagRememberRef.current },
+    );
     ntagSizeResolverRef.current = null;
   }, []);
   // Settle any pending prompt on unmount so `await promptNtagSize()` can't hang.
@@ -678,10 +692,17 @@ function FilamentDetail() {
         // corrects a tag an earlier failed write mis-formatted.
         let ntagSize: NtagSizeName | undefined;
         if (effectiveCapacity == null) {
-          const picked = await promptNtagSize();
-          if (!picked) return null; // user cancelled the write
-          ntagSize = picked;
-          effectiveCapacity = NTAG_NAME_TO_NDEF_BYTES[picked];
+          if (ntagDefaultSize !== "ask") {
+            // A saved default (Settings, or a remembered pick) → skip the prompt
+            // so a batch of same-type tags writes without re-picking each time.
+            ntagSize = ntagDefaultSize;
+          } else {
+            const picked = await promptNtagSize();
+            if (!picked) return null; // user cancelled the write
+            ntagSize = picked.size;
+            if (picked.remember) setNtagDefaultSize(picked.size); // "don't ask again"
+          }
+          effectiveCapacity = NTAG_NAME_TO_NDEF_BYTES[ntagSize];
         }
         let includeExtended = true;
         if (effectiveCapacity != null) {
@@ -741,7 +762,7 @@ function FilamentDetail() {
         || `https://filamentdb.app/filament/${encodeURIComponent(filament.vendor)}/${encodeURIComponent(filament.name)}`;
       return { payload, standard: "openprinttag", productUrl };
     },
-    [filament, toast, t, promptNtagSize],
+    [filament, toast, t, promptNtagSize, ntagDefaultSize, setNtagDefaultSize],
   );
 
   const handleNfcWrite = async () => {
@@ -2338,10 +2359,19 @@ function FilamentDetail() {
                 </button>
               ))}
             </div>
+            <label className="mt-4 flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={ntagRemember}
+                onChange={(e) => setNtagRememberChecked(e.target.checked)}
+                className="rounded border-gray-300 dark:border-gray-600"
+              />
+              {t("detail.nfc.ntagSize.remember")}
+            </label>
             <button
               type="button"
               onClick={() => resolveNtagSize(null)}
-              className="mt-4 w-full rounded-md px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+              className="mt-3 w-full rounded-md px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
             >
               {t("detail.nfc.ntagSize.cancel")}
             </button>
