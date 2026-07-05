@@ -137,6 +137,12 @@ export function useNumberFormat() {
   // first render matches the server. Also consumed by useCurrency.
   const separators: Separators | null = ready ? resolveSeparators(config) : null;
   const deviceLocale = osLocale ?? locale;
+  // The locale to use for Intl-based (system-mode) number/currency grouping.
+  // `undefined` pre-`ready` so callers keep their app-locale default and the
+  // first render matches the server. Post-`ready` it's the device locale, so
+  // currency in system mode groups per device — matching weights/counts
+  // (Codex P2: otherwise system-mode prices stayed on the app locale).
+  const systemLocale = ready ? deviceLocale : undefined;
   const group = separators?.group;
   const decimal = separators?.decimal;
 
@@ -206,7 +212,7 @@ export function useNumberFormat() {
   );
 
   return useMemo(
-    () => ({ config, setConfig: setNumberFormat, separators, formatGrams, formatNumber }),
-    [config, separators, formatGrams, formatNumber],
+    () => ({ config, setConfig: setNumberFormat, separators, systemLocale, formatGrams, formatNumber }),
+    [config, separators, systemLocale, formatGrams, formatNumber],
   );
 }

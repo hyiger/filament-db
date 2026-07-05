@@ -110,7 +110,7 @@ export function useCurrency() {
   // The number-format preference also governs currency grouping/decimals.
   // `separators` is null in system mode (and pre-hydration), where currency
   // keeps its locale-aware Intl formatting unchanged.
-  const { separators } = useNumberFormat();
+  const { separators, systemLocale } = useNumberFormat();
   const numGroup = separators?.group;
   const numDecimal = separators?.decimal;
   const [customCurrencies, setCustomCurrenciesState] = useState<CustomCurrency[]>([]);
@@ -270,8 +270,12 @@ export function useCurrency() {
    */
   const format = useCallback(
     (value: number, localeOverride?: string): string => {
-      // Default to the app's i18n locale; an explicit arg still wins. (#821)
-      const effectiveLocale = localeOverride ?? locale ?? undefined;
+      // Default to the app's i18n locale; an explicit arg still wins (#821).
+      // In System number-format mode, `systemLocale` is the device locale so
+      // currency grouping matches weights/counts; it's undefined pre-hydration
+      // and for presets (where group/decimal parts are swapped below), so those
+      // keep the app-locale base. (Codex P2 on the number-format PR.)
+      const effectiveLocale = localeOverride ?? systemLocale ?? locale ?? undefined;
       const isBuiltin = CURRENCIES.some((c) => c.code === currency);
       if (isBuiltin) {
         try {
@@ -315,7 +319,7 @@ export function useCurrency() {
       }
       return `${symbol}${value.toFixed(2)}`;
     },
-    [currency, symbol, locale, numGroup, numDecimal],
+    [currency, symbol, locale, systemLocale, numGroup, numDecimal],
   );
 
   return {
