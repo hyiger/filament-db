@@ -32,7 +32,7 @@ interface UpdateInstallStrings {
 contextBridge.exposeInMainWorld("electronAPI", {
   // Config
   getConfig: () => ipcRenderer.invoke("get-config"),
-  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string; labelFormat?: string; ntagDefaultSize?: string; exposeToLan?: boolean }) =>
+  saveConfig: (config: { mongodbUri?: string; connectionMode?: string; atlasUri?: string; geminiApiKey?: string; aiApiKey?: string; aiProvider?: string; currency?: string; customCurrencies?: string; locale?: string; labelFormat?: string; dateFormat?: string; ntagDefaultSize?: string; exposeToLan?: boolean }) =>
     ipcRenderer.invoke("save-config", config),
   resetConfig: () => ipcRenderer.invoke("reset-config"),
   testConnection: (uri: string) => ipcRenderer.invoke("test-connection", uri),

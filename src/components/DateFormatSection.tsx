@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useDateFormat } from "@/hooks/useDateFormat";
 import { type DateFormatMode, isValidPattern } from "@/lib/dateFormatPref";
 
-/** Date-format picker, rendered as a settings card (GH #983). Preset presets
+/** Date-format picker, rendered as a settings card (GH #983). Presets
  *  (System / ISO / US / European) plus a custom token pattern, with a live
  *  preview of today's date and inline validation. Mirrors the Currency /
  *  Theme cards on /settings/ui. */
@@ -13,8 +13,13 @@ export default function DateFormatSection() {
   const { t } = useTranslation();
   const { config, setConfig, formatDate } = useDateFormat();
 
-  // Local editing state for the custom pattern, seeded from the stored value.
-  const [customPattern, setCustomPattern] = useState(config.pattern ?? "");
+  // The custom-pattern text is derived directly from `config.pattern` (not
+  // local state) so it stays correct across the useSyncExternalStore
+  // hydration swap — opening /settings/ui with a saved custom format shows
+  // the persisted pattern rather than an empty input (Codex P2). Every
+  // keystroke already writes through onPatternChange, so config.pattern is
+  // always the live value.
+  const pattern = config.pattern ?? "";
 
   // A single "today" instance so the preview doesn't churn every render.
   const sample = useMemo(() => new Date(), []);
@@ -30,19 +35,15 @@ export default function DateFormatSection() {
   function selectMode(mode: DateFormatMode) {
     // Preserve any typed custom pattern when switching to a preset so toggling
     // back to Custom doesn't lose it.
-    if (mode === "custom" || customPattern) {
-      setConfig({ mode, pattern: customPattern });
-    } else {
-      setConfig({ mode });
-    }
+    setConfig(pattern ? { mode, pattern } : { mode });
   }
 
   function onPatternChange(value: string) {
-    setCustomPattern(value);
     setConfig({ mode: "custom", pattern: value });
   }
 
-  const customInvalid = config.mode === "custom" && !isValidPattern(customPattern);
+  const customInvalid =
+    config.mode === "custom" && pattern !== "" && !isValidPattern(pattern);
 
   return (
     <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-5">
@@ -79,7 +80,7 @@ export default function DateFormatSection() {
           <input
             id="date-format-pattern"
             type="text"
-            value={customPattern}
+            value={pattern}
             onChange={(e) => onPatternChange(e.target.value)}
             placeholder={t("settings.dateFormat.customPlaceholder")}
             maxLength={40}
