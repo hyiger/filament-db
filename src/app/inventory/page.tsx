@@ -814,7 +814,10 @@ export default function InventoryPage() {
                       group.count === 1
                         ? "inventory.group.summary.one"
                         : "inventory.group.summary.other",
-                      { count: group.count, grams: formatNumber(group.totalGrams, { maxDecimals: 0 }) },
+                      {
+                        count: formatNumber(group.count, { maxDecimals: 0 }),
+                        grams: formatNumber(group.totalGrams, { maxDecimals: 0 }),
+                      },
                     )}
                   </div>
                 </button>
