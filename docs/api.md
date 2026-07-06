@@ -672,10 +672,11 @@ Send a JSON body. `tagType` selects the decoder; the byte fields are base64:
 }
 ```
 
-- `tagType` (required) — `"openprinttag"` or `"bambu"`.
+- `tagType` (required) — `"openprinttag"`, `"opentag3d"`, or `"bambu"`.
 - **OpenPrintTag (ISO 15693 / NFC-V)** — supply **one** of:
   - `payload` — base64 of the NDEF record payload (CBOR). Preferred; iOS Core NFC hands back already-parsed NDEF records.
   - `tagMemory` — base64 of the raw tag memory; the route runs `parseNdefFromTag` to extract the payload.
+- **OpenTag3D (Type-2 NTAG / Type-5 SLIX2, fixed binary memory map)** — supply `payload` (pre-parsed record bytes) or `tagMemory` (raw dump). A raw `tagMemory` dump is **auto-sniffed** (CC-offset + record MIME, via the pluggable codec registry) regardless of the `tagType` hint, so the mobile client needs no format detection.
 - **Bambu (MIFARE Classic / ISO 14443-3A)** — `blocks`: an object mapping the absolute MIFARE block number (`0`–`63`, as a string key) to the base64 of that 16-byte plaintext block. At least one readable block is required, and the dump must carry at least one identity block (variant/material id or filament type) — an empty or identity-less block map is rejected as an undecodable read rather than returned as a fabricated all-zero tag.
 
 Matching mirrors the NFC read workflow: the decoded `spoolUid` is tried as an `instanceId` first (an OpenPrintTag written by Filament DB stores the filament's `instanceId` in its `spool_uid` field), then it falls through to `name` → `vendor`+`type` exactly like `GET /api/filaments/match`. Decoded strings are bounded to 128 chars before they feed the regex queries.
@@ -708,7 +709,7 @@ Returns `200`:
 Errors:
 - `400` — invalid JSON, body not an object, missing byte fields for the chosen `tagType`, or undecodable / wrong-format bytes (`"Could not decode tag"` with the underlying reason).
 - `413` — request body larger than the 64 KB ceiling (checked against both the `Content-Length` header and the buffered byte length, so a chunked body can't slip past).
-- `415` — `tagType` is neither `"openprinttag"` nor `"bambu"`.
+- `415` — `tagType` is not one of `"openprinttag"`, `"opentag3d"`, or `"bambu"`.
 
 ---
 
@@ -1261,12 +1262,14 @@ Aggregates PrintHistory rows plus any manual per-spool usageHistory entries (the
   "since": "2026-03-23T00:00:00Z",
   "days": 30,
   "totals": { "grams": 3240, "cost": 82.50, "jobs": 17, "manualEntries": 2 },
-  "usageByDay": [{ "date": "2026-03-23", "grams": 0 }, …],
+  "usageByDay": [{ "date": "2026-03-23", "grams": 0, "byFilament": [{ "id": "…", "name": "PLA Black", "color": "#000000", "grams": 0 }] }, …],
   "byFilament":  [{ "_id": "…", "name": "PLA Black", "vendor": "Vendor A", "cost": 25, "grams": 1200 }, …],
   "byVendor":    [{ "vendor": "Vendor A", "grams": 2100 }, …],
   "byPrinter":   [{ "_id": "…", "name": "Core One", "grams": 1900 }, …]
 }
 ```
+
+Each `usageByDay[i]` carries a per-day `byFilament` breakdown (`{ id, name, color, grams }`, sorted DESC by grams) for the stacked "Detailed" chart (v1.60.1, #934/#936). The per-day segments sum exactly to `day.grams` (Hamilton largest-remainder apportionment), so they can differ slightly from the top-level window-total `byFilament` ranking. Days are emitted in ASC `YYYY-MM-DD` (UTC) order.
 
 `usageHistory` entries are only pulled in when `source === "manual"`. Entries with `source: "job"` or `"slicer"` are owned by a PrintHistory row and already counted in the primary aggregation — including them here would double-count the same grams.
 

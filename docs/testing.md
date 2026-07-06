@@ -37,12 +37,12 @@ The exact file and test counts drift on every PR — run `npm test` for the curr
 
 The Vitest config (`vitest.config.ts`) enforces the following minimum thresholds for files in `src/lib/` and `src/models/`:
 
-- **Statements**: 80%
-- **Branches**: 75%
-- **Functions**: 90%
-- **Lines**: 80%
+- **Statements**: 98%
+- **Branches**: 96%
+- **Functions**: 96%
+- **Lines**: 99%
 
-Tests will fail if coverage drops below these thresholds.
+Tests will fail if coverage drops below these thresholds. (Raised from 80/75/90/80 in the v1.62 coverage sweep, #942.)
 
 **Coverage scope**: Thresholds currently apply only to `src/lib/**` and `src/models/**`. API routes (`src/app/api/`), pages (`src/app/`), and Electron code (`electron/`) are not covered by the threshold gate.
 
@@ -58,7 +58,7 @@ Tests run against Node.js 20 and 22. Coverage reports are uploaded as artifacts 
 
 ### Release Workflow (`.github/workflows/release.yml`)
 
-Runs automatically on version tags (`v*`). Tests are run on all six build configurations (macOS arm64 + x64, Windows x64 + arm64, Linux x64 + arm64) before building the Electron installers. If tests fail, the build is skipped for that platform.
+Runs automatically on version tags (`v*`). The full CI gate (lint, root + Electron typecheck, coverage-enforced tests, `npm audit`, build, and the standalone smoke test) runs **once** via the reusable `ci-gate.yml` workflow in a single `gate` job (#852); the six platform build legs (macOS arm64 + x64, Windows x64 + arm64, Linux x64 + arm64) `needs: gate`, so a failing gate blocks the whole release rather than being re-run per platform.
 
 ## Test Setup
 
