@@ -16,10 +16,17 @@
 
 /**
  * `system` follows the device's locale via `Intl.NumberFormat`; `usuk`,
- * `european`, `space` are fixed separator pairs; `custom` is a user-chosen pair.
+ * `european`, `space` are fixed separator pairs; `none` disables thousands
+ * grouping entirely (`12345689.56`); `custom` is a user-chosen pair.
  * (US and UK number formats are identical, so they share one preset.)
  */
-export type NumberFormatMode = "system" | "usuk" | "european" | "space" | "custom";
+export type NumberFormatMode =
+  | "system"
+  | "usuk"
+  | "european"
+  | "space"
+  | "none"
+  | "custom";
 
 export interface NumberFormatPref {
   mode: NumberFormatMode;
@@ -42,11 +49,15 @@ export interface Separators {
 }
 
 /** Fixed separator pairs for the named presets. `system`/`custom` resolve
- *  elsewhere. */
-export const PRESET_SEPARATORS: Record<"usuk" | "european" | "space", Separators> = {
+ *  elsewhere. `none` uses an empty group separator (no thousands grouping). */
+export const PRESET_SEPARATORS: Record<
+  "usuk" | "european" | "space" | "none",
+  Separators
+> = {
   usuk: { group: ",", decimal: "." },
   european: { group: ".", decimal: "," },
   space: { group: GROUP_SPACE, decimal: "," },
+  none: { group: "", decimal: "." },
 };
 
 const MODES: readonly NumberFormatMode[] = [
@@ -54,6 +65,7 @@ const MODES: readonly NumberFormatMode[] = [
   "usuk",
   "european",
   "space",
+  "none",
   "custom",
 ];
 
@@ -96,6 +108,8 @@ export function resolveSeparators(pref: NumberFormatPref): Separators | null {
       return PRESET_SEPARATORS.european;
     case "space":
       return PRESET_SEPARATORS.space;
+    case "none":
+      return PRESET_SEPARATORS.none;
     case "custom":
       return pref.group !== undefined &&
         pref.decimal !== undefined &&

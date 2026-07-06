@@ -22,6 +22,7 @@ export default function NumberFormatSection() {
     { code: "usuk", labelKey: "settings.numberFormat.mode.usuk" },
     { code: "european", labelKey: "settings.numberFormat.mode.european" },
     { code: "space", labelKey: "settings.numberFormat.mode.space" },
+    { code: "none", labelKey: "settings.numberFormat.mode.none" },
     { code: "custom", labelKey: "settings.numberFormat.mode.custom" },
   ];
 

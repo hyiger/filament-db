@@ -63,6 +63,7 @@ describe("resolveSeparators", () => {
     expect(resolveSeparators({ mode: "usuk" })).toEqual(PRESET_SEPARATORS.usuk);
     expect(resolveSeparators({ mode: "european" })).toEqual(PRESET_SEPARATORS.european);
     expect(resolveSeparators({ mode: "space" })).toEqual(PRESET_SEPARATORS.space);
+    expect(resolveSeparators({ mode: "none" })).toEqual(PRESET_SEPARATORS.none);
   });
   it("returns a valid custom pair and null for an invalid/missing one", () => {
     expect(resolveSeparators({ mode: "custom", group: " ", decimal: "," })).toEqual({
@@ -84,6 +85,12 @@ describe("formatWithSeparators", () => {
     expect(formatWithSeparators(1245414.45, usuk)).toBe("1,245,414.45");
     expect(formatWithSeparators(1245414.45, eu)).toBe("1.245.414,45");
     expect(formatWithSeparators(1245414.45, sp)).toBe(`1${GROUP_SPACE}245${GROUP_SPACE}414,45`);
+  });
+  it("the None preset renders no thousands grouping, dot decimal", () => {
+    const none = PRESET_SEPARATORS.none;
+    expect(formatWithSeparators(12345689.56, none)).toBe("12345689.56");
+    expect(formatWithSeparators(1000, none)).toBe("1000");
+    expect(formatWithSeparators(1234.5, none)).toBe("1234.5");
   });
   it("groups on 4- and 7-digit boundaries correctly", () => {
     expect(formatWithSeparators(1000, usuk)).toBe("1,000");

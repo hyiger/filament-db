@@ -1507,6 +1507,7 @@
   "settings.numberFormat.mode.usuk": "US / UK (1,234,567.89)",
   "settings.numberFormat.mode.european": "Europäisch (1.234.567,89)",
   "settings.numberFormat.mode.space": "Leerzeichen (1 234 567,89)",
+  "settings.numberFormat.mode.none": "Keine (1234567.89)",
   "settings.numberFormat.mode.custom": "Benutzerdefiniert",
   "settings.numberFormat.groupLabel": "Tausender",
   "settings.numberFormat.decimalLabel": "Dezimal",
