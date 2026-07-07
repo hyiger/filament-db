@@ -1014,4 +1014,94 @@ describe("/api/spools/import", () => {
       expect(fresh.spools[0].instanceId).toBe("dupe123456");
     });
   });
+
+  describe("size caps (GH #991)", () => {
+    // 10 MB is MAX_UPLOAD_SIZE. Build one ~11.2 MB body and reuse it across the
+    // post-buffer / File.size cases so the suite makes a single large alloc.
+    // The Content-Length preflight cases use a tiny body + a fabricated
+    // oversized header, so they cost nothing.
+    const OVERSIZED = "A,1\n".repeat(2_800_000); // ~11.2 MB
+    const OVER_CL = String(11 * 1024 * 1024);
+
+    function rawRequest(body: string, contentLength?: string) {
+      const headers: Record<string, string> = { "content-type": "text/csv" };
+      if (contentLength !== undefined) headers["content-length"] = contentLength;
+      return new NextRequest("http://localhost/api/spools/import", {
+        method: "POST",
+        headers,
+        body,
+      });
+    }
+
+    function jsonRequestCL(csv: string, contentLength?: string) {
+      const headers: Record<string, string> = { "content-type": "application/json" };
+      if (contentLength !== undefined) headers["content-length"] = contentLength;
+      return new NextRequest("http://localhost/api/spools/import", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ csv }),
+      });
+    }
+
+    function multipartRequest(file: File) {
+      const fd = new FormData();
+      fd.append("file", file);
+      // Let FormData drive the multipart content-type + boundary.
+      return new NextRequest("http://localhost/api/spools/import", {
+        method: "POST",
+        body: fd,
+      });
+    }
+
+    // A 413 here must short-circuit BEFORE any CSV parsing / DB work, so the
+    // body carries no per-row `results`.
+    async function expectSizeReject(res: Response) {
+      expect(res.status).toBe(413);
+      const body = await res.json();
+      expect(body.error).toMatch(/too large/i);
+      expect(body.results).toBeUndefined();
+      expect(body.imported).toBeUndefined();
+    }
+
+    it("rejects a raw text/csv body whose declared Content-Length exceeds 10 MB", async () => {
+      // Preflight path: only a header, no large payload.
+      const res = await importSpools(rawRequest("filament,totalWeight\nX,1\n", OVER_CL));
+      await expectSizeReject(res);
+    });
+
+    it("rejects a raw body over 10 MB even when Content-Length understates it", async () => {
+      // Post-buffer byteLength re-check: preflight passes on the lying header,
+      // then the buffered body trips the cap.
+      const res = await importSpools(rawRequest(OVERSIZED, "100"));
+      await expectSizeReject(res);
+    });
+
+    it("rejects a JSON { csv } body whose declared Content-Length exceeds 10 MB", async () => {
+      const res = await importSpools(jsonRequestCL("filament,totalWeight\nX,1\n", OVER_CL));
+      await expectSizeReject(res);
+    });
+
+    it("rejects a JSON { csv } whose csv string is over 10 MB with an understated Content-Length", async () => {
+      const res = await importSpools(jsonRequestCL(OVERSIZED, "100"));
+      await expectSizeReject(res);
+    });
+
+    it("rejects a multipart upload whose file is over 10 MB", async () => {
+      const file = new File([OVERSIZED], "big.csv", { type: "text/csv" });
+      const res = await importSpools(multipartRequest(file));
+      await expectSizeReject(res);
+    });
+
+    it("does not reject a normal small body (preflight isn't over-eager)", async () => {
+      const f = await Filament.create({ name: "SizeOk", vendor: "T", type: "PLA" });
+      const csv = "filament,totalWeight\nSizeOk,950\n";
+      // Honest small Content-Length — must pass the preflight and import.
+      const res = await importSpools(rawRequest(csv, String(Buffer.byteLength(csv, "utf8"))));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.imported).toBe(1);
+      expect(body.failed).toBe(0);
+      void f;
+    });
+  });
 });
