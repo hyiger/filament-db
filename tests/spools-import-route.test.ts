@@ -1092,6 +1092,29 @@ describe("/api/spools/import", () => {
       await expectSizeReject(res);
     });
 
+    it("rejects a multipart body over the cap BEFORE parsing the form (Codex P2 round 2)", async () => {
+      // A small multipart body with a fabricated oversized Content-Length must
+      // be rejected by the preflight before formData() consumes the envelope —
+      // covers the "small file + tens of MB of extra fields" total-body abuse
+      // that checkFileSize (file part only, post-parse) can't catch.
+      const boundary = "----filamentdbtest";
+      const body =
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="file"; filename="x.csv"\r\n` +
+        `Content-Type: text/csv\r\n\r\n` +
+        `filament,totalWeight\nX,1\n\r\n` +
+        `--${boundary}--\r\n`;
+      const req = new NextRequest("http://localhost/api/spools/import", {
+        method: "POST",
+        headers: {
+          "content-type": `multipart/form-data; boundary=${boundary}`,
+          "content-length": OVER_CL,
+        },
+        body,
+      });
+      await expectSizeReject(await importSpools(req));
+    });
+
     it("caps the full JSON envelope, not just the csv field (Codex P2)", async () => {
       // A small `csv` with a huge sibling field must still be rejected on total
       // body size — the guard measures the raw payload before parsing, not only

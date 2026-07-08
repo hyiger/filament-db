@@ -15,6 +15,17 @@ import { unsanitizeCsvCell } from "@/lib/csvWriter";
 import { isValidIsoDateString, validateSpoolInstanceId, MAX_SPOOL_TEXT_LENGTH } from "@/lib/validateSpoolBody";
 
 /**
+ * Slack added to the 10 MB cap for the multipart Content-Length preflight, to
+ * cover the MIME envelope (boundary lines + per-part headers + CRLFs) so a
+ * legitimate ~10 MB file isn't rejected for its framing bytes. The route reads
+ * only the `file` field, so a real upload's overhead is a few hundred bytes;
+ * 64 KB is generous headroom while still far below the multi-MB abuse this
+ * guards against (GH #991). `checkFileSize` enforces the exact 10 MB on the
+ * file part itself.
+ */
+const MULTIPART_OVERHEAD_ALLOWANCE = 64 * 1024;
+
+/**
  * POST /api/spools/import — bulk-create OR upsert spools from CSV.
  *
  * Accepts either:
@@ -77,15 +88,19 @@ export async function POST(request: NextRequest) {
   // unauthenticated local/LAN API. Mirrors the sibling import routes
   // (prusaslicer, bambustudio, import-csv).
   //
-  // Non-multipart bodies get a Content-Length preflight here — kept OUTSIDE the
-  // try/catch below so a genuine 413 isn't downgraded into the 400 "Failed to
-  // read request body" path. The multipart branch is bounded by `checkFileSize`
-  // on the resolved File instead: its Content-Length includes MIME-envelope
-  // overhead that would over-count a legitimate ~10 MB upload.
-  if (!isMultipart) {
-    const sizeError = checkContentLength(request);
-    if (sizeError) return sizeError;
-  }
+  // Content-Length preflight for EVERY shape — kept OUTSIDE the try/catch below
+  // so a genuine 413 isn't downgraded into the 400 "Failed to read request
+  // body" path. The multipart branch gets a small envelope-overhead allowance
+  // (boundaries + part headers) so a legitimate ~10 MB file isn't tripped by
+  // its MIME framing, while a huge total body — a big file OR a small file plus
+  // tens of MB of extra fields — is still rejected before `formData()` buffers
+  // it (Codex P2: `checkFileSize` alone runs only AFTER the whole envelope is
+  // parsed and measures only the `file` part). `checkFileSize` below then
+  // enforces the exact 10 MB bound on the file part itself.
+  const preflight = isMultipart
+    ? checkContentLength(request, MAX_UPLOAD_SIZE + MULTIPART_OVERHEAD_ALLOWANCE)
+    : checkContentLength(request);
+  if (preflight) return preflight;
 
   try {
     if (isMultipart) {
@@ -100,8 +115,11 @@ export async function POST(request: NextRequest) {
       if (!(file instanceof File)) {
         return errorResponse("multipart upload must include a 'file' field", 400);
       }
-      // GH #991: cap on File.size BEFORE file.text() materialises the whole
-      // body into memory (matches /api/filaments/bambustudio).
+      // GH #991: exact cap on File.size BEFORE file.text() materialises the
+      // whole body into memory (matches /api/filaments/bambustudio). The
+      // Content-Length preflight above already rejected an oversized TOTAL body;
+      // this bounds the file part itself (e.g. a chunked request with no
+      // Content-Length that slipped past the preflight).
       const sizeError = checkFileSize(file);
       if (sizeError) return sizeError;
       csvText = await file.text();
