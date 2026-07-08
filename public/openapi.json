@@ -2306,7 +2306,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write. Printers can also conflict on an AMS/MMU nozzle-slot assignment.",
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write. Printers additionally return 409 when an `installedNozzles` entry names a nozzle already installed in another printer.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2394,7 +2394,7 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write. Printers can also conflict on an AMS/MMU nozzle-slot assignment.",
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write. Printers additionally return 409 when an `installedNozzles` entry names a nozzle already installed in another printer.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5278,6 +5278,9 @@
             "multipart/form-data": {
               "schema": {
                 "type": "object",
+                "required": [
+                  "file"
+                ],
                 "properties": {
                   "file": {
                     "type": "string",
