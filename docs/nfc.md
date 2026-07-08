@@ -96,7 +96,7 @@ From any filament's detail page:
 
 ### Read-only (soft lock) *(v1.34.8 / #583)*
 
-You can mark an OpenPrintTag **read-only** so the app won't accidentally overwrite a finished spool's tag. From **Settings → NFC Tools**, with a tag on the reader:
+You can mark an OpenPrintTag **read-only** so the app won't accidentally overwrite a finished spool's tag. From **Settings → Devices** (the **NFC Tools** card), with a tag on the reader:
 
 - **Set Read-Only** — locks the tag. "Write NFC" then refuses it.
 - **Make Writable** — clears the lock.
@@ -107,7 +107,7 @@ This is a *reversible* soft lock (it flips the NFC-Forum CC write-access bits, n
 
 ### Erasing / Formatting Tags
 
-From the **Settings** page (Electron only):
+From **Settings → Devices** (the **NFC Tools** card, Electron only):
 
 1. Place a tag on the reader (the NFC status indicator turns green)
 2. Click **"Erase Tag"** (red button)

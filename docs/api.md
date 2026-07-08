@@ -469,7 +469,7 @@ Returns `application/json`: an array of OrcaSlicer profile objects.
 
 ### POST /api/filaments/:name-or-id/orcaslicer
 
-Sync filament settings back from OrcaSlicer. The path segment is the URL-encoded filament name OR a 24-char hex ObjectId; the route tries name first and falls back to id.
+Sync filament settings back from OrcaSlicer. The path segment is the URL-encoded filament name OR a 24-char hex ObjectId; a 24-hex ObjectId is **authoritative** and resolved FIRST, falling back to a name lookup only when that `_id` matches no filament (e.g. a preset legitimately named with 24 hex characters). This matches the id-addressed calibration and spool-check routes (GH #950/#867).
 
 Request body is a JSON object with any combination of OrcaSlicer keys. Recognised structured keys (`type`, `vendor`, `color`, `density`, `cost`, `diameter`, `maxVolumetricSpeed`, `temperatures`) are written to the corresponding DB fields; any other top-level keys are merged into the `settings` passthrough bag so they round-trip cleanly on the next export.
 

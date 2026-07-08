@@ -616,6 +616,70 @@ Liefert `202 Accepted`:
 
 ---
 
+## NFC-Tag-Dekodierung
+
+| Methode | Endpunkt | Beschreibung |
+|--------|----------|-------------|
+| `POST` | `/api/nfc/decode` | Dekodiert rohe NFC-Tag-Bytes serverseitig (OpenPrintTag, OpenTag3D oder Bambu) und gleicht das Ergebnis mit der DB ab. Ein roher Speicherauszug wird automatisch erkannt (die OpenTag3D-MIME-Kennung wird über die Codec-Registry ermittelt). Versorgt die mobile Scanner-App |
+
+### POST /api/nfc/decode
+
+Dekodiert rohe NFC-Tag-Bytes in ein `DecodedOpenPrintTag` und hängt in einem einzigen Roundtrip einen DB-Match an. Die mobile Scanner-App liest die Tag-Bytes auf dem Gerät, sendet sie per POST hierher und rendert das Ergebnis — die Dekodierlogik (OpenPrintTag-CBOR, Bambu MIFARE Classic mit seinem aus der UID abgeleiteten HKDF-Schlüssel) ist komplex und hängt bei Bambu von Node-`crypto` ab, das in React Native nicht läuft, deshalb liegt sie auf dem Server. Das hält zudem einen einzigen, getesteten Codepfad gemeinsam mit dem Desktop-Reader, statt eines abdriftenden Client-Dekoders.
+
+Wie `GET /api/filaments/match` ist diese Route absichtlich **nicht** durch `assertSameOriginRequest` geschützt — sie führt keine Mutation aus (Dekodierung + reiner Lesezugriff) und ist dafür gedacht, von der Cross-Origin-Mobile-App erreicht zu werden. Wenn `FILAMENTDB_API_KEY` gesetzt ist, verlangt `src/proxy.ts` von jedem `/api`-Aufrufer (auch von dieser Route) ein `Authorization: Bearer <key>`; dieser Schlüssel — nicht eine Same-Origin-Prüfung — regelt den Zugriff von außerhalb des Geräts.
+
+Sende einen JSON-Body. `tagType` wählt den Dekoder; die Byte-Felder sind base64-kodiert:
+
+```json
+{
+  "tagType": "openprinttag",
+  "payload": "…base64…",
+  "tagMemory": "…base64…",
+  "blocks": { "1": "…base64…", "2": "…base64…" }
+}
+```
+
+- `tagType` (erforderlich) — `"openprinttag"`, `"opentag3d"` oder `"bambu"`.
+- **OpenPrintTag (ISO 15693 / NFC-V)** — genau **eines** angeben:
+  - `payload` — base64 der NDEF-Record-Payload (CBOR). Bevorzugt; iOS Core NFC liefert bereits geparste NDEF-Records zurück.
+  - `tagMemory` — base64 des rohen Tag-Speichers; die Route ruft `parseNdefFromTag` auf, um die Payload zu extrahieren.
+- **OpenTag3D (Type-2-NTAG / Type-5-SLIX2, feste binäre Speicherkarte)** — `payload` (vorab geparste Record-Bytes) oder `tagMemory` (Rohauszug) angeben. Ein roher `tagMemory`-Auszug wird unabhängig vom `tagType`-Hinweis **automatisch erkannt** (CC-Offset + Record-MIME über die austauschbare Codec-Registry), sodass der mobile Client keine Formaterkennung benötigt.
+- **Bambu (MIFARE Classic / ISO 14443-3A)** — `blocks`: ein Objekt, das die absolute MIFARE-Blocknummer (`0`–`63`, als String-Schlüssel) auf die base64-Kodierung des jeweiligen 16-Byte-Klartextblocks abbildet. Mindestens ein lesbarer Block ist erforderlich, und der Auszug muss mindestens einen Identitätsblock (Varianten-/Material-ID oder Filamenttyp) enthalten — eine leere oder identitätslose Block-Map wird als nicht dekodierbare Lesung abgelehnt, statt als erfundenes Null-Tag zurückgegeben zu werden.
+
+Das Matching spiegelt den NFC-Lese-Workflow: die dekodierte `spoolUid` wird zuerst als `instanceId` versucht (ein von Filament DB geschriebenes OpenPrintTag speichert die `instanceId` des Filaments im Feld `spool_uid`), dann fällt es auf `name` → `vendor`+`type` zurück, genau wie `GET /api/filaments/match`. Dekodierte Zeichenketten werden auf 128 Zeichen begrenzt, bevor sie in die Regex-Abfragen einfließen.
+
+Gibt `200` zurück:
+
+```json
+{
+  "decoded": {
+    "materialName": "Prusament PLA Galaxy Black",
+    "brandName": "Prusament",
+    "materialType": "PLA",
+    "color": "#000000",
+    "spoolUid": "2acc21072a",
+    "tagSource": "openprinttag"
+  },
+  "match": { "_id": "…", "name": "…", "vendor": "…", "type": "…", "color": "…" },
+  "matchedSpool": { "_id": "…", "instanceId": "…", "label": "…" },
+  "candidates": [],
+  "matchedBy": "instanceId"
+}
+```
+
+- `decoded` — das vollständige `DecodedOpenPrintTag`.
+- `match` — die gematchte DB-Zeile oder `null`, wenn nichts passt.
+- `matchedSpool` — die Spule, deren `instanceId` mit dem Tag übereinstimmte (#732), oder `null`, wenn der Treffer auf Filamentebene oder heuristisch war.
+- `candidates` — plausible Alternativen (Hersteller+Typ, dann nur Hersteller), wenn es keinen sicheren Match gibt; sonst leer.
+- `matchedBy` — `"instanceId"`, wenn die `spool_uid` des Tags eine **spulenspezifische** `spools[].instanceId` ODER die `instanceId` auf Filamentebene traf, `"heuristic"` bei einem Treffer aus den schwächeren Stufen (Name / Hersteller+Typ), oder `null`, wenn es keinen Match gibt.
+
+Fehler:
+- `400` — ungültiges JSON, Body ist kein Objekt, fehlende Byte-Felder für den gewählten `tagType` oder nicht dekodierbare / falsch formatierte Bytes (`"Could not decode tag"` mit dem zugrunde liegenden Grund).
+- `413` — Request-Body größer als die Obergrenze von 64 KB (geprüft gegen den `Content-Length`-Header und die gepufferte Byte-Länge, sodass ein Chunked-Body nicht durchrutschen kann).
+- `415` — `tagType` ist keines von `"openprinttag"`, `"opentag3d"` oder `"bambu"`.
+
+---
+
 ## OpenPrintTag-Datenbank
 
 | Methode | Endpunkt | Beschreibung |

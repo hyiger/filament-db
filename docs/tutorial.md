@@ -163,10 +163,9 @@ If you have a link to a manufacturer's Technical Data Sheet (PDF or web page), t
 
 **First-time setup (once):**
 
-1. Go to **Settings** (link in the top navigation bar, or navigate to `/settings`).
-2. Scroll to **AI Features**.
-3. Choose a provider: **Google Gemini** (free tier), **Anthropic Claude**, or **OpenAI ChatGPT**.
-4. Click the provider link to get an API key (Gemini is free, Claude and OpenAI are pay-per-use).
+1. Go to **Settings → AI** (the **AI** tile on the Settings page, or navigate to `/settings/ai`).
+2. Choose a provider: **Google Gemini** (free tier), **Anthropic Claude**, or **OpenAI ChatGPT**.
+3. Click the provider link to get an API key (Gemini is free, Claude and OpenAI are pay-per-use).
 5. Paste the key and click **Save Key**. A green dot confirms it's configured.
 
 **Importing from TDS:**
@@ -406,10 +405,9 @@ A small colored dot appears in the header:
 
 ### Erasing a Tag
 
-1. Go to **Settings** (link in the top navigation bar).
-2. Scroll to the **NFC Tools** section — it shows the reader/tag status.
-3. Place a tag on the reader (status turns green).
-4. Click **Erase Tag** (red button).
+1. Go to **Settings → Devices** (the **Devices** tile, or navigate to `/settings/devices`) — the **NFC Tools** card shows the reader/tag status.
+2. Place a tag on the reader (status turns green).
+3. Click **Erase Tag** (red button).
 5. Confirm the action. The app zeroes all memory blocks and writes a blank header.
 6. The tag is now blank and ready to be rewritten.
 

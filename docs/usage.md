@@ -186,7 +186,7 @@ Synced collections: filaments (with embedded spools), nozzles, printers, locatio
 
 ## Language
 
-Go to **Settings** and use the **Language** toggle to switch between English and German. The setting is persisted in the desktop app's config (or localStorage in the web app) and takes effect immediately across all pages.
+Go to **Settings → UI Settings** and use the **Language** toggle to switch between English and German. The setting is persisted in the desktop app's config (or localStorage in the web app) and takes effect immediately across all pages.
 
 ---
 
@@ -309,7 +309,7 @@ On any filament's detail page:
 
 ### Erasing / Formatting Tags
 
-On the **Settings** page, the NFC Tools section lets you erase a tag:
+On **Settings → Devices**, the **NFC Tools** card lets you erase a tag:
 
 1. Place a tag on the reader (status turns green)
 2. Click **"Erase Tag"** and confirm
@@ -327,7 +327,7 @@ Extract filament properties automatically from a manufacturer's Technical Data S
 
 ### Setup
 
-1. Go to **Settings** and scroll to the **AI Features** section
+1. Go to **Settings → AI**
 2. Select your preferred AI provider: **Google Gemini**, **Anthropic Claude**, or **OpenAI ChatGPT**
 3. Get a free API key from your chosen provider (links are provided in the settings page)
 4. Paste the key and click **Save Key** — the key is validated before saving
@@ -353,7 +353,7 @@ The TDS URL is also saved to the filament's `tdsUrl` field for future reference.
 
 ### AI Settings
 
-On the **Settings** page under **AI Features**:
+On **Settings → AI**:
 
 - **Provider selector** — click a provider button to switch between Gemini, Claude, and ChatGPT
 - **API key** — masked input field with show/hide toggle
@@ -524,7 +524,7 @@ Click any material row to expand a detail panel with three columns:
    - **New materials** are created with all available fields
    - **Existing materials** are updated conservatively -- only null/empty fields are filled, preserving your existing calibration data
 
-### Checking for Community Updates *(v1.35)*
+### Checking for Community Updates *(v1.36)*
 
 The OpenPrintTag database is revised over time as the community adds data. A filament you imported keeps a link back to its source material, so you can pull later improvements without re-importing the whole catalog.
 
@@ -673,7 +673,7 @@ All edits go through the same `PUT /api/filaments/{id}/spools/{spoolId}` endpoin
 
 ## System Theme *(v1.11)*
 
-Settings → **Theme**: choose **Light**, **Dark**, or **System**. System mode follows the OS `prefers-color-scheme` media query. An inline init script runs before React mounts so the first paint is already the correct theme — no dark-mode flicker on cold load.
+**Settings → UI Settings → Theme**: choose **Light**, **Dark**, or **System**. System mode follows the OS `prefers-color-scheme` media query. An inline init script runs before React mounts so the first paint is already the correct theme — no dark-mode flicker on cold load.
 
 ## Auto-Update (Desktop) *(v1.11)*
 

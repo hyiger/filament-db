@@ -186,6 +186,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -337,6 +347,16 @@
           },
           "404": {
             "description": "Filament not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2038,6 +2058,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -2109,6 +2139,16 @@
           },
           "404": {
             "description": "Nozzle not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2264,6 +2304,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write. Printers can also conflict on an AMS/MMU nozzle-slot assignment.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -2335,6 +2385,16 @@
           },
           "404": {
             "description": "Printer not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write. Printers can also conflict on an AMS/MMU nozzle-slot assignment.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2947,6 +3007,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -3322,6 +3392,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -3394,6 +3474,16 @@
           },
           "404": {
             "description": "Bed type not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3524,6 +3614,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -3596,6 +3696,16 @@
           },
           "404": {
             "description": "Location not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4470,6 +4580,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Optimistic-concurrency version conflict on a concurrent write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -4709,6 +4829,16 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Optimistic-concurrency version conflict on a concurrent write.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           }
         }
       }
@@ -4890,6 +5020,16 @@
           },
           "404": {
             "description": "Print history not found or already deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Optimistic-concurrency version conflict on a concurrent write.",
             "content": {
               "application/json": {
                 "schema": {
@@ -5134,6 +5274,18 @@
                   }
                 }
               }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The CSV file (same columns as the raw text/csv body)."
+                  }
+                }
+              }
             }
           }
         },
@@ -5150,6 +5302,16 @@
           },
           "400": {
             "description": "Invalid or empty CSV",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the 10 MB cap (v1.66.1, #991) — enforced before parsing across the text/csv, JSON, and multipart shapes.",
             "content": {
               "application/json": {
                 "schema": {

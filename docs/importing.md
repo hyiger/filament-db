@@ -78,7 +78,7 @@ Extract filament properties automatically from a manufacturer's Technical Data S
 
 ### Prerequisites
 
-Configure an AI provider API key in **Settings > AI Features**. Supported providers:
+Configure an AI provider API key in **Settings → AI**. Supported providers:
 
 - **Google Gemini** — free tier (15 RPM), get a key at [Google AI Studio](https://aistudio.google.com/apikey)
 - **Anthropic Claude** — pay-per-use, get a key at [Anthropic Console](https://console.anthropic.com/settings/keys)
