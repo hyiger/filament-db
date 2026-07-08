@@ -1092,6 +1092,34 @@ describe("/api/spools/import", () => {
       await expectSizeReject(res);
     });
 
+    it("caps the full JSON envelope, not just the csv field (Codex P2)", async () => {
+      // A small `csv` with a huge sibling field must still be rejected on total
+      // body size — the guard measures the raw payload before parsing, not only
+      // the decoded csv string. Understated Content-Length so the preflight
+      // passes and the post-buffer byte check is what fires.
+      const req = new NextRequest("http://localhost/api/spools/import", {
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": "100" },
+        body: JSON.stringify({ csv: "filament,totalWeight\nX,1\n", padding: OVERSIZED }),
+      });
+      await expectSizeReject(await importSpools(req));
+    });
+
+    it("does not let a spoofed multipart content-type parameter bypass the cap (Codex P2)", async () => {
+      // `application/json; x="multipart/form-data"` must branch on its essence
+      // (application/json), so the size guards still apply — a substring match
+      // previously read it as multipart and skipped both checks.
+      const req = new NextRequest("http://localhost/api/spools/import", {
+        method: "POST",
+        headers: {
+          "content-type": 'application/json; x="multipart/form-data"',
+          "content-length": "100",
+        },
+        body: JSON.stringify({ csv: OVERSIZED }),
+      });
+      await expectSizeReject(await importSpools(req));
+    });
+
     it("does not reject a normal small body (preflight isn't over-eager)", async () => {
       const f = await Filament.create({ name: "SizeOk", vendor: "T", type: "PLA" });
       const csv = "filament,totalWeight\nSizeOk,950\n";

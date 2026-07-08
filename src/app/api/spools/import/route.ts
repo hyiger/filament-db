@@ -56,36 +56,39 @@ export async function POST(request: NextRequest) {
 
   let csvText: string;
 
-  const contentType = (request.headers.get("content-type") || "").toLowerCase();
-  const isMultipart = contentType.includes("multipart/form-data");
+  // Branch off the media-type ESSENCE (type/subtype), with parameters stripped.
+  // A substring match on the raw Content-Type let a request like
+  // `application/json; x="multipart/form-data"` read as multipart and skip BOTH
+  // size guards while still entering the JSON branch (Codex P2). Deciding the
+  // branch AND the guard gating from the exact essence closes that bypass;
+  // legitimate `charset=`/`boundary=` parameters are ignored either way.
+  const mediaType = (request.headers.get("content-type") || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+  const isJson = mediaType === "application/json";
+  const isMultipart = mediaType === "multipart/form-data";
 
   // GH #991: bound the request body BEFORE buffering it, so a large upload
   // can't drive the server to buffer + parse far more than this small
   // paste/spreadsheet workflow needs. `next.config.ts` raises
   // `proxyClientMaxBodySize` to 52 MB for snapshot restores, so without this
   // guard this endpoint inherits that budget even on the default
-  // unauthenticated local/LAN API.
+  // unauthenticated local/LAN API. Mirrors the sibling import routes
+  // (prusaslicer, bambustudio, import-csv).
   //
-  // Raw/JSON get a Content-Length preflight here — kept OUTSIDE the try/catch
-  // below so a genuine 413 isn't downgraded into the 400 "Failed to read
-  // request body" path — plus a post-buffer byte re-check for a missing/lying
-  // Content-Length. The multipart branch is bounded by `checkFileSize` on the
-  // resolved File instead: its Content-Length includes MIME-envelope overhead
-  // that would over-count a legitimate ~10 MB upload. Mirrors the sibling
-  // import routes (prusaslicer, bambustudio, import-csv).
+  // Non-multipart bodies get a Content-Length preflight here — kept OUTSIDE the
+  // try/catch below so a genuine 413 isn't downgraded into the 400 "Failed to
+  // read request body" path. The multipart branch is bounded by `checkFileSize`
+  // on the resolved File instead: its Content-Length includes MIME-envelope
+  // overhead that would over-count a legitimate ~10 MB upload.
   if (!isMultipart) {
     const sizeError = checkContentLength(request);
     if (sizeError) return sizeError;
   }
 
   try {
-    if (contentType.includes("application/json")) {
-      const body = await request.json();
-      if (typeof body?.csv !== "string") {
-        return errorResponse("Body must be { csv: string } for JSON requests", 400);
-      }
-      csvText = body.csv;
-    } else if (isMultipart) {
+    if (isMultipart) {
       // GH #339: the in-app importer (SpoolCsvImportDialog) reads the file
       // client-side and POSTs it as raw text/csv, but every other import
       // route in the app takes a multipart upload. Without this branch a
@@ -103,19 +106,30 @@ export async function POST(request: NextRequest) {
       if (sizeError) return sizeError;
       csvText = await file.text();
     } else {
-      csvText = await request.text();
+      // Raw text/csv AND JSON: read the raw body and byte-check the WHOLE
+      // buffered payload BEFORE any JSON.parse. This is the hard cap for a
+      // missing/lying Content-Length (chunked/headerless) that slips past the
+      // preflight and — for JSON — it bounds the full envelope, not just the
+      // decoded `csv` field, so a huge sibling JSON field can't sneak an
+      // oversized body through (Codex P2). Byte length, not String.length
+      // (UTF-16 units): a non-ASCII UTF-8 body can exceed 10 MB of bytes while
+      // under the char count (Codex P2 on PR #685).
+      const raw = await request.text();
+      if (Buffer.byteLength(raw, "utf8") > MAX_UPLOAD_SIZE) {
+        return errorResponse("Request body too large. Maximum is 10 MB.", 413);
+      }
+      if (isJson) {
+        const body = JSON.parse(raw);
+        if (typeof body?.csv !== "string") {
+          return errorResponse("Body must be { csv: string } for JSON requests", 400);
+        }
+        csvText = body.csv;
+      } else {
+        csvText = raw;
+      }
     }
   } catch {
     return errorResponse("Failed to read request body", 400);
-  }
-
-  // GH #991: byte-length re-check for the raw/JSON branches, catching a
-  // missing/wrong Content-Length that slips past the preflight. Byte length,
-  // not String.length (UTF-16 code units) — a non-ASCII UTF-8 body can exceed
-  // 10 MB of bytes while under the char count (Codex P2 on PR #685). Multipart
-  // is already bounded by checkFileSize above (which reads the true File.size).
-  if (!isMultipart && Buffer.byteLength(csvText, "utf8") > MAX_UPLOAD_SIZE) {
-    return errorResponse("Request body too large. Maximum is 10 MB.", 413);
   }
 
   // Strip BOM if present
