@@ -374,6 +374,34 @@ export async function PUT(
     if (!filament) {
       return errorResponse("Not found", 404);
     }
+
+    // GH #1004 F7: the parentId validation above is check-then-act — two
+    // concurrent re-parent PUTs (A→B and B→A) can each pass validation
+    // against pre-write state and both persist, creating a mutual A⇄B cycle
+    // (or an A→B while C→A nests inheritance) that every single-level read
+    // path (resolveFilament) assumes cannot exist. Re-assert the invariant
+    // against POST-write state and, on violation, revert just this doc's
+    // parentId and 409 so the caller retries. Only runs on an actual
+    // re-parent to a non-null parent (un-parenting can't create a cycle).
+    if (reparenting && body.parentId) {
+      const [newParent, childCount] = await Promise.all([
+        Filament.findOne({ _id: body.parentId, _deletedAt: null }).select("parentId").lean(),
+        Filament.countDocuments({ parentId: id, _deletedAt: null }),
+      ]);
+      const parentIsVariant = !newParent || newParent.parentId != null;
+      const gainedChildren = childCount > 0;
+      if (parentIsVariant || gainedChildren) {
+        await Filament.updateOne(
+          { _id: id },
+          { $set: { parentId: stored?.parentId ?? null } },
+        );
+        return errorResponse(
+          "Re-parenting conflicts with a concurrent change (it would create nested inheritance or a parent cycle). Please retry.",
+          409,
+        );
+      }
+    }
+
     return NextResponse.json(filament);
   } catch (err) {
     // Surface MongoDB duplicate-key errors (renaming a filament to a

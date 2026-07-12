@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { GET as getFilament, PUT as putFilament } from "@/app/api/filaments/[id]/route";
@@ -24,6 +24,10 @@ describe("PUT /api/filaments/[id] — client-input rejections return 400", () =>
       mongoose.model("Filament", filamentMod.default.schema);
     }
     Filament = mongoose.models.Filament;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("returns 400 when tdsUrl uses a non-http(s) scheme", async () => {
@@ -140,5 +144,81 @@ describe("PUT /api/filaments/[id] — client-input rejections return 400", () =>
     // monitoring branches on shape, and a clean 409 should look
     // distinct from a server fault.
     expect(body.detail).toBeUndefined();
+  });
+
+  // ── GH #1004 F7: concurrent re-parent can't create an A⇄B cycle ──
+  //
+  // The parentId validation is check-then-act. Two opposing re-parent PUTs
+  // (A→B and B→A) can each pass validation against pre-write state and both
+  // persist, forming a mutual cycle that resolveFilament (single-level by
+  // design) assumes cannot exist. A post-write re-assertion reverts + 409s.
+
+  function putReq(id: string, body: unknown) {
+    return putFilament(
+      new NextRequest(`http://localhost/api/filaments/${id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+      { params: Promise.resolve({ id }) },
+    );
+  }
+
+  it("F7: re-parenting to a valid root still succeeds (no false 409)", async () => {
+    const parent = await Filament.create({ name: "Root P", vendor: "T", type: "PLA" });
+    const child = await Filament.create({ name: "Child C", vendor: "T", type: "PLA" });
+
+    const res = await putReq(String(child._id), { parentId: String(parent._id) });
+    expect(res.status).toBe(200);
+
+    const reloaded = await Filament.findById(child._id).lean();
+    expect(String(reloaded.parentId)).toBe(String(parent._id));
+  });
+
+  it("F7: reverts parentId + 409 when the post-write re-assert finds a violation", async () => {
+    const parent = await Filament.create({ name: "Root P", vendor: "T", type: "PLA" });
+    const child = await Filament.create({ name: "Child C", vendor: "T", type: "PLA" });
+
+    // Deterministically simulate the check-then-act race: the pre-write
+    // variant-count reads 0 (validation passes), but by the post-write
+    // re-assertion this doc has gained a child (a concurrent PUT pointed a
+    // variant at it). A re-parent PUT calls countDocuments exactly twice —
+    // the pre-write guard, then the post-write re-check — in that order.
+    //
+    // Spy on the SAME model object the route uses (its module default). The
+    // beforeEach re-registers a DIFFERENT object after setup's model reset,
+    // so spying on the test's `Filament` would miss the route's calls.
+    const routeFilament = (await import("@/models/Filament")).default;
+    vi.spyOn(routeFilament, "countDocuments")
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1);
+
+    const res = await putReq(String(child._id), { parentId: String(parent._id) });
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toMatch(/concurrent|cycle|nested/i);
+
+    // parentId reverted to its pre-PUT value (null) — no cycle persisted.
+    const reloaded = await Filament.findById(child._id).lean();
+    expect(reloaded.parentId ?? null).toBeNull();
+  });
+
+  it("F7: two opposing concurrent re-parents never persist a mutual A⇄B cycle", async () => {
+    const a = await Filament.create({ name: "A", vendor: "T", type: "PLA" });
+    const b = await Filament.create({ name: "B", vendor: "T", type: "PLA" });
+
+    await Promise.all([
+      putReq(String(a._id), { parentId: String(b._id) }),
+      putReq(String(b._id), { parentId: String(a._id) }),
+    ]);
+
+    const [ra, rb] = await Promise.all([
+      Filament.findById(a._id).lean(),
+      Filament.findById(b._id).lean(),
+    ]);
+    const aToB = String(ra.parentId ?? "") === String(b._id);
+    const bToA = String(rb.parentId ?? "") === String(a._id);
+    // The invariant that must always hold: never both directions at once.
+    expect(aToB && bToA).toBe(false);
   });
 });

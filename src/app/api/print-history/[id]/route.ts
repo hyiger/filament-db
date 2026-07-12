@@ -59,6 +59,59 @@ export async function GET(
 const EDITABLE_FIELDS = ["jobLabel", "notes", "startedAt", "source", "printerId"] as const;
 const VALID_SOURCES = new Set(["manual", "prusaslicer", "orcaslicer", "bambu", "other"]);
 
+/**
+ * GH #1004 F6: stamp this job's id onto the legacy (pre-jobId) usageHistory
+ * entries it created, so a later DELETE refund resolves them by jobId
+ * (matcher tiers 1–2) instead of by the now-stale (grams, startedAt) tuple.
+ *
+ * The DELETE tier-3 legacy matcher pairs a usage row to its spool entry on
+ * `(grams, date)` where `date === job.startedAt`. Editing startedAt leaves
+ * each legacy entry's `date` at its ORIGINAL value, so that matcher would
+ * later miss — the spool weight silently never refunds even though the job is
+ * tombstoned "Deleted and refunded". Stamping jobId now makes those entries
+ * immune to the date drift.
+ *
+ * One entry consumed per usage row, matched on the row's grams + the job's
+ * OLD startedAt, restricted to print-driven ("job"/"slicer") entries that
+ * don't already carry a jobId — the exact candidate set the DELETE tier-3
+ * matcher uses. Reloading the filament per row and saving after each stamp
+ * means an already-stamped entry (now carrying a jobId) is skipped by the
+ * `!h.jobId` predicate on the next row, so two rows against the same spool
+ * consume distinct entries.
+ */
+async function backfillLegacyUsageJobIds(
+  jobId: string,
+  usage: Array<{ filamentId?: unknown; spoolId?: unknown; grams?: unknown }>,
+  oldStartedMs: number,
+): Promise<void> {
+  const jobObjectId = new mongoose.Types.ObjectId(jobId);
+  for (const u of usage) {
+    if (!u.filamentId || !u.spoolId || typeof u.grams !== "number") continue;
+    const filament = await Filament.findOne({
+      _id: u.filamentId as mongoose.Types.ObjectId,
+      _deletedAt: null,
+    });
+    if (!filament) continue;
+    const spool = filament.spools.find((s) => String(s._id) === String(u.spoolId));
+    if (!spool) continue;
+    const history = spool.usageHistory || [];
+    const idx = history.findIndex(
+      (h) =>
+        !h.jobId &&
+        (h.source === "job" || h.source === "slicer") &&
+        h.grams === u.grams &&
+        h.date instanceof Date &&
+        h.date.getTime() === oldStartedMs,
+    );
+    if (idx === -1) continue;
+    history[idx].jobId = jobObjectId;
+    // A jobId stamp only touches this subdoc — validate modified paths only
+    // so a legacy out-of-range field elsewhere can't block the backfill
+    // (mirrors the DELETE refund's save, GH #905).
+    await filament.save({ validateModifiedOnly: true });
+  }
+}
+
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -138,6 +191,24 @@ export async function PUT(
       return errorResponse("Request body must include at least one editable field", 400);
     }
 
+    // GH #1004 F6: when startedAt actually changes, immunise this job's
+    // legacy usage entries against the DELETE refund matcher losing them to
+    // the date drift (see backfillLegacyUsageJobIds). Only the startedAt edit
+    // path needs the extra read + walk.
+    if (update.startedAt instanceof Date) {
+      const existing = await PrintHistory.findOne({ _id: id, _deletedAt: null })
+        .select("startedAt usage")
+        .lean();
+      if (!existing) {
+        return errorResponse("Not found", 404);
+      }
+      const oldStartedMs =
+        existing.startedAt instanceof Date ? existing.startedAt.getTime() : NaN;
+      if (!Number.isNaN(oldStartedMs) && oldStartedMs !== update.startedAt.getTime()) {
+        await backfillLegacyUsageJobIds(id, existing.usage ?? [], oldStartedMs);
+      }
+    }
+
     const updated = await PrintHistory.findOneAndUpdate(
       { _id: id, _deletedAt: null },
       { $set: update },
@@ -148,6 +219,11 @@ export async function PUT(
     }
     return NextResponse.json(updated);
   } catch (err) {
+    // A jobId backfill save() can race a concurrent slicer POST / DELETE on
+    // the same filament — surface as 409 (retryable) like the DELETE handler,
+    // not a generic 500.
+    const conflict = handleVersionError(err);
+    if (conflict) return conflict;
     return errorResponseFromCaught(err, "Failed to update print history entry");
   }
 }
