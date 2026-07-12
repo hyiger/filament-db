@@ -41,8 +41,14 @@ export async function GET(request: NextRequest) {
         // color/secondaryColors for the stacked-chart hex.
         .populate("usage.filamentId", "name vendor cost parentId color secondaryColors")
         .lean(),
+      // GH #1005 F1: select only spools.usageHistory — the sole spool
+      // subfield this handler reads (the manual-entries loop). The whole
+      // `spools` array carries base64 photoDataUrl (up to 5 MB each) +
+      // dryCycles that were fetched and discarded on every request; the
+      // Mongoose sub-path select keeps `f.spools[].usageHistory` iterable.
+      // Mirrors the #517 dashboard fix.
       Filament.find({ _deletedAt: null })
-        .select("name vendor cost parentId color secondaryColors spools")
+        .select("name vendor cost parentId color secondaryColors spools.usageHistory")
         .lean(),
     ]);
 

@@ -509,4 +509,39 @@ describe("GET /api/spools/by-location", () => {
     );
     expect(realGroup.spools[0].legacySingleSpool).toBe(false);
   });
+
+  // GH #1005 F4: the pipeline now $unsets spools.photoDataUrl + usageHistory
+  // early (before the $lookup/$unwind/$group), while KEEPING dryCycles so
+  // dryCycleCount/lastDryAt still compute. Prove both on one photo-laden spool.
+  it("computes dry stats + omits blobs even when a spool carries a photo (GH #1005 F4)", async () => {
+    const shelf = await Location.create({ name: "Blob Shelf", kind: "shelf" });
+    const dried = new Date("2025-06-01T00:00:00.000Z");
+    await Filament.create({
+      name: "Blob PLA",
+      vendor: "QA",
+      type: "PLA",
+      diameter: 1.75,
+      spools: [
+        {
+          label: "photo+dry",
+          totalWeight: 1000,
+          locationId: shelf._id,
+          photoDataUrl: `data:image/png;base64,${"A".repeat(4096)}`,
+          usageHistory: [{ grams: 20, date: dried, source: "manual", jobId: null }],
+          dryCycles: [{ date: dried, tempC: 50, durationMin: 240 }],
+        },
+      ],
+    });
+
+    const { GET } = await import("@/app/api/spools/by-location/route");
+    const body = await (await GET(req())).json();
+    const spool = body.groups[0].spools[0];
+    // dryCycles survived the prune → stats compute.
+    expect(spool.dryCycleCount).toBe(1);
+    expect(new Date(spool.lastDryAt).toISOString()).toBe(dried.toISOString());
+    // Heavy blobs never leak into the response (already true per #429; the
+    // early $unset makes it true pipeline-internally too).
+    expect(spool.photoDataUrl).toBeUndefined();
+    expect(spool.usageHistory).toBeUndefined();
+  });
 });

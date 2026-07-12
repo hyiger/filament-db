@@ -51,6 +51,10 @@ export async function GET(request: NextRequest) {
 
     const filaments = await Filament.find(query)
       .sort({ name: 1 })
+      // GH #1005 F2: the OrcaSlicer bundle mapping never reads spools; exclude
+      // the whole array (photoDataUrl blobs + usageHistory ledgers) so a
+      // slicer startup doesn't deserialize hundreds of MB to emit the JSON.
+      .select("-spools")
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")
       .populate("calibrations.bedType")
@@ -77,6 +81,7 @@ export async function GET(request: NextRequest) {
         _id: { $in: missingParentIds },
         _deletedAt: null,
       })
+        .select("-spools") // GH #1005 F2: bundle generation never reads spools
         .populate("calibrations.nozzle")
         .populate("calibrations.printer")
         .populate("calibrations.bedType")

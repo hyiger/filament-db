@@ -12,6 +12,9 @@ export async function GET() {
 
     const filaments = await Filament.find({ _deletedAt: null })
       .sort({ name: 1 })
+      // GH #1005 F2: the slicer bundle mapping never reads spools; exclude the
+      // whole array (photoDataUrl blobs + usageHistory ledgers).
+      .select("-spools")
       .populate("calibrations.nozzle")
       .populate("calibrations.printer")
       .populate("calibrations.bedType")

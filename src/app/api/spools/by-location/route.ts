@@ -131,6 +131,14 @@ export async function GET(request: NextRequest) {
           ],
         },
       },
+      // GH #1005 F4: drop the heavy per-spool subfields BEFORE they ride
+      // through the $lookup/$unwind/$group stages. The GH #777 legacy-spool
+      // $set below references the whole `$spools` array, which forces the
+      // pipeline to materialize every subfield off the collection scan
+      // (photoDataUrl blobs, usageHistory ledgers) only to discard them at
+      // the $group $push. KEEP spools.dryCycles — dryCycleCount / lastDryAt
+      // below are computed from it.
+      { $unset: ["spools.photoDataUrl", "spools.usageHistory"] },
       // Self-lookup for parent — needed for spoolWeight / netFilamentWeight
       // inheritance (see resolveFilament INHERITABLE_FIELDS) AND for the
       // type / vendor filters, which both fields inherit from. Done

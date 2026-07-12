@@ -1665,6 +1665,48 @@ describe("API route correctness", () => {
     });
   });
 
+  // ── #1005 F2: the -spools projection on BOTH the main find and the
+  //    missing-parents fetch must not break variant inheritance ──────────
+  describe("#1005 F2 — bulk export excludes spools without breaking inheritance", () => {
+    it("resolves a variant's inherited temp via the missing-parents fetch (parent outside ?ids=)", async () => {
+      // Parent carries the real temp + a photo-laden spool the export must
+      // NOT need. Variant inherits (temperatures.nozzle null) and is the ONLY
+      // id requested → its parent is missing from the filtered set, forcing
+      // the .select("-spools") missing-parents fetch.
+      const parent = await Filament.create({
+        name: "Inherit Parent",
+        vendor: "Acme",
+        type: "PLA",
+        temperatures: { nozzle: 218, bed: 60 },
+        spools: [
+          {
+            label: "p",
+            totalWeight: 1000,
+            photoDataUrl: `data:image/png;base64,${"A".repeat(4096)}`,
+          },
+        ],
+      });
+      const variant = await Filament.create({
+        name: "Inherit Variant",
+        vendor: "Acme",
+        type: "PLA",
+        parentId: parent._id,
+        temperatures: { nozzle: null, bed: null }, // inherits parent's 218/60
+        spools: [{ label: "v", totalWeight: 900 }],
+      });
+
+      const res = await prusaBulkExport(
+        getReq(`http://localhost/api/filaments/prusaslicer?ids=${variant._id}`),
+      );
+      expect(res.status).toBe(200);
+      const ini = await res.text();
+      // The variant preset resolved the parent's nozzle temp — inheritance
+      // survived the -spools projection on both finds.
+      expect(ini).toContain("Inherit Variant");
+      expect(ini).toMatch(/temperature\s*=\s*218/);
+    });
+  });
+
   // ── #950: slicer round-trip fidelity + id-first addressing ──────────
 
   describe("#950 — slicer round-trip fidelity + id-first addressing", () => {

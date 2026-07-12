@@ -38,6 +38,11 @@ export async function GET(request: NextRequest) {
     // (variant own → parent → 0) inside the subtract.
     const counts = await Filament.aggregate([
       { $match: { _deletedAt: null } },
+      // GH #1005 F4: this stats pipeline reads only spools.{retired,locationId,
+      // totalWeight}; drop every heavy per-spool subfield (photoDataUrl,
+      // usageHistory, AND dryCycles — no dry stats are computed here) before
+      // the $unwind streams them.
+      { $unset: ["spools.photoDataUrl", "spools.usageHistory", "spools.dryCycles"] },
       // Pull the parent doc (if any) so we can resolve inherited spoolWeight.
       // Variants without a parentId get an empty array; the $arrayElemAt
       // below safely returns null for the inherited fallback.

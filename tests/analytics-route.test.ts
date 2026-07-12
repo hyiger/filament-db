@@ -1064,3 +1064,75 @@ describe("/api/analytics — usageByDay.byFilament breakdown (GH #934)", () => {
     expect(body.usageByDay).toHaveLength(31);
   });
 });
+
+/**
+ * GH #1005 F1: the route must fetch only `spools.usageHistory` from the
+ * spool array, never the whole thing (base64 photoDataUrl blobs +
+ * dryCycles are read by nothing in the handler). These tests prove the
+ * narrowed projection (a) still feeds the manual-entries loop correctly,
+ * and (b) doesn't select the discarded subfields.
+ */
+describe("/api/analytics — spool projection (GH #1005 F1)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    delete mongoose.models.Filament;
+    Filament = (await import("@/models/Filament")).default;
+    delete mongoose.models.PrintHistory;
+    await import("@/models/PrintHistory");
+  });
+
+  it("still totals manual usage on a spool that also carries a photo + dryCycles", async () => {
+    const recent = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+    await Filament.create({
+      name: "Heavy Spool",
+      vendor: "V",
+      type: "PLA",
+      cost: 20,
+      spools: [
+        {
+          label: "photo-laden",
+          totalWeight: 800,
+          // The exact payload the projection is meant to stop fetching.
+          photoDataUrl: `data:image/png;base64,${"A".repeat(4096)}`,
+          dryCycles: [{ date: recent, targetTemp: 45, hours: 6 }],
+          usageHistory: [
+            { grams: 30, date: recent, source: "manual", jobId: null },
+            { grams: 12, date: recent, source: "manual", jobId: null },
+          ],
+        },
+      ],
+    });
+
+    const res = await getAnalytics(new NextRequest("http://localhost/api/analytics"));
+    const body = await res.json();
+    expect(body.totals.manualEntries).toBe(2);
+    expect(body.totals.grams).toBe(42);
+  });
+
+  it("projects spools.usageHistory and NOT the whole spools array", async () => {
+    const spy = vi.spyOn(Filament, "find");
+    try {
+      await getAnalytics(new NextRequest("http://localhost/api/analytics"));
+      // The Filament.find call (not the PrintHistory populate) that reads spools.
+      const projections = spy.mock.results
+        .map((r) => {
+          try {
+            return (r.value as { projection(): Record<string, unknown> | null }).projection();
+          } catch {
+            return null;
+          }
+        })
+        .filter((p): p is Record<string, unknown> => p != null);
+      const withSpools = projections.find(
+        (p) => "spools.usageHistory" in p || "spools" in p,
+      );
+      expect(withSpools).toBeDefined();
+      expect(withSpools!["spools.usageHistory"]).toBe(1);
+      expect("spools" in withSpools!).toBe(false); // no bare whole-array select
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
