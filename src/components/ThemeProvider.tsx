@@ -50,23 +50,44 @@ function resolveFor(pref: ThemePreference, systemDark: boolean): "light" | "dark
 }
 
 export default function ThemeProvider({ children }: { children: ReactNode }) {
-  const [preference, setPreferenceState] = useState<ThemePreference>(readStoredPreference);
+  // GH #1007 F2: seed to SSR-safe constants and read localStorage + matchMedia
+  // in a mount effect — mirroring the GH #639 fix in useCurrency /
+  // TranslationProvider. Seeding these in the useState initializers runs during
+  // hydration, so a stored non-"system" theme made the client's first render
+  // (which highlights `preference` in ThemeSection) disagree with the server's
+  // "system" render → a React 19 hydration mismatch + full client re-render on
+  // every /settings/ui visit.
+  const [preference, setPreferenceState] = useState<ThemePreference>("system");
   // systemDark tracks the OS media query so `resolved` is a pure derivation
-  // of (preference, systemDark) rather than a DOM-read side effect. This
-  // keeps us out of the react-hooks/set-state-in-effect trap.
-  const [systemDark, setSystemDark] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false;
-  });
+  // of (preference, systemDark) rather than a DOM-read side effect.
+  const [systemDark, setSystemDark] = useState<boolean>(false);
+  // Gate the <html> class-application effect until the real preference is read,
+  // so React doesn't briefly overwrite the anti-FOUC inline script's class with
+  // the default-derived theme during the hydration frame (a visible flash).
+  const [hydrated, setHydrated] = useState(false);
 
   const resolved = resolveFor(preference, systemDark);
 
-  // Apply the resolved theme to <html>. Side effect only — no state write.
+  // Seed preference + systemDark from client-only sources, post-hydration.
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- one-shot post-hydration seed from localStorage/matchMedia */
+    setPreferenceState(readStoredPreference());
+    if (typeof window !== "undefined" && window.matchMedia) {
+      setSystemDark(window.matchMedia("(prefers-color-scheme: dark)").matches);
+    }
+    setHydrated(true);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, []);
+
+  // Apply the resolved theme to <html>. Side effect only — no state write.
+  // Skipped until hydrated so the inline anti-FOUC script's class stands during
+  // the hydration frame (before the stored preference has been read).
+  useEffect(() => {
+    if (!hydrated) return;
     const html = document.documentElement;
     if (resolved === "dark") html.classList.add("dark");
     else html.classList.remove("dark");
-  }, [resolved]);
+  }, [resolved, hydrated]);
 
   // Subscribe once to media-query changes so systemDark stays current.
   // Using the callback form of setSystemDark avoids the set-state-in-effect

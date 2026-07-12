@@ -86,6 +86,12 @@ function ComparePageInner() {
     if (selectedIds.length === 0) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing derived state
       setComparison([]);
+      // Codex P2 on PR #1013: also clear loading here. When the last selection
+      // is removed while a compare fetch is still in flight, the previous
+      // effect's cleanup aborts it and the AbortError branch below now
+      // (correctly) ignores that rejection — so without this, `loading` would
+      // stay true forever: a stuck spinner with no request behind it.
+      setLoading(false);
       return;
     }
     const ac = new AbortController();
@@ -96,7 +102,15 @@ function ComparePageInner() {
         setComparison(data);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch((err) => {
+        // GH #1007 F5: a rapid selection change aborts the in-flight request
+        // AFTER the new effect already set loading=true. Without filtering
+        // AbortError, that stale rejection flips the "Loading…" cue off
+        // mid-fetch and the previous comparison reads as current. Matches
+        // every sibling fetch (analytics / inventory / home).
+        if ((err as Error)?.name === "AbortError") return;
+        setLoading(false);
+      });
     return () => ac.abort();
   }, [selectedIds]);
 

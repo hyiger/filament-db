@@ -137,8 +137,8 @@ export default function LabelFormatEditor() {
               if (p) update(p.patch);
             }}
           >
-            {Object.entries(LABEL_PRESETS).map(([key, { label }]) => (
-              <option key={key} value={key}>{label}</option>
+            {Object.entries(LABEL_PRESETS).map(([key, { labelKey }]) => (
+              <option key={key} value={key}>{t(labelKey)}</option>
             ))}
             {preset === "custom" && <option value="custom">{t("settings.labelFormat.preset.custom")}</option>}
           </select>
