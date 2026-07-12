@@ -129,6 +129,32 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(live._deletedAt ?? null).toBeNull();
   });
 
+  it("rejects a null row with a clean 400, not a 500 (GH #1009 Codex P3)", async () => {
+    // Pre-existing data must survive an invalid restore untouched.
+    await BedType.create({ name: "Keep Me", material: "PEI" });
+
+    const snapshot = {
+      version: 3,
+      createdAt: new Date().toISOString(),
+      collections: {
+        filaments: [null], // a null element passes the array-shape check
+        nozzles: [], printers: [], bedTypes: [], locations: [], printHistory: [], sharedCatalogs: [],
+      },
+    };
+    const res = await POST(new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    }));
+    // Pre-fix: restoreTypes(null) threw outside the try → 500. Now a clean 400.
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/filaments\[0\]/);
+
+    // DB untouched — the pre-existing bed type is still there.
+    expect(await BedType.countDocuments({ name: "Keep Me" })).toBe(1);
+  });
+
   it("POST restore of a v1 snapshot (no bedTypes) leaves the collection empty, not undefined", async () => {
     // Upgrading users with an older snapshot should still be able to restore.
     const snapshot = {

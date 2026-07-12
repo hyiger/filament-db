@@ -980,7 +980,18 @@ export async function upsertImportRows(
           // its gone-forever state). `writeDoc` carries parentId only
           // when a Parent column was supplied, matching the plain-create
           // branch's semantics.
-          const newDoc = await Filament.create(writeDoc);
+          //
+          // Codex P2 on #1009: writeDoc may have been pruned against the
+          // TOMBSTONE's parent (createParentId = softDeleted.parentId) to
+          // support a variant resurrect. But this fallback creates a STANDALONE
+          // record whenever no Parent column was supplied (resolvedParentId is
+          // null) — and a standalone doc has no parent to inherit the pruned
+          // fields from, so creating from the pruned doc would drop every
+          // flattened CSV value that matched the old parent to null/[]. Use the
+          // UNPRUNED doc in that case; keep the pruned writeDoc only when the
+          // created row is actually a variant (a Parent column resolved).
+          const createDoc = resolvedParentId ? writeDoc : doc;
+          const newDoc = await Filament.create(createDoc);
           activeByName.set(row.name, { _id: newDoc._id, parentId: resolvedParentId });
           deletedByName.delete(row.name);
           created++;

@@ -1873,6 +1873,48 @@ describe("upsertImportRows — purged tombstones (GH #1004 F1)", () => {
     expect(String(active!._id)).not.toBe(String(trashed._id));
   });
 
+  it("purge-race create of a variant-resurrect uses the UNPRUNED doc (Codex P2 on #1009)", async () => {
+    // A soft-deleted VARIANT whose import row omits Parent: writeDoc gets pruned
+    // against the tombstone's parent to support a variant resurrect. If the
+    // tombstone is then purged mid-import (updateOne matches 0), the create
+    // fallback must NOT persist the pruned nulls onto the resulting STANDALONE
+    // doc — there is no parent to inherit them from.
+    const COLS = ["Name", "Vendor", "Type", "Color", "Cost", "Density", "Nozzle Temp", "Bed Temp", "Parent"];
+    const parent = await Filament.create({
+      name: "Uni PLA", vendor: "Acme", type: "PLA", cost: 25, density: 1.24,
+    });
+    const variant = await Filament.create({
+      name: "Uni PLA — Red", vendor: "Acme", type: "PLA", color: "#FF0000", parentId: parent._id,
+    });
+    // Soft-delete the variant so it buckets as a resurrect candidate.
+    await Filament.updateOne({ _id: variant._id }, { $set: { _deletedAt: new Date() } });
+
+    const mapping = mapHeaders(COLS);
+    // Row echoes the parent-equal cost/density (would be pruned) with NO Parent.
+    const rows = [
+      rowToImport(["Uni PLA — Red", "Acme", "PLA", "#FF0000", 25, 1.24, "", "", ""], mapping),
+    ];
+
+    const spy = vi
+      .spyOn(Filament, "updateOne")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, acknowledged: true } as any);
+    try {
+      const result = await upsertImportRows(rows);
+      expect(result.created).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The created STANDALONE row kept the imported cost/density (pre-fix: null,
+    // because it was created from the parent-pruned writeDoc with no parent).
+    const active = await Filament.findOne({ name: "Uni PLA — Red", _deletedAt: null }).lean();
+    expect(active).not.toBeNull();
+    expect(active!.parentId ?? null).toBeNull(); // standalone — no Parent column
+    expect(active!.cost).toBe(25);
+    expect(active!.density).toBe(1.24);
+  });
+
   it("still resurrects a plain trashed (non-purged) row (regression)", async () => {
     const trashed = await Filament.create({ name: "PETG Blue", vendor: "T", type: "PETG" });
     await Filament.updateOne({ _id: trashed._id }, { $set: { _deletedAt: new Date() } });

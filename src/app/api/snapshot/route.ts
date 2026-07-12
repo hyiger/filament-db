@@ -385,7 +385,20 @@ async function restoreSnapshot(request: NextRequest) {
   ];
   for (const [colName, Model, rows] of preValidate) {
     for (let i = 0; i < rows.length; i++) {
-      const candidate = new Model(restoreTypes(rows[i] as Record<string, unknown>));
+      const row = rows[i];
+      // Codex P3 on #1009: a null / non-object element passes the array-shape
+      // check upstream, but restoreTypes(null) → Object.entries(null) throws
+      // OUTSIDE the try below — escaping as a 500 instead of the intended clean
+      // 400 with the DB untouched. Reject non-object rows here.
+      if (row === null || typeof row !== "object" || Array.isArray(row)) {
+        return NextResponse.json(
+          {
+            error: `Snapshot failed validation at ${colName}[${i}] — expected an object, got ${row === null ? "null" : Array.isArray(row) ? "array" : typeof row}. Nothing was changed.`,
+          },
+          { status: 400 },
+        );
+      }
+      const candidate = new Model(restoreTypes(row as Record<string, unknown>));
       try {
         await candidate.validate();
       } catch (validationErr) {
