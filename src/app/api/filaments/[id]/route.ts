@@ -374,6 +374,55 @@ export async function PUT(
     if (!filament) {
       return errorResponse("Not found", 404);
     }
+
+    // GH #1004 F7: the parentId validation above is check-then-act — two
+    // concurrent re-parent PUTs (A→B and B→A) can each pass validation
+    // against pre-write state and both persist, creating a mutual A⇄B cycle
+    // (or an A→B while C→A nests inheritance) that every single-level read
+    // path (resolveFilament) assumes cannot exist. Re-assert the invariant
+    // against POST-write state and, on violation, roll this doc back to a safe
+    // root + 409 so the caller retries.
+    //
+    // Codex P2 (r3) on PR #1012: run whenever a NON-NULL parentId is written —
+    // NOT only when `reparenting` (a pre-write-snapshot diff) is true. The edit
+    // form echoes `parentId` on every save, so a stale re-save writes back an
+    // unchanged parentId; if a race turned that parent into a variant in the
+    // meantime, a `reparenting`-gated check would skip it and let a nested chain
+    // persist. Gating on the written value re-validates every parented write.
+    // Un-parenting (parentId null) can't create a cycle, so it's still skipped.
+    if (body.parentId) {
+      const [newParent, childCount] = await Promise.all([
+        Filament.findOne({ _id: body.parentId, _deletedAt: null }).select("parentId").lean(),
+        Filament.countDocuments({ parentId: id, _deletedAt: null }),
+      ]);
+      const parentIsVariant = !newParent || newParent.parentId != null;
+      const gainedChildren = childCount > 0;
+      if (parentIsVariant || gainedChildren) {
+        // Codex P2 (×2) on PR #1012: roll back to a SAFE state — a root
+        // (`parentId: null`) — NOT the old parent. Two reasons:
+        //   1. A concurrent PUT may have turned the OLD parent into a variant
+        //      while this filament was momentarily "away" (its variant-count
+        //      guard read zero), so restoring the old parent could recreate the
+        //      very nested inheritance we're rejecting. A root is always a valid
+        //      single-level state (no cycle, no nesting) whatever else changed.
+        //   2. Scope the write to the parent THIS request wrote
+        //      (`parentId: body.parentId`) + a live row, so a *newer* valid
+        //      re-parent (or delete) that landed between our findOneAndUpdate
+        //      and here isn't clobbered — matchedCount 0, and we still 409.
+        // Under any interleaving of two opposing re-parents, at least one side
+        // detects the conflict and nulls out, so no cycle/nesting ever
+        // persists; the loser retries against the (now root) filament.
+        await Filament.updateOne(
+          { _id: id, parentId: body.parentId, _deletedAt: null },
+          { $set: { parentId: null } },
+        );
+        return errorResponse(
+          "Re-parenting conflicts with a concurrent change (it would create nested inheritance or a parent cycle). The filament was left without a parent; re-check and retry.",
+          409,
+        );
+      }
+    }
+
     return NextResponse.json(filament);
   } catch (err) {
     // Surface MongoDB duplicate-key errors (renaming a filament to a
