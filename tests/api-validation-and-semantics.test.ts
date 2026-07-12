@@ -524,6 +524,89 @@ describe("PR A — API validation & semantics", () => {
       expect(res.status).toBe(400);
     });
 
+    // ── GH #1004 F6: editing startedAt must not orphan the DELETE refund ──
+    //
+    // The DELETE refund's tier-3 legacy matcher pairs a usage row to its
+    // spool's usageHistory entry by (grams, date === startedAt). A legacy
+    // (pre-jobId) entry keeps its ORIGINAL date, so editing startedAt used to
+    // make that matcher miss — the weight silently stranded while the job was
+    // tombstoned "refunded". PUT now backfills this job's id onto the legacy
+    // entries so DELETE resolves them via the date-independent jobId tiers.
+    async function makeLegacyJob() {
+      const fil = await Filament.create({
+        name: "F6 Mat", vendor: "QA", type: "PLA", diameter: 1.75,
+        netFilamentWeight: 1000, spoolWeight: 200,
+      });
+      fil.spools.push({ label: "S1", totalWeight: 1000 });
+      await fil.save();
+      const spoolId = fil.spools[0]._id.toString();
+
+      const { POST: createJob } = await import("@/app/api/print-history/route");
+      const res = await createJob(jsonReq("http://localhost/api/print-history", {
+        jobLabel: "Legacy job",
+        usage: [{ filamentId: fil._id.toString(), spoolId, grams: 25 }],
+      }));
+      expect(res.status).toBe(201);
+      const job = await res.json();
+
+      // Simulate a PRE-jobId legacy entry: strip the jobId the POST stamped,
+      // leaving only the (grams, date, source:"job") tuple tier-3 keys on.
+      const reload = await Filament.findById(fil._id);
+      reload.spools[0].usageHistory[0].jobId = null;
+      await reload.save();
+
+      return { job, filamentId: fil._id.toString() };
+    }
+
+    it("F6: editing startedAt backfills jobId onto legacy entries so DELETE still refunds", async () => {
+      const { job, filamentId } = await makeLegacyJob();
+      const { PUT, DELETE } = await import("@/app/api/print-history/[id]/route");
+
+      let fil = await Filament.findById(filamentId).lean();
+      expect(fil.spools[0].totalWeight).toBe(975); // 1000 − 25 charged
+      expect(fil.spools[0].usageHistory[0].jobId ?? null).toBeNull(); // legacy
+
+      const putRes = await PUT(
+        jsonReq(`http://localhost/api/print-history/${job._id}`, {
+          startedAt: "2024-01-01T00:00:00.000Z",
+        }, "PUT"),
+        { params: Promise.resolve({ id: job._id }) },
+      );
+      expect(putRes.status).toBe(200);
+
+      // The legacy entry now carries this job's id → immune to the date drift.
+      fil = await Filament.findById(filamentId).lean();
+      expect(String(fil.spools[0].usageHistory[0].jobId)).toBe(String(job._id));
+
+      const delRes = await DELETE(
+        new NextRequest(`http://localhost/api/print-history/${job._id}`, { method: "DELETE" }),
+        { params: Promise.resolve({ id: job._id }) },
+      );
+      expect(delRes.status).toBe(200);
+
+      // Refund fired (pre-fix: tier-3 missed on the changed startedAt → 975).
+      fil = await Filament.findById(filamentId).lean();
+      expect(fil.spools[0].totalWeight).toBe(1000);
+      expect(fil.spools[0].usageHistory).toHaveLength(0);
+    });
+
+    it("F6: editing a NON-startedAt field leaves usageHistory untouched", async () => {
+      const { job, filamentId } = await makeLegacyJob();
+      const { PUT } = await import("@/app/api/print-history/[id]/route");
+
+      const putRes = await PUT(
+        jsonReq(`http://localhost/api/print-history/${job._id}`, {
+          jobLabel: "Renamed",
+        }, "PUT"),
+        { params: Promise.resolve({ id: job._id }) },
+      );
+      expect(putRes.status).toBe(200);
+
+      // No startedAt change → the backfill must not run (entry stays legacy).
+      const fil = await Filament.findById(filamentId).lean();
+      expect(fil.spools[0].usageHistory[0].jobId ?? null).toBeNull();
+    });
+
   });
 
   // ─── #341: spool POST returns 201 (was 200) ───────────────────────
