@@ -360,7 +360,7 @@ describe("filamentToOrcaSlicerKeys", () => {
     expect(keys.filament_shrinkage_compensation_z).toEqual(["0.2"]);
   });
 
-  it("skips filament_shrink for 0 shrinkage (Orca's default is 100%), GH #1008 F1", () => {
+  it("emits an explicit 100% for 0 shrinkage (Codex P2 on #1016), GH #1008 F1", () => {
     const filament = {
       name: "Zero Shrink",
       vendor: "Test",
@@ -374,12 +374,27 @@ describe("filamentToOrcaSlicerKeys", () => {
     };
 
     const keys = filamentToOrcaSlicerKeys(filament);
-    // GH #1008 F1: 0-based 0 = no shrink = Orca's implicit 100% default, so we
-    // must NOT emit filament_shrink (emitting "100%" would round-trip fine but
-    // pins a redundant explicit override). shrinkageZ (Prusa-style raw key)
-    // still emits 0.
-    expect(keys.filament_shrink).toBeUndefined();
+    // GH #1008 F1 + Codex P2: 0-based 0 = no shrink = Orca's "100%". Emit it
+    // EXPLICITLY — the Bambu importer only writes shrinkageXY when the key is
+    // present, so an omitted key on a no-shrink export would leave a stale
+    // non-zero value in place on re-import (zero would be un-round-trippable
+    // on updates). Only a null (never-set) shrinkageXY omits the key.
+    expect(keys.filament_shrink).toEqual(["100%"]);
     expect(keys.filament_shrinkage_compensation_z).toEqual(["0"]);
+  });
+
+  it("omits filament_shrink only when shrinkageXY was never set (null)", () => {
+    const filament = {
+      name: "No Shrink Data",
+      vendor: "Test",
+      type: "ABS",
+      color: "#808080",
+      diameter: 1.75,
+      shrinkageXY: null,
+      temperatures: {},
+      settings: {},
+    };
+    expect(filamentToOrcaSlicerKeys(filament).filament_shrink).toBeUndefined();
   });
 
   it("skips a null value in the settings bag", () => {
