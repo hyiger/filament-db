@@ -596,7 +596,7 @@ export async function upsertImportRows(
   // second fetch. Heavy subdocuments (spools — photoDataUrl can be MBs)
   // stay excluded.
   const INHERITANCE_PROJECTION =
-    "_id name parentId _deletedAt vendor type cost density diameter " +
+    "_id name parentId _deletedAt _purged vendor type cost density diameter " +
     "maxVolumetricSpeed spoolWeight netFilamentWeight dryingTemperature " +
     "dryingTime transmissionDistance glassTempTransition heatDeflectionTemp " +
     "shoreHardnessA shoreHardnessD shrinkageXY shrinkageZ minPrintSpeed " +
@@ -629,7 +629,15 @@ export async function upsertImportRows(
     };
     if (doc._deletedAt == null) {
       activeByName.set(doc.name, entry);
-    } else if (!deletedByName.has(doc.name)) {
+    } else if (doc._purged !== true && !deletedByName.has(doc.name)) {
+      // GH #1004 F1: _purged tombstones land in NEITHER bucket. They are
+      // one-way gone-forever markers (see the permanent-delete handler +
+      // the sync engine's _purged short-circuit) — resurrecting one via
+      // re-import produced an active row still flagged _purged: a "zombie"
+      // that poisons hybrid sync and, once re-trashed, skips the trash
+      // listing entirely. A purged name simply falls through to the create
+      // path, which the partial-unique index (scoped to _deletedAt: null)
+      // permits.
       deletedByName.set(doc.name, entry);
     }
   }
@@ -955,23 +963,52 @@ export async function upsertImportRows(
         // `lowStockThreshold.min`, type coercions — was bypassed. A
         // malformed re-import of a previously-trashed row could persist
         // invalid numeric fields.
-        await Filament.updateOne(
-          { _id: softDeleted._id },
+        // GH #1004 F1 (race belt-and-suspenders): the bucketing above
+        // already excludes _purged tombstones, but a permanent delete can
+        // land BETWEEN the batch load and this row's write. Guard the
+        // filter so the resurrect can never revive a purge tombstone; a
+        // zero-match falls through to the create path below instead of
+        // incrementing `updated` against a write that matched nothing.
+        const res = await Filament.updateOne(
+          { _id: softDeleted._id, _purged: { $ne: true } },
           { ...writeDoc, _deletedAt: null },
           { runValidators: true, context: "query" },
         );
-        // GH #379: re-promote into activeByName so a later pass-2 row
-        // referencing this name as Parent resolves correctly. The
-        // effective parentId after resurrect is `resolvedParentId ??
-        // softDeleted.parentId` because we only include `parentId` in
-        // `doc` when a Parent column was provided — without it the
-        // soft-deleted row's prior parentId survives unchanged, and a
-        // pass-2 row that tried to point its Parent at this resurrected
-        // row would otherwise wrongly skip the variant-of-variant guard.
-        const effectiveParentId = resolvedParentId ?? softDeleted.parentId;
-        activeByName.set(row.name, { _id: softDeleted._id, parentId: effectiveParentId });
-        deletedByName.delete(row.name);
-        updated++;
+        if (res.matchedCount === 0) {
+          // The tombstone was purged mid-import — mint a fresh doc (the
+          // partial-unique name index permits it; the purged row keeps
+          // its gone-forever state). `writeDoc` carries parentId only
+          // when a Parent column was supplied, matching the plain-create
+          // branch's semantics.
+          //
+          // Codex P2 on #1009: writeDoc may have been pruned against the
+          // TOMBSTONE's parent (createParentId = softDeleted.parentId) to
+          // support a variant resurrect. But this fallback creates a STANDALONE
+          // record whenever no Parent column was supplied (resolvedParentId is
+          // null) — and a standalone doc has no parent to inherit the pruned
+          // fields from, so creating from the pruned doc would drop every
+          // flattened CSV value that matched the old parent to null/[]. Use the
+          // UNPRUNED doc in that case; keep the pruned writeDoc only when the
+          // created row is actually a variant (a Parent column resolved).
+          const createDoc = resolvedParentId ? writeDoc : doc;
+          const newDoc = await Filament.create(createDoc);
+          activeByName.set(row.name, { _id: newDoc._id, parentId: resolvedParentId });
+          deletedByName.delete(row.name);
+          created++;
+        } else {
+          // GH #379: re-promote into activeByName so a later pass-2 row
+          // referencing this name as Parent resolves correctly. The
+          // effective parentId after resurrect is `resolvedParentId ??
+          // softDeleted.parentId` because we only include `parentId` in
+          // `doc` when a Parent column was provided — without it the
+          // soft-deleted row's prior parentId survives unchanged, and a
+          // pass-2 row that tried to point its Parent at this resurrected
+          // row would otherwise wrongly skip the variant-of-variant guard.
+          const effectiveParentId = resolvedParentId ?? softDeleted.parentId;
+          activeByName.set(row.name, { _id: softDeleted._id, parentId: effectiveParentId });
+          deletedByName.delete(row.name);
+          updated++;
+        }
       } else {
         const newDoc = await Filament.create(writeDoc);
         // GH #379: seed activeByName with the freshly-created row so a

@@ -828,3 +828,97 @@ describe("dbConnect", () => {
     }
   });
 });
+
+/**
+ * GH #1004 F1 — startup repair for "zombie" filaments created by the
+ * pre-fix importer: `_purged: true` while ACTIVE (`_deletedAt: null`).
+ * Their intended state is gone-forever, so the migration restores
+ * `_deletedAt`. Idempotent: matches nothing on healthy installs.
+ */
+describe("purgedZombies migration (GH #1004 F1)", () => {
+  it("re-tombstones active _purged rows and leaves healthy rows alone", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+
+    // A zombie (raw insert — the broken state the old importer produced),
+    // a healthy active row, and a proper tombstone.
+    await Filament.collection.insertOne({
+      name: "Zombie", vendor: "T", type: "PLA", _purged: true, _deletedAt: null,
+    });
+    await Filament.collection.insertOne({
+      name: "Healthy", vendor: "T", type: "PLA", _deletedAt: null,
+    });
+    const properDeletedAt = new Date("2024-01-01T00:00:00Z");
+    await Filament.collection.insertOne({
+      name: "ProperTombstone", vendor: "T", type: "PLA", _purged: true, _deletedAt: properDeletedAt,
+    });
+
+    // Force the migration block to re-run.
+    const cached = (global as Record<string, unknown>).mongoose as {
+      conn: unknown; promise: unknown;
+      migrations: Record<string, boolean>;
+    };
+    cached.migrations = {
+      instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false,
+      nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false,
+    };
+    cached.conn = null;
+    cached.promise = null;
+
+    await dbConnect();
+
+    const zombie = await Filament.collection.findOne({ name: "Zombie" });
+    expect(zombie!._purged).toBe(true);
+    expect(zombie!._deletedAt).not.toBeNull(); // re-tombstoned
+
+    const healthy = await Filament.collection.findOne({ name: "Healthy" });
+    expect(healthy!._purged ?? false).toBe(false);
+    expect(healthy!._deletedAt).toBeNull(); // untouched
+
+    const proper = await Filament.collection.findOne({ name: "ProperTombstone" });
+    expect(proper!._deletedAt!.toISOString()).toBe(properDeletedAt.toISOString()); // untouched
+
+    expect(cached.migrations.purgedZombies).toBe(true);
+
+    await Filament.collection.deleteMany({ name: { $in: ["Zombie", "Healthy", "ProperTombstone"] } });
+  });
+
+  it("leaves the flag false and retries on a transient failure", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+
+    const cached = (global as Record<string, unknown>).mongoose as {
+      conn: unknown; promise: unknown; migrations: Record<string, boolean>;
+    };
+    cached.migrations = {
+      instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false,
+      nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false,
+    };
+    cached.conn = null;
+    cached.promise = null;
+
+    // Force the zombie repair to throw once (transient blip).
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const updateSpy = vi
+      .spyOn(Filament, "updateMany")
+      .mockRejectedValueOnce(new Error("transient"));
+    try {
+      await dbConnect();
+      // The catch left the flag false so the next connect retries.
+      expect(cached.migrations.purgedZombies).toBe(false);
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining("purged zombie"),
+        expect.any(Error),
+      );
+    } finally {
+      updateSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+
+    // Retry now succeeds (real updateMany) and flips the flag.
+    cached.conn = null;
+    cached.promise = null;
+    await dbConnect();
+    expect(cached.migrations.purgedZombies).toBe(true);
+  });
+});

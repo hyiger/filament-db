@@ -107,6 +107,26 @@ function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
+ * GH #1009 (Codex P2): re-tombstone a purged-but-not-deleted row at restore time.
+ *
+ * A snapshot exported from an install affected by the purged-zombie bug can
+ * carry a filament / print-history / shared-catalog row with `_purged: true`
+ * but `_deletedAt: null` — an active "zombie" (`_purged` and `_deletedAt` are
+ * set together everywhere else). The startup `purgedZombies` migration only
+ * runs once per process, and its in-memory flag is already set by the time this
+ * restore runs, so a restored zombie would stay visible until an app restart
+ * while the hybrid sync engine treats it as a permanent tombstone. Normalize
+ * the state here (soft-delete it) rather than only at startup. No-op for the
+ * common case (`_purged` absent/false).
+ */
+function normalizePurgedTombstone(doc: Record<string, unknown>): Record<string, unknown> {
+  if (doc._purged === true && doc._deletedAt == null) {
+    doc._deletedAt = new Date();
+  }
+  return doc;
+}
+
+/**
  * GET /api/snapshot — Export snapshot-scoped app data as JSON.
  *
  * The snapshot includes all documents (including soft-deleted) from
@@ -343,6 +363,58 @@ async function restoreSnapshot(request: NextRequest) {
     sharedCatalogs = [],
   } = cols;
 
+  // GH #1004 F2(b): pre-validate EVERY incoming doc BEFORE the destructive
+  // wipe. The forward inserts below deliberately validate + throw on the
+  // first bad doc (#259 all-or-nothing) — but real installs carry legacy
+  // docs that fail CURRENT schema validation (the reason the #905
+  // `validateModifiedOnly` fixes exist), so a snapshot of one's own DB
+  // could previously wipe-then-fail-then-rollback every time. Validating
+  // up front turns that into a clean 400 with the DB untouched; the
+  // rollback path below remains reachable only for driver-level errors
+  // (duplicate keys inside the snapshot file, BSON limits).
+  const preValidate: Array<
+    [string, { new (doc: Record<string, unknown>): { validate(): Promise<void> } }, unknown[]]
+  > = [
+    ["nozzles", Nozzle, nozzles],
+    ["printers", Printer, printers],
+    ["bedTypes", BedType, bedTypes],
+    ["locations", Location, locations],
+    ["filaments", Filament, filaments],
+    ["printHistory", PrintHistory, printHistory],
+    ["sharedCatalogs", SharedCatalog, sharedCatalogs],
+  ];
+  for (const [colName, Model, rows] of preValidate) {
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      // Codex P3 on #1009: a null / non-object element passes the array-shape
+      // check upstream, but restoreTypes(null) → Object.entries(null) throws
+      // OUTSIDE the try below — escaping as a 500 instead of the intended clean
+      // 400 with the DB untouched. Reject non-object rows here.
+      if (row === null || typeof row !== "object" || Array.isArray(row)) {
+        return NextResponse.json(
+          {
+            error: `Snapshot failed validation at ${colName}[${i}] — expected an object, got ${row === null ? "null" : Array.isArray(row) ? "array" : typeof row}. Nothing was changed.`,
+          },
+          { status: 400 },
+        );
+      }
+      const candidate = new Model(restoreTypes(row as Record<string, unknown>));
+      try {
+        await candidate.validate();
+      } catch (validationErr) {
+        const detail =
+          validationErr instanceof Error ? validationErr.message : String(validationErr);
+        return NextResponse.json(
+          {
+            error: `Snapshot failed validation at ${colName}[${i}] — nothing was changed. Fix the snapshot (or the offending record) and retry.`,
+            detail,
+          },
+          { status: 400 },
+        );
+      }
+    }
+  }
+
   // --- Safety: snapshot the current DB so we can roll back on failure ---
   const [
     backupFilaments,
@@ -426,19 +498,22 @@ async function restoreSnapshot(request: NextRequest) {
     }
 
     if (filaments.length > 0) {
-      const docs = (filaments as Record<string, unknown>[]).map(restoreTypes);
+      // GH #1009 (Codex P2): normalizePurgedTombstone re-tombstones any
+      // purged-but-active zombie the snapshot carries (Filament / PrintHistory /
+      // SharedCatalog all carry `_purged`).
+      const docs = (filaments as Record<string, unknown>[]).map(restoreTypes).map(normalizePurgedTombstone);
       await Filament.insertMany(docs, { ordered: true });
       results.filaments = filaments.length;
     }
 
     if (printHistory.length > 0) {
-      const docs = (printHistory as Record<string, unknown>[]).map(restoreTypes);
+      const docs = (printHistory as Record<string, unknown>[]).map(restoreTypes).map(normalizePurgedTombstone);
       await PrintHistory.insertMany(docs, { ordered: true });
       results.printHistory = printHistory.length;
     }
 
     if (sharedCatalogs.length > 0) {
-      const docs = (sharedCatalogs as Record<string, unknown>[]).map(restoreTypes);
+      const docs = (sharedCatalogs as Record<string, unknown>[]).map(restoreTypes).map(normalizePurgedTombstone);
       await SharedCatalog.insertMany(docs, { ordered: true });
       results.sharedCatalogs = sharedCatalogs.length;
     }
@@ -459,13 +534,36 @@ async function restoreSnapshot(request: NextRequest) {
         PrintHistory.deleteMany({}),
         SharedCatalog.deleteMany({}),
       ]);
-      if (backupNozzles.length > 0) await Nozzle.insertMany(backupNozzles, { ordered: false });
-      if (backupPrinters.length > 0) await Printer.insertMany(backupPrinters, { ordered: false });
-      if (backupBedTypes.length > 0) await BedType.insertMany(backupBedTypes, { ordered: false });
-      if (backupLocations.length > 0) await Location.insertMany(backupLocations, { ordered: false });
-      if (backupFilaments.length > 0) await Filament.insertMany(backupFilaments, { ordered: false });
-      if (backupPrintHistory.length > 0) await PrintHistory.insertMany(backupPrintHistory, { ordered: false });
-      if (backupSharedCatalogs.length > 0) await SharedCatalog.insertMany(backupSharedCatalogs, { ordered: false });
+      // GH #1004 F2(a): `lean: true` — the backup docs came verbatim from
+      // THIS database via `.lean()` above and never left the server, so
+      // #259's untrusted-input rationale doesn't apply here. Without it,
+      // Mongoose re-validates the backup against the CURRENT schema and —
+      // with ordered:false + the default throwOnValidationError:false —
+      // silently SKIPS any legacy doc that no longer validates, while the
+      // response below claims a full rollback. Byte-identical reinsertion
+      // is the correct rollback semantic. The count checks catch any
+      // residual silent-subset path and route it into rollbackErr so the
+      // user is told data may be lost instead of being told all is well.
+      const rollbackInsert = async (
+        name: string,
+        model: { insertMany(docs: unknown[], opts: Record<string, unknown>): Promise<unknown[]> },
+        backup: unknown[],
+      ) => {
+        if (backup.length === 0) return;
+        const inserted = await model.insertMany(backup, { ordered: false, lean: true });
+        if (inserted.length !== backup.length) {
+          throw new Error(
+            `rollback of ${name} restored ${inserted.length} of ${backup.length} documents`,
+          );
+        }
+      };
+      await rollbackInsert("nozzles", Nozzle, backupNozzles);
+      await rollbackInsert("printers", Printer, backupPrinters);
+      await rollbackInsert("bedTypes", BedType, backupBedTypes);
+      await rollbackInsert("locations", Location, backupLocations);
+      await rollbackInsert("filaments", Filament, backupFilaments);
+      await rollbackInsert("printHistory", PrintHistory, backupPrintHistory);
+      await rollbackInsert("sharedCatalogs", SharedCatalog, backupSharedCatalogs);
     } catch (rollbackErr) {
       // Rollback itself failed — report it so the user knows data may be lost
       const detail = err instanceof Error ? err.message : String(err);

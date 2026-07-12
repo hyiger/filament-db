@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import mongoose from "mongoose";
 import { mapHeaders, pruneInheritedCreateDoc, rowToImport, splitInheritedImportSet, upsertImportRows } from "@/lib/importFilaments";
 
 describe("mapHeaders", () => {
@@ -1781,4 +1782,180 @@ describe("upsertImportRows — optTags round-trip (GH #954)", () => {
     // Number("") === 0 (a valid tag id) — the empty token must be dropped first.
     expect(f.optTags).toEqual([28, 16]);
   });
+});
+
+/**
+ * GH #1004 F1 — the CSV/XLSX importer must never resurrect a `_purged`
+ * tombstone. Permanent delete sets BOTH `_purged: true` and `_deletedAt`;
+ * the pre-fix importer bucketed any `_deletedAt != null` doc as a resurrect
+ * candidate and revived it WITHOUT clearing `_purged` — an active "zombie"
+ * that poisons hybrid sync (the engine short-circuits on `_purged` before
+ * LWW) and, once re-trashed, skips the trash listing forever. A purged name
+ * must fall through to the CREATE path instead (legal under the
+ * partial-unique name index, which is scoped to `_deletedAt: null`).
+ */
+describe("upsertImportRows — purged tombstones (GH #1004 F1)", () => {
+  let Filament: typeof import("@/models/Filament").default;
+
+  beforeEach(async () => {
+    Filament = (await import("@/models/Filament")).default;
+  });
+
+  async function purge(id: mongoose.Types.ObjectId) {
+    await Filament.updateOne(
+      { _id: id },
+      { $set: { _purged: true, _deletedAt: new Date() } },
+    );
+  }
+
+  it("imports a purged name as a NEW filament and leaves the tombstone untouched", async () => {
+    const tombstone = await Filament.create({ name: "PLA Red", vendor: "T", type: "PLA" });
+    await purge(tombstone._id);
+
+    const result = await upsertImportRows([
+      { name: "PLA Red", vendor: "NewVendor", type: "PLA" },
+    ]);
+    expect(result.created).toBe(1);
+    expect(result.updated).toBe(0);
+
+    const active = await Filament.findOne({ name: "PLA Red", _deletedAt: null }).lean();
+    expect(active).not.toBeNull();
+    expect(String(active!._id)).not.toBe(String(tombstone._id));
+    expect(active!._purged).not.toBe(true);
+
+    // The tombstone kept its gone-forever state.
+    const dead = await Filament.findById(tombstone._id).lean();
+    expect(dead!._purged).toBe(true);
+    expect(dead!._deletedAt).not.toBeNull();
+  });
+
+  it("a later Parent-column row resolves against the freshly-created doc, not the tombstone", async () => {
+    const tombstone = await Filament.create({ name: "Galaxy", vendor: "T", type: "PLA" });
+    await purge(tombstone._id);
+
+    const result = await upsertImportRows([
+      { name: "Galaxy", vendor: "Acme", type: "PLA" },
+      { name: "Galaxy Black", vendor: "Acme", type: "PLA", parentName: "Galaxy" },
+    ]);
+    expect(result.created).toBe(2);
+
+    const parent = await Filament.findOne({ name: "Galaxy", _deletedAt: null }).lean();
+    const variant = await Filament.findOne({ name: "Galaxy Black", _deletedAt: null }).lean();
+    expect(String(variant!.parentId)).toBe(String(parent!._id));
+    expect(String(variant!.parentId)).not.toBe(String(tombstone._id));
+  });
+
+  it("mints a new doc when a bucketed tombstone is purged mid-import (race guard)", async () => {
+    // A non-purged trashed row buckets as a resurrect candidate. Simulate a
+    // permanent-delete landing between the batch load and this row's write:
+    // the guarded resurrect updateOne matches zero rows → fall through to a
+    // fresh create instead of falsely reporting `updated`.
+    const trashed = await Filament.create({ name: "Race PLA", vendor: "T", type: "PLA" });
+    await Filament.updateOne({ _id: trashed._id }, { $set: { _deletedAt: new Date() } });
+
+    const spy = vi
+      .spyOn(Filament, "updateOne")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, acknowledged: true } as any);
+    try {
+      const result = await upsertImportRows([
+        { name: "Race PLA", vendor: "T", type: "PLA" },
+      ]);
+      expect(result.created).toBe(1);
+      expect(result.updated).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // A brand-new active row exists; the tombstone's write never landed.
+    const active = await Filament.findOne({ name: "Race PLA", _deletedAt: null }).lean();
+    expect(active).not.toBeNull();
+    expect(String(active!._id)).not.toBe(String(trashed._id));
+  });
+
+  it("purge-race create of a variant-resurrect uses the UNPRUNED doc (Codex P2 on #1009)", async () => {
+    // A soft-deleted VARIANT whose import row omits Parent: writeDoc gets pruned
+    // against the tombstone's parent to support a variant resurrect. If the
+    // tombstone is then purged mid-import (updateOne matches 0), the create
+    // fallback must NOT persist the pruned nulls onto the resulting STANDALONE
+    // doc — there is no parent to inherit them from.
+    const COLS = ["Name", "Vendor", "Type", "Color", "Cost", "Density", "Nozzle Temp", "Bed Temp", "Parent"];
+    const parent = await Filament.create({
+      name: "Uni PLA", vendor: "Acme", type: "PLA", cost: 25, density: 1.24,
+    });
+    const variant = await Filament.create({
+      name: "Uni PLA — Red", vendor: "Acme", type: "PLA", color: "#FF0000", parentId: parent._id,
+    });
+    // Soft-delete the variant so it buckets as a resurrect candidate.
+    await Filament.updateOne({ _id: variant._id }, { $set: { _deletedAt: new Date() } });
+
+    const mapping = mapHeaders(COLS);
+    // Row echoes the parent-equal cost/density (would be pruned) with NO Parent.
+    const rows = [
+      rowToImport(["Uni PLA — Red", "Acme", "PLA", "#FF0000", 25, 1.24, "", "", ""], mapping),
+    ];
+
+    const spy = vi
+      .spyOn(Filament, "updateOne")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, acknowledged: true } as any);
+    try {
+      const result = await upsertImportRows(rows);
+      expect(result.created).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The created STANDALONE row kept the imported cost/density (pre-fix: null,
+    // because it was created from the parent-pruned writeDoc with no parent).
+    const active = await Filament.findOne({ name: "Uni PLA — Red", _deletedAt: null }).lean();
+    expect(active).not.toBeNull();
+    expect(active!.parentId ?? null).toBeNull(); // standalone — no Parent column
+    expect(active!.cost).toBe(25);
+    expect(active!.density).toBe(1.24);
+  });
+
+  it("still resurrects a plain trashed (non-purged) row (regression)", async () => {
+    const trashed = await Filament.create({ name: "PETG Blue", vendor: "T", type: "PETG" });
+    await Filament.updateOne({ _id: trashed._id }, { $set: { _deletedAt: new Date() } });
+
+    const result = await upsertImportRows([
+      { name: "PETG Blue", vendor: "T", type: "PETG", cost: 19.99 },
+    ]);
+    expect(result.updated).toBe(1);
+    expect(result.created).toBe(0);
+
+    const revived = await Filament.findById(trashed._id).lean();
+    expect(revived!._deletedAt).toBeNull();
+    expect(revived!.cost).toBe(19.99);
+  });
+
+  it.each([["purged first"], ["non-purged first"]])(
+    "with a purged AND a non-purged tombstone sharing the name (%s), the non-purged one is resurrected",
+    async (order) => {
+      const mk = () => Filament.create({ name: "Twin", vendor: "T", type: "PLA" });
+      let purged, trashed;
+      if (order === "purged first") {
+        purged = await mk();
+        await purge(purged._id);
+        trashed = await mk();
+        await Filament.updateOne({ _id: trashed._id }, { $set: { _deletedAt: new Date() } });
+      } else {
+        trashed = await mk();
+        await Filament.updateOne({ _id: trashed._id }, { $set: { _deletedAt: new Date() } });
+        purged = await mk();
+        await purge(purged._id);
+      }
+
+      const result = await upsertImportRows([{ name: "Twin", vendor: "T", type: "PLA" }]);
+      expect(result.updated).toBe(1);
+      expect(result.created).toBe(0);
+
+      const revived = await Filament.findById(trashed._id).lean();
+      expect(revived!._deletedAt).toBeNull();
+      const stillDead = await Filament.findById(purged._id).lean();
+      expect(stillDead!._purged).toBe(true);
+      expect(stillDead!._deletedAt).not.toBeNull();
+    },
+  );
 });

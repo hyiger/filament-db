@@ -96,6 +96,65 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(names).toEqual(["Restored Glass", "Restored PEI"]);
   });
 
+  it("re-tombstones a purged-but-active zombie on restore (GH #1009 Codex P2)", async () => {
+    // A snapshot from an install affected by the purged-zombie bug carries a
+    // filament with _purged: true but _deletedAt: null — an active zombie the
+    // startup migration won't re-repair this process. Restore must normalize it.
+    const snapshot = {
+      version: 3,
+      createdAt: new Date().toISOString(),
+      collections: {
+        filaments: [
+          { name: "Zombie PLA", vendor: "T", type: "PLA", _purged: true, _deletedAt: null },
+          { name: "Live PLA", vendor: "T", type: "PLA" },
+        ],
+        nozzles: [], printers: [], bedTypes: [], locations: [], printHistory: [], sharedCatalogs: [],
+      },
+    };
+    const res = await POST(new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    }));
+    expect(res.status).toBe(200);
+
+    // The zombie is restored but re-tombstoned: _purged stays true AND
+    // _deletedAt is now set, so it's out of the active set (no visible zombie).
+    const zombie = await Filament.findOne({ name: "Zombie PLA" }).lean();
+    expect(zombie._purged).toBe(true);
+    expect(zombie._deletedAt).not.toBeNull();
+    expect(zombie._deletedAt).toBeInstanceOf(Date);
+    // A normal row is untouched (still active).
+    const live = await Filament.findOne({ name: "Live PLA" }).lean();
+    expect(live._deletedAt ?? null).toBeNull();
+  });
+
+  it("rejects a null row with a clean 400, not a 500 (GH #1009 Codex P3)", async () => {
+    // Pre-existing data must survive an invalid restore untouched.
+    await BedType.create({ name: "Keep Me", material: "PEI" });
+
+    const snapshot = {
+      version: 3,
+      createdAt: new Date().toISOString(),
+      collections: {
+        filaments: [null], // a null element passes the array-shape check
+        nozzles: [], printers: [], bedTypes: [], locations: [], printHistory: [], sharedCatalogs: [],
+      },
+    };
+    const res = await POST(new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    }));
+    // Pre-fix: restoreTypes(null) threw outside the try → 500. Now a clean 400.
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/filaments\[0\]/);
+
+    // DB untouched — the pre-existing bed type is still there.
+    expect(await BedType.countDocuments({ name: "Keep Me" })).toBe(1);
+  });
+
   it("POST restore of a v1 snapshot (no bedTypes) leaves the collection empty, not undefined", async () => {
     // Upgrading users with an older snapshot should still be able to restore.
     const snapshot = {
@@ -542,8 +601,8 @@ describe("snapshot route — Location + PrintHistory round-trip", () => {
     );
   });
 
-  it("rejects a snapshot with an invalid document and rolls back (GH #259/#333)", async () => {
-    // Pre-existing data that must survive a failed restore.
+  it("rejects an invalid snapshot with 400 BEFORE wiping anything (GH #259/#333, #1004 F2)", async () => {
+    // Pre-existing data that must survive an invalid restore attempt.
     await Filament.create({ name: "Survivor PLA", vendor: "T", type: "PLA" });
 
     const snapshot = {
@@ -551,7 +610,9 @@ describe("snapshot route — Location + PrintHistory round-trip", () => {
       createdAt: new Date().toISOString(),
       collections: {
         // `vendor` is a required field — this document fails schema
-        // validation, so the `ordered: true` insertMany throws.
+        // validation. #1004 F2: pre-validation now catches it BEFORE the
+        // destructive wipe, so the failure is a clean 400 with the DB
+        // untouched (pre-fix: wipe → ordered insertMany throw → rollback).
         filaments: [{ name: "Invalid Filament", type: "PLA" }],
         nozzles: [],
         printers: [],
@@ -569,14 +630,81 @@ describe("snapshot route — Location + PrintHistory round-trip", () => {
         body: JSON.stringify(snapshot),
       }),
     );
-    // The restore must NOT silently succeed on an invalid import.
-    expect(res.status).toBe(500);
-    expect((await res.json()).error).toMatch(/rolled back/i);
+    // The restore must NOT silently succeed on an invalid import — and must
+    // not wipe first either.
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/nothing was changed/i);
+    expect(body.error).toMatch(/filaments\[0\]/);
 
-    // Pre-existing data was restored; the invalid document never landed.
+    // Pre-existing data untouched; the invalid document never landed.
     const all = await Filament.find({}).lean();
     expect(all).toHaveLength(1);
     expect(all[0].name).toBe("Survivor PLA");
+  });
+
+  /**
+   * GH #1004 F2 — THE P1 PIN. The rollback used to re-hydrate the backup
+   * through full Mongoose validation with `ordered: false` +
+   * `throwOnValidationError: false`, silently DROPPING any legacy doc that
+   * no longer passes the CURRENT schema (exactly the population the #905
+   * `validateModifiedOnly` fixes exist for) while the response claimed a
+   * complete rollback. With `lean: true` the backup is reinserted
+   * byte-identically.
+   *
+   * Recipe: a legacy-invalid doc (cost: -5, inserted via the raw driver —
+   * bypassing Mongoose like a pre-#337 install) + a snapshot that PASSES
+   * per-doc pre-validation but fails at the DRIVER level mid-insert (two
+   * docs sharing an _id → E11000), so the wipe-then-rollback path runs.
+   */
+  it("rollback preserves legacy docs that fail current validation (GH #1004 F2)", async () => {
+    await Filament.collection.insertOne({
+      name: "Legacy Invalid",
+      vendor: "Old",
+      type: "PLA",
+      cost: -5, // violates cost.min on the current schema
+      _deletedAt: null,
+    });
+
+    const dupId = new mongoose.Types.ObjectId().toString();
+    const snapshot = {
+      version: 4,
+      createdAt: new Date().toISOString(),
+      collections: {
+        // Each doc is individually VALID (passes pre-validation), but the
+        // shared _id makes the ordered insertMany throw a driver-level
+        // E11000 on the second doc → the catch wipes + rolls back.
+        filaments: [
+          { _id: dupId, name: "Dup A", vendor: "V", type: "PLA" },
+          { _id: dupId, name: "Dup B", vendor: "V", type: "PLA" },
+        ],
+        nozzles: [],
+        printers: [],
+        bedTypes: [],
+        locations: [],
+        printHistory: [],
+        sharedCatalogs: [],
+      },
+    };
+
+    const res = await POST(
+      new NextRequest("http://localhost/api/snapshot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(snapshot),
+      }),
+    );
+    expect(res.status).toBe(500);
+    expect((await res.json()).error).toMatch(/rolled back/i);
+
+    // The legacy doc SURVIVED the rollback verbatim (pre-fix: silently
+    // dropped because cost: -5 fails re-validation).
+    const legacy = await Filament.collection.findOne({ name: "Legacy Invalid" });
+    expect(legacy).not.toBeNull();
+    expect(legacy!.cost).toBe(-5);
+
+    // And the snapshot's docs did not land.
+    expect(await Filament.collection.countDocuments({ name: /^Dup / })).toBe(0);
   });
 
   /**
