@@ -353,12 +353,14 @@ describe("filamentToOrcaSlicerKeys", () => {
     };
 
     const keys = filamentToOrcaSlicerKeys(filament);
-    // shrinkageXY is emitted with a trailing "%"
-    expect(keys.filament_shrink).toEqual(["0.4%"]);
+    // GH #1008 F1: filament_shrink is emitted in Orca's 100-based convention —
+    // 0-based shrinkageXY 0.4 → "99.6%" (a part that measures 99.6 mm per 100).
+    // shrinkageZ keeps the PrusaSlicer-named 0-based key, so it stays raw.
+    expect(keys.filament_shrink).toEqual(["99.6%"]);
     expect(keys.filament_shrinkage_compensation_z).toEqual(["0.2"]);
   });
 
-  it("emits shrinkage keys even when the value is 0 (only null skips)", () => {
+  it("skips filament_shrink for 0 shrinkage (Orca's default is 100%), GH #1008 F1", () => {
     const filament = {
       name: "Zero Shrink",
       vendor: "Test",
@@ -372,8 +374,11 @@ describe("filamentToOrcaSlicerKeys", () => {
     };
 
     const keys = filamentToOrcaSlicerKeys(filament);
-    // The guard is `!= null`, so 0 still emits (via set()'s own `!= null` check).
-    expect(keys.filament_shrink).toEqual(["0%"]);
+    // GH #1008 F1: 0-based 0 = no shrink = Orca's implicit 100% default, so we
+    // must NOT emit filament_shrink (emitting "100%" would round-trip fine but
+    // pins a redundant explicit override). shrinkageZ (Prusa-style raw key)
+    // still emits 0.
+    expect(keys.filament_shrink).toBeUndefined();
     expect(keys.filament_shrinkage_compensation_z).toEqual(["0"]);
   });
 
