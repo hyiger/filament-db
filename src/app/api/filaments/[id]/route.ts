@@ -391,8 +391,17 @@ export async function PUT(
       const parentIsVariant = !newParent || newParent.parentId != null;
       const gainedChildren = childCount > 0;
       if (parentIsVariant || gainedChildren) {
+        // Codex P2 on PR #1012: scope the rollback to the parent THIS request
+        // wrote (`parentId: body.parentId`) and to a still-live row
+        // (`_deletedAt: null`). Matching only `_id` would clobber a *newer*
+        // valid re-parent (or a delete) of the same filament that landed
+        // between our findOneAndUpdate and this rollback — the stale revert
+        // would silently undo that later write. Guarded, the rollback fires
+        // only while our own write is still the current state; if it was
+        // superseded, matchedCount is 0 and we still return 409 (our
+        // re-parent didn't stick, which is the correct outcome).
         await Filament.updateOne(
-          { _id: id },
+          { _id: id, parentId: body.parentId, _deletedAt: null },
           { $set: { parentId: stored?.parentId ?? null } },
         );
         return errorResponse(

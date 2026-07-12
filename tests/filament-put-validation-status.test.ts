@@ -192,11 +192,21 @@ describe("PUT /api/filaments/[id] — client-input rejections return 400", () =>
     vi.spyOn(routeFilament, "countDocuments")
       .mockResolvedValueOnce(0)
       .mockResolvedValueOnce(1);
+    // Observe the rollback filter (spy calls through, so the revert still runs).
+    const updateSpy = vi.spyOn(routeFilament, "updateOne");
 
     const res = await putReq(String(child._id), { parentId: String(parent._id) });
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.error).toMatch(/concurrent|cycle|nested/i);
+
+    // Codex P2 on PR #1012: the rollback must be scoped to the parent THIS
+    // request wrote + a live row, so a concurrent newer re-parent isn't
+    // clobbered. Pin that the filter carries both, not just `_id`.
+    expect(updateSpy).toHaveBeenCalledTimes(1);
+    const rollbackFilter = updateSpy.mock.calls[0][0] as unknown as Record<string, unknown>;
+    expect(String(rollbackFilter.parentId)).toBe(String(parent._id));
+    expect(rollbackFilter._deletedAt).toBeNull();
 
     // parentId reverted to its pre-PUT value (null) — no cycle persisted.
     const reloaded = await Filament.findById(child._id).lean();
