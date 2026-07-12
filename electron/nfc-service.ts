@@ -1120,9 +1120,18 @@ export class NfcService extends EventEmitter {
 
         try {
           await this.writeBlock(protocol, i, blockData);
-        } catch {
-          // Last block(s) may be write-protected on SLIX2 (config area) — stop
-          break;
+        } catch (err) {
+          // GH #1006 F1: ONLY the last block (the SLIX2 config/lock area, e.g.
+          // block 79) is legitimately write-protected — that's the expected,
+          // ignorable failure this catch was written for. A failure at any
+          // EARLIER block means live CC/NDEF data didn't land (the tag was
+          // lifted, an RF NAK), leaving the payload truncated mid-CBOR. The
+          // old code broke on ANY failure and still resolved { success: true },
+          // so the user pocketed a corrupt tag that fails on the next scan with
+          // no indication the write failed. Rethrow early failures so the write
+          // reports failure; only swallow the protected-tail case.
+          if (i >= numBlocks - 1) break;
+          throw err;
         }
 
         // Small delay for EEPROM programming time

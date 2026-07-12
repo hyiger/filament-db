@@ -1192,6 +1192,12 @@ ipcMain.handle("nfc-get-status", (event) => {
     readerName: null,
     tagPresent: false,
     tagUid: null,
+    // GH #1006 F4: NfcService.getStatus() always includes `lastError`, and
+    // src/types/electron.d.ts types it as required (`lastError: {...} | null`,
+    // GH #450). This null-service fallback (SCardSvr stopped / pcsclite threw —
+    // the exact degraded-host path #450 surfaces errors for) must match the
+    // contract, or the renderer receives `undefined` where it's typed `null`.
+    lastError: null,
   };
 });
 
