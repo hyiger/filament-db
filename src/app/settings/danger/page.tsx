@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "@/i18n/TranslationProvider";
 
 export default function DangerSettingsPage() {
@@ -10,6 +10,20 @@ export default function DangerSettingsPage() {
   const [deleteInput, setDeleteInput] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [deleteResult, setDeleteResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // GH #1004 F4: in hybrid mode a wipe is local-only — the sync engine
+  // re-inserts every Atlas doc on the next cycle, so the wipe appears to
+  // "come back". Warn before the user acts. Web mode has no sync, so this
+  // stays hidden there (no electronAPI). Post-mount read (SSR-safe).
+  const [isHybrid, setIsHybrid] = useState(false);
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.getConfig) return;
+    api
+      .getConfig()
+      .then((cfg) => setIsHybrid(cfg.connectionMode === "hybrid"))
+      .catch(() => {});
+  }, []);
 
   return (
     <main id="main-content" className="max-w-3xl mx-auto px-4 py-8">
@@ -20,6 +34,15 @@ export default function DangerSettingsPage() {
       <div className="rounded-lg border border-red-200 dark:border-red-900/50 p-5">
         <h2 className="text-lg font-semibold text-red-600 dark:text-red-400 mb-1">{t("settings.dangerZone")}</h2>
         <p className="text-sm text-gray-500 mb-4">{t("settings.dangerZoneDesc")}</p>
+
+        {isHybrid && (
+          <div className="mb-4 flex gap-2 items-start rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/40 px-3 py-2.5 text-sm text-amber-800 dark:text-amber-200">
+            <svg className="w-4 h-4 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z" />
+            </svg>
+            <span>{t("settings.danger.hybridWarning")}</span>
+          </div>
+        )}
 
         {!showDeleteConfirm ? (
           <button
