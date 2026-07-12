@@ -10,6 +10,8 @@ import {
   SAMPLE_FILAMENT,
   type LabelFormat,
 } from "../src/lib/labelFormat";
+import en from "../src/i18n/locales/en.json";
+import de from "../src/i18n/locales/de.json";
 
 const FIL = { name: "Galaxy Black", vendor: "Prusament", type: "PLA", colorName: "Black" };
 const fmt = (lines: LabelFormat["lines"]): LabelFormat => ({ ...DEFAULT_LABEL_FORMAT, lines });
@@ -46,6 +48,20 @@ describe("composeLabelLines", () => {
     for (const [key, { patch }] of Object.entries(LABEL_PRESETS)) {
       const f = normalizeLabelFormat({ ...DEFAULT_LABEL_FORMAT, ...patch });
       expect(composeLabelLines(SAMPLE_FILAMENT, f).length, key).toBeGreaterThan(0);
+    }
+  });
+
+  it("every preset carries a labelKey present in en + de (GH #1007 F3)", () => {
+    // The editor renders t(labelKey), so a hardcoded English label would show
+    // untranslated in German Settings. The i18n parity test only scans literal
+    // string-argument translation calls and can't catch a dynamic t(labelKey),
+    // so pin it here.
+    const enDict = en as Record<string, string>;
+    const deDict = de as Record<string, string>;
+    for (const [key, { labelKey }] of Object.entries(LABEL_PRESETS)) {
+      expect(labelKey, key).toMatch(/^settings\.labelFormat\.preset\./);
+      expect(enDict[labelKey], `${key} missing in en.json`).toBeTruthy();
+      expect(deDict[labelKey], `${key} missing in de.json`).toBeTruthy();
     }
   });
 
