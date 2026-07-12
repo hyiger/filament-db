@@ -803,7 +803,15 @@ export class SyncService extends EventEmitter {
               const doc = this.stripForTransfer(full);
               const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(localCol, localDoc._id) : undefined;
               const transformed = transformDoc ? transformDoc(doc, "toLocal", targetSpoolIds) : doc;
-              await localCol.updateOne({ _id: localDoc._id }, { $set: { ...transformed, _deletedAt: null } });
+              // GH #1004 F3: replaceOne, not $set. A whole-doc LWW copy must
+              // also DELETE fields the source no longer has — the $unset
+              // un-pinning flows (#951/#969/#971 un-pin a variant override so
+              // GH #106 inheritance resumes) leave a field absent on the
+              // source; $set can't remove it, and the equal-updatedAt result
+              // then freezes the divergence forever. `transformed` is the
+              // stripped source (no _id/__v), so replaceOne keeps the target
+              // _id. Targeted flag $sets above stay $set (they mutate one key).
+              await localCol.replaceOne({ _id: localDoc._id }, { ...transformed, _deletedAt: null });
               result.pulled++;
             }
           }
@@ -823,7 +831,9 @@ export class SyncService extends EventEmitter {
               const doc = this.stripForTransfer(full);
               const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(remoteCol, remoteDoc._id) : undefined;
               const transformed = transformDoc ? transformDoc(doc, "toRemote", targetSpoolIds) : doc;
-              await remoteCol.updateOne({ _id: remoteDoc._id }, { $set: { ...transformed, _deletedAt: null } });
+              // GH #1004 F3: replaceOne so a whole-doc copy also drops fields
+              // the source no longer carries (see the toLocal branch above).
+              await remoteCol.replaceOne({ _id: remoteDoc._id }, { ...transformed, _deletedAt: null });
               result.pushed++;
             }
           }
@@ -843,7 +853,9 @@ export class SyncService extends EventEmitter {
             const doc = this.stripForTransfer(full);
             const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(remoteCol, remoteDoc._id) : undefined;
             const transformed = transformDoc ? transformDoc(doc, "toRemote", targetSpoolIds) : doc;
-            await remoteCol.updateOne({ _id: remoteDoc._id }, { $set: transformed });
+            // GH #1004 F3: replaceOne so the LWW copy drops fields the source
+            // deleted (un-pin $unset flows); $set would freeze the divergence.
+            await remoteCol.replaceOne({ _id: remoteDoc._id }, transformed);
             result.updated++;
           }
         } else if (remoteTime > localTime) {
@@ -853,7 +865,8 @@ export class SyncService extends EventEmitter {
             const doc = this.stripForTransfer(full);
             const targetSpoolIds = transformDoc ? await fetchTargetSpoolIds(localCol, localDoc._id) : undefined;
             const transformed = transformDoc ? transformDoc(doc, "toLocal", targetSpoolIds) : doc;
-            await localCol.updateOne({ _id: localDoc._id }, { $set: transformed });
+            // GH #1004 F3: replaceOne (see the toRemote branch above).
+            await localCol.replaceOne({ _id: localDoc._id }, transformed);
             result.updated++;
           }
         }

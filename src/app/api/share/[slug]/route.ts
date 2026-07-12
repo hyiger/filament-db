@@ -36,7 +36,15 @@ export async function GET(
         $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }],
       },
       { $inc: { viewCount: 1 } },
-      { returnDocument: "after" },
+      // GH #1004 F5: timestamps:false so this read-path counter does NOT
+      // advance `updatedAt`. The schema has timestamps:true, which otherwise
+      // auto-$sets updatedAt on every view — and the hybrid sync engine
+      // resurrects a locally-unpublished catalog whenever the remote copy's
+      // updatedAt out-runs the local _deletedAt (sync-service.ts). So a mere
+      // GET on a still-live peer could revive a revoked share, defeating the
+      // DELETE handler's "unpublish sticks across peers" promise. viewCount
+      // divergence across peers is cosmetic; the timestamp bump is not.
+      { returnDocument: "after", timestamps: false },
     );
 
     if (!catalog) {
