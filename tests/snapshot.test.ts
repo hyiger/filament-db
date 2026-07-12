@@ -96,6 +96,39 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(names).toEqual(["Restored Glass", "Restored PEI"]);
   });
 
+  it("re-tombstones a purged-but-active zombie on restore (GH #1009 Codex P2)", async () => {
+    // A snapshot from an install affected by the purged-zombie bug carries a
+    // filament with _purged: true but _deletedAt: null — an active zombie the
+    // startup migration won't re-repair this process. Restore must normalize it.
+    const snapshot = {
+      version: 3,
+      createdAt: new Date().toISOString(),
+      collections: {
+        filaments: [
+          { name: "Zombie PLA", vendor: "T", type: "PLA", _purged: true, _deletedAt: null },
+          { name: "Live PLA", vendor: "T", type: "PLA" },
+        ],
+        nozzles: [], printers: [], bedTypes: [], locations: [], printHistory: [], sharedCatalogs: [],
+      },
+    };
+    const res = await POST(new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    }));
+    expect(res.status).toBe(200);
+
+    // The zombie is restored but re-tombstoned: _purged stays true AND
+    // _deletedAt is now set, so it's out of the active set (no visible zombie).
+    const zombie = await Filament.findOne({ name: "Zombie PLA" }).lean();
+    expect(zombie._purged).toBe(true);
+    expect(zombie._deletedAt).not.toBeNull();
+    expect(zombie._deletedAt).toBeInstanceOf(Date);
+    // A normal row is untouched (still active).
+    const live = await Filament.findOne({ name: "Live PLA" }).lean();
+    expect(live._deletedAt ?? null).toBeNull();
+  });
+
   it("POST restore of a v1 snapshot (no bedTypes) leaves the collection empty, not undefined", async () => {
     // Upgrading users with an older snapshot should still be able to restore.
     const snapshot = {

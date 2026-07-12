@@ -107,6 +107,26 @@ function restoreTypes(doc: Record<string, unknown>): Record<string, unknown> {
 }
 
 /**
+ * GH #1009 (Codex P2): re-tombstone a purged-but-not-deleted row at restore time.
+ *
+ * A snapshot exported from an install affected by the purged-zombie bug can
+ * carry a filament / print-history / shared-catalog row with `_purged: true`
+ * but `_deletedAt: null` — an active "zombie" (`_purged` and `_deletedAt` are
+ * set together everywhere else). The startup `purgedZombies` migration only
+ * runs once per process, and its in-memory flag is already set by the time this
+ * restore runs, so a restored zombie would stay visible until an app restart
+ * while the hybrid sync engine treats it as a permanent tombstone. Normalize
+ * the state here (soft-delete it) rather than only at startup. No-op for the
+ * common case (`_purged` absent/false).
+ */
+function normalizePurgedTombstone(doc: Record<string, unknown>): Record<string, unknown> {
+  if (doc._purged === true && doc._deletedAt == null) {
+    doc._deletedAt = new Date();
+  }
+  return doc;
+}
+
+/**
  * GET /api/snapshot — Export snapshot-scoped app data as JSON.
  *
  * The snapshot includes all documents (including soft-deleted) from
@@ -465,19 +485,22 @@ async function restoreSnapshot(request: NextRequest) {
     }
 
     if (filaments.length > 0) {
-      const docs = (filaments as Record<string, unknown>[]).map(restoreTypes);
+      // GH #1009 (Codex P2): normalizePurgedTombstone re-tombstones any
+      // purged-but-active zombie the snapshot carries (Filament / PrintHistory /
+      // SharedCatalog all carry `_purged`).
+      const docs = (filaments as Record<string, unknown>[]).map(restoreTypes).map(normalizePurgedTombstone);
       await Filament.insertMany(docs, { ordered: true });
       results.filaments = filaments.length;
     }
 
     if (printHistory.length > 0) {
-      const docs = (printHistory as Record<string, unknown>[]).map(restoreTypes);
+      const docs = (printHistory as Record<string, unknown>[]).map(restoreTypes).map(normalizePurgedTombstone);
       await PrintHistory.insertMany(docs, { ordered: true });
       results.printHistory = printHistory.length;
     }
 
     if (sharedCatalogs.length > 0) {
-      const docs = (sharedCatalogs as Record<string, unknown>[]).map(restoreTypes);
+      const docs = (sharedCatalogs as Record<string, unknown>[]).map(restoreTypes).map(normalizePurgedTombstone);
       await SharedCatalog.insertMany(docs, { ordered: true });
       results.sharedCatalogs = sharedCatalogs.length;
     }
