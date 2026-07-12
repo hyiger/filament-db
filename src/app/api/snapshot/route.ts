@@ -343,6 +343,45 @@ async function restoreSnapshot(request: NextRequest) {
     sharedCatalogs = [],
   } = cols;
 
+  // GH #1004 F2(b): pre-validate EVERY incoming doc BEFORE the destructive
+  // wipe. The forward inserts below deliberately validate + throw on the
+  // first bad doc (#259 all-or-nothing) — but real installs carry legacy
+  // docs that fail CURRENT schema validation (the reason the #905
+  // `validateModifiedOnly` fixes exist), so a snapshot of one's own DB
+  // could previously wipe-then-fail-then-rollback every time. Validating
+  // up front turns that into a clean 400 with the DB untouched; the
+  // rollback path below remains reachable only for driver-level errors
+  // (duplicate keys inside the snapshot file, BSON limits).
+  const preValidate: Array<
+    [string, { new (doc: Record<string, unknown>): { validate(): Promise<void> } }, unknown[]]
+  > = [
+    ["nozzles", Nozzle, nozzles],
+    ["printers", Printer, printers],
+    ["bedTypes", BedType, bedTypes],
+    ["locations", Location, locations],
+    ["filaments", Filament, filaments],
+    ["printHistory", PrintHistory, printHistory],
+    ["sharedCatalogs", SharedCatalog, sharedCatalogs],
+  ];
+  for (const [colName, Model, rows] of preValidate) {
+    for (let i = 0; i < rows.length; i++) {
+      const candidate = new Model(restoreTypes(rows[i] as Record<string, unknown>));
+      try {
+        await candidate.validate();
+      } catch (validationErr) {
+        const detail =
+          validationErr instanceof Error ? validationErr.message : String(validationErr);
+        return NextResponse.json(
+          {
+            error: `Snapshot failed validation at ${colName}[${i}] — nothing was changed. Fix the snapshot (or the offending record) and retry.`,
+            detail,
+          },
+          { status: 400 },
+        );
+      }
+    }
+  }
+
   // --- Safety: snapshot the current DB so we can roll back on failure ---
   const [
     backupFilaments,
@@ -459,13 +498,36 @@ async function restoreSnapshot(request: NextRequest) {
         PrintHistory.deleteMany({}),
         SharedCatalog.deleteMany({}),
       ]);
-      if (backupNozzles.length > 0) await Nozzle.insertMany(backupNozzles, { ordered: false });
-      if (backupPrinters.length > 0) await Printer.insertMany(backupPrinters, { ordered: false });
-      if (backupBedTypes.length > 0) await BedType.insertMany(backupBedTypes, { ordered: false });
-      if (backupLocations.length > 0) await Location.insertMany(backupLocations, { ordered: false });
-      if (backupFilaments.length > 0) await Filament.insertMany(backupFilaments, { ordered: false });
-      if (backupPrintHistory.length > 0) await PrintHistory.insertMany(backupPrintHistory, { ordered: false });
-      if (backupSharedCatalogs.length > 0) await SharedCatalog.insertMany(backupSharedCatalogs, { ordered: false });
+      // GH #1004 F2(a): `lean: true` — the backup docs came verbatim from
+      // THIS database via `.lean()` above and never left the server, so
+      // #259's untrusted-input rationale doesn't apply here. Without it,
+      // Mongoose re-validates the backup against the CURRENT schema and —
+      // with ordered:false + the default throwOnValidationError:false —
+      // silently SKIPS any legacy doc that no longer validates, while the
+      // response below claims a full rollback. Byte-identical reinsertion
+      // is the correct rollback semantic. The count checks catch any
+      // residual silent-subset path and route it into rollbackErr so the
+      // user is told data may be lost instead of being told all is well.
+      const rollbackInsert = async (
+        name: string,
+        model: { insertMany(docs: unknown[], opts: Record<string, unknown>): Promise<unknown[]> },
+        backup: unknown[],
+      ) => {
+        if (backup.length === 0) return;
+        const inserted = await model.insertMany(backup, { ordered: false, lean: true });
+        if (inserted.length !== backup.length) {
+          throw new Error(
+            `rollback of ${name} restored ${inserted.length} of ${backup.length} documents`,
+          );
+        }
+      };
+      await rollbackInsert("nozzles", Nozzle, backupNozzles);
+      await rollbackInsert("printers", Printer, backupPrinters);
+      await rollbackInsert("bedTypes", BedType, backupBedTypes);
+      await rollbackInsert("locations", Location, backupLocations);
+      await rollbackInsert("filaments", Filament, backupFilaments);
+      await rollbackInsert("printHistory", PrintHistory, backupPrintHistory);
+      await rollbackInsert("sharedCatalogs", SharedCatalog, backupSharedCatalogs);
     } catch (rollbackErr) {
       // Rollback itself failed — report it so the user knows data may be lost
       const detail = err instanceof Error ? err.message : String(err);

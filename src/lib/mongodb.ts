@@ -34,6 +34,14 @@ interface MongooseCache {
      * plain unique `name` (or `instanceId`) index is dropped and rebuilt
      * as the partial-unique-on-non-deleted index the schema declares. */
     coreModelIndexes: boolean;
+    /** GH #1004 F1 — re-tombstone "zombie" rows: filaments carrying
+     * `_purged: true` while ACTIVE (`_deletedAt: null`). The pre-#1004
+     * CSV/XLSX importer could resurrect a purge tombstone without
+     * clearing the flag; such rows poison hybrid sync (the engine
+     * short-circuits on `_purged` before LWW) and vanish unrecoverably
+     * if re-trashed. Their intended state is gone-forever, so restore
+     * `_deletedAt`. Idempotent: matches 0 rows on healthy installs. */
+    purgedZombies: boolean;
   };
 }
 
@@ -70,7 +78,7 @@ export default async function dbConnect() {
     promise: null,
     uri: null,
     migrationsPromise: null,
-    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false },
+    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false },
   };
 
   if (!global.mongoose) {
@@ -85,7 +93,7 @@ export default async function dbConnect() {
     cached.promise = null;
     cached.uri = null;
     cached.migrationsPromise = null;
-    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false };
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false };
   }
 
   // GH #312: a cached connection can go dead after a DB outage or an
@@ -108,7 +116,8 @@ export default async function dbConnect() {
     cached.migrations.spoolInstanceIds &&
     cached.migrations.sharedCatalogIndexes &&
     cached.migrations.nozzlePhysicalInstances &&
-    cached.migrations.coreModelIndexes
+    cached.migrations.coreModelIndexes &&
+    cached.migrations.purgedZombies
   ) {
     return cached.conn;
   }
@@ -137,6 +146,35 @@ export default async function dbConnect() {
     return cached.conn;
   }
   const runMigrations = async (): Promise<void> => {
+  // GH #1004 F1 — repair "zombie" filaments: `_purged: true` while ACTIVE
+  // (`_deletedAt: null`). The pre-#1004 CSV/XLSX importer could resurrect a
+  // purge tombstone without clearing the flag; the row then renders in the
+  // app while hybrid sync treats it as a one-way tombstone (propagating
+  // `_purged` onto the peer and never syncing its edits), and a later
+  // soft-delete makes it vanish from the trash entirely. Gone-forever is
+  // the row's intended state, so restore `_deletedAt`. Idempotent — the
+  // filter matches nothing on healthy installs.
+  if (!cached.migrations.purgedZombies) {
+    try {
+      const { default: Filament } = await import("@/models/Filament");
+      const res = await Filament.updateMany(
+        { _purged: true, _deletedAt: null },
+        { $set: { _deletedAt: new Date() } },
+      );
+      if (res.modifiedCount > 0) {
+        console.log(
+          `[migration] Re-tombstoned ${res.modifiedCount} purged zombie filament(s) (GH #1004)`,
+        );
+      }
+      cached.migrations.purgedZombies = true;
+    } catch (err) {
+      console.error(
+        "[migration] Failed to repair purged zombie filaments (will retry on next connect):",
+        err,
+      );
+    }
+  }
+
   // GH #732 — the 5-byte hex identity is moving from the filament to the
   // spool. Backfill a per-spool `instanceId` onto every spool that lacks one
   // so existing installs converge on first connect after upgrade. The first
