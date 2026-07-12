@@ -128,13 +128,12 @@ export default function FilamentPicker({
       {showControls && typeOptions.length > 1 && (
         <div
           className="flex flex-wrap gap-1"
-          role="tablist"
+          role="group"
           aria-label={t("picker.typeFilterAriaLabel")}
         >
           <button
             type="button"
-            role="tab"
-            aria-selected={typeFilter === null}
+            aria-pressed={typeFilter === null}
             onClick={() => setTypeFilter(null)}
             className={`px-2 py-0.5 text-xs rounded-full border ${
               typeFilter === null
@@ -148,8 +147,7 @@ export default function FilamentPicker({
             <button
               key={type}
               type="button"
-              role="tab"
-              aria-selected={typeFilter === type}
+              aria-pressed={typeFilter === type}
               onClick={() =>
                 setTypeFilter((current) => (current === type ? null : type))
               }

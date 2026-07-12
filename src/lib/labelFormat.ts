@@ -67,12 +67,19 @@ export const FONT_STACKS: Record<LabelFontFamily, string> = {
  *  as needed so all stacked lines fit the 128-dot print head. */
 export const FONT_SIZE_DOTS: Record<LabelFontSize, number> = { s: 28, m: 40, l: 54 };
 
-/** Named layout presets — applied as a partial over the current format. */
-export const LABEL_PRESETS: Record<string, { label: string; patch: Partial<LabelFormat> }> = {
-  nameOnly: { label: "Name only", patch: { lines: ["name"] } },
-  vendorType: { label: "Vendor + Type", patch: { lines: ["vendorType"] } },
-  vendorOverType: { label: "Vendor over Type", patch: { lines: ["vendor", "type"] } },
-  typeColor: { label: "Type + Color", patch: { lines: ["type", "colorName"] } },
+/**
+ * Named layout presets — applied as a partial over the current format.
+ *
+ * GH #1007 F3: carry an i18n KEY (not a hardcoded English label) so the editor
+ * can translate the preset names — they render untranslated in German Settings
+ * otherwise, and the i18n parity test (which only scans literal string-argument
+ * translation calls) can never catch a hardcoded string here.
+ */
+export const LABEL_PRESETS: Record<string, { labelKey: string; patch: Partial<LabelFormat> }> = {
+  nameOnly: { labelKey: "settings.labelFormat.preset.nameOnly", patch: { lines: ["name"] } },
+  vendorType: { labelKey: "settings.labelFormat.preset.vendorType", patch: { lines: ["vendorType"] } },
+  vendorOverType: { labelKey: "settings.labelFormat.preset.vendorOverType", patch: { lines: ["vendor", "type"] } },
+  typeColor: { labelKey: "settings.labelFormat.preset.typeColor", patch: { lines: ["type", "colorName"] } },
 };
 
 /** Representative filament for the Settings live preview (so it works with no real filament in context). */
