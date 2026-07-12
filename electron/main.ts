@@ -766,6 +766,12 @@ async function resolveMongoUri(): Promise<string | null> {
       await client.close();
 
       store.set("mongodbUri", atlasUri);
+      // GH #1006 F3: pure Atlas doesn't use the embedded mongod — stop one a
+      // prior offline/hybrid session started, or it idles for the rest of the
+      // session (~200–300 MB RSS + a dbPath lock) serving nothing. No-op when
+      // none is running; the atlas-fallback path below restarts it on demand
+      // when Atlas is unreachable. Mirrors the syncService teardown above (#672).
+      await stopLocalMongo();
       return atlasUri;
     } catch {
       console.log("Atlas unreachable, falling back to local MongoDB...");
@@ -993,14 +999,39 @@ ipcMain.handle("save-config", async (event, config: {
         serverRestarted = true;
       } catch (err) {
         console.error("Failed to start server after config save:", err);
+        // GH #1006 F2: stopServer() already killed the healthy server, so the
+        // app now has NO embedded server. The usual cause is a transient port
+        // race (EADDRINUSE from the not-yet-dead old process still holding 3456
+        // during the gap). Clear any half-spawned process and retry once on the
+        // SAME resolved uri — resolveMongoUri already stood up THIS mode's
+        // mongod/sync (and tore down the previous mode's, so the old uri would
+        // now point at a stopped mongod), making the new uri the only coherent
+        // recovery target. Mirrors the LAN-toggle branch's recover-or-fail shape.
+        await stopServer();
+        try {
+          await startProductionServer(uri || undefined);
+          serverRestarted = true;
+        } catch (recoveryErr) {
+          console.error("Failed to restore server after config-change failure:", recoveryErr);
+        }
       } finally {
         intentionalServerRestart = false;
       }
       // Refresh LAN auto-discovery so a stale advert doesn't point at a server
       // that just restarted (or failed to). syncMdnsAdvertisement() no-ops when
       // exposeToLan is off; stop outright if the restart failed.
-      if (serverRestarted) syncMdnsAdvertisement();
-      else stopMdnsAdvertisement();
+      if (serverRestarted) {
+        syncMdnsAdvertisement();
+      } else {
+        // GH #1006 F2: recovery failed too — the app has no embedded server.
+        // Don't advertise a dead one, don't reload the window into a Chromium
+        // error page (the #176 white-window class), and return failure so the
+        // renderer surfaces its error path instead of showing "Switched to
+        // <mode>" over a dead server. Pre-fix this fell through to loadURL +
+        // { success: true } unconditionally.
+        stopMdnsAdvertisement();
+        return { success: false };
+      }
     }
 
     // Reload the window on a connection change so the renderer picks up
