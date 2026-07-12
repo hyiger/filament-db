@@ -223,6 +223,35 @@ describe("PUT /api/filaments/[id] — client-input rejections return 400", () =>
     expect(reloaded.parentId ?? null).toBeNull();
   });
 
+  it("F7: runs the post-write re-assert even on an ECHOED (unchanged) parentId (Codex P2 r3)", async () => {
+    // The edit form re-submits parentId on every save, so a stale save can echo
+    // the child's CURRENT parent (reparenting == false). If a race meanwhile
+    // invalidated the relationship, a `reparenting`-gated check would skip it.
+    // Gating on the WRITTEN parentId re-validates every parented write.
+    const parentX = await Filament.create({ name: "Parent X", vendor: "T", type: "PLA" });
+    const child = await Filament.create({
+      name: "Child C", vendor: "T", type: "PLA", parentId: parentX._id,
+    });
+
+    const routeFilament = (await import("@/models/Filament")).default;
+    // Pre-write variant-count 0 (validation passes); post-write re-check sees 1
+    // (the child concurrently gained a variant). countDocuments runs twice even
+    // on an echoed write — the pre-write guard is gated on body.parentId, not
+    // reparenting — so the mock order still lines up.
+    vi.spyOn(routeFilament, "countDocuments")
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(1);
+
+    // Echo the SAME parent the child already has — reparenting is false, so the
+    // OLD `reparenting`-gated check would skip and return 200.
+    const res = await putReq(String(child._id), { parentId: String(parentX._id) });
+    expect(res.status).toBe(409);
+
+    // Healed to a safe root even though parentId didn't change.
+    const reloaded = await Filament.findById(child._id).lean();
+    expect(reloaded.parentId ?? null).toBeNull();
+  });
+
   it("F7: two opposing concurrent re-parents never persist a mutual A⇄B cycle", async () => {
     const a = await Filament.create({ name: "A", vendor: "T", type: "PLA" });
     const b = await Filament.create({ name: "B", vendor: "T", type: "PLA" });

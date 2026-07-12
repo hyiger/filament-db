@@ -380,10 +380,17 @@ export async function PUT(
     // against pre-write state and both persist, creating a mutual A⇄B cycle
     // (or an A→B while C→A nests inheritance) that every single-level read
     // path (resolveFilament) assumes cannot exist. Re-assert the invariant
-    // against POST-write state and, on violation, revert just this doc's
-    // parentId and 409 so the caller retries. Only runs on an actual
-    // re-parent to a non-null parent (un-parenting can't create a cycle).
-    if (reparenting && body.parentId) {
+    // against POST-write state and, on violation, roll this doc back to a safe
+    // root + 409 so the caller retries.
+    //
+    // Codex P2 (r3) on PR #1012: run whenever a NON-NULL parentId is written —
+    // NOT only when `reparenting` (a pre-write-snapshot diff) is true. The edit
+    // form echoes `parentId` on every save, so a stale re-save writes back an
+    // unchanged parentId; if a race turned that parent into a variant in the
+    // meantime, a `reparenting`-gated check would skip it and let a nested chain
+    // persist. Gating on the written value re-validates every parented write.
+    // Un-parenting (parentId null) can't create a cycle, so it's still skipped.
+    if (body.parentId) {
       const [newParent, childCount] = await Promise.all([
         Filament.findOne({ _id: body.parentId, _deletedAt: null }).select("parentId").lean(),
         Filament.countDocuments({ parentId: id, _deletedAt: null }),
