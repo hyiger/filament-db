@@ -391,21 +391,26 @@ export async function PUT(
       const parentIsVariant = !newParent || newParent.parentId != null;
       const gainedChildren = childCount > 0;
       if (parentIsVariant || gainedChildren) {
-        // Codex P2 on PR #1012: scope the rollback to the parent THIS request
-        // wrote (`parentId: body.parentId`) and to a still-live row
-        // (`_deletedAt: null`). Matching only `_id` would clobber a *newer*
-        // valid re-parent (or a delete) of the same filament that landed
-        // between our findOneAndUpdate and this rollback — the stale revert
-        // would silently undo that later write. Guarded, the rollback fires
-        // only while our own write is still the current state; if it was
-        // superseded, matchedCount is 0 and we still return 409 (our
-        // re-parent didn't stick, which is the correct outcome).
+        // Codex P2 (×2) on PR #1012: roll back to a SAFE state — a root
+        // (`parentId: null`) — NOT the old parent. Two reasons:
+        //   1. A concurrent PUT may have turned the OLD parent into a variant
+        //      while this filament was momentarily "away" (its variant-count
+        //      guard read zero), so restoring the old parent could recreate the
+        //      very nested inheritance we're rejecting. A root is always a valid
+        //      single-level state (no cycle, no nesting) whatever else changed.
+        //   2. Scope the write to the parent THIS request wrote
+        //      (`parentId: body.parentId`) + a live row, so a *newer* valid
+        //      re-parent (or delete) that landed between our findOneAndUpdate
+        //      and here isn't clobbered — matchedCount 0, and we still 409.
+        // Under any interleaving of two opposing re-parents, at least one side
+        // detects the conflict and nulls out, so no cycle/nesting ever
+        // persists; the loser retries against the (now root) filament.
         await Filament.updateOne(
           { _id: id, parentId: body.parentId, _deletedAt: null },
-          { $set: { parentId: stored?.parentId ?? null } },
+          { $set: { parentId: null } },
         );
         return errorResponse(
-          "Re-parenting conflicts with a concurrent change (it would create nested inheritance or a parent cycle). Please retry.",
+          "Re-parenting conflicts with a concurrent change (it would create nested inheritance or a parent cycle). The filament was left without a parent; re-check and retry.",
           409,
         );
       }

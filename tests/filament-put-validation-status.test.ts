@@ -175,9 +175,15 @@ describe("PUT /api/filaments/[id] — client-input rejections return 400", () =>
     expect(String(reloaded.parentId)).toBe(String(parent._id));
   });
 
-  it("F7: reverts parentId + 409 when the post-write re-assert finds a violation", async () => {
-    const parent = await Filament.create({ name: "Root P", vendor: "T", type: "PLA" });
-    const child = await Filament.create({ name: "Child C", vendor: "T", type: "PLA" });
+  it("F7: rolls parentId back to a safe root (null) + 409 when the post-write re-assert finds a violation", async () => {
+    // The child STARTS as a variant of oldParent (X), so a "roll back to a safe
+    // root (null)" is observably different from "restore the old parent (X)" —
+    // pinning the Codex P2 (×2) fix.
+    const oldParent = await Filament.create({ name: "Old Parent X", vendor: "T", type: "PLA" });
+    const newParent = await Filament.create({ name: "New Parent B", vendor: "T", type: "PLA" });
+    const child = await Filament.create({
+      name: "Child C", vendor: "T", type: "PLA", parentId: oldParent._id,
+    });
 
     // Deterministically simulate the check-then-act race: the pre-write
     // variant-count reads 0 (validation passes), but by the post-write
@@ -192,23 +198,27 @@ describe("PUT /api/filaments/[id] — client-input rejections return 400", () =>
     vi.spyOn(routeFilament, "countDocuments")
       .mockResolvedValueOnce(0)
       .mockResolvedValueOnce(1);
-    // Observe the rollback filter (spy calls through, so the revert still runs).
+    // Observe the rollback filter + update (spy calls through, revert still runs).
     const updateSpy = vi.spyOn(routeFilament, "updateOne");
 
-    const res = await putReq(String(child._id), { parentId: String(parent._id) });
+    const res = await putReq(String(child._id), { parentId: String(newParent._id) });
     expect(res.status).toBe(409);
     const body = await res.json();
     expect(body.error).toMatch(/concurrent|cycle|nested/i);
 
-    // Codex P2 on PR #1012: the rollback must be scoped to the parent THIS
-    // request wrote + a live row, so a concurrent newer re-parent isn't
-    // clobbered. Pin that the filter carries both, not just `_id`.
+    // Codex P2 (×2) on PR #1012: the rollback must (a) be scoped to the parent
+    // THIS request wrote + a live row, so a concurrent newer re-parent isn't
+    // clobbered, and (b) set parentId to a SAFE root (null), NOT restore the old
+    // parent — which a concurrent PUT could have turned into a variant.
     expect(updateSpy).toHaveBeenCalledTimes(1);
     const rollbackFilter = updateSpy.mock.calls[0][0] as unknown as Record<string, unknown>;
-    expect(String(rollbackFilter.parentId)).toBe(String(parent._id));
+    expect(String(rollbackFilter.parentId)).toBe(String(newParent._id));
     expect(rollbackFilter._deletedAt).toBeNull();
+    const rollbackUpdate = updateSpy.mock.calls[0][1] as unknown as { $set?: { parentId?: unknown } };
+    expect(rollbackUpdate.$set).toBeDefined();
+    expect(rollbackUpdate.$set!.parentId).toBeNull();
 
-    // parentId reverted to its pre-PUT value (null) — no cycle persisted.
+    // The child is left as a ROOT (null) — NOT restored to old parent X.
     const reloaded = await Filament.findById(child._id).lean();
     expect(reloaded.parentId ?? null).toBeNull();
   });
