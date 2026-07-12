@@ -271,6 +271,31 @@ describe("/api/share", () => {
       expect(b2.viewCount).toBe(2);
     });
 
+    it("increments viewCount WITHOUT advancing updatedAt (GH #1004 F5)", async () => {
+      const catalog = await seed();
+      // Pin updatedAt to a known past instant, bypassing Mongoose timestamps,
+      // so a regression (updatedAt bumped to ~now) is unambiguously detectable.
+      const past = new Date("2020-01-01T00:00:00.000Z");
+      await SharedCatalog.collection.updateOne(
+        { _id: catalog._id },
+        { $set: { updatedAt: past } },
+      );
+
+      const res = await getShare(
+        new NextRequest(`http://localhost/api/share/${catalog.slug}`),
+        { params: Promise.resolve({ slug: catalog.slug }) },
+      );
+      const body = await res.json();
+      expect(body.viewCount).toBe(1); // the $inc still ran
+
+      // timestamps:false on the viewCount update — a read-path counter must
+      // NOT bump updatedAt, or the hybrid sync engine treats a mere view on a
+      // still-live peer as a newer write and resurrects a revoked share.
+      const fresh = await SharedCatalog.collection.findOne({ _id: catalog._id });
+      expect(new Date(fresh.updatedAt).getTime()).toBe(past.getTime());
+      expect(fresh.viewCount).toBe(1);
+    });
+
     it("handles concurrent requests without losing increments (atomic $inc)", async () => {
       // The pre-fix code did findOne + save() which races: both reads see
       // count=0, both increment to 1. The fix uses findOneAndUpdate($inc).

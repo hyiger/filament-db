@@ -819,4 +819,76 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(remoteRow?.material).toBe("LOCAL-WINS");
     });
   });
+
+  // ── GH #1004 F3: whole-doc LWW copy must DROP un-pinned fields ─────────
+  //
+  // A last-write-wins copy used $set, which can only add/overwrite keys —
+  // never remove one the source dropped. So when a variant override is
+  // un-pinned (the #951/#969/#971 $unset flows leave a field absent so GH
+  // #106 inheritance resumes), the stale value lingered on the peer. Worse:
+  // the $set also copied the source's newer updatedAt onto the peer, leaving
+  // the two sides content-divergent at an EQUAL timestamp — a state LWW can
+  // never resolve (frozen forever). replaceOne copies the doc verbatim, so
+  // the field is removed and the sides converge in one cycle.
+  describe("LWW copies whole documents, dropping un-pinned fields (replaceOne) — GH #1004 F3", () => {
+    it("drops a field the newer LOCAL side no longer carries (toRemote), then converges", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 60_000);
+      const newer = new Date();
+
+      // Remote holds the pinned value; local is newer and has un-pinned it
+      // (the field is simply absent — mirroring a variant-override $unset).
+      await remoteDb.collection("nozzles").insertOne({
+        name: "0.4 Brass", diameter: 0.4, pressureAdvance: 0.05,
+        syncId: "noz-unpin", _deletedAt: null, createdAt: older, updatedAt: older,
+      });
+      await localDb.collection("nozzles").insertOne({
+        name: "0.4 Brass", diameter: 0.4, // pressureAdvance intentionally absent
+        syncId: "noz-unpin", _deletedAt: null, createdAt: older, updatedAt: newer,
+      });
+
+      sync = makeSync();
+      const results = await sync.sync();
+      expect(results.find((r) => r.collection === "nozzles")?.updated).toBe(1);
+
+      // replaceOne copied the newer local doc verbatim — the field is GONE,
+      // not retained (a $set update could only overwrite, never remove it).
+      const remoteRow = await remoteDb.collection("nozzles").findOne({ syncId: "noz-unpin" });
+      expect(remoteRow).toBeTruthy();
+      expect(Object.hasOwn(remoteRow ?? {}, "pressureAdvance")).toBe(false);
+
+      // The copy carried local's updatedAt, so a second cycle is an
+      // equal-timestamp no-op AND the field stays gone. Pre-fix, $set left
+      // remote still holding pressureAdvance at that same equal timestamp —
+      // a divergence LWW could never resolve.
+      const results2 = await sync.sync();
+      expect(results2.find((r) => r.collection === "nozzles")?.updated).toBe(0);
+      const remoteRow2 = await remoteDb.collection("nozzles").findOne({ syncId: "noz-unpin" });
+      expect(Object.hasOwn(remoteRow2 ?? {}, "pressureAdvance")).toBe(false);
+    });
+
+    it("drops a field the newer REMOTE side no longer carries (toLocal)", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const older = new Date(Date.now() - 60_000);
+      const newer = new Date();
+
+      await localDb.collection("nozzles").insertOne({
+        name: "0.6 Steel", diameter: 0.6, pressureAdvance: 0.03,
+        syncId: "noz-unpin-r", _deletedAt: null, createdAt: older, updatedAt: older,
+      });
+      await remoteDb.collection("nozzles").insertOne({
+        name: "0.6 Steel", diameter: 0.6, // pressureAdvance intentionally absent
+        syncId: "noz-unpin-r", _deletedAt: null, createdAt: older, updatedAt: newer,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      const localRow = await localDb.collection("nozzles").findOne({ syncId: "noz-unpin-r" });
+      expect(localRow).toBeTruthy();
+      expect(Object.hasOwn(localRow ?? {}, "pressureAdvance")).toBe(false);
+    });
+  });
 });
