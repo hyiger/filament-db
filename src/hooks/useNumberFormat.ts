@@ -12,6 +12,7 @@ import {
   type FormatOptions,
 } from "@/lib/numberFormatPref";
 import { formatGrams as pureFormatGrams } from "@/lib/formatWeight";
+import { getNumberFormat } from "@/lib/intlCache";
 
 /**
  * useNumberFormat — the global number-format preference (sibling of
@@ -159,7 +160,7 @@ export function useNumberFormat() {
       }
       // system mode: device-locale grouping via Intl (trims trailing zeros).
       try {
-        return new Intl.NumberFormat(deviceLocale, {
+        return getNumberFormat(deviceLocale, {
           maximumFractionDigits: decimals,
         }).format(value);
       } catch {
@@ -194,7 +195,7 @@ export function useNumberFormat() {
         });
       }
       try {
-        return new Intl.NumberFormat(deviceLocale, {
+        return getNumberFormat(deviceLocale, {
           minimumFractionDigits: minDecimals,
           maximumFractionDigits: maxDecimals,
           useGrouping,
