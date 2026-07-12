@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import type { Locale } from "./index";
 import { DEFAULT_LOCALE, LOCALES } from "./index";
+import { interpolate } from "./interpolate";
 import en from "./locales/en.json";
 import de from "./locales/de.json";
 
@@ -94,13 +95,10 @@ export function TranslationProvider({ children }: { children: ReactNode }) {
 
   const t = useCallback(
     (key: string, params?: Record<string, string | number>): string => {
-      let value = dictionaries[locale]?.[key] ?? dictionaries.en?.[key] ?? key;
-      if (params) {
-        for (const [paramName, paramValue] of Object.entries(params)) {
-          value = value.replace(new RegExp(`\\{${paramName}\\}`, "g"), String(paramValue));
-        }
-      }
-      return value;
+      const value = dictionaries[locale]?.[key] ?? dictionaries.en?.[key] ?? key;
+      // GH #1007 F1: interpolate() inserts each value literally (function
+      // replacement) so `$`-patterns in user data can't corrupt the output.
+      return interpolate(value, params);
     },
     [locale],
   );
