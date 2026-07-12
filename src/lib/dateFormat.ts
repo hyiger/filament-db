@@ -19,6 +19,7 @@
  */
 
 import { formatWithPattern } from "./dateFormatPref";
+import { getDateTimeFormat } from "./intlCache";
 
 type DateInput = Date | string | number | null | undefined;
 
@@ -56,7 +57,7 @@ export function formatDate(
     return formatWithPattern(d, options.pattern, options.timeZone);
   }
   try {
-    return new Intl.DateTimeFormat(locale, {
+    return getDateTimeFormat(locale, {
       dateStyle: "short",
       ...(options?.timeZone ? { timeZone: options.timeZone } : {}),
     }).format(d);
@@ -80,7 +81,7 @@ export function formatTime(input: DateInput, locale: string): string {
   const d = normalise(input);
   if (!d) return "";
   try {
-    return new Intl.DateTimeFormat(locale, { timeStyle: "short" }).format(d);
+    return getDateTimeFormat(locale, { timeStyle: "short" }).format(d);
   } catch {
     return d.toLocaleTimeString();
   }
@@ -107,7 +108,7 @@ export function formatDateTime(
     return `${formatWithPattern(d, options.pattern)}, ${formatTime(d, locale)}`;
   }
   try {
-    return new Intl.DateTimeFormat(locale, {
+    return getDateTimeFormat(locale, {
       dateStyle: "short",
       timeStyle: "short",
     }).format(d);
