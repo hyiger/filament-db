@@ -771,7 +771,19 @@ async function resolveMongoUri(): Promise<string | null> {
       // session (~200–300 MB RSS + a dbPath lock) serving nothing. No-op when
       // none is running; the atlas-fallback path below restarts it on demand
       // when Atlas is unreachable. Mirrors the syncService teardown above (#672).
-      await stopLocalMongo();
+      //
+      // Codex P2 on #1015: guard with its OWN try/catch. The enclosing catch
+      // means "Atlas unreachable → fall back to local" — a mongod.stop()
+      // rejection AFTER a successful Atlas ping must not jump the user onto
+      // local-fallback (which would silently ignore their reachable Atlas
+      // selection and, since a failed stop doesn't clear the cached local URI,
+      // startLocalMongo() would hand back the stale mongod). A failed stop just
+      // leaves the mongod idling — the exact pre-F3 behavior, logged, no worse.
+      try {
+        await stopLocalMongo();
+      } catch (stopErr) {
+        console.warn("Failed to stop embedded MongoDB after Atlas switch (leaving it running):", stopErr);
+      }
       return atlasUri;
     } catch {
       console.log("Atlas unreachable, falling back to local MongoDB...");
