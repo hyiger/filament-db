@@ -15,6 +15,7 @@ import {
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { formatWithSeparators } from "@/lib/numberFormatPref";
+import { getNumberFormat } from "@/lib/intlCache";
 
 /**
  * Built-in currencies. v1.12 expanded the list from 4 to 13 to cover the
@@ -282,7 +283,7 @@ export function useCurrency() {
       const isBuiltin = CURRENCIES.some((c) => c.code === currency);
       if (isBuiltin) {
         try {
-          const fmt = new Intl.NumberFormat(baseLocale, {
+          const fmt = getNumberFormat(baseLocale, {
             style: "currency",
             currency,
           });
@@ -319,7 +320,7 @@ export function useCurrency() {
         // System mode (post-hydration): group the number per the device locale
         // so custom-code amounts match weights/counts, not raw toFixed.
         try {
-          return `${symbol}${new Intl.NumberFormat(systemLocale, {
+          return `${symbol}${getNumberFormat(systemLocale, {
             minimumFractionDigits: 2,
             maximumFractionDigits: 2,
           }).format(value)}`;

@@ -15,6 +15,8 @@
  * `src/components/DateFormatSection.tsx`.
  */
 
+import { getDateTimeFormat } from "./intlCache";
+
 /**
  * `system` follows the device's regional setting (the GH #983 request — a UK
  * PC renders `31/12/2026`); the three named presets are locale-INDEPENDENT
@@ -113,7 +115,7 @@ export function formatWithPattern(
   pattern: string,
   timeZone?: string,
 ): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
+  const parts = getDateTimeFormat("en-US", {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
