@@ -336,13 +336,78 @@ export function buildStructuredUpdate(
 
   // Temperatures: merge with whatever's already on the doc so we don't
   // clobber e.g. nozzleRangeMin when the import only carries `nozzle`.
+  //
+  // GH #1008 F5 (import-side guard, least-lossy — user decision; the export
+  // stays unchanged): `hot_plate_temp` double-maps on BOTH sides. The export
+  // emits it from `temperatures.bed` and then re-emits it from the
+  // "Hot Plate" bedTypeTemps entry (which wins when both exist); the parser
+  // inverts it into BOTH `temperatures.bed` AND a "Hot Plate" bedTypeTemps
+  // entry. So a filament with bed=60 + bedTypeTemps=[{Hot Plate, 65}] exports
+  // hot_plate_temp=65 only, and syncing that same profile back used to
+  // rewrite the generic bed temp 60→65 — silently replacing the value the
+  // PrusaSlicer export and OpenPrintTag writes read. Guard: when the parsed
+  // profile carries a distinct "Hot Plate" bedTypeTemps entry AND the target
+  // already has a bed temp (its own, or — for a variant — inherited from its
+  // parent, mirroring resolveFilament's own ?? parent), keep the stored value
+  // and do NOT merge the parsed hot-plate value into `temperatures.bed`. The
+  // plate-specific value still lands in bedTypeTemps["Hot Plate"] below, so
+  // nothing is lost and the Bambu round-trip stays stable. A fresh import
+  // (no existing bed temp anywhere) still seeds bed from hot_plate_temp.
+  // Same guard for `bedFirstLayer` / hot_plate_temp_initial_layer — the
+  // identical double-mapping.
   const t = parsed.temperatures;
-  const tempKeys = Object.entries(t).filter(([, v]) => v != null);
+  let tempKeys = Object.entries(t).filter(([, v]) => v != null);
+  const hotPlate = parsed.bedTypeTemps.find((e) => e.bedType === "Hot Plate");
+  if (hotPlate) {
+    const ownTemps =
+      (existing?.temperatures as Record<string, unknown> | undefined) ?? {};
+    const inheritedTemps = isVariantWithParent
+      ? ((parent?.temperatures as Record<string, unknown> | undefined) ?? {})
+      : {};
+    const hasEffectiveBed = (sub: "bed" | "bedFirstLayer") =>
+      (ownTemps[sub] ?? inheritedTemps[sub]) != null;
+    tempKeys = tempKeys.filter(([key]) => {
+      if (key === "bed" && hotPlate.temperature != null && hasEffectiveBed("bed")) {
+        return false;
+      }
+      if (
+        key === "bedFirstLayer" &&
+        hotPlate.firstLayerTemperature != null &&
+        hasEffectiveBed("bedFirstLayer")
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }
   if (tempKeys.length > 0) {
-    u.temperatures = {
+    const mergedTemps: Record<string, unknown> = {
       ...((existing?.temperatures as Record<string, unknown>) || {}),
       ...Object.fromEntries(tempKeys),
     };
+    // GH #1008 F4 (sibling of GH #403's scalar guard — which covers scalars
+    // only): a variant's export flattens its inherited temps through
+    // resolveFilament, so syncing that preset back used to write the
+    // parent's temps into the variant as local pins, severing GH #106 live
+    // inheritance. Reset each merged subfield whose value EQUALS the
+    // parent's to null — the inherit sentinel resolveFilament reads
+    // (own ?? parent) — so inheritance resumes; divergent values stay as
+    // genuine overrides. Null-in-the-object rather than a `$unset` because
+    // `u.temperatures` must STAY a nested full-replace object: the bulk
+    // route's create path spreads this update into `Filament.create`, where
+    // dotted keys would be silently dropped by strict mode (and a $unset
+    // would conflict with the object $set on the same path). This also
+    // self-heals a stale parent-equal pin the profile didn't touch (it rides
+    // in via the merge spread) — the GH #971 posture.
+    if (isVariantWithParent && parent) {
+      const parentTemps =
+        (parent.temperatures as Record<string, unknown> | undefined) ?? {};
+      for (const sub of Object.keys(mergedTemps)) {
+        const v = mergedTemps[sub];
+        if (v != null && v === parentTemps[sub]) mergedTemps[sub] = null;
+      }
+    }
+    u.temperatures = mergedTemps;
   }
 
   if (parsed.bedTypeTemps.length > 0) {
@@ -365,10 +430,72 @@ export function buildStructuredUpdate(
     for (const entry of parsed.bedTypeTemps) {
       byName.set(entry.bedType, { ...byName.get(entry.bedType), ...entry });
     }
-    u.bedTypeTemps = [...byName.values()];
+    const mergedBedTypes = [...byName.values()];
+    // GH #1008 F4: bedTypeTemps inherits as a WHOLE array (empty === inherit,
+    // GH #106/#477 array-fallback in resolveFilament). A variant's export
+    // flattens the parent's plate list into per-plate keys, so syncing it
+    // back used to materialize a full copy on the variant — a non-empty own
+    // array that then shadows every later parent edit. When the merged array
+    // deep-equals the parent's effective array (same entries by bedType,
+    // order-insensitive), write `[]` — the inherit sentinel — instead of the
+    // copy. Writing [] (rather than skipping) also self-heals a stale
+    // materialized copy that now matches the parent (GH #971 posture). A
+    // divergent merged array still writes as a genuine override.
+    if (
+      isVariantWithParent &&
+      parent &&
+      bedTypeTempsEqualParent(mergedBedTypes, parent.bedTypeTemps)
+    ) {
+      u.bedTypeTemps = [];
+    } else {
+      u.bedTypeTemps = mergedBedTypes;
+    }
   }
 
   return { set: u, unset };
+}
+
+/**
+ * GH #1008 F4: order-insensitive deep equality between the merged
+ * bedTypeTemps array and the parent's effective array (a parent is never
+ * itself a variant, so its own array IS its effective array). Entries match
+ * when bedType, temperature, and firstLayerTemperature agree —
+ * null/undefined are collapsed (the model stores null defaults where the
+ * parser emits undefined). Conservative on malformed parent data (duplicate
+ * bedTypes, non-array): returns false so the merged array writes through.
+ */
+function bedTypeTempsEqualParent(
+  merged: Array<{
+    bedType: string;
+    temperature?: number | null;
+    firstLayerTemperature?: number | null;
+  }>,
+  parentArr: unknown,
+): boolean {
+  if (!Array.isArray(parentArr) || parentArr.length !== merged.length) {
+    return false;
+  }
+  const byType = new Map<
+    string,
+    { temperature?: number | null; firstLayerTemperature?: number | null }
+  >();
+  for (const raw of parentArr) {
+    const e = raw as {
+      bedType?: unknown;
+      temperature?: number | null;
+      firstLayerTemperature?: number | null;
+    };
+    if (typeof e.bedType !== "string" || byType.has(e.bedType)) return false;
+    byType.set(e.bedType, e);
+  }
+  return merged.every((m) => {
+    const p = byType.get(m.bedType);
+    return (
+      p != null &&
+      (m.temperature ?? null) === (p.temperature ?? null) &&
+      (m.firstLayerTemperature ?? null) === (p.firstLayerTemperature ?? null)
+    );
+  });
 }
 
 export interface CalibrationOutcome {

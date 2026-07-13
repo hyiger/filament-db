@@ -124,7 +124,17 @@ describe("Bambu Studio importer routes", () => {
 
       const stored = await Filament.findOne({ name: "QA Bambu PLA" });
       expect(stored.temperatures.nozzle).toBe(225);
-      expect(stored.temperatures.bed).toBe(65);
+      // GH #1008 F5 (import-side guard): hot_plate_temp double-maps into both
+      // temperatures.bed and the "Hot Plate" bedTypeTemps entry. The target
+      // already has a generic bed temp (50), so the parsed hot-plate value must
+      // NOT overwrite it — it lands in bedTypeTemps["Hot Plate"] instead
+      // (nothing lost; the next export emits hot_plate_temp=65 from that entry).
+      // Pre-#1008 this expected bed to become 65.
+      expect(stored.temperatures.bed).toBe(50);
+      const hotPlate = stored.bedTypeTemps.find(
+        (e: { bedType: string }) => e.bedType === "Hot Plate",
+      );
+      expect(hotPlate?.temperature).toBe(65);
     });
 
     it("preserves filament_notes in the settings bag through import (GH #620)", async () => {

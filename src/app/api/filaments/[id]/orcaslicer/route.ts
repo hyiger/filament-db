@@ -11,6 +11,7 @@ import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
 import { isUpdateNozzleRangeInverted } from "@/lib/temperatureRange";
+import { splitInheritedImportSet } from "@/lib/importFilaments";
 
 /**
  * Top-level body keys that map to structured Filament DB fields.
@@ -185,6 +186,15 @@ export async function POST(
     }
 
     // Temperatures — same finite-number coercion per sub-field (GH #618).
+    // GH #1008 F2: write the temps as DOTTED paths (`temperatures.<sub>`),
+    // never a merged whole-object $set. Two reasons: (a) the inheritance
+    // split below (`splitInheritedImportSet`) only splits dotted temperature
+    // keys — a nested temps object falls through its pass-through branch
+    // whole, pinning every subfield onto a variant; (b) same rationale as
+    // #859 on the PrusaSlicer sync: update-validators check every path in
+    // the $set, so merging the STORED temps into the payload let one legacy
+    // out-of-range stored value 400 an unrelated sync. Dotted paths validate
+    // only the incoming values and leave untouched siblings alone.
     let touchesNozzleRange = false;
     if (body.temperatures && typeof body.temperatures === "object") {
       const src = body.temperatures as Record<string, unknown>;
@@ -199,30 +209,33 @@ export async function POST(
         temps[field] = n;
       }
       touchesNozzleRange = "nozzleRangeMin" in temps || "nozzleRangeMax" in temps;
-      if (Object.keys(temps).length > 0) {
-        update.temperatures = { ...filament.temperatures, ...temps };
+      for (const [key, value] of Object.entries(temps)) {
+        update[`temperatures.${key}`] = value;
       }
     }
 
+    // GH #1008 F2: fetch the FULL active parent once — shared by the
+    // nozzle-range inversion check below AND the variant inheritance split
+    // before the write (replaces the earlier range-only projected fetch).
+    // Null for standalones/roots and for a soft-deleted parent.
+    const parent = filament.parentId
+      ? await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
+      : null;
+
     // #574 / GH #618: reject an inverted nozzle range (min > max) the same
     // way the regular PUT does — the per-field 0–600 validators can't catch
-    // the cross-field relationship. `update.temperatures` is a full replace
-    // built from stored + incoming, so it IS the effective own range; only
-    // validate when the sync actually touches an endpoint, so pre-existing
-    // bad data can't 400 an unrelated sync. A variant inherits any endpoint
-    // it leaves null from its parent (resolveFilament: own ?? parent), so
-    // resolve the parent's endpoints in before checking (#577).
+    // the cross-field relationship. The dotted `temperatures.*` keys merge
+    // into the stored subdoc, so the effective own range is the incoming
+    // endpoint(s) combined with the stored other endpoint (the dotted branch
+    // of effectiveNozzleRangeForUpdate); only validate when the sync actually
+    // touches an endpoint, so pre-existing bad data can't 400 an unrelated
+    // sync. A variant inherits any endpoint it leaves null from its parent
+    // (resolveFilament: own ?? parent), so resolve the parent's endpoints in
+    // before checking (#577).
     if (touchesNozzleRange) {
       // GH #892: shared combinator (same guard the Bambu routes use) — own
       // effective range + parent inheritance + inversion test in one call.
-      let parentTemps = null;
-      if (filament.parentId) {
-        const parent = await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
-          .select("temperatures.nozzleRangeMin temperatures.nozzleRangeMax")
-          .lean();
-        parentTemps = parent?.temperatures ?? null;
-      }
-      if (isUpdateNozzleRangeInverted(update, filament.temperatures, parentTemps)) {
+      if (isUpdateNozzleRangeInverted(update, filament.temperatures, parent?.temperatures ?? null)) {
         return errorResponse(
           "Nozzle range minimum temperature must be less than or equal to the maximum",
           400,
@@ -251,6 +264,35 @@ export async function POST(
       update.settings = merge.settings;
     }
 
+    // GH #1008 F2 (sibling of the GH #951 fix on the PrusaSlicer per-id
+    // sync): the Orca bundle export flattens a variant through
+    // resolveFilament, so the fork echoes the parent's type/density/cost/
+    // temps/settings back on every sync. Blindly $set-ing them onto the
+    // variant pins each value as a local override and severs GH #106 live
+    // inheritance — a later parent edit stops propagating. This was the only
+    // slicer sync path without the split. Reuse the CSV importer's
+    // battle-tested split (GH #628/#649/#971): drop each inheritable field
+    // whose incoming value equals the parent's (keep inheriting), and $unset
+    // a stale local override so inheritance resumes; a divergent value still
+    // writes. Variant-only keys (color, …) pass through untouched. When the
+    // parent is missing/soft-deleted there's nothing to inherit — write
+    // verbatim, matching the PrusaSlicer route.
+    let setBody: Record<string, unknown> = update;
+    let unsetKeys: string[] = [];
+    if (filament.parentId && parent) {
+      const split = splitInheritedImportSet(
+        update,
+        filament.toObject(),
+        parent.toObject(),
+      );
+      setBody = split.set;
+      unsetKeys = split.unset;
+    }
+    const mongoUpdate: Record<string, unknown> = { $set: setBody };
+    if (unsetKeys.length > 0) {
+      mongoUpdate.$unset = Object.fromEntries(unsetKeys.map((k) => [k, ""]));
+    }
+
     // GH #618: `runValidators` so the #337 numeric range validators fire
     // on an OrcaSlicer sync (negative cost/density, out-of-range temps) —
     // `context: "query"` matches the Bambu sync route (Codex P2 on #387).
@@ -262,7 +304,7 @@ export async function POST(
     try {
       updateResult = await Filament.updateOne(
         { _id: filament._id, _deletedAt: null },
-        { $set: update },
+        mongoUpdate,
         { runValidators: true, context: "query" },
       );
     } catch (validationErr) {
@@ -281,7 +323,10 @@ export async function POST(
     return NextResponse.json({
       success: true,
       filament: filament.name,
-      updated: Object.keys(update),
+      // GH #1008 F2: report what was actually $set after the inheritance
+      // split (dotted `temperatures.*` keys included) — parent-equal fields
+      // the split dropped are not "updated".
+      updated: Object.keys(setBody),
       settingsAdded,
     });
   } catch (err) {

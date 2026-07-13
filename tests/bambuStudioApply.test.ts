@@ -430,6 +430,398 @@ describe("buildStructuredUpdate", () => {
       expect(unset).toEqual(["density"]);
     });
   });
+
+  describe("variant temperature inheritance (GH #1008 F4)", () => {
+    // GH #403's setIfNotInherited guards scalars only; the temps merge used
+    // to write the parent's (export-flattened) temps into the variant as
+    // local pins. Parent-equal subfields are now reset to null — the inherit
+    // sentinel resolveFilament reads (own ?? parent) — INSIDE the nested
+    // object, because the bulk route's create path spreads the update into
+    // Filament.create where dotted keys would be dropped by strict mode.
+
+    it("nulls parent-equal temperature subfields on a variant (inherit sentinel)", () => {
+      const parent = { temperatures: { nozzle: 215, bed: 60 } };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+      };
+      const { set: update, unset } = buildStructuredUpdate(
+        makeParsed({ temperatures: { nozzle: 215, bed: 60 } }),
+        existing,
+      );
+      // Parent-equal values become null sentinels — not pinned copies.
+      expect(update.temperatures).toEqual({ nozzle: null, bed: null });
+      // No $unset — null-in-object IS the clear (a $unset on
+      // temperatures.nozzle would conflict with the object $set).
+      expect(unset).toEqual([]);
+    });
+
+    it("keeps a divergent temperature value as a genuine variant override", () => {
+      const parent = { temperatures: { nozzle: 215, bed: 60 } };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ temperatures: { nozzle: 230, bed: 60 } }),
+        existing,
+      );
+      // nozzle diverges → stays; bed equals parent → null sentinel.
+      expect(update.temperatures).toEqual({ nozzle: 230, bed: null });
+    });
+
+    it("self-heals a stale parent-equal pin that rides in via the merge spread (GH #971 posture)", () => {
+      const parent = {
+        temperatures: { nozzle: 215, nozzleRangeMin: 180 },
+      };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        temperatures: {
+          nozzle: 215, // stale parent-equal pin — profile also carries it
+          nozzleRangeMin: 190, // genuine divergent override — must survive
+        },
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ temperatures: { nozzle: 215 } }),
+        existing,
+      );
+      expect(update.temperatures).toEqual({
+        nozzle: null, // parent-equal → inherit resumes
+        nozzleRangeMin: 190, // divergent local override survives the merge
+      });
+    });
+
+    it("does not touch temps on a root filament (no parent) — old behavior intact", () => {
+      const existing: ExistingFilamentForApply = {
+        parentId: null,
+        parent: null,
+        temperatures: { bed: 60 },
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ temperatures: { nozzle: 215 } }),
+        existing,
+      );
+      expect(update.temperatures).toEqual({ bed: 60, nozzle: 215 });
+    });
+  });
+
+  describe("variant bedTypeTemps inheritance (GH #1008 F4)", () => {
+    // bedTypeTemps inherits as a WHOLE array (empty === inherit, GH
+    // #106/#477). A variant's export flattens the parent's plate list, so a
+    // sync-back used to materialize a full copy — a non-empty own array that
+    // shadows every later parent edit.
+
+    it("collapses the merged array to [] when it deep-equals the parent's effective array (order-insensitive)", () => {
+      const parent = {
+        bedTypeTemps: [
+          // Parent order differs from the parsed order; lean docs also carry
+          // extra keys (e.g. _id) the comparison must ignore.
+          { bedType: "Cool Plate", temperature: 35, _id: "x1" },
+          { bedType: "Hot Plate", temperature: 65, firstLayerTemperature: 70, _id: "x2" },
+        ],
+      };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        bedTypeTemps: [], // inheriting
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({
+          bedTypeTemps: [
+            { bedType: "Hot Plate", temperature: 65, firstLayerTemperature: 70 },
+            { bedType: "Cool Plate", temperature: 35 },
+          ],
+        }),
+        existing,
+      );
+      // [] = the array-fallback inherit sentinel, not a materialized copy.
+      expect(update.bedTypeTemps).toEqual([]);
+    });
+
+    it("self-heals a stale materialized copy that now matches the parent", () => {
+      const parent = {
+        bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }],
+      };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        // Stale full copy pinned by a pre-#1008 sync.
+        bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }],
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }] }),
+        existing,
+      );
+      expect(update.bedTypeTemps).toEqual([]); // pin cleared → inherits live
+    });
+
+    it("keeps the merged array when it differs from the parent's (genuine override)", () => {
+      const parent = {
+        bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }],
+      };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        bedTypeTemps: [],
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ bedTypeTemps: [{ bedType: "Hot Plate", temperature: 70 }] }),
+        existing,
+      );
+      expect(update.bedTypeTemps).toEqual([
+        { bedType: "Hot Plate", temperature: 70 },
+      ]);
+    });
+
+    it("keeps the merged array when the parent has more plate entries (length mismatch)", () => {
+      const parent = {
+        bedTypeTemps: [
+          { bedType: "Hot Plate", temperature: 65 },
+          { bedType: "Cool Plate", temperature: 35 },
+        ],
+      };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        bedTypeTemps: [],
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }] }),
+        existing,
+      );
+      // One entry ≠ the parent's two-entry list → written as-is (the
+      // deep-equal skip covers only the full-echo round-trip case).
+      expect(update.bedTypeTemps).toEqual([
+        { bedType: "Hot Plate", temperature: 65 },
+      ]);
+    });
+
+    it("writes the merged array unchanged on a root filament (no parent)", () => {
+      const existing: ExistingFilamentForApply = {
+        parentId: null,
+        parent: null,
+        bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }],
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }] }),
+        existing,
+      );
+      expect(update.bedTypeTemps).toEqual([
+        { bedType: "Hot Plate", temperature: 65 },
+      ]);
+    });
+  });
+
+  describe("hot_plate_temp vs temperatures.bed (GH #1008 F5 — import-side guard)", () => {
+    // hot_plate_temp double-maps: the parser inverts it into BOTH
+    // temperatures.bed and a "Hot Plate" bedTypeTemps entry. When the target
+    // already has a generic bed temp, the plate-specific value must not
+    // overwrite it — it still lands in bedTypeTemps["Hot Plate"], so nothing
+    // is lost (least-lossy, per the user decision on #1008: export unchanged).
+
+    // What the real parser produces for hot_plate_temp=65 +
+    // hot_plate_temp_initial_layer=70 (both homes populated).
+    const hotPlateParsed = () =>
+      makeParsed({
+        temperatures: { bed: 65, bedFirstLayer: 70 },
+        bedTypeTemps: [
+          { bedType: "Hot Plate", temperature: 65, firstLayerTemperature: 70 },
+        ],
+      });
+
+    it("keeps a stored generic bed temp; the parsed hot-plate value lands in bedTypeTemps only", () => {
+      const existing: ExistingFilamentForApply = {
+        temperatures: { bed: 60, bedFirstLayer: 65 },
+      };
+      const { set: update } = buildStructuredUpdate(hotPlateParsed(), existing);
+      // Both bed subfields were guarded and nothing else was parsed → no
+      // temperatures write at all (stored 60/65 untouched).
+      expect("temperatures" in update).toBe(false);
+      // The plate-specific value has its own home.
+      expect(update.bedTypeTemps).toEqual([
+        { bedType: "Hot Plate", temperature: 65, firstLayerTemperature: 70 },
+      ]);
+    });
+
+    it("guards per-subfield: a missing stored bedFirstLayer still seeds while bed is kept", () => {
+      const existing: ExistingFilamentForApply = {
+        temperatures: { bed: 60 }, // no stored bedFirstLayer
+      };
+      const { set: update } = buildStructuredUpdate(hotPlateParsed(), existing);
+      expect(update.temperatures).toEqual({
+        bed: 60, // stored value rides the merge unchanged
+        bedFirstLayer: 70, // no stored value → seeded from the profile
+      });
+    });
+
+    it("a fresh import (create branch) still seeds bed from hot_plate_temp", () => {
+      const { set: update } = buildStructuredUpdate(hotPlateParsed(), null);
+      expect(update.temperatures).toEqual({ bed: 65, bedFirstLayer: 70 });
+    });
+
+    it("an existing filament with NO bed temp still seeds bed from hot_plate_temp", () => {
+      const existing: ExistingFilamentForApply = {
+        temperatures: { nozzle: 215 },
+      };
+      const { set: update } = buildStructuredUpdate(hotPlateParsed(), existing);
+      expect(update.temperatures).toEqual({
+        nozzle: 215,
+        bed: 65,
+        bedFirstLayer: 70,
+      });
+    });
+
+    it("a variant INHERITING its bed temp keeps inheriting (parent's effective value counts as 'has a bed temp')", () => {
+      const parent = { temperatures: { bed: 60 } };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        // own bed null → effective bed = parent's 60
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({
+          temperatures: { bed: 65 },
+          bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }],
+        }),
+        existing,
+      );
+      // bed guarded (effective value exists) and nothing else parsed → no
+      // temps write; the variant keeps resolving bed=60 from the parent.
+      expect("temperatures" in update).toBe(false);
+    });
+
+    it("without a 'Hot Plate' bedTypeTemps entry the bed merge is unchanged (guard keyed on the double-map)", () => {
+      // Hand-built parsed payloads (and any future parser shape that maps a
+      // dedicated bed key) bypass the guard — it exists only for the
+      // hot_plate_temp double-mapping.
+      const existing: ExistingFilamentForApply = {
+        temperatures: { bed: 60 },
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ temperatures: { bed: 65 } }),
+        existing,
+      );
+      expect(update.temperatures).toEqual({ bed: 65 });
+    });
+
+    it("guards only the subfields the Hot Plate entry actually carries", () => {
+      // A Hot Plate entry without the matching field is not the double-map
+      // for that subfield — the merge behaves as before (defensive; the real
+      // parser always populates both homes from the same key).
+      const existing: ExistingFilamentForApply = {
+        temperatures: { bed: 60, bedFirstLayer: 65 },
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({
+          temperatures: { bed: 66, bedFirstLayer: 71 },
+          bedTypeTemps: [{ bedType: "Hot Plate" }], // neither field present
+        }),
+        existing,
+      );
+      expect(update.temperatures).toEqual({ bed: 66, bedFirstLayer: 71 });
+    });
+
+    it("a variant whose parent has no temperatures at all still seeds bed", () => {
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent: {}, // parent doc without a temperatures object
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({
+          temperatures: { bed: 65 },
+          bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }],
+        }),
+        existing,
+      );
+      // No own value, no inherited value → fresh seed.
+      expect(update.temperatures).toEqual({ bed: 65 });
+    });
+  });
+
+  describe("bedTypeTempsEqualParent edge shapes (GH #1008 F4)", () => {
+    it("same length but a different bedType name is NOT equal (merged array writes)", () => {
+      const parent = {
+        bedTypeTemps: [{ bedType: "Cool Plate", temperature: 65 }],
+      };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        bedTypeTemps: [],
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }] }),
+        existing,
+      );
+      expect(update.bedTypeTemps).toEqual([
+        { bedType: "Hot Plate", temperature: 65 },
+      ]);
+    });
+
+    it("same bedType + temperature but a different firstLayerTemperature is NOT equal", () => {
+      const parent = {
+        bedTypeTemps: [
+          { bedType: "Hot Plate", temperature: 65, firstLayerTemperature: 70 },
+        ],
+      };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        bedTypeTemps: [],
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({
+          bedTypeTemps: [
+            { bedType: "Hot Plate", temperature: 65, firstLayerTemperature: 75 },
+          ],
+        }),
+        existing,
+      );
+      expect(update.bedTypeTemps).toEqual([
+        { bedType: "Hot Plate", temperature: 65, firstLayerTemperature: 75 },
+      ]);
+    });
+
+    it("is conservative on malformed parent entries (non-string bedType → merged array writes)", () => {
+      const parent = {
+        bedTypeTemps: [{ bedType: 42, temperature: 65 }], // malformed
+      };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        bedTypeTemps: [],
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }] }),
+        existing,
+      );
+      expect(update.bedTypeTemps).toEqual([
+        { bedType: "Hot Plate", temperature: 65 },
+      ]);
+    });
+
+    it("is conservative on duplicate parent bedTypes (ambiguous → merged array writes)", () => {
+      const parent = {
+        bedTypeTemps: [
+          { bedType: "Hot Plate", temperature: 65 },
+          { bedType: "Hot Plate", temperature: 70 }, // duplicate name
+        ],
+      };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        bedTypeTemps: [{ bedType: "Cool Plate", temperature: 35 }],
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({ bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }] }),
+        existing,
+      );
+      // merged = [Cool 35 (existing), Hot 65 (parsed)] — length matches the
+      // parent's 2, but the duplicate bails the comparison conservatively.
+      const list = update.bedTypeTemps as Array<Record<string, unknown>>;
+      expect(list).toHaveLength(2);
+    });
+  });
 });
 
 /**
