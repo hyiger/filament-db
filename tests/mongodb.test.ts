@@ -922,3 +922,94 @@ describe("purgedZombies migration (GH #1004 F1)", () => {
     expect(cached.migrations.purgedZombies).toBe(true);
   });
 });
+
+/**
+ * GH #1008 F1 (Codex P1 on #1016) — normalize legacy 100-based shrinkageXY.
+ * The pre-#1016 importer stored Orca's `filament_shrink` raw (98 = "98%
+ * remaining size"), which the convention-aware export would double-convert
+ * into a catastrophic "2% of size" compensation. `>= 50` separates legacy
+ * remaining-size values (~90–100) from real 0-based shrinkage (≤ ~10%).
+ */
+describe("legacyShrinkage migration (GH #1008 F1)", () => {
+  function resetMigrations() {
+    const cached = (global as Record<string, unknown>).mongoose as {
+      conn: unknown; promise: unknown; migrations: Record<string, boolean>;
+    };
+    cached.migrations = {
+      instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false,
+      nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false,
+      legacyShrinkage: false,
+    };
+    cached.conn = null;
+    cached.promise = null;
+    return cached;
+  }
+
+  it("converts legacy 100-based values and leaves modern 0-based values alone", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+
+    // Raw inserts — the states the old importer produced / users entered.
+    await Filament.collection.insertMany([
+      { name: "LegacyStock", vendor: "T", type: "ABS", shrinkageXY: 98 },   // old import of "98%"
+      { name: "LegacyDefault", vendor: "T", type: "PLA", shrinkageXY: 100 }, // old import of "100%"
+      { name: "ModernSmall", vendor: "T", type: "ABS", shrinkageXY: 0.4 },  // real 0-based value
+      { name: "ModernZero", vendor: "T", type: "PLA", shrinkageXY: 0 },
+      { name: "NoShrink", vendor: "T", type: "PLA", shrinkageXY: null },
+    ]);
+
+    const cached = resetMigrations();
+    await dbConnect();
+
+    const byName = async (n: string) => Filament.collection.findOne({ name: n });
+    expect((await byName("LegacyStock"))!.shrinkageXY).toBe(2);   // 100 − 98
+    expect((await byName("LegacyDefault"))!.shrinkageXY).toBe(0); // 100 − 100
+    expect((await byName("ModernSmall"))!.shrinkageXY).toBe(0.4); // untouched
+    expect((await byName("ModernZero"))!.shrinkageXY).toBe(0);    // untouched
+    expect((await byName("NoShrink"))!.shrinkageXY).toBeNull();   // untouched
+    expect(cached.migrations.legacyShrinkage).toBe(true);
+
+    // Idempotence: a second run changes nothing (converted values are < 50).
+    resetMigrations();
+    await dbConnect();
+    expect((await byName("LegacyStock"))!.shrinkageXY).toBe(2);
+
+    await Filament.collection.deleteMany({
+      name: { $in: ["LegacyStock", "LegacyDefault", "ModernSmall", "ModernZero", "NoShrink"] },
+    });
+  });
+
+  it("leaves the flag false and retries on a transient failure", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+
+    const cached = resetMigrations();
+    // Mongoose's model-level updateMany (purgedZombies, runs first) delegates
+    // to this same collection.updateMany internally — so pass the FIRST call
+    // through and reject the SECOND (the legacyShrinkage pipeline update).
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const realUpdateMany = Filament.collection.updateMany.bind(Filament.collection);
+    const updateSpy = vi
+      .spyOn(Filament.collection, "updateMany")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockImplementationOnce(((...args: unknown[]) => (realUpdateMany as any)(...args)) as any)
+      .mockRejectedValueOnce(new Error("transient"));
+    try {
+      await dbConnect();
+      expect(cached.migrations.purgedZombies).toBe(true);
+      expect(cached.migrations.legacyShrinkage).toBe(false); // retries next connect
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining("legacy shrinkage"),
+        expect.any(Error),
+      );
+    } finally {
+      updateSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+
+    cached.conn = null;
+    cached.promise = null;
+    await dbConnect();
+    expect(cached.migrations.legacyShrinkage).toBe(true);
+  });
+});

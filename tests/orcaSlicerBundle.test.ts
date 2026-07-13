@@ -353,12 +353,14 @@ describe("filamentToOrcaSlicerKeys", () => {
     };
 
     const keys = filamentToOrcaSlicerKeys(filament);
-    // shrinkageXY is emitted with a trailing "%"
-    expect(keys.filament_shrink).toEqual(["0.4%"]);
+    // GH #1008 F1: filament_shrink is emitted in Orca's 100-based convention —
+    // 0-based shrinkageXY 0.4 → "99.6%" (a part that measures 99.6 mm per 100).
+    // shrinkageZ keeps the PrusaSlicer-named 0-based key, so it stays raw.
+    expect(keys.filament_shrink).toEqual(["99.6%"]);
     expect(keys.filament_shrinkage_compensation_z).toEqual(["0.2"]);
   });
 
-  it("emits shrinkage keys even when the value is 0 (only null skips)", () => {
+  it("emits an explicit 100% for 0 shrinkage (Codex P2 on #1016), GH #1008 F1", () => {
     const filament = {
       name: "Zero Shrink",
       vendor: "Test",
@@ -372,9 +374,27 @@ describe("filamentToOrcaSlicerKeys", () => {
     };
 
     const keys = filamentToOrcaSlicerKeys(filament);
-    // The guard is `!= null`, so 0 still emits (via set()'s own `!= null` check).
-    expect(keys.filament_shrink).toEqual(["0%"]);
+    // GH #1008 F1 + Codex P2: 0-based 0 = no shrink = Orca's "100%". Emit it
+    // EXPLICITLY — the Bambu importer only writes shrinkageXY when the key is
+    // present, so an omitted key on a no-shrink export would leave a stale
+    // non-zero value in place on re-import (zero would be un-round-trippable
+    // on updates). Only a null (never-set) shrinkageXY omits the key.
+    expect(keys.filament_shrink).toEqual(["100%"]);
     expect(keys.filament_shrinkage_compensation_z).toEqual(["0"]);
+  });
+
+  it("omits filament_shrink only when shrinkageXY was never set (null)", () => {
+    const filament = {
+      name: "No Shrink Data",
+      vendor: "Test",
+      type: "ABS",
+      color: "#808080",
+      diameter: 1.75,
+      shrinkageXY: null,
+      temperatures: {},
+      settings: {},
+    };
+    expect(filamentToOrcaSlicerKeys(filament).filament_shrink).toBeUndefined();
   });
 
   it("skips a null value in the settings bag", () => {

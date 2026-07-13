@@ -297,9 +297,13 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     settings: {},
   };
 
-  // Shrinkage — "0.5%" → 0.5
+  // Shrinkage. GH #1008 F1: `filament_shrink` is Orca/Bambu's 100-based
+  // "remaining size" (94% → 6% shrink; 100% or absent → no shrink), so convert
+  // to the DB's 0-based shrinkage: `100 - value`. A stock profile's default
+  // 100% (or "98%") thus stores 0 (or 2), not a bogus 100/98. `shrinkageZ` uses
+  // the PrusaSlicer-named 0-based key, so it stays raw.
   const shrink = num(json.filament_shrink);
-  if (shrink != null) filament.shrinkageXY = shrink;
+  if (shrink != null) filament.shrinkageXY = 100 - shrink;
   const shrinkZ = num(json.filament_shrinkage_compensation_z);
   if (shrinkZ != null) filament.shrinkageZ = shrinkZ;
 

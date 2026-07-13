@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { parseBambuStudioProfile } from "@/lib/bambuStudioImport";
 import {
   generateOrcaSlicerProfiles,
+  filamentToOrcaSlicerKeys,
 } from "@/lib/orcaSlicerBundle";
 
 /**
@@ -78,14 +79,31 @@ describe("parseBambuStudioProfile", () => {
     expect(byName["Textured PEI Plate"]?.temperature).toBe(70);
   });
 
-  it("strips trailing % from filament_shrink", () => {
+  it("converts filament_shrink from Orca's 100-based to the DB's 0-based (GH #1008 F1)", () => {
+    // "98%" remaining-size → 2% shrinkage; shrinkageZ (Prusa-named key) stays raw.
     const { filament } = parseBambuStudioProfile({
       name: ["X"],
-      filament_shrink: ["0.5%"],
+      filament_shrink: ["98%"],
       filament_shrinkage_compensation_z: ["1.2"],
     });
-    expect(filament.shrinkageXY).toBe(0.5);
+    expect(filament.shrinkageXY).toBeCloseTo(2, 6);
     expect(filament.shrinkageZ).toBe(1.2);
+  });
+
+  it("treats filament_shrink 100% as 0 shrinkage (GH #1008 F1)", () => {
+    const { filament } = parseBambuStudioProfile({ name: ["X"], filament_shrink: ["100%"] });
+    expect(filament.shrinkageXY).toBe(0);
+  });
+
+  it("round-trips shrinkageXY through Orca export → Bambu import (GH #1008 F1)", () => {
+    const source = {
+      name: "RT", vendor: "T", type: "ABS", color: "#808080", diameter: 1.75,
+      shrinkageXY: 0.4, temperatures: {}, settings: {},
+    };
+    const keys = filamentToOrcaSlicerKeys(source);
+    // Re-parse the exported key (unwrap the single-element array shape).
+    const { filament } = parseBambuStudioProfile({ name: ["RT"], filament_shrink: keys.filament_shrink });
+    expect(filament.shrinkageXY).toBeCloseTo(0.4, 6);
   });
 
   it("passes filament_soluble through the settings bag (no model column yet, Codex P1 #387 r2)", () => {

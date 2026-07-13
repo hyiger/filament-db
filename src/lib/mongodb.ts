@@ -42,6 +42,16 @@ interface MongooseCache {
      * if re-trashed. Their intended state is gone-forever, so restore
      * `_deletedAt`. Idempotent: matches 0 rows on healthy installs. */
     purgedZombies: boolean;
+    /** GH #1008 F1 (Codex P1 on #1016) — normalize legacy 100-based
+     * `shrinkageXY` values. The pre-#1016 Bambu/Orca importer stored
+     * `filament_shrink` RAW, so a stock profile's "98%" (remaining size)
+     * persisted as `shrinkageXY: 98` — which the convention-aware export
+     * would double-convert into catastrophic compensation ("2% of size").
+     * Real 0-based shrinkage is physically ≤ ~10% while legacy remaining-size
+     * values are ~90–100, so `>= 50` is an unambiguous separator. Idempotent:
+     * a converted value lands in [0, 50] — below the threshold for every real
+     * input, and the x = 50 boundary maps to itself (a no-op re-match). */
+    legacyShrinkage: boolean;
   };
 }
 
@@ -78,7 +88,7 @@ export default async function dbConnect() {
     promise: null,
     uri: null,
     migrationsPromise: null,
-    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false },
+    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false },
   };
 
   if (!global.mongoose) {
@@ -93,7 +103,7 @@ export default async function dbConnect() {
     cached.promise = null;
     cached.uri = null;
     cached.migrationsPromise = null;
-    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false };
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false };
   }
 
   // GH #312: a cached connection can go dead after a DB outage or an
@@ -117,7 +127,8 @@ export default async function dbConnect() {
     cached.migrations.sharedCatalogIndexes &&
     cached.migrations.nozzlePhysicalInstances &&
     cached.migrations.coreModelIndexes &&
-    cached.migrations.purgedZombies
+    cached.migrations.purgedZombies &&
+    cached.migrations.legacyShrinkage
   ) {
     return cached.conn;
   }
@@ -170,6 +181,38 @@ export default async function dbConnect() {
     } catch (err) {
       console.error(
         "[migration] Failed to repair purged zombie filaments (will retry on next connect):",
+        err,
+      );
+    }
+  }
+
+  // GH #1008 F1 (Codex P1 on #1016) — normalize legacy 100-based shrinkageXY.
+  // The pre-#1016 Bambu/Orca importer stored `filament_shrink` raw, so a stock
+  // profile's "98%" (Orca remaining-size) persisted as `shrinkageXY: 98`; the
+  // convention-aware export would double-convert that into "2%" — a
+  // shrink-to-2%-of-size compensation. Real 0-based shrinkage is physically
+  // ≤ ~10% while legacy remaining-size values sit at ~90–100, so `>= 50`
+  // separates them unambiguously (the schema caps the field at 100, so the
+  // pipeline result always lands back in [0, 50]). Idempotent: a converted
+  // value sits below the threshold for every real input; the x = 50 boundary
+  // maps to itself, a no-op re-match.
+  if (!cached.migrations.legacyShrinkage) {
+    try {
+      const { default: Filament } = await import("@/models/Filament");
+      // Raw driver call: Mongoose's update-casting layer rejects the
+      // aggregation-pipeline form; the driver supports it natively.
+      const res = await Filament.collection.updateMany({ shrinkageXY: { $gte: 50 } }, [
+        { $set: { shrinkageXY: { $subtract: [100, "$shrinkageXY"] } } },
+      ]);
+      if (res.modifiedCount > 0) {
+        console.log(
+          `[migration] Normalized ${res.modifiedCount} legacy 100-based shrinkageXY value(s) (GH #1008)`,
+        );
+      }
+      cached.migrations.legacyShrinkage = true;
+    } catch (err) {
+      console.error(
+        "[migration] Failed to normalize legacy shrinkage values (will retry on next connect):",
         err,
       );
     }

@@ -137,8 +137,20 @@ export function filamentToOrcaSlicerKeys(
   // the settings passthrough above already carries it. The old
   // `set(..., filament.soluble)` read an always-undefined field — removed.
 
-  // Shrinkage
-  if (filament.shrinkageXY != null) set("filament_shrink", String(filament.shrinkageXY) + "%");
+  // Shrinkage. GH #1008 F1: Orca/Bambu's `filament_shrink` is a 100-based
+  // "remaining size" (94% = the part measures 94 mm per 100 mm; default 100% =
+  // no shrink), whereas the DB stores 0-based shrinkage (0% = none) — the same
+  // convention as PrusaSlicer's `filament_shrinkage_compensation_xy`. Convert at
+  // the boundary: emit `100 - shrinkageXY`. A 0 emits Orca's EXPLICIT no-shrink
+  // value `100%` (Codex P2 on #1016): the Bambu importer only sets shrinkageXY
+  // when the key is present, and buildStructuredUpdate skips undefined — so an
+  // absent key on a no-shrink export would leave a stale non-zero value in
+  // place when re-imported over an existing filament, making zero shrinkage
+  // un-round-trippable on updates. Only null (never set) omits the key.
+  // `shrinkageZ` rides the PrusaSlicer-named 0-based key, so it stays raw.
+  if (filament.shrinkageXY != null) {
+    set("filament_shrink", String(100 - filament.shrinkageXY) + "%");
+  }
   if (filament.shrinkageZ != null) set("filament_shrinkage_compensation_z", filament.shrinkageZ);
 
   // GH #950.4: bake the representative calibration on top (flow/PA/retraction/fans/
