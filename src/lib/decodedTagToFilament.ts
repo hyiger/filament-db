@@ -1,6 +1,19 @@
 import type { DecodedOpenPrintTag } from "./openprinttag-decode";
 
 /**
+ * GH #1008 F6: coerce an `aux` value to a finite number. Aux values ride
+ * unvalidated client JSON (`Record<string, unknown>`), so they may arrive as
+ * strings or junk — only numbers and non-empty numeric strings pass; anything
+ * else (booleans, objects, arrays, "", NaN, Infinity) returns null.
+ */
+function auxTemp(v: unknown): number | null {
+  if (typeof v !== "number" && typeof v !== "string") return null;
+  if (typeof v === "string" && v.trim() === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
  * Map a tag decoded by `POST /api/nfc/decode` (a `DecodedOpenPrintTag`) into a
  * Filament DB creation payload — the server-side mapper behind create-from-scan
  * (mobile Phase 2, plan §4.4). The phone never reproduces this mapping: it
@@ -58,6 +71,22 @@ export function decodedTagToFilamentPayload(
 
   const secondaryColors = Array.isArray(decoded.secondaryColors) ? decoded.secondaryColors : [];
 
+  // GH #1008 F6: for an OpenTag3D tag with a RANGED print temp,
+  // `decoded.nozzleTemp` is the Extended range MAX (`maxPrintTemp ??
+  // recPrintTemp` — see opentag3d-decode.ts), while the Core RECOMMENDED
+  // print_temp survives only in `aux.opentag3d_recommended_print_temp_c`
+  // (stashed exactly when a distinct max exists). Mapping the max into the
+  // everyday `temperatures.nozzle` made write→scan→create asymmetric: a
+  // filament written with nozzle=215 / rangeMax=230 scanned back and created
+  // with nozzle=230 — the same everyday-vs-max drift #970 fixed on the OPT
+  // encode side. Prefer the preserved recommended value for the everyday temp;
+  // the max stays on `nozzleRangeMax`. Same for bed — the schema has no
+  // bed-range fields, so the recommended value simply wins the single `bed`
+  // slot. Only OpenTag3D decodes populate these aux keys, so OpenPrintTag /
+  // Bambu payloads are unchanged.
+  const recommendedNozzle = auxTemp(decoded.aux?.opentag3d_recommended_print_temp_c);
+  const recommendedBed = auxTemp(decoded.aux?.opentag3d_recommended_bed_temp_c);
+
   return {
     name,
     vendor: brand || null,
@@ -76,11 +105,14 @@ export function decodedTagToFilamentPayload(
     // and fall back to the 1.75 the OPT importer assumes when the tag omits it.
     diameter: decoded.diameter ?? 1.75,
     temperatures: {
-      nozzle: decoded.nozzleTemp ?? null,
+      // GH #1008 F6: everyday temp = the Core recommended value when the tag
+      // preserved one (ranged OpenTag3D); otherwise decoded.nozzleTemp (OPT /
+      // Bambu / Core-only OpenTag3D, where it IS the recommended value).
+      nozzle: recommendedNozzle ?? decoded.nozzleTemp ?? null,
       nozzleFirstLayer: null,
       nozzleRangeMin: decoded.nozzleTempMin ?? null,
       nozzleRangeMax: decoded.nozzleTemp ?? null,
-      bed: decoded.bedTemp ?? null,
+      bed: recommendedBed ?? decoded.bedTemp ?? null,
       bedFirstLayer: null,
       standby: decoded.preheatTemp ?? null,
     },

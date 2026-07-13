@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { upsertIniFilament } from "@/lib/iniImportApply";
+import { parseIniFilaments } from "@/lib/parseIni";
+import { collapsePerNozzleImportSections } from "@/lib/prusaSlicerBundle";
 import type { CollapsedFilamentData } from "@/lib/prusaSlicerBundle";
 
 /**
@@ -348,6 +350,67 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
       const fresh = await Filament.findById(variant._id).lean();
       // Nothing to heal; the matching key keeps inheriting (no phantom local write).
       expect(fresh.settings?.cooling).toBeUndefined();
+    });
+  });
+
+  // ── GH #1008 F3: end-to-end leave-when-omitted for temps + inherits through
+  //    the REAL pipeline (parseIni → collapse → upsert). Pre-fix, a section
+  //    omitting the temp keys rode parseIni's all-null `temperatures` (and
+  //    `inherits: null`) into the importer's dot-key $set and wiped all four
+  //    stored temps + inherits on a name-matched filament. ────────────────────
+  describe("leave-when-omitted temps + inherits (GH #1008 F3)", () => {
+    /** Parse a raw INI through the actual import pipeline (parse → collapse). */
+    const collapse = (ini: string) => collapsePerNozzleImportSections(parseIniFilaments(ini));
+
+    it("a section with NO temp keys and NO inherits preserves all four stored temps + inherits", async () => {
+      const existing = await Filament.create({
+        name: "Prusament PLA",
+        vendor: "Prusa",
+        type: "PLA",
+        temperatures: { nozzle: 215, nozzleFirstLayer: 220, bed: 60, bedFirstLayer: 65 },
+        inherits: "Prusament PLA @MK4S",
+      });
+      // The realistic PrusaSlicer user-preset shape: only the diverged key(s).
+      const [section] = collapse(
+        `[filament:Prusament PLA]\nfilament_retract_length = 1.2\n`,
+      );
+      expect(await upsertIniFilament(section)).toBe("updated");
+      const fresh = await Filament.findById(existing._id).lean();
+      expect(fresh.temperatures.nozzle).toBe(215);
+      expect(fresh.temperatures.nozzleFirstLayer).toBe(220);
+      expect(fresh.temperatures.bed).toBe(60);
+      expect(fresh.temperatures.bedFirstLayer).toBe(65);
+      expect(fresh.inherits).toBe("Prusament PLA @MK4S");
+      expect(fresh.settings.filament_retract_length).toBe("1.2"); // the diverged key landed
+    });
+
+    it("a PARTIAL temp section updates only the supplied subfield; siblings + inherits survive", async () => {
+      const existing = await Filament.create({
+        name: "Partial PLA",
+        vendor: "Prusa",
+        type: "PLA",
+        temperatures: { nozzle: 215, bed: 60 },
+        inherits: "*PLA*",
+      });
+      const [section] = collapse(`[filament:Partial PLA]\ntemperature = 230\n`);
+      expect(await upsertIniFilament(section)).toBe("updated");
+      const fresh = await Filament.findById(existing._id).lean();
+      expect(fresh.temperatures.nozzle).toBe(230); // supplied → updated
+      expect(fresh.temperatures.bed).toBe(60); // omitted → survives
+      expect(fresh.inherits).toBe("*PLA*"); // omitted → survives
+    });
+
+    it("an explicit `inherits = nil` still clears the stored inherits (deliberate reset writes through)", async () => {
+      const existing = await Filament.create({
+        name: "NilInherits PLA",
+        vendor: "Prusa",
+        type: "PLA",
+        inherits: "*PLA*",
+      });
+      const [section] = collapse(`[filament:NilInherits PLA]\ninherits = nil\n`);
+      expect(await upsertIniFilament(section)).toBe("updated");
+      const fresh = await Filament.findById(existing._id).lean();
+      expect(fresh.inherits ?? null).toBeNull();
     });
   });
 });

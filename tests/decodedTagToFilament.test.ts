@@ -152,4 +152,91 @@ describe("decodedTagToFilamentPayload", () => {
       standby: null,
     });
   });
+
+  // ── GH #1008 F6: for a RANGED OpenTag3D tag, decoded.nozzleTemp is the
+  //    Extended range MAX; the Core RECOMMENDED print_temp survives only in
+  //    aux.opentag3d_recommended_print_temp_c (stashed exactly when a distinct
+  //    max exists). The create payload must map the recommended value to the
+  //    everyday temp, keeping the max on nozzleRangeMax — otherwise a filament
+  //    written with nozzle=215/rangeMax=230 scans back and creates with 230. ──
+
+  it("#1008 F6: OpenTag3D ranged tag — everyday nozzle/bed = the Core RECOMMENDED, max stays on nozzleRangeMax", () => {
+    const p = decodedTagToFilamentPayload(
+      tag({
+        tagSource: "opentag3d",
+        brandName: "Polar Filament",
+        materialName: "PETG",
+        materialType: "PETG",
+        nozzleTemp: 230, // = Extended max_print_temp
+        nozzleTempMin: 190,
+        bedTemp: 70, // = Extended max_bed_temp
+        aux: {
+          opentag3d_recommended_print_temp_c: 215,
+          opentag3d_recommended_bed_temp_c: 60,
+        },
+      }),
+    );
+    expect(p.temperatures).toEqual({
+      nozzle: 215, // everyday = recommended, NOT the range max
+      nozzleFirstLayer: null,
+      nozzleRangeMin: 190,
+      nozzleRangeMax: 230, // the max survives on the range field
+      bed: 60, // bed likewise prefers the recommended value
+      bedFirstLayer: null,
+      standby: null,
+    });
+  });
+
+  it("#1008 F6: falls back to decoded.nozzleTemp/bedTemp when no recommended aux key exists", () => {
+    // A Core-only OpenTag3D image (no Extended max): nozzleTemp IS the
+    // recommended value and no aux key is stashed. Unrelated aux keys must not
+    // interfere; OpenPrintTag / Bambu decodes (no opentag3d_* aux) take this
+    // same path — pinned by the OPT test at the top of this file too.
+    const p = decodedTagToFilamentPayload(
+      tag({
+        tagSource: "opentag3d",
+        nozzleTemp: 215,
+        bedTemp: 60,
+        aux: { opentag3d_serial: "abc123" },
+      }),
+    );
+    const temps = p.temperatures as Record<string, number | null>;
+    expect(temps.nozzle).toBe(215);
+    expect(temps.nozzleRangeMax).toBe(215);
+    expect(temps.bed).toBe(60);
+  });
+
+  it("#1008 F6: coerces numeric-string aux temps; an empty string falls back", () => {
+    const p = decodedTagToFilamentPayload(
+      tag({
+        tagSource: "opentag3d",
+        nozzleTemp: 230,
+        bedTemp: 70,
+        aux: {
+          opentag3d_recommended_print_temp_c: "215", // string → coerced
+          opentag3d_recommended_bed_temp_c: "  ", // blank → ignored
+        },
+      }),
+    );
+    const temps = p.temperatures as Record<string, number | null>;
+    expect(temps.nozzle).toBe(215);
+    expect(temps.bed).toBe(70); // fell back to the decoded bed temp
+  });
+
+  it("#1008 F6: ignores non-finite / non-numeric aux junk and falls back to the decoded temps", () => {
+    const p = decodedTagToFilamentPayload(
+      tag({
+        tagSource: "opentag3d",
+        nozzleTemp: 230,
+        bedTemp: 70,
+        aux: {
+          opentag3d_recommended_print_temp_c: "not-a-number", // NaN → ignored
+          opentag3d_recommended_bed_temp_c: { nested: true }, // object → ignored
+        },
+      }),
+    );
+    const temps = p.temperatures as Record<string, number | null>;
+    expect(temps.nozzle).toBe(230);
+    expect(temps.bed).toBe(70);
+  });
 });
