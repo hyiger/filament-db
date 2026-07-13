@@ -19,6 +19,13 @@ interface NfcStatus {
   readerName: string | null;
   tagPresent: boolean;
   tagUid: string | null;
+  // GH #1006 F4: mirror the canonical contract in src/types/electron.d.ts
+  // (GH #450) — NfcService.getStatus() always includes this, and the drift
+  // was invisible to typecheck because this local interface omitted it.
+  lastError: {
+    code: "permission" | "busy" | "no-daemon" | "generic";
+    message: string;
+  } | null;
 }
 
 interface UpdateInstallStrings {

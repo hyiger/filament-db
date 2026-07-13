@@ -36,10 +36,19 @@ export default function SetupPage() {
           return;
         }
 
-        await window.electronAPI.saveConfig({
+        // GH #1006 F2 (Codex P2 on #1015): a failed server respawn RESOLVES
+        // with { success: false } (no rejection) and skips the redirect — check
+        // the result or setup just clears the spinner with no error while the
+        // app has no embedded server.
+        const saveRes = await window.electronAPI.saveConfig({
           connectionMode: mode === "hybrid" ? "hybrid" : "atlas",
           atlasUri: mongoUri,
         });
+        if (!saveRes?.success) {
+          setError(t("setup.setupFailed"));
+          setTesting(false);
+          return;
+        }
         // Electron will redirect to home
       } else {
         // Web app: test via API route
@@ -92,9 +101,14 @@ export default function SetupPage() {
     setError("");
 
     try {
-      await window.electronAPI.saveConfig({
+      // GH #1006 F2 (Codex P2 on #1015): same result check as the Atlas path.
+      const saveRes = await window.electronAPI.saveConfig({
         connectionMode: "offline",
       });
+      if (!saveRes?.success) {
+        setError(t("setup.setupFailed"));
+        return;
+      }
       // Electron will redirect to home
     } catch (err) {
       setError(err instanceof Error ? err.message : t("setup.setupFailed"));

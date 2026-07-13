@@ -154,7 +154,16 @@ export default function NetworkSettingsPage() {
                             return;
                           }
                           setModeSwitching(true);
-                          await window.electronAPI!.saveConfig({ connectionMode: pendingMode, atlasUri: atlasUri.trim() });
+                          // GH #1006 F2 (Codex P2 on #1015): a failed server respawn
+                          // RESOLVES with { success: false } — it doesn't reject — so
+                          // the catch below never fires for it. Check the result (the
+                          // exposeToLan toggle's pattern) or the toast shows
+                          // "Switched to…" over a dead server.
+                          const saveRes = await window.electronAPI!.saveConfig({ connectionMode: pendingMode, atlasUri: atlasUri.trim() });
+                          if (!saveRes?.success) {
+                            setModeResult({ ok: false, message: t("settings.switchFailed") });
+                            return;
+                          }
                           setCurrentMode(pendingMode);
                           setHasStoredUri(true);
                           setPendingMode("");
@@ -190,7 +199,13 @@ export default function NetworkSettingsPage() {
                       setModeSwitching(true);
                       setModeResult(null);
                       try {
-                        await window.electronAPI!.saveConfig({ connectionMode: pendingMode });
+                        // GH #1006 F2 (Codex P2 on #1015): same result check as the
+                        // connect-and-switch path above — {success:false} resolves.
+                        const saveRes = await window.electronAPI!.saveConfig({ connectionMode: pendingMode });
+                        if (!saveRes?.success) {
+                          setModeResult({ ok: false, message: t("settings.switchFailed") });
+                          return;
+                        }
                         setCurrentMode(pendingMode);
                         setPendingMode("");
                         setModeResult({ ok: true, message: t("settings.switchedTo", { mode: CONNECTION_MODES.find((m) => m.id === pendingMode)?.label || "" }) });
