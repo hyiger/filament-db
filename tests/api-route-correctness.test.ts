@@ -1225,6 +1225,174 @@ describe("API route correctness", () => {
     expect(resolved.settings.some_passthrough_key).toBe("changed");
   });
 
+  // ── #1008 F2: the ORCA per-id sync gets the same inheritance split ──
+  // The Orca bundle export flattens a variant through resolveFilament, so the
+  // Orca fork echoes the parent's cost/density/temps back on every sync. This
+  // was the ONLY slicer sync path with no parent-equality split — one sync
+  // pinned every echoed value onto the variant and severed GH #106 live
+  // inheritance.
+
+  it("#1008 F2 — orca sync does NOT pin parent-equal inherited values on a variant (inheritance survives)", async () => {
+    const parent = await Filament.create({
+      name: "Orca Sync PLA",
+      vendor: "Acme",
+      type: "PLA",
+      cost: 25,
+      density: 1.24,
+      temperatures: { nozzle: 215, bed: 60 },
+    });
+    const variant = await Filament.create({
+      name: "Orca Sync PLA — Red",
+      vendor: "Acme",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+      // fully inheriting
+    });
+
+    // The Orca fork echoes the full (resolved) preset — every value == parent.
+    const res = await orcaSync(
+      jsonReq(`http://localhost/api/filaments/${variant._id}/orcaslicer`, {
+        type: "PLA",
+        vendor: "Acme",
+        cost: 25,
+        density: 1.24,
+        temperatures: { nozzle: 215, bed: 60 },
+      }),
+      { params: Promise.resolve({ id: String(variant._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Filament.findById(variant._id).lean();
+    // None of the parent-equal inherited fields were pinned as local overrides.
+    expect(fresh.cost).toBeNull();
+    expect(fresh.density).toBeNull();
+    expect(fresh.temperatures?.nozzle ?? null).toBeNull();
+    expect(fresh.temperatures?.bed ?? null).toBeNull();
+
+    // A later parent edit still propagates to the variant (GH #106 intact).
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { cost: 30, "temperatures.nozzle": 230 } },
+    );
+    const { resolveFilament } = await import("@/lib/resolveFilament");
+    const freshParent = await Filament.findById(parent._id).lean();
+    const resolved = resolveFilament(fresh, freshParent);
+    expect(resolved.cost).toBe(30);
+    expect(resolved.temperatures?.nozzle).toBe(230);
+  });
+
+  it("#1008 F2 — orca sync $unsets a stale parent-equal local override and still writes divergent values", async () => {
+    const parent = await Filament.create({
+      name: "Orca Sync PETG",
+      vendor: "Acme",
+      type: "PETG",
+      cost: 20,
+      temperatures: { nozzle: 240 },
+    });
+    const variant = await Filament.create({
+      name: "Orca Sync PETG — Black",
+      vendor: "Acme",
+      type: "PETG",
+      color: "#000000",
+      parentId: parent._id,
+      cost: 22, // stale local override — diverges from parent
+      temperatures: { nozzle: 245 }, // stale local temp override
+    });
+
+    const res = await orcaSync(
+      jsonReq(`http://localhost/api/filaments/${variant._id}/orcaslicer`, {
+        cost: 20, // == parent → stale 22 must be $unset
+        temperatures: {
+          nozzle: 240, // == parent → stale 245 must be $unset
+          bed: 85, // parent has no bed → genuine override, still writes
+        },
+      }),
+      { params: Promise.resolve({ id: String(variant._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // The response reports what was actually $set post-split: the divergent
+    // dotted temp key, not the dropped parent-equal fields.
+    expect(body.updated).toContain("temperatures.bed");
+    expect(body.updated).not.toContain("cost");
+    expect(body.updated).not.toContain("temperatures.nozzle");
+
+    const fresh = await Filament.findById(variant._id).lean();
+    expect(fresh.cost ?? null).toBeNull(); // stale pin cleared → inherits
+    expect(fresh.temperatures?.nozzle ?? null).toBeNull(); // stale pin cleared
+    expect(fresh.temperatures?.bed).toBe(85); // divergent value written
+
+    // The cleared pins now track the parent live.
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { cost: 21, "temperatures.nozzle": 242 } },
+    );
+    const { resolveFilament } = await import("@/lib/resolveFilament");
+    const freshParent = await Filament.findById(parent._id).lean();
+    const resolved = resolveFilament(fresh, freshParent);
+    expect(resolved.cost).toBe(21);
+    expect(resolved.temperatures?.nozzle).toBe(242);
+    expect(resolved.temperatures?.bed).toBe(85); // own override still wins
+  });
+
+  it("#1008 F2 — a sync where EVERY field is parent-equal (empty $set) still clears a stale pin", async () => {
+    // The split can drop every $set key while still emitting $unset — the
+    // write must survive Mongoose's empty-$set stripping and apply the unset.
+    const parent = await Filament.create({
+      name: "Orca Sync ASA",
+      vendor: "Acme",
+      type: "ASA",
+      cost: 35,
+    });
+    const variant = await Filament.create({
+      name: "Orca Sync ASA — White",
+      vendor: "Acme",
+      type: "ASA",
+      color: "#FFFFFF",
+      parentId: parent._id,
+      cost: 40, // stale divergence
+    });
+
+    const res = await orcaSync(
+      jsonReq(`http://localhost/api/filaments/${variant._id}/orcaslicer`, {
+        cost: 35, // == parent → dropped from $set, stale 40 → $unset
+      }),
+      { params: Promise.resolve({ id: String(variant._id) }) },
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).updated).toEqual([]);
+
+    const fresh = await Filament.findById(variant._id).lean();
+    expect(fresh.cost == null).toBe(true); // $unset applied → inherits again
+  });
+
+  it("#1008 F2 — orca sync on a standalone filament writes everything unchanged (no regression)", async () => {
+    const f = await Filament.create({
+      name: "Orca Standalone PLA",
+      vendor: "Acme",
+      type: "PLA",
+      temperatures: { bed: 55 },
+    });
+
+    const res = await orcaSync(
+      jsonReq(`http://localhost/api/filaments/${f._id}/orcaslicer`, {
+        cost: 25,
+        density: 1.24,
+        temperatures: { nozzle: 215 },
+      }),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.cost).toBe(25);
+    expect(fresh.density).toBe(1.24);
+    expect(fresh.temperatures?.nozzle).toBe(215);
+    // Dotted temp writes leave stored siblings the sync didn't touch alone.
+    expect(fresh.temperatures?.bed).toBe(55);
+  });
+
   it("#872 — a per-nozzle sync with an out-of-range baked calibration value is rejected with 400 (nothing persisted)", async () => {
     const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
     const f = await Filament.create({
