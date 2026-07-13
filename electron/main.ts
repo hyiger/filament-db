@@ -766,6 +766,24 @@ async function resolveMongoUri(): Promise<string | null> {
       await client.close();
 
       store.set("mongodbUri", atlasUri);
+      // GH #1006 F3: pure Atlas doesn't use the embedded mongod — stop one a
+      // prior offline/hybrid session started, or it idles for the rest of the
+      // session (~200–300 MB RSS + a dbPath lock) serving nothing. No-op when
+      // none is running; the atlas-fallback path below restarts it on demand
+      // when Atlas is unreachable. Mirrors the syncService teardown above (#672).
+      //
+      // Codex P2 on #1015: guard with its OWN try/catch. The enclosing catch
+      // means "Atlas unreachable → fall back to local" — a mongod.stop()
+      // rejection AFTER a successful Atlas ping must not jump the user onto
+      // local-fallback (which would silently ignore their reachable Atlas
+      // selection and, since a failed stop doesn't clear the cached local URI,
+      // startLocalMongo() would hand back the stale mongod). A failed stop just
+      // leaves the mongod idling — the exact pre-F3 behavior, logged, no worse.
+      try {
+        await stopLocalMongo();
+      } catch (stopErr) {
+        console.warn("Failed to stop embedded MongoDB after Atlas switch (leaving it running):", stopErr);
+      }
       return atlasUri;
     } catch {
       console.log("Atlas unreachable, falling back to local MongoDB...");
@@ -993,14 +1011,47 @@ ipcMain.handle("save-config", async (event, config: {
         serverRestarted = true;
       } catch (err) {
         console.error("Failed to start server after config save:", err);
+        // GH #1006 F2: stopServer() already killed the healthy server, so the
+        // app now has NO embedded server. The usual cause is a transient port
+        // race (EADDRINUSE from the not-yet-dead old process still holding 3456
+        // during the gap). Clear any half-spawned process and retry once on the
+        // SAME resolved uri — resolveMongoUri already stood up THIS mode's
+        // mongod/sync (and tore down the previous mode's, so the old uri would
+        // now point at a stopped mongod), making the new uri the only coherent
+        // recovery target. Mirrors the LAN-toggle branch's recover-or-fail shape.
+        await stopServer();
+        try {
+          await startProductionServer(uri || undefined);
+          serverRestarted = true;
+        } catch (recoveryErr) {
+          console.error("Failed to restore server after config-change failure:", recoveryErr);
+          // Codex P2 on #1015: the failed recovery can leave a stray child —
+          // startProductionServer rejects with the utility process still alive
+          // (waitForServer timeout) or with `serverProcess` pointing at a dead
+          // handle. We're about to report "no embedded server", so make that
+          // true: kill/clear the half-spawned process before returning failure,
+          // or a late child squats the port and the next retry waits on
+          // stopServer()'s 5s safety net for an already-exited handle.
+          await stopServer();
+        }
       } finally {
         intentionalServerRestart = false;
       }
       // Refresh LAN auto-discovery so a stale advert doesn't point at a server
       // that just restarted (or failed to). syncMdnsAdvertisement() no-ops when
       // exposeToLan is off; stop outright if the restart failed.
-      if (serverRestarted) syncMdnsAdvertisement();
-      else stopMdnsAdvertisement();
+      if (serverRestarted) {
+        syncMdnsAdvertisement();
+      } else {
+        // GH #1006 F2: recovery failed too — the app has no embedded server.
+        // Don't advertise a dead one, don't reload the window into a Chromium
+        // error page (the #176 white-window class), and return failure so the
+        // renderer surfaces its error path instead of showing "Switched to
+        // <mode>" over a dead server. Pre-fix this fell through to loadURL +
+        // { success: true } unconditionally.
+        stopMdnsAdvertisement();
+        return { success: false };
+      }
     }
 
     // Reload the window on a connection change so the renderer picks up
@@ -1053,6 +1104,10 @@ ipcMain.handle("save-config", async (event, config: {
           await startProductionServer((store.get("mongodbUri") as string) || undefined);
         } catch (recoveryErr) {
           console.error("Failed to restore server after LAN-share toggle failure:", recoveryErr);
+          // Codex P2 on #1015 (same hazard as the connection-change branch):
+          // the failed recovery can leave a half-spawned/stale child — clear
+          // it so "no embedded server" is actually true before we report it.
+          await stopServer();
         }
         // Reflect the reverted bind state in the mDNS advertisement too.
         syncMdnsAdvertisement();
@@ -1192,6 +1247,12 @@ ipcMain.handle("nfc-get-status", (event) => {
     readerName: null,
     tagPresent: false,
     tagUid: null,
+    // GH #1006 F4: NfcService.getStatus() always includes `lastError`, and
+    // src/types/electron.d.ts types it as required (`lastError: {...} | null`,
+    // GH #450). This null-service fallback (SCardSvr stopped / pcsclite threw —
+    // the exact degraded-host path #450 surfaces errors for) must match the
+    // contract, or the renderer receives `undefined` where it's typed `null`.
+    lastError: null,
   };
 });
 
