@@ -1025,6 +1025,14 @@ ipcMain.handle("save-config", async (event, config: {
           serverRestarted = true;
         } catch (recoveryErr) {
           console.error("Failed to restore server after config-change failure:", recoveryErr);
+          // Codex P2 on #1015: the failed recovery can leave a stray child —
+          // startProductionServer rejects with the utility process still alive
+          // (waitForServer timeout) or with `serverProcess` pointing at a dead
+          // handle. We're about to report "no embedded server", so make that
+          // true: kill/clear the half-spawned process before returning failure,
+          // or a late child squats the port and the next retry waits on
+          // stopServer()'s 5s safety net for an already-exited handle.
+          await stopServer();
         }
       } finally {
         intentionalServerRestart = false;
@@ -1096,6 +1104,10 @@ ipcMain.handle("save-config", async (event, config: {
           await startProductionServer((store.get("mongodbUri") as string) || undefined);
         } catch (recoveryErr) {
           console.error("Failed to restore server after LAN-share toggle failure:", recoveryErr);
+          // Codex P2 on #1015 (same hazard as the connection-change branch):
+          // the failed recovery can leave a half-spawned/stale child — clear
+          // it so "no embedded server" is actually true before we report it.
+          await stopServer();
         }
         // Reflect the reverted bind state in the mDNS advertisement too.
         syncMdnsAdvertisement();
