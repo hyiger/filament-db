@@ -156,9 +156,21 @@ const SETTINGS_STRIP_KEYS = [...IMPORT_ROUTING_HINT_KEYS, "filament_settings_id"
  */
 export type CollapsedFilamentData = Omit<
   import("./parseIni").FilamentData,
-  "temperatures" | "maxVolumetricSpeed" | "cost" | "density" | "diameter" | "color" | "vendor" | "type"
+  | "temperatures"
+  | "maxVolumetricSpeed"
+  | "cost"
+  | "density"
+  | "diameter"
+  | "color"
+  | "vendor"
+  | "type"
+  | "inherits"
 > & {
-  temperatures?: import("./parseIni").FilamentData["temperatures"];
+  /** GH #1008 F3: subfields individually optional — the non-hinted collapse
+   *  deletes each temp the section didn't supply so the importer's dot-key
+   *  `$set` can't null a stored value (leave-when-omitted, same as the
+   *  scalars); the whole object is dropped when no subfield remains. */
+  temperatures?: Partial<import("./parseIni").FilamentData["temperatures"]>;
   maxVolumetricSpeed?: number | null;
   cost?: number | null;
   density?: number | null;
@@ -166,6 +178,10 @@ export type CollapsedFilamentData = Omit<
   color?: string;
   vendor?: string;
   type?: string;
+  /** GH #1008 F3: optional/deletable — omitted when the section carries no
+   *  `inherits` key (parseIni materialises `inherits: null` either way). An
+   *  EXPLICIT `inherits = nil` keeps the key (null value) and writes through. */
+  inherits?: string | null;
   /** GH #950: the section's round-tripped `filamentdb_id` routing hint (the
    *  filament _id). Carried for id-first resolution in `upsertIniFilament`;
    *  NEVER persisted (stripped from the settings bag above). */
@@ -195,7 +211,14 @@ export function collapsePerNozzleImportSections(
       // Pass through, but never persist routing hints / re-derived keys.
       const settings = { ...f.settings };
       for (const k of SETTINGS_STRIP_KEYS) delete settings[k];
-      const collapsed: CollapsedFilamentData = { ...f, settings };
+      // GH #1008 F3: CLONE `temperatures` — the `...f` spread below would share
+      // the source object's reference, and the per-subfield deletes further down
+      // must not corrupt the caller's parsed FilamentData.
+      const collapsed: CollapsedFilamentData = {
+        ...f,
+        settings,
+        temperatures: { ...f.temperatures },
+      };
       // GH #950: leave-when-omitted. parseIni fills absent fields with defaults
       // (null / "#808080" / 1.75 / "Unknown"); $set-ing those over a name-matched
       // existing filament CLOBBERS its real values on a partial/hand-crafted
@@ -209,6 +232,23 @@ export function collapsePerNozzleImportSections(
       if (!("filament_vendor" in f.settings)) delete collapsed.vendor;
       if (!("filament_type" in f.settings)) delete collapsed.type;
       if (!("filament_max_volumetric_speed" in f.settings)) delete collapsed.maxVolumetricSpeed;
+      // GH #1008 F3: extend the same rule to the four temp SUBFIELDS and
+      // `inherits`, which the #950 guard above skipped. parseIni ALWAYS
+      // materialises `temperatures` as {nozzle: null, …} and `inherits: null`
+      // when the keys are absent — riding those through gets dot-flattened by
+      // the importer and `$set`s every stored temp (and inherits) to null on a
+      // name-matched filament. Real PrusaSlicer user presets are
+      // `inherits = <system preset>` + only the diverged keys, so the partial
+      // section is the NORMAL shape, not an edge case. An EXPLICIT
+      // `temperature = nil` / `inherits = nil` keeps its key present in
+      // f.settings and still writes null through (a deliberate reset).
+      const temps = collapsed.temperatures!;
+      if (!("temperature" in f.settings)) delete temps.nozzle;
+      if (!("first_layer_temperature" in f.settings)) delete temps.nozzleFirstLayer;
+      if (!("bed_temperature" in f.settings)) delete temps.bed;
+      if (!("first_layer_bed_temperature" in f.settings)) delete temps.bedFirstLayer;
+      if (Object.keys(temps).length === 0) delete collapsed.temperatures;
+      if (!("inherits" in f.settings)) delete collapsed.inherits;
       const fid = (f.settings.filamentdb_id ?? "").trim();
       if (fid) collapsed.filamentdbId = fid; // GH #950: id-first resolution hint
       out.push(collapsed);
@@ -260,6 +300,11 @@ export function collapsePerNozzleImportSections(
     void maxVolumetricSpeed;
     const collapsed: CollapsedFilamentData = { ...sharedFields, name: baseName, settings };
     if (id) collapsed.filamentdbId = id; // GH #950: id-first resolution hint
+    // GH #1008 F3: same `inherits` leave-when-omitted as the non-hinted branch —
+    // a suffixed section without an `inherits` key must not `$set` null over the
+    // base's stored value. (Temps / max-vol are already omitted wholesale above;
+    // an explicit `inherits = nil` keeps the key and writes null through.)
+    if (!("inherits" in f.settings)) delete collapsed.inherits;
     // Carry a shared field ONLY when the suffixed section actually SUPPLIED it (the
     // source INI key is present) — otherwise parseIni's defaults (null / "#808080" /
     // 1.75 / "Unknown") would $set over the base filament's real cost/density/color/

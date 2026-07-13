@@ -1372,6 +1372,106 @@ describe("collapsePerNozzleImportSections (#872)", () => {
     const base = collapsePerNozzleImportSections(parseIniFilaments(bundle))[0];
     expect(base.settings.compatible_printers_condition).toBe("printer_model==MK4"); // survived
   });
+
+  // ── GH #1008 F3: leave-when-omitted for the four temp SUBFIELDS + `inherits`.
+  //    parseIni materialises `temperatures` as {nozzle: null, …} and
+  //    `inherits: null` even when the source keys are absent; riding those
+  //    through the collapse gets dot-flattened by the importer and $sets every
+  //    stored temp (and inherits) to null on a name-matched filament. Real
+  //    PrusaSlicer user presets are `inherits = <system>` + only diverged keys,
+  //    so the partial section is the NORMAL shape. ─────────────────────────────
+
+  it("#1008 F3: a non-hinted section omitting ALL temp keys + inherits drops both (no null clobber)", () => {
+    // The canonical failure shape: a user preset carrying only one diverged key.
+    const parsed = parseIniFilaments(
+      `[filament:Prusament PLA]\nfilament_retract_length = 1.2\n`,
+    );
+    const f = collapsePerNozzleImportSections(parsed)[0];
+    expect("temperatures" in f).toBe(false);
+    expect("inherits" in f).toBe(false);
+    expect(f.settings.filament_retract_length).toBe("1.2"); // passthrough kept
+  });
+
+  it("#1008 F3: an explicit `temperature = 215` keeps ONLY the supplied temp subfield", () => {
+    const parsed = parseIniFilaments(
+      `[filament:Plain PLA]\nfilament_type = PLA\ntemperature = 215\n`,
+    );
+    const f = collapsePerNozzleImportSections(parsed)[0];
+    // The other three subfields are ABSENT (not null) so the importer's
+    // dot-key $set can't touch a stored bed/first-layer value.
+    expect(f.temperatures).toEqual({ nozzle: 215 });
+    expect("inherits" in f).toBe(false);
+  });
+
+  it("#1008 F3: all four temp keys supplied → the full temperatures object survives", () => {
+    const parsed = parseIniFilaments(
+      `[filament:Full PLA]\nfilament_type = PLA\ntemperature = 215\nfirst_layer_temperature = 220\nbed_temperature = 60\nfirst_layer_bed_temperature = 65\n`,
+    );
+    const f = collapsePerNozzleImportSections(parsed)[0];
+    expect(f.temperatures).toEqual({
+      nozzle: 215,
+      nozzleFirstLayer: 220,
+      bed: 60,
+      bedFirstLayer: 65,
+    });
+  });
+
+  it("#1008 F3: an explicit `temperature = nil` keeps the subfield as null (a deliberate reset writes through)", () => {
+    const parsed = parseIniFilaments(
+      `[filament:Nil PLA]\nfilament_type = PLA\ntemperature = nil\nbed_temperature = 60\n`,
+    );
+    const f = collapsePerNozzleImportSections(parsed)[0];
+    expect(f.temperatures).toEqual({ nozzle: null, bed: 60 });
+  });
+
+  it("#1008 F3: an explicit `inherits = nil` still carries inherits (null) through", () => {
+    const parsed = parseIniFilaments(
+      `[filament:Plain PLA]\nfilament_type = PLA\ninherits = nil\n`,
+    );
+    const f = collapsePerNozzleImportSections(parsed)[0];
+    expect("inherits" in f).toBe(true);
+    expect(f.inherits).toBeNull();
+  });
+
+  it("#1008 F3: an explicit inherits VALUE is kept", () => {
+    const parsed = parseIniFilaments(
+      `[filament:Plain PLA]\nfilament_type = PLA\ninherits = Prusament PLA @MK4S\n`,
+    );
+    const f = collapsePerNozzleImportSections(parsed)[0];
+    expect(f.inherits).toBe("Prusament PLA @MK4S");
+  });
+
+  it("#1008 F3: the collapse does NOT mutate the source section's temperatures (by-reference clone)", () => {
+    const parsed = parseIniFilaments(
+      `[filament:Plain PLA]\nfilament_type = PLA\ntemperature = 215\n`,
+    );
+    const source = parsed[0];
+    collapsePerNozzleImportSections(parsed);
+    // The caller's parsed FilamentData keeps its full all-subfield shape — the
+    // collapse pruned a CLONE, not the shared object.
+    expect(source.temperatures).toEqual({
+      nozzle: 215,
+      nozzleFirstLayer: null,
+      bed: null,
+      bedFirstLayer: null,
+    });
+  });
+
+  it("#1008 F3: a HINTED section without inherits drops it too (no clobber of the base's stored inherits)", () => {
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    expect("inherits" in base).toBe(false);
+  });
+
+  it("#1008 F3: a HINTED section WITH inherits keeps it", () => {
+    const parsed = parseIniFilaments(
+      `[filament:PLA 0.4 Brass]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass\ninherits = *PLA*\n`,
+    );
+    const base = collapsePerNozzleImportSections(parsed)[0];
+    expect(base.inherits).toBe("*PLA*");
+  });
 });
 
 describe("resolveSyncBackColor (#883)", () => {
