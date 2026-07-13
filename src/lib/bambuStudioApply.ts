@@ -366,18 +366,20 @@ export function buildStructuredUpdate(
       : {};
     const hasEffectiveBed = (sub: "bed" | "bedFirstLayer") =>
       (ownTemps[sub] ?? inheritedTemps[sub]) != null;
-    tempKeys = tempKeys.filter(([key]) => {
-      if (key === "bed" && hotPlate.temperature != null && hasEffectiveBed("bed")) {
-        return false;
-      }
-      if (
-        key === "bedFirstLayer" &&
-        hotPlate.firstLayerTemperature != null &&
-        hasEffectiveBed("bedFirstLayer")
-      ) {
-        return false;
-      }
-      return true;
+    tempKeys = tempKeys.filter(([key, value]) => {
+      const guarded =
+        (key === "bed" && hotPlate.temperature != null) ||
+        (key === "bedFirstLayer" && hotPlate.firstLayerTemperature != null);
+      if (!guarded || !hasEffectiveBed(key as "bed" | "bedFirstLayer")) return true;
+      // Codex P2 on #1018: a PARENT-EQUAL incoming value must still reach the
+      // F4 nulling branch below — the hot-plate key is the only Bambu field
+      // that can express "set my bed back to the parent's", and filtering it
+      // here left a stale divergent variant pin un-healable forever (F4 nulls
+      // a parent-equal merged value, resuming GH #106 inheritance). Only a
+      // parent-DIVERGENT hot-plate value is suppressed, which is the F5
+      // data-loss case this guard exists for. `inheritedTemps` is {} for a
+      // standalone filament, so this passes nothing extra through there.
+      return value != null && value === inheritedTemps[key];
     });
   }
   if (tempKeys.length > 0) {

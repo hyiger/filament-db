@@ -691,6 +691,49 @@ describe("buildStructuredUpdate", () => {
       expect("temperatures" in update).toBe(false);
     });
 
+    it("a PARENT-EQUAL hot-plate value un-pins a stale divergent variant bed override (Codex P2 on #1018)", () => {
+      // The variant carries a divergent own bed pin (70 ≠ parent's 60). The
+      // user sets the Bambu profile's bed back to the parent's value —
+      // hot_plate_temp is the ONLY Bambu field that can express this. The F5
+      // guard must let the parent-equal value through to the F4 nulling
+      // branch (pre-fix it filtered it, leaving the pin un-healable forever).
+      const parent = { temperatures: { bed: 60 } };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        temperatures: { bed: 70 }, // stale divergent pin
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({
+          temperatures: { bed: 60 }, // == parent
+          bedTypeTemps: [{ bedType: "Hot Plate", temperature: 60 }],
+        }),
+        existing,
+      );
+      // The value flowed through and F4 nulled it — inheritance resumes.
+      expect((update.temperatures as Record<string, unknown>).bed).toBeNull();
+    });
+
+    it("a PARENT-DIVERGENT hot-plate value is still suppressed on a pinned variant (the F5 case)", () => {
+      const parent = { temperatures: { bed: 60 } };
+      const existing: ExistingFilamentForApply = {
+        parentId: "parent-id",
+        parent,
+        temperatures: { bed: 70 },
+      };
+      const { set: update } = buildStructuredUpdate(
+        makeParsed({
+          temperatures: { bed: 65 }, // ≠ parent AND ≠ own — the plate-specific value
+          bedTypeTemps: [{ bedType: "Hot Plate", temperature: 65 }],
+        }),
+        existing,
+      );
+      // Suppressed → nothing else parsed → no temperatures write at all;
+      // the stored own pin (70) stays and 65 lives only in the Hot Plate entry.
+      expect("temperatures" in update).toBe(false);
+      expect(update.bedTypeTemps).toEqual([{ bedType: "Hot Plate", temperature: 65 }]);
+    });
+
     it("without a 'Hot Plate' bedTypeTemps entry the bed merge is unchanged (guard keyed on the double-map)", () => {
       // Hand-built parsed payloads (and any future parser shape that maps a
       // dedicated bed key) bypass the guard — it exists only for the
