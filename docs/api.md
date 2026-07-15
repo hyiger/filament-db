@@ -1454,7 +1454,7 @@ Each row is processed independently; per-row errors are reported in the response
 
 A single request is capped at 10,000 rows by `parseCsv`; beyond that the request is rejected with 400.
 
-Requests larger than **10 MB** are rejected with `413` before any CSV parsing (v1.66.1, #991) — enforced on all three content types via a `Content-Length` preflight (multipart gets a small allowance for MIME framing) plus a post-buffer byte-length re-check for a missing or lying `Content-Length`. Matches the 10 MB cap on the sibling import endpoints.
+Requests larger than **10 MB** are rejected with `413` before any CSV parsing (v1.66.1, #991). All three content types get a `Content-Length` preflight (multipart with a small 64 KB allowance for MIME framing); the raw `text/csv` and JSON paths additionally re-check the buffered byte length (catching a missing or lying `Content-Length`), while the multipart path enforces the exact 10 MB on the uploaded file part after parsing. Matches the 10 MB cap on the sibling import endpoints.
 
 ### GET /api/spools/export-csv
 
