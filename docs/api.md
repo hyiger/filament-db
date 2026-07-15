@@ -487,7 +487,7 @@ Returns `text/plain` INI content.
 
 Import a PrusaSlicer INI config bundle. Send the INI text as the raw request body (e.g. `Content-Type: text/plain`).
 
-Per-nozzle suffixed sections from a Filament DB export (recognised by their `filamentdb_nozzle` hint) are **folded back into their base filament**, so an export → import round-trip updates the original record instead of spawning suffixed `"PLA 0.4 Brass"` orphans. The per-nozzle calibration model is NOT reconstructed from the flat bundle — snapshot export/restore (Settings → Backup & Restore) is the lossless round-trip.
+Per-nozzle suffixed sections from a Filament DB export (recognised by their `filamentdb_nozzle` hint) are **folded back into their base filament**, so an export → import round-trip updates the original record instead of spawning suffixed `"PLA 0.4 Brass"` orphans. The per-nozzle calibration model is NOT reconstructed from the flat bundle — snapshot export/restore (Settings → Backup & Data) is the lossless round-trip.
 
 Returns:
 ```json

@@ -433,7 +433,7 @@ Liefert `text/plain`-INI-Inhalt.
 
 Importiert ein PrusaSlicer-INI-Config-Bundle. Sende den INI-Text als rohen Request-Body (z. B. `Content-Type: text/plain`).
 
-Per-Düsen-suffigierte Abschnitte aus einem Filament-DB-Export (erkennbar am `filamentdb_nozzle`-Hinweis) werden beim Import **wieder in ihr Basis-Filament zusammengefaltet**, sodass ein Export-→-Import-Round-Trip den Originaldatensatz aktualisiert, statt suffigierte `"PLA 0.4 Brass"`-Duplikate anzulegen. Das Per-Düsen-Kalibrierungsmodell wird dabei NICHT aus dem flachen Bundle rekonstruiert — der verlustfreie Round-Trip ist der Snapshot-Export/-Restore (Einstellungen → Backup & Restore).
+Per-Düsen-suffigierte Abschnitte aus einem Filament-DB-Export (erkennbar am `filamentdb_nozzle`-Hinweis) werden beim Import **wieder in ihr Basis-Filament zusammengefaltet**, sodass ein Export-→-Import-Round-Trip den Originaldatensatz aktualisiert, statt suffigierte `"PLA 0.4 Brass"`-Duplikate anzulegen. Das Per-Düsen-Kalibrierungsmodell wird dabei NICHT aus dem flachen Bundle rekonstruiert — der verlustfreie Round-Trip ist der Snapshot-Export/-Restore (Einstellungen → Sicherung & Daten).
 
 Liefert:
 ```json
