@@ -429,7 +429,7 @@ Wenn ein Brother PT-P710BT (P-touch CUBE) per USB angeschlossen ist, kannst du e
 
 1. Wähle unter **Einstellungen → Geräte** in der Etikettendrucker-Karte deinen Drucker aus der Liste (PT-Touch-Treffer sind mit Badge markiert). Passe das Etikettformat — QR-Platzierung, Textfelder, Schriftart, Ausrichtung, Invertierung — im Editor mit Live-Vorschau an.
 2. Öffne auf der Detailseite eines Filaments das Menü **Export ▾** und klicke auf **Etikett drucken**.
-3. Wähle den QR-Modus — eine scanbare **URL** (die Smartphone-freundliche Variante; bei einem Filament mit mehreren Spulen kannst du auch wählen, auf welche Spule der Deep-Link zeigt) oder die **Instanz-ID** des Filaments — und prüfe die Live-Vorschau in der nativen Auflösung des Druckers.
+3. Wähle den QR-Modus — eine scanbare **URL** (die Smartphone-freundliche Variante) oder die **Instanz-ID**. Beide Modi sind spulenbewusst: Über die Spulen-Auswahl im Dialog bestimmst du, auf welche Spule der URL-Deep-Link zeigt bzw. wessen Instanz-ID kodiert wird — die ID der ausgewählten Spule; nur bei der expliziten Auswahl **„Nur Filament"** (oder wenn das Filament keine Spulen hat) wird die Filament-ID kodiert. Prüfe die Live-Vorschau in der nativen Auflösung des Druckers.
 4. Klicke auf **Drucken**. Die App übergibt das Etikett per USB an das Drucksystem deines Betriebssystems.
 
 > Der **URL**-QR-Modus braucht in der paketierten Desktop-App eine erreichbare Adresse — setze eine **öffentliche URL** in den Etikettendrucker-Einstellungen, damit Smartphones in deinem Netzwerk sie öffnen können (der Standard-`localhost`-Origin ist von anderen Geräten aus nicht erreichbar). Passt gut zu **Im lokalen Netzwerk freigeben** (siehe „Im lokalen Netzwerk freigeben", Schritt 26).
