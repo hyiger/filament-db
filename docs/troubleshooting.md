@@ -50,7 +50,7 @@ If the filament ID in the URL doesn't exist, the page will show "Filament not fo
 
 ## INI export is missing some filaments
 
-A filament with zero or one nozzle calibration is exported as a single `[filament:Name]` section; its calibration values (EM, pressure advance, max volumetric speed, retraction) are not baked into the INI — they are applied dynamically at print time via the `/api/filaments/{id}/calibration` endpoint (used by PrusaSlicer Filament Edition). A filament calibrated for **two or more distinct nozzles** exports one section per nozzle instead, name-suffixed with the nozzle (e.g. `[filament:PLA 0.4 Brass]`) with that nozzle's calibration values baked in — so "extra" suffixed sections in the bundle are expected, not duplicates. If a filament is missing from the export entirely, check that it has a name and is not soft-deleted.
+A filament with zero or one nozzle calibration is exported as a single `[filament:Name]` section; its calibration values (EM, pressure advance, max volumetric speed, retraction) are not baked into the INI — they are applied dynamically at print time via the `/api/filaments/{id}/calibration` endpoint (used by PrusaSlicer Filament Edition). A filament calibrated for **two or more distinct nozzles** exports one section per nozzle instead, name-suffixed with the nozzle (e.g. `[filament:PLA 0.4 Brass]`) with that nozzle's filament-scoped calibration values baked in (pressure advance stays dynamic via the calibration API) — so "extra" suffixed sections in the bundle are expected, not duplicates. If a filament is missing from the export entirely, check that it has a name and is not soft-deleted.
 
 ## "Blocked cross-origin request" in dev mode
 

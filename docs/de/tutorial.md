@@ -327,7 +327,7 @@ Um ein bestehendes eigenständiges Filament in eine Variante umzuwandeln:
 2. Eine `.ini`-Datei wird heruntergeladen, die alle Filamente als `[filament:Name]`-Abschnitte enthält.
 3. Gehe in PrusaSlicer zu **Datei > Importieren > Config Bundle importieren** und wähle die Datei.
 
-Bei einem Filament mit null oder einer Düsen-Kalibrierung sind Kalibrierungs-Overrides (Extrusion Multiplier, Pressure Advance, Retraction, Max Volumetric Speed) in der exportierten INI **nicht** enthalten — sie werden dynamisch von PrusaSlicer Filament Edition über die Kalibrierungs-API angewandt, wenn sich der Drucker-/Düsen-Kontext ändert. Ein Filament mit Kalibrierungen für **zwei oder mehr unterschiedliche Düsen** exportiert stattdessen ein Preset pro Düse, mit Düsen-Suffix im Namen (z. B. `PLA 0.4 Brass`), jeweils mit den eingebetteten Kalibrierungswerten dieser Düse.
+Bei einem Filament mit null oder einer Düsen-Kalibrierung sind Kalibrierungs-Overrides (Extrusion Multiplier, Pressure Advance, Retraction, Max Volumetric Speed) in der exportierten INI **nicht** enthalten — sie werden dynamisch von PrusaSlicer Filament Edition über die Kalibrierungs-API angewandt, wenn sich der Drucker-/Düsen-Kontext ändert. Ein Filament mit Kalibrierungen für **zwei oder mehr unterschiedliche Düsen** exportiert stattdessen ein Preset pro Düse, mit Düsen-Suffix im Namen (z. B. `PLA 0.4 Brass`), jeweils mit den eingebetteten filament-bezogenen Kalibrierungswerten dieser Düse (Pressure Advance bleibt dynamisch über die Kalibrierungs-API).
 
 ---
 

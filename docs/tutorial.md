@@ -325,7 +325,7 @@ To turn an existing standalone filament into a variant:
 2. A `.ini` file downloads containing all your filaments as `[filament:Name]` sections.
 3. In PrusaSlicer, go to **File > Import > Import Config Bundle** and select the file.
 
-For a filament with zero or one nozzle calibration, calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are not included in the exported INI — they are applied dynamically by PrusaSlicer Filament Edition via the calibration API when the printer/nozzle context changes. A filament calibrated for **two or more distinct nozzles** instead exports one preset per nozzle, name-suffixed with the nozzle (e.g. `PLA 0.4 Brass`), each with that nozzle's calibration values baked in.
+For a filament with zero or one nozzle calibration, calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are not included in the exported INI — they are applied dynamically by PrusaSlicer Filament Edition via the calibration API when the printer/nozzle context changes. A filament calibrated for **two or more distinct nozzles** instead exports one preset per nozzle, name-suffixed with the nozzle (e.g. `PLA 0.4 Brass`), each with that nozzle's filament-scoped calibration values baked in (pressure advance stays dynamic via the calibration API).
 
 ---
 

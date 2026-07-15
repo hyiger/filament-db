@@ -72,7 +72,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 ### Developer
 - **REST API** -- full CRUD endpoints for filaments, nozzles, printers, and bed types
-- **PrusaSlicer API** -- `GET /api/filaments/prusaslicer` exports filaments as a PrusaSlicer-compatible INI config bundle (one section per filament — or, for a filament calibrated on two or more distinct nozzles, one nozzle-suffixed section per nozzle with that nozzle's calibration baked in); calibration overrides are otherwise applied dynamically via `GET /api/filaments/{id}/calibration`; `POST` imports bundles back
+- **PrusaSlicer API** -- `GET /api/filaments/prusaslicer` exports filaments as a PrusaSlicer-compatible INI config bundle (one section per filament — or, for a filament calibrated on two or more distinct nozzles, one nozzle-suffixed section per nozzle with that nozzle's filament-scoped calibration baked in — pressure advance stays dynamic); calibration overrides are otherwise applied dynamically via `GET /api/filaments/{id}/calibration`; `POST` imports bundles back
 - **Scan stream (SSE)** -- `GET /api/scan/stream` Server-Sent Events feed and `POST /api/scan/publish` for fanning NFC tag reads to slicer integrations or other subscribers in real time
 - **API documentation** -- API reference plus interactive Swagger UI at `/api-docs` with an OpenAPI 3.0 spec for the documented REST surface
 
