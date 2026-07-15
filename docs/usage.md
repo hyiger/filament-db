@@ -4,7 +4,7 @@
 
 ## Browsing Filaments
 
-The home page displays all filaments in a sortable table with columns for color, name, vendor, type, nozzle temperature, bed temperature, cost, and remaining spool percentage.
+The home page displays all filaments in a sortable table with columns for color, name, vendor, type, nozzle temperature, bed temperature, cost, remaining spool percentage, and purchased / opened dates (each showing the earliest purchase or opened date across the filament's spools).
 
 - **Statistics**: Click the summary line (e.g. "18 filaments · 8 types · 5 vendors") to expand a panel with bar charts by type and vendor, plus a color swatch grid
 - **Search**: Type in the search box to filter filaments by name
@@ -121,7 +121,7 @@ Two ways to reach the bulk-data actions:
 
 Both surfaces cover:
 
-- **Import filaments** — Prusament QR scan, Atlas import, OpenPrintTag browse, file upload (CSV / XLSX / PrusaSlicer INI). Full database snapshots restore from Settings → Backup & Restore.
+- **Import filaments** — Prusament QR scan, Atlas import, OpenPrintTag browse, file upload (CSV / XLSX / PrusaSlicer INI). Full database snapshots restore from Settings → Backup & Data.
 - **Import spools** — bulk CSV with one row per spool
 - **Export filaments** — PrusaSlicer INI bundle, CSV, or XLSX
 - **Export spools** — CSV inventory with location and lot number
@@ -187,6 +187,41 @@ Synced collections: filaments (with embedded spools), nozzles, printers, locatio
 ## Language
 
 Go to **Settings → UI Settings** and use the **Language** toggle to switch between English and German. The setting is persisted in the desktop app's config (or localStorage in the web app) and takes effect immediately across all pages.
+
+---
+
+## Date Format *(v1.65)*
+
+Go to **Settings → UI Settings** and pick a **Date format** to control how every date in the app is rendered:
+
+- **System** — follow your device/OS region setting (the default)
+- **ISO** — `YYYY-MM-DD`
+- **US** — `MM/DD/YYYY`
+- **European** — `DD/MM/YYYY`
+- **Custom** — your own pattern built from `YYYY` / `YY` (year), `MM` / `M` (month), and `DD` / `D` (day) tokens (e.g. `DD-MM-YY`); other characters are kept as separators
+
+A live preview shows today's date in the chosen format. Like Language, the setting persists in the desktop app's config (or localStorage in the web app).
+
+---
+
+## Number Format *(v1.66)*
+
+Also under **Settings → UI Settings**, the **Number format** control sets the digit grouping and decimal separator for all displayed numbers — weights, counts, and prices (currency values included):
+
+- **System** — follow your device region (the default)
+- **US / UK** — `1,234,567.89`
+- **European** — `1.234.567,89`
+- **Space** — `1 234 567,89`
+- **None** — no grouping (`1234567.89`)
+- **Custom** — pick your own thousands and decimal characters (single non-digit characters, and they must differ)
+
+A live preview shows a sample value in the chosen format. Machine-readable output (CSV / XLSX and slicer exports) is not affected — only what's displayed in the UI.
+
+---
+
+## Currency
+
+The **Currency** control at the top of **Settings → UI Settings** picks the currency used for cost and price display. Click one of the built-in currencies, or **add a custom one** with your own code, symbol, and name (custom entries can be removed again with their × button).
 
 ---
 
@@ -268,7 +303,7 @@ If you have defined bed types, a **bed type selector** appears within each nozzl
 
 This lets you store different temperatures, PA, EM, and retraction values for the same filament on different printer + nozzle + bed type combinations (e.g., smooth PEI on a Prusa Core One vs. textured PEI on a Bambu H2D).
 
-Leave fields blank to use the filament's base defaults. Top-level filament temperatures remain as manufacturer-recommended defaults. The INI export uses a single-section-per-filament architecture: each filament produces one `[filament:Name]` section with its base settings. Calibration overrides are not embedded in the INI — PrusaSlicer Filament Edition fetches them dynamically via `GET /api/filaments/{id}/calibration` when you switch printer or nozzle.
+Leave fields blank to use the filament's base defaults. Top-level filament temperatures remain as manufacturer-recommended defaults. How calibrations reach the INI export depends on how many distinct nozzles a filament is calibrated for. A filament with zero or one nozzle calibration produces a single `[filament:Name]` section with its base settings, and calibration overrides are not embedded — PrusaSlicer Filament Edition fetches them dynamically via `GET /api/filaments/{id}/calibration` when you switch printer or nozzle. A filament calibrated for **two or more distinct nozzles** instead exports one preset per nozzle, name-suffixed with the nozzle (e.g. `PLA 0.4 Brass`), each with that nozzle's calibration values baked in.
 
 ---
 
@@ -426,11 +461,11 @@ Open the **Import/Export** dropdown on the home page and click **"Import File (I
 
 ### Exporting a Snapshot
 
-Go to **Settings → Backup & Restore** and click **"Download Snapshot"** to download a JSON snapshot of core app data. The snapshot includes filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones) with references and timestamps preserved.
+Go to **Settings → Backup & Data** and click **"Download Snapshot"** to download a JSON snapshot of core app data. The snapshot includes filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones) with references and timestamps preserved.
 
 ### Restoring a Snapshot
 
-Go to **Settings → Backup & Restore** and click **"Restore from Snapshot"**. Select a previously exported snapshot file. This replaces all current data with the snapshot contents. The restore uses best-effort rollback — if any part fails, the handler attempts to re-insert the previous data from an in-memory backup.
+Go to **Settings → Backup & Data** and click **"Restore from Snapshot"**. Select a previously exported snapshot file. This replaces all current data with the snapshot contents. The restore uses best-effort rollback — if any part fails, the handler attempts to re-insert the previous data from an in-memory backup.
 
 ---
 
@@ -456,13 +491,13 @@ Your last choice is remembered as the default for the next print.
 ### One-time setup
 
 1. **Connect the printer via USB** and power it on. On macOS/Linux it's reachable through CUPS automatically; on Windows, install it as a normal printer if your OS prompts.
-2. **Open the desktop app → Settings → Label Printer**. Any printers already set up as system queues are listed automatically. If your PT-P710BT was just connected and isn't a configured queue yet, click **Scan for USB printers** (or **Refresh**) to detect it — **on macOS this may ask for your administrator password**, because listing USB print devices is an admin operation. The PT-P710BT shows up with a green **PT-Touch** badge (on macOS/Linux it appears as a `usb://Brother/PT-P710BT…` device). Select it.
+2. **Open the desktop app → Settings → Devices** and find the **Label printer** card. Any printers already set up as system queues are listed automatically. If your PT-P710BT was just connected and isn't a configured queue yet, click **Scan for USB printers** (or **Refresh**) to detect it — **on macOS this may ask for your administrator password**, because listing USB print devices is an admin operation. The PT-P710BT shows up with a green **PT-Touch** badge (on macOS/Linux it appears as a `usb://Brother/PT-P710BT…` device). Select it.
 3. **(Optional) Public URL for QR-mode labels**: if you want to print labels with deep-link URLs that scan correctly from your phone, also set the **Public base URL** field. URL mode in the desktop app needs a non-localhost address because the renderer's `window.location.origin` is `http://localhost:3456` — unscannable from any other device. Examples: `https://filament-db.lan`, `https://my-instance.example.com`. Loopback addresses, query strings, and URL fragments are rejected with a descriptive error. Leave blank to disable URL mode in the desktop app — the instance-ID mode still works without it.
 4. **Test print**: click **Test print** to send a short label using your saved format. Confirm the QR scans and the text is crisp before you start printing real labels.
 
 ### Customizing the label
 
-**Settings → Label format** controls what every label looks like, with a live preview rendered against a sample filament:
+The **Label format** card on **Settings → Devices** controls what every label looks like, with a live preview rendered against a sample filament:
 
 - **QR code** — place it on the **left**, **right**, or turn it **off** for a text-only label.
 - **Text fields** — choose a preset (*Name only*, *Vendor + Type*, *Vendor over Type*, *Type + Color*) or toggle individual fields (name, vendor, type, color). Multiple fields stack as separate lines (e.g. vendor over type).
@@ -480,8 +515,8 @@ If you're running in the **web app instead of Electron**, the Print button downl
 
 ### Troubleshooting
 
-- **No printer listed** in Settings → Label Printer: make sure the printer is connected with a USB **data** cable (charge-only cables power the printer but won't enumerate it) and powered on, then click **Scan for USB printers**. On macOS the scan may prompt for your administrator password (it's the OS authorizing the device query — opening Settings itself no longer prompts, as of the #771 fix). On Linux you may need to add the printer in your system print settings first.
-- **Upgrading from a pre-v1.34.9 build**: if you'd previously selected a Bluetooth/serial device, re-select your printer in Settings → Label Printer. The app detects the old serial-style setting and asks you to pick again rather than failing cryptically.
+- **No printer listed** in Settings → Devices: make sure the printer is connected with a USB **data** cable (charge-only cables power the printer but won't enumerate it) and powered on, then click **Scan for USB printers**. On macOS the scan may prompt for your administrator password (it's the OS authorizing the device query — opening Settings itself no longer prompts, as of the #771 fix). On Linux you may need to add the printer in your system print settings first.
+- **Upgrading from a pre-v1.34.9 build**: if you'd previously selected a Bluetooth/serial device, re-select your printer in Settings → Devices. The app detects the old serial-style setting and asks you to pick again rather than failing cryptically.
 - **Label prints mirrored** (text backwards, QR reversed): fixed in v1.34.9 — update to the latest version.
 - **Nothing printed even though it "succeeded"**: the PT-P710BT auto-powers-off when idle. Wake it (press its power button), confirm tape is loaded, and print again.
 

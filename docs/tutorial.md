@@ -221,7 +221,7 @@ You can also click **"+ Prusament QR"** on a filament's detail page (in the Spoo
 
 ### From a Snapshot Backup
 
-1. Go to **Settings → Backup & Restore** and click **"Restore from Snapshot"**.
+1. Go to **Settings → Backup & Data** and click **"Restore from Snapshot"**.
 2. Select a previously exported snapshot JSON file.
 3. All current snapshot-scoped data is replaced with the snapshot contents (best-effort rollback on failure).
 
@@ -246,7 +246,7 @@ The home page shows all filaments in a sortable table.
 - **Search** -- type in the search box to filter by name
 - **Filter by Type** -- use the type dropdown to show only PLA, PETG, ASA, etc.
 - **Filter by Vendor** -- use the vendor dropdown to show only one manufacturer
-- **Sort** -- click any column header (Name, Vendor, Type, Nozzle Temp, Bed Temp, Cost) to sort ascending or descending. The active sort shows a blue arrow.
+- **Sort** -- click any column header (Name, Vendor, Type, Nozzle Temp, Bed Temp, Cost, Remaining %, Purchased, Opened) to sort ascending or descending. The active sort shows a blue arrow.
 - **Color swatches** -- each row shows the filament's color as a dot
 - **Statistics** -- click the summary line (e.g. "18 filaments · 8 types · 5 vendors") to expand bar charts by type and vendor, plus a color swatch grid
 
@@ -322,10 +322,10 @@ To turn an existing standalone filament into a variant:
 ## Step 11: Export to PrusaSlicer
 
 1. On the home page, open the **Import/Export** dropdown and, under **Export**, click **INI (PrusaSlicer)**.
-2. A `.ini` file downloads containing all your filaments as `[filament:Name]` sections — one section per filament.
+2. A `.ini` file downloads containing all your filaments as `[filament:Name]` sections.
 3. In PrusaSlicer, go to **File > Import > Import Config Bundle** and select the file.
 
-Calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are not included in the exported INI — they are applied dynamically by PrusaSlicer Filament Edition via the calibration API when the printer/nozzle context changes.
+For a filament with zero or one nozzle calibration, calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are not included in the exported INI — they are applied dynamically by PrusaSlicer Filament Edition via the calibration API when the printer/nozzle context changes. A filament calibrated for **two or more distinct nozzles** instead exports one preset per nozzle, name-suffixed with the nozzle (e.g. `PLA 0.4 Brass`), each with that nozzle's calibration values baked in.
 
 ---
 
@@ -635,16 +635,16 @@ A companion Expo/React Native app (in `packages/mobile`) turns your phone into a
 | Add filament | Home > + Add Filament |
 | Populate from NFC / TDS / INI / Duplicate | Add Filament > Populate from toolbar |
 | Import from TDS | Add Filament > Import from TDS |
-| Configure AI provider | Settings > AI Features |
+| Configure AI provider | Settings > AI |
 | Import from PrusaSlicer | Home > Import/Export > Import File (INI / CSV / XLSX) |
 | Import from CSV/XLSX | Home > Import/Export > Import File (INI / CSV / XLSX) — routed by extension |
 | Import Prusament spool | Home > Import/Export > Prusament QR |
 | Import from Atlas | Home > Import/Export > Import from Atlas |
 | Browse OpenPrintTag DB | Home > Import/Export > Browse OpenPrintTag DB |
-| Restore from snapshot | Settings > Backup & Restore > Restore from Snapshot |
+| Restore from snapshot | Settings > Backup & Data > Restore from Snapshot |
 | Export to PrusaSlicer | Home > Import/Export > Export ▸ INI (PrusaSlicer) |
 | Export to CSV/XLSX | Home > Import/Export > Export ▸ CSV / Excel (XLSX) |
-| Backup database | Settings > Backup & Restore > Download Snapshot |
+| Backup database | Settings > Backup & Data > Download Snapshot |
 | View filament details | Home > click filament name |
 | Edit filament | Detail page > Edit |
 | Add color variant | Detail page > Create variant |
