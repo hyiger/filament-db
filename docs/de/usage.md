@@ -186,7 +186,7 @@ Synchronisierte Sammlungen: filaments (mit eingebetteten Spulen), nozzles, print
 
 ## Sprache
 
-Gehe zu **Einstellungen** und nutze den **Sprache**-Umschalter, um zwischen Englisch und Deutsch zu wechseln. Die Einstellung wird in der Desktop-App-Konfiguration persistiert (oder im localStorage der Web-App) und greift sofort auf allen Seiten.
+Gehe zu **Einstellungen → UI-Einstellungen** und nutze den **Sprache**-Umschalter, um zwischen Englisch und Deutsch zu wechseln. Die Einstellung wird in der Desktop-App-Konfiguration persistiert (oder im localStorage der Web-App) und greift sofort auf allen Seiten.
 
 ---
 
@@ -268,7 +268,7 @@ Wenn du Druckbett-Typen definiert hast, erscheint innerhalb jedes Düsen-Abschni
 
 So kannst du unterschiedliche Temperaturen, PA-, EM- und Retraction-Werte für dasselbe Filament auf verschiedenen Drucker- + Düsen- + Druckbett-Typ-Kombinationen speichern (z. B. Smooth PEI auf einem Prusa Core One vs. Textured PEI auf einem Bambu H2D).
 
-Felder leer lassen, um die Basis-Defaults des Filaments zu verwenden. Top-Level-Filament-Temperaturen bleiben als hersteller-empfohlene Defaults. Der INI-Export nutzt eine Single-Section-pro-Filament-Architektur: Jedes Filament erzeugt einen `[filament:Name]`-Abschnitt mit seinen Basis-Einstellungen. Kalibrierungs-Overrides werden nicht in die INI eingebettet — PrusaSlicer Filament Edition lädt sie dynamisch via `GET /api/filaments/{id}/calibration`, wenn du Drucker oder Düse wechselst.
+Felder leer lassen, um die Basis-Defaults des Filaments zu verwenden. Top-Level-Filament-Temperaturen bleiben als hersteller-empfohlene Defaults. Beim INI-Export gilt: Ein Filament mit null oder einer Düsen-Kalibrierung erzeugt einen einzelnen `[filament:Name]`-Abschnitt mit seinen Basis-Einstellungen — Kalibrierungs-Overrides werden dort nicht eingebettet, PrusaSlicer Filament Edition lädt sie dynamisch via `GET /api/filaments/{id}/calibration`, wenn du Drucker oder Düse wechselst. Ein Filament mit Kalibrierungen für **zwei oder mehr unterschiedliche Düsen** exportiert stattdessen ein Preset pro Düse, mit Düsen-Suffix im Namen (z. B. `PLA 0.4 Brass`), jeweils mit den eingebetteten Kalibrierungswerten dieser Düse.
 
 ---
 
@@ -308,7 +308,7 @@ Auf der Detailseite eines beliebigen Filaments:
 
 ### Tags löschen / formatieren
 
-Auf der **Einstellungen**-Seite kannst du im Abschnitt NFC-Tools einen Tag löschen:
+Unter **Einstellungen → Geräte** kannst du über die **NFC-Tools**-Karte einen Tag löschen:
 
 1. Lege einen Tag auf den Reader (Status wird grün)
 2. Klicke **„Tag löschen"** und bestätige
@@ -326,7 +326,7 @@ Extrahiere Filament-Eigenschaften automatisch aus dem Datenblatt eines Herstelle
 
 ### Setup
 
-1. Gehe zu **Einstellungen** und scrolle zum Abschnitt **AI-Funktionen**
+1. Gehe zu **Einstellungen → KI**
 2. Wähle deinen bevorzugten AI-Provider: **Google Gemini**, **Anthropic Claude** oder **OpenAI ChatGPT**
 3. Hole einen kostenlosen API-Key vom gewählten Provider (Links sind auf der Einstellungen-Seite hinterlegt)
 4. Füge den Key ein und klicke auf **Key speichern** — der Key wird vor dem Speichern validiert
@@ -352,7 +352,7 @@ Die TDS-URL wird zusätzlich im `tdsUrl`-Feld des Filaments für spätere Refere
 
 ### AI-Einstellungen
 
-Auf der **Einstellungen**-Seite unter **AI-Funktionen**:
+Unter **Einstellungen → KI**:
 
 - **Anbieter-Auswahl** — klicke einen Anbieter-Button, um zwischen Gemini, Claude und ChatGPT zu wechseln
 - **API-Key** — maskiertes Eingabefeld mit Anzeigen/Verbergen-Umschalter
@@ -536,7 +536,7 @@ Klicke eine Material-Zeile, um eine Detailansicht mit drei Spalten auszuklappen:
    - **Neue Materialien** werden mit allen verfügbaren Feldern angelegt
    - **Bestehende Materialien** werden konservativ aktualisiert — nur null/leere Felder werden gefüllt, deine vorhandenen Kalibrierungsdaten bleiben erhalten
 
-### Auf Community-Updates prüfen *(v1.35)*
+### Auf Community-Updates prüfen *(v1.36)*
 
 Die OpenPrintTag-Datenbank wird im Lauf der Zeit überarbeitet, während die Community Daten ergänzt. Ein importiertes Filament behält eine Verknüpfung zu seinem Quell-Material, sodass du spätere Verbesserungen übernehmen kannst, ohne den ganzen Katalog neu zu importieren.
 
@@ -672,10 +672,35 @@ Die **Compare**-Seite unter `/compare` nimmt bis zu 8 Filamente (im eingebauten 
 
 ## System-Theme *(v1.11)*
 
-Einstellungen → **Theme**: wähle **Hell**, **Dunkel** oder **System**. System-Modus folgt der `prefers-color-scheme`-Media-Query des OS. Ein Inline-Init-Skript läuft vor dem Mounten von React, sodass die erste Darstellung bereits das richtige Theme zeigt — kein Dark-Mode-Flackern beim Kaltstart.
+**Einstellungen → UI-Einstellungen → Theme**: wähle **Hell**, **Dunkel** oder **System**. System-Modus folgt der `prefers-color-scheme`-Media-Query des OS. Ein Inline-Init-Skript läuft vor dem Mounten von React, sodass die erste Darstellung bereits das richtige Theme zeigt — kein Dark-Mode-Flackern beim Kaltstart.
 
 ## Auto-Update (Desktop) *(v1.11)*
 
 Ein schmaler Banner oben in der App kündigt eine neue Version an, lädt sie auf Wunsch im Hintergrund und fordert zum Restart-and-Install auf, sobald bereit. Alle Texte sind lokalisiert — der native Installations-Bestätigungsdialog nutzt die aktuelle Sprache des Renderers.
 
 Unter macOS sind Release-Builds Developer-ID-signiert **und** notarisiert (seit v1.39.1), öffnen also ohne Gatekeeper-Warnung und aktualisieren sich normal automatisch — kein `xattr -cr` nötig. (Der erste Start nach einem notarisierten Download kann langsam sein, während macOS ihn verifiziert; das ist erwartet, kein Hänger.) Nutze `xattr -cr` nur als Fallback für eine *unsignierte* DMG, die du selbst gebaut hast. Der Banner zeigt außerdem einen **View release**-Button, falls du die DMG lieber manuell herunterlädst.
+
+## Im lokalen Netzwerk freigeben (Desktop) *(v1.45)*
+
+Einstellungen → **Im lokalen Netzwerk freigeben** lässt andere Geräte in deinem LAN den eingebauten Server dieser Desktop-Instanz erreichen. Standardmäßig ist die Option **aus** — dann bindet der eingebettete Server nur an localhost und nichts außerhalb dieses Rechners kann sich verbinden.
+
+Schalte sie ein, und der Server bindet neu an `0.0.0.0` (alle Schnittstellen); das Einstellungs-Panel zeigt die LAN-URL, auf die du ein anderes Gerät richten kannst (z. B. `http://192.168.1.50:3456`). Mit dieser Adresse verbindet sich die mobile Scanner-App.
+
+**Eine freigegebene Instanz absichern**: Setze die Umgebungsvariable `FILAMENTDB_API_KEY` auf dem Desktop-Host (oder Server), um ein Bearer-Token-Gate vor jede `/api/*`-Anfrage zu stellen — Clients müssen dann einen passenden API-Key senden. Bleibt sie ungesetzt (Standard), ist die API nicht authentifiziert — in einem vertrauenswürdigen Heimnetz in Ordnung, in einem exponierten nicht. Beachte: Das Gate ist Alles-oder-Nichts und **deaktiviert die Browser-Web-UI** (die den Key nicht sendet); es ist also für Nicht-Browser-Clients gedacht (Mobile-App, Slicer, Skripte). Für Browser-UI-Zugriff im LAN nutze Loopback + die Desktop-App oder einen authentifizierenden Reverse-Proxy — siehe [Eine netzwerkexponierte Instanz absichern](setup.md#eine-netzwerkexponierte-instanz-absichern).
+
+## Im Netzwerk finden — mDNS-Auto-Discovery *(v1.47)*
+
+Solange **Im lokalen Netzwerk freigeben** aktiviert ist, kündigt sich die Desktop-App per mDNS / Bonjour an (`_filamentdb._tcp`), sodass Clients sie finden können, ohne eine IP einzutippen. Der Button **„Im Netzwerk suchen"** der mobilen Scanner-App scannt nach dieser Ankündigung und bietet die gefundene Instanz zur Verbindung an. Die Ankündigung stoppt, sobald du die LAN-Freigabe wieder ausschaltest.
+
+## Mobile Scanner-App
+
+Eine leichtgewichtige iOS-/Android-Begleit-App liegt in [`packages/mobile/`](../../packages/mobile/README.md). Sie ist eine schlanke „Fernbedienung" für deinen Filament-DB-Server — die Geschäftslogik bleibt auf dem Server; die App leitet Scans und Bearbeitungen an die REST-API weiter und rendert die Antworten (plus eine kleine idempotente Offline-Schreibwarteschlange, die einen App-Neustart übersteht).
+
+Was sie kann:
+
+- **Verbinden** mit einem Filament-DB-Server per manueller URL **oder** mDNS-Auto-Discovery (siehe oben), mit optionalem API-Key, der im Geräte-Schlüsselbund gespeichert wird
+- **Scannen** des QR-Labels einer Spule (ein Label-Deep-Link oder eine bloße Instanz-ID) oder eines **OpenPrintTag**-NFC-Tags (Rohbytes werden serverseitig dekodiert + gematcht); NFC ist über das Build-Flag `EXPO_PUBLIC_ENABLE_NFC` schaltbar (damit eine kostenlose Apple-ID einen reinen QR-Build ausliefern kann)
+- **Filament anlegen** aus einem Scan sowie **Spulen-Deep-Links** folgen (`?spool=`)
+- **Spule aktualisieren**: Restgewicht setzen, zwischen Standorten verschieben, ausmustern / reaktivieren sowie Verbrauch oder Trockenzyklen protokollieren
+
+Bambu-Lab-MIFARE-Classic-Tags sind Android-only — iPhones können sie mit Core NFC nicht lesen. Siehe [`packages/mobile/README.md`](../../packages/mobile/README.md) für Build- und Setup-Anweisungen.

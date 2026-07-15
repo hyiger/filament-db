@@ -165,11 +165,10 @@ Wenn du einen Link auf das Technical Data Sheet eines Herstellers hast (PDF oder
 
 **Erstmaliges Setup (einmalig):**
 
-1. Gehe in der oberen Navigation zu **Einstellungen** (oder zu `/settings`).
-2. Scrolle zu **AI-Funktionen**.
-3. Wähle einen Anbieter: **Google Gemini** (kostenlose Stufe), **Anthropic Claude** oder **OpenAI ChatGPT**.
-4. Klicke auf den Anbieter-Link, um einen API-Key zu erhalten (Gemini ist kostenlos, Claude und OpenAI sind pay-per-use).
-5. Füge den Key ein und klicke auf **Key speichern**. Ein grüner Punkt bestätigt die Konfiguration.
+1. Gehe zu **Einstellungen → KI** (die **KI**-Kachel auf der Einstellungen-Seite, oder navigiere zu `/settings/ai`).
+2. Wähle einen Anbieter: **Google Gemini** (kostenlose Stufe), **Anthropic Claude** oder **OpenAI ChatGPT**.
+3. Klicke auf den Anbieter-Link, um einen API-Key zu erhalten (Gemini ist kostenlos, Claude und OpenAI sind pay-per-use).
+4. Füge den Key ein und klicke auf **Key speichern**. Ein grüner Punkt bestätigt die Konfiguration.
 
 **Aus TDS importieren:**
 
@@ -257,6 +256,14 @@ Die Startseite zeigt alle Filamente in einer sortierbaren Tabelle.
 
 Wenn du Farbvarianten hast, zeigen Elternfilamente ein Count-Badge (z. B. „5 Farben"). Der Swatch des Elternfilaments ist eine Zusammensetzung der Gruppenfarben — die eigene Farbe plus die jeder Variante, als gleich breite Segmente (oder eine einfarbige Füllung, wenn die ganze Gruppe einfarbig ist); ein Elternfilament ohne bekannte Farben fällt auf ein neutrales Schraffurmuster zurück. Klicke den Pfeil zum Erweitern und sieh die Variantenzeilen mit eigenen Swatches und Namen. Erneuter Klick klappt zusammen.
 
+### Nicht vorrätige Filamente ausblenden
+
+Wenn kein Filter aktiv ist, blendet die Liste Filamente ohne aktive Spulen aus und zeigt über der Tabelle einen Umschalter **„Nicht vorrätige anzeigen (N)"**. Klicke ihn, um sie einzublenden; **„Nicht vorrätige ausblenden"** versteckt sie wieder. Sobald eine Suche oder ein Typ-/Vendor-Filter aktiv ist, werden alle Treffer unabhängig vom Bestand angezeigt, damit dir keine gesuchte Zeile verloren geht.
+
+### Standort einer Spule schnell wechseln
+
+Bei jedem Filament, das Spulen verfolgt, sitzt ein kleines **×N**-Aufklappelement neben der Zeile. Klicke es, um ein Inline-Spulen-Panel aufzuklappen, das für jede Spule Etikett, Gewicht und ein **Standort**-Dropdown zeigt. Wähle im Dropdown einen Standort, um die Spule direkt aus der Liste zu verschieben — ohne die Detailseite des Filaments zu öffnen. Wähle **Kein Standort**, um ihn zu leeren.
+
 ---
 
 ## Schritt 8: Filament-Details ansehen
@@ -317,10 +324,10 @@ Um ein bestehendes eigenständiges Filament in eine Variante umzuwandeln:
 ## Schritt 11: Nach PrusaSlicer exportieren
 
 1. Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **INI (PrusaSlicer)**.
-2. Eine `.ini`-Datei wird heruntergeladen, die alle Filamente als `[filament:Name]`-Abschnitte enthält — ein Abschnitt pro Filament.
+2. Eine `.ini`-Datei wird heruntergeladen, die alle Filamente als `[filament:Name]`-Abschnitte enthält.
 3. Gehe in PrusaSlicer zu **Datei > Importieren > Config Bundle importieren** und wähle die Datei.
 
-Kalibrierungs-Overrides (Extrusion Multiplier, Pressure Advance, Retraction, Max Volumetric Speed) sind in der exportierten INI **nicht** enthalten — sie werden dynamisch von PrusaSlicer Filament Edition über die Kalibrierungs-API angewandt, wenn sich der Drucker-/Düsen-Kontext ändert.
+Bei einem Filament mit null oder einer Düsen-Kalibrierung sind Kalibrierungs-Overrides (Extrusion Multiplier, Pressure Advance, Retraction, Max Volumetric Speed) in der exportierten INI **nicht** enthalten — sie werden dynamisch von PrusaSlicer Filament Edition über die Kalibrierungs-API angewandt, wenn sich der Drucker-/Düsen-Kontext ändert. Ein Filament mit Kalibrierungen für **zwei oder mehr unterschiedliche Düsen** exportiert stattdessen ein Preset pro Düse, mit Düsen-Suffix im Namen (z. B. `PLA 0.4 Brass`), jeweils mit den eingebetteten Kalibrierungswerten dieser Düse.
 
 ---
 
@@ -400,12 +407,11 @@ Ein kleiner farbiger Punkt im Header:
 
 ### Tag löschen
 
-1. Gehe in der oberen Navigation zu **Einstellungen**.
-2. Scrolle zum Abschnitt **NFC-Tools** — er zeigt Reader-/Tag-Status.
-3. Lege einen Tag auf den Reader (Status wird grün).
-4. Klicke auf **Tag löschen** (roter Button).
-5. Bestätige die Aktion. Die App nullt alle Speicherblöcke und schreibt einen leeren Header.
-6. Der Tag ist jetzt leer und bereit, neu beschrieben zu werden.
+1. Gehe zu **Einstellungen → Geräte** (die **Geräte**-Kachel, oder navigiere zu `/settings/devices`) — die **NFC-Tools**-Karte zeigt den Reader-/Tag-Status.
+2. Lege einen Tag auf den Reader (Status wird grün).
+3. Klicke auf **Tag löschen** (roter Button).
+4. Bestätige die Aktion. Die App nullt alle Speicherblöcke und schreibt einen leeren Header.
+5. Der Tag ist jetzt leer und bereit, neu beschrieben zu werden.
 
 Wenn du den Tag entfernst, bevor du bestätigst, schließt sich die Bestätigung automatisch.
 
@@ -416,6 +422,17 @@ Falls du externe NFC-Tools bevorzugst:
 1. Öffne auf der Detailseite eines Filaments das Menü **Export ▾** und klicke auf **OPT exportieren**.
 2. Eine `.bin`-Datei wird heruntergeladen, die die NDEF-verpackte CBOR-Nutzlast enthält.
 3. Schreibe diese Datei mit deiner bevorzugten NFC-Software auf einen Tag.
+
+### Etikett drucken (Desktop-App + Brother PT-P710BT)
+
+Wenn ein Brother PT-P710BT (P-touch CUBE) per USB angeschlossen ist, kannst du ein QR-Etikett für ein Filament oder eine einzelne Spule drucken:
+
+1. Wähle unter **Einstellungen → Geräte** in der Etikettendrucker-Karte deinen Drucker aus der Liste (PT-Touch-Treffer sind mit Badge markiert). Passe das Etikettformat — QR-Platzierung, Textfelder, Schriftart, Ausrichtung, Invertierung — im Editor mit Live-Vorschau an.
+2. Öffne auf der Detailseite eines Filaments das Menü **Export ▾** und klicke auf **Etikett drucken**.
+3. Wähle den QR-Modus — eine scanbare **URL** (die Smartphone-freundliche Variante; bei einem Filament mit mehreren Spulen kannst du auch wählen, auf welche Spule der Deep-Link zeigt) oder die **Instanz-ID** des Filaments — und prüfe die Live-Vorschau in der nativen Auflösung des Druckers.
+4. Klicke auf **Drucken**. Die App übergibt das Etikett per USB an das Drucksystem deines Betriebssystems.
+
+> Der **URL**-QR-Modus braucht in der paketierten Desktop-App eine erreichbare Adresse — setze eine **öffentliche URL** in den Etikettendrucker-Einstellungen, damit Smartphones in deinem Netzwerk sie öffnen können (der Standard-`localhost`-Origin ist von anderen Geräten aus nicht erreichbar). Passt gut zu **Im lokalen Netzwerk freigeben** (siehe „Im lokalen Netzwerk freigeben", Schritt 26).
 
 ---
 
@@ -589,6 +606,30 @@ Fehlende Locations werden automatisch angelegt, du musst sie nicht vorher anlege
 
 ---
 
+## Schritt 26: Im lokalen Netzwerk freigeben *(Desktop-App)*
+
+Standardmäßig ist die Datenbank der Desktop-App nur von dem Computer aus erreichbar, auf dem sie läuft. Um sie für Smartphones und andere Geräte in deinem WLAN zu öffnen — für die Begleit-App (Schritt 27) oder zum Scannen des URL-QR-Codes eines Etiketts (Schritt 13) — aktiviere die LAN-Freigabe:
+
+1. Suche in den **Einstellungen** die Option **Im lokalen Netzwerk freigeben** und schalte sie ein. Der eingebettete Server bindet neu an deine LAN-Adresse (statt localhost), und die Einstellungen zeigen die URL, die andere Geräte verwenden können.
+2. Bei aktivierter Freigabe kündigt sich die App außerdem per Bonjour/mDNS an (`_filamentdb._tcp`), sodass die Mobile-App sie findet, ohne dass du eine IP eintippen musst.
+
+> **Eine freigegebene Instanz absichern:** Setze die Umgebungsvariable `FILAMENTDB_API_KEY`, um bei jeder API-Anfrage ein Bearer-Token zu verlangen. Ungesetzt ist eine ins LAN exponierte Instanz nicht authentifiziert. Das Gate ist Alles-oder-Nichts und **deaktiviert die Browser-Web-UI** (sie sendet den Key nicht) — nutze es für Nicht-Browser-Clients (Mobile-App, Slicer); für Browser-UI-Zugriff im LAN nutze Loopback oder einen authentifizierenden Reverse-Proxy. Siehe [Eine netzwerkexponierte Instanz absichern](setup.md#eine-netzwerkexponierte-instanz-absichern).
+
+---
+
+## Schritt 27: Die mobile Scanner-App nutzen
+
+Eine Begleit-App auf Expo/React-Native-Basis (in `packages/mobile`) macht dein Smartphone zum mobilen Scanner und Schnellbearbeitungs-Werkzeug für deine Bibliothek.
+
+1. **Auf deine Bibliothek richten.** Gib in den **Einstellungen** der App die URL deines Filament-DB-Servers manuell ein, oder tippe auf **„Im Netzwerk suchen"** → **Scannen**, um ihn per Bonjour/mDNS automatisch zu finden (erfordert **Im lokalen Netzwerk freigeben**, Schritt 26).
+2. **Tag oder QR scannen.** Scanne einen OpenPrintTag (NFC, wo aktiviert) oder ein QR-Etikett (Schritt 13), um direkt zum passenden Filament zu springen — oder, wenn es keinen Treffer gibt, um **ein Filament aus dem Scan anzulegen**.
+3. **Spulen unterwegs aktualisieren.** Passe das Restgewicht einer Spule an, verschiebe sie an einen anderen Standort, mustere sie aus oder reaktiviere sie und protokolliere Verbrauch oder einen Trockenzyklus — alles vom Smartphone aus. Der `?spool=`-Deep-Link eines URL-Modus-Etiketts öffnet genau diese Spule.
+4. **Offline arbeiten.** Schreibvorgänge werden in eine Warteschlange gestellt und beim erneuten Verbinden abgespielt — ein Scan in der Werkstatt geht also nicht verloren, wenn der Server kurz nicht erreichbar ist.
+
+> Das NFC-Lesen ist hinter dem Build-Flag `EXPO_PUBLIC_ENABLE_NFC` schaltbar; QR-Scannen und alle Spulen-Bearbeitungsflüsse funktionieren unabhängig davon. (Bambu-MIFARE-Classic-Tags können auf dem iPhone nicht gelesen werden — eine iOS-Hardware-Grenze.)
+
+---
+
 ## Schnellreferenz
 
 | Aktion | Ort |
@@ -596,7 +637,7 @@ Fehlende Locations werden automatisch angelegt, du musst sie nicht vorher anlege
 | Filament hinzufügen | Startseite > + Filament hinzufügen |
 | Vorbefüllen via NFC / TDS / INI / Duplizieren | Filament hinzufügen > Vorbefüllen-Werkzeugleiste |
 | Aus TDS importieren | Filament hinzufügen > Aus TDS importieren |
-| AI-Provider konfigurieren | Einstellungen > AI-Funktionen |
+| AI-Provider konfigurieren | Einstellungen > KI |
 | Aus PrusaSlicer importieren | Startseite > Importieren/Exportieren > Datei importieren (INI / CSV / XLSX) |
 | Aus CSV/XLSX importieren | Startseite > Importieren/Exportieren > Datei importieren (INI / CSV / XLSX) — nach Erweiterung weitergeleitet |
 | Prusament-Spule importieren | Startseite > Importieren/Exportieren > Prusament QR |
@@ -613,9 +654,12 @@ Fehlende Locations werden automatisch angelegt, du musst sie nicht vorher anlege
 | Drucker verwalten | Einstellungen > Drucker |
 | API-Dokumentation öffnen | Einstellungen > API-Dokumentation (oder zu `/api-docs` navigieren) |
 | NFC-Tag schreiben | Detailseite > NFC schreiben (Desktop-App) |
-| NFC-Tag löschen | Einstellungen > NFC-Tools > Tag löschen (Desktop-App) |
+| NFC-Tag löschen | Einstellungen > Geräte > NFC-Tools > Tag löschen (Desktop-App) |
 | NFC-Binärdatei exportieren | Detailseite > Export ▾ > OPT exportieren |
+| Etikett drucken | Detailseite > Export ▾ > Etikett drucken (Desktop-App + Brother PT-P710BT) |
 | Spulen verfolgen | Detailseite > Spulen-Tracker > + Spule hinzufügen |
+| Nicht vorrätige ein-/ausblenden | Startseite > Umschalter „Nicht vorrätige anzeigen/ausblenden" |
+| Standort einer Spule schnell wechseln | Startseite > Zeile aufklappen (×N) > Standort-Dropdown |
 | Spule einer Location zuweisen | Spulen-Detail > Location-Dropdown |
 | Spule einem Drucker-Slot zuweisen | Spulen-Detail > Drucker-Slot-Auswahl |
 | Manuellen Spulen-Verbrauch loggen | Spulen-Detail > Verbrauch loggen |
@@ -625,6 +669,8 @@ Fehlende Locations werden automatisch angelegt, du musst sie nicht vorher anlege
 | Filamente vergleichen | Vergleich-Seite > bis zu 8 auswählen (oder /compare?ids=…) |
 | Shared Catalog veröffentlichen | Obere Nav > Teilen > + Neu |
 | Spulen aus CSV importieren | Startseite > Importieren > Spulen aus CSV |
+| Im lokalen Netzwerk freigeben | Einstellungen > Im lokalen Netzwerk freigeben (Desktop-App) |
+| Mobile Scanner-App nutzen | Mobile-App > Einstellungen > URL setzen oder „Im Netzwerk suchen" |
 | Theme wechseln | Einstellungen > Theme |
 | Manueller Sync | Status-Pille klicken > Jetzt synchronisieren (Desktop Hybrid-Modus) |
 | Verbindungsstatus prüfen | Status-Pille neben „Filament DB"-Titel |

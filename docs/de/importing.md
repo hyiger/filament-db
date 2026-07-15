@@ -165,7 +165,7 @@ Was beim Import NICHT angetastet wird (damit der Round-Trip dein Inventar nicht 
 
 1. Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke auf **„Datei importieren (INI / CSV / XLSX)"** — die App leitet anhand der Dateierweiterung weiter (`.csv` → CSV-Importer, `.xlsx` → XLSX-Importer, `.ini` → PrusaSlicer-Bundle)
 2. Wähle eine Datei mit einer Kopfzeile, die mindestens die Spalten `Name`, `Vendor` und `Type` enthält (max. 10 MB)
-3. Weitere unterstützte Spalten: `Color`, `Color Name`, `Diameter`, `Cost`, `Density`, `Nozzle Temp`, `Bed Temp`, `Nozzle First Layer`, `Bed First Layer`, `Max Volumetric Speed`, `Spool Weight`, `Net Filament Weight`, `TDS URL`, `Instance ID`, `Drying Temp`, `Drying Time`, `Transmission Distance` (HueForge TD), `Glass Transition` / `Tg`, `Heat Deflection` / `HDT`, `Shore A`, `Shore D`, `Min Print Speed`, `Max Print Speed`, `Nozzle Range Min`, `Nozzle Range Max`, `Standby Temp`, `Spool Type`
+3. Weitere unterstützte Spalten: `Color`, `Color Name`, `Secondary Colors` (kommasepariert, max. 5), `Diameter`, `Cost`, `Density`, `Nozzle Temp`, `Bed Temp`, `Nozzle First Layer`, `Bed First Layer`, `Max Volumetric Speed`, `Spool Weight`, `Net Filament Weight`, `TDS URL`, `Instance ID`, `Parent` (Name des Eltern-Filaments — wird beim Anlegen/Wiederherstellen berücksichtigt und hängt die Zeile als Variante an), `Drying Temp`, `Drying Time`, `Transmission Distance` (HueForge TD), `Glass Transition` / `Tg`, `Heat Deflection` / `HDT`, `Shore A`, `Shore D`, `Min Print Speed`, `Max Print Speed`, `Nozzle Range Min`, `Nozzle Range Max`, `Standby Temp`, `Spool Type`
 4. Spaltennamen werden case-insensitiv mit üblichen Aliassen gematcht (z. B. „HueForge TD" wird auf Transmission Distance gemappt, „Tg" auf Glass Transition)
 5. Nur in der Datei vorhandene Felder werden aktualisiert — bestehende Daten für nicht zugeordnete Spalten bleiben erhalten
 6. Zeilen, denen Pflichtfelder fehlen (Name, Vendor oder Type), werden übersprungen — die Antwort enthält ein `skippedRows`-Array mit Zeilennummern und Begründungen
@@ -231,7 +231,7 @@ Wenn du [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaSlicer) nu
 3. In PrusaSlicer erscheinen die Filament-Presets aus Filament DB beim Start in der Filament-Dropdown-Liste
 4. Kalibrierungswerte (EM, Max Volumetric Speed, Pressure Advance, Retraction) werden dynamisch angewandt, wenn Drucker/Düse wechseln — sie werden via `GET /api/filaments/:name/calibration` abgerufen
 
-PrusaSlicer Filament Edition lädt die Basis-Presets beim Start aus `GET /api/filaments/prusaslicer` (eine Section pro Filament). Kalibrierungs-Overrides werden separat pro Drucker-/Düsenkontext angefragt. Du kannst ein PrusaSlicer-Config-Bundle auch wieder zurück in Filament DB importieren via `POST /api/filaments/prusaslicer`.
+PrusaSlicer Filament Edition lädt die Basis-Presets beim Start aus `GET /api/filaments/prusaslicer` (ein Preset pro Filament — bzw. bei einem Filament mit Kalibrierungen für zwei oder mehr unterschiedliche Düsen ein Preset pro Düse mit Düsen-Suffix im Namen; siehe [Export nach PrusaSlicer INI](#export-nach-prusaslicer-ini)). Kalibrierungs-Overrides werden separat pro Drucker-/Düsenkontext angefragt. Du kannst ein PrusaSlicer-Config-Bundle auch wieder zurück in Filament DB importieren via `POST /api/filaments/prusaslicer`.
 
 ---
 
@@ -239,4 +239,4 @@ PrusaSlicer Filament Edition lädt die Basis-Presets beim Start aus `GET /api/fi
 
 Öffne auf der Startseite das Dropdown **Importieren/Exportieren** und klicke unter **Export** auf **„INI (PrusaSlicer)"**, um alle Filamente als PrusaSlicer-kompatible INI-Datei herunterzuladen. Die Datei enthält alle gespeicherten Einstellungen pro Filament und kann über **Datei > Importieren > Config Bundle importieren...** zurück in PrusaSlicer geladen werden.
 
-Jedes Filament erzeugt einen `[filament:Name]`-Abschnitt. Kalibrierungs-Overrides sind nicht enthalten — sie werden dynamisch über die Kalibrierungs-API angewandt.
+Ein Filament mit null oder einer Düsen-Kalibrierung erzeugt einen einzelnen `[filament:Name]`-Abschnitt; Kalibrierungs-Overrides sind darin nicht enthalten — sie werden dynamisch über die Kalibrierungs-API angewandt. Ein Filament mit Kalibrierungen für **zwei oder mehr unterschiedliche Düsen** erzeugt stattdessen ein Preset pro Düse, mit Düsen-Suffix im Namen (z. B. `PLA 0.4 Brass`), jeweils mit den eingebetteten Kalibrierungswerten dieser Düse. Beim Re-Import eines solchen Bundles in Filament DB werden die Suffix-Abschnitte wieder auf das Basis-Filament zusammengeführt — ein Round-Trip aktualisiert also den Original-Datensatz, statt Suffix-Duplikate anzulegen.

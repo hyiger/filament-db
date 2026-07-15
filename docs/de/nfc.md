@@ -96,7 +96,7 @@ Von der Detailseite eines beliebigen Filaments:
 
 ### Schreibschutz (umkehrbar) *(v1.34.8 / #583)*
 
-Du kannst einen OpenPrintTag **schreibgeschützt** markieren, damit die App den Tag einer fertigen Spule nicht versehentlich überschreibt. Unter **Einstellungen → NFC-Tools**, mit einem Tag auf dem Reader:
+Du kannst einen OpenPrintTag **schreibgeschützt** markieren, damit die App den Tag einer fertigen Spule nicht versehentlich überschreibt. Unter **Einstellungen → Geräte** (**NFC-Tools**-Karte), mit einem Tag auf dem Reader:
 
 - **Schreibschutz aktivieren** — sperrt den Tag. „NFC schreiben" verweigert ihn dann.
 - **Beschreibbar machen** — hebt die Sperre auf.
@@ -107,7 +107,7 @@ Das ist eine *umkehrbare* Soft-Sperre (sie kippt die Schreibzugriffs-Bits des NF
 
 ### Tags löschen / formatieren
 
-Über die Seite **Einstellungen** (nur Electron):
+Unter **Einstellungen → Geräte** (**NFC-Tools**-Karte, nur Electron):
 
 1. Lege einen Tag auf den Reader (die NFC-Statusanzeige wird grün)
 2. Klicke auf **„Tag löschen"** (roter Button)
