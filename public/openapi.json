@@ -156,7 +156,7 @@
               "schema": {
                 "oneOf": [
                   {
-                    "$ref": "#/components/schemas/FilamentInput"
+                    "$ref": "#/components/schemas/FilamentCreateInput"
                   },
                   {
                     "$ref": "#/components/schemas/CreateFromTagInput"
@@ -7332,48 +7332,6 @@
             "nullable": true,
             "description": "Gross weight (spool + filament) in grams. On create, when provided without a `spools` array the server auto-creates ONE initial spool carrying this weight and nulls the top-level field — spool-based filaments track weight per spool."
           },
-          "spools": {
-            "type": "array",
-            "description": "Initial spool subdocuments. Each entry is allow-listed to the fields below; everything else (usageHistory, dryCycles, instanceId, createdAt) is stripped or system-assigned. photoDataUrl, the ISO date strings, and locationId are validated with the same contracts as the dedicated spool routes. When omitted, a top-level totalWeight auto-creates one spool.",
-            "items": {
-              "type": "object",
-              "properties": {
-                "label": {
-                  "type": "string"
-                },
-                "totalWeight": {
-                  "type": "number",
-                  "nullable": true
-                },
-                "lotNumber": {
-                  "type": "string"
-                },
-                "purchaseDate": {
-                  "type": "string",
-                  "nullable": true,
-                  "description": "ISO date string (YYYY-MM-DD or full ISO 8601); must name a real calendar date."
-                },
-                "openedDate": {
-                  "type": "string",
-                  "nullable": true,
-                  "description": "ISO date string (YYYY-MM-DD or full ISO 8601); must name a real calendar date."
-                },
-                "locationId": {
-                  "type": "string",
-                  "nullable": true,
-                  "description": "Must reference an active Location."
-                },
-                "photoDataUrl": {
-                  "type": "string",
-                  "nullable": true,
-                  "description": "Raster-image data URL (JPEG/PNG/GIF/WebP/AVIF/HEIC/HEIF only, max 5 MB; SVG is rejected)."
-                },
-                "retired": {
-                  "type": "boolean"
-                }
-              }
-            }
-          },
           "dryingTemperature": {
             "type": "number",
             "nullable": true
@@ -7482,6 +7440,61 @@
           "name",
           "vendor",
           "type"
+        ]
+      },
+      "FilamentCreateInput": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FilamentInput"
+          },
+          {
+            "type": "object",
+            "description": "Create-only additions. `spools` is honored ONLY on POST — the PUT handler strips `body.spools` (spool subdocuments are managed via the dedicated /spools endpoints after creation).",
+            "properties": {
+              "spools": {
+                "type": "array",
+                "description": "Initial spool subdocuments. Each entry is allow-listed to the fields below; everything else (usageHistory, dryCycles, instanceId, createdAt) is stripped or system-assigned. photoDataUrl, the ISO date strings, and locationId are validated with the same contracts as the dedicated spool routes. When omitted, a top-level totalWeight auto-creates one spool.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "totalWeight": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "lotNumber": {
+                      "type": "string"
+                    },
+                    "purchaseDate": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "ISO date string (YYYY-MM-DD or full ISO 8601); must name a real calendar date."
+                    },
+                    "openedDate": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "ISO date string (YYYY-MM-DD or full ISO 8601); must name a real calendar date."
+                    },
+                    "locationId": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Must reference an active Location."
+                    },
+                    "photoDataUrl": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Raster-image data URL (JPEG/PNG/GIF/WebP/AVIF/HEIC/HEIF only, max 5 MB; SVG is rejected)."
+                    },
+                    "retired": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
         ]
       },
       "Nozzle": {
