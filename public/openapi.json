@@ -751,7 +751,7 @@
             "schema": {
               "type": "string"
             },
-            "description": "Spool subdocument _id selecting which spool's instanceId and remaining weight are encoded. Default: the first non-retired spool (then the first of any), falling back to the filament-level instanceId only for a spool-less filament. An id that doesn't belong to this filament is a 400 — the route never silently encodes the wrong spool."
+            "description": "Spool subdocument _id selecting which spool's instanceId and remaining weight are encoded. Default: the first non-retired spool (then the first of any), falling back to the filament-level instanceId for a spool-less filament OR when the default-selected spool has no instanceId (legacy data, src/lib/selectSpoolForWrite.ts). An EXPLICITLY requested spool without an instanceId does NOT silently fall back — it is a 422. An id that doesn't belong to this filament is a 400 — the route never silently encodes the wrong spool."
           }
         ],
         "responses": {

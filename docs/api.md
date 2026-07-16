@@ -384,7 +384,7 @@ Downloads the filament as an OpenPrintTag CBOR binary (`.bin` file). The binary 
 The tag's `spool_uid` carries a **per-spool** `instanceId` (#732), and the encoded remaining weight comes from the same spool the id was taken from.
 
 Query parameters:
-- `spool` (optional) -- a spool subdocument `_id` selecting which spool's `instanceId` and remaining weight are encoded. Default: the first non-retired spool (then the first of any), falling back to the filament-level `instanceId` only for a spool-less filament.
+- `spool` (optional) -- a spool subdocument `_id` selecting which spool's `instanceId` and remaining weight are encoded. Default: the first non-retired spool (then the first of any), falling back to the filament-level `instanceId` for a spool-less filament — or when the default-selected spool has no `instanceId` (legacy data). An **explicitly requested** spool without an `instanceId` does not silently fall back; it's a 422.
 
 Refusals:
 - `400` — the `{id}` is not a valid ObjectId, or the `spool` id doesn't belong to this filament (`"Spool not found on this filament"` — the route won't silently encode the wrong spool).
@@ -733,7 +733,7 @@ Send a JSON body. `tagType` selects the decoder; the byte fields are base64:
 - **OpenTag3D (Type-2 NTAG / Type-5 SLIX2, fixed binary memory map)** — supply `payload` (pre-parsed record bytes) or `tagMemory` (raw dump). A raw `tagMemory` dump is **auto-sniffed** (CC-offset + record MIME, via the pluggable codec registry) regardless of the `tagType` hint, so the mobile client needs no format detection.
 - **Bambu (MIFARE Classic / ISO 14443-3A)** — `blocks`: an object mapping the absolute MIFARE block number (`0`–`63`, as a string key) to the base64 of that 16-byte plaintext block. At least one readable block is required, and the dump must carry at least one identity block (variant/material id or filament type) — an empty or identity-less block map is rejected as an undecodable read rather than returned as a fabricated all-zero tag.
 
-Matching mirrors the NFC read workflow: the decoded `spoolUid` is tried as an `instanceId` first (an OpenPrintTag written by Filament DB stores the **selected spool's** `instanceId` in its `spool_uid` field — the filament-level id is only a fallback for spool-less filaments, #732), then it falls through to `name` → `vendor`+`type` exactly like `GET /api/filaments/match`. Decoded strings are bounded to 128 chars before they feed the regex queries.
+Matching mirrors the NFC read workflow: the decoded `spoolUid` is tried as an `instanceId` first (an OpenPrintTag written by Filament DB stores the **selected spool's** `instanceId` in its `spool_uid` field — the filament-level id is a fallback for spool-less filaments or legacy spools without ids, #732), then it falls through to `name` → `vendor`+`type` exactly like `GET /api/filaments/match`. Decoded strings are bounded to 128 chars before they feed the regex queries.
 
 Returns `200`:
 
