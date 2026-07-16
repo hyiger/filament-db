@@ -39,12 +39,12 @@ Die exakten Datei- und Testzahlen ändern sich mit jedem PR — führe `npm test
 
 Die Vitest-Konfiguration (`vitest.config.ts`) erzwingt die folgenden Mindestschwellen für Dateien in `src/lib/` und `src/models/`:
 
-- **Statements**: 80%
-- **Branches**: 75%
-- **Functions**: 90%
-- **Lines**: 80%
+- **Statements**: 98%
+- **Branches**: 96%
+- **Functions**: 96%
+- **Lines**: 99%
 
-Tests schlagen fehl, wenn die Abdeckung unter diese Schwellen fällt.
+Tests schlagen fehl, wenn die Abdeckung unter diese Schwellen fällt. (Angehoben von 80/75/90/80 im v1.62-Coverage-Sweep, #942.)
 
 **Geltungsbereich der Abdeckung**: Die Schwellen gelten derzeit nur für `src/lib/**` und `src/models/**`. API-Routen (`src/app/api/`), Seiten (`src/app/`) und Electron-Code (`electron/`) sind nicht vom Schwellen-Gate erfasst.
 
@@ -60,7 +60,7 @@ Tests laufen gegen Node.js 20 und 22. Abdeckungsberichte werden im Node-22-Lauf 
 
 ### Release-Workflow (`.github/workflows/release.yml`)
 
-Läuft automatisch bei Versions-Tags (`v*`). Tests werden in allen sechs Build-Konfigurationen (macOS arm64 + x64, Windows x64 + arm64, Linux x64 + arm64) ausgeführt, bevor die Electron-Installer gebaut werden. Wenn Tests fehlschlagen, wird der Build für diese Plattform übersprungen.
+Läuft automatisch bei Versions-Tags (`v*`). Das vollständige CI-Gate (Lint, Root- + Electron-Typecheck, Tests mit erzwungenen Abdeckungsschwellen, `npm audit`, Build und der Standalone-Smoke-Test) läuft **einmal** über den wiederverwendbaren Workflow `ci-gate.yml` in einem einzelnen `gate`-Job (#852); die sechs Plattform-Build-Jobs (macOS arm64 + x64, Windows x64 + arm64, Linux x64 + arm64) hängen per `needs: gate` davon ab — ein fehlschlagendes Gate blockiert also das gesamte Release, statt pro Plattform erneut ausgeführt zu werden.
 
 ## Test-Setup
 

@@ -96,7 +96,7 @@ Instead of typing an IP, tap **Find on your network → Scan** on the Server
 connection screen. The phone discovers desktop instances advertising
 `_filamentdb._tcp` over mDNS/Bonjour and fills in the address for you. This
 requires the desktop app to have **"Share on local network"** turned on
-(Settings → Connection) and both devices on the same Wi-Fi. (Discovery uses a
+(Settings → Network Settings) and both devices on the same Wi-Fi. (Discovery uses a
 native module, so it works only in a development/standalone build, not Expo Go.)
 
 ### Offline support

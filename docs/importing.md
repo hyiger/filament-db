@@ -174,7 +174,7 @@ What's NOT touched on import (so the round-trip can't damage your inventory):
 
 You can restore a previously exported snapshot to import core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones).
 
-1. Go to **Settings → Backup & Restore** and click **"Restore from Snapshot"**
+1. Go to **Settings → Backup & Data** and click **"Restore from Snapshot"**
 2. Select a snapshot JSON file (exported via **"Download Snapshot"**)
 3. All current snapshot-scoped data is replaced with the snapshot contents
 4. The restore uses best-effort rollback — if any error occurs, the handler attempts to re-insert the previous data
@@ -229,7 +229,7 @@ If you are using [PrusaSlicer Filament Edition](https://github.com/hyiger/PrusaS
 3. In PrusaSlicer, filament presets from Filament DB appear in the filament dropdown on startup
 4. Calibration values (EM, max volumetric speed, pressure advance, retraction) are applied dynamically when the printer/nozzle changes — they are fetched via `GET /api/filaments/:name/calibration`
 
-PrusaSlicer Filament Edition fetches base presets from `GET /api/filaments/prusaslicer` on startup (one section per filament). Calibration overrides are requested separately per printer/nozzle context. You can also import a PrusaSlicer config bundle back into Filament DB via `POST /api/filaments/prusaslicer`.
+PrusaSlicer Filament Edition fetches base presets from `GET /api/filaments/prusaslicer` on startup (one preset per filament — or, for a filament calibrated on two or more distinct nozzles, one nozzle-suffixed preset per nozzle; see [Exporting to PrusaSlicer INI](#exporting-to-prusaslicer-ini)). Calibration overrides are requested separately per printer/nozzle context. You can also import a PrusaSlicer config bundle back into Filament DB via `POST /api/filaments/prusaslicer`.
 
 ---
 
@@ -237,4 +237,4 @@ PrusaSlicer Filament Edition fetches base presets from `GET /api/filaments/prusa
 
 Open the **Import/Export** dropdown on the home page and, under **Export**, click **"INI (PrusaSlicer)"** to download all filaments as a PrusaSlicer-compatible INI file. This file contains all stored settings for each filament and can be imported back into PrusaSlicer via **File > Import > Import Config Bundle...**
 
-Each filament produces one `[filament:Name]` section. Calibration overrides are not included — they are applied dynamically via the calibration API.
+A filament with zero or one nozzle calibration produces a single `[filament:Name]` section, and calibration overrides are not included — they are applied dynamically via the calibration API. A filament calibrated for **two or more distinct nozzles** instead produces one preset per nozzle, name-suffixed with the nozzle (e.g. `PLA 0.4 Brass`), each with that nozzle's filament-scoped calibration values baked in (pressure advance stays dynamic via the calibration API). Re-importing such a bundle into Filament DB collapses the suffixed sections back onto the base filament, so a round-trip updates the original record instead of creating suffixed duplicates.

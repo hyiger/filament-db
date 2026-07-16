@@ -157,7 +157,7 @@ Ablehnung:
 
 ### GET /api/filaments/export
 
-Lädt alle Filamente als PrusaSlicer-kompatible INI-Datei mit einem `[filament:Name]`-Abschnitt pro Filament herunter. Verwendet denselben Generator wie `GET /api/filaments/prusaslicer` — strukturierte DB-Felder werden auf PrusaSlicer-INI-Schlüssel gemappt und mit dem Settings-Passthrough-Bag zusammengeführt.
+Lädt alle Filamente als PrusaSlicer-kompatible INI-Datei herunter. Verwendet denselben Generator wie `GET /api/filaments/prusaslicer` — strukturierte DB-Felder werden auf PrusaSlicer-INI-Schlüssel gemappt und mit dem Settings-Passthrough-Bag zusammengeführt; ein Filament mit Kalibrierungen für ≥ 2 unterschiedliche Düsen exportiert einen namenssuffigierten Abschnitt pro Düse (Details beim genannten Endpunkt).
 
 ### POST /api/filaments/import
 
@@ -363,6 +363,21 @@ Antworten:
 - `400` — fehlerhafter Body, ein unbekanntes Feld, ein Feld, das OpenPrintTag derzeit nicht anbietet (Prüfung erneut ausführen), oder das Filament ist nicht mit OpenPrintTag verknüpft.
 - `404` — der Slug existiert nicht mehr in der OpenPrintTag-Datenbank.
 
+### POST /api/filaments/:id/openprinttag/link
+
+Verknüpft ein **bestehendes** Filament mit einem OpenPrintTag-Material, damit es den `check`-/`sync`-Loop oben nutzen kann (v1.52, #753). Same-Origin-geschützt. Sende einen JSON-Body:
+
+```json
+{ "slug": "prusament-pla-galaxy-black" }
+```
+
+Schreibt **nur** die Verknüpfung (`settings.openprinttag_slug` / `_uuid`) und den Provenance-Snapshot (`openprinttagSnapshot`) — es wird nie ein Feldwert angefasst. Das Verknüpfen kann also keinen benutzergesetzten oder (bei einer Variante) geerbten Wert überschreiben: ein abweichendes Feld erscheint bei der nächsten Prüfung als `conflict`, nicht als automatisches Zurücksetzen.
+
+Antworten:
+- `{ "linked": true, "slug": "…", "filament": { … } }` — Verknüpfung hergestellt + das frische Dokument.
+- `404` mit `{ "linked": false, "found": false, "slug": "…" }` — der Slug existiert nicht mehr in der OpenPrintTag-Datenbank.
+- `400` — fehlender oder ungültiger `slug`.
+
 ### POST /api/filaments/:id/spools
 
 Fügt einem Filament eine neue Spule hinzu. Sende einen JSON-Body:
@@ -398,7 +413,12 @@ Entfernt eine Spule aus einem Filament. Liefert das aktualisierte Filament-Dokum
 
 ### GET /api/filaments/prusaslicer
 
-Exportiert alle Filamente als PrusaSlicer-kompatibles INI-Config-Bundle mit einem `[filament:Name]`-Abschnitt pro Filament. Strukturierte DB-Felder (Temperaturen, Dichte, Kosten, max. volumetrische Geschwindigkeit, Schrumpfung) werden auf ihre PrusaSlicer-INI-Äquivalente gemappt und mit dem `settings`-Passthrough-Bag zusammengeführt. Kalibrierungs-Overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) werden NICHT in das Bundle eingebacken — sie werden dynamisch von PrusaSlicer Filament Edition über `GET /api/filaments/:name/calibration` angewendet, wenn sich der Drucker-/Düsenkontext ändert.
+Exportiert alle Filamente als PrusaSlicer-kompatibles INI-Config-Bundle. Strukturierte DB-Felder (Temperaturen, Dichte, Kosten, max. volumetrische Geschwindigkeit, Schrumpfung) werden auf ihre PrusaSlicer-INI-Äquivalente gemappt und mit dem `settings`-Passthrough-Bag zusammengeführt. Wie ein Filament in Abschnitte zerlegt wird, hängt davon ab, für wie viele **unterschiedliche Düsen** es Kalibrierungen hat (#876):
+
+- **0 oder 1 Düse** — ein einzelner `[filament:Name]`-Abschnitt ohne eingebackene Kalibrierung. Kalibrierungs-Overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) werden dynamisch von PrusaSlicer Filament Edition über `GET /api/filaments/:name/calibration` angewendet, wenn sich der Drucker-/Düsenkontext ändert.
+- **≥ 2 unterschiedliche Düsen** — ein flacher, namenssuffigierter Abschnitt pro Düse (z. B. `[filament:PLA 0.4 Brass]`), jeweils mit den **filament-bezogenen** Kalibrierungswerten dieser Düse **eingebacken** — extrusion multiplier, retraction, max volumetric speed und Pro-Kalibrierung-Temperaturen; **pressure advance wird bewusst NICHT eingebacken** und bleibt dynamisch über `GET /api/filaments/:id/calibration` (PrusaSlicer kennt kein Eltern-/Kind-Modell für User-Filament-Presets). Alle Geschwister-Abschnitte teilen sich eine `filamentdb_id` und tragen je einen `filamentdb_nozzle`-Routing-Hinweis, damit die Rück-Synchronisation (`POST /api/filaments/:id`) Updates dem richtigen Per-Düsen-Kalibrierungseintrag zuordnet.
+
+Jeder Abschnitt trägt den `filamentdb_id`-Routing-Schlüssel (die stabile `_id` des Filaments).
 
 Jeder ausgegebene Abschnitt enthält außerdem standardmäßig `compatible_printers = ` und `compatible_printers_condition = ` (beide leer), was PrusaSlicer als „keine Einschränkung" interpretiert — das synchronisierte Filament erscheint im Dropdown jedes Druckers, und die Auto-Auswahl des Scan-Streams funktioniert unabhängig davon, welches Druckerprofil aktiv ist. Hat ein Nutzer über einen vorherigen Round-Trip-Import eine spezifische Einschränkung gesetzt (die Schlüssel kommen non-empty im Settings-Bag an), bleibt diese Einschränkung beim Export erhalten.
 
@@ -412,6 +432,8 @@ Liefert `text/plain`-INI-Inhalt.
 ### POST /api/filaments/prusaslicer
 
 Importiert ein PrusaSlicer-INI-Config-Bundle. Sende den INI-Text als rohen Request-Body (z. B. `Content-Type: text/plain`).
+
+Per-Düsen-suffigierte Abschnitte aus einem Filament-DB-Export (erkennbar am `filamentdb_nozzle`-Hinweis) werden beim Import **wieder in ihr Basis-Filament zusammengefaltet**, sodass ein Export-→-Import-Round-Trip den Originaldatensatz aktualisiert, statt suffigierte `"PLA 0.4 Brass"`-Duplikate anzulegen. Das Per-Düsen-Kalibrierungsmodell wird dabei NICHT aus dem flachen Bundle rekonstruiert — der verlustfreie Round-Trip ist der Snapshot-Export/-Restore (Einstellungen → Sicherung & Daten).
 
 Liefert:
 ```json

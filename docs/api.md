@@ -100,12 +100,33 @@ Create a new filament. Send a JSON body with at minimum `name`, `vendor`, and `t
 
 If `totalWeight` is provided but no `spools` array, an initial spool entry is automatically created from the weight value.
 
+#### Create from a decoded tag
+
+The route also accepts the mobile scanner's create-from-tag body shape:
+
+```json
+{
+  "tagData": { "…the decoded tag…": "…" },
+  "overrides": { "name": "…", "vendor": "…", "type": "…" },
+  "spoolRemainingGrams": 750
+}
+```
+
+- `tagData` — a decoded tag exactly as `POST /api/nfc/decode` returned it in `decoded`. The server maps it to a filament payload (`decodedTagToFilamentPayload`) — the phone never reproduces the mapping. Temperatures use the tag's **recommended** values, not the range max (v1.67.0, #1008).
+- `overrides` — filament fields that **win over** the tag-mapped values. The scanner sends the user-confirmed `name` / `vendor` / `type` here (they're required fields).
+- `spoolRemainingGrams` — a number ≥ 0. The server adds the tag's tare to derive the spool's gross weight and creates ONE initial spool from it. **Omit it (or send `null`) to create a catalog-only filament with no spool.**
+
+The merged body then flows through the normal create path (same field stripping, ref validation, and unique-name handling as a plain create). `instanceId` is never taken from the tag — it stays system-assigned.
+
 ### GET /api/filaments/:id
 
 Returns a single filament with `compatibleNozzles`, `calibrations.nozzle`, and `calibrations.printer` populated with full documents. Also includes:
 
 - `_variants` -- array of child variant filaments (`_id`, `name`, `color`, `cost`)
 - Inherited field resolution when the filament has a `parentId` -- fields not set on the variant are inherited from the parent, and an `_inherited` array lists which fields were inherited
+
+Query parameters:
+- `raw=true` -- skips inheritance resolution and returns the variant's **own stored values**: fields it doesn't override come back `null` (or empty), with a slim `_parent` summary attached for placeholder hints. This is what the edit form uses — prefilling the form with resolved values and saving would copy the parent's fields onto the variant and silently sever the inheritance link (GH #106). On a non-variant the response shape is unchanged.
 
 ### PUT /api/filaments/:id
 
@@ -163,7 +184,7 @@ Refusal:
 
 ### GET /api/filaments/export
 
-Downloads all filaments as a PrusaSlicer-compatible INI file with one `[filament:Name]` section per filament. Uses the same generator as `GET /api/filaments/prusaslicer` — structured DB fields are mapped to PrusaSlicer INI keys and merged with the settings passthrough bag.
+Downloads all filaments as a PrusaSlicer-compatible INI file. Uses the same generator as `GET /api/filaments/prusaslicer` — structured DB fields are mapped to PrusaSlicer INI keys and merged with the settings passthrough bag, and a filament with calibrations for ≥ 2 distinct nozzles exports one name-suffixed section per nozzle (see that endpoint for the section layout).
 
 ### POST /api/filaments/import
 
@@ -255,7 +276,9 @@ Returns calibration data for a specific filament and nozzle diameter. The `{id}`
 Query parameters:
 - `nozzle_diameter` (required) -- nozzle diameter in mm (e.g. `0.4`)
 - `high_flow` (optional) -- `0` or `1`. When provided, only matches nozzles with the corresponding `highFlow` flag. Disambiguates standard vs high-flow nozzles at the same diameter.
+- `nozzle_type` (optional) -- nozzle type name (e.g. `Diamondback`). Further disambiguates same-diameter nozzles of different type — symmetric with the sync-back route's `filamentdb_nozzle` hint, so a multi-nozzle filament's suffixed per-nozzle preset reads back **its** nozzle's calibration (#872).
 - `bed_type` (optional) -- bed type name or ID. When provided, returns calibration values specific to that bed surface. Falls back to: bed-type-specific match → no-bed-type match → first diameter match.
+- `format` (optional) -- `orcaslicer` returns the calibration with OrcaSlicer key names and array-wrapped values (OrcaSlicer's multi-extruder convention).
 
 Returns on success:
 ```json
@@ -289,7 +312,12 @@ Used by PrusaSlicer Filament Edition to auto-adjust filament settings when the u
 
 ### POST /api/filaments/:id
 
-Sync a filament preset back from PrusaSlicer. The `{id}` parameter may be a URL-encoded preset name or a MongoDB ObjectId.
+Sync a filament preset back from PrusaSlicer. The `{id}` parameter may be a URL-encoded preset name or a MongoDB ObjectId — the two forms have different addressing semantics (#867):
+
+- **ObjectId URL** (`POST /api/filaments/{ObjectId}`) is **authoritative** — the update targets that `_id`; a `filamentdb_id` carried in the config never overrides it. This path also applies the body's `name` as a **rename** when it differs from the stored name (this is what makes the fork's "Update anyway" reconcile stick after a `name_id_mismatch`). A rename colliding with another active filament returns `409 name_taken` (see below). If the 24-hex URL matches no `_id` (a preset legitimately *named* with 24 hex chars), the route falls through to name resolution rather than 404ing.
+- **Name URL** (the fork's normal sync) resolves **`filamentdb_id` → name**: a `filamentdb_id` key carried in the config is tried first, falling back gracefully to the preset name when the id is absent or stale (it's DB-instance-specific). The name-addressed path **never renames** — the name is its addressing key, and a `body.name` there is ignored.
+
+The exported bundle stamps every preset with a `filamentdb_id` config key (the filament's stable `_id`); the sync consumes it for routing only — it is never stored in the `settings` bag. Per-nozzle suffixed presets from a multi-nozzle export (#876) additionally carry a `filamentdb_nozzle` hint, which routes their calibration keys to the matching per-nozzle calibration entry (and stops the suffixed name being read as a rename).
 
 Query parameters:
 - `nozzle_diameter` (optional) -- nozzle diameter in mm (e.g. `0.4`). When provided, calibration-related keys (`extrusion_multiplier`, `pressure_advance`, `filament_retract_length`, `filament_retract_speed`, `filament_retract_lift`) are written to the matching per-nozzle calibration entry instead of the settings bag.
@@ -300,15 +328,24 @@ Send a JSON body:
 { "config": { "temperature": "215", "filament_density": "1.24", "my_custom_key": "value" } }
 ```
 
-Recognised PrusaSlicer INI keys (`filament_type`, `filament_vendor`, `filament_colour`, `filament_diameter`, `filament_density`, `filament_cost`, `filament_spool_weight`, `filament_max_volumetric_speed`, `temperature`, `first_layer_temperature`, `bed_temperature`, `first_layer_bed_temperature`, `filament_shrinkage_compensation_xy`, `filament_shrinkage_compensation_z`, `filament_soluble`, `filament_abrasive`) are reverse-mapped to structured DB fields. All remaining keys are merged into the filament's `settings` passthrough bag.
+Recognised PrusaSlicer INI keys (`filament_type`, `filament_vendor`, `filament_colour`, `filament_diameter`, `filament_density`, `filament_cost`, `filament_spool_weight`, `filament_max_volumetric_speed`, `temperature`, `first_layer_temperature`, `bed_temperature`, `first_layer_bed_temperature`, `filament_shrinkage_compensation_xy`, `filament_shrinkage_compensation_z`) are reverse-mapped to structured DB fields. All remaining keys are merged into the filament's `settings` passthrough bag — including `filament_soluble` and `filament_abrasive`, which are preserved in the settings bag rather than mapped to structured fields (the Filament schema has no such columns; the slicer exports and the OpenPrintTag encoder read them from the bag — #950).
 
-Returns:
+Returns `200` — a 200 always means the update **was applied**:
 ```json
 {
   "message": "Synced 12 settings for \"Prusament PETG Prusa Galaxy Black\"",
-  "filamentId": "64a1b2c3d4e5f6a7b8c9d0e1"
+  "filamentId": "64a1b2c3d4e5f6a7b8c9d0e1",
+  "matchedBy": "id",
+  "matchedName": "Prusament PETG Prusa Galaxy Black"
 }
 ```
+
+`matchedBy` reports how the filament was resolved — `"id"` (URL ObjectId or config `filamentdb_id`), `"name"`, or `null` — and `matchedName` is the filament's canonical stored name, so the fork can re-stamp the id into a preset that only matched by name.
+
+Conflict responses — a **409 guarantees nothing was applied**:
+
+- `409 name_id_mismatch` — a name-addressed sync's `filamentdb_id` resolved to a filament whose stored name differs from the preset name. That's ambiguous server-side: a *renamed preset* (id right) vs a *copied/cloned id* (id points at the wrong filament, e.g. a Save-As that kept the source's id). The route refuses to mutate and returns `{ "error": "name_id_mismatch", "message": "…", "matchedBy": "id", "filamentId": "…", "matchedName": "…", "sentName": "…" }`. To update the resolved filament anyway, re-sync by its ObjectId URL (the authoritative form).
+- `409 name_taken` — an ObjectId-addressed rename collides with another active filament's name. Returns `{ "error": "name_taken", "message": "…", "conflictId": "…" }` where `conflictId` names the filament that already owns the name.
 
 ### GET /api/filaments/:id/spool-check
 
@@ -343,6 +380,16 @@ Returns 400 if `weight` is missing or invalid. Returns 404 if the filament is no
 ### GET /api/filaments/:id/openprinttag
 
 Downloads the filament as an OpenPrintTag CBOR binary (`.bin` file). The binary can be written to an NFC-V (ISO 15693) tag or used with other OpenPrintTag-compatible tools.
+
+The tag's `spool_uid` carries a **per-spool** `instanceId` (#732), and the encoded remaining weight comes from the same spool the id was taken from.
+
+Query parameters:
+- `spool` (optional) -- a spool subdocument `_id` selecting which spool's `instanceId` and remaining weight are encoded. Default: the first non-retired spool (then the first of any), falling back to the filament-level `instanceId` for a spool-less filament — or when the default-selected spool has no `instanceId` (legacy data). An **explicitly requested** spool without an `instanceId` does not silently fall back; it's a 422.
+
+Refusals:
+- `400` — the `{id}` is not a valid ObjectId, or the `spool` id doesn't belong to this filament (`"Spool not found on this filament"` — the route won't silently encode the wrong spool).
+- `404` — filament not found.
+- `422` — no `instanceId` is available to encode (neither the selected spool nor the filament carries one).
 
 ### GET /api/filaments/:id/openprinttag/check
 
@@ -420,7 +467,12 @@ Remove a spool from a filament. Returns the updated filament document.
 
 ### GET /api/filaments/prusaslicer
 
-Exports all filaments as a PrusaSlicer-compatible INI config bundle with one `[filament:Name]` section per filament. Structured DB fields (temperatures, density, cost, max volumetric speed, shrinkage) are mapped to their PrusaSlicer INI equivalents and merged with the `settings` passthrough bag. Calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are NOT baked into the bundle — they are applied dynamically by PrusaSlicer Filament Edition via `GET /api/filaments/:name/calibration` when the printer/nozzle context changes.
+Exports all filaments as a PrusaSlicer-compatible INI config bundle. Structured DB fields (temperatures, density, cost, max volumetric speed, shrinkage) are mapped to their PrusaSlicer INI equivalents and merged with the `settings` passthrough bag. How a filament is split into sections depends on how many **distinct nozzles** it has calibrations for (#876):
+
+- **0 or 1 distinct nozzle** — one `[filament:Name]` section with no calibration baked in. Calibration overrides (extrusion multiplier, pressure advance, retraction, max volumetric speed) are applied dynamically by PrusaSlicer Filament Edition via `GET /api/filaments/:name/calibration` when the printer/nozzle context changes.
+- **≥ 2 distinct nozzles** — one flat, name-suffixed section per distinct nozzle (e.g. `[filament:PLA 0.4 Brass]`), each with that nozzle's **filament-scoped** calibration values **baked in** — extrusion multiplier, retraction, max volumetric speed, and per-calibration temps; **pressure advance is deliberately NOT baked** and stays dynamic via `GET /api/filaments/:id/calibration` (PrusaSlicer has no parent/child model for user filament presets). All sibling sections share one `filamentdb_id` and each carries a `filamentdb_nozzle` routing hint so the sync-back (`POST /api/filaments/:id`) routes updates to the right per-nozzle calibration entry.
+
+Every section carries the `filamentdb_id` routing key (the filament's stable `_id` — see the addressing notes on `POST /api/filaments/:id`).
 
 Each emitted section also includes `compatible_printers = ` and `compatible_printers_condition = ` (both empty) by default, which PrusaSlicer treats as "no restriction" — the synced filament shows up in every printer's dropdown, and the scan-stream auto-select works regardless of which printer profile is active. If a user pinned a specific restriction via a previous round-trip import (the keys arrive non-empty in the settings bag), the export preserves that restriction.
 
@@ -434,6 +486,8 @@ Returns `text/plain` INI content.
 ### POST /api/filaments/prusaslicer
 
 Import a PrusaSlicer INI config bundle. Send the INI text as the raw request body (e.g. `Content-Type: text/plain`).
+
+Per-nozzle suffixed sections from a Filament DB export (recognised by their `filamentdb_nozzle` hint) are **folded back into their base filament**, so an export → import round-trip updates the original record instead of spawning suffixed `"PLA 0.4 Brass"` orphans. The per-nozzle calibration model is NOT reconstructed from the flat bundle — snapshot export/restore (Settings → Backup & Data) is the lossless round-trip.
 
 Returns:
 ```json
@@ -679,7 +733,7 @@ Send a JSON body. `tagType` selects the decoder; the byte fields are base64:
 - **OpenTag3D (Type-2 NTAG / Type-5 SLIX2, fixed binary memory map)** — supply `payload` (pre-parsed record bytes) or `tagMemory` (raw dump). A raw `tagMemory` dump is **auto-sniffed** (CC-offset + record MIME, via the pluggable codec registry) regardless of the `tagType` hint, so the mobile client needs no format detection.
 - **Bambu (MIFARE Classic / ISO 14443-3A)** — `blocks`: an object mapping the absolute MIFARE block number (`0`–`63`, as a string key) to the base64 of that 16-byte plaintext block. At least one readable block is required, and the dump must carry at least one identity block (variant/material id or filament type) — an empty or identity-less block map is rejected as an undecodable read rather than returned as a fabricated all-zero tag.
 
-Matching mirrors the NFC read workflow: the decoded `spoolUid` is tried as an `instanceId` first (an OpenPrintTag written by Filament DB stores the filament's `instanceId` in its `spool_uid` field), then it falls through to `name` → `vendor`+`type` exactly like `GET /api/filaments/match`. Decoded strings are bounded to 128 chars before they feed the regex queries.
+Matching mirrors the NFC read workflow: the decoded `spoolUid` is tried as an `instanceId` first (an OpenPrintTag written by Filament DB stores the **selected spool's** `instanceId` in its `spool_uid` field — the filament-level id is a fallback for spool-less filaments or legacy spools without ids, #732), then it falls through to `name` → `vendor`+`type` exactly like `GET /api/filaments/match`. Decoded strings are bounded to 128 chars before they feed the regex queries.
 
 Returns `200`:
 
@@ -1203,7 +1257,7 @@ Per-job ledger of print runs. Decrements spool weights, appends spool-level usag
 | `POST`   | `/api/print-history`      | Record a print job (see body below) |
 | `GET`    | `/api/print-history/{id}` | Fetch one print job with the same populated fields as the list (printer name + per-usage filament name/vendor/type/color). Tombstoned rows return 404 |
 | `PUT`    | `/api/print-history/{id}` | Update job metadata only. Accepts five fields: `jobLabel` (trimmed, capped 200), `notes` (truncated to 2000), `source` (enum), `printerId` (or `null`), `startedAt`. **Unknown keys are rejected with 400** (a stray `_purged` or legacy `durationSeconds` doesn't slip through). Usage rows + spool gram totals are NOT mutable here — refund + re-record via DELETE + POST to change a usage |
-| `DELETE` | `/api/print-history/{id}` | Undo a print job — refund the spool weight, remove the matching `usageHistory` entries, soft-delete the row |
+| `DELETE` | `/api/print-history/{id}` | Undo a print job — refund the spool weight, remove the matching `usageHistory` entries, soft-delete the row. Append `?permanent=true` to purge an already soft-deleted entry |
 
 ### POST /api/print-history
 
@@ -1244,6 +1298,10 @@ Refund matching is by `usageHistory.jobId === entry._id` — unambiguous, so a m
 Returns `200 { "message": "Deleted and refunded" }` on first success, `404` on any subsequent call (or if no PrintHistory with that id ever existed).
 
 Best-effort: if a referenced spool has since been deleted (or the filament soft-deleted), that entry is silently skipped — the rest of the refunds still apply and the PrintHistory document is still tombstoned.
+
+#### Permanent delete: `DELETE /api/print-history/{id}?permanent=true`
+
+Marks an already soft-deleted entry as permanently purged by setting the `_purged` sync tombstone (GH #524.5), mirroring the filament permanent-delete path. **Only allowed when the entry is already soft-deleted** — an active entry returns `404` (`"Not found, or not in trash (permanent delete requires the entry to be soft-deleted first)"`), so a purge can never skip the refund + soft-delete step. No refund happens here — the spool weight was already refunded by the soft delete. Idempotent: a second purge returns `404`. Returns `200 { "message": "Permanently deleted" }`.
 
 ---
 
@@ -1286,7 +1344,7 @@ Publishes a static snapshot of selected filaments with their referenced nozzles/
 | `GET`    | `/api/share`            | List catalogs you've published (newest first; soft-deleted catalogs are hidden) |
 | `POST`   | `/api/share`            | Publish a new catalog |
 | `GET`    | `/api/share/:slug`      | Public fetch. Atomically increments `viewCount`. Returns 404 when soft-deleted, 410 when expired. |
-| `DELETE` | `/api/share/:slug`      | Unpublish (soft-delete) |
+| `DELETE` | `/api/share/:slug`      | Unpublish (soft-delete). Append `?permanent=true` to purge an already unpublished catalog |
 
 ### POST /api/share
 
@@ -1316,6 +1374,10 @@ Soft-deletes the catalog by setting `_deletedAt` (instead of `deleteOne`). The s
 The slug index is **partial-unique on `_deletedAt: null`** (auto-migrated from the legacy plain-unique index by `SharedCatalog.syncIndexes()` in the dbConnect migration block), so a slug used by a tombstoned row can be reused by a future republish without tripping E11000.
 
 Returns `200 { "message": "Unpublished" }` on first success, `404` on any subsequent call.
+
+#### Permanent delete: `DELETE /api/share/:slug?permanent=true`
+
+Marks an already unpublished catalog as permanently purged by setting the `_purged` sync tombstone (GH #524.5), mirroring the filament permanent-delete path. **Only allowed when the catalog is already unpublished** (soft-deleted) — otherwise `404` (`"Not found, or not unpublished (permanent delete requires the catalog to be unpublished first)"`). Idempotent: a second purge returns `404`. Returns `200 { "message": "Permanently deleted" }`.
 
 #### SharedCatalog schema additions (v1.13)
 
@@ -1391,6 +1453,8 @@ Each row is processed independently; per-row errors are reported in the response
 ```
 
 A single request is capped at 10,000 rows by `parseCsv`; beyond that the request is rejected with 400.
+
+Requests larger than **10 MB** are rejected with `413` before any CSV parsing (v1.66.1, #991). All three content types get a `Content-Length` preflight (multipart with a small 64 KB allowance for MIME framing); the raw `text/csv` and JSON paths additionally re-check the buffered byte length (catching a missing or lying `Content-Length`), while the multipart path enforces the exact 10 MB on the uploaded file part after parsing. Matches the 10 MB cap on the sibling import endpoints.
 
 ### GET /api/spools/export-csv
 

@@ -148,7 +148,7 @@
           "Filaments"
         ],
         "summary": "Create filament",
-        "description": "Create a new filament profile. If parentId is provided, the filament becomes a color variant inheriting settings from its parent. Alternatively, send { tagData, overrides } where tagData is a DecodedOpenPrintTag from POST /api/nfc/decode: the server maps the decoded tag to a filament payload (mobile create-from-scan, plan §4.4), then overrides win over the mapped fields — the scanner uses this to set the user-edited name/vendor/type (which are required). Spool subdocuments are never fabricated on create.",
+        "description": "Create a new filament profile. If parentId is provided, the filament becomes a color variant inheriting settings from its parent. Alternatively, send { tagData, overrides } where tagData is a DecodedOpenPrintTag from POST /api/nfc/decode: the server maps the decoded tag to a filament payload (mobile create-from-scan, plan §4.4), then overrides win over the mapped fields — the scanner uses this to set the user-edited name/vendor/type (which are required). When totalWeight is provided without a spools array (or spoolRemainingGrams is sent on the tagData path), the server creates ONE initial spool from it; usage history is never fabricated.",
         "requestBody": {
           "required": true,
           "content": {
@@ -156,7 +156,7 @@
               "schema": {
                 "oneOf": [
                   {
-                    "$ref": "#/components/schemas/FilamentInput"
+                    "$ref": "#/components/schemas/FilamentCreateInput"
                   },
                   {
                     "$ref": "#/components/schemas/CreateFromTagInput"
@@ -740,10 +740,18 @@
           "Filaments"
         ],
         "summary": "Generate OpenPrintTag binary",
-        "description": "Generates a CBOR-encoded OpenPrintTag binary for NFC writing. Contains filament name, brand, type, color, density, diameter, and temperatures.",
+        "description": "Generates a CBOR-encoded OpenPrintTag binary for NFC writing. Contains filament name, brand, type, color, density, diameter, and temperatures. The tag's spool_uid carries the SELECTED spool's per-spool instanceId (#732), and the encoded remaining weight comes from that same spool — pass ?spool= to target a specific spool.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
+          },
+          {
+            "name": "spool",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Spool subdocument _id selecting which spool's instanceId and remaining weight are encoded. Default: the first non-retired spool (then the first of any), falling back to the filament-level instanceId for a spool-less filament OR when the default-selected spool has no instanceId (legacy data, src/lib/selectSpoolForWrite.ts). An EXPLICITLY requested spool without an instanceId does NOT silently fall back — it is a 422. An id that doesn't belong to this filament is a 400 — the route never silently encodes the wrong spool."
           }
         ],
         "responses": {
@@ -758,8 +766,28 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid filament id (not an ObjectId), or the spool id does not belong to this filament",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Filament not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "No instance ID available to encode — neither the selected spool nor the filament carries one",
             "content": {
               "application/json": {
                 "schema": {
@@ -4990,7 +5018,7 @@
           "Print History"
         ],
         "summary": "Undo print job",
-        "description": "Refunds matching spool usage and soft-deletes the PrintHistory row so sync propagates the delete tombstone.",
+        "description": "Refunds matching spool usage and soft-deletes the PrintHistory row so sync propagates the delete tombstone. Pass ?permanent=true to mark an already soft-deleted entry as purged (sets _purged so the hybrid sync engine propagates the deletion to peers); the entry must already be soft-deleted, and no refund happens on the purge — the spool weight was already refunded by the soft delete.",
         "parameters": [
           {
             "name": "id",
@@ -5000,11 +5028,23 @@
               "type": "string"
             },
             "description": "PrintHistory ObjectId"
+          },
+          {
+            "name": "permanent",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "description": "When 'true', permanently purges a soft-deleted entry (sets the _purged sync tombstone) instead of refunding + soft-deleting. The entry must already be soft-deleted — an active entry returns 404. Idempotent: a second purge also returns 404."
           }
         ],
         "responses": {
           "200": {
-            "description": "Deleted and refunded",
+            "description": "Deleted and refunded (or, with ?permanent=true, permanently deleted)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5019,7 +5059,7 @@
             }
           },
           "404": {
-            "description": "Print history not found or already deleted",
+            "description": "Print history not found or already deleted; with ?permanent=true, also returned when the entry is not yet soft-deleted (permanent delete requires the entry to be in the trash first)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5196,10 +5236,24 @@
           "Sharing"
         ],
         "summary": "Unpublish shared catalog",
-        "description": "Soft-deletes the shared catalog so peer sync propagates the unpublish tombstone.",
+        "description": "Soft-deletes the shared catalog so peer sync propagates the unpublish tombstone. Pass ?permanent=true to mark an already unpublished catalog as purged (sets the _purged sync tombstone); the catalog must already be unpublished (soft-deleted) first.",
+        "parameters": [
+          {
+            "name": "permanent",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            },
+            "description": "When 'true', permanently purges an unpublished catalog (sets the _purged sync tombstone) instead of soft-deleting. The catalog must already be unpublished — otherwise 404. Idempotent: a second purge also returns 404."
+          }
+        ],
         "responses": {
           "200": {
-            "description": "Unpublished",
+            "description": "Unpublished (or, with ?permanent=true, permanently deleted)",
             "content": {
               "application/json": {
                 "schema": {
@@ -5214,7 +5268,7 @@
             }
           },
           "404": {
-            "description": "Shared catalog not found",
+            "description": "Shared catalog not found; with ?permanent=true, also returned when the catalog is not yet unpublished (permanent delete requires unpublishing first)",
             "content": {
               "application/json": {
                 "schema": {
@@ -7275,7 +7329,8 @@
           },
           "totalWeight": {
             "type": "number",
-            "nullable": true
+            "nullable": true,
+            "description": "Gross weight (spool + filament) in grams. On create, when provided without a `spools` array the server auto-creates ONE initial spool carrying this weight and nulls the top-level field — spool-based filaments track weight per spool."
           },
           "dryingTemperature": {
             "type": "number",
@@ -7385,6 +7440,61 @@
           "name",
           "vendor",
           "type"
+        ]
+      },
+      "FilamentCreateInput": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/FilamentInput"
+          },
+          {
+            "type": "object",
+            "description": "Create-only additions. `spools` is honored ONLY on POST — the PUT handler strips `body.spools` (spool subdocuments are managed via the dedicated /spools endpoints after creation).",
+            "properties": {
+              "spools": {
+                "type": "array",
+                "description": "Initial spool subdocuments. Each entry is allow-listed to the fields below; everything else (usageHistory, dryCycles, instanceId, createdAt) is stripped or system-assigned. photoDataUrl, the ISO date strings, and locationId are validated with the same contracts as the dedicated spool routes. When omitted, a top-level totalWeight auto-creates one spool.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "totalWeight": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "lotNumber": {
+                      "type": "string"
+                    },
+                    "purchaseDate": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "ISO date string (YYYY-MM-DD or full ISO 8601); must name a real calendar date."
+                    },
+                    "openedDate": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "ISO date string (YYYY-MM-DD or full ISO 8601); must name a real calendar date."
+                    },
+                    "locationId": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Must reference an active Location."
+                    },
+                    "photoDataUrl": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "Raster-image data URL (JPEG/PNG/GIF/WebP/AVIF/HEIC/HEIF only, max 5 MB; SVG is rejected)."
+                    },
+                    "retired": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          }
         ]
       },
       "Nozzle": {

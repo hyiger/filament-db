@@ -87,6 +87,8 @@ From any filament's detail page:
 
 > An NTAG215/216 holds the full OpenTag3D image; a smaller NTAG213 only fits the core fields (you'll get a notice that the spool ID and remaining weight were omitted). A combined filament type like `PA12-CF` is split into OpenTag3D's separate base (`PA12`) + modifier (`CF`) slots.
 
+> **If a blank NTAG's size can't be auto-detected** (the tag doesn't answer the sizing query), the app asks you to pick the tag type — NTAG213, 215, or 216 — before writing. Tick **"Remember this — don't ask again"** to save your choice as the default so batch writing stops re-prompting on every tag; the saved default can be changed later under **Settings → Devices** (the "Default NTAG type" setting, where "Ask each time" restores the prompt). *(v1.64.2)*
+
 **Before overwriting, the app checks the tag** (v1.34.8 / #583):
 
 - If the tag **already holds data**, you get a confirmation prompt naming what's on it before it's overwritten.

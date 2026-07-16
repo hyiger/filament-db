@@ -31,7 +31,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 - **NFC tag read/write/erase** -- read, write, and erase [OpenPrintTag](https://openprinttag.org/) (NFC-V / ISO 15693) and [OpenTag3D](https://opentag3d.info/) (NTAG213/215/216) tags, and read Bambu Lab MIFARE Classic spool tags, using an ACR1552U reader (desktop app). Write/erase auto-detect the tag type; read-only locking is OpenPrintTag-only (the NTAG capability container is one-time-programmable)
 - **NFC scan → slicer preset** -- live Server-Sent Events stream at `GET /api/scan/stream` emits each tag read so a subscribed PrusaSlicer / OrcaSlicer FilamentDB module can auto-select the matching filament preset by name; the most recent scan replays on connect so a slicer opened just after a tag read still picks it up
 - **Instance IDs** -- unique per-spool identifier (5-byte hex, Prusament-compatible), written to NFC tags and QR labels and resolved first by tag/QR matching (the filament-level id is kept as a legacy fallback)
-- **Label printer (Brother PT-P710BT)** -- print a 24mm-tape spool label directly from the filament detail page over **USB** (the printer's Bluetooth is mobile-only; the desktop app prints through the OS print system — CUPS on macOS/Linux, the spooler on Windows). The layout is **configurable under Settings → Label format** with a live preview: QR placement (left / right / off), which text fields (presets + toggles for name / vendor / type / color, stacked), curated font + size, horizontal/vertical orientation, and invert (white-on-black, QR stays scannable). The QR encodes either the spool instance ID (compact, re-scans into the match endpoint) or a deep-link URL (chosen per print, sticky default). Bitmap is rendered renderer-side and serialized via the Brother raster command set; the same code path supports a `Print` button in the dialog (Electron) or a `.bin` download for offline inspection via the `npm run label:sim` simulator (web)
+- **Label printer (Brother PT-P710BT)** -- print a 24mm-tape spool label directly from the filament detail page over **USB** (the printer's Bluetooth is mobile-only; the desktop app prints through the OS print system — CUPS on macOS/Linux, the spooler on Windows). The layout is **configurable under Settings → Devices → Label format** with a live preview: QR placement (left / right / off), which text fields (presets + toggles for name / vendor / type / color, stacked), curated font + size, horizontal/vertical orientation, and invert (white-on-black, QR stays scannable). The QR encodes either the spool instance ID (compact, re-scans into the match endpoint) or a deep-link URL (chosen per print, sticky default). Bitmap is rendered renderer-side and serialized via the Brother raster command set; the same code path supports a `Print` button in the dialog (Electron) or a `.bin` download for offline inspection via the `npm run label:sim` simulator (web)
 
 ### Sharing & Comparison
 - **Shared catalogs** -- publish a static snapshot of selected filaments (with referenced nozzles/printers/bed-types) under a short public slug so another user or machine can import the set. Atomic view counts. Optional expiry.
@@ -72,7 +72,7 @@ A desktop and web application for managing 3D printing filament profiles. Import
 
 ### Developer
 - **REST API** -- full CRUD endpoints for filaments, nozzles, printers, and bed types
-- **PrusaSlicer API** -- `GET /api/filaments/prusaslicer` exports filaments as a PrusaSlicer-compatible INI config bundle (one section per filament); calibration overrides are applied dynamically via `GET /api/filaments/{id}/calibration`; `POST` imports bundles back
+- **PrusaSlicer API** -- `GET /api/filaments/prusaslicer` exports filaments as a PrusaSlicer-compatible INI config bundle (one section per filament — or, for a filament calibrated on two or more distinct nozzles, one nozzle-suffixed section per nozzle with that nozzle's filament-scoped calibration baked in — pressure advance stays dynamic); calibration overrides are otherwise applied dynamically via `GET /api/filaments/{id}/calibration`; `POST` imports bundles back
 - **Scan stream (SSE)** -- `GET /api/scan/stream` Server-Sent Events feed and `POST /api/scan/publish` for fanning NFC tag reads to slicer integrations or other subscribers in real time
 - **API documentation** -- API reference plus interactive Swagger UI at `/api-docs` with an OpenAPI 3.0 spec for the documented REST surface
 
@@ -175,9 +175,14 @@ filament-db/
 │   └── models/                 # Mongoose schemas (Filament, Nozzle, Printer, BedType, Location, PrintHistory, SharedCatalog)
 ├── tests/                      # Vitest unit + route + Mongoose model + electron sync tests
 ├── .github/workflows/
-│   ├── test.yml             # CI: tests on push/PR (Node 20 & 22)
-│   ├── release.yml          # CD: build desktop installers on version tags (4 platforms)
-│   └── docker.yml           # CD: build and push Docker image to GHCR on version tags
+│   ├── ci-gate.yml          # Reusable full CI gate (lint, typechecks, coverage tests, audit, build, smoke) run by release.yml + docker.yml
+│   ├── test.yml             # CI: the same gate inline on push/PR (Node 20 & 22)
+│   ├── release.yml          # CD: build desktop installers on version tags (6 build configurations: macOS/Windows/Linux, x64 + arm64)
+│   ├── docker.yml           # CD: build and push the multi-arch Docker image to GHCR on version tags
+│   ├── release-bump.yml     # Manual version-bump PR (package.json, package-lock.json, openapi.json)
+│   ├── mobile.yml           # CI for packages/mobile (its own lint + typecheck + audit, path-filtered)
+│   ├── eas-build-mobile.yml # Manual Expo EAS build of the mobile companion app
+│   └── reference-drift.yml  # Weekly check that the bundled technical reference matches the live wiki
 ├── electron-builder.yml     # Electron packaging config (macOS, Windows, Linux x64/arm64)
 └── vitest.config.ts         # Test config with coverage thresholds
 ```

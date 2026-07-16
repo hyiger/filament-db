@@ -26,7 +26,7 @@ Für Atlas- und Hybrid-Modus brauchst du eine MongoDB-Atlas-Verbindungszeichenfo
 
 Filament DB als Docker-Container betreiben. Das Image ist ~72 MB groß, basiert auf `node:22-alpine` und unterstützt sowohl `linux/amd64` als auch `linux/arm64` (Raspberry Pi).
 
-> **Hinweis:** Das Docker-Image betreibt nur die Web-App. NFC-Tag-Lesen/Schreiben erfordert die [Desktop-App](#option-1-desktop-app-am-einfachsten) für den direkten USB-Hardwarezugriff.
+> **Hinweis:** Das Docker-Image betreibt nur die Web-App. NFC-Tag-Lesen/Schreiben (OpenPrintTag, Bambu und OpenTag3D) erfordert die [Desktop-App](#option-1-desktop-app-am-einfachsten) für den direkten USB-Hardwarezugriff.
 
 ### Schnellstart
 
@@ -128,6 +128,8 @@ Es gibt zwei Wege, eine exponierte Instanz abzusichern — je nachdem, **wer** s
   > **Das Bearer-Gate ist Alles-oder-Nichts und deaktiviert die Browser-Web-UI.** Die Web-UI sendet einfache Same-Origin-Anfragen ohne den Schlüssel, daher lädt die UI zwar, aber jeder Aufruf liefert `401`. Es gibt bewusst keine Same-Origin-Ausnahme (diese Signale sind fälschbar). Nutze den Schlüssel nur, wenn der Zugriff auf diese Instanz nicht über die Browser-UI erfolgt.
 
 - **Browser-Web-UI-Zugriff über das LAN** — verlasse dich **nicht** auf `FILAMENTDB_API_KEY` (er bricht die UI, siehe oben). Binde stattdessen den Port an Loopback und nutze die Desktop-App, oder stelle Filament DB hinter einen **authentifizierenden Reverse-Proxy** (nginx/Caddy/Authelia mit Basic-Auth, SSO oder mTLS), der die Authentifizierung übernimmt, bevor die Anfrage die App erreicht. Wenn du einen Reverse-Proxy nutzt, **binde Filament DB selbst an Loopback** (`-p 127.0.0.1:3456:3000` bei Docker, `HOSTNAME=127.0.0.1` beim systemd-Dienst) oder sperre den direkten Port per Firewall — sonst bleibt die App unter `http://<host>:3456` erreichbar und Browser-Nutzer umgehen den Proxy direkt zur nicht authentifizierten API. Der Proxy muss der einzige Zugang sein.
+
+  > **Konfiguriere den Proxy so, dass er den ursprünglichen `Host`-Header (inklusive Port) beibehält.** Der CSRF-Guard der App vergleicht den `Origin` einer Anfrage mit ihrem `Host`. Ein Proxy, der `Host` auf die Upstream-Adresse umschreibt (z. B. nginx' bloßes `proxy_pass`, das `Host: 127.0.0.1:3000` sendet), lässt Browser-Anfragen wie Cross-Origin aussehen, sodass sie mit `403` abgelehnt werden. **Das betrifft normale Mutationen moderner Browser** (Erstellen/Bearbeiten/Löschen), nicht nur Randfälle — Browser senden `Origin` bei Same-Origin-`POST`/`PUT`/`PATCH`/`DELETE`, und der Guard vergleicht ihn unabhängig von `Sec-Fetch`-Metadaten mit `Host`. Für nginx verwende `proxy_set_header Host $http_host;` — **`$http_host`, nicht `$host`**: `$host` verwirft den Port, sodass eine unter `http://box:3456` betriebene Instanz `Host: box` weiterleiten würde und der Portvergleich des Guards weiterhin mit `403` ablehnt. Füge außerdem `proxy_set_header X-Forwarded-Proto $scheme;` hinzu. Caddys `reverse_proxy` behält den vollständigen `Host` standardmäßig bei.
 
 ### Aus Quellen bauen
 
@@ -337,7 +339,7 @@ journalctl -u filament-db -f            # Logs verfolgen
 
 ### NFC neben dem Dienst nutzen
 
-Die Desktop-App enthält NFC-Tag-Lese/Schreibe-Unterstützung, die direkten USB-Zugriff auf einen NFC-Reader erfordert. Da sowohl der Web-Dienst als auch die Desktop-App einen Next.js-Server starten, betreibe die Desktop-App auf einem anderen Port, damit der Web-Dienst weiterhin für PrusaSlicer und andere Netzwerkclients verfügbar bleibt:
+Die Desktop-App enthält NFC-Tag-Lese/Schreibe-Unterstützung (OpenPrintTag, Bambu und OpenTag3D), die direkten USB-Zugriff auf einen NFC-Reader erfordert. Da sowohl der Web-Dienst als auch die Desktop-App einen Next.js-Server starten, betreibe die Desktop-App auf einem anderen Port, damit der Web-Dienst weiterhin für PrusaSlicer und andere Netzwerkclients verfügbar bleibt:
 
 ```bash
 PORT=3457 "/opt/Filament DB/filament-db"
