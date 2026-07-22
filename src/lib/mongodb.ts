@@ -641,6 +641,21 @@ export default async function dbConnect() {
  * dbConnect retries (and, per the r7 prerequisite posture, fails requests
  * until the DB reaches a terminal cleanup state again).
  */
+/** Thrown when the DURABLE marker state could not be updated to reflect the
+ * restore — nothing was invalidated, so no later dbConnect (or restart) will
+ * re-run the cleanup. The caller must NOT report the retry as scheduled; the
+ * snapshot route surfaces this as a restore failure so the user re-runs the
+ * (idempotent) restore instead. Codex P1 r16. */
+export class RestoreCleanupInvalidationError extends Error {
+  constructor(cause: unknown) {
+    super(
+      "snapshot restore could not update the legacyNozzleConditions cleanup marker — re-run the restore",
+      { cause },
+    );
+    this.name = "RestoreCleanupInvalidationError";
+  }
+}
+
 export async function rerunLegacyNozzleCleanupAfterRestore(
   snapshotIsPostCleanup: boolean,
 ): Promise<void> {
@@ -650,19 +665,45 @@ export async function rerunLegacyNozzleCleanupAfterRestore(
   const markers = db.collection("_migrations");
 
   if (snapshotIsPostCleanup) {
-    await markers.updateOne(
-      { _id: "legacyNozzleConditions" as never },
-      {
-        $set: { completed: true, completedAt: new Date() },
-        $setOnInsert: { claimedAt: new Date(), processed: [] },
-      },
-      { upsert: true },
-    );
+    try {
+      await markers.updateOne(
+        { _id: "legacyNozzleConditions" as never },
+        {
+          $set: { completed: true, completedAt: new Date() },
+          $setOnInsert: { claimedAt: new Date(), processed: [] },
+        },
+        { upsert: true },
+      );
+    } catch (err) {
+      // Without a completed marker a later first-connect could re-judge the
+      // restored post-cleanup pins — surface as a restore failure (r16).
+      throw new RestoreCleanupInvalidationError(err);
+    }
     if (cached) cached.migrations.legacyNozzleConditions = true;
     return;
   }
 
-  await markers.deleteOne({ _id: "legacyNozzleConditions" as never });
+  // Codex P1 r16: the durable invalidation is ONE atomic marker conversion
+  // (completed → released, prior-world observations wiped, claim token
+  // unset so any in-flight pre-restore runner is fenced out). If it fails,
+  // NOTHING changed — the completed marker and the true flag both stand — so
+  // the "dbConnect will retry" promise would be a lie even across restarts;
+  // surface it as a restore failure instead (the restore is idempotent).
+  // A matched-nothing result is fine: no marker existed, nothing to convert.
+  try {
+    await markers.updateOne(
+      { _id: "legacyNozzleConditions" as never },
+      {
+        $set: { released: true, processed: [] },
+        $unset: { completed: "", completedAt: "", claimToken: "" },
+      },
+    );
+  } catch (err) {
+    throw new RestoreCleanupInvalidationError(err);
+  }
+  // Codex P1 r12 ordering: only AFTER the durable state reflects "not
+  // completed" may the process-local flag flip — a racer can then never
+  // observe (flag false + completed marker) and flip it back.
   if (cached) cached.migrations.legacyNozzleConditions = false;
   const result = await clearLegacyNozzleConditionsOnce(db as unknown as MinimalDb);
   if (result.ran && result.cleared > 0) {

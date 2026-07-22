@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
-import dbConnect, { rerunLegacyNozzleCleanupAfterRestore } from "@/lib/mongodb";
+import dbConnect, {
+  rerunLegacyNozzleCleanupAfterRestore,
+  RestoreCleanupInvalidationError,
+} from "@/lib/mongodb";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { checkContentLength } from "@/lib/apiErrorHandler";
 import Filament from "@/models/Filament";
@@ -550,6 +553,22 @@ async function restoreSnapshot(request: NextRequest) {
     try {
       await rerunLegacyNozzleCleanupAfterRestore(snapshot.legacyNozzleCleanupComplete === true);
     } catch (cleanupErr) {
+      // Codex P1 r16: distinguish the two failure shapes. If the DURABLE
+      // marker state was never updated, no later dbConnect (or restart) will
+      // re-run the cleanup — reporting success would strand restored legacy
+      // conditions forever. The restore is idempotent, so fail the request
+      // and have the user run it again. A failure AFTER the durable
+      // invalidation genuinely retries on the next connect.
+      if (cleanupErr instanceof RestoreCleanupInvalidationError) {
+        console.error("[snapshot] Restore cleanup invalidation failed:", cleanupErr);
+        return NextResponse.json(
+          {
+            error:
+              "Snapshot data was restored, but the legacy nozzle-condition cleanup could not be scheduled. Run the restore again.",
+          },
+          { status: 500 },
+        );
+      }
       console.error(
         "[snapshot] Post-restore legacy nozzle-condition cleanup failed (dbConnect will retry):",
         cleanupErr,

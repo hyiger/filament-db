@@ -608,6 +608,47 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     expect(await conditionOf("hot-variant")).toBe("nozzle_diameter[0]==0.4"); // not cleared under drifted ticks
   });
 
+  it("re-derives OWN-tick rows from fresh nozzle docs before the clear — a mid-run diameter edit skips the row (r16)", async () => {
+    // A nozzle DOC edit (diameter change / purge) changes the derivation
+    // without touching the filament row, so the child's condition+updatedAt
+    // predicate cannot see it — only the fresh-doc re-derivation can.
+    const noz04 = await seedNozzle(0.4);
+    await seed("own-tick-drift", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    const real = db();
+    let nozzleFinds = 0;
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "nozzles") return col;
+        return {
+          findOne: col.findOne.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: col.updateOne.bind(col),
+          find: (filter: Record<string, unknown>, opts?: Record<string, unknown>) => {
+            nozzleFinds += 1;
+            const isRevalidation = nozzleFinds >= 2; // 1 = scan join, 2+ = pre-clear re-read
+            return {
+              toArray: async () => {
+                if (isRevalidation) {
+                  // The nozzle's diameter is edited between the scan and the
+                  // destructive write.
+                  await rawDb()
+                    .collection("nozzles")
+                    .updateOne({ _id: noz04 }, { $set: { diameter: 0.8 } });
+                }
+                return col.find(filter, opts).toArray();
+              },
+            };
+          },
+        };
+      },
+    };
+    const res = await clearLegacyNozzleConditionsOnce(wrapper);
+    expect(res).toEqual({ ran: true, cleared: 0 });
+    expect(nozzleFinds).toBeGreaterThanOrEqual(2);
+    expect(await conditionOf("own-tick-drift")).toBe("nozzle_diameter[0]==0.4"); // preserved
+  });
+
   it("skips the clear when the provenance parent is DELETED mid-run (r15 revalidation)", async () => {
     const noz04 = await seedNozzle(0.4);
     const parentId = await seed("vanishing-parent", undefined, { compatibleNozzles: [noz04] });

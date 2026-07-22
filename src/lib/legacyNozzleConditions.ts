@@ -367,8 +367,13 @@ export async function clearLegacyNozzleConditionsOnce(
       observed: string;
       observedUpdatedAt: unknown;
       /** Set when provenance came through the parent — the pre-clear
-       * revalidation re-reads THIS parent (Codex P2 r15). */
+       * revalidation re-reads THIS parent's ref list (Codex P2 r15). */
       viaParent: unknown;
+      /** The effective refs at scan time — the pre-clear revalidation
+       * re-fetches their nozzle DOCS fresh (Codex P2 r16: a nozzle's
+       * diameter edit or purge changes the derivation without touching the
+       * filament row, so the child predicate alone can't see it). */
+      refs: unknown[];
     }
     const toClear: ClearEntry[] = [];
     for (const c of fresh) {
@@ -380,6 +385,7 @@ export async function clearLegacyNozzleConditionsOnce(
           observed: stored as string,
           observedUpdatedAt: c.updatedAt,
           viaParent: hasOwn(c) ? null : c.parentId,
+          refs: effectiveRefsOf(c),
         });
       }
     }
@@ -397,6 +403,7 @@ export async function clearLegacyNozzleConditionsOnce(
           observed: stored as string,
           observedUpdatedAt: c.updatedAt,
           viaParent: hasOwn(c) ? null : c.parentId,
+          refs: effectiveRefsOf(c),
         });
       }
     }
@@ -443,25 +450,30 @@ export async function clearLegacyNozzleConditionsOnce(
       // user save in between bumps updatedAt and blocks it.
       const owned = await markers.findOne({ _id: MARKER_ID });
       if (!owned || owned.claimToken !== token) throw new LegacyCleanupInProgressError();
-      // Codex P2 r15: for a row whose provenance came through its PARENT, the
-      // conditional filter below cannot see a parent tick edit (the child's
-      // updatedAt is untouched by it) — so re-read the ACTIVE parent and
-      // re-derive immediately before the write; any drift skips the row. The
-      // residual single-write window is the same benign-convergent one as the
-      // ownership re-check above. Own-tick rows need no re-read: their tick
-      // edits bump the child's own updatedAt, which the filter re-asserts.
+      // Codex P2 r15/r16: the conditional filter below can only see CHILD-row
+      // changes — it cannot see a PARENT tick edit (r15) or a referenced
+      // nozzle DOC's diameter edit / purge (r16), neither of which touches
+      // the child's updatedAt. So re-derive immediately before the write:
+      // for parent-provenance rows re-read the ACTIVE parent's ref list; for
+      // own-tick rows the scan-time ref list still holds (its mutation bumps
+      // the child's updatedAt, which the filter re-asserts) — then fetch the
+      // nozzle DOCS fresh either way and require the derivation to still
+      // equal the value being cleared; any drift skips the row. The residual
+      // single-write window is the same benign-convergent one as the
+      // ownership re-check above.
+      let refsNow: unknown[] = entry.refs;
       if (entry.viaParent != null) {
         const parentNow = await filaments.findOne({ _id: entry.viaParent, _deletedAt: null });
-        const parentRefs = Array.isArray(parentNow?.compatibleNozzles)
+        refsNow = Array.isArray(parentNow?.compatibleNozzles)
           ? (parentNow!.compatibleNozzles as unknown[])
           : [];
-        const parentDocs = parentRefs.length
-          ? await nozzles
-              .find({ _id: { $in: parentRefs } }, { projection: { _id: 1, diameter: 1 } })
-              .toArray()
-          : [];
-        if (deriveLegacyNozzleCondition(parentDocs) !== entry.observed) continue;
       }
+      const freshDocs = refsNow.length
+        ? await nozzles
+            .find({ _id: { $in: refsNow } }, { projection: { _id: 1, diameter: 1 } })
+            .toArray()
+        : [];
+      if (deriveLegacyNozzleCondition(freshDocs) !== entry.observed) continue;
       const res = await filaments.updateOne(
         {
           _id: entry._id,

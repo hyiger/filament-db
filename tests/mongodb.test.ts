@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import dbConnect, {
   isDuplicateKeyError,
   rerunLegacyNozzleCleanupAfterRestore,
+  RestoreCleanupInvalidationError,
 } from "@/lib/mongodb";
 
 describe("dbConnect", () => {
@@ -1209,6 +1210,7 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     const rawDb = mongoose.connection.db!;
     const realCollection = rawDb.collection.bind(rawDb);
     let flagSeenByRacerPath = false;
+    let raced = false;
     const collSpy = vi
       .spyOn(rawDb, "collection")
       .mockImplementation(((name: string) => {
@@ -1218,17 +1220,26 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
           (col as any).updateOne = () => Promise.reject(new Error("transient"));
         }
         if (name === "_migrations") {
-          const realDeleteOne = col.deleteOne.bind(col);
+          const realUpdateOne = col.updateOne.bind(col);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (col as any).deleteOne = async (filter: Record<string, unknown>) => {
-            // The racer connects at the worst moment. Pre-fix (flag flipped
-            // BEFORE the delete) it would observe flag-false + completed
-            // marker → "already-done" → flip the flag back to TRUE, silently
+          (col as any).updateOne = async (
+            filter: Record<string, unknown>,
+            update: Record<string, unknown>,
+          ) => {
+            // Intercept the durable INVALIDATION write (the FIRST
+            // released-carrying marker write; the cleanup's own release-mark
+            // comes later and must pass through untouched). The racer
+            // connects at the worst moment. Pre-fix (flag flipped BEFORE the
+            // invalidation) it would observe flag-false + completed marker →
+            // "already-done" → flip the flag back to TRUE, silently
             // cancelling the retry. Post-fix the flag is still true here, so
             // it early-returns without touching migration state.
-            await dbConnect();
-            flagSeenByRacerPath = cached.migrations.legacyNozzleConditions;
-            return realDeleteOne(filter);
+            if (!raced && JSON.stringify(update).includes("released")) {
+              raced = true;
+              await dbConnect();
+              flagSeenByRacerPath = cached.migrations.legacyNozzleConditions;
+            }
+            return realUpdateOne(filter, update);
           };
         }
         return col;
@@ -1255,5 +1266,58 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
 
     await Filament.collection.deleteMany({ name: "RestoreRace" });
     await mongoose.connection.db!.collection("nozzles").deleteMany({ name: "LNCR 0.4" });
+  });
+
+  it("a failed durable invalidation surfaces RestoreCleanupInvalidationError and changes NOTHING (r16)", async () => {
+    await dbConnect();
+    await deleteMarker();
+    const cached = resetMigrations();
+    await dbConnect(); // completes the cleanup: marker completed, flag true
+    expect(cached.migrations.legacyNozzleConditions).toBe(true);
+
+    const rawDb = mongoose.connection.db!;
+    const realCollection = rawDb.collection.bind(rawDb);
+    const collSpy = vi
+      .spyOn(rawDb, "collection")
+      .mockImplementation(((name: string) => {
+        const col = realCollection(name);
+        if (name === "_migrations") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).updateOne = () => Promise.reject(new Error("marker write down"));
+        }
+        return col;
+      }) as never);
+    try {
+      // The durable state was never touched — reporting "will retry" would be
+      // a lie (even across restarts), so the typed error must surface…
+      await expect(rerunLegacyNozzleCleanupAfterRestore(false)).rejects.toBeInstanceOf(
+        RestoreCleanupInvalidationError,
+      );
+      // …and both the marker and the process-local flag are untouched.
+      expect(cached.migrations.legacyNozzleConditions).toBe(true);
+    } finally {
+      collSpy.mockRestore();
+    }
+    const marker = await mongoose.connection.db!.collection("_migrations").findOne(MARKER);
+    expect(marker!.completed).toBe(true);
+
+    // Same posture for the post-cleanup branch's marker upsert.
+    const collSpy2 = vi
+      .spyOn(rawDb, "collection")
+      .mockImplementation(((name: string) => {
+        const col = realCollection(name);
+        if (name === "_migrations") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).updateOne = () => Promise.reject(new Error("marker write down"));
+        }
+        return col;
+      }) as never);
+    try {
+      await expect(rerunLegacyNozzleCleanupAfterRestore(true)).rejects.toBeInstanceOf(
+        RestoreCleanupInvalidationError,
+      );
+    } finally {
+      collSpy2.mockRestore();
+    }
   });
 });

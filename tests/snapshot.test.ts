@@ -160,6 +160,63 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(marker?.completed).toBe(true);
   });
 
+  it("returns 500 (not fake success) when the cleanup invalidation cannot be persisted (GH #1021 r16)", async () => {
+    const { vi } = await import("vitest");
+    // Steady state: cleanup completed on this DB.
+    await mongoose.connection.db!.collection("_migrations").deleteMany({});
+    await mongoose.connection.db!.collection("_migrations").insertOne({
+      _id: "legacyNozzleConditions" as never,
+      claimedAt: new Date(),
+      completed: true,
+      processed: [],
+    });
+    const snapshot = {
+      version: 2, // pre-provenance backup → restore wants to re-clean
+      createdAt: new Date().toISOString(),
+      collections: {
+        filaments: [{ name: "Snap Inv PLA", vendor: "X", type: "PLA" }],
+        nozzles: [],
+        printers: [],
+        bedTypes: [],
+      },
+    };
+
+    const rawDb = mongoose.connection.db!;
+    const realCollection = rawDb.collection.bind(rawDb);
+    const collSpy = vi
+      .spyOn(rawDb, "collection")
+      .mockImplementation(((name: string) => {
+        const col = realCollection(name);
+        if (name === "_migrations") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).updateOne = () => Promise.reject(new Error("marker write down"));
+        }
+        return col;
+      }) as never);
+    try {
+      const req = new NextRequest("http://localhost/api/snapshot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(snapshot),
+      });
+      const res = await POST(req);
+      // The durable invalidation never landed: a success response claiming
+      // "will retry" would strand the restored legacy conditions forever.
+      expect(res.status).toBe(500);
+      expect((await res.json()).error).toMatch(/run the restore again/i);
+    } finally {
+      collSpy.mockRestore();
+    }
+    // The data itself WAS restored (the restore is idempotent — re-running it
+    // is the documented recovery).
+    expect(await Filament.countDocuments({ name: "Snap Inv PLA" })).toBe(1);
+    // And the stale completed marker is untouched (nothing half-invalidated).
+    const marker = await mongoose.connection.db!
+      .collection("_migrations")
+      .findOne({ _id: "legacyNozzleConditions" as never });
+    expect(marker?.completed).toBe(true);
+  });
+
   it("re-runs the legacy nozzle-condition cleanup after a restore (GH #1021 r11)", async () => {
     // The one-shot cleanup already COMPLETED on this DB…
     await mongoose.connection.db!.collection("_migrations").deleteMany({});
