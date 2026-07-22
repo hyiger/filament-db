@@ -52,6 +52,15 @@ interface MongooseCache {
      * a converted value lands in [0, 50] — below the threshold for every real
      * input, and the x = 50 boundary maps to itself (a no-op re-match). */
     legacyShrinkage: boolean;
+    /** GH #1021 — clear machine-derived `nozzle_diameter[0]==D [or ...]`
+     * values the pre-#1021 export wrote into
+     * `settings.compatible_printers_condition` and round-trips persisted.
+     * One-shot by design: after this runs, any pure nozzle-only condition in
+     * a settings bag is user-authored by construction, so the export can pass
+     * every pin through untouched (an export-time purge cannot distinguish
+     * the two — Codex P1 ×2 on #1022). Idempotent: cleared values become ""
+     * and never match the regex again. */
+    legacyNozzleConditions: boolean;
   };
 }
 
@@ -88,7 +97,7 @@ export default async function dbConnect() {
     promise: null,
     uri: null,
     migrationsPromise: null,
-    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false },
+    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false },
   };
 
   if (!global.mongoose) {
@@ -103,7 +112,7 @@ export default async function dbConnect() {
     cached.promise = null;
     cached.uri = null;
     cached.migrationsPromise = null;
-    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false };
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false };
   }
 
   // GH #312: a cached connection can go dead after a DB outage or an
@@ -128,7 +137,8 @@ export default async function dbConnect() {
     cached.migrations.nozzlePhysicalInstances &&
     cached.migrations.coreModelIndexes &&
     cached.migrations.purgedZombies &&
-    cached.migrations.legacyShrinkage
+    cached.migrations.legacyShrinkage &&
+    cached.migrations.legacyNozzleConditions
   ) {
     return cached.conn;
   }
@@ -213,6 +223,45 @@ export default async function dbConnect() {
     } catch (err) {
       console.error(
         "[migration] Failed to normalize legacy shrinkage values (will retry on next connect):",
+        err,
+      );
+    }
+  }
+
+  // GH #1021 (Codex P1 ×2 on #1022) — clear machine-derived nozzle-diameter
+  // compatibility conditions. The pre-#1021 export derived
+  // `nozzle_diameter[0]==D [or ...]` from the compatibleNozzles ticks, and any
+  // round-trip (fork sync-back / bulk INI re-import) persisted that value into
+  // `settings.compatible_printers_condition` — hiding the preset in PrusaSlicer
+  // for non-matching printers even after the derivation was removed. Cleared
+  // HERE, once, rather than at export time: post-migration, any pure
+  // nozzle-only condition in a bag is user-authored by construction, so the
+  // export passes all pins through (an export-time purge cannot tell a user's
+  // pure nozzle pin from a stale machine value). Values become "" (the
+  // round-trip "no restriction" representation). Only the exact machine
+  // grammar matches; compound/human expressions are untouched. Idempotent —
+  // "" never matches again. Raw collection.updateMany (no updatedAt bump),
+  // matching the legacyShrinkage precedent; each peer runs it on its own DB.
+  if (!cached.migrations.legacyNozzleConditions) {
+    try {
+      const { default: Filament } = await import("@/models/Filament");
+      const res = await Filament.collection.updateMany(
+        {
+          "settings.compatible_printers_condition": {
+            $regex: /^nozzle_diameter\[0\]==\d+(\.\d+)?( or nozzle_diameter\[0\]==\d+(\.\d+)?)*$/,
+          },
+        },
+        { $set: { "settings.compatible_printers_condition": "" } },
+      );
+      if (res.modifiedCount > 0) {
+        console.log(
+          `[migration] Cleared ${res.modifiedCount} legacy machine-derived nozzle condition(s) (GH #1021)`,
+        );
+      }
+      cached.migrations.legacyNozzleConditions = true;
+    } catch (err) {
+      console.error(
+        "[migration] Failed to clear legacy nozzle conditions (will retry on next connect):",
         err,
       );
     }

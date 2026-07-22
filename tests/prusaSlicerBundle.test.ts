@@ -192,64 +192,23 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.compatible_printers_condition).toBe("printer_model==MK4");
   });
 
-  it("#1021 (Codex P1): a legacy condition MATCHING the ticks derivation is purged (provenance match)", () => {
-    // Pre-#1021 exports derived `nozzle_diameter[0]==D` from the ticks and
-    // round-trips persisted it into settings. The purge matches by PROVENANCE:
-    // stored value === the recomputed derivation from the CURRENT ticks.
-    const cases: Array<[string, Array<{ diameter: number }>]> = [
-      ["nozzle_diameter[0]==0.4", [{ diameter: 0.4 }]],
-      ["nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6", [{ diameter: 0.6 }, { diameter: 0.4 }]],
-      [
-        "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.8",
-        [{ diameter: 0.8 }, { diameter: 0.25 }, { diameter: 0.4 }, { diameter: 0.4 }],
-      ],
-    ];
-    for (const [legacy, nozzles] of cases) {
-      const keys = filamentToSlicerKeys({
-        name: "LegacyPinned",
-        vendor: "X",
-        type: "PLA",
-        diameter: 1.75,
-        temperatures: {},
-        settings: { compatible_printers_condition: legacy },
-        compatibleNozzles: nozzles,
-      });
-      expect(keys.compatible_printers_condition).toBe("");
-    }
-  });
-
-  it("#1022 (Codex P1): a nozzle-only condition NOT matching the ticks is preserved (user-authored)", () => {
-    // A pure nozzle condition whose diameters don't line up with the filament's
-    // ticks cannot have been machine-derived from them — treat it as a genuine
-    // user pin and pass it through.
-    const cases: Array<[string, Array<{ diameter: number }> | undefined]> = [
-      ["nozzle_diameter[0]==0.4", [{ diameter: 0.6 }]], // different diameter ticked
-      ["nozzle_diameter[0]==0.4", []], // no ticks at all
-      ["nozzle_diameter[0]==0.4", undefined], // field absent
-      ["nozzle_diameter[0]==0.6 or nozzle_diameter[0]==0.4", [{ diameter: 0.4 }, { diameter: 0.6 }]], // wrong order ≠ machine output
-    ];
-    for (const [pin, nozzles] of cases) {
-      const keys = filamentToSlicerKeys({
-        name: "UserNozzlePinned",
-        vendor: "X",
-        type: "PLA",
-        diameter: 1.75,
-        temperatures: {},
-        settings: { compatible_printers_condition: pin },
-        ...(nozzles !== undefined ? { compatibleNozzles: nozzles } : {}),
-      });
-      expect(keys.compatible_printers_condition).toBe(pin);
-    }
-  });
-
-  it("#1021 (Codex P1): a compound / human-written condition is NOT purged", () => {
+  it("#1021/#1022: EVERY non-empty bag condition passes through — incl. a pure nozzle-only one", () => {
+    // Post-migration semantics: the `legacyNozzleConditions` startup migration
+    // (src/lib/mongodb.ts) cleared machine-derived values from the DB once, so
+    // any condition remaining in a settings bag is user-authored by
+    // construction. The export must NOT purge at export time — an export-time
+    // rule cannot distinguish a user's pure nozzle pin from a stale machine
+    // value (the two Codex P1 rounds on #1022 hit opposite sides of exactly
+    // that ambiguity).
     for (const pin of [
+      "nozzle_diameter[0]==0.4",
+      "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6",
       "printer_model==MK4 and nozzle_diameter[0]==0.4",
       "nozzle_diameter[0]>=0.4",
       "printer_notes=~/.*PRUSA.*/",
     ]) {
       const keys = filamentToSlicerKeys({
-        name: "HumanPinned",
+        name: "PinnedAnyShape",
         vendor: "X",
         type: "PLA",
         diameter: 1.75,
@@ -261,13 +220,13 @@ describe("filamentToSlicerKeys", () => {
     }
   });
 
-  it("#1021 (Codex P1): the calibration bake re-derives its condition AFTER the legacy purge", () => {
-    // A per-nozzle preset whose bag carries the ticks-derived legacy value:
-    // purge empties it (stored == derivation from the 0.8 tick), then the
-    // calibration bake (fires on absent-or-empty) sets its own nozzle's.
+  it("#1021/#1022: a bag-pinned nozzle condition WINS over the calibration bake (pin precedence)", () => {
+    // Post-migration a bag value is a user pin, and #950's rule applies: the
+    // per-nozzle calibration bake only sets the condition when it is
+    // absent-or-empty — it never overwrites a pin.
     const keys = filamentToSlicerKeys(
       {
-        name: "LegacyCalibrated",
+        name: "PinnedCalibrated",
         vendor: "X",
         type: "PLA",
         diameter: 1.75,
@@ -277,7 +236,7 @@ describe("filamentToSlicerKeys", () => {
       },
       { nozzle: { diameter: 0.4, type: "Brass" }, extrusionMultiplier: 1.02 } as never,
     );
-    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
   });
 
   it("#1021: an EMPTY round-tripped condition stays empty (no nozzle derivation over it)", () => {

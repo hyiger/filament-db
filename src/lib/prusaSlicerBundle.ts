@@ -323,37 +323,6 @@ export function collapsePerNozzleImportSections(
   return out;
 }
 
-/**
- * GH #1021: recompute EXACTLY what the pre-#1021 export derived from the
- * compatibleNozzles ticks (`nozzle_diameter[0]==D` per valid diameter, deduped,
- * ascending, joined by ` or `; "" when no valid diameters). Used to purge that
- * legacy machine value from a round-tripped settings bag by PROVENANCE, not
- * shape: a stored condition is treated as machine-derived only when it equals
- * this recomputation for the same filament — so a user-AUTHORED nozzle-only
- * condition that doesn't line up with the ticks (different diameters, or no
- * ticks at all) is preserved as a genuine pin (Codex P1 on #1022). Residual
- * ambiguity — a user hand-writing precisely the ticks-derived string — is
- * indistinguishable server-side and resolves to purge, matching what the old
- * exporter would have overwritten anyway.
- */
-function legacyDerivedNozzleCondition(compatibleNozzles: unknown): string {
-  if (!Array.isArray(compatibleNozzles)) return "";
-  const diameters = Array.from(
-    new Set(
-      compatibleNozzles
-        .map((n: unknown) =>
-          n != null &&
-          typeof n === "object" &&
-          typeof (n as { diameter?: unknown }).diameter === "number"
-            ? (n as { diameter: number }).diameter
-            : null,
-        )
-        .filter((d): d is number => typeof d === "number" && d > 0),
-    ),
-  ).sort((a, b) => a - b);
-  return diameters.map((d) => `nozzle_diameter[0]==${d}`).join(" or ");
-}
-
 export function filamentToSlicerKeys(
   filament: FilamentDoc,
   // #872: when present, BAKE this per-nozzle calibration's filament-level values
@@ -366,27 +335,16 @@ export function filamentToSlicerKeys(
   // PrusaSlicer keys preserved from a previous import
   const keys: Record<string, string | null> = { ...(filament.settings || {}) };
 
-  // GH #1021 (Codex P1 ×2): purge a LEGACY auto-derived nozzle condition from
-  // the bag before the pin-preservation logic below can treat it as a user pin.
-  // The pre-#1021 export derived `nozzle_diameter[0]==D [or ...]` from the
-  // compatibleNozzles ticks, and any round-trip (the fork's sync-back POST via
-  // mergeSlicerSettings, or a bulk INI re-import via the non-hinted collapse)
-  // PERSISTED that machine value into `settings` — so without this, affected
-  // filaments would stay hidden in PrusaSlicer even after the derivation was
-  // removed. Matching is by PROVENANCE, not shape: the stored value is cleared
-  // only when it EQUALS the recomputed old derivation for this filament's
-  // current ticks (legacyDerivedNozzleCondition). A user-authored nozzle-only
-  // condition that doesn't line up with the ticks, any other expression
-  // (`printer_model==MK4`, compounds), and PrusaSlicer's `nil` marker (null)
-  // all pass through as genuine pins. The per-nozzle calibration bake below
-  // re-sets the condition for calibrated fan-out presets after this clears
-  // (it fires on absent-or-empty).
-  if (typeof keys.compatible_printers_condition === "string" && keys.compatible_printers_condition !== "") {
-    const legacyDerived = legacyDerivedNozzleCondition(filament.compatibleNozzles);
-    if (legacyDerived !== "" && keys.compatible_printers_condition === legacyDerived) {
-      keys.compatible_printers_condition = "";
-    }
-  }
+  // GH #1021 (Codex P1 ×2 on #1022): legacy machine-derived nozzle conditions
+  // (`nozzle_diameter[0]==D [or ...]`, persisted into `settings` by pre-#1021
+  // round-trips) are cleared ONCE by the `legacyNozzleConditions` startup
+  // migration (src/lib/mongodb.ts), NOT here. Post-migration, any condition in
+  // the bag is user-authored by construction — including a pure nozzle-only
+  // one — so this export passes every non-empty value through untouched. An
+  // export-time purge could not distinguish a user's pure nozzle pin from a
+  // stale machine value (both P1 rounds on #1022 hit opposite sides of that
+  // ambiguity); the one-shot migration resolves it by removing the only
+  // source of machine-written values.
 
   // Map structured DB fields → PrusaSlicer INI keys.
   // These override anything in the settings bag.

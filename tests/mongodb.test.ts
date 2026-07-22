@@ -1013,3 +1013,101 @@ describe("legacyShrinkage migration (GH #1008 F1)", () => {
     expect(cached.migrations.legacyShrinkage).toBe(true);
   });
 });
+
+/**
+ * GH #1021 (Codex P1 ×2 on #1022) — one-shot clear of machine-derived
+ * `nozzle_diameter[0]==D [or ...]` compatibility conditions the pre-#1021
+ * export wrote and round-trips persisted into settings. After this runs, any
+ * pure nozzle-only condition in a bag is user-authored by construction, so the
+ * export passes every pin through untouched.
+ */
+describe("legacyNozzleConditions migration (GH #1021)", () => {
+  function resetMigrations() {
+    const cached = (global as Record<string, unknown>).mongoose as {
+      conn: unknown; promise: unknown; migrations: Record<string, boolean>;
+    };
+    cached.migrations = {
+      instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false,
+      nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false,
+      legacyShrinkage: false, legacyNozzleConditions: false,
+    };
+    cached.conn = null;
+    cached.promise = null;
+    return cached;
+  }
+
+  it("clears exact machine-shaped conditions and leaves human expressions + other settings", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    await Filament.collection.insertMany([
+      { name: "MachineSingle", vendor: "T", type: "PLA",
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" } },
+      { name: "MachineMulti", vendor: "T", type: "PLA",
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.6" } },
+      { name: "HumanCompound", vendor: "T", type: "PLA",
+        settings: { compatible_printers_condition: "printer_model==MK4 and nozzle_diameter[0]==0.4" } },
+      { name: "HumanComparison", vendor: "T", type: "PLA",
+        settings: { compatible_printers_condition: "nozzle_diameter[0]>=0.4" } },
+      { name: "NoCondition", vendor: "T", type: "PLA", settings: { cooling: "1" } },
+    ]);
+
+    const cached = resetMigrations();
+    await dbConnect();
+
+    const byName = async (n: string) => Filament.collection.findOne({ name: n });
+    expect((await byName("MachineSingle"))!.settings.compatible_printers_condition).toBe("");
+    expect((await byName("MachineSingle"))!.settings.cooling).toBe("1"); // untouched sibling key
+    expect((await byName("MachineMulti"))!.settings.compatible_printers_condition).toBe("");
+    expect((await byName("HumanCompound"))!.settings.compatible_printers_condition)
+      .toBe("printer_model==MK4 and nozzle_diameter[0]==0.4");
+    expect((await byName("HumanComparison"))!.settings.compatible_printers_condition)
+      .toBe("nozzle_diameter[0]>=0.4");
+    expect((await byName("NoCondition"))!.settings.compatible_printers_condition).toBeUndefined();
+    expect(cached.migrations.legacyNozzleConditions).toBe(true);
+
+    // Idempotence: a second run matches nothing ("" doesn't match the regex).
+    resetMigrations();
+    await dbConnect();
+    expect((await byName("MachineSingle"))!.settings.compatible_printers_condition).toBe("");
+
+    await Filament.collection.deleteMany({
+      name: { $in: ["MachineSingle", "MachineMulti", "HumanCompound", "HumanComparison", "NoCondition"] },
+    });
+  });
+
+  it("leaves the flag false and retries on a transient failure", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+
+    const cached = resetMigrations();
+    // collection.updateMany order in the migration block: (1) purgedZombies via
+    // the model (delegates to collection), (2) legacyShrinkage raw, (3) this
+    // one raw. Pass the first two through, reject the third.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const realUpdateMany = Filament.collection.updateMany.bind(Filament.collection);
+    const updateSpy = vi
+      .spyOn(Filament.collection, "updateMany")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockImplementationOnce(((...args: unknown[]) => (realUpdateMany as any)(...args)) as any)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockImplementationOnce(((...args: unknown[]) => (realUpdateMany as any)(...args)) as any)
+      .mockRejectedValueOnce(new Error("transient"));
+    try {
+      await dbConnect();
+      expect(cached.migrations.legacyShrinkage).toBe(true);
+      expect(cached.migrations.legacyNozzleConditions).toBe(false); // retries next connect
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining("legacy nozzle conditions"),
+        expect.any(Error),
+      );
+    } finally {
+      updateSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+
+    cached.conn = null;
+    cached.promise = null;
+    await dbConnect();
+    expect(cached.migrations.legacyNozzleConditions).toBe(true);
+  });
+});
