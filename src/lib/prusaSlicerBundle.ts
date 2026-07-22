@@ -324,14 +324,35 @@ export function collapsePerNozzleImportSections(
 }
 
 /**
- * GH #1021: the exact machine shape the pre-#1021 export derived from the
- * compatibleNozzles ticks — one or more `nozzle_diameter[0]==<number>` terms
- * joined by ` or `, nothing else. Used to purge that legacy value from a
- * round-tripped settings bag; anything a human plausibly wrote (other
- * variables, `and`, comparisons) deliberately does not match.
+ * GH #1021: recompute EXACTLY what the pre-#1021 export derived from the
+ * compatibleNozzles ticks (`nozzle_diameter[0]==D` per valid diameter, deduped,
+ * ascending, joined by ` or `; "" when no valid diameters). Used to purge that
+ * legacy machine value from a round-tripped settings bag by PROVENANCE, not
+ * shape: a stored condition is treated as machine-derived only when it equals
+ * this recomputation for the same filament — so a user-AUTHORED nozzle-only
+ * condition that doesn't line up with the ticks (different diameters, or no
+ * ticks at all) is preserved as a genuine pin (Codex P1 on #1022). Residual
+ * ambiguity — a user hand-writing precisely the ticks-derived string — is
+ * indistinguishable server-side and resolves to purge, matching what the old
+ * exporter would have overwritten anyway.
  */
-const LEGACY_DERIVED_NOZZLE_CONDITION_RE =
-  /^nozzle_diameter\[0\]==\d+(?:\.\d+)?(?: or nozzle_diameter\[0\]==\d+(?:\.\d+)?)*$/;
+function legacyDerivedNozzleCondition(compatibleNozzles: unknown): string {
+  if (!Array.isArray(compatibleNozzles)) return "";
+  const diameters = Array.from(
+    new Set(
+      compatibleNozzles
+        .map((n: unknown) =>
+          n != null &&
+          typeof n === "object" &&
+          typeof (n as { diameter?: unknown }).diameter === "number"
+            ? (n as { diameter: number }).diameter
+            : null,
+        )
+        .filter((d): d is number => typeof d === "number" && d > 0),
+    ),
+  ).sort((a, b) => a - b);
+  return diameters.map((d) => `nozzle_diameter[0]==${d}`).join(" or ");
+}
 
 export function filamentToSlicerKeys(
   filament: FilamentDoc,
@@ -345,24 +366,26 @@ export function filamentToSlicerKeys(
   // PrusaSlicer keys preserved from a previous import
   const keys: Record<string, string | null> = { ...(filament.settings || {}) };
 
-  // GH #1021 (Codex P1): purge a LEGACY auto-derived nozzle condition from the
-  // bag before the pin-preservation logic below can treat it as a user pin.
+  // GH #1021 (Codex P1 ×2): purge a LEGACY auto-derived nozzle condition from
+  // the bag before the pin-preservation logic below can treat it as a user pin.
   // The pre-#1021 export derived `nozzle_diameter[0]==D [or ...]` from the
   // compatibleNozzles ticks, and any round-trip (the fork's sync-back POST via
   // mergeSlicerSettings, or a bulk INI re-import via the non-hinted collapse)
   // PERSISTED that machine value into `settings` — so without this, affected
   // filaments would stay hidden in PrusaSlicer even after the derivation was
-  // removed. Only the exact machine shape is cleared (pure `nozzle_diameter[0]==`
-  // terms joined by ` or `); any other condition — `printer_model==MK4`,
-  // compound expressions like `printer_model==MK4 and nozzle_diameter[0]==0.4`,
-  // or PrusaSlicer's `nil` marker (null) — is a genuine pin and passes through.
-  // The per-nozzle calibration bake below re-sets the condition for calibrated
-  // fan-out presets after this clears (it fires on absent-or-empty).
-  if (
-    typeof keys.compatible_printers_condition === "string" &&
-    LEGACY_DERIVED_NOZZLE_CONDITION_RE.test(keys.compatible_printers_condition)
-  ) {
-    keys.compatible_printers_condition = "";
+  // removed. Matching is by PROVENANCE, not shape: the stored value is cleared
+  // only when it EQUALS the recomputed old derivation for this filament's
+  // current ticks (legacyDerivedNozzleCondition). A user-authored nozzle-only
+  // condition that doesn't line up with the ticks, any other expression
+  // (`printer_model==MK4`, compounds), and PrusaSlicer's `nil` marker (null)
+  // all pass through as genuine pins. The per-nozzle calibration bake below
+  // re-sets the condition for calibrated fan-out presets after this clears
+  // (it fires on absent-or-empty).
+  if (typeof keys.compatible_printers_condition === "string" && keys.compatible_printers_condition !== "") {
+    const legacyDerived = legacyDerivedNozzleCondition(filament.compatibleNozzles);
+    if (legacyDerived !== "" && keys.compatible_printers_condition === legacyDerived) {
+      keys.compatible_printers_condition = "";
+    }
   }
 
   // Map structured DB fields → PrusaSlicer INI keys.

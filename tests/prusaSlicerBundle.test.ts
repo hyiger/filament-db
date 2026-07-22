@@ -192,16 +192,19 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.compatible_printers_condition).toBe("printer_model==MK4");
   });
 
-  it("#1021 (Codex P1): a LEGACY auto-derived condition persisted in the settings bag is purged", () => {
-    // Pre-#1021 exports derived `nozzle_diameter[0]==D` and round-trips (fork
-    // sync-back / bulk INI re-import) persisted it into settings. Treating it
-    // as a user pin would keep those filaments hidden forever. The exact
-    // machine shape is cleared; single- and multi-term forms alike.
-    for (const legacy of [
-      "nozzle_diameter[0]==0.4",
-      "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6",
-      "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.8",
-    ]) {
+  it("#1021 (Codex P1): a legacy condition MATCHING the ticks derivation is purged (provenance match)", () => {
+    // Pre-#1021 exports derived `nozzle_diameter[0]==D` from the ticks and
+    // round-trips persisted it into settings. The purge matches by PROVENANCE:
+    // stored value === the recomputed derivation from the CURRENT ticks.
+    const cases: Array<[string, Array<{ diameter: number }>]> = [
+      ["nozzle_diameter[0]==0.4", [{ diameter: 0.4 }]],
+      ["nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6", [{ diameter: 0.6 }, { diameter: 0.4 }]],
+      [
+        "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.8",
+        [{ diameter: 0.8 }, { diameter: 0.25 }, { diameter: 0.4 }, { diameter: 0.4 }],
+      ],
+    ];
+    for (const [legacy, nozzles] of cases) {
       const keys = filamentToSlicerKeys({
         name: "LegacyPinned",
         vendor: "X",
@@ -209,8 +212,33 @@ describe("filamentToSlicerKeys", () => {
         diameter: 1.75,
         temperatures: {},
         settings: { compatible_printers_condition: legacy },
+        compatibleNozzles: nozzles,
       });
       expect(keys.compatible_printers_condition).toBe("");
+    }
+  });
+
+  it("#1022 (Codex P1): a nozzle-only condition NOT matching the ticks is preserved (user-authored)", () => {
+    // A pure nozzle condition whose diameters don't line up with the filament's
+    // ticks cannot have been machine-derived from them — treat it as a genuine
+    // user pin and pass it through.
+    const cases: Array<[string, Array<{ diameter: number }> | undefined]> = [
+      ["nozzle_diameter[0]==0.4", [{ diameter: 0.6 }]], // different diameter ticked
+      ["nozzle_diameter[0]==0.4", []], // no ticks at all
+      ["nozzle_diameter[0]==0.4", undefined], // field absent
+      ["nozzle_diameter[0]==0.6 or nozzle_diameter[0]==0.4", [{ diameter: 0.4 }, { diameter: 0.6 }]], // wrong order ≠ machine output
+    ];
+    for (const [pin, nozzles] of cases) {
+      const keys = filamentToSlicerKeys({
+        name: "UserNozzlePinned",
+        vendor: "X",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: {},
+        settings: { compatible_printers_condition: pin },
+        ...(nozzles !== undefined ? { compatibleNozzles: nozzles } : {}),
+      });
+      expect(keys.compatible_printers_condition).toBe(pin);
     }
   });
 
@@ -227,14 +255,16 @@ describe("filamentToSlicerKeys", () => {
         diameter: 1.75,
         temperatures: {},
         settings: { compatible_printers_condition: pin },
+        compatibleNozzles: [{ diameter: 0.4 }],
       });
       expect(keys.compatible_printers_condition).toBe(pin);
     }
   });
 
   it("#1021 (Codex P1): the calibration bake re-derives its condition AFTER the legacy purge", () => {
-    // A per-nozzle preset whose bag carries the legacy value: purge empties it,
-    // then the calibration bake (fires on absent-or-empty) sets its own.
+    // A per-nozzle preset whose bag carries the ticks-derived legacy value:
+    // purge empties it (stored == derivation from the 0.8 tick), then the
+    // calibration bake (fires on absent-or-empty) sets its own nozzle's.
     const keys = filamentToSlicerKeys(
       {
         name: "LegacyCalibrated",
@@ -243,6 +273,7 @@ describe("filamentToSlicerKeys", () => {
         diameter: 1.75,
         temperatures: {},
         settings: { compatible_printers_condition: "nozzle_diameter[0]==0.8" },
+        compatibleNozzles: [{ diameter: 0.8 }],
       },
       { nozzle: { diameter: 0.4, type: "Brass" }, extrusionMultiplier: 1.02 } as never,
     );
