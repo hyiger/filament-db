@@ -26,9 +26,11 @@
  *  - TOCTOU-safe clears: claim serialization only excludes other cleanup
  *    runners, not ordinary filament writers (an Atlas DB shared by several
  *    clients keeps serving them). Each destructive write is therefore a
- *    PER-ROW CONDITIONAL update — filtered on the exact condition value the
- *    scan observed — so a row edited between scan and write is left alone
- *    (its new value is post-cleanup-era user input by definition).
+ *    PER-ROW CONDITIONAL update — filtered on the exact condition value AND
+ *    the exact `updatedAt` the scan observed — so a row saved between scan
+ *    and write is left alone even when the user deliberately re-pinned the
+ *    byte-identical expression (the save bumped `updatedAt`, the filter
+ *    misses, nothing is erased).
  *  - NOT safe to re-run blindly: a pin authored after a row was cleared can
  *    be textually identical to the legacy value it replaced, so neither
  *    completion NOR per-row progress may live in a process-local flag. The
@@ -41,16 +43,22 @@
  *    crash exactly between record and write: that row is skipped on resume
  *    and keeps its legacy value (visible, hand-clearable) — strictly safer
  *    than any path that could erase a pin.
- *  - CLAIM-FIRST + WAIT + RESUME: the marker is inserted (unique `_id`)
- *    BEFORE any destructive write, so racing processes serialize on the
- *    insert; a loser does not proceed while the winner is mid-clear (its
+ *  - CLAIM-FIRST + WAIT + RESUME + FENCE: the marker is inserted (unique
+ *    `_id`) BEFORE any destructive write, so racing processes serialize on
+ *    the insert; a loser does not proceed while the winner is mid-clear (its
  *    writes could be accepted and then erased by the in-flight update) — it
  *    POLLS until the winner completes (→ done) or `waitMs` expires
  *    (→ throws, so the caller keeps its retry state and nothing downstream
  *    treats the DB as clean). A claim marked `released` (failed attempt) or
  *    older than `staleMs` (crashed claimer) is taken over via a CAS on the
  *    observed `claimedAt` — safe precisely because the resume honors the
- *    recorded per-row progress.
+ *    recorded per-row progress. Every acquisition mints a unique
+ *    `claimToken`, and every subsequent marker write (per-row record,
+ *    rollback, release, completion) filters on it — so a legitimately
+ *    long-running holder that gets taken over past `staleMs` is FENCED OUT
+ *    at its next record write (before the row's destructive clear) and
+ *    aborts with the in-progress error instead of double-running, marking
+ *    the new holder's claim released, or completing over it.
  *  - PREREQUISITE for callers: a throw from this helper means the DB is not
  *    in a terminal cleanup state. `dbConnect` RETHROWS it (failing the
  *    current request rather than serving against a mid-clear DB) and
@@ -62,6 +70,8 @@
  *    runs it on BOTH the local and remote DBs before any collection sync)
  *    share one implementation.
  */
+
+import { randomUUID } from "crypto";
 
 /** The exact machine grammar the pre-#1021 export produced — one or more
  * `nozzle_diameter[0]==<number>` terms joined by ` or `, nothing else. Used
@@ -113,16 +123,17 @@ export interface MinimalDb {
     updateOne(
       filter: Record<string, unknown>,
       update: Record<string, unknown>,
-    ): Promise<{ modifiedCount: number }>;
+    ): Promise<{ modifiedCount: number; matchedCount: number }>;
   };
 }
 
-/** Thrown when another process holds a LIVE claim past `waitMs`. Callers must
- * treat it as transient (retry later) and must NOT mark the DB clean. */
+/** Thrown when another process holds a LIVE claim past `waitMs`, or when this
+ * runner discovers its claim was taken over (fenced out mid-run). Callers
+ * must treat it as transient (retry later) and must NOT mark the DB clean. */
 export class LegacyCleanupInProgressError extends Error {
   constructor() {
     super(
-      "legacyNozzleConditions cleanup is in progress in another process; timed out waiting for it to complete",
+      "the legacyNozzleConditions cleanup claim is held by another process (still running, or it took this one over); retry later",
     );
     this.name = "LegacyCleanupInProgressError";
   }
@@ -171,6 +182,9 @@ export async function clearLegacyNozzleConditionsOnce(
   const { waitMs = 15_000, pollMs = 250, staleMs = 10 * 60_000 } = options;
   const markers = db.collection("_migrations");
   const deadline = Date.now() + waitMs;
+  // Fencing token: minted per acquisition; every later marker write filters
+  // on it, so a runner whose claim was taken over aborts instead of writing.
+  const token = randomUUID();
 
   // Observe-or-claim loop: ends by returning (done), throwing (live-claim
   // timeout), or breaking out with the claim held (fresh or resumed).
@@ -178,7 +192,12 @@ export async function clearLegacyNozzleConditionsOnce(
     const existing = await markers.findOne({ _id: MARKER_ID });
     if (!existing) {
       try {
-        await markers.insertOne({ _id: MARKER_ID, claimedAt: new Date(), clearedIds: [] });
+        await markers.insertOne({
+          _id: MARKER_ID,
+          claimedAt: new Date(),
+          claimToken: token,
+          clearedIds: [],
+        });
         break; // fresh claim held — we are the (sole) runner
       } catch (err) {
         if (isDuplicateKey(err)) continue; // lost the race — re-observe the winner
@@ -194,10 +213,11 @@ export async function clearLegacyNozzleConditionsOnce(
       Date.now() - claimedAtMs > staleMs; // crashed claimer
     if (abandoned) {
       // CAS on the observed claimedAt serializes takeover racers; safe to
-      // resume because the work phase honors the recorded clearedIds.
+      // resume because the work phase honors the recorded clearedIds, and the
+      // fresh claimToken fences out the previous holder if it is still alive.
       const takeover = await markers.updateOne(
         { _id: MARKER_ID, claimedAt: claimedAtRaw ?? null, completed: { $ne: true } },
-        { $set: { claimedAt: new Date() }, $unset: { released: "" } },
+        { $set: { claimedAt: new Date(), claimToken: token }, $unset: { released: "" } },
       );
       if (takeover.modifiedCount === 1) break; // resumed claim held
       continue; // lost the CAS — re-observe
@@ -223,7 +243,7 @@ export async function clearLegacyNozzleConditionsOnce(
       await filaments
         .find(
           { "settings.compatible_printers_condition": { $regex: LEGACY_NOZZLE_CONDITION_RE } },
-          { projection: { _id: 1, parentId: 1, compatibleNozzles: 1, "settings.compatible_printers_condition": 1 } },
+          { projection: { _id: 1, parentId: 1, compatibleNozzles: 1, updatedAt: 1, "settings.compatible_printers_condition": 1 } },
         )
         .toArray()
     ).filter((c) => !alreadyCleared.has(String(c._id))); // resume: never re-examine a processed row
@@ -278,29 +298,45 @@ export async function clearLegacyNozzleConditionsOnce(
         const stored = (c.settings as { compatible_printers_condition?: unknown } | undefined)
           ?.compatible_printers_condition;
         return derived !== null && stored === derived
-          ? { _id: c._id, observed: stored as string }
+          ? { _id: c._id, observed: stored as string, observedUpdatedAt: c.updatedAt }
           : null;
       })
-      .filter((entry): entry is { _id: unknown; observed: string } => entry !== null);
+      .filter(
+        (entry): entry is { _id: unknown; observed: string; observedUpdatedAt: unknown } =>
+          entry !== null,
+      );
 
-    // Per-row: RECORD progress first, then the CONDITIONAL clear (filter
-    // re-asserts the exact value the scan observed, so a filament edited by
-    // another client between scan and write keeps its new value —
-    // modifiedCount 0, nothing erased). Record-first means a retry can never
-    // re-examine a row whose clear went through; if the clear THROWS, the
-    // record is best-effort rolled back so the retry re-attempts it.
+    // Per-row: RECORD progress first (FENCED on our claimToken — a
+    // modifiedCount of 0 means another process took the claim over, so abort
+    // BEFORE the destructive write), then the CONDITIONAL clear. The clear's
+    // filter re-asserts the exact condition AND the exact updatedAt the scan
+    // observed, so a row saved by another client between scan and write keeps
+    // its new state even when the re-pinned text is byte-identical (the save
+    // bumped updatedAt). Record-first means a retry can never re-examine a
+    // row whose clear went through; if the clear THROWS, the record is
+    // best-effort rolled back so the retry re-attempts it.
     for (const entry of toClear) {
       const idKey = String(entry._id);
-      await markers.updateOne({ _id: MARKER_ID }, { $addToSet: { clearedIds: idKey } });
+      const recorded = await markers.updateOne(
+        { _id: MARKER_ID, claimToken: token },
+        { $addToSet: { clearedIds: idKey } },
+      );
+      // matchedCount (not modifiedCount): the fence asks "does the claim
+      // still carry OUR token", not "did the $addToSet change anything".
+      if (recorded.matchedCount !== 1) throw new LegacyCleanupInProgressError();
       try {
         const res = await filaments.updateOne(
-          { _id: entry._id, "settings.compatible_printers_condition": entry.observed },
+          {
+            _id: entry._id,
+            "settings.compatible_printers_condition": entry.observed,
+            updatedAt: entry.observedUpdatedAt ?? null,
+          },
           { $set: { "settings.compatible_printers_condition": "" } },
         );
         cleared += res.modifiedCount;
       } catch (err) {
         await markers
-          .updateOne({ _id: MARKER_ID }, { $pull: { clearedIds: idKey } })
+          .updateOne({ _id: MARKER_ID, claimToken: token }, { $pull: { clearedIds: idKey } })
           .catch(() => {});
         throw err;
       }
@@ -308,12 +344,23 @@ export async function clearLegacyNozzleConditionsOnce(
   } catch (err) {
     // Durably mark the attempt released (progress kept) so the next attempt —
     // this process or any other — resumes instead of waiting on a claim
-    // nobody holds. If even this write fails, the claim stays live-shaped:
-    // contenders throw until it goes stale, then the CAS takeover resumes it.
-    await markers.updateOne({ _id: MARKER_ID }, { $set: { released: true } }).catch(() => {});
+    // nobody holds. Fenced: if the claim was taken over, this no-ops and the
+    // new holder's state stands. If the write fails, the claim stays
+    // live-shaped: contenders throw until it goes stale, then the CAS
+    // takeover resumes it.
+    await markers
+      .updateOne({ _id: MARKER_ID, claimToken: token }, { $set: { released: true } })
+      .catch(() => {});
     throw err;
   }
 
-  await markers.updateOne({ _id: MARKER_ID }, { $set: { completed: true, completedAt: new Date() } });
+  // Fenced completion: if the claim was taken over mid-run, the new holder
+  // owns the terminal state — surface the in-progress error instead of
+  // reporting a terminal result the marker does not reflect.
+  const done = await markers.updateOne(
+    { _id: MARKER_ID, claimToken: token },
+    { $set: { completed: true, completedAt: new Date() } },
+  );
+  if (done.matchedCount !== 1) throw new LegacyCleanupInProgressError();
   return { ran: true, cleared };
 }

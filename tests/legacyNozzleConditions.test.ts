@@ -67,7 +67,12 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     const nozJunk = await seedNozzle("not-a-number"); // populate found it, derivation filtered it
     const danglingRef = new mongoose.Types.ObjectId(); // populate → null → contributed nothing
 
-    await seed("machine-single", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    // updatedAt present → the clear predicate matches on its exact value
+    // (rows without one exercise the null fallback).
+    await seed("machine-single", "nozzle_diameter[0]==0.4", {
+      compatibleNozzles: [noz04],
+      updatedAt: new Date(),
+    });
     // Unordered, duplicated, junk-diameter, and dangling entries — the join +
     // frozen derivation dedupe, filter, and sort exactly like populate did.
     await seed("machine-multi", "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.6", {
@@ -177,6 +182,110 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     // …so the conditional clear matches nothing and the new pin survives.
     expect(res).toEqual({ ran: true, cleared: 0 });
     expect(await conditionOf("toctou")).toBe("nozzle_diameter[0]==0.9");
+  });
+
+  it("preserves a deliberately re-pinned IDENTICAL condition via the updatedAt predicate (r9)", async () => {
+    // The text-only predicate can't see a save that re-pins the byte-same
+    // expression — the observed updatedAt in the clear filter can.
+    const noz04 = await seedNozzle(0.4);
+    const rowId = await seed("same-text-repin", "nozzle_diameter[0]==0.4", {
+      compatibleNozzles: [noz04],
+      updatedAt: new Date(Date.now() - 60_000),
+    });
+    const real = db();
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "filaments") return col;
+        return {
+          findOne: col.findOne.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: col.updateOne.bind(col),
+          find: (filter: Record<string, unknown>, opts?: Record<string, unknown>) => {
+            const cursor = col.find(filter, opts);
+            const isCandidateScan = "settings.compatible_printers_condition" in filter;
+            return {
+              toArray: async () => {
+                const rows = await cursor.toArray();
+                if (isCandidateScan) {
+                  // A user SAVES the identical pin after the scan — same text,
+                  // fresh updatedAt (every app save bumps it).
+                  await rawDb().collection("filaments").updateOne(
+                    { _id: rowId },
+                    { $set: { "settings.compatible_printers_condition": "nozzle_diameter[0]==0.4", updatedAt: new Date() } },
+                  );
+                }
+                return rows;
+              },
+            };
+          },
+        };
+      },
+    };
+    const res = await clearLegacyNozzleConditionsOnce(wrapper);
+    expect(res).toEqual({ ran: true, cleared: 0 });
+    expect(await conditionOf("same-text-repin")).toBe("nozzle_diameter[0]==0.4"); // pin survives
+  });
+
+  it("a runner fenced out by a takeover aborts BEFORE any destructive write (r9)", async () => {
+    const noz04 = await seedNozzle(0.4);
+    await seed("fenced", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    const real = db();
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "_migrations") return col;
+        return {
+          findOne: col.findOne.bind(col),
+          find: col.find.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: async (f: Record<string, unknown>, u: Record<string, unknown>) => {
+            // Right before OUR per-row progress record lands, another process
+            // takes the claim over (a run that outlived staleMs) — new token.
+            if (JSON.stringify(u).includes("$addToSet")) {
+              await col.updateOne(MARKER, { $set: { claimToken: "someone-else" } });
+            }
+            return col.updateOne(f, u);
+          },
+        };
+      },
+    };
+    await expect(clearLegacyNozzleConditionsOnce(wrapper)).rejects.toBeInstanceOf(
+      LegacyCleanupInProgressError,
+    );
+    expect(await conditionOf("fenced")).toBe("nozzle_diameter[0]==0.4"); // fenced runner cleared nothing
+    // Its release write no-oped too — the new holder's claim is untouched.
+    const marker = await rawDb().collection("_migrations").findOne(MARKER);
+    expect(marker!.claimToken).toBe("someone-else");
+    expect(marker!.released).toBeUndefined();
+  });
+
+  it("a takeover between the last clear and completion surfaces the in-progress error (r9)", async () => {
+    // No candidate rows, so the completion write is the first fenced write.
+    const real = db();
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "_migrations") return col;
+        return {
+          findOne: col.findOne.bind(col),
+          find: col.find.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: async (f: Record<string, unknown>, u: Record<string, unknown>) => {
+            if (JSON.stringify(u).includes("completed")) {
+              await col.updateOne(MARKER, { $set: { claimToken: "someone-else" } });
+            }
+            return col.updateOne(f, u);
+          },
+        };
+      },
+    };
+    await expect(clearLegacyNozzleConditionsOnce(wrapper)).rejects.toBeInstanceOf(
+      LegacyCleanupInProgressError,
+    );
+    // The taken-over claim was not marked completed by the fenced runner.
+    const marker = await rawDb().collection("_migrations").findOne(MARKER);
+    expect(marker!.completed).toBeUndefined();
   });
 
   it("WAITS on a live claim and resolves already-done when the claimant completes", async () => {
