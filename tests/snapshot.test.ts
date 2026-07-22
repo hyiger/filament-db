@@ -96,6 +96,67 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(names).toEqual(["Restored Glass", "Restored PEI"]);
   });
 
+  it("GET stamps legacyNozzleCleanupComplete from the durable marker (GH #1021 r12)", async () => {
+    await mongoose.connection.db!.collection("_migrations").deleteMany({});
+    let res = await GET(new NextRequest("http://localhost/api/snapshot"));
+    expect(res.status).toBe(200);
+    let body = await res.json();
+    expect(body.legacyNozzleCleanupComplete).toBe(false);
+
+    await mongoose.connection.db!.collection("_migrations").insertOne({
+      _id: "legacyNozzleConditions" as never,
+      claimedAt: new Date(),
+      completed: true,
+      processed: [],
+    });
+    res = await GET(new NextRequest("http://localhost/api/snapshot"));
+    body = await res.json();
+    expect(body.legacyNozzleCleanupComplete).toBe(true);
+  });
+
+  it("a POST-cleanup snapshot's byte-identical pin SURVIVES restore (GH #1021 r12 provenance)", async () => {
+    await mongoose.connection.db!.collection("_migrations").deleteMany({});
+    const nozId = new mongoose.Types.ObjectId();
+    // The backup was taken AFTER the cleanup completed, so this
+    // provenance-matching pure nozzle condition is a user pin.
+    const snapshot = {
+      version: 2,
+      createdAt: new Date().toISOString(),
+      legacyNozzleCleanupComplete: true,
+      collections: {
+        filaments: [
+          {
+            name: "Snap PostClean PLA",
+            vendor: "X",
+            type: "PLA",
+            compatibleNozzles: [String(nozId)],
+            settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+          },
+        ],
+        nozzles: [{ _id: String(nozId), name: "Snap2 0.4", diameter: 0.4, type: "Brass" }],
+        printers: [],
+        bedTypes: [],
+      },
+    };
+
+    const req = new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+
+    const pin = await Filament.findOne({ name: "Snap PostClean PLA" }).lean();
+    expect(pin!.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4"); // NOT re-judged
+    // The durable marker reflects completion so no later first-connect
+    // re-judges the restored rows either.
+    const marker = await mongoose.connection.db!
+      .collection("_migrations")
+      .findOne({ _id: "legacyNozzleConditions" as never });
+    expect(marker?.completed).toBe(true);
+  });
+
   it("re-runs the legacy nozzle-condition cleanup after a restore (GH #1021 r11)", async () => {
     // The one-shot cleanup already COMPLETED on this DB…
     await mongoose.connection.db!.collection("_migrations").deleteMany({});

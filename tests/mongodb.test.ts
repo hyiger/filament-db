@@ -1,6 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
-import dbConnect, { isDuplicateKeyError } from "@/lib/mongodb";
+import dbConnect, {
+  isDuplicateKeyError,
+  rerunLegacyNozzleCleanupAfterRestore,
+} from "@/lib/mongodb";
 
 describe("dbConnect", () => {
   beforeEach(() => {
@@ -1179,5 +1182,78 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
 
     await Filament.collection.deleteMany({ name: "TransientVictim" });
     await mongoose.connection.db!.collection("nozzles").deleteMany({ name: "LNCT 0.4" });
+  });
+
+  it("restore re-clean deletes the marker BEFORE flipping the flag — a racing dbConnect can't cancel the retry (r12)", async () => {
+    // Reach a normal steady state first: cleanup completed, flag true.
+    await dbConnect();
+    await deleteMarker();
+    let cached = resetMigrations();
+    await dbConnect();
+    expect(cached.migrations.legacyNozzleConditions).toBe(true);
+
+    // Simulate a just-restored PRE-upgrade dataset: a stamped machine
+    // condition with tick provenance, sitting under the stale completed marker.
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    const noz = await mongoose.connection.db!.collection("nozzles")
+      .insertOne({ name: "LNCR 0.4", diameter: 0.4 });
+    await Filament.collection.insertOne({
+      name: "RestoreRace", vendor: "T", type: "PLA",
+      compatibleNozzles: [noz.insertedId],
+      settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+    });
+
+    // Rig the re-clean: a dbConnect RACES it inside the marker delete (the
+    // r12 window), and its cleanup then fails transiently.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rawDb = mongoose.connection.db!;
+    const realCollection = rawDb.collection.bind(rawDb);
+    let flagSeenByRacerPath = false;
+    const collSpy = vi
+      .spyOn(rawDb, "collection")
+      .mockImplementation(((name: string) => {
+        const col = realCollection(name);
+        if (name === "filaments") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).updateOne = () => Promise.reject(new Error("transient"));
+        }
+        if (name === "_migrations") {
+          const realDeleteOne = col.deleteOne.bind(col);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).deleteOne = async (filter: Record<string, unknown>) => {
+            // The racer connects at the worst moment. Pre-fix (flag flipped
+            // BEFORE the delete) it would observe flag-false + completed
+            // marker → "already-done" → flip the flag back to TRUE, silently
+            // cancelling the retry. Post-fix the flag is still true here, so
+            // it early-returns without touching migration state.
+            await dbConnect();
+            flagSeenByRacerPath = cached.migrations.legacyNozzleConditions;
+            return realDeleteOne(filter);
+          };
+        }
+        return col;
+      }) as never);
+    try {
+      await expect(rerunLegacyNozzleCleanupAfterRestore(false)).rejects.toThrow("transient");
+      expect(flagSeenByRacerPath).toBe(true); // racer saw the still-true flag (early return)
+      // THE r12 assertion: the failed re-clean leaves the flag FALSE — the
+      // racer could not flip it back — so the retry-on-next-connect survives.
+      expect(cached.migrations.legacyNozzleConditions).toBe(false);
+    } finally {
+      collSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+
+    // And the retry actually happens and finishes the clean.
+    cached = (global as Record<string, unknown>).mongoose as ReturnType<typeof resetMigrations>;
+    cached.conn = null;
+    cached.promise = null;
+    await dbConnect();
+    expect(cached.migrations.legacyNozzleConditions).toBe(true);
+    const cleaned = await Filament.collection.findOne({ name: "RestoreRace" });
+    expect(cleaned!.settings.compatible_printers_condition).toBe("");
+
+    await Filament.collection.deleteMany({ name: "RestoreRace" });
+    await mongoose.connection.db!.collection("nozzles").deleteMany({ name: "LNCR 0.4" });
   });
 });

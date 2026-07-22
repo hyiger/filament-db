@@ -181,9 +181,19 @@ export async function GET(request: NextRequest) {
   //        always cleared SharedCatalog)
   // Older snapshots still restore cleanly because POST destructures
   // missing collections to `[]`.
+  // GH #1021 r12: cleanup provenance. Restore uses this to decide whether the
+  // snapshot's data predates the one-shot legacy nozzle-condition cleanup
+  // (absent/false → re-run it over the restored rows) or is post-cleanup
+  // (true → a byte-identical pure nozzle condition in the backup is a USER
+  // pin, and re-judging it would erase legitimate configuration).
+  const cleanupMarker = await mongoose.connection.db
+    ?.collection("_migrations")
+    .findOne({ _id: "legacyNozzleConditions" as never });
+
   const snapshot = {
     version: CURRENT_SNAPSHOT_VERSION,
     createdAt: new Date().toISOString(),
+    legacyNozzleCleanupComplete: cleanupMarker?.completed === true,
     collections: {
       filaments,
       nozzles,
@@ -243,6 +253,7 @@ async function restoreSnapshot(request: NextRequest) {
 
   let snapshot: {
     version?: number;
+    legacyNozzleCleanupComplete?: boolean;
     collections?: {
       filaments?: unknown[];
       nozzles?: unknown[];
@@ -518,15 +529,17 @@ async function restoreSnapshot(request: NextRequest) {
       results.sharedCatalogs = sharedCatalogs.length;
     }
 
-    // GH #1021 (Codex P1 r11): the restore replaced filaments+nozzles, but
-    // snapshots don't carry `_migrations` — a completed legacyNozzleConditions
-    // marker would keep skipping the cleanup over freshly-restored pre-upgrade
-    // data. Invalidate it and re-clean the restored rows now. Best-effort: a
+    // GH #1021 (Codex P1 r11/r12): the restore replaced filaments+nozzles,
+    // but snapshots don't carry `_migrations` — a completed marker would keep
+    // skipping the cleanup over freshly-restored PRE-upgrade data. The
+    // snapshot's own provenance flag decides (r12): post-cleanup backups keep
+    // their pins (no re-run — a byte-identical condition there is user
+    // input); pre-cleanup/older backups get re-cleaned. Best-effort: a
     // transient failure leaves the process-local flag false, so the next
     // dbConnect retries (and fails requests until terminal, per the r7
     // posture) — the restore itself already succeeded either way.
     try {
-      await rerunLegacyNozzleCleanupAfterRestore();
+      await rerunLegacyNozzleCleanupAfterRestore(snapshot.legacyNozzleCleanupComplete === true);
     } catch (cleanupErr) {
       console.error(
         "[snapshot] Post-restore legacy nozzle-condition cleanup failed (dbConnect will retry):",

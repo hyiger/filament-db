@@ -613,24 +613,57 @@ export default async function dbConnect() {
 }
 
 /**
- * GH #1021 (Codex P1 r11): a snapshot restore REPLACES the filament +
- * nozzle collections, but snapshots neither carry nor touch `_migrations` —
- * so a completed legacyNozzleConditions marker would keep reporting
- * "already-done" over freshly-restored pre-upgrade data, and any stamped
- * machine conditions in the backup would survive and hide presets forever.
- * Call this AFTER a successful restore: it invalidates the durable marker
- * (the restored dataset is a different world — old observations are
- * meaningless) and re-runs the cleanup against the restored rows. On failure
- * the process-local flag stays false, so the next dbConnect retries (and, per
- * the r7 prerequisite posture, fails requests until the DB reaches a terminal
- * cleanup state again).
+ * GH #1021 (Codex P1 r11/r12): a snapshot restore REPLACES the filament +
+ * nozzle collections, but snapshots don't carry `_migrations` — so a
+ * completed legacyNozzleConditions marker would keep reporting "already-done"
+ * over freshly-restored PRE-upgrade data, and any stamped machine conditions
+ * in the backup would survive and hide presets forever. Call this AFTER a
+ * successful restore with the snapshot's own provenance flag
+ * (`legacyNozzleCleanupComplete`, stamped by the snapshot GET since r12):
+ *
+ *  - `true` — the backup's data is already post-cleanup, so a byte-identical
+ *    pure nozzle condition in it is a USER PIN; re-running the intentionally
+ *    non-repeatable cleanup would erase it (Codex P1 r12). We only make sure
+ *    the durable marker reflects completion so no later first-connect
+ *    re-judges the restored rows either.
+ *  - `false`/absent — a pre-upgrade or unknown-provenance backup: invalidate
+ *    the marker (the restored dataset is a different world — old observations
+ *    are meaningless) and re-run the cleanup against the restored rows.
+ *
+ * ORDER MATTERS in the re-run branch (Codex P1 r12): the marker is deleted
+ * BEFORE the process-local flag flips, so no concurrent dbConnect can observe
+ * (flag false + completed marker), return "already-done", and flip the flag
+ * back to true — which would silently cancel the retry-on-next-connect if the
+ * cleanup below then failed transiently. With the marker gone first, a racer
+ * either early-returns on the still-true flag (the same unavoidable dirty
+ * window the restore's own wipe/insert phase has) or joins the cleanup
+ * through the claim protocol. On failure the flag stays false, so the next
+ * dbConnect retries (and, per the r7 prerequisite posture, fails requests
+ * until the DB reaches a terminal cleanup state again).
  */
-export async function rerunLegacyNozzleCleanupAfterRestore(): Promise<void> {
+export async function rerunLegacyNozzleCleanupAfterRestore(
+  snapshotIsPostCleanup: boolean,
+): Promise<void> {
   const cached = global.mongoose;
-  if (cached) cached.migrations.legacyNozzleConditions = false;
   const db = mongoose.connection.db;
   if (!db) throw new Error("no db handle on the mongoose connection");
-  await db.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+  const markers = db.collection("_migrations");
+
+  if (snapshotIsPostCleanup) {
+    await markers.updateOne(
+      { _id: "legacyNozzleConditions" as never },
+      {
+        $set: { completed: true, completedAt: new Date() },
+        $setOnInsert: { claimedAt: new Date(), processed: [] },
+      },
+      { upsert: true },
+    );
+    if (cached) cached.migrations.legacyNozzleConditions = true;
+    return;
+  }
+
+  await markers.deleteOne({ _id: "legacyNozzleConditions" as never });
+  if (cached) cached.migrations.legacyNozzleConditions = false;
   const result = await clearLegacyNozzleConditionsOnce(db as unknown as MinimalDb);
   if (result.ran && result.cleared > 0) {
     console.log(
