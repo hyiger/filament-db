@@ -901,6 +901,49 @@ describe("Bambu Studio importer routes", () => {
   });
 
   describe("POST /api/filaments/[id]/bambustudio (per-id sync)", () => {
+    it("strips a provenance-matching legacy nozzle condition; preserves a mismatched pin (GH #1021 r14)", async () => {
+      const Nozzle = (await import("@/models/Nozzle")).default;
+      const n4 = await Nozzle.create({ name: "Bambu 0.4", diameter: 0.4, type: "Brass" });
+      const target = await Filament.create({
+        name: "Bambu Legacy PLA",
+        vendor: "QA",
+        type: "PLA",
+        compatibleNozzles: [n4._id],
+      });
+
+      const { POST } = await import("@/app/api/filaments/[id]/bambustudio/route");
+      // A Bambu/Orca JSON exported BEFORE the cleanup carries the stamped
+      // machine condition as passthrough — importing it must not re-persist.
+      const res = await POST(
+        jsonReq(
+          `http://localhost/api/filaments/${target._id}/bambustudio`,
+          minimalProfile({
+            filament_settings_id: ["Bambu Legacy PLA"],
+            compatible_printers_condition: ["nozzle_diameter[0]==0.4"],
+          }),
+        ),
+        { params: Promise.resolve({ id: String(target._id) }) },
+      );
+      expect(res.status).toBe(200);
+      const stored = await Filament.findById(target._id).lean();
+      expect(stored.settings?.compatible_printers_condition).toBe("");
+
+      // A pure nozzle pin that does NOT match the ticks is user input — kept.
+      const res2 = await POST(
+        jsonReq(
+          `http://localhost/api/filaments/${target._id}/bambustudio`,
+          minimalProfile({
+            filament_settings_id: ["Bambu Legacy PLA"],
+            compatible_printers_condition: ["nozzle_diameter[0]==0.8"],
+          }),
+        ),
+        { params: Promise.resolve({ id: String(target._id) }) },
+      );
+      expect(res2.status).toBe(200);
+      const stored2 = await Filament.findById(target._id).lean();
+      expect(stored2.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+    });
+
     it("pins by id and ignores the parsed filament name", async () => {
       const target = await Filament.create({
         name: "Original Name",
