@@ -239,8 +239,13 @@ async function buildIniUpdate(
   // Strip it (→ "") when it provenance-matches the target's effective ticks.
   // All three update paths (active / resurrect / create-race) funnel through
   // here; fresh creates carry no ticks to test against and are unguarded.
-  await stripLegacyMachineCondition(collapsed.settings, existing);
-  const flat = toUpdateSet(collapsed);
+  // Codex P2 r15: strip a per-invocation CLONE of the settings bag, never the
+  // shared section object — the caller reuses `collapsed` across its fallback
+  // phases, and a strip decision based on THIS row's ticks must not leak into
+  // a later phase's different target (or the create path).
+  const scoped: CollapsedFilamentData = { ...collapsed, settings: { ...collapsed.settings } };
+  await stripLegacyMachineCondition(scoped.settings, existing);
+  const flat = toUpdateSet(scoped);
   const purge = staleSettingsShadowUnset(existing);
   // Attach the stale-shadow purge (+ any caller unsets) to a `$set`-only body.
   const withUnset = (

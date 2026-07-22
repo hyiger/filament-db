@@ -492,23 +492,153 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     // Row C: examined by attempt 1 and untouched since (identical
     // observation) — the resume may finish the interrupted clear.
     const idC = await seed("untouched-machine", machineText, { compatibleNozzles: [noz04] });
+    // Row D: same, but with PARENT-provenance (inherited ticks, unchanged).
+    const parentId = await seed("untouched-parent", undefined, { compatibleNozzles: [noz04] });
+    const idD = await seed("untouched-variant", machineText, { compatibleNozzles: [], parentId });
     await rawDb().collection("_migrations").insertOne({
       ...MARKER,
       claimedAt: new Date(),
       released: true,
       processed: [
-        { i: String(idA), c: machineText, u: null }, // pre-clear observation
-        { i: String(idB), c: "nozzle_diameter[0]==0.8", u: null }, // old non-match
-        { i: String(idC), c: machineText, u: null },
+        { i: String(idA), c: machineText, u: null, d: machineText }, // pre-clear observation
+        { i: String(idB), c: "nozzle_diameter[0]==0.8", u: null, d: machineText }, // old non-match
+        { i: String(idC), c: machineText, u: null, d: machineText },
+        { i: String(idD), c: machineText, u: null, d: machineText },
+        // A legacy-shaped entry with no recorded derivation (never verifiable)
+        // must load without crashing and never make its row eligible.
+        { i: "000000000000000000000000", c: "x", u: null },
       ],
     });
 
     const res = await clearLegacyNozzleConditionsOnce(db());
-    expect(res).toEqual({ ran: true, cleared: 1 });
+    expect(res).toEqual({ ran: true, cleared: 2 });
     expect(await conditionOf("repinned-after-clear")).toBe(machineText); // pin SURVIVES
     expect(await conditionOf("changed-since-examined")).toBe(machineText); // authored value SURVIVES
     expect(await conditionOf("untouched-machine")).toBe(""); // interrupted work finished
+    expect(await conditionOf("untouched-variant")).toBe(""); // parent-provenance work finished too
     expect((await rawDb().collection("_migrations").findOne(MARKER))!.completed).toBe(true);
+  });
+
+  it("a RESUMED attempt skips recorded rows whose PARENT ticks drifted since examination (r15)", async () => {
+    const machineText = "nozzle_diameter[0]==0.4";
+    const noz04 = await seedNozzle(0.4);
+    const noz08 = await seedNozzle(0.8);
+    // Case A: at examination the parent derived ==0.4 (machine match,
+    // recorded d); the parent's ticks then moved to 0.8 — the CHILD is
+    // untouched, but the value is no longer clearable under current ticks.
+    const parentA = await seed("drift-parent-a", undefined, { compatibleNozzles: [noz08] });
+    const idA = await seed("drift-variant", machineText, { compatibleNozzles: [], parentId: parentA });
+    // Case B: at examination the parent derived ==0.8 (so the stored ==0.4
+    // was judged a USER PIN, recorded d = ==0.8); the parent's ticks then
+    // moved to 0.4 — the pin now coincidentally matches the derivation, but
+    // the recorded d mismatch proves the judgment context changed: skip.
+    const parentB = await seed("drift-parent-b", undefined, { compatibleNozzles: [noz04] });
+    const idB = await seed("drift-pin", machineText, { compatibleNozzles: [], parentId: parentB });
+    await rawDb().collection("_migrations").insertOne({
+      ...MARKER,
+      claimedAt: new Date(),
+      released: true,
+      processed: [
+        { i: String(idA), c: machineText, u: null, d: machineText },
+        { i: String(idB), c: machineText, u: null, d: "nozzle_diameter[0]==0.8" },
+      ],
+    });
+
+    const res = await clearLegacyNozzleConditionsOnce(db());
+    expect(res).toEqual({ ran: true, cleared: 0 });
+    expect(await conditionOf("drift-variant")).toBe(machineText); // survives
+    expect(await conditionOf("drift-pin")).toBe(machineText); // pin survives
+    expect((await rawDb().collection("_migrations").findOne(MARKER))!.completed).toBe(true);
+  });
+
+  it("skips a variant whose provenance parent is soft-DELETED (r15: unresolvable at export)", async () => {
+    const noz04 = await seedNozzle(0.4);
+    const parentId = await seed("deleted-parent", undefined, {
+      compatibleNozzles: [noz04],
+      _deletedAt: new Date(),
+    });
+    await seed("orphaned-variant", "nozzle_diameter[0]==0.4", {
+      compatibleNozzles: [],
+      parentId,
+    });
+
+    const res = await clearLegacyNozzleConditionsOnce(db());
+    expect(res).toEqual({ ran: true, cleared: 0 });
+    // The export path can't resolve a deleted parent, so its ticks prove
+    // nothing — the value is preserved as a possible user pin.
+    expect(await conditionOf("orphaned-variant")).toBe("nozzle_diameter[0]==0.4");
+  });
+
+  it("re-derives through the ACTIVE parent right before the clear — a mid-run parent tick edit skips the row (r15)", async () => {
+    const noz04 = await seedNozzle(0.4);
+    const noz08 = await seedNozzle(0.8);
+    const parentId = await seed("hot-parent", undefined, { compatibleNozzles: [noz04] });
+    await seed("hot-variant", "nozzle_diameter[0]==0.4", { compatibleNozzles: [], parentId });
+    const real = db();
+    let parentEdited = false;
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "filaments") return col;
+        return {
+          find: col.find.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: col.updateOne.bind(col),
+          findOne: async (filter: Record<string, unknown>) => {
+            // The pre-clear parent revalidation is the only filaments.findOne
+            // in the flow — edit the parent's ticks just before it reads, as
+            // a concurrent client would between the scan and the write.
+            if (!parentEdited) {
+              parentEdited = true;
+              await rawDb()
+                .collection("filaments")
+                .updateOne(
+                  { _id: parentId },
+                  { $set: { compatibleNozzles: [noz08], updatedAt: new Date() } },
+                );
+            }
+            return col.findOne(filter);
+          },
+        };
+      },
+    };
+    const res = await clearLegacyNozzleConditionsOnce(wrapper);
+    expect(res).toEqual({ ran: true, cleared: 0 });
+    expect(parentEdited).toBe(true);
+    expect(await conditionOf("hot-variant")).toBe("nozzle_diameter[0]==0.4"); // not cleared under drifted ticks
+  });
+
+  it("skips the clear when the provenance parent is DELETED mid-run (r15 revalidation)", async () => {
+    const noz04 = await seedNozzle(0.4);
+    const parentId = await seed("vanishing-parent", undefined, { compatibleNozzles: [noz04] });
+    await seed("vanishing-variant", "nozzle_diameter[0]==0.4", { compatibleNozzles: [], parentId });
+    const real = db();
+    let parentDeleted = false;
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "filaments") return col;
+        return {
+          find: col.find.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: col.updateOne.bind(col),
+          findOne: async (filter: Record<string, unknown>) => {
+            // Soft-delete the parent just before the pre-clear revalidation
+            // reads it — the _deletedAt:null re-read then finds nothing.
+            if (!parentDeleted) {
+              parentDeleted = true;
+              await rawDb()
+                .collection("filaments")
+                .updateOne({ _id: parentId }, { $set: { _deletedAt: new Date() } });
+            }
+            return col.findOne(filter);
+          },
+        };
+      },
+    };
+    const res = await clearLegacyNozzleConditionsOnce(wrapper);
+    expect(res).toEqual({ ran: true, cleared: 0 });
+    expect(await conditionOf("vanishing-variant")).toBe("nozzle_diameter[0]==0.4"); // preserved
   });
 
   it("loses a takeover CAS race and falls back to observing the new holder", async () => {

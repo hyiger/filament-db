@@ -388,6 +388,28 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
       const fresh2 = await Filament.findOne({ name: "Ini Legacy PLA" }).lean();
       expect(fresh2!.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
     });
+
+    it("never mutates the caller's section object (r15: phase fallbacks must not inherit a strip)", async () => {
+      const Nozzle = (await import("@/models/Nozzle")).default;
+      const n6 = await Nozzle.create({ name: "Ini 0.6", diameter: 0.6, type: "Brass" });
+      await Filament.create({
+        name: "Ini Mut PLA",
+        vendor: "Acme",
+        type: "PLA",
+        compatibleNozzles: [n6._id],
+      });
+      const input = {
+        ...section("Ini Mut PLA"),
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.6" },
+      };
+      const outcome = await upsertIniFilament(input);
+      expect(outcome).toBe("updated");
+      const fresh = await Filament.findOne({ name: "Ini Mut PLA" }).lean();
+      expect(fresh!.settings?.compatible_printers_condition).toBe(""); // stripped in the WRITE…
+      // …but the caller's payload is untouched — a fallback phase (or the
+      // create path) re-judges against ITS OWN target, not this row's ticks.
+      expect(input.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.6");
+    });
   });
 
   describe("leave-when-omitted temps + inherits (GH #1008 F3)", () => {
