@@ -983,5 +983,58 @@ describe("SyncService — v1.12 sync expansion", () => {
       const after2 = await remoteDb.collection("filaments").findOne({ syncId: "fil-remote-legacy" });
       expect(after2!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
     });
+
+    it("strips a stale machine condition IN TRANSIT after both markers completed (r17: mixed-version peer)", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      // Both sides' one-shot cleanups completed long ago.
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+        await dbh.collection("_migrations").insertOne({
+          _id: "legacyNozzleConditions" as never,
+          claimedAt: now,
+          completed: true,
+          processed: [],
+        });
+      }
+      // An OLDER (pre-#1022) desktop edited a filament on the remote side and
+      // its export/sync round-trip re-stamped the machine condition — the doc
+      // is NEWER than the local counterpart, so LWW copies it toLocal.
+      const rNoz = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC t 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-t", createdAt: now, updatedAt: now,
+      })).insertedId;
+      await localDb.collection("nozzles").insertOne({
+        name: "LNC t 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-t", createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("filaments").insertOne({
+        name: "TransitLegacy", vendor: "T", type: "PLA",
+        compatibleNozzles: [rNoz],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" },
+        syncId: "fil-transit", _deletedAt: null, createdAt: now, updatedAt: new Date(now.getTime() + 5000),
+      });
+      // A remote PIN that does not match its ticks must ride through intact.
+      await remoteDb.collection("filaments").insertOne({
+        name: "TransitPin", vendor: "T", type: "PLA",
+        compatibleNozzles: [rNoz],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.8" },
+        syncId: "fil-transit-pin", _deletedAt: null, createdAt: now, updatedAt: new Date(now.getTime() + 5000),
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The copy that landed locally was stripped in transit (the completed
+      // markers meant no migration was left to catch it)…
+      const localCopy = await localDb.collection("filaments").findOne({ syncId: "fil-transit" });
+      expect(localCopy!.settings.compatible_printers_condition).toBe("");
+      expect(localCopy!.settings.cooling).toBe("1"); // sibling key intact
+      // …the non-matching pin rode through verbatim…
+      const localPin = await localDb.collection("filaments").findOne({ syncId: "fil-transit-pin" });
+      expect(localPin!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+      // …and the SOURCE row is untouched (its own database's problem).
+      const remoteRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit" });
+      expect(remoteRow!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+    });
   });
 });

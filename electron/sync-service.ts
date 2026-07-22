@@ -3,6 +3,8 @@ import { createHash, randomBytes, randomUUID } from "crypto";
 import { MongoClient, ObjectId, Document } from "mongodb";
 import {
   clearLegacyNozzleConditionsOnce,
+  deriveLegacyNozzleCondition,
+  LEGACY_NOZZLE_CONDITION_RE,
   type MinimalDb,
 } from "../src/lib/legacyNozzleConditions";
 
@@ -336,10 +338,14 @@ export class SyncService extends EventEmitter {
       // Build nozzle syncId→ID maps for reference remapping.
       // GH #511: project to {_id, syncId} so we don't pull the full doc
       // payload across the wire just to build a 100-byte id map.
-      const localNozzles = await localDb.collection("nozzles").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
-      const remoteNozzles = await remoteDb.collection("nozzles").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
+      // (+ diameter since GH #1021 r17 — the filament transform's in-transit
+      // legacy-condition strip derives provenance from source-side diameters.)
+      const localNozzles = await localDb.collection("nozzles").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1, diameter: 1 } }).toArray();
+      const remoteNozzles = await remoteDb.collection("nozzles").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1, diameter: 1 } }).toArray();
       const localNozzleBySyncId = new Map(localNozzles.filter(n => n.syncId).map(n => [n.syncId as string, n._id]));
       const remoteNozzleBySyncId = new Map(remoteNozzles.filter(n => n.syncId).map(n => [n.syncId as string, n._id]));
+      const localNozzleDiameterById = new Map(localNozzles.map(n => [n._id.toString(), n.diameter as unknown]));
+      const remoteNozzleDiameterById = new Map(remoteNozzles.map(n => [n._id.toString(), n.diameter as unknown]));
 
       // Sync bedtypes before printers AND before filaments: printers now
       // carry installedBedTypes refs (and filament calibrations carry
@@ -465,10 +471,19 @@ export class SyncService extends EventEmitter {
       // base64 photoDataUrl blobs in spools[] that we'd otherwise stream
       // across the wire just to build a 100-byte id map. updatedAt is kept
       // for the snapshot construction immediately below.
-      const localFilaments = await localDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, updatedAt: 1 } }).toArray();
-      const remoteFilaments = await remoteDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, updatedAt: 1 } }).toArray();
+      // (+ compatibleNozzles/_deletedAt since GH #1021 r17 — the in-transit
+      // legacy-condition strip resolves a variant's provenance through its
+      // ACTIVE source-side parent's ticks; refs are ~12 bytes each.)
+      const localFilaments = await localDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, updatedAt: 1, compatibleNozzles: 1, _deletedAt: 1 } }).toArray();
+      const remoteFilaments = await remoteDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, updatedAt: 1, compatibleNozzles: 1, _deletedAt: 1 } }).toArray();
       const localFilamentBySyncId = new Map(localFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
       const remoteFilamentBySyncId = new Map(remoteFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
+      const localFilamentTicksById = new Map(
+        localFilaments.filter(f => f._deletedAt == null).map(f => [f._id.toString(), f.compatibleNozzles as unknown]),
+      );
+      const remoteFilamentTicksById = new Map(
+        remoteFilaments.filter(f => f._deletedAt == null).map(f => [f._id.toString(), f.compatibleNozzles as unknown]),
+      );
 
       // Snapshot each side's pre-existing filaments as `_id → updatedAt(ms)`
       // so the post-sync repair pass can tell whether THIS sync cycle wrote
@@ -502,6 +517,8 @@ export class SyncService extends EventEmitter {
         localFilamentBySyncId, remoteFilamentBySyncId,
         localLocationBySyncId, remoteLocationBySyncId,
         localBedTypeBySyncId, remoteBedTypeBySyncId,
+        localNozzleDiameterById, remoteNozzleDiameterById,
+        localFilamentTicksById, remoteFilamentTicksById,
       );
       results.push(await trySync(
         "filaments",
@@ -1380,6 +1397,10 @@ export class SyncService extends EventEmitter {
     remoteLocationBySyncId: Map<string, ObjectId>,
     localBedTypeBySyncId: Map<string, ObjectId>,
     remoteBedTypeBySyncId: Map<string, ObjectId>,
+    localNozzleDiameterById: Map<string, unknown>,
+    remoteNozzleDiameterById: Map<string, unknown>,
+    localFilamentTicksById: Map<string, unknown>,
+    remoteFilamentTicksById: Map<string, unknown>,
   ): (
     doc: Document,
     direction: "toLocal" | "toRemote",
@@ -1418,6 +1439,43 @@ export class SyncService extends EventEmitter {
       const targetLocationMap = direction === "toLocal" ? localLocationBySyncId : remoteLocationBySyncId;
       const sourceBedTypeIdToSyncId = direction === "toLocal" ? remoteBedTypeIdToSyncId : localBedTypeIdToSyncId;
       const targetBedTypeMap = direction === "toLocal" ? localBedTypeBySyncId : remoteBedTypeBySyncId;
+
+      // GH #1021 (Codex P1 r17): the LWW copy is itself an INGESTION boundary.
+      // A pre-#1022 peer in a mixed-version hybrid pair can push a NEWER doc
+      // still carrying the stamped machine condition AFTER both sides'
+      // one-shot markers completed — and the copy would replicate it verbatim,
+      // resurrecting the hidden-preset bug with no migration left to run. So
+      // every copied filament gets the same provenance-matched strip as the
+      // slicer/import boundaries, resolved against the SOURCE side (whose
+      // ticks are the world the stamp was made in): own refs, else the ACTIVE
+      // source parent's; diameters from the source nozzle map. Runs BEFORE
+      // the ref remap below (it needs the source-side ids). Missing
+      // provenance (dangling refs, deleted parent) strips nothing — the
+      // conservative direction. Only the in-transit COPY is stripped; the
+      // source row is its own database's problem.
+      const sourceDiameters = direction === "toLocal" ? remoteNozzleDiameterById : localNozzleDiameterById;
+      const sourceTicksById = direction === "toLocal" ? remoteFilamentTicksById : localFilamentTicksById;
+      const condition = (doc.settings as Record<string, unknown> | undefined)?.compatible_printers_condition;
+      if (typeof condition === "string" && LEGACY_NOZZLE_CONDITION_RE.test(condition)) {
+        const ownRefs = Array.isArray(doc.compatibleNozzles) && doc.compatibleNozzles.length > 0
+          ? (doc.compatibleNozzles as unknown[])
+          : null;
+        const parentTicks = doc.parentId != null ? sourceTicksById.get(String(doc.parentId)) : undefined;
+        const refs = ownRefs ?? (Array.isArray(parentTicks) && parentTicks.length > 0 ? parentTicks : null);
+        if (refs) {
+          const populated: { diameter: unknown }[] = [];
+          for (const ref of refs) {
+            const diameter = sourceDiameters.get(String(ref));
+            if (diameter !== undefined) populated.push({ diameter });
+          }
+          if (deriveLegacyNozzleCondition(populated) === condition) {
+            doc.settings = {
+              ...(doc.settings as Record<string, unknown>),
+              compatible_printers_condition: "",
+            };
+          }
+        }
+      }
 
       // Remap compatibleNozzles
       if (Array.isArray(doc.compatibleNozzles)) {
