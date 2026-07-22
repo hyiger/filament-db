@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { clearLegacyNozzleConditionsOnce, type MinimalDb } from "./legacyNozzleConditions";
 
 interface MongooseCache {
   conn: typeof mongoose | null;
@@ -233,57 +234,32 @@ export default async function dbConnect() {
     }
   }
 
-  // GH #1021 (Codex P1 ×2 on #1022) — clear machine-derived nozzle-diameter
-  // compatibility conditions. The pre-#1021 export derived
-  // `nozzle_diameter[0]==D [or ...]` from the compatibleNozzles ticks, and any
-  // round-trip (fork sync-back / bulk INI re-import) persisted that value into
+  // GH #1021 (#1022) — clear machine-derived nozzle-diameter compatibility
+  // conditions. The pre-#1021 export derived `nozzle_diameter[0]==D [or ...]`
+  // from the compatibleNozzles ticks, and any round-trip (fork sync-back /
+  // bulk INI re-import) persisted that value into
   // `settings.compatible_printers_condition` — hiding the preset in PrusaSlicer
   // for non-matching printers even after the derivation was removed. Cleared
-  // HERE, once, rather than at export time: post-migration, any pure
-  // nozzle-only condition in a bag is user-authored by construction, so the
-  // export passes all pins through (an export-time purge cannot tell a user's
-  // pure nozzle pin from a stale machine value). Values become "" (the
-  // round-trip "no restriction" representation). Only the exact machine
-  // grammar matches; compound/human expressions are untouched. Idempotent —
-  // "" never matches again. Raw collection.updateMany (no updatedAt bump),
-  // matching the legacyShrinkage precedent; each peer runs it on its own DB.
+  // HERE, once, rather than at export time: post-cleanup, any pure nozzle-only
+  // condition in a bag is user-authored by construction, so the export passes
+  // all pins through (an export-time purge cannot tell a user's pure nozzle
+  // pin from a stale machine value). Values become "" (the round-trip "no
+  // restriction" representation); compound/human expressions are untouched.
   if (!cached.migrations.legacyNozzleConditions) {
     try {
-      const { default: Filament } = await import("@/models/Filament");
-      // Codex P1 (r3) on #1022: the in-process flag resets on every restart,
-      // and unlike the other migrations this clear is NOT safe to re-run — a
-      // legitimate pure nozzle pin authored AFTER the one-shot cleanup is
-      // textually identical to the legacy machine values and would be erased
-      // on the next boot. Persist completion as a durable marker document so
-      // the clear runs exactly once per DATABASE, not once per process. (Two
-      // processes racing the very first run are serialized by the unique _id
-      // insert; the loser's redundant clear can only touch pre-marker data,
-      // which is machine-written by definition.)
+      // Full rationale in src/lib/legacyNozzleConditions.ts: durable per-DB
+      // marker (NOT this process-local flag), CLAIM-FIRST so racing processes
+      // serialize before the destructive update, claim released on a transient
+      // failure so the next connect retries. The hybrid remote (Atlas) side
+      // runs the same helper from electron/sync-service.ts — this call only
+      // covers whatever DB this process connects to.
       const db = mongoose.connection.db;
       if (!db) throw new Error("no db handle on the mongoose connection");
-      const markers = db.collection("_migrations");
-      const done = await markers.findOne({ _id: "legacyNozzleConditions" as never });
-      if (!done) {
-        const res = await Filament.collection.updateMany(
-          {
-            "settings.compatible_printers_condition": {
-              $regex: /^nozzle_diameter\[0\]==\d+(\.\d+)?( or nozzle_diameter\[0\]==\d+(\.\d+)?)*$/,
-            },
-          },
-          { $set: { "settings.compatible_printers_condition": "" } },
+      const result = await clearLegacyNozzleConditionsOnce(db as unknown as MinimalDb);
+      if (result.ran && result.cleared > 0) {
+        console.log(
+          `[migration] Cleared ${result.cleared} legacy machine-derived nozzle condition(s) (GH #1021)`,
         );
-        if (res.modifiedCount > 0) {
-          console.log(
-            `[migration] Cleared ${res.modifiedCount} legacy machine-derived nozzle condition(s) (GH #1021)`,
-          );
-        }
-        try {
-          await markers.insertOne({ _id: "legacyNozzleConditions" as never, completedAt: new Date() });
-        } catch (markerErr) {
-          // A concurrent process won the marker race (duplicate _id) — its
-          // marker stands; anything else must surface so the retry path runs.
-          if (!isDuplicateKeyError(markerErr)) throw markerErr;
-        }
       }
       cached.migrations.legacyNozzleConditions = true;
     } catch (err) {

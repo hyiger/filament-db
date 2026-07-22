@@ -1015,11 +1015,14 @@ describe("legacyShrinkage migration (GH #1008 F1)", () => {
 });
 
 /**
- * GH #1021 (Codex P1 ×2 on #1022) — one-shot clear of machine-derived
+ * GH #1021 (#1022) — one-shot clear of machine-derived
  * `nozzle_diameter[0]==D [or ...]` compatibility conditions the pre-#1021
  * export wrote and round-trips persisted into settings. After this runs, any
  * pure nozzle-only condition in a bag is user-authored by construction, so the
- * export passes every pin through untouched.
+ * export passes every pin through untouched. These tests pin the dbConnect
+ * WIRING (flag + logging + retry); the helper's own branches (claim-first
+ * race, claim release, skip-if-claimed) are covered in
+ * tests/legacyNozzleConditions.test.ts.
  */
 describe("legacyNozzleConditions migration (GH #1021)", () => {
   function resetMigrations() {
@@ -1094,31 +1097,36 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
   it("leaves the flag false and retries on a transient failure", async () => {
     await dbConnect();
     await deleteMarker(); // ensure the clear actually attempts to run
-    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
 
     const cached = resetMigrations();
-    // collection.updateMany order in the migration block: (1) purgedZombies via
-    // the model (delegates to collection), (2) legacyShrinkage raw, (3) this
-    // one raw. Pass the first two through, reject the third.
+    // The cleanup helper reaches "filaments" through the RAW driver handle
+    // (connection.db.collection(...)), not Filament.collection — so inject the
+    // failure there, poisoning only the "filaments" handle's updateMany and
+    // passing "_migrations" (claim/release) through untouched.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const realUpdateMany = Filament.collection.updateMany.bind(Filament.collection);
-    const updateSpy = vi
-      .spyOn(Filament.collection, "updateMany")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .mockImplementationOnce(((...args: unknown[]) => (realUpdateMany as any)(...args)) as any)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .mockImplementationOnce(((...args: unknown[]) => (realUpdateMany as any)(...args)) as any)
-      .mockRejectedValueOnce(new Error("transient"));
+    const rawDb = mongoose.connection.db!;
+    const realCollection = rawDb.collection.bind(rawDb);
+    const collSpy = vi
+      .spyOn(rawDb, "collection")
+      .mockImplementation(((name: string) => {
+        const col = realCollection(name);
+        if (name === "filaments") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).updateMany = () => Promise.reject(new Error("transient"));
+        }
+        return col;
+      }) as never);
     try {
       await dbConnect();
-      expect(cached.migrations.legacyShrinkage).toBe(true);
       expect(cached.migrations.legacyNozzleConditions).toBe(false); // retries next connect
       expect(errSpy).toHaveBeenCalledWith(
         expect.stringContaining("legacy nozzle conditions"),
         expect.any(Error),
       );
+      // The claim was RELEASED on failure — no stale marker blocks the retry.
+      expect(await mongoose.connection.db!.collection("_migrations").findOne(MARKER)).toBeNull();
     } finally {
-      updateSpy.mockRestore();
+      collSpy.mockRestore();
       errSpy.mockRestore();
     }
 
@@ -1126,7 +1134,9 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     cached.promise = null;
     await dbConnect();
     expect(cached.migrations.legacyNozzleConditions).toBe(true);
-    // A failed attempt wrote no marker; the successful retry did.
-    expect(await mongoose.connection.db!.collection("_migrations").findOne(MARKER)).not.toBeNull();
+    // The successful retry completed the durable marker.
+    const marker = await mongoose.connection.db!.collection("_migrations").findOne(MARKER);
+    expect(marker).not.toBeNull();
+    expect(marker!.completed).toBe(true);
   });
 });

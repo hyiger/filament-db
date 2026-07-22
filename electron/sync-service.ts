@@ -1,6 +1,10 @@
 import { EventEmitter } from "events";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { MongoClient, ObjectId, Document } from "mongodb";
+import {
+  clearLegacyNozzleConditionsOnce,
+  type MinimalDb,
+} from "../src/lib/legacyNozzleConditions";
 
 /**
  * Recognise a duplicate-key error specifically on the `syncId` index,
@@ -302,6 +306,26 @@ export class SyncService extends EventEmitter {
 
       const localDb = local.db(getDbNameFromUri(this.localUri));
       const remoteDb = remote.db(getDbNameFromUri(this.atlasUri));
+
+      // GH #1021 (Codex P1 on #1022): the REMOTE database never runs dbConnect,
+      // so it never gets the one-shot legacyNozzleConditions cleanup — and the
+      // raw local cleanup preserves updatedAt, so LWW would never propagate it
+      // (equal timestamps → no action) while an Atlas-side edit would push the
+      // stale machine value BACK. Each side must clean its own DB: run the same
+      // marker-guarded helper against the remote before syncing. Best-effort —
+      // a transient failure releases its claim and retries next cycle without
+      // failing the sync (the helper's claim-first design makes a repeat safe
+      // to attempt and impossible to double-run).
+      try {
+        const res = await clearLegacyNozzleConditionsOnce(remoteDb as unknown as MinimalDb);
+        if (res.ran && res.cleared > 0) {
+          console.log(
+            `[sync] Cleared ${res.cleared} legacy machine-derived nozzle condition(s) on the remote DB (GH #1021)`,
+          );
+        }
+      } catch (err) {
+        console.error("[sync] Remote legacy nozzle-condition cleanup failed (will retry next cycle):", err);
+      }
 
       // Sync nozzles first (filaments and printers reference them)
       this.updateStatus({ progress: "Syncing nozzles..." });

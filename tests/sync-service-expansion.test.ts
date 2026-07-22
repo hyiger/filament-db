@@ -891,4 +891,49 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(Object.hasOwn(localRow ?? {}, "pressureAdvance")).toBe(false);
     });
   });
+
+  // ── GH #1021 (Codex P1 on #1022): remote legacyNozzleConditions cleanup ──
+  // The remote (Atlas) DB never runs dbConnect's startup migrations, and the
+  // raw cleanup preserves updatedAt so LWW would never propagate it — sync()
+  // must run the same marker-guarded helper against the remote itself.
+
+  describe("remote legacyNozzleConditions cleanup (GH #1021)", () => {
+    it("clears machine-derived conditions on the REMOTE db exactly once; a later remote pin survives", async () => {
+      const remoteDb = remoteClient.db("filament-db");
+      // Earlier tests' sync() calls already completed the one-shot marker
+      // against an (empty) remote — drop it so the cleanup attempts to run.
+      await remoteDb.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+      const now = new Date();
+      await remoteDb.collection("filaments").insertOne({
+        name: "RemoteLegacy", vendor: "T", type: "PLA",
+        settings: {
+          compatible_printers_condition: "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6",
+          cooling: "1",
+        },
+        syncId: "fil-remote-legacy", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      const after = await remoteDb.collection("filaments").findOne({ syncId: "fil-remote-legacy" });
+      expect(after!.settings.compatible_printers_condition).toBe("");
+      expect(after!.settings.cooling).toBe("1"); // sibling key untouched
+      const marker = await remoteDb
+        .collection("_migrations")
+        .findOne({ _id: "legacyNozzleConditions" as never });
+      expect(marker?.completed).toBe(true);
+
+      // A pure nozzle pin authored on the REMOTE after completion is textually
+      // identical to the legacy values — the durable marker must keep every
+      // later cycle from erasing it.
+      await remoteDb.collection("filaments").updateOne(
+        { syncId: "fil-remote-legacy" },
+        { $set: { "settings.compatible_printers_condition": "nozzle_diameter[0]==0.4", updatedAt: new Date(Date.now() + 1000) } },
+      );
+      await sync.sync();
+      const after2 = await remoteDb.collection("filaments").findOne({ syncId: "fil-remote-legacy" });
+      expect(after2!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+    });
+  });
 });
