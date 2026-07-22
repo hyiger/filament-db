@@ -1024,29 +1024,71 @@ describe("SyncService — v1.12 sync expansion", () => {
       sync = makeSync();
       await sync.sync();
 
-      // The copy that landed locally was stripped in transit (the completed
-      // markers meant no migration was left to catch it) — and its updatedAt
-      // was BUMPED, making the cleaned side the newer one (r19/r23)…
+      // The copy landed VERBATIM (honest timestamps — nothing in-transit is
+      // authoritative, r25), and the post-sync field-level pair-clear then
+      // set the condition to "" on BOTH sides in the same cycle…
       const localCopy = await localDb.collection("filaments").findOne({ syncId: "fil-transit" });
       expect(localCopy!.settings.compatible_printers_condition).toBe("");
       expect(localCopy!.settings.cooling).toBe("1"); // sibling key intact
-      // …the non-matching pin rode through verbatim (and stays on its source)…
+      const remoteRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit" });
+      expect(remoteRow!.settings.compatible_printers_condition).toBe("");
+      expect(remoteRow!.settings.cooling).toBe("1");
+      // …with timestamps UNTOUCHED — the pair converges at the source's own
+      // updatedAt, so no synthetic stamp can ever tie or outrun a real edit.
+      expect(remoteRow!.updatedAt.getTime()).toBe(localCopy!.updatedAt.getTime());
+      // …the non-matching pin rode through verbatim (both sides)…
       const localPin = await localDb.collection("filaments").findOne({ syncId: "fil-transit-pin" });
       expect(localPin!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
       const remotePin = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit-pin" });
       expect(remotePin!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
-      // …and the SOURCE converges through the engine's OWN LWW on the next
-      // cycle (r23): the bumped target is newer, so the cleaned doc
-      // replaceOne-propagates back — no bespoke second destructive write, no
-      // two-write partial state, retried every cycle by construction.
-      const remoteBefore = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit" });
-      expect(remoteBefore!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      // …and the durable retry queue is empty (the pair converged in-cycle).
+      const queue = await localDb.collection("_migrations").findOne({ _id: "legacyTransitClears" as never });
+      expect(queue?.entries ?? []).toEqual([]);
+    });
+
+    it("drains a queued pair-clear left by a prior partial failure (r25 durable retry)", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+        await dbh.collection("_migrations").insertOne({
+          _id: "legacyNozzleConditions" as never,
+          claimedAt: now,
+          completed: true,
+          processed: [],
+        });
+      }
+      // The partial state a crashed prior cycle can leave: target already
+      // cleared, source still stale, both at the SAME updatedAt (frozen for
+      // plain LWW) — with the pending pair durably queued.
+      const ts = new Date(now.getTime() + 1000);
+      await localDb.collection("filaments").insertOne({
+        name: "QueuedPair", vendor: "T", type: "PLA",
+        settings: { compatible_printers_condition: "" },
+        syncId: "fil-queued", _deletedAt: null, createdAt: now, updatedAt: ts,
+      });
+      await remoteDb.collection("filaments").insertOne({
+        name: "QueuedPair", vendor: "T", type: "PLA",
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+        syncId: "fil-queued", _deletedAt: null, createdAt: now, updatedAt: ts,
+      });
+      await localDb.collection("_migrations").updateOne(
+        { _id: "legacyTransitClears" as never },
+        { $addToSet: { entries: { d: "toLocal", s: "fil-queued", c: "nozzle_diameter[0]==0.4", u: ts } } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
       await sync.sync();
-      const remoteRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit" });
+
+      // The drain re-attempted the conditional clears: the stale source is
+      // now clean, timestamps untouched, and the entry is dequeued.
+      const remoteRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-queued" });
       expect(remoteRow!.settings.compatible_printers_condition).toBe("");
-      expect(remoteRow!.settings.cooling).toBe("1");
-      // Converged: both sides byte-equal at the bumped updatedAt.
-      expect(String(remoteRow!.updatedAt.getTime())).toBe(String(localCopy!.updatedAt.getTime()));
+      expect(remoteRow!.updatedAt.getTime()).toBe(ts.getTime());
+      const queue = await localDb.collection("_migrations").findOne({ _id: "legacyTransitClears" as never });
+      expect(queue?.entries ?? []).toEqual([]);
     });
 
     it("strips a PARENT-provenance transit row via the deferred post-sync revalidation (r22)", async () => {
@@ -1083,14 +1125,11 @@ describe("SyncService — v1.12 sync expansion", () => {
       await sync.sync();
 
       // The deferred post-sync revalidation confirmed the CURRENT remote
-      // parent still derives the condition → the transferred copy is
-      // stripped with a bumped updatedAt (single write, r23)…
+      // parent still derives the condition → the field-level pair-clear set
+      // it to "" on BOTH sides in the same cycle, timestamps untouched.
       const localChild = await localDb.collection("filaments").findOne({ syncId: "fil-defer-child" });
       expect(localChild!.settings.compatible_printers_condition).toBe("");
       expect(localChild!.settings.cooling).toBe("1");
-      // …and the SOURCE converges through normal LWW on the next cycle (the
-      // bumped target is newer).
-      await sync.sync();
       const remoteChild = await remoteDb.collection("filaments").findOne({ syncId: "fil-defer-child" });
       expect(remoteChild!.settings.compatible_printers_condition).toBe("");
       expect(remoteChild!.settings.cooling).toBe("1");

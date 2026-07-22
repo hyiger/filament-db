@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
 import { createHash, randomBytes, randomUUID } from "crypto";
-import { MongoClient, ObjectId, Document } from "mongodb";
+import { MongoClient, ObjectId, Document, type Db } from "mongodb";
 import {
   clearLegacyNozzleConditionsOnce,
   deriveLegacyNozzleCondition,
@@ -335,6 +335,45 @@ export class SyncService extends EventEmitter {
         }
       }
 
+      // GH #1021 (Codex P2 r23 / r25): drain the durable transit-clear queue.
+      // A prior cycle's pair-clear that failed halfway left its entry queued
+      // in the local `_migrations` collection; re-attempt it every cycle (the
+      // conditional filters make retries safe forever) and dequeue once
+      // neither side matches the observed state anymore.
+      if (!this.aborted) {
+        const pendingDoc = await localDb.collection("_migrations").findOne(
+          { _id: "legacyTransitClears" as never },
+        );
+        const pending = Array.isArray(pendingDoc?.entries) ? (pendingDoc!.entries as unknown[]) : [];
+        for (const raw of pending) {
+          if (this.aborted) break;
+          if (
+            !raw || typeof raw !== "object" ||
+            typeof (raw as { s?: unknown }).s !== "string" ||
+            typeof (raw as { c?: unknown }).c !== "string" ||
+            typeof (raw as { d?: unknown }).d !== "string"
+          ) {
+            // Malformed entry — drop it rather than retry it forever.
+            await localDb.collection("_migrations").updateOne(
+              { _id: "legacyTransitClears" as never },
+              { $pull: { entries: raw } } as never,
+            ).catch(() => {});
+            continue;
+          }
+          const entry = raw as { d: string; s: string; c: string; u: unknown };
+          try {
+            if (await this.attemptTransitClearPair(localDb, remoteDb, entry)) {
+              await localDb.collection("_migrations").updateOne(
+                { _id: "legacyTransitClears" as never },
+                { $pull: { entries: entry } } as never,
+              );
+            }
+          } catch (err) {
+            console.error("[sync] Transit-clear retry failed (stays queued):", err);
+          }
+        }
+      }
+
       // Sync nozzles first (filaments and printers reference them)
       this.updateStatus({ progress: "Syncing nozzles..." });
       results.push(await trySync("nozzles", [], () =>
@@ -344,14 +383,10 @@ export class SyncService extends EventEmitter {
       // Build nozzle syncId→ID maps for reference remapping.
       // GH #511: project to {_id, syncId} so we don't pull the full doc
       // payload across the wire just to build a 100-byte id map.
-      // (+ diameter since GH #1021 r17 — the filament transform's in-transit
-      // legacy-condition strip derives provenance from source-side diameters.)
-      const localNozzles = await localDb.collection("nozzles").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1, diameter: 1 } }).toArray();
-      const remoteNozzles = await remoteDb.collection("nozzles").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1, diameter: 1 } }).toArray();
+      const localNozzles = await localDb.collection("nozzles").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
+      const remoteNozzles = await remoteDb.collection("nozzles").find({ _deletedAt: null }, { projection: { _id: 1, syncId: 1 } }).toArray();
       const localNozzleBySyncId = new Map(localNozzles.filter(n => n.syncId).map(n => [n.syncId as string, n._id]));
       const remoteNozzleBySyncId = new Map(remoteNozzles.filter(n => n.syncId).map(n => [n.syncId as string, n._id]));
-      const localNozzleDiameterById = new Map(localNozzles.map(n => [n._id.toString(), n.diameter as unknown]));
-      const remoteNozzleDiameterById = new Map(remoteNozzles.map(n => [n._id.toString(), n.diameter as unknown]));
 
       // Sync bedtypes before printers AND before filaments: printers now
       // carry installedBedTypes refs (and filament calibrations carry
@@ -508,18 +543,19 @@ export class SyncService extends EventEmitter {
       // Sync filaments with nozzle, printer, parent, spool-location, and
       // bedType remapping
       this.updateStatus({ progress: "Syncing filaments..." });
-      // GH #1021 r22: PARENT-provenance candidates are NOT stripped in
-      // transit — the parent row lives in the very collection this pass is
-      // syncing, so any pre-fetched tick map can go stale mid-pass (LWW may
-      // update the parent before its child transforms). They are recorded
-      // here and revalidated AFTER the collection sync against the CURRENT
-      // source parent (see below).
-      const deferredParentChecks: Array<{
+      // GH #1021 r22/r25: legacy-condition candidates are NOT stripped in
+      // transit at all — the transform only RECORDS them (a parent row lives
+      // in the very collection being synced, so any pre-fetched provenance
+      // can go stale mid-pass; and own-tick nozzle docs are re-read fresh
+      // later for the same reason, r16). Everything is judged AFTER the
+      // collection sync against the CURRENT source-side state (see below).
+      const deferredLegacyChecks: Array<{
         direction: "toLocal" | "toRemote";
         syncId: string;
         observed: string;
         observedUpdatedAt: unknown;
         parentId: unknown;
+        ownRefs: unknown[] | null;
       }> = [];
       const filamentTransform = this.buildFilamentRefsTransform(
         localNozzleBySyncId, remoteNozzleBySyncId,
@@ -527,8 +563,7 @@ export class SyncService extends EventEmitter {
         localFilamentBySyncId, remoteFilamentBySyncId,
         localLocationBySyncId, remoteLocationBySyncId,
         localBedTypeBySyncId, remoteBedTypeBySyncId,
-        localNozzleDiameterById, remoteNozzleDiameterById,
-        deferredParentChecks,
+        deferredLegacyChecks,
       );
       results.push(await trySync(
         "filaments",
@@ -536,95 +571,69 @@ export class SyncService extends EventEmitter {
         () => this.syncCollection(localDb, remoteDb, "filaments", filamentTransform),
       ));
 
-      // GH #1021 (Codex P1 r19): a row stripped IN TRANSIT still carries the
-      // stale value on its SOURCE side — and the copy preserved the source
-      // updatedAt, so LWW sees both sides as equal afterwards and never
-      // revisits the pair; the source would keep serving the stale value to
-      // its own exports and post-cleanup snapshots forever. Clear it at the
-      // source with the same conditional predicate as the one-shot cleanup
-      // (exact value + exact updatedAt; raw driver, no timestamp bump — both
-      // sides then converge on the STRIPPED value at equal timestamps).
-      // Best-effort per row: on a transient failure the target copy is
-      // already clean (the r17 guarantee), and any later edit of the source
-      // re-triggers a copy + a fresh strip/clear.
-      // GH #1021 (Codex P1 r22 / P1+P2 r23): parent-provenance candidates
-      // were deferred by the transform (the pre-sync tick map could be stale
-      // mid-pass — this pass may have pulled newer parent ticks before
-      // transforming the child). Revalidate each against the CURRENT source
-      // parent + nozzle docs, post-sync: only when the child's condition
-      // still derives from the parent's ticks AS THEY NOW STAND is it the
-      // machine stamp — then conditionally strip the TRANSFERRED COPY only,
-      // as a SINGLE write that BUMPS updatedAt (r23). The bump makes the
-      // cleaned target the newer side, so the engine's own next LWW cycle
-      // replaceOne-propagates the cleaned doc onto the source: source-side
-      // convergence needs no second destructive write here (no two-write
-      // partial state to retry — r23 P2), it is retried by construction
-      // every cycle until it lands. A parent/nozzle edit inside the
-      // revalidate→write window (r23 P1) is the same benign-convergent
-      // residual as the one-shot cleanup's pre-clear re-derivation: the
-      // conditional filter re-asserts the exact child value + updatedAt, the
-      // value provably derived from the ticks at write time, and — because
-      // the pair no longer sits at equal timestamps — any later user re-pin
-      // is newer and wins through normal LWW.
-      for (const entry of deferredParentChecks) {
+      // GH #1021 (Codex r17–r25): the LWW copy is itself an ingestion
+      // boundary — a pre-#1022 peer can push a NEWER doc carrying the
+      // stamped machine condition after both one-shot markers completed,
+      // with no migration left to catch it. The remedy is FIELD-LEVEL and
+      // timestamp-honest (r25): both sides of the pair get a CONDITIONAL
+      // single-field clear (exact syncId + exact condition + exact
+      // updatedAt → set the condition to "" and NOTHING else, timestamps
+      // untouched). No synthetic stamp ever makes the copied snapshot
+      // authoritative (r24) and no tie with a genuine later edit can exist
+      // (r25) — a user edit on either side bumps that row's updatedAt, its
+      // filter simply misses, and normal LWW propagates the edit over the
+      // cleared side. Partial completion (r23 P2) is handled by a DURABLE
+      // queue: the pending pair is recorded in the local `_migrations`
+      // collection BEFORE the clears and dequeued only once NEITHER side
+      // matches the observed state anymore; every later cycle re-drains the
+      // queue (see the top of sync()), so a transient failure of either
+      // write can never freeze the pair at equal timestamps.
+      for (const entry of deferredLegacyChecks) {
         if (this.aborted) break;
         const sourceSide = entry.direction === "toLocal" ? remoteDb : localDb;
-        const targetSide = entry.direction === "toLocal" ? localDb : remoteDb;
         try {
-          const parentNow = await sourceSide.collection("filaments").findOne(
-            { _id: entry.parentId as ObjectId, _deletedAt: null },
-            { projection: { compatibleNozzles: 1 } },
-          );
-          const refs = Array.isArray(parentNow?.compatibleNozzles)
-            ? (parentNow!.compatibleNozzles as ObjectId[])
-            : [];
-          const nozzleDocs = refs.length
-            ? await sourceSide.collection("nozzles")
-                .find({ _id: { $in: refs } }, { projection: { _id: 1, diameter: 1 } })
-                .toArray()
-            : [];
-          if (deriveLegacyNozzleCondition(nozzleDocs) !== entry.observed) continue;
-          // Codex P1 r24: bumping the target makes the COPIED SNAPSHOT
-          // authoritative for the pair, so first prove the SOURCE row hasn't
-          // moved since the copy — a concurrent source edit would otherwise
-          // be replaced wholesale by the stale snapshot on the next cycle.
-          // If it moved, skip entirely: the newer source replaces the target
-          // next cycle and is re-judged in that transit.
-          const sourceRow = await sourceSide.collection("filaments").findOne(
-            { syncId: entry.syncId },
-            { projection: { updatedAt: 1, "settings.compatible_printers_condition": 1 } },
-          );
-          const sourceCondition = (
-            sourceRow?.settings as { compatible_printers_condition?: unknown } | undefined
-          )?.compatible_printers_condition;
-          const observedTs = SyncService.readTimestamp(entry.observedUpdatedAt) ?? 0;
-          if (
-            !sourceRow ||
-            sourceCondition !== entry.observed ||
-            (SyncService.readTimestamp(sourceRow.updatedAt) ?? 0) !== observedTs
-          ) {
-            continue;
+          // Provenance, judged fresh against CURRENT source-side state:
+          // own refs (captured pre-remap), else the ACTIVE source parent's
+          // refs — then the nozzle DOCS re-read now (a mid-pass parent edit,
+          // nozzle diameter edit, or purge must all be visible; r16/r22).
+          let refs: unknown[] | null = entry.ownRefs;
+          if (!refs && entry.parentId != null) {
+            const parentNow = await sourceSide.collection("filaments").findOne(
+              { _id: entry.parentId as ObjectId, _deletedAt: null },
+              { projection: { compatibleNozzles: 1 } },
+            );
+            refs = Array.isArray(parentNow?.compatibleNozzles)
+              ? (parentNow!.compatibleNozzles as unknown[])
+              : null;
           }
-          // EXACTLY observed+1ms, not wall-clock (Codex P1/P2 r24) — the
-          // same rationale as the in-transit bump: smallest stamp that beats
-          // the stale source while losing to any genuine later edit, with
-          // the timestamp parsed the way LWW itself parses it.
-          await targetSide.collection("filaments").updateOne(
-            {
-              syncId: entry.syncId,
-              "settings.compatible_printers_condition": entry.observed,
-              updatedAt: entry.observedUpdatedAt ?? null,
-            },
-            {
-              $set: {
-                "settings.compatible_printers_condition": "",
-                updatedAt: new Date(observedTs + 1),
-              },
-            },
+          if (!refs || refs.length === 0) continue;
+          const nozzleDocs = await sourceSide.collection("nozzles")
+            .find({ _id: { $in: refs as ObjectId[] } }, { projection: { _id: 1, diameter: 1 } })
+            .toArray();
+          if (deriveLegacyNozzleCondition(nozzleDocs) !== entry.observed) continue;
+
+          // Durably enqueue BEFORE any destructive write, then attempt the
+          // pair; dequeue only when verified converged.
+          const queued = {
+            d: entry.direction,
+            s: entry.syncId,
+            c: entry.observed,
+            u: entry.observedUpdatedAt ?? null,
+          };
+          await localDb.collection("_migrations").updateOne(
+            { _id: "legacyTransitClears" as never },
+            { $addToSet: { entries: queued } },
+            { upsert: true },
           );
+          if (await this.attemptTransitClearPair(localDb, remoteDb, queued)) {
+            await localDb.collection("_migrations").updateOne(
+              { _id: "legacyTransitClears" as never },
+              { $pull: { entries: queued } } as never,
+            );
+          }
         } catch (err) {
           console.error(
-            "[sync] Deferred parent-provenance legacy-condition check failed (best-effort):",
+            "[sync] Deferred legacy-condition transit check failed (queued for retry):",
             err,
           );
         }
@@ -1040,6 +1049,35 @@ export class SyncService extends EventEmitter {
     if (bulk.length > 0) {
       await col.bulkWrite(bulk);
     }
+  }
+
+  /**
+   * GH #1021 r25: attempt the FIELD-LEVEL, timestamp-honest clear of one
+   * legacy-condition pair on both databases. Each write's filter re-asserts
+   * the exact syncId + condition + updatedAt the transit observed and sets
+   * ONLY the condition to "" — a row the user has since edited misses its
+   * filter and normal LWW then owns the pair. Returns true once NEITHER side
+   * matches the observed state anymore (converged or user-superseded), which
+   * is the dequeue condition for the durable retry queue.
+   */
+  private async attemptTransitClearPair(
+    localDb: Db,
+    remoteDb: Db,
+    entry: { d: string; s: string; c: string; u: unknown },
+  ): Promise<boolean> {
+    const sourceDb = entry.d === "toLocal" ? remoteDb : localDb;
+    const targetDb = entry.d === "toLocal" ? localDb : remoteDb;
+    const filter = {
+      syncId: entry.s,
+      "settings.compatible_printers_condition": entry.c,
+      updatedAt: (entry.u ?? null) as Date | null,
+    };
+    const update = { $set: { "settings.compatible_printers_condition": "" } };
+    await targetDb.collection("filaments").updateOne(filter, update);
+    await sourceDb.collection("filaments").updateOne(filter, update);
+    const stillTarget = await targetDb.collection("filaments").findOne(filter, { projection: { _id: 1 } });
+    const stillSource = await sourceDb.collection("filaments").findOne(filter, { projection: { _id: 1 } });
+    return !stillTarget && !stillSource;
   }
 
   /**
@@ -1501,14 +1539,13 @@ export class SyncService extends EventEmitter {
     remoteLocationBySyncId: Map<string, ObjectId>,
     localBedTypeBySyncId: Map<string, ObjectId>,
     remoteBedTypeBySyncId: Map<string, ObjectId>,
-    localNozzleDiameterById: Map<string, unknown>,
-    remoteNozzleDiameterById: Map<string, unknown>,
-    deferredParentChecks: Array<{
+    deferredLegacyChecks: Array<{
       direction: "toLocal" | "toRemote";
       syncId: string;
       observed: string;
       observedUpdatedAt: unknown;
       parentId: unknown;
+      ownRefs: unknown[] | null;
     }>,
   ): (
     doc: Document,
@@ -1560,56 +1597,30 @@ export class SyncService extends EventEmitter {
       // below (it needs the source-side ids). Missing provenance (dangling
       // refs, no parent) strips nothing — the conservative direction.
       //
-      // OWN-tick rows strip in transit: their diameters come from the nozzle
-      // map, which is stable for the whole pass (nozzles synced before
-      // filaments). PARENT-provenance rows are DEFERRED instead (Codex P1
-      // r22): the parent row lives in the collection being synced right now,
-      // so a pre-fetched tick map can go stale mid-pass — sync() revalidates
-      // them against the CURRENT source parent after the collection sync and
-      // conditionally strips both sides then.
-      const sourceDiameters = direction === "toLocal" ? remoteNozzleDiameterById : localNozzleDiameterById;
+      // GH #1021 r25: NOTHING is stripped in transit — the copy rides
+      // verbatim (honest timestamps, the snapshot is never authoritative).
+      // The transform only RECORDS syntactic candidates, capturing the
+      // source-side provenance ids BEFORE the remaps below; sync() judges
+      // them after the collection sync against fresh source-side state and
+      // applies field-level conditional clears to both sides.
       const condition = (doc.settings as Record<string, unknown> | undefined)?.compatible_printers_condition;
-      if (typeof condition === "string" && LEGACY_NOZZLE_CONDITION_RE.test(condition)) {
+      if (
+        typeof condition === "string" &&
+        LEGACY_NOZZLE_CONDITION_RE.test(condition) &&
+        typeof doc.syncId === "string" &&
+        doc.syncId
+      ) {
         const ownRefs = Array.isArray(doc.compatibleNozzles) && doc.compatibleNozzles.length > 0
-          ? (doc.compatibleNozzles as unknown[])
+          ? ([...(doc.compatibleNozzles as unknown[])])
           : null;
-        if (ownRefs) {
-          const populated: { diameter: unknown }[] = [];
-          for (const ref of ownRefs) {
-            const diameter = sourceDiameters.get(String(ref));
-            if (diameter !== undefined) populated.push({ diameter });
-          }
-          if (deriveLegacyNozzleCondition(populated) === condition) {
-            doc.settings = {
-              ...(doc.settings as Record<string, unknown>),
-              compatible_printers_condition: "",
-            };
-            // Codex P1 r19 / P2 r23: BUMP updatedAt on the stripped copy. The
-            // cleaned target then lands NEWER than the still-stale source, so
-            // the engine's own next LWW cycle replaceOne-propagates the
-            // cleaned doc back over the source — source-side convergence with
-            // no bespoke second write, retried by construction every cycle
-            // (an equal-timestamp pair would freeze the divergence instead).
-            // EXACTLY source+1ms, deliberately NOT wall-clock (Codex P1 r24):
-            // only intra-pair ordering drives the convergence, and +1ms is
-            // the smallest stamp that beats the stale source while losing to
-            // ANY genuine later edit on either side (a same-peer edit after
-            // the source stamp always carries a later same-clock timestamp;
-            // a wall-clock bump could leap PAST such an edit and erase it).
-            // Parsed via readTimestamp (Codex P2 r24) — raw rows can store
-            // updatedAt as an ISO string / epoch number, and treating those
-            // as 0 would land the bump in 1970 and hand the pair straight
-            // back to the stale source.
-            const sourceTs = SyncService.readTimestamp(doc.updatedAt) ?? 0;
-            doc.updatedAt = new Date(sourceTs + 1);
-          }
-        } else if (doc.parentId != null && typeof doc.syncId === "string" && doc.syncId) {
-          deferredParentChecks.push({
+        if (ownRefs || doc.parentId != null) {
+          deferredLegacyChecks.push({
             direction,
             syncId: doc.syncId,
             observed: condition,
             observedUpdatedAt: doc.updatedAt ?? null,
-            parentId: doc.parentId,
+            parentId: ownRefs ? null : doc.parentId,
+            ownRefs,
           });
         }
       }
