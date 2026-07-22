@@ -508,14 +508,6 @@ export class SyncService extends EventEmitter {
       // Sync filaments with nozzle, printer, parent, spool-location, and
       // bedType remapping
       this.updateStatus({ progress: "Syncing filaments..." });
-      // GH #1021 r19: the transform records every in-transit strip here so the
-      // SOURCE rows can be cleaned after the collection sync (see below).
-      const strippedInTransit: Array<{
-        direction: "toLocal" | "toRemote";
-        syncId: string;
-        observed: string;
-        observedUpdatedAt: unknown;
-      }> = [];
       // GH #1021 r22: PARENT-provenance candidates are NOT stripped in
       // transit — the parent row lives in the very collection this pass is
       // syncing, so any pre-fetched tick map can go stale mid-pass (LWW may
@@ -536,7 +528,6 @@ export class SyncService extends EventEmitter {
         localLocationBySyncId, remoteLocationBySyncId,
         localBedTypeBySyncId, remoteBedTypeBySyncId,
         localNozzleDiameterById, remoteNozzleDiameterById,
-        strippedInTransit,
         deferredParentChecks,
       );
       results.push(await trySync(
@@ -556,33 +547,25 @@ export class SyncService extends EventEmitter {
       // Best-effort per row: on a transient failure the target copy is
       // already clean (the r17 guarantee), and any later edit of the source
       // re-triggers a copy + a fresh strip/clear.
-      for (const entry of strippedInTransit) {
-        if (this.aborted) break;
-        const sourceCol = (entry.direction === "toLocal" ? remoteDb : localDb).collection("filaments");
-        try {
-          await sourceCol.updateOne(
-            {
-              syncId: entry.syncId,
-              "settings.compatible_printers_condition": entry.observed,
-              updatedAt: entry.observedUpdatedAt ?? null,
-            },
-            { $set: { "settings.compatible_printers_condition": "" } },
-          );
-        } catch (err) {
-          console.error("[sync] Source-side legacy nozzle-condition clear failed (best-effort):", err);
-        }
-      }
-
-      // GH #1021 (Codex P1 r22): parent-provenance candidates were deferred
-      // by the transform (the pre-sync tick map could be stale mid-pass —
-      // this pass may have pulled newer parent ticks before transforming the
-      // child). Revalidate each against the CURRENT source parent + nozzle
-      // docs, post-sync: only when the child's condition still derives from
-      // the parent's ticks AS THEY NOW STAND is it the machine stamp — then
-      // conditionally strip BOTH the transferred copy and the source row
-      // (exact value + exact updatedAt, no timestamp bump). A non-matching
-      // current derivation means the condition is a pin under the settled
-      // state and BOTH sides keep it.
+      // GH #1021 (Codex P1 r22 / P1+P2 r23): parent-provenance candidates
+      // were deferred by the transform (the pre-sync tick map could be stale
+      // mid-pass — this pass may have pulled newer parent ticks before
+      // transforming the child). Revalidate each against the CURRENT source
+      // parent + nozzle docs, post-sync: only when the child's condition
+      // still derives from the parent's ticks AS THEY NOW STAND is it the
+      // machine stamp — then conditionally strip the TRANSFERRED COPY only,
+      // as a SINGLE write that BUMPS updatedAt (r23). The bump makes the
+      // cleaned target the newer side, so the engine's own next LWW cycle
+      // replaceOne-propagates the cleaned doc onto the source: source-side
+      // convergence needs no second destructive write here (no two-write
+      // partial state to retry — r23 P2), it is retried by construction
+      // every cycle until it lands. A parent/nozzle edit inside the
+      // revalidate→write window (r23 P1) is the same benign-convergent
+      // residual as the one-shot cleanup's pre-clear re-derivation: the
+      // conditional filter re-asserts the exact child value + updatedAt, the
+      // value provably derived from the ticks at write time, and — because
+      // the pair no longer sits at equal timestamps — any later user re-pin
+      // is newer and wins through normal LWW.
       for (const entry of deferredParentChecks) {
         if (this.aborted) break;
         const sourceSide = entry.direction === "toLocal" ? remoteDb : localDb;
@@ -601,14 +584,24 @@ export class SyncService extends EventEmitter {
                 .toArray()
             : [];
           if (deriveLegacyNozzleCondition(nozzleDocs) !== entry.observed) continue;
-          const filter = {
-            syncId: entry.syncId,
-            "settings.compatible_printers_condition": entry.observed,
-            updatedAt: entry.observedUpdatedAt ?? null,
-          };
-          const update = { $set: { "settings.compatible_printers_condition": "" } };
-          await targetSide.collection("filaments").updateOne(filter, update);
-          await sourceSide.collection("filaments").updateOne(filter, update);
+          // Same clock-skew guard as the in-transit bump: the copy carried
+          // the SOURCE's updatedAt, which a fast-clocked peer may have
+          // stamped in our future — the cleared doc must land strictly newer.
+          const observedTs =
+            entry.observedUpdatedAt instanceof Date ? entry.observedUpdatedAt.getTime() : 0;
+          await targetSide.collection("filaments").updateOne(
+            {
+              syncId: entry.syncId,
+              "settings.compatible_printers_condition": entry.observed,
+              updatedAt: entry.observedUpdatedAt ?? null,
+            },
+            {
+              $set: {
+                "settings.compatible_printers_condition": "",
+                updatedAt: new Date(Math.max(Date.now(), observedTs + 1)),
+              },
+            },
+          );
         } catch (err) {
           console.error(
             "[sync] Deferred parent-provenance legacy-condition check failed (best-effort):",
@@ -1490,12 +1483,6 @@ export class SyncService extends EventEmitter {
     remoteBedTypeBySyncId: Map<string, ObjectId>,
     localNozzleDiameterById: Map<string, unknown>,
     remoteNozzleDiameterById: Map<string, unknown>,
-    strippedInTransit: Array<{
-      direction: "toLocal" | "toRemote";
-      syncId: string;
-      observed: string;
-      observedUpdatedAt: unknown;
-    }>,
     deferredParentChecks: Array<{
       direction: "toLocal" | "toRemote";
       syncId: string;
@@ -1577,18 +1564,18 @@ export class SyncService extends EventEmitter {
               ...(doc.settings as Record<string, unknown>),
               compatible_printers_condition: "",
             };
-            // Codex P1 r19: record the strip so sync() can clean the SOURCE
-            // row too — the copy keeps the source updatedAt, so LWW would
-            // otherwise never revisit the pair and the source would keep
-            // serving the stale value to its own exports/snapshots.
-            if (typeof doc.syncId === "string" && doc.syncId) {
-              strippedInTransit.push({
-                direction,
-                syncId: doc.syncId,
-                observed: condition,
-                observedUpdatedAt: doc.updatedAt ?? null,
-              });
-            }
+            // Codex P1 r19 / P2 r23: BUMP updatedAt on the stripped copy. The
+            // cleaned target then lands NEWER than the still-stale source, so
+            // the engine's own next LWW cycle replaceOne-propagates the
+            // cleaned doc back over the source — source-side convergence with
+            // no bespoke second write, retried by construction every cycle
+            // (an equal-timestamp pair would freeze the divergence instead).
+            // A later user edit on either side is newer still and wins.
+            // max(now, source+1ms): a peer whose clock runs AHEAD of this
+            // machine stamped the source in our future — a plain `now` would
+            // land OLDER and the stale source would win the pair right back.
+            const sourceTs = doc.updatedAt instanceof Date ? doc.updatedAt.getTime() : 0;
+            doc.updatedAt = new Date(Math.max(Date.now(), sourceTs + 1));
           }
         } else if (doc.parentId != null && typeof doc.syncId === "string" && doc.syncId) {
           deferredParentChecks.push({

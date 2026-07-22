@@ -1025,7 +1025,8 @@ describe("SyncService — v1.12 sync expansion", () => {
       await sync.sync();
 
       // The copy that landed locally was stripped in transit (the completed
-      // markers meant no migration was left to catch it)…
+      // markers meant no migration was left to catch it) — and its updatedAt
+      // was BUMPED, making the cleaned side the newer one (r19/r23)…
       const localCopy = await localDb.collection("filaments").findOne({ syncId: "fil-transit" });
       expect(localCopy!.settings.compatible_printers_condition).toBe("");
       expect(localCopy!.settings.cooling).toBe("1"); // sibling key intact
@@ -1034,14 +1035,17 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(localPin!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
       const remotePin = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit-pin" });
       expect(remotePin!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
-      // …and the SOURCE row is cleaned too (Codex P1 r19): the copy kept the
-      // source updatedAt, so LWW would never revisit the pair — without the
-      // source-side clear it would keep serving the stale value to its own
-      // exports/snapshots forever, at equal timestamps.
+      // …and the SOURCE converges through the engine's OWN LWW on the next
+      // cycle (r23): the bumped target is newer, so the cleaned doc
+      // replaceOne-propagates back — no bespoke second destructive write, no
+      // two-write partial state, retried every cycle by construction.
+      const remoteBefore = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit" });
+      expect(remoteBefore!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      await sync.sync();
       const remoteRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit" });
       expect(remoteRow!.settings.compatible_printers_condition).toBe("");
-      expect(remoteRow!.settings.cooling).toBe("1"); // conditional clear touches one key
-      // Both sides now byte-equal at the same updatedAt — a converged pair.
+      expect(remoteRow!.settings.cooling).toBe("1");
+      // Converged: both sides byte-equal at the bumped updatedAt.
       expect(String(remoteRow!.updatedAt.getTime())).toBe(String(localCopy!.updatedAt.getTime()));
     });
 
@@ -1079,12 +1083,17 @@ describe("SyncService — v1.12 sync expansion", () => {
       await sync.sync();
 
       // The deferred post-sync revalidation confirmed the CURRENT remote
-      // parent still derives the condition → stripped on BOTH sides.
+      // parent still derives the condition → the transferred copy is
+      // stripped with a bumped updatedAt (single write, r23)…
       const localChild = await localDb.collection("filaments").findOne({ syncId: "fil-defer-child" });
       expect(localChild!.settings.compatible_printers_condition).toBe("");
       expect(localChild!.settings.cooling).toBe("1");
+      // …and the SOURCE converges through normal LWW on the next cycle (the
+      // bumped target is newer).
+      await sync.sync();
       const remoteChild = await remoteDb.collection("filaments").findOne({ syncId: "fil-defer-child" });
       expect(remoteChild!.settings.compatible_printers_condition).toBe("");
+      expect(remoteChild!.settings.cooling).toBe("1");
     });
 
     it("preserves a child condition when the SAME pass moved the parent's ticks away from it (r22 regression)", async () => {
