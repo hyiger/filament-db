@@ -477,19 +477,10 @@ export class SyncService extends EventEmitter {
       // base64 photoDataUrl blobs in spools[] that we'd otherwise stream
       // across the wire just to build a 100-byte id map. updatedAt is kept
       // for the snapshot construction immediately below.
-      // (+ compatibleNozzles/_deletedAt since GH #1021 r17 — the in-transit
-      // legacy-condition strip resolves a variant's provenance through its
-      // ACTIVE source-side parent's ticks; refs are ~12 bytes each.)
-      const localFilaments = await localDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, updatedAt: 1, compatibleNozzles: 1, _deletedAt: 1 } }).toArray();
-      const remoteFilaments = await remoteDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, updatedAt: 1, compatibleNozzles: 1, _deletedAt: 1 } }).toArray();
+      const localFilaments = await localDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, updatedAt: 1 } }).toArray();
+      const remoteFilaments = await remoteDb.collection("filaments").find({}, { projection: { _id: 1, syncId: 1, updatedAt: 1 } }).toArray();
       const localFilamentBySyncId = new Map(localFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
       const remoteFilamentBySyncId = new Map(remoteFilaments.filter(f => f.syncId).map(f => [f.syncId as string, f._id]));
-      const localFilamentTicksById = new Map(
-        localFilaments.filter(f => f._deletedAt == null).map(f => [f._id.toString(), f.compatibleNozzles as unknown]),
-      );
-      const remoteFilamentTicksById = new Map(
-        remoteFilaments.filter(f => f._deletedAt == null).map(f => [f._id.toString(), f.compatibleNozzles as unknown]),
-      );
 
       // Snapshot each side's pre-existing filaments as `_id → updatedAt(ms)`
       // so the post-sync repair pass can tell whether THIS sync cycle wrote
@@ -525,6 +516,19 @@ export class SyncService extends EventEmitter {
         observed: string;
         observedUpdatedAt: unknown;
       }> = [];
+      // GH #1021 r22: PARENT-provenance candidates are NOT stripped in
+      // transit — the parent row lives in the very collection this pass is
+      // syncing, so any pre-fetched tick map can go stale mid-pass (LWW may
+      // update the parent before its child transforms). They are recorded
+      // here and revalidated AFTER the collection sync against the CURRENT
+      // source parent (see below).
+      const deferredParentChecks: Array<{
+        direction: "toLocal" | "toRemote";
+        syncId: string;
+        observed: string;
+        observedUpdatedAt: unknown;
+        parentId: unknown;
+      }> = [];
       const filamentTransform = this.buildFilamentRefsTransform(
         localNozzleBySyncId, remoteNozzleBySyncId,
         localPrinterBySyncId, remotePrinterBySyncId,
@@ -532,8 +536,8 @@ export class SyncService extends EventEmitter {
         localLocationBySyncId, remoteLocationBySyncId,
         localBedTypeBySyncId, remoteBedTypeBySyncId,
         localNozzleDiameterById, remoteNozzleDiameterById,
-        localFilamentTicksById, remoteFilamentTicksById,
         strippedInTransit,
+        deferredParentChecks,
       );
       results.push(await trySync(
         "filaments",
@@ -566,6 +570,50 @@ export class SyncService extends EventEmitter {
           );
         } catch (err) {
           console.error("[sync] Source-side legacy nozzle-condition clear failed (best-effort):", err);
+        }
+      }
+
+      // GH #1021 (Codex P1 r22): parent-provenance candidates were deferred
+      // by the transform (the pre-sync tick map could be stale mid-pass —
+      // this pass may have pulled newer parent ticks before transforming the
+      // child). Revalidate each against the CURRENT source parent + nozzle
+      // docs, post-sync: only when the child's condition still derives from
+      // the parent's ticks AS THEY NOW STAND is it the machine stamp — then
+      // conditionally strip BOTH the transferred copy and the source row
+      // (exact value + exact updatedAt, no timestamp bump). A non-matching
+      // current derivation means the condition is a pin under the settled
+      // state and BOTH sides keep it.
+      for (const entry of deferredParentChecks) {
+        if (this.aborted) break;
+        const sourceSide = entry.direction === "toLocal" ? remoteDb : localDb;
+        const targetSide = entry.direction === "toLocal" ? localDb : remoteDb;
+        try {
+          const parentNow = await sourceSide.collection("filaments").findOne(
+            { _id: entry.parentId as ObjectId, _deletedAt: null },
+            { projection: { compatibleNozzles: 1 } },
+          );
+          const refs = Array.isArray(parentNow?.compatibleNozzles)
+            ? (parentNow!.compatibleNozzles as ObjectId[])
+            : [];
+          const nozzleDocs = refs.length
+            ? await sourceSide.collection("nozzles")
+                .find({ _id: { $in: refs } }, { projection: { _id: 1, diameter: 1 } })
+                .toArray()
+            : [];
+          if (deriveLegacyNozzleCondition(nozzleDocs) !== entry.observed) continue;
+          const filter = {
+            syncId: entry.syncId,
+            "settings.compatible_printers_condition": entry.observed,
+            updatedAt: entry.observedUpdatedAt ?? null,
+          };
+          const update = { $set: { "settings.compatible_printers_condition": "" } };
+          await targetSide.collection("filaments").updateOne(filter, update);
+          await sourceSide.collection("filaments").updateOne(filter, update);
+        } catch (err) {
+          console.error(
+            "[sync] Deferred parent-provenance legacy-condition check failed (best-effort):",
+            err,
+          );
         }
       }
 
@@ -1442,13 +1490,18 @@ export class SyncService extends EventEmitter {
     remoteBedTypeBySyncId: Map<string, ObjectId>,
     localNozzleDiameterById: Map<string, unknown>,
     remoteNozzleDiameterById: Map<string, unknown>,
-    localFilamentTicksById: Map<string, unknown>,
-    remoteFilamentTicksById: Map<string, unknown>,
     strippedInTransit: Array<{
       direction: "toLocal" | "toRemote";
       syncId: string;
       observed: string;
       observedUpdatedAt: unknown;
+    }>,
+    deferredParentChecks: Array<{
+      direction: "toLocal" | "toRemote";
+      syncId: string;
+      observed: string;
+      observedUpdatedAt: unknown;
+      parentId: unknown;
     }>,
   ): (
     doc: Document,
@@ -1494,26 +1547,28 @@ export class SyncService extends EventEmitter {
       // still carrying the stamped machine condition AFTER both sides'
       // one-shot markers completed — and the copy would replicate it verbatim,
       // resurrecting the hidden-preset bug with no migration left to run. So
-      // every copied filament gets the same provenance-matched strip as the
-      // slicer/import boundaries, resolved against the SOURCE side (whose
-      // ticks are the world the stamp was made in): own refs, else the ACTIVE
-      // source parent's; diameters from the source nozzle map. Runs BEFORE
-      // the ref remap below (it needs the source-side ids). Missing
-      // provenance (dangling refs, deleted parent) strips nothing — the
-      // conservative direction. Only the in-transit COPY is stripped; the
-      // source row is its own database's problem.
+      // every copied filament gets the same provenance-matched treatment as
+      // the slicer/import boundaries, resolved against the SOURCE side (whose
+      // ticks are the world the stamp was made in). Runs BEFORE the ref remap
+      // below (it needs the source-side ids). Missing provenance (dangling
+      // refs, no parent) strips nothing — the conservative direction.
+      //
+      // OWN-tick rows strip in transit: their diameters come from the nozzle
+      // map, which is stable for the whole pass (nozzles synced before
+      // filaments). PARENT-provenance rows are DEFERRED instead (Codex P1
+      // r22): the parent row lives in the collection being synced right now,
+      // so a pre-fetched tick map can go stale mid-pass — sync() revalidates
+      // them against the CURRENT source parent after the collection sync and
+      // conditionally strips both sides then.
       const sourceDiameters = direction === "toLocal" ? remoteNozzleDiameterById : localNozzleDiameterById;
-      const sourceTicksById = direction === "toLocal" ? remoteFilamentTicksById : localFilamentTicksById;
       const condition = (doc.settings as Record<string, unknown> | undefined)?.compatible_printers_condition;
       if (typeof condition === "string" && LEGACY_NOZZLE_CONDITION_RE.test(condition)) {
         const ownRefs = Array.isArray(doc.compatibleNozzles) && doc.compatibleNozzles.length > 0
           ? (doc.compatibleNozzles as unknown[])
           : null;
-        const parentTicks = doc.parentId != null ? sourceTicksById.get(String(doc.parentId)) : undefined;
-        const refs = ownRefs ?? (Array.isArray(parentTicks) && parentTicks.length > 0 ? parentTicks : null);
-        if (refs) {
+        if (ownRefs) {
           const populated: { diameter: unknown }[] = [];
-          for (const ref of refs) {
+          for (const ref of ownRefs) {
             const diameter = sourceDiameters.get(String(ref));
             if (diameter !== undefined) populated.push({ diameter });
           }
@@ -1535,6 +1590,14 @@ export class SyncService extends EventEmitter {
               });
             }
           }
+        } else if (doc.parentId != null && typeof doc.syncId === "string" && doc.syncId) {
+          deferredParentChecks.push({
+            direction,
+            syncId: doc.syncId,
+            observed: condition,
+            observedUpdatedAt: doc.updatedAt ?? null,
+            parentId: doc.parentId,
+          });
         }
       }
 

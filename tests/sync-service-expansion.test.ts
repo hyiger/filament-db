@@ -1044,5 +1044,113 @@ describe("SyncService — v1.12 sync expansion", () => {
       // Both sides now byte-equal at the same updatedAt — a converged pair.
       expect(String(remoteRow!.updatedAt.getTime())).toBe(String(localCopy!.updatedAt.getTime()));
     });
+
+    it("strips a PARENT-provenance transit row via the deferred post-sync revalidation (r22)", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+        await dbh.collection("_migrations").insertOne({
+          _id: "legacyNozzleConditions" as never,
+          claimedAt: now,
+          completed: true,
+          processed: [],
+        });
+      }
+      const rNoz = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC dp 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-dp", createdAt: now, updatedAt: now,
+      })).insertedId;
+      // Parent (stable ticks) + inheriting child stamped from those ticks —
+      // both only on the remote, both newer than (absent) local rows.
+      const rParent = (await remoteDb.collection("filaments").insertOne({
+        name: "DeferParent", vendor: "T", type: "PLA",
+        compatibleNozzles: [rNoz],
+        syncId: "fil-defer-parent", _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
+      await remoteDb.collection("filaments").insertOne({
+        name: "DeferChild", vendor: "T", type: "PLA",
+        compatibleNozzles: [], parentId: rParent,
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" },
+        syncId: "fil-defer-child", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The deferred post-sync revalidation confirmed the CURRENT remote
+      // parent still derives the condition → stripped on BOTH sides.
+      const localChild = await localDb.collection("filaments").findOne({ syncId: "fil-defer-child" });
+      expect(localChild!.settings.compatible_printers_condition).toBe("");
+      expect(localChild!.settings.cooling).toBe("1");
+      const remoteChild = await remoteDb.collection("filaments").findOne({ syncId: "fil-defer-child" });
+      expect(remoteChild!.settings.compatible_printers_condition).toBe("");
+    });
+
+    it("preserves a child condition when the SAME pass moved the parent's ticks away from it (r22 regression)", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+        await dbh.collection("_migrations").insertOne({
+          _id: "legacyNozzleConditions" as never,
+          claimedAt: now,
+          completed: true,
+          processed: [],
+        });
+      }
+      // Nozzles exist on both sides with a shared syncId.
+      await localDb.collection("nozzles").insertOne({
+        name: "LNC r22 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-r22-04", createdAt: now, updatedAt: now,
+      });
+      const lNoz08 = (await localDb.collection("nozzles").insertOne({
+        name: "LNC r22 0.8", diameter: 0.8, _deletedAt: null, syncId: "noz-r22-08", createdAt: now, updatedAt: now,
+      })).insertedId;
+      const rNoz04 = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC r22 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-r22-04", createdAt: now, updatedAt: now,
+      })).insertedId;
+      await remoteDb.collection("nozzles").insertOne({
+        name: "LNC r22 0.8", diameter: 0.8, _deletedAt: null, syncId: "noz-r22-08", createdAt: now, updatedAt: now,
+      });
+      // The parent exists on BOTH sides: the LOCAL copy is NEWER with ticks
+      // moved to 0.8; the REMOTE copy still has the old 0.4 ticks. The same
+      // pass will push local's 0.8 ticks onto the remote parent…
+      await localDb.collection("filaments").insertOne({
+        name: "R22Parent", vendor: "T", type: "PLA",
+        compatibleNozzles: [lNoz08],
+        syncId: "fil-r22-parent", _deletedAt: null, createdAt: now,
+        updatedAt: new Date(now.getTime() + 10_000),
+      });
+      const rParent = (await remoteDb.collection("filaments").insertOne({
+        name: "R22Parent", vendor: "T", type: "PLA",
+        compatibleNozzles: [rNoz04],
+        syncId: "fil-r22-parent", _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
+      // …while the REMOTE child (newer than absent-local) carries a condition
+      // matching the parent's OLD 0.4 ticks. Under the settled state (parent
+      // ticks 0.8) that condition is a PIN and must survive on both sides.
+      await remoteDb.collection("filaments").insertOne({
+        name: "R22Child", vendor: "T", type: "PLA",
+        compatibleNozzles: [], parentId: rParent,
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+        syncId: "fil-r22-child", _deletedAt: null, createdAt: now,
+        updatedAt: new Date(now.getTime() + 5_000),
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The pre-fix stale tick map would have judged the child against the
+      // OLD 0.4 ticks and stripped it; the deferred revalidation reads the
+      // parent AS IT NOW STANDS (0.8 after the pass) and preserves the pin.
+      const localChild = await localDb.collection("filaments").findOne({ syncId: "fil-r22-child" });
+      expect(localChild!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      const remoteChild = await remoteDb.collection("filaments").findOne({ syncId: "fil-r22-child" });
+      expect(remoteChild!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      // Sanity: the parent's ticks DID converge to the newer 0.8 set.
+      const remoteParent = await remoteDb.collection("filaments").findOne({ syncId: "fil-r22-parent" });
+      expect(String(remoteParent!.compatibleNozzles[0])).toBe(String((await remoteDb.collection("nozzles").findOne({ syncId: "noz-r22-08" }))!._id));
+    });
   });
 });
