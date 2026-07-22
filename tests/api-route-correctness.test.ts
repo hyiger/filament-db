@@ -10,6 +10,7 @@ import { PUT as putSpool } from "@/app/api/filaments/[id]/spools/[spoolId]/route
 import { POST as postPrintHistory } from "@/app/api/print-history/route";
 import { POST as scanPublish } from "@/app/api/scan/publish/route";
 import { POST as slicerSync } from "@/app/api/filaments/[id]/route";
+import { POST as createFilament } from "@/app/api/filaments/route";
 import { POST as orcaSync } from "@/app/api/filaments/[id]/orcaslicer/route";
 import { GET as orcaBulkExport } from "@/app/api/filaments/orcaslicer/route";
 import { GET as prusaBulkExport } from "@/app/api/filaments/prusaslicer/route";
@@ -1945,6 +1946,39 @@ describe("API route correctness", () => {
       expect(res2.status).toBe(200);
       const fresh3 = await Filament.findById(f._id).lean();
       expect(fresh3.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+    });
+
+    it("full-document CREATE (shared-catalog import shape) strips a self-provenanced machine condition (r18)", async () => {
+      const brass = await Nozzle.create({ name: "1021c 0.4 Brass", diameter: 0.4, type: "Brass" });
+      // buildFilamentImportBody's shape: remapped tick refs (as strings) +
+      // the source's settings bag verbatim — including a pre-upgrade stamp.
+      const res = await createFilament(
+        jsonReq("http://localhost/api/filaments", {
+          name: "Imported Catalog PLA",
+          vendor: "X",
+          type: "PLA",
+          compatibleNozzles: [String(brass._id)],
+          settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" },
+        }),
+      );
+      expect(res.status).toBe(201);
+      const stored = await Filament.findOne({ name: "Imported Catalog PLA" }).lean();
+      expect(stored.settings?.compatible_printers_condition).toBe(""); // stripped at create
+      expect(stored.settings?.cooling).toBe("1");
+
+      // A non-matching pure nozzle condition rides through as a user pin.
+      const res2 = await createFilament(
+        jsonReq("http://localhost/api/filaments", {
+          name: "Imported Catalog PLA 2",
+          vendor: "X",
+          type: "PLA",
+          compatibleNozzles: [String(brass._id)],
+          settings: { compatible_printers_condition: "nozzle_diameter[0]==0.8" },
+        }),
+      );
+      expect(res2.status).toBe(201);
+      const stored2 = await Filament.findOne({ name: "Imported Catalog PLA 2" }).lean();
+      expect(stored2.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
     });
 
     it("OrcaSlicer sync: the shared bag's passthrough copy is stripped the same way", async () => {

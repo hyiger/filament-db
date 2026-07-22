@@ -320,12 +320,18 @@ export class SyncService extends EventEmitter {
       // collection sync, and treat a failure as a PREREQUISITE failure — abort
       // the cycle (throw → the outer catch reports it; the next cycle retries)
       // rather than syncing stale values around the one-shot cleanup.
-      for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
-        const res = await clearLegacyNozzleConditionsOnce(dbHandle as unknown as MinimalDb);
-        if (res.ran && res.cleared > 0) {
-          console.log(
-            `[sync] Cleared ${res.cleared} legacy machine-derived nozzle condition(s) on the ${side} DB (GH #1021)`,
-          );
+      // Codex P2 r18: destroy() can land while the two clients were still
+      // connecting — re-check the abort flag BEFORE any destructive cleanup
+      // write, matching the mode-switch contract every later step honors
+      // (the abandoned databases must not be touched).
+      if (!this.aborted) {
+        for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
+          const res = await clearLegacyNozzleConditionsOnce(dbHandle as unknown as MinimalDb);
+          if (res.ran && res.cleared > 0) {
+            console.log(
+              `[sync] Cleared ${res.cleared} legacy machine-derived nozzle condition(s) on the ${side} DB (GH #1021)`,
+            );
+          }
         }
       }
 
