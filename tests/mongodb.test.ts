@@ -1036,8 +1036,14 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     return cached;
   }
 
+  const MARKER = { _id: "legacyNozzleConditions" as never };
+  async function deleteMarker() {
+    await mongoose.connection.db!.collection("_migrations").deleteOne(MARKER);
+  }
+
   it("clears exact machine-shaped conditions and leaves human expressions + other settings", async () => {
     await dbConnect();
+    await deleteMarker(); // fresh-upgrade state: no durable marker yet
     const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
     await Filament.collection.insertMany([
       { name: "MachineSingle", vendor: "T", type: "PLA",
@@ -1064,19 +1070,30 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
       .toBe("nozzle_diameter[0]>=0.4");
     expect((await byName("NoCondition"))!.settings.compatible_printers_condition).toBeUndefined();
     expect(cached.migrations.legacyNozzleConditions).toBe(true);
+    // Completion persisted DURABLY, not just in the process-local flag.
+    expect(await mongoose.connection.db!.collection("_migrations").findOne(MARKER)).not.toBeNull();
 
-    // Idempotence: a second run matches nothing ("" doesn't match the regex).
+    // Codex P1 r3 on #1022 — THE point of the marker: a pure nozzle pin
+    // authored AFTER the one-shot cleanup must SURVIVE a restart (simulated by
+    // resetting the process-local flags), even though it is textually
+    // identical to the legacy machine values.
+    await Filament.collection.insertOne({
+      name: "PostUpgradePin", vendor: "T", type: "PLA",
+      settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+    });
     resetMigrations();
     await dbConnect();
-    expect((await byName("MachineSingle"))!.settings.compatible_printers_condition).toBe("");
+    expect((await byName("PostUpgradePin"))!.settings.compatible_printers_condition)
+      .toBe("nozzle_diameter[0]==0.4"); // NOT cleared — the durable marker skips the re-run
 
     await Filament.collection.deleteMany({
-      name: { $in: ["MachineSingle", "MachineMulti", "HumanCompound", "HumanComparison", "NoCondition"] },
+      name: { $in: ["MachineSingle", "MachineMulti", "HumanCompound", "HumanComparison", "NoCondition", "PostUpgradePin"] },
     });
   });
 
   it("leaves the flag false and retries on a transient failure", async () => {
     await dbConnect();
+    await deleteMarker(); // ensure the clear actually attempts to run
     const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
 
     const cached = resetMigrations();
@@ -1109,5 +1126,7 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     cached.promise = null;
     await dbConnect();
     expect(cached.migrations.legacyNozzleConditions).toBe(true);
+    // A failed attempt wrote no marker; the successful retry did.
+    expect(await mongoose.connection.db!.collection("_migrations").findOne(MARKER)).not.toBeNull();
   });
 });

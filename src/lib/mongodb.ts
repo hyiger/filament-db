@@ -58,8 +58,13 @@ interface MongooseCache {
      * One-shot by design: after this runs, any pure nozzle-only condition in
      * a settings bag is user-authored by construction, so the export can pass
      * every pin through untouched (an export-time purge cannot distinguish
-     * the two — Codex P1 ×2 on #1022). Idempotent: cleared values become ""
-     * and never match the regex again. */
+     * the two — Codex P1 ×2 on #1022). UNLIKE the other migrations this one
+     * is NOT safe to re-run (a pin authored AFTER the cleanup is
+     * indistinguishable from the legacy values), and this in-process flag
+     * resets on every restart — so completion is persisted DURABLY as a
+     * marker document in the `_migrations` collection; the clear runs only
+     * when the marker is absent (Codex P1 r3 on #1022). This flag then only
+     * records "checked this process". */
     legacyNozzleConditions: boolean;
   };
 }
@@ -245,18 +250,40 @@ export default async function dbConnect() {
   if (!cached.migrations.legacyNozzleConditions) {
     try {
       const { default: Filament } = await import("@/models/Filament");
-      const res = await Filament.collection.updateMany(
-        {
-          "settings.compatible_printers_condition": {
-            $regex: /^nozzle_diameter\[0\]==\d+(\.\d+)?( or nozzle_diameter\[0\]==\d+(\.\d+)?)*$/,
+      // Codex P1 (r3) on #1022: the in-process flag resets on every restart,
+      // and unlike the other migrations this clear is NOT safe to re-run — a
+      // legitimate pure nozzle pin authored AFTER the one-shot cleanup is
+      // textually identical to the legacy machine values and would be erased
+      // on the next boot. Persist completion as a durable marker document so
+      // the clear runs exactly once per DATABASE, not once per process. (Two
+      // processes racing the very first run are serialized by the unique _id
+      // insert; the loser's redundant clear can only touch pre-marker data,
+      // which is machine-written by definition.)
+      const db = mongoose.connection.db;
+      if (!db) throw new Error("no db handle on the mongoose connection");
+      const markers = db.collection("_migrations");
+      const done = await markers.findOne({ _id: "legacyNozzleConditions" as never });
+      if (!done) {
+        const res = await Filament.collection.updateMany(
+          {
+            "settings.compatible_printers_condition": {
+              $regex: /^nozzle_diameter\[0\]==\d+(\.\d+)?( or nozzle_diameter\[0\]==\d+(\.\d+)?)*$/,
+            },
           },
-        },
-        { $set: { "settings.compatible_printers_condition": "" } },
-      );
-      if (res.modifiedCount > 0) {
-        console.log(
-          `[migration] Cleared ${res.modifiedCount} legacy machine-derived nozzle condition(s) (GH #1021)`,
+          { $set: { "settings.compatible_printers_condition": "" } },
         );
+        if (res.modifiedCount > 0) {
+          console.log(
+            `[migration] Cleared ${res.modifiedCount} legacy machine-derived nozzle condition(s) (GH #1021)`,
+          );
+        }
+        try {
+          await markers.insertOne({ _id: "legacyNozzleConditions" as never, completedAt: new Date() });
+        } catch (markerErr) {
+          // A concurrent process won the marker race (duplicate _id) — its
+          // marker stands; anything else must surface so the retry path runs.
+          if (!isDuplicateKeyError(markerErr)) throw markerErr;
+        }
       }
       cached.migrations.legacyNozzleConditions = true;
     } catch (err) {
