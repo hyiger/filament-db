@@ -307,24 +307,24 @@ export class SyncService extends EventEmitter {
       const localDb = local.db(getDbNameFromUri(this.localUri));
       const remoteDb = remote.db(getDbNameFromUri(this.atlasUri));
 
-      // GH #1021 (Codex P1 on #1022): the REMOTE database never runs dbConnect,
-      // so it never gets the one-shot legacyNozzleConditions cleanup — and the
-      // raw local cleanup preserves updatedAt, so LWW would never propagate it
-      // (equal timestamps → no action) while an Atlas-side edit would push the
-      // stale machine value BACK. Each side must clean its own DB: run the same
-      // marker-guarded helper against the remote before syncing. Best-effort —
-      // a transient failure releases its claim and retries next cycle without
-      // failing the sync (the helper's claim-first design makes a repeat safe
-      // to attempt and impossible to double-run).
-      try {
-        const res = await clearLegacyNozzleConditionsOnce(remoteDb as unknown as MinimalDb);
+      // GH #1021 (Codex P1 ×2 on #1022): neither database can be assumed clean
+      // here. The REMOTE never runs dbConnect at all, and the LOCAL one may not
+      // have either — resolveMongoUri() starts this sync via initSyncService()
+      // BEFORE the Next server (and its dbConnect migrations) comes up. If a
+      // legacy machine-derived nozzle condition rides a NEWER doc on either
+      // side, LWW copies it over the cleaned side, and since the cleanup
+      // preserves updatedAt the divergence then sticks at equal timestamps
+      // forever. So: run the marker-guarded cleanup on BOTH DBs before any
+      // collection sync, and treat a failure as a PREREQUISITE failure — abort
+      // the cycle (throw → the outer catch reports it; the next cycle retries)
+      // rather than syncing stale values around the one-shot cleanup.
+      for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
+        const res = await clearLegacyNozzleConditionsOnce(dbHandle as unknown as MinimalDb);
         if (res.ran && res.cleared > 0) {
           console.log(
-            `[sync] Cleared ${res.cleared} legacy machine-derived nozzle condition(s) on the remote DB (GH #1021)`,
+            `[sync] Cleared ${res.cleared} legacy machine-derived nozzle condition(s) on the ${side} DB (GH #1021)`,
           );
         }
-      } catch (err) {
-        console.error("[sync] Remote legacy nozzle-condition cleanup failed (will retry next cycle):", err);
       }
 
       // Sync nozzles first (filaments and printers reference them)

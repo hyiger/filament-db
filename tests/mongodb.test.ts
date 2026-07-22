@@ -1044,15 +1044,24 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     await mongoose.connection.db!.collection("_migrations").deleteOne(MARKER);
   }
 
-  it("clears exact machine-shaped conditions and leaves human expressions + other settings", async () => {
+  it("clears provenance-matched machine conditions and leaves user pins + human expressions", async () => {
     await dbConnect();
     await deleteMarker(); // fresh-upgrade state: no durable marker yet
     const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
     await Filament.collection.insertMany([
+      // Machine-derived: stored value equals the legacy derivation from the
+      // row's compatibleNozzles (the provenance test).
       { name: "MachineSingle", vendor: "T", type: "PLA",
+        compatibleNozzles: [{ diameter: 0.4, type: "Brass" }],
         settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" } },
       { name: "MachineMulti", vendor: "T", type: "PLA",
+        compatibleNozzles: [{ diameter: 0.6 }, { diameter: 0.25 }],
         settings: { compatible_printers_condition: "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.6" } },
+      // Same SYNTAX but the ticks don't derive to it → a pre-upgrade user pin
+      // (Codex P1 r6) — must survive.
+      { name: "PreUpgradePin", vendor: "T", type: "PLA",
+        compatibleNozzles: [{ diameter: 0.6 }],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" } },
       { name: "HumanCompound", vendor: "T", type: "PLA",
         settings: { compatible_printers_condition: "printer_model==MK4 and nozzle_diameter[0]==0.4" } },
       { name: "HumanComparison", vendor: "T", type: "PLA",
@@ -1067,6 +1076,8 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     expect((await byName("MachineSingle"))!.settings.compatible_printers_condition).toBe("");
     expect((await byName("MachineSingle"))!.settings.cooling).toBe("1"); // untouched sibling key
     expect((await byName("MachineMulti"))!.settings.compatible_printers_condition).toBe("");
+    expect((await byName("PreUpgradePin"))!.settings.compatible_printers_condition)
+      .toBe("nozzle_diameter[0]==0.4");
     expect((await byName("HumanCompound"))!.settings.compatible_printers_condition)
       .toBe("printer_model==MK4 and nozzle_diameter[0]==0.4");
     expect((await byName("HumanComparison"))!.settings.compatible_printers_condition)
@@ -1078,10 +1089,11 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
 
     // Codex P1 r3 on #1022 — THE point of the marker: a pure nozzle pin
     // authored AFTER the one-shot cleanup must SURVIVE a restart (simulated by
-    // resetting the process-local flags), even though it is textually
-    // identical to the legacy machine values.
+    // resetting the process-local flags), even when it is byte-identical to a
+    // provenance-matching legacy machine value.
     await Filament.collection.insertOne({
       name: "PostUpgradePin", vendor: "T", type: "PLA",
+      compatibleNozzles: [{ diameter: 0.4 }],
       settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
     });
     resetMigrations();
@@ -1090,13 +1102,20 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
       .toBe("nozzle_diameter[0]==0.4"); // NOT cleared — the durable marker skips the re-run
 
     await Filament.collection.deleteMany({
-      name: { $in: ["MachineSingle", "MachineMulti", "HumanCompound", "HumanComparison", "NoCondition", "PostUpgradePin"] },
+      name: { $in: ["MachineSingle", "MachineMulti", "PreUpgradePin", "HumanCompound", "HumanComparison", "NoCondition", "PostUpgradePin"] },
     });
   });
 
   it("leaves the flag false and retries on a transient failure", async () => {
     await dbConnect();
     await deleteMarker(); // ensure the clear actually attempts to run
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    // A provenance-matching row so the cleanup actually reaches its updateMany.
+    await Filament.collection.insertOne({
+      name: "TransientVictim", vendor: "T", type: "PLA",
+      compatibleNozzles: [{ diameter: 0.4 }],
+      settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+    });
 
     const cached = resetMigrations();
     // The cleanup helper reaches "filaments" through the RAW driver handle
@@ -1134,9 +1153,13 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     cached.promise = null;
     await dbConnect();
     expect(cached.migrations.legacyNozzleConditions).toBe(true);
-    // The successful retry completed the durable marker.
+    // The successful retry completed the durable marker AND cleared the row.
     const marker = await mongoose.connection.db!.collection("_migrations").findOne(MARKER);
     expect(marker).not.toBeNull();
     expect(marker!.completed).toBe(true);
+    const victim = await Filament.collection.findOne({ name: "TransientVictim" });
+    expect(victim!.settings.compatible_printers_condition).toBe("");
+
+    await Filament.collection.deleteMany({ name: "TransientVictim" });
   });
 });

@@ -892,37 +892,71 @@ describe("SyncService — v1.12 sync expansion", () => {
     });
   });
 
-  // ── GH #1021 (Codex P1 on #1022): remote legacyNozzleConditions cleanup ──
-  // The remote (Atlas) DB never runs dbConnect's startup migrations, and the
-  // raw cleanup preserves updatedAt so LWW would never propagate it — sync()
-  // must run the same marker-guarded helper against the remote itself.
+  // ── GH #1021 (Codex P1 ×2 on #1022): legacyNozzleConditions cleanup ──
+  // The remote (Atlas) DB never runs dbConnect's startup migrations, and on
+  // first hybrid startup the sync can run BEFORE the local dbConnect does —
+  // while the cleanup preserves updatedAt, so LWW would never propagate it.
+  // sync() must therefore run the marker-guarded helper against BOTH DBs
+  // before any collection sync.
 
-  describe("remote legacyNozzleConditions cleanup (GH #1021)", () => {
-    it("clears machine-derived conditions on the REMOTE db exactly once; a later remote pin survives", async () => {
+  describe("legacyNozzleConditions cleanup on both sync sides (GH #1021)", () => {
+    it("clears provenance-matched conditions on BOTH DBs exactly once; a later remote pin survives", async () => {
+      const localDb = localClient.db("filament-db");
       const remoteDb = remoteClient.db("filament-db");
-      // Earlier tests' sync() calls already completed the one-shot marker
-      // against an (empty) remote — drop it so the cleanup attempts to run.
-      await remoteDb.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+      // Earlier tests' sync() calls already completed the one-shot markers
+      // against (empty) DBs — drop them so the cleanups attempt to run.
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+      }
       const now = new Date();
+      // Machine-derived on the REMOTE (stored equals the derivation from its
+      // compatibleNozzles)…
       await remoteDb.collection("filaments").insertOne({
         name: "RemoteLegacy", vendor: "T", type: "PLA",
+        compatibleNozzles: [{ diameter: 0.6 }, { diameter: 0.4 }],
         settings: {
           compatible_printers_condition: "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6",
           cooling: "1",
         },
         syncId: "fil-remote-legacy", _deletedAt: null, createdAt: now, updatedAt: now,
       });
+      // …and on the LOCAL side (the round-6 case: local sync starts before the
+      // Next server's dbConnect migrations have run).
+      await localDb.collection("filaments").insertOne({
+        name: "LocalLegacy", vendor: "T", type: "PLA",
+        compatibleNozzles: [{ diameter: 0.25 }],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.25" },
+        syncId: "fil-local-legacy", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      // A user pin whose ticks do NOT derive to it must survive the cleanup
+      // AND the sync that follows.
+      await remoteDb.collection("filaments").insertOne({
+        name: "RemotePin", vendor: "T", type: "PLA",
+        compatibleNozzles: [{ diameter: 0.8 }],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+        syncId: "fil-remote-pin", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
 
       sync = makeSync();
       await sync.sync();
 
-      const after = await remoteDb.collection("filaments").findOne({ syncId: "fil-remote-legacy" });
-      expect(after!.settings.compatible_printers_condition).toBe("");
-      expect(after!.settings.cooling).toBe("1"); // sibling key untouched
-      const marker = await remoteDb
-        .collection("_migrations")
-        .findOne({ _id: "legacyNozzleConditions" as never });
-      expect(marker?.completed).toBe(true);
+      const remoteAfter = await remoteDb.collection("filaments").findOne({ syncId: "fil-remote-legacy" });
+      expect(remoteAfter!.settings.compatible_printers_condition).toBe("");
+      expect(remoteAfter!.settings.cooling).toBe("1"); // sibling key untouched
+      const localAfter = await localDb.collection("filaments").findOne({ syncId: "fil-local-legacy" });
+      expect(localAfter!.settings.compatible_printers_condition).toBe("");
+      // The cleared local doc propagated cleanly to the remote (no stale
+      // machine value pushed back over the cleaned side).
+      const localOnRemote = await remoteDb.collection("filaments").findOne({ syncId: "fil-local-legacy" });
+      expect(localOnRemote!.settings.compatible_printers_condition).toBe("");
+      const pinAfter = await remoteDb.collection("filaments").findOne({ syncId: "fil-remote-pin" });
+      expect(pinAfter!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      for (const dbh of [localDb, remoteDb]) {
+        const marker = await dbh
+          .collection("_migrations")
+          .findOne({ _id: "legacyNozzleConditions" as never });
+        expect(marker?.completed).toBe(true);
+      }
 
       // A pure nozzle pin authored on the REMOTE after completion is textually
       // identical to the legacy values — the durable marker must keep every
