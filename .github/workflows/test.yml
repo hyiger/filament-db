@@ -54,11 +54,15 @@ jobs:
 
       # GH #253: this step previously ended in `|| true`, which swallowed
       # the audit exit code so moderate+ advisories never failed CI. The
-      # known findings are now resolved (brace-expansion bumped; uuid
-      # pinned >=11.1.1 via an exceljs override), so the audit is a real
-      # gate again — a new moderate+ advisory will fail the workflow.
+      # audit is a real gate: a new moderate+ advisory fails the workflow.
+      # #1021-era follow-up: npm audit has no exception mechanism, so the
+      # gate runs through scripts/audit-gate.mjs — it fails on any
+      # moderate+ advisory NOT in .audit-allowlist.json (currently only
+      # the unfixable immutable@3 pair pinned by swagger-ui-react, which
+      # only ever renders our own committed openapi.json). Allowlist
+      # entries carry a justification + reviewBy date.
       - name: Security audit
-        run: npm audit --audit-level=moderate
+        run: node scripts/audit-gate.mjs
 
       - name: Build
         run: npm run build
