@@ -153,7 +153,6 @@ describe("clearLegacyNozzleConditionsOnce", () => {
           findOne: col.findOne.bind(col),
           insertOne: col.insertOne.bind(col),
           updateOne: col.updateOne.bind(col),
-          deleteOne: col.deleteOne.bind(col),
           find: (filter: Record<string, unknown>, opts?: Record<string, unknown>) => {
             const cursor = col.find(filter, opts);
             const isCandidateScan = "settings.compatible_printers_condition" in filter;
@@ -196,13 +195,14 @@ describe("clearLegacyNozzleConditionsOnce", () => {
   });
 
   it("takes over when a live claim is RELEASED mid-wait (winner hit a transient failure)", async () => {
-    await rawDb().collection("_migrations").insertOne({ ...MARKER, claimedAt: new Date() });
+    await rawDb().collection("_migrations").insertOne({ ...MARKER, claimedAt: new Date(), clearedIds: [] });
     const noz04 = await seedNozzle(0.4);
     await seed("retry-target", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
 
     const pending = clearLegacyNozzleConditionsOnce(db(), { waitMs: 3000, pollMs: 10 });
     await new Promise((r) => setTimeout(r, 50));
-    await rawDb().collection("_migrations").deleteOne(MARKER); // winner released
+    // Winner durably marked its failed attempt released (progress kept).
+    await rawDb().collection("_migrations").updateOne(MARKER, { $set: { released: true } });
 
     expect(await pending).toEqual({ ran: true, cleared: 1 });
     expect(await conditionOf("retry-target")).toBe("");
@@ -219,24 +219,88 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     expect(await conditionOf("still-dirty")).toBe("nozzle_diameter[0]==0.4");
   });
 
-  it("skips permanently on a STALE claim (crashed claimer) — never a takeover re-run", async () => {
+  it("RESUMES a stale claim (crashed claimer) via CAS takeover — progress makes takeover safe", async () => {
     await rawDb()
       .collection("_migrations")
-      .insertOne({ ...MARKER, claimedAt: new Date(Date.now() - 60 * 60 * 1000) });
+      .insertOne({ ...MARKER, claimedAt: new Date(Date.now() - 60 * 60 * 1000), clearedIds: [] });
     const noz04 = await seedNozzle(0.4);
     await seed("crash-residue", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
 
     const res = await clearLegacyNozzleConditionsOnce(db());
-    expect(res).toEqual({ ran: false, reason: "claimed-elsewhere" });
-    expect(await conditionOf("crash-residue")).toBe("nozzle_diameter[0]==0.4");
+    expect(res).toEqual({ ran: true, cleared: 1 });
+    expect(await conditionOf("crash-residue")).toBe("");
+    expect((await rawDb().collection("_migrations").findOne(MARKER))!.completed).toBe(true);
 
-    // A malformed claim (unreadable claimedAt) is treated the same way.
-    await rawDb().collection("_migrations").deleteOne(MARKER);
+    // A malformed claim (unreadable claimedAt) is likewise taken over.
+    await rawDb().collection("_migrations").deleteMany({});
     await rawDb().collection("_migrations").insertOne({ ...MARKER, claimedAt: "not-a-date" });
-    expect(await clearLegacyNozzleConditionsOnce(db())).toEqual({
-      ran: false,
-      reason: "claimed-elsewhere",
+    expect(await clearLegacyNozzleConditionsOnce(db())).toEqual({ ran: true, cleared: 0 });
+
+    // …as is one with NO claimedAt at all (the CAS filter's null fallback
+    // matches the missing field under Mongo's null query semantics).
+    await rawDb().collection("_migrations").deleteMany({});
+    await rawDb().collection("_migrations").insertOne({ ...MARKER, released: true });
+    expect(await clearLegacyNozzleConditionsOnce(db())).toEqual({ ran: true, cleared: 0 });
+  });
+
+  it("a RESUMED attempt never re-examines processed rows (r8: a pin authored on a cleared row survives)", async () => {
+    const noz04 = await seedNozzle(0.4);
+    // Attempt 1 cleared row A (recording it durably) and then failed
+    // elsewhere; the user authored a provenance-matching pin on A before the
+    // retry. Row B still carries its machine value.
+    const idA = await seed("repinned-after-clear", "nozzle_diameter[0]==0.4", {
+      compatibleNozzles: [noz04],
     });
+    await seed("still-machine", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    await rawDb().collection("_migrations").insertOne({
+      ...MARKER,
+      claimedAt: new Date(),
+      released: true,
+      clearedIds: [String(idA)],
+    });
+
+    const res = await clearLegacyNozzleConditionsOnce(db());
+    expect(res).toEqual({ ran: true, cleared: 1 });
+    expect(await conditionOf("repinned-after-clear")).toBe("nozzle_diameter[0]==0.4"); // pin SURVIVES
+    expect(await conditionOf("still-machine")).toBe("");
+    expect((await rawDb().collection("_migrations").findOne(MARKER))!.completed).toBe(true);
+  });
+
+  it("loses a takeover CAS race and falls back to observing the new holder", async () => {
+    await rawDb().collection("_migrations").insertOne({
+      ...MARKER,
+      claimedAt: new Date(Date.now() - 60 * 60 * 1000),
+      released: true,
+      clearedIds: [],
+    });
+    const real = db();
+    let casIntercepted = false;
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "_migrations") return col;
+        return {
+          findOne: col.findOne.bind(col),
+          find: col.find.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: async (f: Record<string, unknown>, u: Record<string, unknown>) => {
+            // Just before OUR takeover CAS lands, a racer takes over AND
+            // completes — so our CAS matches nothing and we must re-observe.
+            if (!casIntercepted && "claimedAt" in f) {
+              casIntercepted = true;
+              await col.updateOne(MARKER, {
+                $set: { claimedAt: new Date(), completed: true },
+                $unset: { released: "" },
+              });
+            }
+            return col.updateOne(f, u);
+          },
+        };
+      },
+    };
+    const res = await clearLegacyNozzleConditionsOnce(wrapper, { waitMs: 500, pollMs: 10 });
+    expect(res).toEqual({ ran: false, reason: "already-done" });
+    expect(casIntercepted).toBe(true);
   });
 
   it("loses the claim-insert race and falls back to observing the winner", async () => {
@@ -264,7 +328,6 @@ describe("clearLegacyNozzleConditionsOnce", () => {
           },
           find: col.find.bind(col),
           updateOne: col.updateOne.bind(col),
-          deleteOne: col.deleteOne.bind(col),
         };
       },
     };
@@ -286,7 +349,6 @@ describe("clearLegacyNozzleConditionsOnce", () => {
           findOne: col.findOne.bind(col),
           find: col.find.bind(col),
           insertOne: col.insertOne.bind(col),
-          deleteOne: col.deleteOne.bind(col),
           updateOne: async (f: Record<string, unknown>, u: Record<string, unknown>) => {
             if (failNext) {
               failNext = false;
@@ -298,18 +360,25 @@ describe("clearLegacyNozzleConditionsOnce", () => {
       },
     };
     await expect(clearLegacyNozzleConditionsOnce(wrapper)).rejects.toThrow("transient");
-    // Claim released → nothing in _migrations → the retry claims and completes.
-    expect(await rawDb().collection("_migrations").findOne(MARKER)).toBeNull();
+    // Claim kept, durably marked RELEASED; the failed row's progress record
+    // was rolled back so the retry re-attempts it.
+    const failedMarker = await rawDb().collection("_migrations").findOne(MARKER);
+    expect(failedMarker).not.toBeNull();
+    expect(failedMarker!.released).toBe(true);
+    expect(failedMarker!.completed).toBeUndefined();
+    expect(failedMarker!.clearedIds).toEqual([]);
     const res = await clearLegacyNozzleConditionsOnce(wrapper);
     expect(res).toEqual({ ran: true, cleared: 1 });
     expect(await conditionOf("retry-me")).toBe("");
   });
 
-  it("keeps the claim held when the release itself fails mid-crash: waiters throw, then stale-skip", async () => {
-    // The documented worst case: clear fails AND the claim delete fails. The
-    // original error still propagates, the claim stays live, contenders THROW
-    // until it goes stale, and then every run SKIPS — residual legacy values
-    // (recoverable) instead of any re-run that could erase a post-upgrade pin.
+  it("hard-crash worst case: release AND rollback writes fail → waiters throw, stale takeover skips the recorded row", async () => {
+    // Clear fails, the progress rollback ($pull) fails, and the release mark
+    // fails. The original error still propagates, the claim stays live-shaped
+    // with the row RECORDED, contenders THROW until it goes stale, and the
+    // eventual takeover SKIPS the recorded row — the documented record-first
+    // residue (legacy value survives, hand-clearable) instead of any path
+    // that could erase a post-cleanup pin.
     const noz04 = await seedNozzle(0.4);
     await seed("stuck", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
     const real = db();
@@ -321,7 +390,6 @@ describe("clearLegacyNozzleConditionsOnce", () => {
             findOne: col.findOne.bind(col),
             find: col.find.bind(col),
             insertOne: col.insertOne.bind(col),
-            deleteOne: col.deleteOne.bind(col),
             updateOne: async () => {
               throw new Error("clear failed");
             },
@@ -332,9 +400,12 @@ describe("clearLegacyNozzleConditionsOnce", () => {
             findOne: col.findOne.bind(col),
             find: col.find.bind(col),
             insertOne: col.insertOne.bind(col),
-            updateOne: col.updateOne.bind(col),
-            deleteOne: async () => {
-              throw new Error("release failed");
+            updateOne: async (f: Record<string, unknown>, u: Record<string, unknown>) => {
+              const body = JSON.stringify(u);
+              if (body.includes("$pull") || body.includes("released")) {
+                throw new Error("marker write failed");
+              }
+              return col.updateOne(f, u);
             },
           };
         }
@@ -346,11 +417,12 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     await expect(
       clearLegacyNozzleConditionsOnce(db(), { waitMs: 40, pollMs: 10 }),
     ).rejects.toBeInstanceOf(LegacyCleanupInProgressError);
-    // …and once the claim is stale, every run skips.
+    // …and once stale, the takeover resumes but skips the recorded row.
     await new Promise((r) => setTimeout(r, 5));
     const res = await clearLegacyNozzleConditionsOnce(db(), { waitMs: 40, pollMs: 10, staleMs: 0 });
-    expect(res).toEqual({ ran: false, reason: "claimed-elsewhere" });
-    expect(await conditionOf("stuck")).toBe("nozzle_diameter[0]==0.4");
+    expect(res).toEqual({ ran: true, cleared: 0 });
+    expect(await conditionOf("stuck")).toBe("nozzle_diameter[0]==0.4"); // residue, hand-clearable
+    expect((await rawDb().collection("_migrations").findOne(MARKER))!.completed).toBe(true);
   });
 
   it("a non-duplicate claim-insert failure propagates (not swallowed as a race)", async () => {
@@ -367,7 +439,6 @@ describe("clearLegacyNozzleConditionsOnce", () => {
           },
           find: col.find.bind(col),
           updateOne: col.updateOne.bind(col),
-          deleteOne: col.deleteOne.bind(col),
         };
       },
     };
@@ -402,7 +473,6 @@ describe("clearLegacyNozzleConditionsOnce", () => {
           },
           find: col.find.bind(col),
           updateOne: col.updateOne.bind(col),
-          deleteOne: col.deleteOne.bind(col),
         };
       },
     };

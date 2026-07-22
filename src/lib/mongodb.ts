@@ -249,8 +249,9 @@ export default async function dbConnect() {
     try {
       // Full rationale in src/lib/legacyNozzleConditions.ts: durable per-DB
       // marker (NOT this process-local flag), CLAIM-FIRST so racing processes
-      // serialize before the destructive update, claim released on a transient
-      // failure so the next connect retries. The hybrid remote (Atlas) side
+      // serialize before any destructive write; a failed attempt durably
+      // marks the claim released with per-row progress kept, so the next
+      // connect RESUMES (never repeats) it. The hybrid remote (Atlas) side
       // runs the same helper from electron/sync-service.ts — this call only
       // covers whatever DB this process connects to.
       const db = mongoose.connection.db;

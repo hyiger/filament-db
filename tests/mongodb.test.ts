@@ -1155,8 +1155,12 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
         expect.stringContaining("legacy nozzle conditions"),
         expect.any(Error),
       );
-      // The claim was RELEASED on failure — no stale marker blocks the retry.
-      expect(await mongoose.connection.db!.collection("_migrations").findOne(MARKER)).toBeNull();
+      // The claim was durably marked RELEASED (progress kept, failed row
+      // rolled back) so the retry resumes instead of waiting on a dead claim.
+      const failedMarker = await mongoose.connection.db!.collection("_migrations").findOne(MARKER);
+      expect(failedMarker).not.toBeNull();
+      expect(failedMarker!.released).toBe(true);
+      expect(failedMarker!.completed).toBeUndefined();
     } finally {
       collSpy.mockRestore();
       errSpy.mockRestore();

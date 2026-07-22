@@ -29,19 +29,28 @@
  *    PER-ROW CONDITIONAL update — filtered on the exact condition value the
  *    scan observed — so a row edited between scan and write is left alone
  *    (its new value is post-cleanup-era user input by definition).
- *  - NOT safe to re-run: a pin authored after the cleanup can be textually
- *    identical to a legacy value, so completion must be durable per DB — a
- *    marker document in `_migrations` — not a process-local flag.
- *  - CLAIM-FIRST + WAIT: the marker is inserted (unique `_id`) BEFORE the
- *    destructive update, so racing processes serialize on the insert; a loser
- *    does not proceed while the winner is mid-clear (its writes could be
- *    accepted and then erased by the in-flight update) — it POLLS the claim
- *    until the winner completes (→ done), the claim is released (→ takes its
- *    own attempt), or `waitMs` expires (→ throws, so the caller keeps its
- *    retry state and nothing downstream treats the DB as clean). A claim
- *    older than `staleMs` is a crashed claimer: skip permanently rather than
- *    take over — the remaining legacy values are the known, recoverable
- *    pre-fix state, while a re-run could eat a post-upgrade pin.
+ *  - NOT safe to re-run blindly: a pin authored after a row was cleared can
+ *    be textually identical to the legacy value it replaced, so neither
+ *    completion NOR per-row progress may live in a process-local flag. The
+ *    `_migrations` marker document durably records BOTH: `completed` for the
+ *    whole DB, and `clearedIds` for every row a partially-failed attempt
+ *    already processed. Each row is RECORDED in `clearedIds` before its
+ *    destructive write (un-recorded again only if that write THROWS), so a
+ *    retry never re-examines a row whose clear went through — a pin authored
+ *    on it between failure and retry survives. The residual trade is a hard
+ *    crash exactly between record and write: that row is skipped on resume
+ *    and keeps its legacy value (visible, hand-clearable) — strictly safer
+ *    than any path that could erase a pin.
+ *  - CLAIM-FIRST + WAIT + RESUME: the marker is inserted (unique `_id`)
+ *    BEFORE any destructive write, so racing processes serialize on the
+ *    insert; a loser does not proceed while the winner is mid-clear (its
+ *    writes could be accepted and then erased by the in-flight update) — it
+ *    POLLS until the winner completes (→ done) or `waitMs` expires
+ *    (→ throws, so the caller keeps its retry state and nothing downstream
+ *    treats the DB as clean). A claim marked `released` (failed attempt) or
+ *    older than `staleMs` (crashed claimer) is taken over via a CAS on the
+ *    observed `claimedAt` — safe precisely because the resume honors the
+ *    recorded per-row progress.
  *  - PREREQUISITE for callers: a throw from this helper means the DB is not
  *    in a terminal cleanup state. `dbConnect` RETHROWS it (failing the
  *    current request rather than serving against a mid-clear DB) and
@@ -105,7 +114,6 @@ export interface MinimalDb {
       filter: Record<string, unknown>,
       update: Record<string, unknown>,
     ): Promise<{ modifiedCount: number }>;
-    deleteOne(filter: Record<string, unknown>): Promise<unknown>;
   };
 }
 
@@ -134,7 +142,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export type LegacyNozzleCleanupResult =
   | { ran: true; cleared: number }
-  | { ran: false; reason: "already-done" | "claimed-elsewhere" };
+  | { ran: false; reason: "already-done" };
 
 export interface LegacyNozzleCleanupOptions {
   /** How long to wait for another process's live claim before throwing
@@ -143,16 +151,18 @@ export interface LegacyNozzleCleanupOptions {
   waitMs?: number;
   /** Poll interval while waiting on a live claim. */
   pollMs?: number;
-  /** Claims older than this are treated as a crashed claimer (skip forever).
-   * Generous so ordinary clock skew between writers can't misclassify a live
-   * claim as stale. */
+  /** Live-shaped claims older than this are treated as a crashed claimer and
+   * taken over (with progress honored). Generous so ordinary clock skew
+   * between writers can't misclassify a live claim as stale. */
   staleMs?: number;
 }
 
 /**
- * Run the one-shot cleanup against `db` exactly once per database.
- * Throws on transient failures (after releasing the claim) and on a live-claim
- * wait timeout, so callers can retry later; returns how it resolved otherwise.
+ * Run the one-shot cleanup against `db` to completion at most once per
+ * database, resuming (never repeating) prior partial attempts. Throws on
+ * transient failures (after durably marking the claim released, progress
+ * kept) and on a live-claim wait timeout, so callers can retry later; returns
+ * how it resolved otherwise.
  */
 export async function clearLegacyNozzleConditionsOnce(
   db: MinimalDb,
@@ -162,45 +172,61 @@ export async function clearLegacyNozzleConditionsOnce(
   const markers = db.collection("_migrations");
   const deadline = Date.now() + waitMs;
 
-  // Observe-or-claim loop: ends by returning (done / stale skip), throwing
-  // (live-claim timeout), or breaking out with the claim held.
+  // Observe-or-claim loop: ends by returning (done), throwing (live-claim
+  // timeout), or breaking out with the claim held (fresh or resumed).
   for (;;) {
     const existing = await markers.findOne({ _id: MARKER_ID });
-    if (existing) {
-      if (existing.completed === true) return { ran: false, reason: "already-done" };
-      const claimedAt =
-        existing.claimedAt instanceof Date ? existing.claimedAt.getTime() : NaN;
-      // Malformed claim (no readable claimedAt): can't age it — treat as the
-      // crashed-claimer state and skip rather than risk a concurrent re-run.
-      if (!Number.isFinite(claimedAt) || Date.now() - claimedAt > staleMs) {
-        return { ran: false, reason: "claimed-elsewhere" };
+    if (!existing) {
+      try {
+        await markers.insertOne({ _id: MARKER_ID, claimedAt: new Date(), clearedIds: [] });
+        break; // fresh claim held — we are the (sole) runner
+      } catch (err) {
+        if (isDuplicateKey(err)) continue; // lost the race — re-observe the winner
+        throw err;
       }
-      if (Date.now() >= deadline) throw new LegacyCleanupInProgressError();
-      await sleep(pollMs);
-      continue; // re-observe: winner completed, released, or still clearing
     }
-    try {
-      await markers.insertOne({ _id: MARKER_ID, claimedAt: new Date() });
-      break; // claim held — we are the (sole) runner
-    } catch (err) {
-      if (isDuplicateKey(err)) continue; // lost the race — loop back and wait on the winner
-      throw err;
+    if (existing.completed === true) return { ran: false, reason: "already-done" };
+    const claimedAtRaw = existing.claimedAt;
+    const claimedAtMs = claimedAtRaw instanceof Date ? claimedAtRaw.getTime() : NaN;
+    const abandoned =
+      existing.released === true || // failed attempt, progress preserved
+      !Number.isFinite(claimedAtMs) || // malformed claim — can't age it
+      Date.now() - claimedAtMs > staleMs; // crashed claimer
+    if (abandoned) {
+      // CAS on the observed claimedAt serializes takeover racers; safe to
+      // resume because the work phase honors the recorded clearedIds.
+      const takeover = await markers.updateOne(
+        { _id: MARKER_ID, claimedAt: claimedAtRaw ?? null, completed: { $ne: true } },
+        { $set: { claimedAt: new Date() }, $unset: { released: "" } },
+      );
+      if (takeover.modifiedCount === 1) break; // resumed claim held
+      continue; // lost the CAS — re-observe
     }
+    if (Date.now() >= deadline) throw new LegacyCleanupInProgressError();
+    await sleep(pollMs);
   }
 
   let cleared = 0;
   try {
+    // Fresh read for the durable per-row progress (empty on a fresh claim).
+    const marker = await markers.findOne({ _id: MARKER_ID });
+    const alreadyCleared = new Set<string>(
+      Array.isArray(marker?.clearedIds) ? (marker!.clearedIds as unknown[]).map(String) : [],
+    );
+
     const filaments = db.collection("filaments");
     // Cheap syntactic candidate scan, then the PROVENANCE test: clear only
     // rows whose stored value byte-equals the legacy derivation from their
     // effective compatibleNozzles (own non-empty list, else the parent's —
     // the same resolution the old exporter saw).
-    const candidates = await filaments
-      .find(
-        { "settings.compatible_printers_condition": { $regex: LEGACY_NOZZLE_CONDITION_RE } },
-        { projection: { _id: 1, parentId: 1, compatibleNozzles: 1, "settings.compatible_printers_condition": 1 } },
-      )
-      .toArray();
+    const candidates = (
+      await filaments
+        .find(
+          { "settings.compatible_printers_condition": { $regex: LEGACY_NOZZLE_CONDITION_RE } },
+          { projection: { _id: 1, parentId: 1, compatibleNozzles: 1, "settings.compatible_printers_condition": 1 } },
+        )
+        .toArray()
+    ).filter((c) => !alreadyCleared.has(String(c._id))); // resume: never re-examine a processed row
 
     const hasOwn = (c: Record<string, unknown>) =>
       Array.isArray(c.compatibleNozzles) && c.compatibleNozzles.length > 0;
@@ -257,22 +283,34 @@ export async function clearLegacyNozzleConditionsOnce(
       })
       .filter((entry): entry is { _id: unknown; observed: string } => entry !== null);
 
-    // Per-row CONDITIONAL clears: the filter re-asserts the exact value the
-    // scan observed, so a filament edited by another client between scan and
-    // write (claiming only serializes cleanup runners, not ordinary writers)
-    // keeps its new value — modifiedCount 0, nothing erased.
+    // Per-row: RECORD progress first, then the CONDITIONAL clear (filter
+    // re-asserts the exact value the scan observed, so a filament edited by
+    // another client between scan and write keeps its new value —
+    // modifiedCount 0, nothing erased). Record-first means a retry can never
+    // re-examine a row whose clear went through; if the clear THROWS, the
+    // record is best-effort rolled back so the retry re-attempts it.
     for (const entry of toClear) {
-      const res = await filaments.updateOne(
-        { _id: entry._id, "settings.compatible_printers_condition": entry.observed },
-        { $set: { "settings.compatible_printers_condition": "" } },
-      );
-      cleared += res.modifiedCount;
+      const idKey = String(entry._id);
+      await markers.updateOne({ _id: MARKER_ID }, { $addToSet: { clearedIds: idKey } });
+      try {
+        const res = await filaments.updateOne(
+          { _id: entry._id, "settings.compatible_printers_condition": entry.observed },
+          { $set: { "settings.compatible_printers_condition": "" } },
+        );
+        cleared += res.modifiedCount;
+      } catch (err) {
+        await markers
+          .updateOne({ _id: MARKER_ID }, { $pull: { clearedIds: idKey } })
+          .catch(() => {});
+        throw err;
+      }
     }
   } catch (err) {
-    // Release the claim (best-effort) so the next attempt can retry; if this
-    // delete also fails the claim stays held — waiters throw until it goes
-    // stale, then skip (recoverable by deleting the marker by hand).
-    await markers.deleteOne({ _id: MARKER_ID }).catch(() => {});
+    // Durably mark the attempt released (progress kept) so the next attempt —
+    // this process or any other — resumes instead of waiting on a claim
+    // nobody holds. If even this write fails, the claim stays live-shaped:
+    // contenders throw until it goes stale, then the CAS takeover resumes it.
+    await markers.updateOne({ _id: MARKER_ID }, { $set: { released: true } }).catch(() => {});
     throw err;
   }
 
