@@ -654,7 +654,13 @@ export class SyncService extends EventEmitter {
       const toEnqueue = Array.from(merged.values());
       let enqueued = toEnqueue.length === 0;
       let queueDbUsed: Db = localDb;
-      if (toEnqueue.length > 0 && !this.aborted) {
+      // Codex P2 r28: the enqueue is deliberately NOT abort-gated. It
+      // persists the cleanup INTENT for copies the (already completed)
+      // filament sync made this cycle — skipping it on a late destroy()
+      // would strand equal-timestamp pairs that no replacement service could
+      // ever rediscover through LWW. Only the destructive CLEARS below honor
+      // the abort; this is bookkeeping for writes that already happened.
+      if (toEnqueue.length > 0) {
         // Codex P2 r27: durable intent must survive SERVICE RECREATION, not
         // just this process — try the local queue, then fall back to the
         // REMOTE db's queue (the drain reads both). Only when BOTH databases
@@ -683,7 +689,7 @@ export class SyncService extends EventEmitter {
           );
         }
       }
-      if (enqueued) {
+      if (enqueued && !this.aborted) {
         for (const queued of toEnqueue) {
           if (this.aborted) break;
           try {
