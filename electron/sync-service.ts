@@ -353,52 +353,62 @@ export class SyncService extends EventEmitter {
         }
       }
 
-      // GH #1021 (Codex P2 r23 / r25 / r26): drain the durable transit-clear
-      // queue. A prior cycle's pair-clear that failed halfway left its entry
-      // queued in the local `_migrations` collection; re-attempt it every
-      // cycle and dequeue once neither side matches the observed state.
-      // Every replay REVALIDATES the provenance persisted with the entry
-      // (r26) — parent/nozzle drift since the enqueue drops the entry
-      // without touching either row.
+      // GH #1021 (Codex P2 r23 / r25 / r26 / r27): drain the durable
+      // transit-clear queues on BOTH databases (a failed local enqueue falls
+      // back to the remote queue, r27). A prior cycle's pair-clear that
+      // failed halfway left its entry queued; re-attempt it every cycle and
+      // dequeue once neither side matches the observed state. Every replay
+      // REVALIDATES the provenance persisted with the entry (r26) —
+      // parent/nozzle drift since the enqueue drops the entry after
+      // reconciling any partial clear (r27) rather than replaying blind.
       if (!this.aborted) {
-        const pendingDoc = await localDb.collection("_migrations").findOne(
-          { _id: "legacyTransitClears" as never },
-        );
-        const pending = Array.isArray(pendingDoc?.entries) ? (pendingDoc!.entries as unknown[]) : [];
-        for (const raw of pending) {
+        for (const queueDb of [localDb, remoteDb]) {
           if (this.aborted) break;
-          if (
-            !raw || typeof raw !== "object" ||
-            typeof (raw as { s?: unknown }).s !== "string" ||
-            typeof (raw as { c?: unknown }).c !== "string" ||
-            typeof (raw as { d?: unknown }).d !== "string"
-          ) {
-            // Malformed entry — drop it rather than retry it forever.
-            await localDb.collection("_migrations").updateOne(
+          let pending: unknown[] = [];
+          try {
+            const pendingDoc = await queueDb.collection("_migrations").findOne(
               { _id: "legacyTransitClears" as never },
-              { $pull: { entries: raw } } as never,
-            ).catch(() => {});
+            );
+            pending = Array.isArray(pendingDoc?.entries) ? (pendingDoc!.entries as unknown[]) : [];
+          } catch (err) {
+            console.error("[sync] Transit-clear queue read failed (retried next cycle):", err);
             continue;
           }
-          const entry = raw as { d: string; s: string; c: string; u: unknown; p: unknown; r: unknown };
-          try {
+          for (const raw of pending) {
+            if (this.aborted) break;
             if (
-              await this.attemptTransitClearPair(localDb, remoteDb, {
-                d: entry.d,
-                s: entry.s,
-                c: entry.c,
-                u: entry.u,
-                p: entry.p ?? null,
-                r: Array.isArray(entry.r) ? entry.r : null,
-              })
+              !raw || typeof raw !== "object" ||
+              typeof (raw as { s?: unknown }).s !== "string" ||
+              typeof (raw as { c?: unknown }).c !== "string" ||
+              typeof (raw as { d?: unknown }).d !== "string"
             ) {
-              await localDb.collection("_migrations").updateOne(
+              // Malformed entry — drop it rather than retry it forever.
+              await queueDb.collection("_migrations").updateOne(
                 { _id: "legacyTransitClears" as never },
-                { $pull: { entries: entry } } as never,
-              );
+                { $pull: { entries: raw } } as never,
+              ).catch(() => {});
+              continue;
             }
-          } catch (err) {
-            console.error("[sync] Transit-clear retry failed (stays queued):", err);
+            const entry = raw as { d: string; s: string; c: string; u: unknown; p: unknown; r: unknown };
+            try {
+              if (
+                await this.attemptTransitClearPair(localDb, remoteDb, {
+                  d: entry.d as "toLocal" | "toRemote",
+                  s: entry.s,
+                  c: entry.c,
+                  u: entry.u,
+                  p: entry.p ?? null,
+                  r: Array.isArray(entry.r) ? entry.r : null,
+                })
+              ) {
+                await queueDb.collection("_migrations").updateOne(
+                  { _id: "legacyTransitClears" as never },
+                  { $pull: { entries: entry } } as never,
+                );
+              }
+            } catch (err) {
+              console.error("[sync] Transit-clear retry failed (stays queued):", err);
+            }
           }
         }
       }
@@ -643,20 +653,33 @@ export class SyncService extends EventEmitter {
       }
       const toEnqueue = Array.from(merged.values());
       let enqueued = toEnqueue.length === 0;
+      let queueDbUsed: Db = localDb;
       if (toEnqueue.length > 0 && !this.aborted) {
-        try {
-          await localDb.collection("_migrations").updateOne(
-            { _id: "legacyTransitClears" as never },
-            { $addToSet: { entries: { $each: toEnqueue } } },
-            { upsert: true },
-          );
-          enqueued = true;
-          this.pendingLegacyCandidates = [];
-        } catch (err) {
+        // Codex P2 r27: durable intent must survive SERVICE RECREATION, not
+        // just this process — try the local queue, then fall back to the
+        // REMOTE db's queue (the drain reads both). Only when BOTH databases
+        // refuse the write do the candidates stay in memory — and both DBs
+        // just accepted the whole collection sync moments earlier, so a
+        // double refusal means the cycle itself is failing.
+        for (const dbh of [localDb, remoteDb]) {
+          try {
+            await dbh.collection("_migrations").updateOne(
+              { _id: "legacyTransitClears" as never },
+              { $addToSet: { entries: { $each: toEnqueue } } },
+              { upsert: true },
+            );
+            enqueued = true;
+            queueDbUsed = dbh;
+            this.pendingLegacyCandidates = [];
+            break;
+          } catch (err) {
+            console.error("[sync] Legacy-condition candidate enqueue failed on one side:", err);
+          }
+        }
+        if (!enqueued) {
           this.pendingLegacyCandidates = toEnqueue;
           console.error(
-            "[sync] Legacy-condition candidate enqueue failed — clears skipped this cycle, candidates carried over:",
-            err,
+            "[sync] Legacy-condition candidate enqueue failed on BOTH databases — clears skipped this cycle, candidates carried over in memory",
           );
         }
       }
@@ -665,7 +688,7 @@ export class SyncService extends EventEmitter {
           if (this.aborted) break;
           try {
             if (await this.attemptTransitClearPair(localDb, remoteDb, queued)) {
-              await localDb.collection("_migrations").updateOne(
+              await queueDbUsed.collection("_migrations").updateOne(
                 { _id: "legacyTransitClears" as never },
                 { $pull: { entries: queued } } as never,
               );
@@ -1124,11 +1147,19 @@ export class SyncService extends EventEmitter {
         ? (parentNow!.compatibleNozzles as unknown[])
         : null;
     }
-    if (!refs || refs.length === 0) return true; // nothing provable → drop, no clears
+    if (!refs || refs.length === 0) {
+      // Nothing provable → drop, but reconcile a partial clear first (r27).
+      await this.reconcilePartialTransitPair(sourceDb, targetDb, entry);
+      return true;
+    }
     const nozzleDocs = await sourceDb.collection("nozzles")
       .find({ _id: { $in: refs as ObjectId[] } }, { projection: { _id: 1, diameter: 1 } })
       .toArray();
-    if (deriveLegacyNozzleCondition(nozzleDocs) !== entry.c) return true; // drifted → pin → drop
+    if (deriveLegacyNozzleCondition(nozzleDocs) !== entry.c) {
+      // Drifted → the value is a possible pin → drop, after reconciling.
+      await this.reconcilePartialTransitPair(sourceDb, targetDb, entry);
+      return true;
+    }
 
     const filter = {
       syncId: entry.s,
@@ -1141,6 +1172,42 @@ export class SyncService extends EventEmitter {
     const stillTarget = await targetDb.collection("filaments").findOne(filter, { projection: { _id: 1 } });
     const stillSource = await sourceDb.collection("filaments").findOne(filter, { projection: { _id: 1 } });
     return !stillTarget && !stillSource;
+  }
+
+  /**
+   * GH #1021 r27: before DROPPING a queue entry whose provenance is now
+   * unverifiable or drifted, undo any PARTIAL clear an earlier attempt left:
+   * one side cleared ("" at exactly the observed updatedAt — our clears
+   * preserve timestamps, so this is our own signature) while the other still
+   * holds the observed value. Restore the surviving value onto the cleared
+   * side so both sides carry the possible pin again — otherwise the pair
+   * would sit divergent at equal timestamps, which LWW skips forever. A row
+   * the user has since edited misses these exact-updatedAt filters entirely.
+   * Failures propagate so the entry stays queued and the reconcile retries.
+   */
+  private async reconcilePartialTransitPair(
+    sourceDb: Db,
+    targetDb: Db,
+    entry: { s: string; c: string; u: unknown },
+  ): Promise<void> {
+    const observedFilter = {
+      syncId: entry.s,
+      "settings.compatible_printers_condition": entry.c,
+      updatedAt: (entry.u ?? null) as Date | null,
+    };
+    const clearedFilter = {
+      syncId: entry.s,
+      "settings.compatible_printers_condition": "",
+      updatedAt: (entry.u ?? null) as Date | null,
+    };
+    const restore = { $set: { "settings.compatible_printers_condition": entry.c } };
+    const sourceHolds = await sourceDb.collection("filaments").findOne(observedFilter, { projection: { _id: 1 } });
+    const targetHolds = await targetDb.collection("filaments").findOne(observedFilter, { projection: { _id: 1 } });
+    if (sourceHolds && !targetHolds) {
+      await targetDb.collection("filaments").updateOne(clearedFilter, restore);
+    } else if (targetHolds && !sourceHolds) {
+      await sourceDb.collection("filaments").updateOne(clearedFilter, restore);
+    }
   }
 
   /**
