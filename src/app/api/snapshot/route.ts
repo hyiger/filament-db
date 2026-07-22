@@ -19,9 +19,14 @@ import SharedCatalog from "@/models/SharedCatalog";
 let restoreInProgress = false;
 
 /** Current snapshot schema version (see the version history in GET). Bumped
- * whenever the `collections` shape changes so restore can reject newer files
- * (GH #953). */
-const CURRENT_SNAPSHOT_VERSION = 4;
+ * whenever the snapshot shape changes so restore can reject newer files
+ * (GH #953). v5 changes no collection, but carries the
+ * `legacyNozzleCleanupComplete` provenance flag (GH #1021 r13) — a pre-#1022
+ * build restoring a v5 file would silently DROP that provenance, and the
+ * post-upgrade migration would then re-judge (and could erase) a
+ * byte-identical post-cleanup user pin; the #953 version guard in those
+ * builds rejects v5 instead. */
+const CURRENT_SNAPSHOT_VERSION = 5;
 
 /** The collection keys a v≤4 snapshot carries. Restore requires at least one to
  * be present so a wrong-shape / newer file 400s instead of silently wiping the
@@ -179,6 +184,10 @@ export async function GET(request: NextRequest) {
   //        snapshot/restore round-trip, silently losing every published
   //        share link; now symmetric with /api/snapshot/delete which
   //        always cleared SharedCatalog)
+  //   v5 — adds the top-level legacyNozzleCleanupComplete provenance flag
+  //        (GH #1021: restore must know whether the data predates the
+  //        one-shot nozzle-condition cleanup; bumped so pre-#1022 builds —
+  //        which would drop the flag — reject the file via the #953 guard)
   // Older snapshots still restore cleanly because POST destructures
   // missing collections to `[]`.
   // GH #1021 r12: cleanup provenance. Restore uses this to decide whether the
