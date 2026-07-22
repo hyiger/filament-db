@@ -320,18 +320,18 @@ export class SyncService extends EventEmitter {
       // collection sync, and treat a failure as a PREREQUISITE failure — abort
       // the cycle (throw → the outer catch reports it; the next cycle retries)
       // rather than syncing stale values around the one-shot cleanup.
-      // Codex P2 r18: destroy() can land while the two clients were still
-      // connecting — re-check the abort flag BEFORE any destructive cleanup
-      // write, matching the mode-switch contract every later step honors
-      // (the abandoned databases must not be touched).
-      if (!this.aborted) {
-        for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
-          const res = await clearLegacyNozzleConditionsOnce(dbHandle as unknown as MinimalDb);
-          if (res.ran && res.cleared > 0) {
-            console.log(
-              `[sync] Cleared ${res.cleared} legacy machine-derived nozzle condition(s) on the ${side} DB (GH #1021)`,
-            );
-          }
+      // Codex P2 r18/r19: destroy() can land while the two clients were still
+      // connecting — or while the FIRST side's cleanup is awaiting — so the
+      // abort flag is re-checked before EACH side's destructive cleanup,
+      // matching the mode-switch contract every later step honors (the
+      // abandoned databases must not be touched by any subsequent operation).
+      for (const [side, dbHandle] of [["local", localDb], ["remote", remoteDb]] as const) {
+        if (this.aborted) break;
+        const res = await clearLegacyNozzleConditionsOnce(dbHandle as unknown as MinimalDb);
+        if (res.ran && res.cleared > 0) {
+          console.log(
+            `[sync] Cleared ${res.cleared} legacy machine-derived nozzle condition(s) on the ${side} DB (GH #1021)`,
+          );
         }
       }
 
@@ -517,6 +517,14 @@ export class SyncService extends EventEmitter {
       // Sync filaments with nozzle, printer, parent, spool-location, and
       // bedType remapping
       this.updateStatus({ progress: "Syncing filaments..." });
+      // GH #1021 r19: the transform records every in-transit strip here so the
+      // SOURCE rows can be cleaned after the collection sync (see below).
+      const strippedInTransit: Array<{
+        direction: "toLocal" | "toRemote";
+        syncId: string;
+        observed: string;
+        observedUpdatedAt: unknown;
+      }> = [];
       const filamentTransform = this.buildFilamentRefsTransform(
         localNozzleBySyncId, remoteNozzleBySyncId,
         localPrinterBySyncId, remotePrinterBySyncId,
@@ -525,12 +533,41 @@ export class SyncService extends EventEmitter {
         localBedTypeBySyncId, remoteBedTypeBySyncId,
         localNozzleDiameterById, remoteNozzleDiameterById,
         localFilamentTicksById, remoteFilamentTicksById,
+        strippedInTransit,
       );
       results.push(await trySync(
         "filaments",
         ["nozzles", "bedtypes", "printers", "locations"],
         () => this.syncCollection(localDb, remoteDb, "filaments", filamentTransform),
       ));
+
+      // GH #1021 (Codex P1 r19): a row stripped IN TRANSIT still carries the
+      // stale value on its SOURCE side — and the copy preserved the source
+      // updatedAt, so LWW sees both sides as equal afterwards and never
+      // revisits the pair; the source would keep serving the stale value to
+      // its own exports and post-cleanup snapshots forever. Clear it at the
+      // source with the same conditional predicate as the one-shot cleanup
+      // (exact value + exact updatedAt; raw driver, no timestamp bump — both
+      // sides then converge on the STRIPPED value at equal timestamps).
+      // Best-effort per row: on a transient failure the target copy is
+      // already clean (the r17 guarantee), and any later edit of the source
+      // re-triggers a copy + a fresh strip/clear.
+      for (const entry of strippedInTransit) {
+        if (this.aborted) break;
+        const sourceCol = (entry.direction === "toLocal" ? remoteDb : localDb).collection("filaments");
+        try {
+          await sourceCol.updateOne(
+            {
+              syncId: entry.syncId,
+              "settings.compatible_printers_condition": entry.observed,
+              updatedAt: entry.observedUpdatedAt ?? null,
+            },
+            { $set: { "settings.compatible_printers_condition": "" } },
+          );
+        } catch (err) {
+          console.error("[sync] Source-side legacy nozzle-condition clear failed (best-effort):", err);
+        }
+      }
 
       // Repair filaments whose parentId was dropped (or stale) when the
       // syncCollection transform ran. The transform builds its target id
@@ -1407,6 +1444,12 @@ export class SyncService extends EventEmitter {
     remoteNozzleDiameterById: Map<string, unknown>,
     localFilamentTicksById: Map<string, unknown>,
     remoteFilamentTicksById: Map<string, unknown>,
+    strippedInTransit: Array<{
+      direction: "toLocal" | "toRemote";
+      syncId: string;
+      observed: string;
+      observedUpdatedAt: unknown;
+    }>,
   ): (
     doc: Document,
     direction: "toLocal" | "toRemote",
@@ -1479,6 +1522,18 @@ export class SyncService extends EventEmitter {
               ...(doc.settings as Record<string, unknown>),
               compatible_printers_condition: "",
             };
+            // Codex P1 r19: record the strip so sync() can clean the SOURCE
+            // row too — the copy keeps the source updatedAt, so LWW would
+            // otherwise never revisit the pair and the source would keep
+            // serving the stale value to its own exports/snapshots.
+            if (typeof doc.syncId === "string" && doc.syncId) {
+              strippedInTransit.push({
+                direction,
+                syncId: doc.syncId,
+                observed: condition,
+                observedUpdatedAt: doc.updatedAt ?? null,
+              });
+            }
           }
         }
       }

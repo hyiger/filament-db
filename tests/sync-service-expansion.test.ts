@@ -1029,12 +1029,20 @@ describe("SyncService — v1.12 sync expansion", () => {
       const localCopy = await localDb.collection("filaments").findOne({ syncId: "fil-transit" });
       expect(localCopy!.settings.compatible_printers_condition).toBe("");
       expect(localCopy!.settings.cooling).toBe("1"); // sibling key intact
-      // …the non-matching pin rode through verbatim…
+      // …the non-matching pin rode through verbatim (and stays on its source)…
       const localPin = await localDb.collection("filaments").findOne({ syncId: "fil-transit-pin" });
       expect(localPin!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
-      // …and the SOURCE row is untouched (its own database's problem).
+      const remotePin = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit-pin" });
+      expect(remotePin!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+      // …and the SOURCE row is cleaned too (Codex P1 r19): the copy kept the
+      // source updatedAt, so LWW would never revisit the pair — without the
+      // source-side clear it would keep serving the stale value to its own
+      // exports/snapshots forever, at equal timestamps.
       const remoteRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit" });
-      expect(remoteRow!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      expect(remoteRow!.settings.compatible_printers_condition).toBe("");
+      expect(remoteRow!.settings.cooling).toBe("1"); // conditional clear touches one key
+      // Both sides now byte-equal at the same updatedAt — a converged pair.
+      expect(String(remoteRow!.updatedAt.getTime())).toBe(String(localCopy!.updatedAt.getTime()));
     });
   });
 });
