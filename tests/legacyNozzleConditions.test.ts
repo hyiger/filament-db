@@ -185,6 +185,95 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     expect(await conditionOf("toctou")).toBe("nozzle_diameter[0]==0.9");
   });
 
+  it("re-scans until dry: a candidate written MID-CLEANUP is examined before completion (r21)", async () => {
+    const noz04 = await seedNozzle(0.4);
+    await seed("first-wave", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    const real = db();
+    let arrived = false;
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "filaments") return col;
+        return {
+          findOne: col.findOne.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: col.updateOne.bind(col),
+          find: (filter: Record<string, unknown>, opts?: Record<string, unknown>) => {
+            const isCandidateScan = "settings.compatible_printers_condition" in filter;
+            return {
+              toArray: async () => {
+                const rows = await col.find(filter, opts).toArray();
+                if (isCandidateScan && !arrived) {
+                  // Another client (a pre-#1022 peer) lands a stamped row
+                  // right after this scan — the next pass must catch it.
+                  arrived = true;
+                  await rawDb().collection("filaments").insertOne({
+                    name: "LNC mid-window",
+                    vendor: "T",
+                    type: "PLA",
+                    compatibleNozzles: [noz04],
+                    settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+                  });
+                }
+                return rows;
+              },
+            };
+          },
+        };
+      },
+    };
+    const res = await clearLegacyNozzleConditionsOnce(wrapper);
+    expect(res).toEqual({ ran: true, cleared: 2 }); // first wave + the mid-window arrival
+    expect(await conditionOf("first-wave")).toBe("");
+    expect(await conditionOf("mid-window")).toBe("");
+    expect((await rawDb().collection("_migrations").findOne(MARKER))!.completed).toBe(true);
+  });
+
+  it("throws (transient) instead of completing when new candidates keep arriving at the pass cap (r21)", async () => {
+    const noz04 = await seedNozzle(0.4);
+    await seed("wave-0", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    const real = db();
+    let wave = 0;
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "filaments") return col;
+        return {
+          findOne: col.findOne.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: col.updateOne.bind(col),
+          find: (filter: Record<string, unknown>, opts?: Record<string, unknown>) => {
+            const isCandidateScan = "settings.compatible_printers_condition" in filter;
+            return {
+              toArray: async () => {
+                const rows = await col.find(filter, opts).toArray();
+                if (isCandidateScan) {
+                  // A pathological continuous writer: every pass finds one more.
+                  wave += 1;
+                  await rawDb().collection("filaments").insertOne({
+                    name: `LNC wave-${wave}`,
+                    vendor: "T",
+                    type: "PLA",
+                    compatibleNozzles: [noz04],
+                    settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+                  });
+                }
+                return rows;
+              },
+            };
+          },
+        };
+      },
+    };
+    await expect(clearLegacyNozzleConditionsOnce(wrapper)).rejects.toBeInstanceOf(
+      LegacyCleanupInProgressError,
+    );
+    // Not completed — released for a later retry once the writer stops.
+    const marker = await rawDb().collection("_migrations").findOne(MARKER);
+    expect(marker!.completed).toBeUndefined();
+    expect(marker!.released).toBe(true);
+  });
+
   it("preserves a deliberately re-pinned IDENTICAL condition via the updatedAt predicate (r9)", async () => {
     // The text-only predicate can't see a save that re-pins the byte-same
     // expression — the observed updatedAt in the clear filter can.

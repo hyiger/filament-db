@@ -279,210 +279,234 @@ export async function clearLegacyNozzleConditionsOnce(
     });
 
     const filaments = db.collection("filaments");
-    // Cheap syntactic candidate scan, then the PROVENANCE test: clear only
-    // rows whose stored value byte-equals the legacy derivation from their
-    // effective compatibleNozzles (own non-empty list, else the ACTIVE
-    // parent's — the same resolution the old exporter saw; a soft-deleted
-    // parent is unresolvable at export, so its ticks derive nothing, Codex P2
-    // r15). A row RECORDED by a prior attempt stays eligible only while its
-    // CHILD state is byte-identical to the recorded observation AND its
-    // current derivation equals the recorded one (`d`) — a parent tick edit
-    // between attempts changes the derivation without touching the child, and
-    // must skip the row rather than re-judge it (Codex P1 r11 / P2 r15).
-    const scanned = await filaments
-      .find(
-        { "settings.compatible_printers_condition": { $regex: LEGACY_NOZZLE_CONDITION_RE } },
-        { projection: { _id: 1, parentId: 1, compatibleNozzles: 1, updatedAt: 1, "settings.compatible_printers_condition": 1 } },
-      )
-      .toArray();
-    const fresh: Record<string, unknown>[] = []; // never examined by any attempt
-    const resumable: Record<string, unknown>[] = []; // recorded + child untouched
-    for (const c of scanned) {
-      const rec = processed.get(String(c._id));
-      if (!rec) fresh.push(c);
-      else {
-        const now = observationOf(c);
-        if (rec.c === now.c && timeOf(rec.u) === timeOf(now.u)) resumable.push(c);
-        // else: touched since examination — skipped forever
+    // Codex P2 r21: the scan→complete window is itself a race — a candidate
+    // written by another client (a pre-#1022 peer on a shared Atlas) after
+    // the scan would never be examined, and completion would foreclose it
+    // forever. So the scan/record/clear cycle LOOPS until a verification
+    // pass finds nothing new; a DB still receiving legacy writes at the pass
+    // cap throws the transient in-progress error instead of completing over
+    // unexamined rows. The residual (a row landing between the final empty
+    // scan and the completion write) is caught by the hybrid transit strip +
+    // source-side clear on the next sync cycle (r17/r19).
+    const MAX_CLEANUP_PASSES = 5;
+    for (let pass = 0; ; pass++) {
+      if (pass >= MAX_CLEANUP_PASSES) throw new LegacyCleanupInProgressError();
+      // Cheap syntactic candidate scan, then the PROVENANCE test: clear only
+      // rows whose stored value byte-equals the legacy derivation from their
+      // effective compatibleNozzles (own non-empty list, else the ACTIVE
+      // parent's — the same resolution the old exporter saw; a soft-deleted
+      // parent is unresolvable at export, so its ticks derive nothing, Codex P2
+      // r15). A row RECORDED by a prior attempt stays eligible only while its
+      // CHILD state is byte-identical to the recorded observation AND its
+      // current derivation equals the recorded one (`d`) — a parent tick edit
+      // between attempts changes the derivation without touching the child, and
+      // must skip the row rather than re-judge it (Codex P1 r11 / P2 r15).
+      const scanned = await filaments
+        .find(
+          { "settings.compatible_printers_condition": { $regex: LEGACY_NOZZLE_CONDITION_RE } },
+          { projection: { _id: 1, parentId: 1, compatibleNozzles: 1, updatedAt: 1, "settings.compatible_printers_condition": 1 } },
+        )
+        .toArray();
+      const fresh: Record<string, unknown>[] = []; // never examined by any attempt
+      const resumable: Record<string, unknown>[] = []; // recorded + child untouched
+      for (const c of scanned) {
+        const rec = processed.get(String(c._id));
+        if (!rec) fresh.push(c);
+        else {
+          const now = observationOf(c);
+          if (rec.c === now.c && timeOf(rec.u) === timeOf(now.u)) resumable.push(c);
+          // else: touched since examination — skipped forever
+        }
       }
-    }
-    const candidates = [...fresh, ...resumable];
+      const candidates = [...fresh, ...resumable];
 
-    const hasOwn = (c: Record<string, unknown>) =>
-      Array.isArray(c.compatibleNozzles) && c.compatibleNozzles.length > 0;
-    const parentIds = candidates
-      .filter((c) => !hasOwn(c) && c.parentId != null)
-      .map((c) => c.parentId);
-    const parents = parentIds.length
-      ? await filaments
-          .find(
-            { _id: { $in: parentIds }, _deletedAt: null },
-            { projection: { _id: 1, compatibleNozzles: 1 } },
-          )
-          .toArray()
-      : [];
-    const parentNozzles = new Map(parents.map((p) => [String(p._id), p.compatibleNozzles]));
-
-    const effectiveRefsOf = (c: Record<string, unknown>): unknown[] => {
-      const effective = hasOwn(c)
-        ? c.compatibleNozzles
-        : c.parentId != null
-          ? parentNozzles.get(String(c.parentId))
-          : undefined;
-      return Array.isArray(effective) ? effective : [];
-    };
-
-    // `compatibleNozzles` entries are ObjectId REFS — the exporter populated
-    // them before reading `.diameter` (Codex P1 r7). Reproduce that with one
-    // indexed join against the nozzles collection (raw BSON values in $in,
-    // string-keyed dedupe); a ref that resolves to nothing contributes
-    // nothing, exactly like populate yielding null.
-    const refByKey = new Map<string, unknown>();
-    for (const c of candidates) {
-      for (const ref of effectiveRefsOf(c)) refByKey.set(String(ref), ref);
-    }
-    const nozzles = db.collection("nozzles");
-    const nozzleDocs = refByKey.size
-      ? await nozzles
-          .find(
-            { _id: { $in: Array.from(refByKey.values()) } },
-            { projection: { _id: 1, diameter: 1 } },
-          )
-          .toArray()
-      : [];
-    const nozzleById = new Map(nozzleDocs.map((n) => [String(n._id), n]));
-
-    const deriveFor = (c: Record<string, unknown>): string | null =>
-      deriveLegacyNozzleCondition(
-        effectiveRefsOf(c)
-          .map((ref) => nozzleById.get(String(ref)))
-          .filter((n): n is Record<string, unknown> => n !== undefined),
-      );
-    const storedOf = (c: Record<string, unknown>): unknown =>
-      (c.settings as { compatible_printers_condition?: unknown } | undefined)
-        ?.compatible_printers_condition;
-
-    interface ClearEntry {
-      _id: unknown;
-      observed: string;
-      observedUpdatedAt: unknown;
-      /** Set when provenance came through the parent — the pre-clear
-       * revalidation re-reads THIS parent's ref list (Codex P2 r15). */
-      viaParent: unknown;
-      /** The effective refs at scan time — the pre-clear revalidation
-       * re-fetches their nozzle DOCS fresh (Codex P2 r16: a nozzle's
-       * diameter edit or purge changes the derivation without touching the
-       * filament row, so the child predicate alone can't see it). */
-      refs: unknown[];
-    }
-    const toClear: ClearEntry[] = [];
-    for (const c of fresh) {
-      const derived = deriveFor(c);
-      const stored = storedOf(c);
-      if (derived !== null && stored === derived) {
-        toClear.push({
-          _id: c._id,
-          observed: stored as string,
-          observedUpdatedAt: c.updatedAt,
-          viaParent: hasOwn(c) ? null : c.parentId,
-          refs: effectiveRefsOf(c),
-        });
-      }
-    }
-    for (const c of resumable) {
-      const derived = deriveFor(c);
-      const stored = storedOf(c);
-      const rec = processed.get(String(c._id));
-      // Resume-eligible ONLY when the current derivation also equals the one
-      // recorded at examination time — a parent tick edit between attempts
-      // changes the derivation while the child looks untouched (Codex P2
-      // r15). A recorded entry without `d` cannot be verified → skip.
-      if (derived !== null && stored === derived && rec?.d === derived) {
-        toClear.push({
-          _id: c._id,
-          observed: stored as string,
-          observedUpdatedAt: c.updatedAt,
-          viaParent: hasOwn(c) ? null : c.parentId,
-          refs: effectiveRefsOf(c),
-        });
-      }
-    }
-
-    // RECORD the observation of every NEWLY examined candidate — matches AND
-    // non-matches — in one fenced write BEFORE any destructive write (Codex
-    // P1 r11: a non-match left unrecorded would be re-judged by a later
-    // attempt after e.g. a tick edit made it match, erasing a value the user
-    // authored between attempts). Each entry carries the derivation at
-    // examination time (`d`) so a resume can detect parent-side drift.
-    // Already-recorded rows are NOT re-recorded (their original observation is
-    // the authority). matchedCount (not modifiedCount): the fence asks "does
-    // the claim still carry OUR token", not "did the write change anything".
-    if (fresh.length > 0) {
-      const recorded = await markers.updateOne(
-        { _id: MARKER_ID, claimToken: token },
-        {
-          $addToSet: {
-            processed: {
-              $each: fresh.map((c) => {
-                const o = observationOf(c);
-                return { i: String(c._id), c: o.c, u: o.u, d: deriveFor(c) };
-              }),
-            },
-          },
-        },
-      );
-      if (recorded.matchedCount !== 1) throw new LegacyCleanupInProgressError();
-    }
-
-    // Per-row CONDITIONAL clears. The filter re-asserts the exact condition
-    // AND the exact updatedAt the scan observed, so a row saved by another
-    // client between scan and write keeps its new state even when the
-    // re-pinned text is byte-identical (the save bumped updatedAt). A thrown
-    // clear leaves the row recorded: the retry re-attempts it while untouched
-    // (identical observation) and skips it the moment anyone saves it.
-    for (const entry of toClear) {
-      // Codex P2 r10: re-assert ownership at the destructive-write boundary —
-      // a takeover in the record→clear window would let the new holder skip
-      // this recorded row and complete while our clear lands after. The
-      // residual (takeover between this read and the write below) is
-      // benign-convergent: the condition+updatedAt predicate means a late
-      // clear can only apply the exact clear the migration intended, and any
-      // user save in between bumps updatedAt and blocks it.
-      const owned = await markers.findOne({ _id: MARKER_ID });
-      if (!owned || owned.claimToken !== token) throw new LegacyCleanupInProgressError();
-      // Codex P2 r15/r16: the conditional filter below can only see CHILD-row
-      // changes — it cannot see a PARENT tick edit (r15) or a referenced
-      // nozzle DOC's diameter edit / purge (r16), neither of which touches
-      // the child's updatedAt. So re-derive immediately before the write:
-      // for parent-provenance rows re-read the ACTIVE parent's ref list; for
-      // own-tick rows the scan-time ref list still holds (its mutation bumps
-      // the child's updatedAt, which the filter re-asserts) — then fetch the
-      // nozzle DOCS fresh either way and require the derivation to still
-      // equal the value being cleared; any drift skips the row. The residual
-      // single-write window is the same benign-convergent one as the
-      // ownership re-check above.
-      let refsNow: unknown[] = entry.refs;
-      if (entry.viaParent != null) {
-        const parentNow = await filaments.findOne({ _id: entry.viaParent, _deletedAt: null });
-        refsNow = Array.isArray(parentNow?.compatibleNozzles)
-          ? (parentNow!.compatibleNozzles as unknown[])
-          : [];
-      }
-      const freshDocs = refsNow.length
-        ? await nozzles
-            .find({ _id: { $in: refsNow } }, { projection: { _id: 1, diameter: 1 } })
+      const hasOwn = (c: Record<string, unknown>) =>
+        Array.isArray(c.compatibleNozzles) && c.compatibleNozzles.length > 0;
+      const parentIds = candidates
+        .filter((c) => !hasOwn(c) && c.parentId != null)
+        .map((c) => c.parentId);
+      const parents = parentIds.length
+        ? await filaments
+            .find(
+              { _id: { $in: parentIds }, _deletedAt: null },
+              { projection: { _id: 1, compatibleNozzles: 1 } },
+            )
             .toArray()
         : [];
-      if (deriveLegacyNozzleCondition(freshDocs) !== entry.observed) continue;
-      const res = await filaments.updateOne(
-        {
-          _id: entry._id,
-          "settings.compatible_printers_condition": entry.observed,
-          updatedAt: entry.observedUpdatedAt ?? null,
-        },
-        { $set: { "settings.compatible_printers_condition": "" } },
-      );
-      cleared += res.modifiedCount;
+      const parentNozzles = new Map(parents.map((p) => [String(p._id), p.compatibleNozzles]));
+
+      const effectiveRefsOf = (c: Record<string, unknown>): unknown[] => {
+        const effective = hasOwn(c)
+          ? c.compatibleNozzles
+          : c.parentId != null
+            ? parentNozzles.get(String(c.parentId))
+            : undefined;
+        return Array.isArray(effective) ? effective : [];
+      };
+
+      // `compatibleNozzles` entries are ObjectId REFS — the exporter populated
+      // them before reading `.diameter` (Codex P1 r7). Reproduce that with one
+      // indexed join against the nozzles collection (raw BSON values in $in,
+      // string-keyed dedupe); a ref that resolves to nothing contributes
+      // nothing, exactly like populate yielding null.
+      const refByKey = new Map<string, unknown>();
+      for (const c of candidates) {
+        for (const ref of effectiveRefsOf(c)) refByKey.set(String(ref), ref);
+      }
+      const nozzles = db.collection("nozzles");
+      const nozzleDocs = refByKey.size
+        ? await nozzles
+            .find(
+              { _id: { $in: Array.from(refByKey.values()) } },
+              { projection: { _id: 1, diameter: 1 } },
+            )
+            .toArray()
+        : [];
+      const nozzleById = new Map(nozzleDocs.map((n) => [String(n._id), n]));
+
+      const deriveFor = (c: Record<string, unknown>): string | null =>
+        deriveLegacyNozzleCondition(
+          effectiveRefsOf(c)
+            .map((ref) => nozzleById.get(String(ref)))
+            .filter((n): n is Record<string, unknown> => n !== undefined),
+        );
+      const storedOf = (c: Record<string, unknown>): unknown =>
+        (c.settings as { compatible_printers_condition?: unknown } | undefined)
+          ?.compatible_printers_condition;
+
+      interface ClearEntry {
+        _id: unknown;
+        observed: string;
+        observedUpdatedAt: unknown;
+        /** Set when provenance came through the parent — the pre-clear
+         * revalidation re-reads THIS parent's ref list (Codex P2 r15). */
+        viaParent: unknown;
+        /** The effective refs at scan time — the pre-clear revalidation
+         * re-fetches their nozzle DOCS fresh (Codex P2 r16: a nozzle's
+         * diameter edit or purge changes the derivation without touching the
+         * filament row, so the child predicate alone can't see it). */
+        refs: unknown[];
+      }
+      const toClear: ClearEntry[] = [];
+      for (const c of fresh) {
+        const derived = deriveFor(c);
+        const stored = storedOf(c);
+        if (derived !== null && stored === derived) {
+          toClear.push({
+            _id: c._id,
+            observed: stored as string,
+            observedUpdatedAt: c.updatedAt,
+            viaParent: hasOwn(c) ? null : c.parentId,
+            refs: effectiveRefsOf(c),
+          });
+        }
+      }
+      for (const c of resumable) {
+        const derived = deriveFor(c);
+        const stored = storedOf(c);
+        const rec = processed.get(String(c._id));
+        // Resume-eligible ONLY when the current derivation also equals the one
+        // recorded at examination time — a parent tick edit between attempts
+        // changes the derivation while the child looks untouched (Codex P2
+        // r15). A recorded entry without `d` cannot be verified → skip.
+        if (derived !== null && stored === derived && rec?.d === derived) {
+          toClear.push({
+            _id: c._id,
+            observed: stored as string,
+            observedUpdatedAt: c.updatedAt,
+            viaParent: hasOwn(c) ? null : c.parentId,
+            refs: effectiveRefsOf(c),
+          });
+        }
+      }
+
+      // RECORD the observation of every NEWLY examined candidate — matches AND
+      // non-matches — in one fenced write BEFORE any destructive write (Codex
+      // P1 r11: a non-match left unrecorded would be re-judged by a later
+      // attempt after e.g. a tick edit made it match, erasing a value the user
+      // authored between attempts). Each entry carries the derivation at
+      // examination time (`d`) so a resume can detect parent-side drift.
+      // Already-recorded rows are NOT re-recorded (their original observation is
+      // the authority). matchedCount (not modifiedCount): the fence asks "does
+      // the claim still carry OUR token", not "did the write change anything".
+      if (fresh.length > 0) {
+        const recorded = await markers.updateOne(
+          { _id: MARKER_ID, claimToken: token },
+          {
+            $addToSet: {
+              processed: {
+                $each: fresh.map((c) => {
+                  const o = observationOf(c);
+                  return { i: String(c._id), c: o.c, u: o.u, d: deriveFor(c) };
+                }),
+              },
+            },
+          },
+        );
+        if (recorded.matchedCount !== 1) throw new LegacyCleanupInProgressError();
+      }
+
+      // Per-row CONDITIONAL clears. The filter re-asserts the exact condition
+      // AND the exact updatedAt the scan observed, so a row saved by another
+      // client between scan and write keeps its new state even when the
+      // re-pinned text is byte-identical (the save bumped updatedAt). A thrown
+      // clear leaves the row recorded: the retry re-attempts it while untouched
+      // (identical observation) and skips it the moment anyone saves it.
+      for (const entry of toClear) {
+        // Codex P2 r10: re-assert ownership at the destructive-write boundary —
+        // a takeover in the record→clear window would let the new holder skip
+        // this recorded row and complete while our clear lands after. The
+        // residual (takeover between this read and the write below) is
+        // benign-convergent: the condition+updatedAt predicate means a late
+        // clear can only apply the exact clear the migration intended, and any
+        // user save in between bumps updatedAt and blocks it.
+        const owned = await markers.findOne({ _id: MARKER_ID });
+        if (!owned || owned.claimToken !== token) throw new LegacyCleanupInProgressError();
+        // Codex P2 r15/r16: the conditional filter below can only see CHILD-row
+        // changes — it cannot see a PARENT tick edit (r15) or a referenced
+        // nozzle DOC's diameter edit / purge (r16), neither of which touches
+        // the child's updatedAt. So re-derive immediately before the write:
+        // for parent-provenance rows re-read the ACTIVE parent's ref list; for
+        // own-tick rows the scan-time ref list still holds (its mutation bumps
+        // the child's updatedAt, which the filter re-asserts) — then fetch the
+        // nozzle DOCS fresh either way and require the derivation to still
+        // equal the value being cleared; any drift skips the row. The residual
+        // single-write window is the same benign-convergent one as the
+        // ownership re-check above.
+        let refsNow: unknown[] = entry.refs;
+        if (entry.viaParent != null) {
+          const parentNow = await filaments.findOne({ _id: entry.viaParent, _deletedAt: null });
+          refsNow = Array.isArray(parentNow?.compatibleNozzles)
+            ? (parentNow!.compatibleNozzles as unknown[])
+            : [];
+        }
+        const freshDocs = refsNow.length
+          ? await nozzles
+              .find({ _id: { $in: refsNow } }, { projection: { _id: 1, diameter: 1 } })
+              .toArray()
+          : [];
+        if (deriveLegacyNozzleCondition(freshDocs) !== entry.observed) continue;
+        const res = await filaments.updateOne(
+          {
+            _id: entry._id,
+            "settings.compatible_printers_condition": entry.observed,
+            updatedAt: entry.observedUpdatedAt ?? null,
+          },
+          { $set: { "settings.compatible_printers_condition": "" } },
+        );
+        cleared += res.modifiedCount;
+      }
+
+      // Codex P2 r21: converged only when a whole pass found NOTHING new to
+      // examine and nothing to clear — that empty pass is the verification
+      // scan. Otherwise fold this pass's observations into the in-memory map
+      // (mirroring the durable record above) and re-scan for rows another
+      // client wrote while this pass ran.
+      if (fresh.length === 0 && toClear.length === 0) break;
+      for (const c of fresh) {
+        const o = observationOf(c);
+        processed.set(String(c._id), { c: o.c, u: o.u, d: deriveFor(c) });
+      }
     }
   } catch (err) {
     // Durably mark the attempt released (progress kept) so the next attempt —
