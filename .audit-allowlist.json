@@ -1,0 +1,19 @@
+{
+  "$comment": "Advisories the CI audit gate (scripts/audit-gate.mjs) tolerates. Each entry MUST carry a justification and a reviewBy date; the gate warns (does not fail) past reviewBy so releases can't be broken by a calendar, but the warning is the nudge to re-check upstream. Remove an entry the moment a fix ships.",
+  "allow": [
+    {
+      "id": "GHSA-v56q-mh7h-f735",
+      "package": "immutable",
+      "title": "Immutable.js List 32-bit trie overflow DoS",
+      "justification": "immutable@3.8.3 is pinned by swagger-ui-react (latest 5.32.10 still requires ^3.x — no upstream fix exists, and overriding to immutable 4/5 breaks swagger-ui's redux-immutable internals). Exposure: immutable runs client-side in /api-docs rendering the app's OWN committed public/openapi.json — no attacker-controlled data reaches it, so the DoS vectors (huge Lists / crafted hash-collision keys) have no input path.",
+      "reviewBy": "2026-10-01"
+    },
+    {
+      "id": "GHSA-xvcm-6775-5m9r",
+      "package": "immutable",
+      "title": "Immutable.js Map/Set hash-collision algorithmic complexity DoS",
+      "justification": "Same pinned immutable@3.x via swagger-ui-react and same first-party-spec-only exposure as GHSA-v56q-mh7h-f735.",
+      "reviewBy": "2026-10-01"
+    }
+  ]
+}
