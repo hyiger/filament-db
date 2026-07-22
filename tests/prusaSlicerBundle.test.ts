@@ -192,6 +192,63 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.compatible_printers_condition).toBe("printer_model==MK4");
   });
 
+  it("#1021 (Codex P1): a LEGACY auto-derived condition persisted in the settings bag is purged", () => {
+    // Pre-#1021 exports derived `nozzle_diameter[0]==D` and round-trips (fork
+    // sync-back / bulk INI re-import) persisted it into settings. Treating it
+    // as a user pin would keep those filaments hidden forever. The exact
+    // machine shape is cleared; single- and multi-term forms alike.
+    for (const legacy of [
+      "nozzle_diameter[0]==0.4",
+      "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6",
+      "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.8",
+    ]) {
+      const keys = filamentToSlicerKeys({
+        name: "LegacyPinned",
+        vendor: "X",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: {},
+        settings: { compatible_printers_condition: legacy },
+      });
+      expect(keys.compatible_printers_condition).toBe("");
+    }
+  });
+
+  it("#1021 (Codex P1): a compound / human-written condition is NOT purged", () => {
+    for (const pin of [
+      "printer_model==MK4 and nozzle_diameter[0]==0.4",
+      "nozzle_diameter[0]>=0.4",
+      "printer_notes=~/.*PRUSA.*/",
+    ]) {
+      const keys = filamentToSlicerKeys({
+        name: "HumanPinned",
+        vendor: "X",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: {},
+        settings: { compatible_printers_condition: pin },
+      });
+      expect(keys.compatible_printers_condition).toBe(pin);
+    }
+  });
+
+  it("#1021 (Codex P1): the calibration bake re-derives its condition AFTER the legacy purge", () => {
+    // A per-nozzle preset whose bag carries the legacy value: purge empties it,
+    // then the calibration bake (fires on absent-or-empty) sets its own.
+    const keys = filamentToSlicerKeys(
+      {
+        name: "LegacyCalibrated",
+        vendor: "X",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: {},
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.8" },
+      },
+      { nozzle: { diameter: 0.4, type: "Brass" }, extrusionMultiplier: 1.02 } as never,
+    );
+    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+  });
+
   it("#1021: an EMPTY round-tripped condition stays empty (no nozzle derivation over it)", () => {
     const keys = filamentToSlicerKeys({
       name: "RoundTripped",

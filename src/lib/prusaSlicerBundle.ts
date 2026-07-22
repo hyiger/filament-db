@@ -323,6 +323,16 @@ export function collapsePerNozzleImportSections(
   return out;
 }
 
+/**
+ * GH #1021: the exact machine shape the pre-#1021 export derived from the
+ * compatibleNozzles ticks — one or more `nozzle_diameter[0]==<number>` terms
+ * joined by ` or `, nothing else. Used to purge that legacy value from a
+ * round-tripped settings bag; anything a human plausibly wrote (other
+ * variables, `and`, comparisons) deliberately does not match.
+ */
+const LEGACY_DERIVED_NOZZLE_CONDITION_RE =
+  /^nozzle_diameter\[0\]==\d+(?:\.\d+)?(?: or nozzle_diameter\[0\]==\d+(?:\.\d+)?)*$/;
+
 export function filamentToSlicerKeys(
   filament: FilamentDoc,
   // #872: when present, BAKE this per-nozzle calibration's filament-level values
@@ -334,6 +344,26 @@ export function filamentToSlicerKeys(
   // Start with the settings bag as the base — these are passthrough
   // PrusaSlicer keys preserved from a previous import
   const keys: Record<string, string | null> = { ...(filament.settings || {}) };
+
+  // GH #1021 (Codex P1): purge a LEGACY auto-derived nozzle condition from the
+  // bag before the pin-preservation logic below can treat it as a user pin.
+  // The pre-#1021 export derived `nozzle_diameter[0]==D [or ...]` from the
+  // compatibleNozzles ticks, and any round-trip (the fork's sync-back POST via
+  // mergeSlicerSettings, or a bulk INI re-import via the non-hinted collapse)
+  // PERSISTED that machine value into `settings` — so without this, affected
+  // filaments would stay hidden in PrusaSlicer even after the derivation was
+  // removed. Only the exact machine shape is cleared (pure `nozzle_diameter[0]==`
+  // terms joined by ` or `); any other condition — `printer_model==MK4`,
+  // compound expressions like `printer_model==MK4 and nozzle_diameter[0]==0.4`,
+  // or PrusaSlicer's `nil` marker (null) — is a genuine pin and passes through.
+  // The per-nozzle calibration bake below re-sets the condition for calibrated
+  // fan-out presets after this clears (it fires on absent-or-empty).
+  if (
+    typeof keys.compatible_printers_condition === "string" &&
+    LEGACY_DERIVED_NOZZLE_CONDITION_RE.test(keys.compatible_printers_condition)
+  ) {
+    keys.compatible_printers_condition = "";
+  }
 
   // Map structured DB fields → PrusaSlicer INI keys.
   // These override anything in the settings bag.
