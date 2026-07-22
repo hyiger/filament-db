@@ -1910,6 +1910,43 @@ describe("API route correctness", () => {
       expect(fresh2.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
     });
 
+    it("a PARTIAL sync that omits the key never re-judges a stored post-cleanup pin (r11)", async () => {
+      const brass = await Nozzle.create({ name: "1021p 0.4 Brass", diameter: 0.4, type: "Brass" });
+      // A post-migration user pin that happens to be byte-identical to the
+      // tick derivation lives in the stored bag…
+      const f = await Filament.create({
+        name: "Pinned Sync PLA",
+        vendor: "X",
+        type: "PLA",
+        compatibleNozzles: [brass._id],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+      });
+      // …and a sync that does NOT send the key (merge.settings still carries
+      // the stored copy) must leave it alone.
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Pinned%20Sync%20PLA", {
+          config: { cooling: "1" },
+        }),
+        { params: Promise.resolve({ id: "Pinned Sync PLA" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      expect(fresh.settings?.cooling).toBe("1");
+
+      // Same posture on the Orca path (another passthrough key fires its
+      // persist gate).
+      const res2 = await orcaSync(
+        jsonReq("http://localhost/api/filaments/Pinned%20Sync%20PLA/orcaslicer", {
+          activate_air_filtration: "1",
+        }),
+        { params: Promise.resolve({ id: "Pinned Sync PLA" }) },
+      );
+      expect(res2.status).toBe(200);
+      const fresh3 = await Filament.findById(f._id).lean();
+      expect(fresh3.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+    });
+
     it("OrcaSlicer sync: the shared bag's passthrough copy is stripped the same way", async () => {
       const brass = await Nozzle.create({ name: "1021o 0.6 Brass", diameter: 0.6, type: "Brass" });
       const f = await Filament.create({

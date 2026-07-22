@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
-import dbConnect from "@/lib/mongodb";
+import dbConnect, { rerunLegacyNozzleCleanupAfterRestore } from "@/lib/mongodb";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { checkContentLength } from "@/lib/apiErrorHandler";
 import Filament from "@/models/Filament";
@@ -516,6 +516,22 @@ async function restoreSnapshot(request: NextRequest) {
       const docs = (sharedCatalogs as Record<string, unknown>[]).map(restoreTypes).map(normalizePurgedTombstone);
       await SharedCatalog.insertMany(docs, { ordered: true });
       results.sharedCatalogs = sharedCatalogs.length;
+    }
+
+    // GH #1021 (Codex P1 r11): the restore replaced filaments+nozzles, but
+    // snapshots don't carry `_migrations` — a completed legacyNozzleConditions
+    // marker would keep skipping the cleanup over freshly-restored pre-upgrade
+    // data. Invalidate it and re-clean the restored rows now. Best-effort: a
+    // transient failure leaves the process-local flag false, so the next
+    // dbConnect retries (and fails requests until terminal, per the r7
+    // posture) — the restore itself already succeeded either way.
+    try {
+      await rerunLegacyNozzleCleanupAfterRestore();
+    } catch (cleanupErr) {
+      console.error(
+        "[snapshot] Post-restore legacy nozzle-condition cleanup failed (dbConnect will retry):",
+        cleanupErr,
+      );
     }
 
     return NextResponse.json({

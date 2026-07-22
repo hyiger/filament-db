@@ -417,7 +417,7 @@ describe("clearLegacyNozzleConditionsOnce", () => {
   });
 
   it("takes over when a live claim is RELEASED mid-wait (winner hit a transient failure)", async () => {
-    await rawDb().collection("_migrations").insertOne({ ...MARKER, claimedAt: new Date(), clearedIds: [] });
+    await rawDb().collection("_migrations").insertOne({ ...MARKER, claimedAt: new Date(), processed: [] });
     const noz04 = await seedNozzle(0.4);
     await seed("retry-target", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
 
@@ -442,9 +442,15 @@ describe("clearLegacyNozzleConditionsOnce", () => {
   });
 
   it("RESUMES a stale claim (crashed claimer) via CAS takeover — progress makes takeover safe", async () => {
+    // Malformed observation entries (from whatever wrote them) are ignored,
+    // never crashed on.
     await rawDb()
       .collection("_migrations")
-      .insertOne({ ...MARKER, claimedAt: new Date(Date.now() - 60 * 60 * 1000), clearedIds: [] });
+      .insertOne({
+        ...MARKER,
+        claimedAt: new Date(Date.now() - 60 * 60 * 1000),
+        processed: [null, "junk", { i: 42 }],
+      });
     const noz04 = await seedNozzle(0.4);
     await seed("crash-residue", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
 
@@ -465,26 +471,43 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     expect(await clearLegacyNozzleConditionsOnce(db())).toEqual({ ran: true, cleared: 0 });
   });
 
-  it("a RESUMED attempt never re-examines processed rows (r8: a pin authored on a cleared row survives)", async () => {
+  it("a RESUMED attempt skips any recorded row the user TOUCHED since (r8+r11: authored values survive)", async () => {
     const noz04 = await seedNozzle(0.4);
-    // Attempt 1 cleared row A (recording it durably) and then failed
-    // elsewhere; the user authored a provenance-matching pin on A before the
-    // retry. Row B still carries its machine value.
-    const idA = await seed("repinned-after-clear", "nozzle_diameter[0]==0.4", {
+    const machineText = "nozzle_diameter[0]==0.4";
+    // Row A: examined-and-cleared by attempt 1 (observation = the machine
+    // value); the user then authored a byte-identical pin — every app save
+    // sets/bumps updatedAt, so the observation mismatches.
+    const idA = await seed("repinned-after-clear", machineText, {
       compatibleNozzles: [noz04],
+      updatedAt: new Date(),
     });
-    await seed("still-machine", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    // Row B (Codex P1 r11): examined but NOT a provenance match in attempt 1
+    // (its recorded ticks derivation differed); between attempts the user
+    // edited it — the app save bumped updatedAt — into something that NOW
+    // provenance-matches. Still untouchable: the observation mismatches.
+    const idB = await seed("changed-since-examined", machineText, {
+      compatibleNozzles: [noz04],
+      updatedAt: new Date(),
+    });
+    // Row C: examined by attempt 1 and untouched since (identical
+    // observation) — the resume may finish the interrupted clear.
+    const idC = await seed("untouched-machine", machineText, { compatibleNozzles: [noz04] });
     await rawDb().collection("_migrations").insertOne({
       ...MARKER,
       claimedAt: new Date(),
       released: true,
-      clearedIds: [String(idA)],
+      processed: [
+        { i: String(idA), c: machineText, u: null }, // pre-clear observation
+        { i: String(idB), c: "nozzle_diameter[0]==0.8", u: null }, // old non-match
+        { i: String(idC), c: machineText, u: null },
+      ],
     });
 
     const res = await clearLegacyNozzleConditionsOnce(db());
     expect(res).toEqual({ ran: true, cleared: 1 });
-    expect(await conditionOf("repinned-after-clear")).toBe("nozzle_diameter[0]==0.4"); // pin SURVIVES
-    expect(await conditionOf("still-machine")).toBe("");
+    expect(await conditionOf("repinned-after-clear")).toBe(machineText); // pin SURVIVES
+    expect(await conditionOf("changed-since-examined")).toBe(machineText); // authored value SURVIVES
+    expect(await conditionOf("untouched-machine")).toBe(""); // interrupted work finished
     expect((await rawDb().collection("_migrations").findOne(MARKER))!.completed).toBe(true);
   });
 
@@ -493,7 +516,7 @@ describe("clearLegacyNozzleConditionsOnce", () => {
       ...MARKER,
       claimedAt: new Date(Date.now() - 60 * 60 * 1000),
       released: true,
-      clearedIds: [],
+      processed: [],
     });
     const real = db();
     let casIntercepted = false;
@@ -582,25 +605,25 @@ describe("clearLegacyNozzleConditionsOnce", () => {
       },
     };
     await expect(clearLegacyNozzleConditionsOnce(wrapper)).rejects.toThrow("transient");
-    // Claim kept, durably marked RELEASED; the failed row's progress record
-    // was rolled back so the retry re-attempts it.
+    // Claim kept, durably marked RELEASED; the row's OBSERVATION is recorded,
+    // which is exactly what lets the retry finish it while untouched.
     const failedMarker = await rawDb().collection("_migrations").findOne(MARKER);
     expect(failedMarker).not.toBeNull();
     expect(failedMarker!.released).toBe(true);
     expect(failedMarker!.completed).toBeUndefined();
-    expect(failedMarker!.clearedIds).toEqual([]);
+    expect(failedMarker!.processed).toHaveLength(1);
     const res = await clearLegacyNozzleConditionsOnce(wrapper);
     expect(res).toEqual({ ran: true, cleared: 1 });
     expect(await conditionOf("retry-me")).toBe("");
   });
 
-  it("hard-crash worst case: release AND rollback writes fail → waiters throw, stale takeover skips the recorded row", async () => {
-    // Clear fails, the progress rollback ($pull) fails, and the release mark
-    // fails. The original error still propagates, the claim stays live-shaped
-    // with the row RECORDED, contenders THROW until it goes stale, and the
-    // eventual takeover SKIPS the recorded row — the documented record-first
-    // residue (legacy value survives, hand-clearable) instead of any path
-    // that could erase a post-cleanup pin.
+  it("hard-crash worst case: clear AND release writes fail → waiters throw, stale takeover finishes the untouched row", async () => {
+    // Clear fails and the release mark fails too. The original error still
+    // propagates, the claim stays live-shaped with the row's OBSERVATION
+    // recorded, contenders THROW until it goes stale — and the eventual
+    // takeover may finish the interrupted clear precisely because the row is
+    // byte-identical to its recorded observation (any user save in between
+    // would mismatch and skip it forever).
     const noz04 = await seedNozzle(0.4);
     await seed("stuck", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
     const real = db();
@@ -623,8 +646,7 @@ describe("clearLegacyNozzleConditionsOnce", () => {
             find: col.find.bind(col),
             insertOne: col.insertOne.bind(col),
             updateOne: async (f: Record<string, unknown>, u: Record<string, unknown>) => {
-              const body = JSON.stringify(u);
-              if (body.includes("$pull") || body.includes("released")) {
+              if (JSON.stringify(u).includes("released")) {
                 throw new Error("marker write failed");
               }
               return col.updateOne(f, u);
@@ -639,11 +661,11 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     await expect(
       clearLegacyNozzleConditionsOnce(db(), { waitMs: 40, pollMs: 10 }),
     ).rejects.toBeInstanceOf(LegacyCleanupInProgressError);
-    // …and once stale, the takeover resumes but skips the recorded row.
+    // …and once stale, the takeover resumes and completes the untouched row.
     await new Promise((r) => setTimeout(r, 5));
     const res = await clearLegacyNozzleConditionsOnce(db(), { waitMs: 40, pollMs: 10, staleMs: 0 });
-    expect(res).toEqual({ ran: true, cleared: 0 });
-    expect(await conditionOf("stuck")).toBe("nozzle_diameter[0]==0.4"); // residue, hand-clearable
+    expect(res).toEqual({ ran: true, cleared: 1 });
+    expect(await conditionOf("stuck")).toBe("");
     expect((await rawDb().collection("_migrations").findOne(MARKER))!.completed).toBe(true);
   });
 

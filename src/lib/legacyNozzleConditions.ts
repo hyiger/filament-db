@@ -39,18 +39,20 @@
  *    and write is left alone even when the user deliberately re-pinned the
  *    byte-identical expression (the save bumped `updatedAt`, the filter
  *    misses, nothing is erased).
- *  - NOT safe to re-run blindly: a pin authored after a row was cleared can
- *    be textually identical to the legacy value it replaced, so neither
- *    completion NOR per-row progress may live in a process-local flag. The
- *    `_migrations` marker document durably records BOTH: `completed` for the
- *    whole DB, and `clearedIds` for every row a partially-failed attempt
- *    already processed. Each row is RECORDED in `clearedIds` before its
- *    destructive write (un-recorded again only if that write THROWS), so a
- *    retry never re-examines a row whose clear went through — a pin authored
- *    on it between failure and retry survives. The residual trade is a hard
- *    crash exactly between record and write: that row is skipped on resume
- *    and keeps its legacy value (visible, hand-clearable) — strictly safer
- *    than any path that could erase a pin.
+ *  - NOT safe to re-run blindly: a pin authored after a row was cleared (or
+ *    merely examined) can be textually identical to the legacy value, so
+ *    neither completion NOR per-attempt progress may live in a process-local
+ *    flag. The `_migrations` marker durably records BOTH: `completed` for the
+ *    whole DB, and `processed` — an OBSERVATION ({id, condition, updatedAt})
+ *    for EVERY syntactic candidate an attempt examined, matches and
+ *    non-matches alike, written BEFORE any destructive write. On resume a
+ *    recorded row is eligible again ONLY when it is byte-identical to its
+ *    recorded observation (untouched since the examination); anything saved
+ *    in between — a re-pin, a tick edit — bumps `updatedAt`, mismatches, and
+ *    is permanently skipped. So a retry can finish interrupted work on
+ *    untouched rows but can never re-judge a row the user has touched since
+ *    it was first examined — which is what makes releasing a failed attempt
+ *    safe at all.
  *  - CLAIM-FIRST + WAIT + RESUME + FENCE: the marker is inserted (unique
  *    `_id`) BEFORE any destructive write, so racing processes serialize on
  *    the insert; a loser does not proceed while the winner is mid-clear (its
@@ -225,7 +227,7 @@ export async function clearLegacyNozzleConditionsOnce(
           _id: MARKER_ID,
           claimedAt: new Date(),
           claimToken: token,
-          clearedIds: [],
+          processed: [],
         });
         break; // fresh claim held — we are the (sole) runner
       } catch (err) {
@@ -242,8 +244,8 @@ export async function clearLegacyNozzleConditionsOnce(
       Date.now() - claimedAtMs > staleMs; // crashed claimer
     if (abandoned) {
       // CAS on the observed claimedAt serializes takeover racers; safe to
-      // resume because the work phase honors the recorded clearedIds, and the
-      // fresh claimToken fences out the previous holder if it is still alive.
+      // resume because the work phase honors the recorded observations, and
+      // the fresh claimToken fences out the previous holder if still alive.
       const takeover = await markers.updateOne(
         { _id: MARKER_ID, claimedAt: claimedAtRaw ?? null, completed: { $ne: true } },
         { $set: { claimedAt: new Date(), claimToken: token }, $unset: { released: "" } },
@@ -257,17 +259,34 @@ export async function clearLegacyNozzleConditionsOnce(
 
   let cleared = 0;
   try {
-    // Fresh read for the durable per-row progress (empty on a fresh claim).
+    // Fresh read for the durable per-attempt observations (empty on a fresh
+    // claim). Each entry is {i: id, c: condition, u: updatedAt} for a
+    // syntactic candidate a prior attempt EXAMINED — match or not.
     const marker = await markers.findOne({ _id: MARKER_ID });
-    const alreadyCleared = new Set<string>(
-      Array.isArray(marker?.clearedIds) ? (marker!.clearedIds as unknown[]).map(String) : [],
-    );
+    const processed = new Map<string, { c: unknown; u: unknown }>();
+    for (const entry of Array.isArray(marker?.processed) ? (marker!.processed as unknown[]) : []) {
+      if (entry && typeof entry === "object" && typeof (entry as { i?: unknown }).i === "string") {
+        const e = entry as { i: string; c?: unknown; u?: unknown };
+        processed.set(e.i, { c: e.c, u: e.u ?? null });
+      }
+    }
+    const timeOf = (v: unknown) => (v instanceof Date ? v.getTime() : v ?? null);
+    const observationOf = (c: Record<string, unknown>) => ({
+      c: (c.settings as { compatible_printers_condition?: unknown } | undefined)
+        ?.compatible_printers_condition,
+      u: c.updatedAt ?? null,
+    });
 
     const filaments = db.collection("filaments");
     // Cheap syntactic candidate scan, then the PROVENANCE test: clear only
     // rows whose stored value byte-equals the legacy derivation from their
     // effective compatibleNozzles (own non-empty list, else the parent's —
-    // the same resolution the old exporter saw).
+    // the same resolution the old exporter saw). A row RECORDED by a prior
+    // attempt stays eligible only while byte-identical to its recorded
+    // observation — anything the user saved since (re-pin, tick edit) bumped
+    // updatedAt, mismatches, and is skipped forever (Codex P1 r11: without
+    // this, a released attempt made the retry re-judge unrecorded or changed
+    // rows and could erase a value authored between the attempts).
     const candidates = (
       await filaments
         .find(
@@ -275,7 +294,12 @@ export async function clearLegacyNozzleConditionsOnce(
           { projection: { _id: 1, parentId: 1, compatibleNozzles: 1, updatedAt: 1, "settings.compatible_printers_condition": 1 } },
         )
         .toArray()
-    ).filter((c) => !alreadyCleared.has(String(c._id))); // resume: never re-examine a processed row
+    ).filter((c) => {
+      const rec = processed.get(String(c._id));
+      if (!rec) return true; // never examined by any attempt
+      const now = observationOf(c);
+      return rec.c === now.c && timeOf(rec.u) === timeOf(now.u); // untouched since
+    });
 
     const hasOwn = (c: Record<string, unknown>) =>
       Array.isArray(c.compatibleNozzles) && c.compatibleNozzles.length > 0;
@@ -335,24 +359,37 @@ export async function clearLegacyNozzleConditionsOnce(
           entry !== null,
       );
 
-    // Per-row: RECORD progress first (FENCED on our claimToken — a
-    // modifiedCount of 0 means another process took the claim over, so abort
-    // BEFORE the destructive write), then the CONDITIONAL clear. The clear's
-    // filter re-asserts the exact condition AND the exact updatedAt the scan
-    // observed, so a row saved by another client between scan and write keeps
-    // its new state even when the re-pinned text is byte-identical (the save
-    // bumped updatedAt). Record-first means a retry can never re-examine a
-    // row whose clear went through; if the clear THROWS, the record is
-    // best-effort rolled back so the retry re-attempts it.
-    for (const entry of toClear) {
-      const idKey = String(entry._id);
+    // RECORD the observation of EVERY examined candidate — matches AND
+    // non-matches — in one fenced write BEFORE any destructive write (Codex
+    // P1 r11: a non-match left unrecorded would be re-judged by a later
+    // attempt after e.g. a tick edit made it match, erasing a value the user
+    // authored between attempts). $addToSet dedupes byte-identical entries on
+    // a retry. matchedCount (not modifiedCount): the fence asks "does the
+    // claim still carry OUR token", not "did the write change anything".
+    if (candidates.length > 0) {
       const recorded = await markers.updateOne(
         { _id: MARKER_ID, claimToken: token },
-        { $addToSet: { clearedIds: idKey } },
+        {
+          $addToSet: {
+            processed: {
+              $each: candidates.map((c) => {
+                const o = observationOf(c);
+                return { i: String(c._id), c: o.c, u: o.u };
+              }),
+            },
+          },
+        },
       );
-      // matchedCount (not modifiedCount): the fence asks "does the claim
-      // still carry OUR token", not "did the $addToSet change anything".
       if (recorded.matchedCount !== 1) throw new LegacyCleanupInProgressError();
+    }
+
+    // Per-row CONDITIONAL clears. The filter re-asserts the exact condition
+    // AND the exact updatedAt the scan observed, so a row saved by another
+    // client between scan and write keeps its new state even when the
+    // re-pinned text is byte-identical (the save bumped updatedAt). A thrown
+    // clear leaves the row recorded: the retry re-attempts it while untouched
+    // (identical observation) and skips it the moment anyone saves it.
+    for (const entry of toClear) {
       // Codex P2 r10: re-assert ownership at the destructive-write boundary —
       // a takeover in the record→clear window would let the new holder skip
       // this recorded row and complete while our clear lands after. The
@@ -362,22 +399,15 @@ export async function clearLegacyNozzleConditionsOnce(
       // user save in between bumps updatedAt and blocks it.
       const owned = await markers.findOne({ _id: MARKER_ID });
       if (!owned || owned.claimToken !== token) throw new LegacyCleanupInProgressError();
-      try {
-        const res = await filaments.updateOne(
-          {
-            _id: entry._id,
-            "settings.compatible_printers_condition": entry.observed,
-            updatedAt: entry.observedUpdatedAt ?? null,
-          },
-          { $set: { "settings.compatible_printers_condition": "" } },
-        );
-        cleared += res.modifiedCount;
-      } catch (err) {
-        await markers
-          .updateOne({ _id: MARKER_ID, claimToken: token }, { $pull: { clearedIds: idKey } })
-          .catch(() => {});
-        throw err;
-      }
+      const res = await filaments.updateOne(
+        {
+          _id: entry._id,
+          "settings.compatible_printers_condition": entry.observed,
+          updatedAt: entry.observedUpdatedAt ?? null,
+        },
+        { $set: { "settings.compatible_printers_condition": "" } },
+      );
+      cleared += res.modifiedCount;
     }
   } catch (err) {
     // Durably mark the attempt released (progress kept) so the next attempt —

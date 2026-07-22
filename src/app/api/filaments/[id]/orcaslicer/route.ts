@@ -261,8 +261,14 @@ export async function POST(
     // Strip it (→ "") when it provenance-matches this filament's effective
     // ticks (same guard as the PrusaSlicer sync + INI import boundaries). The
     // key arrives in `merge.added` whenever the body carries it, so the
-    // added/removed persist-gate below still writes the stripped bag.
-    await stripLegacyMachineCondition(merge.settings, filament);
+    // added/removed persist-gate below still writes the stripped bag. Gated
+    // on the sync actually SENDING the key (Codex P1 r11): merge.settings is
+    // seeded from the stored bag, and a sync that omits the key — while some
+    // other passthrough key fires the persist gate — must not re-judge and
+    // blank a post-cleanup pin already stored there.
+    if (Object.prototype.hasOwnProperty.call(body, "compatible_printers_condition")) {
+      await stripLegacyMachineCondition(merge.settings, filament);
+    }
     const settingsAdded = merge.added;
     // GH #950 (Codex P2 on PR #968 r5): also write when the merge PURGED a stale
     // structured key from the existing bag (`removed`) — otherwise a sync that

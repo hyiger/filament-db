@@ -96,6 +96,66 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(names).toEqual(["Restored Glass", "Restored PEI"]);
   });
 
+  it("re-runs the legacy nozzle-condition cleanup after a restore (GH #1021 r11)", async () => {
+    // The one-shot cleanup already COMPLETED on this DB…
+    await mongoose.connection.db!.collection("_migrations").deleteMany({});
+    await mongoose.connection.db!.collection("_migrations").insertOne({
+      _id: "legacyNozzleConditions" as never,
+      claimedAt: new Date(),
+      completed: true,
+      processed: [],
+    });
+    // …and the user restores a PRE-upgrade snapshot whose filament still
+    // carries the stamped machine condition (with its tick provenance).
+    const nozId = new mongoose.Types.ObjectId();
+    const snapshot = {
+      version: 2,
+      createdAt: new Date().toISOString(),
+      collections: {
+        filaments: [
+          {
+            name: "Snap Legacy PLA",
+            vendor: "X",
+            type: "PLA",
+            compatibleNozzles: [String(nozId)],
+            settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" },
+          },
+          {
+            name: "Snap Pin PLA",
+            vendor: "X",
+            type: "PLA",
+            compatibleNozzles: [String(nozId)],
+            settings: { compatible_printers_condition: "nozzle_diameter[0]==0.8" },
+          },
+        ],
+        nozzles: [{ _id: String(nozId), name: "Snap 0.4", diameter: 0.4, type: "Brass" }],
+        printers: [],
+        bedTypes: [],
+      },
+    };
+
+    const req = new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+
+    // The stale completed marker did NOT suppress the re-clean: the restored
+    // machine value is cleared, the non-matching pin survives, and the marker
+    // is freshly completed for the restored dataset.
+    const restored = await Filament.findOne({ name: "Snap Legacy PLA" }).lean();
+    expect(restored!.settings?.compatible_printers_condition).toBe("");
+    expect(restored!.settings?.cooling).toBe("1");
+    const pin = await Filament.findOne({ name: "Snap Pin PLA" }).lean();
+    expect(pin!.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+    const marker = await mongoose.connection.db!
+      .collection("_migrations")
+      .findOne({ _id: "legacyNozzleConditions" as never });
+    expect(marker?.completed).toBe(true);
+  });
+
   it("re-tombstones a purged-but-active zombie on restore (GH #1009 Codex P2)", async () => {
     // A snapshot from an install affected by the purged-zombie bug carries a
     // filament with _purged: true but _deletedAt: null — an active zombie the

@@ -930,7 +930,13 @@ export async function POST(
     // would resurrect the hidden-preset bug after the one-shot DB cleanup.
     // Strip it (→ "") when it provenance-matches this filament's effective
     // ticks; a non-matching pure nozzle condition is a user pin and persists.
-    await stripLegacyMachineCondition(merge.settings, filament);
+    // Gated on the SYNC actually sending the key (Codex P1 r11):
+    // merge.settings is seeded from the STORED bag, and a partial sync that
+    // omits the key must not re-judge — and blank — a post-cleanup pin that
+    // legitimately lives there.
+    if (Object.prototype.hasOwnProperty.call(config, "compatible_printers_condition")) {
+      await stripLegacyMachineCondition(merge.settings, filament);
+    }
     update.settings = merge.settings;
 
     // #867 Phase 2 companion: on the AUTHORITATIVE ObjectId path, honor a renamed

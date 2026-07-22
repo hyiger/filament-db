@@ -611,3 +611,31 @@ export default async function dbConnect() {
 
   return cached.conn;
 }
+
+/**
+ * GH #1021 (Codex P1 r11): a snapshot restore REPLACES the filament +
+ * nozzle collections, but snapshots neither carry nor touch `_migrations` —
+ * so a completed legacyNozzleConditions marker would keep reporting
+ * "already-done" over freshly-restored pre-upgrade data, and any stamped
+ * machine conditions in the backup would survive and hide presets forever.
+ * Call this AFTER a successful restore: it invalidates the durable marker
+ * (the restored dataset is a different world — old observations are
+ * meaningless) and re-runs the cleanup against the restored rows. On failure
+ * the process-local flag stays false, so the next dbConnect retries (and, per
+ * the r7 prerequisite posture, fails requests until the DB reaches a terminal
+ * cleanup state again).
+ */
+export async function rerunLegacyNozzleCleanupAfterRestore(): Promise<void> {
+  const cached = global.mongoose;
+  if (cached) cached.migrations.legacyNozzleConditions = false;
+  const db = mongoose.connection.db;
+  if (!db) throw new Error("no db handle on the mongoose connection");
+  await db.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+  const result = await clearLegacyNozzleConditionsOnce(db as unknown as MinimalDb);
+  if (result.ran && result.cleared > 0) {
+    console.log(
+      `[migration] Cleared ${result.cleared} legacy machine-derived nozzle condition(s) after snapshot restore (GH #1021)`,
+    );
+  }
+  if (cached) cached.migrations.legacyNozzleConditions = true;
+}
