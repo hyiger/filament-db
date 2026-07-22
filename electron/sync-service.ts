@@ -584,11 +584,31 @@ export class SyncService extends EventEmitter {
                 .toArray()
             : [];
           if (deriveLegacyNozzleCondition(nozzleDocs) !== entry.observed) continue;
-          // Same clock-skew guard as the in-transit bump: the copy carried
-          // the SOURCE's updatedAt, which a fast-clocked peer may have
-          // stamped in our future — the cleared doc must land strictly newer.
-          const observedTs =
-            entry.observedUpdatedAt instanceof Date ? entry.observedUpdatedAt.getTime() : 0;
+          // Codex P1 r24: bumping the target makes the COPIED SNAPSHOT
+          // authoritative for the pair, so first prove the SOURCE row hasn't
+          // moved since the copy — a concurrent source edit would otherwise
+          // be replaced wholesale by the stale snapshot on the next cycle.
+          // If it moved, skip entirely: the newer source replaces the target
+          // next cycle and is re-judged in that transit.
+          const sourceRow = await sourceSide.collection("filaments").findOne(
+            { syncId: entry.syncId },
+            { projection: { updatedAt: 1, "settings.compatible_printers_condition": 1 } },
+          );
+          const sourceCondition = (
+            sourceRow?.settings as { compatible_printers_condition?: unknown } | undefined
+          )?.compatible_printers_condition;
+          const observedTs = SyncService.readTimestamp(entry.observedUpdatedAt) ?? 0;
+          if (
+            !sourceRow ||
+            sourceCondition !== entry.observed ||
+            (SyncService.readTimestamp(sourceRow.updatedAt) ?? 0) !== observedTs
+          ) {
+            continue;
+          }
+          // EXACTLY observed+1ms, not wall-clock (Codex P1/P2 r24) — the
+          // same rationale as the in-transit bump: smallest stamp that beats
+          // the stale source while losing to any genuine later edit, with
+          // the timestamp parsed the way LWW itself parses it.
           await targetSide.collection("filaments").updateOne(
             {
               syncId: entry.syncId,
@@ -598,7 +618,7 @@ export class SyncService extends EventEmitter {
             {
               $set: {
                 "settings.compatible_printers_condition": "",
-                updatedAt: new Date(Math.max(Date.now(), observedTs + 1)),
+                updatedAt: new Date(observedTs + 1),
               },
             },
           );
@@ -1570,12 +1590,18 @@ export class SyncService extends EventEmitter {
             // cleaned doc back over the source — source-side convergence with
             // no bespoke second write, retried by construction every cycle
             // (an equal-timestamp pair would freeze the divergence instead).
-            // A later user edit on either side is newer still and wins.
-            // max(now, source+1ms): a peer whose clock runs AHEAD of this
-            // machine stamped the source in our future — a plain `now` would
-            // land OLDER and the stale source would win the pair right back.
-            const sourceTs = doc.updatedAt instanceof Date ? doc.updatedAt.getTime() : 0;
-            doc.updatedAt = new Date(Math.max(Date.now(), sourceTs + 1));
+            // EXACTLY source+1ms, deliberately NOT wall-clock (Codex P1 r24):
+            // only intra-pair ordering drives the convergence, and +1ms is
+            // the smallest stamp that beats the stale source while losing to
+            // ANY genuine later edit on either side (a same-peer edit after
+            // the source stamp always carries a later same-clock timestamp;
+            // a wall-clock bump could leap PAST such an edit and erase it).
+            // Parsed via readTimestamp (Codex P2 r24) — raw rows can store
+            // updatedAt as an ISO string / epoch number, and treating those
+            // as 0 would land the bump in 1970 and hand the pair straight
+            // back to the stale source.
+            const sourceTs = SyncService.readTimestamp(doc.updatedAt) ?? 0;
+            doc.updatedAt = new Date(sourceTs + 1);
           }
         } else if (doc.parentId != null && typeof doc.syncId === "string" && doc.syncId) {
           deferredParentChecks.push({
