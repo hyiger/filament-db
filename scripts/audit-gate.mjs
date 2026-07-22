@@ -21,6 +21,29 @@ const SEVERITIES = ["moderate", "high", "critical"];
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const allowlist = JSON.parse(readFileSync(join(root, ".audit-allowlist.json"), "utf8"));
+
+// Codex P2 on #1023: enforce the allowlist's stated MUSTs before any entry can
+// activate an exception — otherwise an entry missing its justification or
+// carrying an invalid reviewBy date silently becomes a PERMANENT exception
+// (an invalid date never compares as past, so the expiry nudge never fires).
+const entryErrors = [];
+for (const [i, a] of (Array.isArray(allowlist.allow) ? allowlist.allow : []).entries()) {
+  const where = `.audit-allowlist.json allow[${i}]`;
+  if (typeof a.id !== "string" || !/^GHSA-[a-z0-9-]+$/.test(a.id))
+    entryErrors.push(`${where}: missing/invalid GHSA id`);
+  if (typeof a.package !== "string" || a.package.trim() === "")
+    entryErrors.push(`${where}: missing package`);
+  if (typeof a.justification !== "string" || a.justification.trim().length < 20)
+    entryErrors.push(`${where}: justification is required (a real sentence, not a stub)`);
+  if (typeof a.reviewBy !== "string" || Number.isNaN(new Date(a.reviewBy).getTime()))
+    entryErrors.push(`${where}: reviewBy must be a valid date`);
+}
+if (!Array.isArray(allowlist.allow)) entryErrors.push(".audit-allowlist.json: `allow` must be an array");
+if (entryErrors.length > 0) {
+  console.error("Audit allowlist is malformed — failing closed:");
+  for (const e of entryErrors) console.error("  " + e);
+  process.exit(1);
+}
 const allowed = new Map(allowlist.allow.map((a) => [a.id, a]));
 
 // npm audit exits non-zero when it finds anything — capture stdout regardless.
