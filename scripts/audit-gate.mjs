@@ -47,9 +47,30 @@ try {
   process.exit(1);
 }
 
+// Codex P1 on #1023: fail CLOSED on an audit-service error. When the registry
+// audit endpoint errors (403, outage), npm exits nonzero but still writes a
+// valid JSON *error object* to stdout — no `vulnerabilities` key at all. The
+// old `report.vulnerabilities ?? {}` default read that as "no advisories" and
+// printed a pass, silently skipping the security gate in both release
+// workflows. Reject error-shaped output and require the real report shape.
+if (report.error || report.statusCode) {
+  console.error(
+    "npm audit returned an error response — failing closed:\n" +
+      JSON.stringify(report.error ?? report, null, 2).slice(0, 2000),
+  );
+  process.exit(1);
+}
+if (typeof report.vulnerabilities !== "object" || report.vulnerabilities === null) {
+  console.error(
+    "npm audit output missing the `vulnerabilities` report shape — failing closed:\n" +
+      raw.slice(0, 2000),
+  );
+  process.exit(1);
+}
+
 const offenders = [];
 const tolerated = [];
-for (const [name, vuln] of Object.entries(report.vulnerabilities ?? {})) {
+for (const [name, vuln] of Object.entries(report.vulnerabilities)) {
   if (!SEVERITIES.includes(vuln.severity)) continue;
   // `via` mixes advisory objects (this package's own advisories) and strings
   // (names of vulnerable dependencies — those packages carry their own
