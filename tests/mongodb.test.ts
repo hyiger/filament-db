@@ -1048,19 +1048,25 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     await dbConnect();
     await deleteMarker(); // fresh-upgrade state: no durable marker yet
     const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    // compatibleNozzles holds ObjectId REFS — provenance resolves them
+    // against the nozzles collection (mirroring the exporter's populate()).
+    const nozzles = mongoose.connection.db!.collection("nozzles");
+    const noz04 = (await nozzles.insertOne({ name: "LNCM 0.4", diameter: 0.4 })).insertedId;
+    const noz06 = (await nozzles.insertOne({ name: "LNCM 0.6", diameter: 0.6 })).insertedId;
+    const noz025 = (await nozzles.insertOne({ name: "LNCM 0.25", diameter: 0.25 })).insertedId;
     await Filament.collection.insertMany([
       // Machine-derived: stored value equals the legacy derivation from the
       // row's compatibleNozzles (the provenance test).
       { name: "MachineSingle", vendor: "T", type: "PLA",
-        compatibleNozzles: [{ diameter: 0.4, type: "Brass" }],
+        compatibleNozzles: [noz04],
         settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" } },
       { name: "MachineMulti", vendor: "T", type: "PLA",
-        compatibleNozzles: [{ diameter: 0.6 }, { diameter: 0.25 }],
+        compatibleNozzles: [noz06, noz025],
         settings: { compatible_printers_condition: "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.6" } },
       // Same SYNTAX but the ticks don't derive to it → a pre-upgrade user pin
       // (Codex P1 r6) — must survive.
       { name: "PreUpgradePin", vendor: "T", type: "PLA",
-        compatibleNozzles: [{ diameter: 0.6 }],
+        compatibleNozzles: [noz06],
         settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" } },
       { name: "HumanCompound", vendor: "T", type: "PLA",
         settings: { compatible_printers_condition: "printer_model==MK4 and nozzle_diameter[0]==0.4" } },
@@ -1093,7 +1099,7 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     // provenance-matching legacy machine value.
     await Filament.collection.insertOne({
       name: "PostUpgradePin", vendor: "T", type: "PLA",
-      compatibleNozzles: [{ diameter: 0.4 }],
+      compatibleNozzles: [noz04],
       settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
     });
     resetMigrations();
@@ -1104,23 +1110,27 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     await Filament.collection.deleteMany({
       name: { $in: ["MachineSingle", "MachineMulti", "PreUpgradePin", "HumanCompound", "HumanComparison", "NoCondition", "PostUpgradePin"] },
     });
+    await nozzles.deleteMany({ name: /^LNCM / });
   });
 
-  it("leaves the flag false and retries on a transient failure", async () => {
+  it("FAILS the current dbConnect on a transient failure (prerequisite), then retries and clears", async () => {
     await dbConnect();
     await deleteMarker(); // ensure the clear actually attempts to run
     const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
-    // A provenance-matching row so the cleanup actually reaches its updateMany.
+    // A provenance-matching row (ref → nozzles join) so the cleanup actually
+    // reaches its conditional updateOne.
+    const noz = await mongoose.connection.db!.collection("nozzles")
+      .insertOne({ name: "LNCT 0.4", diameter: 0.4 });
     await Filament.collection.insertOne({
       name: "TransientVictim", vendor: "T", type: "PLA",
-      compatibleNozzles: [{ diameter: 0.4 }],
+      compatibleNozzles: [noz.insertedId],
       settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
     });
 
     const cached = resetMigrations();
     // The cleanup helper reaches "filaments" through the RAW driver handle
     // (connection.db.collection(...)), not Filament.collection — so inject the
-    // failure there, poisoning only the "filaments" handle's updateMany and
+    // failure there, poisoning only the "filaments" handle's updateOne and
     // passing "_migrations" (claim/release) through untouched.
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const rawDb = mongoose.connection.db!;
@@ -1131,12 +1141,15 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
         const col = realCollection(name);
         if (name === "filaments") {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (col as any).updateMany = () => Promise.reject(new Error("transient"));
+          (col as any).updateOne = () => Promise.reject(new Error("transient"));
         }
         return col;
       }) as never);
     try {
-      await dbConnect();
+      // Codex P1 r7: the CURRENT caller must fail too — a request served
+      // before the DB reaches a terminal cleanup state could write a pin the
+      // eventual retry would legitimately clear.
+      await expect(dbConnect()).rejects.toThrow("transient");
       expect(cached.migrations.legacyNozzleConditions).toBe(false); // retries next connect
       expect(errSpy).toHaveBeenCalledWith(
         expect.stringContaining("legacy nozzle conditions"),
@@ -1161,5 +1174,6 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
     expect(victim!.settings.compatible_printers_condition).toBe("");
 
     await Filament.collection.deleteMany({ name: "TransientVictim" });
+    await mongoose.connection.db!.collection("nozzles").deleteMany({ name: "LNCT 0.4" });
   });
 });

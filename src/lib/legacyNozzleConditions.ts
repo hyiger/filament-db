@@ -13,11 +13,22 @@
  *    value EXACTLY equals what the removed derivation would have produced
  *    from the row's effective compatibleNozzles (own list, else the parent's
  *    — mirroring resolveFilament, which is what the exporter resolved
- *    through). Residue accepted, in both directions: a user pin that is
- *    byte-identical to the current tick derivation is indistinguishable and
- *    is cleared; a machine value whose ticks were edited AFTER the round-trip
- *    no longer matches and survives — visible in the settings bag and
- *    clearable by hand, strictly better than silently deleting a pin.
+ *    through). `compatibleNozzles` holds ObjectId REFS to the nozzles
+ *    collection (src/models/Filament.ts) and the removed exporter read
+ *    diameters off POPULATED docs — so this helper joins the `nozzles`
+ *    collection and maps refs to diameters the same way (a dangling ref
+ *    contributes nothing, exactly like populate yielding null). Residue
+ *    accepted, in both directions: a user pin that is byte-identical to the
+ *    current tick derivation is indistinguishable and is cleared; a machine
+ *    value whose ticks were edited AFTER the round-trip no longer matches and
+ *    survives — visible in the settings bag and clearable by hand, strictly
+ *    better than silently deleting a pin.
+ *  - TOCTOU-safe clears: claim serialization only excludes other cleanup
+ *    runners, not ordinary filament writers (an Atlas DB shared by several
+ *    clients keeps serving them). Each destructive write is therefore a
+ *    PER-ROW CONDITIONAL update — filtered on the exact condition value the
+ *    scan observed — so a row edited between scan and write is left alone
+ *    (its new value is post-cleanup-era user input by definition).
  *  - NOT safe to re-run: a pin authored after the cleanup can be textually
  *    identical to a legacy value, so completion must be durable per DB — a
  *    marker document in `_migrations` — not a process-local flag.
@@ -31,6 +42,10 @@
  *    older than `staleMs` is a crashed claimer: skip permanently rather than
  *    take over — the remaining legacy values are the known, recoverable
  *    pre-fix state, while a re-run could eat a post-upgrade pin.
+ *  - PREREQUISITE for callers: a throw from this helper means the DB is not
+ *    in a terminal cleanup state. `dbConnect` RETHROWS it (failing the
+ *    current request rather than serving against a mid-clear DB) and
+ *    `electron/sync-service.ts` aborts the sync cycle.
  *  - HYBRID: the Electron sync engine opens Atlas directly (no dbConnect),
  *    and the cleanup preserves `updatedAt`, so LWW would never propagate it —
  *    each side must clean its own DB. This helper is driver-level (takes a
@@ -51,8 +66,11 @@ const MARKER_ID = "legacyNozzleConditions";
  * FROZEN copy of the derivation `filamentToSlicerKeys` performed before
  * #1021/#1022 removed it (unique positive diameters, ascending, default JS
  * number stringification, " or " join). Byte-identical output is the
- * provenance test: stored === derived ⇒ the value is machine-written. Do NOT
- * "improve" the formatting — it must keep reproducing the historical bytes.
+ * provenance test: stored === derived ⇒ the value is machine-written. The
+ * input is the POPULATED shape the exporter saw — objects carrying a numeric
+ * `diameter` — with anything else (populate-miss nulls, junk) contributing
+ * nothing. Do NOT "improve" the formatting — it must keep reproducing the
+ * historical bytes.
  */
 export function deriveLegacyNozzleCondition(compatibleNozzles: unknown): string | null {
   if (!Array.isArray(compatibleNozzles)) return null;
@@ -84,10 +102,6 @@ export interface MinimalDb {
     ): { toArray(): Promise<Record<string, unknown>[]> };
     insertOne(doc: Record<string, unknown>): Promise<unknown>;
     updateOne(
-      filter: Record<string, unknown>,
-      update: Record<string, unknown>,
-    ): Promise<unknown>;
-    updateMany(
       filter: Record<string, unknown>,
       update: Record<string, unknown>,
     ): Promise<{ modifiedCount: number }>;
@@ -200,26 +214,59 @@ export async function clearLegacyNozzleConditionsOnce(
       : [];
     const parentNozzles = new Map(parents.map((p) => [String(p._id), p.compatibleNozzles]));
 
+    const effectiveRefsOf = (c: Record<string, unknown>): unknown[] => {
+      const effective = hasOwn(c)
+        ? c.compatibleNozzles
+        : c.parentId != null
+          ? parentNozzles.get(String(c.parentId))
+          : undefined;
+      return Array.isArray(effective) ? effective : [];
+    };
+
+    // `compatibleNozzles` entries are ObjectId REFS — the exporter populated
+    // them before reading `.diameter` (Codex P1 r7). Reproduce that with one
+    // indexed join against the nozzles collection (raw BSON values in $in,
+    // string-keyed dedupe); a ref that resolves to nothing contributes
+    // nothing, exactly like populate yielding null.
+    const refByKey = new Map<string, unknown>();
+    for (const c of candidates) {
+      for (const ref of effectiveRefsOf(c)) refByKey.set(String(ref), ref);
+    }
+    const nozzleDocs = refByKey.size
+      ? await db
+          .collection("nozzles")
+          .find(
+            { _id: { $in: Array.from(refByKey.values()) } },
+            { projection: { _id: 1, diameter: 1 } },
+          )
+          .toArray()
+      : [];
+    const nozzleById = new Map(nozzleDocs.map((n) => [String(n._id), n]));
+
     const toClear = candidates
-      .filter((c) => {
-        const effective = hasOwn(c)
-          ? c.compatibleNozzles
-          : c.parentId != null
-            ? parentNozzles.get(String(c.parentId))
-            : undefined;
-        const derived = deriveLegacyNozzleCondition(effective);
+      .map((c) => {
+        const populated = effectiveRefsOf(c)
+          .map((ref) => nozzleById.get(String(ref)))
+          .filter((n): n is Record<string, unknown> => n !== undefined);
+        const derived = deriveLegacyNozzleCondition(populated);
         const stored = (c.settings as { compatible_printers_condition?: unknown } | undefined)
           ?.compatible_printers_condition;
-        return derived !== null && stored === derived;
+        return derived !== null && stored === derived
+          ? { _id: c._id, observed: stored as string }
+          : null;
       })
-      .map((c) => c._id);
+      .filter((entry): entry is { _id: unknown; observed: string } => entry !== null);
 
-    if (toClear.length > 0) {
-      const res = await filaments.updateMany(
-        { _id: { $in: toClear } },
+    // Per-row CONDITIONAL clears: the filter re-asserts the exact value the
+    // scan observed, so a filament edited by another client between scan and
+    // write (claiming only serializes cleanup runners, not ordinary writers)
+    // keeps its new value — modifiedCount 0, nothing erased.
+    for (const entry of toClear) {
+      const res = await filaments.updateOne(
+        { _id: entry._id, "settings.compatible_printers_condition": entry.observed },
         { $set: { "settings.compatible_printers_condition": "" } },
       );
-      cleared = res.modifiedCount;
+      cleared += res.modifiedCount;
     }
   } catch (err) {
     // Release the claim (best-effort) so the next attempt can retry; if this

@@ -267,6 +267,14 @@ export default async function dbConnect() {
         "[migration] Failed to clear legacy nozzle conditions (will retry on next connect):",
         err,
       );
+      // Codex P1 r7 on #1022: unlike the best-effort migrations above (all
+      // safe to re-run), this one gates correctness — a request served before
+      // the DB reaches a terminal cleanup state could export stale conditions
+      // or author a pin while a claimed destructive update is still in flight
+      // (LegacyCleanupInProgressError), or author a pin that the eventual
+      // retry would then legitimately match and clear. So the CURRENT caller
+      // must fail too, not just leave the flag false for the next one.
+      throw err;
     }
   }
 

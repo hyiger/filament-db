@@ -909,11 +909,25 @@ describe("SyncService — v1.12 sync expansion", () => {
         await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
       }
       const now = new Date();
+      // compatibleNozzles holds ObjectId REFS — each side's cleanup resolves
+      // them against ITS OWN nozzles collection (the exporter's populate()).
+      const rNoz04 = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC r 0.4", diameter: 0.4, _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
+      const rNoz06 = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC r 0.6", diameter: 0.6, _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
+      const rNoz08 = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC r 0.8", diameter: 0.8, _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
+      const lNoz025 = (await localDb.collection("nozzles").insertOne({
+        name: "LNC l 0.25", diameter: 0.25, _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
       // Machine-derived on the REMOTE (stored equals the derivation from its
       // compatibleNozzles)…
       await remoteDb.collection("filaments").insertOne({
         name: "RemoteLegacy", vendor: "T", type: "PLA",
-        compatibleNozzles: [{ diameter: 0.6 }, { diameter: 0.4 }],
+        compatibleNozzles: [rNoz06, rNoz04],
         settings: {
           compatible_printers_condition: "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6",
           cooling: "1",
@@ -924,7 +938,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       // Next server's dbConnect migrations have run).
       await localDb.collection("filaments").insertOne({
         name: "LocalLegacy", vendor: "T", type: "PLA",
-        compatibleNozzles: [{ diameter: 0.25 }],
+        compatibleNozzles: [lNoz025],
         settings: { compatible_printers_condition: "nozzle_diameter[0]==0.25" },
         syncId: "fil-local-legacy", _deletedAt: null, createdAt: now, updatedAt: now,
       });
@@ -932,7 +946,7 @@ describe("SyncService — v1.12 sync expansion", () => {
       // AND the sync that follows.
       await remoteDb.collection("filaments").insertOne({
         name: "RemotePin", vendor: "T", type: "PLA",
-        compatibleNozzles: [{ diameter: 0.8 }],
+        compatibleNozzles: [rNoz08],
         settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
         syncId: "fil-remote-pin", _deletedAt: null, createdAt: now, updatedAt: now,
       });

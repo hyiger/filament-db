@@ -14,17 +14,28 @@ import {
  * the shared in-memory MongoDB (tests/setup.ts) plus thin wrappers to reach
  * the failure branches. Selection is PROVENANCE-based: a candidate is cleared
  * only when its stored value byte-equals the legacy derivation from its
- * effective compatibleNozzles (own list, else the parent's).
+ * effective compatibleNozzles — ObjectId REFS resolved against the nozzles
+ * collection (mirroring the populate() the removed exporter did), own list
+ * else the parent's.
  */
 describe("clearLegacyNozzleConditionsOnce", () => {
   const db = () => mongoose.connection.db! as unknown as MinimalDb;
   const rawDb = () => mongoose.connection.db!;
   const MARKER = { _id: "legacyNozzleConditions" as never };
+  let nozzleSeq = 0;
 
   beforeEach(async () => {
     await rawDb().collection("_migrations").deleteMany({});
     await rawDb().collection("filaments").deleteMany({ name: /^LNC / });
+    await rawDb().collection("nozzles").deleteMany({ name: /^LNC / });
   });
+
+  async function seedNozzle(diameter: unknown) {
+    const res = await rawDb()
+      .collection("nozzles")
+      .insertOne({ name: `LNC noz ${++nozzleSeq}`, diameter, _deletedAt: null });
+    return res.insertedId;
+  }
 
   async function seed(
     name: string,
@@ -49,29 +60,28 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     (await rawDb().collection("filaments").findOne({ name: `LNC ${name}` }))!.settings
       .compatible_printers_condition;
 
-  it("clears provenance-matched machine values; preserves user pins, tick mismatches, and human expressions", async () => {
-    await seed("machine-single", "nozzle_diameter[0]==0.4", {
-      compatibleNozzles: [{ diameter: 0.4, type: "Brass" }],
-    });
-    // Unordered, duplicated, and junk entries — the frozen derivation dedupes,
-    // filters non-positive/non-numeric, sorts ascending.
+  it("clears provenance-matched machine values (refs → nozzles join); preserves user pins and human expressions", async () => {
+    const noz04 = await seedNozzle(0.4);
+    const noz06 = await seedNozzle(0.6);
+    const noz025 = await seedNozzle(0.25);
+    const nozJunk = await seedNozzle("not-a-number"); // populate found it, derivation filtered it
+    const danglingRef = new mongoose.Types.ObjectId(); // populate → null → contributed nothing
+
+    await seed("machine-single", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    // Unordered, duplicated, junk-diameter, and dangling entries — the join +
+    // frozen derivation dedupe, filter, and sort exactly like populate did.
     await seed("machine-multi", "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.6", {
-      compatibleNozzles: [
-        { diameter: 0.6 },
-        { diameter: 0.25 },
-        { diameter: 0.25 },
-        { diameter: -1 },
-        { diameter: "x" },
-        null,
-      ],
+      compatibleNozzles: [noz06, noz025, noz025, nozJunk, danglingRef],
     });
     // THE round-6 P1 case: a pre-upgrade USER-authored pure nozzle pin — same
     // syntax, but it does not match the derivation from the row's ticks.
-    await seed("user-pin-mismatch", "nozzle_diameter[0]==0.4", {
-      compatibleNozzles: [{ diameter: 0.6 }],
-    });
+    await seed("user-pin-mismatch", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz06] });
     // Shape match but NO tick provenance at all — nothing to attribute it to.
     await seed("user-pin-no-ticks", "nozzle_diameter[0]==0.4", { compatibleNozzles: [] });
+    // Refs that all dangle derive to nothing → preserved.
+    await seed("user-pin-dangling", "nozzle_diameter[0]==0.4", {
+      compatibleNozzles: [danglingRef],
+    });
     await seed("human-compound", "printer_model==MK4 and nozzle_diameter[0]==0.4");
     await seed("human-comparison", "nozzle_diameter[0]>=0.4");
     await seed("no-condition", undefined);
@@ -83,6 +93,7 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     expect(await conditionOf("machine-multi")).toBe("");
     expect(await conditionOf("user-pin-mismatch")).toBe("nozzle_diameter[0]==0.4");
     expect(await conditionOf("user-pin-no-ticks")).toBe("nozzle_diameter[0]==0.4");
+    expect(await conditionOf("user-pin-dangling")).toBe("nozzle_diameter[0]==0.4");
     expect(await conditionOf("human-compound")).toBe("printer_model==MK4 and nozzle_diameter[0]==0.4");
     expect(await conditionOf("human-comparison")).toBe("nozzle_diameter[0]>=0.4");
     expect(await conditionOf("no-condition")).toBeUndefined();
@@ -94,12 +105,11 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     expect(marker!.completed).toBe(true);
   });
 
-  it("resolves a variant's provenance through its PARENT's compatibleNozzles (the exporter's resolution)", async () => {
-    const parentId = await seed("parent", undefined, {
-      compatibleNozzles: [{ diameter: 0.4 }],
-    });
+  it("resolves a variant's provenance through its PARENT's compatibleNozzles refs (the exporter's resolution)", async () => {
+    const noz04 = await seedNozzle(0.4);
+    const parentId = await seed("parent", undefined, { compatibleNozzles: [noz04] });
     // Variant inherited the parent's ticks at export time (GH #106 rule), so
-    // its persisted machine value derives from the PARENT's list.
+    // its persisted machine value derives from the PARENT's populated list.
     await seed("variant-inherited", "nozzle_diameter[0]==0.4", {
       compatibleNozzles: [],
       parentId,
@@ -118,8 +128,9 @@ describe("clearLegacyNozzleConditionsOnce", () => {
 
   it("a machine-grammar pin authored AFTER completion survives every later run", async () => {
     await clearLegacyNozzleConditionsOnce(db()); // completes on an empty DB
+    const noz04 = await seedNozzle(0.4);
     await seed("post-upgrade-pin", "nozzle_diameter[0]==0.4", {
-      compatibleNozzles: [{ diameter: 0.4 }], // even provenance-matching!
+      compatibleNozzles: [noz04], // even provenance-matching!
     });
 
     const res = await clearLegacyNozzleConditionsOnce(db());
@@ -127,11 +138,52 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     expect(await conditionOf("post-upgrade-pin")).toBe("nozzle_diameter[0]==0.4"); // NOT erased
   });
 
+  it("leaves a row alone when its condition changes between scan and write (concurrent ordinary writer)", async () => {
+    // Claiming serializes CLEANUP runners only — an Atlas DB keeps serving
+    // other clients mid-clear. The destructive write must therefore re-assert
+    // the scanned value (Codex P1 r7).
+    const noz04 = await seedNozzle(0.4);
+    const rowId = await seed("toctou", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    const real = db();
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "filaments") return col;
+        return {
+          findOne: col.findOne.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: col.updateOne.bind(col),
+          deleteOne: col.deleteOne.bind(col),
+          find: (filter: Record<string, unknown>, opts?: Record<string, unknown>) => {
+            const cursor = col.find(filter, opts);
+            const isCandidateScan = "settings.compatible_printers_condition" in filter;
+            return {
+              toArray: async () => {
+                const rows = await cursor.toArray();
+                if (isCandidateScan) {
+                  // Another client rewrites the condition AFTER the scan…
+                  await rawDb().collection("filaments").updateOne(
+                    { _id: rowId },
+                    { $set: { "settings.compatible_printers_condition": "nozzle_diameter[0]==0.9" } },
+                  );
+                }
+                return rows;
+              },
+            };
+          },
+        };
+      },
+    };
+    const res = await clearLegacyNozzleConditionsOnce(wrapper);
+    // …so the conditional clear matches nothing and the new pin survives.
+    expect(res).toEqual({ ran: true, cleared: 0 });
+    expect(await conditionOf("toctou")).toBe("nozzle_diameter[0]==0.9");
+  });
+
   it("WAITS on a live claim and resolves already-done when the claimant completes", async () => {
     await rawDb().collection("_migrations").insertOne({ ...MARKER, claimedAt: new Date() });
-    await seed("would-be-cleared", "nozzle_diameter[0]==0.4", {
-      compatibleNozzles: [{ diameter: 0.4 }],
-    });
+    const noz04 = await seedNozzle(0.4);
+    await seed("would-be-cleared", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
 
     const pending = clearLegacyNozzleConditionsOnce(db(), { waitMs: 3000, pollMs: 10 });
     // Simulate the winner finishing while we poll.
@@ -145,9 +197,8 @@ describe("clearLegacyNozzleConditionsOnce", () => {
 
   it("takes over when a live claim is RELEASED mid-wait (winner hit a transient failure)", async () => {
     await rawDb().collection("_migrations").insertOne({ ...MARKER, claimedAt: new Date() });
-    await seed("retry-target", "nozzle_diameter[0]==0.4", {
-      compatibleNozzles: [{ diameter: 0.4 }],
-    });
+    const noz04 = await seedNozzle(0.4);
+    await seed("retry-target", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
 
     const pending = clearLegacyNozzleConditionsOnce(db(), { waitMs: 3000, pollMs: 10 });
     await new Promise((r) => setTimeout(r, 50));
@@ -159,9 +210,8 @@ describe("clearLegacyNozzleConditionsOnce", () => {
 
   it("THROWS (does not skip) when a live claim outlasts waitMs — callers must not treat the DB as clean", async () => {
     await rawDb().collection("_migrations").insertOne({ ...MARKER, claimedAt: new Date() });
-    await seed("still-dirty", "nozzle_diameter[0]==0.4", {
-      compatibleNozzles: [{ diameter: 0.4 }],
-    });
+    const noz04 = await seedNozzle(0.4);
+    await seed("still-dirty", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
 
     await expect(
       clearLegacyNozzleConditionsOnce(db(), { waitMs: 60, pollMs: 10 }),
@@ -173,9 +223,8 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     await rawDb()
       .collection("_migrations")
       .insertOne({ ...MARKER, claimedAt: new Date(Date.now() - 60 * 60 * 1000) });
-    await seed("crash-residue", "nozzle_diameter[0]==0.4", {
-      compatibleNozzles: [{ diameter: 0.4 }],
-    });
+    const noz04 = await seedNozzle(0.4);
+    await seed("crash-residue", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
 
     const res = await clearLegacyNozzleConditionsOnce(db());
     expect(res).toEqual({ ran: false, reason: "claimed-elsewhere" });
@@ -191,9 +240,8 @@ describe("clearLegacyNozzleConditionsOnce", () => {
   });
 
   it("loses the claim-insert race and falls back to observing the winner", async () => {
-    await seed("race-victim", "nozzle_diameter[0]==0.4", {
-      compatibleNozzles: [{ diameter: 0.4 }],
-    });
+    const noz04 = await seedNozzle(0.4);
+    await seed("race-victim", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
     const real = db();
     let findOneCalls = 0;
     const wrapper: MinimalDb = {
@@ -216,7 +264,6 @@ describe("clearLegacyNozzleConditionsOnce", () => {
           },
           find: col.find.bind(col),
           updateOne: col.updateOne.bind(col),
-          updateMany: col.updateMany.bind(col),
           deleteOne: col.deleteOne.bind(col),
         };
       },
@@ -227,9 +274,8 @@ describe("clearLegacyNozzleConditionsOnce", () => {
   });
 
   it("releases the claim and rethrows on a transient clear failure, so a retry succeeds", async () => {
-    await seed("retry-me", "nozzle_diameter[0]==0.4", {
-      compatibleNozzles: [{ diameter: 0.4 }],
-    });
+    const noz04 = await seedNozzle(0.4);
+    await seed("retry-me", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
     const real = db();
     let failNext = true;
     const wrapper: MinimalDb = {
@@ -240,14 +286,13 @@ describe("clearLegacyNozzleConditionsOnce", () => {
           findOne: col.findOne.bind(col),
           find: col.find.bind(col),
           insertOne: col.insertOne.bind(col),
-          updateOne: col.updateOne.bind(col),
           deleteOne: col.deleteOne.bind(col),
-          updateMany: async (f: Record<string, unknown>, u: Record<string, unknown>) => {
+          updateOne: async (f: Record<string, unknown>, u: Record<string, unknown>) => {
             if (failNext) {
               failNext = false;
               throw new Error("transient");
             }
-            return col.updateMany(f, u);
+            return col.updateOne(f, u);
           },
         };
       },
@@ -265,9 +310,8 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     // original error still propagates, the claim stays live, contenders THROW
     // until it goes stale, and then every run SKIPS — residual legacy values
     // (recoverable) instead of any re-run that could erase a post-upgrade pin.
-    await seed("stuck", "nozzle_diameter[0]==0.4", {
-      compatibleNozzles: [{ diameter: 0.4 }],
-    });
+    const noz04 = await seedNozzle(0.4);
+    await seed("stuck", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
     const real = db();
     const wrapper: MinimalDb = {
       collection(name) {
@@ -277,9 +321,8 @@ describe("clearLegacyNozzleConditionsOnce", () => {
             findOne: col.findOne.bind(col),
             find: col.find.bind(col),
             insertOne: col.insertOne.bind(col),
-            updateOne: col.updateOne.bind(col),
             deleteOne: col.deleteOne.bind(col),
-            updateMany: async () => {
+            updateOne: async () => {
               throw new Error("clear failed");
             },
           };
@@ -290,7 +333,6 @@ describe("clearLegacyNozzleConditionsOnce", () => {
             find: col.find.bind(col),
             insertOne: col.insertOne.bind(col),
             updateOne: col.updateOne.bind(col),
-            updateMany: col.updateMany.bind(col),
             deleteOne: async () => {
               throw new Error("release failed");
             },
@@ -325,7 +367,6 @@ describe("clearLegacyNozzleConditionsOnce", () => {
           },
           find: col.find.bind(col),
           updateOne: col.updateOne.bind(col),
-          updateMany: col.updateMany.bind(col),
           deleteOne: col.deleteOne.bind(col),
         };
       },
@@ -361,7 +402,6 @@ describe("clearLegacyNozzleConditionsOnce", () => {
           },
           find: col.find.bind(col),
           updateOne: col.updateOne.bind(col),
-          updateMany: col.updateMany.bind(col),
           deleteOne: col.deleteOne.bind(col),
         };
       },
