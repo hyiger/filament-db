@@ -8,6 +8,19 @@ import {
   type MinimalDb,
 } from "../src/lib/legacyNozzleConditions";
 
+/** GH #1021 r25/r26: one pending legacy-condition transit clear — direction,
+ * syncId, the observed condition + updatedAt (the conditional-write filter),
+ * and the provenance to revalidate on every attempt (own refs, else the
+ * source parentId). Persisted in the local `_migrations` queue. */
+interface LegacyTransitEntry {
+  d: "toLocal" | "toRemote";
+  s: string;
+  c: string;
+  u: unknown;
+  p: unknown;
+  r: unknown[] | null;
+}
+
 /**
  * Recognise a duplicate-key error specifically on the `syncId` index,
  * so the local-only push / pull paths can treat a concurrent peer
@@ -157,6 +170,11 @@ export class SyncService extends EventEmitter {
   };
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private syncing = false;
+  /** GH #1021 r26: candidates whose durable enqueue failed — carried across
+   * cycles in memory so the enqueue is retried until it lands (an
+   * equal-timestamp pair never re-copies, so the transform alone cannot
+   * rediscover them). Cleared once the batch enqueue succeeds. */
+  private pendingLegacyCandidates: LegacyTransitEntry[] = [];
   // #823: set by destroy() so an in-flight cycle stops converging both DBs
   // after the user switches connection mode. Checked before each collection
   // step and each repair pass; the collection already executing finishes (its
@@ -335,11 +353,13 @@ export class SyncService extends EventEmitter {
         }
       }
 
-      // GH #1021 (Codex P2 r23 / r25): drain the durable transit-clear queue.
-      // A prior cycle's pair-clear that failed halfway left its entry queued
-      // in the local `_migrations` collection; re-attempt it every cycle (the
-      // conditional filters make retries safe forever) and dequeue once
-      // neither side matches the observed state anymore.
+      // GH #1021 (Codex P2 r23 / r25 / r26): drain the durable transit-clear
+      // queue. A prior cycle's pair-clear that failed halfway left its entry
+      // queued in the local `_migrations` collection; re-attempt it every
+      // cycle and dequeue once neither side matches the observed state.
+      // Every replay REVALIDATES the provenance persisted with the entry
+      // (r26) — parent/nozzle drift since the enqueue drops the entry
+      // without touching either row.
       if (!this.aborted) {
         const pendingDoc = await localDb.collection("_migrations").findOne(
           { _id: "legacyTransitClears" as never },
@@ -360,9 +380,18 @@ export class SyncService extends EventEmitter {
             ).catch(() => {});
             continue;
           }
-          const entry = raw as { d: string; s: string; c: string; u: unknown };
+          const entry = raw as { d: string; s: string; c: string; u: unknown; p: unknown; r: unknown };
           try {
-            if (await this.attemptTransitClearPair(localDb, remoteDb, entry)) {
+            if (
+              await this.attemptTransitClearPair(localDb, remoteDb, {
+                d: entry.d,
+                s: entry.s,
+                c: entry.c,
+                u: entry.u,
+                p: entry.p ?? null,
+                r: Array.isArray(entry.r) ? entry.r : null,
+              })
+            ) {
               await localDb.collection("_migrations").updateOne(
                 { _id: "legacyTransitClears" as never },
                 { $pull: { entries: entry } } as never,
@@ -588,54 +617,65 @@ export class SyncService extends EventEmitter {
       // matches the observed state anymore; every later cycle re-drains the
       // queue (see the top of sync()), so a transient failure of either
       // write can never freeze the pair at equal timestamps.
-      for (const entry of deferredLegacyChecks) {
-        if (this.aborted) break;
-        const sourceSide = entry.direction === "toLocal" ? remoteDb : localDb;
+      // Codex P2 r26: no destructive write before DURABLE intent. All of this
+      // cycle's candidates — merged with any carried over from a cycle whose
+      // enqueue failed — are written to the queue in ONE batch first. If that
+      // single write fails, every clear is SKIPPED this cycle and the
+      // candidates are kept in memory (`pendingLegacyCandidates`) so the next
+      // cycle retries the enqueue: an equal-timestamp pair never re-copies,
+      // so the transform alone could not rediscover a candidate an enqueue
+      // failure dropped. Each queue entry persists its PROVENANCE (own refs /
+      // parentId) so every later attempt — this cycle's or a drain replay —
+      // revalidates before clearing.
+      const candidateEntries: LegacyTransitEntry[] = deferredLegacyChecks.map((entry) => ({
+        d: entry.direction,
+        s: entry.syncId,
+        c: entry.observed,
+        u: entry.observedUpdatedAt ?? null,
+        p: entry.parentId ?? null,
+        r: entry.ownRefs,
+      }));
+      const entryKey = (e: { d: string; s: string; c: string; u: unknown }) =>
+        `${e.d}|${e.s}|${e.c}|${SyncService.readTimestamp(e.u) ?? "null"}`;
+      const merged = new Map<string, LegacyTransitEntry>();
+      for (const e of [...this.pendingLegacyCandidates, ...candidateEntries]) {
+        merged.set(entryKey(e), e);
+      }
+      const toEnqueue = Array.from(merged.values());
+      let enqueued = toEnqueue.length === 0;
+      if (toEnqueue.length > 0 && !this.aborted) {
         try {
-          // Provenance, judged fresh against CURRENT source-side state:
-          // own refs (captured pre-remap), else the ACTIVE source parent's
-          // refs — then the nozzle DOCS re-read now (a mid-pass parent edit,
-          // nozzle diameter edit, or purge must all be visible; r16/r22).
-          let refs: unknown[] | null = entry.ownRefs;
-          if (!refs && entry.parentId != null) {
-            const parentNow = await sourceSide.collection("filaments").findOne(
-              { _id: entry.parentId as ObjectId, _deletedAt: null },
-              { projection: { compatibleNozzles: 1 } },
-            );
-            refs = Array.isArray(parentNow?.compatibleNozzles)
-              ? (parentNow!.compatibleNozzles as unknown[])
-              : null;
-          }
-          if (!refs || refs.length === 0) continue;
-          const nozzleDocs = await sourceSide.collection("nozzles")
-            .find({ _id: { $in: refs as ObjectId[] } }, { projection: { _id: 1, diameter: 1 } })
-            .toArray();
-          if (deriveLegacyNozzleCondition(nozzleDocs) !== entry.observed) continue;
-
-          // Durably enqueue BEFORE any destructive write, then attempt the
-          // pair; dequeue only when verified converged.
-          const queued = {
-            d: entry.direction,
-            s: entry.syncId,
-            c: entry.observed,
-            u: entry.observedUpdatedAt ?? null,
-          };
           await localDb.collection("_migrations").updateOne(
             { _id: "legacyTransitClears" as never },
-            { $addToSet: { entries: queued } },
+            { $addToSet: { entries: { $each: toEnqueue } } },
             { upsert: true },
           );
-          if (await this.attemptTransitClearPair(localDb, remoteDb, queued)) {
-            await localDb.collection("_migrations").updateOne(
-              { _id: "legacyTransitClears" as never },
-              { $pull: { entries: queued } } as never,
-            );
-          }
+          enqueued = true;
+          this.pendingLegacyCandidates = [];
         } catch (err) {
+          this.pendingLegacyCandidates = toEnqueue;
           console.error(
-            "[sync] Deferred legacy-condition transit check failed (queued for retry):",
+            "[sync] Legacy-condition candidate enqueue failed — clears skipped this cycle, candidates carried over:",
             err,
           );
+        }
+      }
+      if (enqueued) {
+        for (const queued of toEnqueue) {
+          if (this.aborted) break;
+          try {
+            if (await this.attemptTransitClearPair(localDb, remoteDb, queued)) {
+              await localDb.collection("_migrations").updateOne(
+                { _id: "legacyTransitClears" as never },
+                { $pull: { entries: queued } } as never,
+              );
+            }
+          } catch (err) {
+            console.error(
+              "[sync] Deferred legacy-condition transit check failed (stays queued):",
+              err,
+            );
+          }
         }
       }
 
@@ -1063,10 +1103,33 @@ export class SyncService extends EventEmitter {
   private async attemptTransitClearPair(
     localDb: Db,
     remoteDb: Db,
-    entry: { d: string; s: string; c: string; u: unknown },
+    entry: { d: string; s: string; c: string; u: unknown; p: unknown; r: unknown },
   ): Promise<boolean> {
     const sourceDb = entry.d === "toLocal" ? remoteDb : localDb;
     const targetDb = entry.d === "toLocal" ? localDb : remoteDb;
+    // Codex P2 r26: REVALIDATE the provenance persisted with the entry on
+    // EVERY attempt — including drain-time replays. A parent tick edit or a
+    // referenced nozzle's diameter edit between the enqueue and this replay
+    // leaves the child row byte-identical (filters would still match) while
+    // a fresh derivation now classifies the value as a user pin. Unverifiable
+    // or drifted provenance DROPS the entry without touching either row —
+    // whatever value still sits there is preserved as a possible pin.
+    let refs: unknown[] | null = Array.isArray(entry.r) && entry.r.length > 0 ? entry.r : null;
+    if (!refs && entry.p != null) {
+      const parentNow = await sourceDb.collection("filaments").findOne(
+        { _id: entry.p as ObjectId, _deletedAt: null },
+        { projection: { compatibleNozzles: 1 } },
+      );
+      refs = Array.isArray(parentNow?.compatibleNozzles)
+        ? (parentNow!.compatibleNozzles as unknown[])
+        : null;
+    }
+    if (!refs || refs.length === 0) return true; // nothing provable → drop, no clears
+    const nozzleDocs = await sourceDb.collection("nozzles")
+      .find({ _id: { $in: refs as ObjectId[] } }, { projection: { _id: 1, diameter: 1 } })
+      .toArray();
+    if (deriveLegacyNozzleCondition(nozzleDocs) !== entry.c) return true; // drifted → pin → drop
+
     const filter = {
       syncId: entry.s,
       "settings.compatible_printers_condition": entry.c,

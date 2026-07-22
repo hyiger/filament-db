@@ -1061,32 +1061,57 @@ describe("SyncService — v1.12 sync expansion", () => {
       }
       // The partial state a crashed prior cycle can leave: target already
       // cleared, source still stale, both at the SAME updatedAt (frozen for
-      // plain LWW) — with the pending pair durably queued.
+      // plain LWW) — with the pending pairs durably queued, each carrying
+      // its provenance (r26).
+      const rNoz04 = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC q 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-q04", createdAt: now, updatedAt: now,
+      })).insertedId;
+      const rNozDrift = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC q drift", diameter: 0.8, _deletedAt: null, syncId: "noz-qdr", createdAt: now, updatedAt: now,
+      })).insertedId;
       const ts = new Date(now.getTime() + 1000);
-      await localDb.collection("filaments").insertOne({
-        name: "QueuedPair", vendor: "T", type: "PLA",
-        settings: { compatible_printers_condition: "" },
-        syncId: "fil-queued", _deletedAt: null, createdAt: now, updatedAt: ts,
-      });
-      await remoteDb.collection("filaments").insertOne({
-        name: "QueuedPair", vendor: "T", type: "PLA",
-        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
-        syncId: "fil-queued", _deletedAt: null, createdAt: now, updatedAt: ts,
-      });
+      for (const [syncId, name] of [["fil-queued", "QueuedPair"], ["fil-drift", "DriftPair"]] as const) {
+        await localDb.collection("filaments").insertOne({
+          name, vendor: "T", type: "PLA",
+          settings: { compatible_printers_condition: "" },
+          syncId, _deletedAt: null, createdAt: now, updatedAt: ts,
+        });
+        await remoteDb.collection("filaments").insertOne({
+          name, vendor: "T", type: "PLA",
+          settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+          syncId, _deletedAt: null, createdAt: now, updatedAt: ts,
+        });
+      }
       await localDb.collection("_migrations").updateOne(
         { _id: "legacyTransitClears" as never },
-        { $addToSet: { entries: { d: "toLocal", s: "fil-queued", c: "nozzle_diameter[0]==0.4", u: ts } } },
+        {
+          $addToSet: {
+            entries: {
+              $each: [
+                // Provenance still derives ==0.4 → replay clears the source.
+                { d: "toLocal", s: "fil-queued", c: "nozzle_diameter[0]==0.4", u: ts, p: null, r: [rNoz04] },
+                // Provenance DRIFTED since the enqueue (this nozzle is now
+                // 0.8) → the replay must DROP the entry without clearing:
+                // the surviving value is a possible user pin (r26).
+                { d: "toLocal", s: "fil-drift", c: "nozzle_diameter[0]==0.4", u: ts, p: null, r: [rNozDrift] },
+              ],
+            },
+          },
+        },
         { upsert: true },
       );
 
       sync = makeSync();
       await sync.sync();
 
-      // The drain re-attempted the conditional clears: the stale source is
-      // now clean, timestamps untouched, and the entry is dequeued.
+      // The verified pair was cleared (timestamps untouched)…
       const remoteRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-queued" });
       expect(remoteRow!.settings.compatible_printers_condition).toBe("");
       expect(remoteRow!.updatedAt.getTime()).toBe(ts.getTime());
+      // …the drifted-provenance pair was left untouched…
+      const driftRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-drift" });
+      expect(driftRow!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      // …and both entries are dequeued (cleared vs dropped).
       const queue = await localDb.collection("_migrations").findOne({ _id: "legacyTransitClears" as never });
       expect(queue?.entries ?? []).toEqual([]);
     });
