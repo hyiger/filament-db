@@ -459,42 +459,18 @@ export function filamentToSlicerKeys(
   if (!("compatible_printers" in keys)) {
     keys.compatible_printers = "";
   }
-  // #872: derive compatible_printers_condition from the filament's compatible
-  // nozzle diameters, e.g. `nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6`,
-  // so a synced preset only shows up for printers whose nozzle matches. Gated so a
-  // round-tripped user-pinned condition (already in the settings bag) wins, and
-  // only applied when we actually have populated diameters — otherwise the empty
-  // "no restriction" default below still applies.
-  // Derive only when the key is ABSENT or an EMPTY STRING — both mean "no
-  // restriction" (a round-tripped `compatible_printers_condition = ` stores "").
-  // A NON-EMPTY string is a user pin, and `null` is PrusaSlicer's `nil`
-  // inheritance marker (parseIniFilaments → null, writeSection re-emits it as
-  // `nil`) — BOTH must be preserved, not overwritten by the derivation (Codex P2).
-  if (
-    (!("compatible_printers_condition" in keys) ||
-      keys.compatible_printers_condition === "") &&
-    Array.isArray(filament.compatibleNozzles)
-  ) {
-    const diameters = Array.from(
-      new Set(
-        filament.compatibleNozzles
-          .map((n: unknown) =>
-            n != null &&
-            typeof n === "object" &&
-            typeof (n as { diameter?: unknown }).diameter === "number"
-              ? (n as { diameter: number }).diameter
-              : null,
-          )
-          .filter((d): d is number => typeof d === "number" && d > 0),
-      ),
-    ).sort((a, b) => a - b);
-    if (diameters.length > 0) {
-      keys.compatible_printers_condition = diameters
-        .map((d) => `nozzle_diameter[0]==${d}`)
-        .join(" or ");
-    }
-  }
-
+  // GH #1021 (reverts the #872 derivation): compatible_printers_condition is NO
+  // LONGER derived from the filament's compatibleNozzles ticks. Ticking
+  // "compatible nozzles" is bookkeeping metadata, but the derived
+  // `nozzle_diameter[0]==D` condition made PrusaSlicer silently HIDE the preset
+  // for any printer whose nozzle diameter wasn't ticked — and because variants
+  // inherit the parent's compatibleNozzles (empty === inherit, GH #106), one
+  // parent's ticks vanished whole filament groups from the slicer with no
+  // visible cause. The nozzle-diameter condition remains ONLY where it is
+  // structurally meaningful: the per-nozzle calibrated fan-out presets (the
+  // calibration bake above), whose values are tuned for exactly one nozzle.
+  // Round-tripped user pins (a non-empty string) and PrusaSlicer's `nil`
+  // inheritance marker (null) still pass through untouched via the settings bag.
   if (!("compatible_printers_condition" in keys)) {
     keys.compatible_printers_condition = "";
   }
