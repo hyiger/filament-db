@@ -71,16 +71,25 @@ if (typeof report.vulnerabilities !== "object" || report.vulnerabilities === nul
 const offenders = [];
 const tolerated = [];
 for (const [name, vuln] of Object.entries(report.vulnerabilities)) {
-  if (!SEVERITIES.includes(vuln.severity)) continue;
   // `via` mixes advisory objects (this package's own advisories) and strings
   // (names of vulnerable dependencies — those packages carry their own
   // entries in the report, so a pure pass-through parent has no advisory
   // objects of its own and is judged by its children's entries).
   const advisories = (vuln.via ?? []).filter((v) => typeof v === "object" && v !== null);
   for (const adv of advisories) {
+    // Codex P2 on #1023: judge each advisory by ITS OWN severity, not the
+    // package's aggregate (`vuln.severity` is the max across advisories, and
+    // --audit-level does not filter the report) — otherwise a below-threshold
+    // advisory on a package that also carries an allowlisted high one would
+    // be misread at the aggregate severity and block the gate.
+    if (!SEVERITIES.includes(adv.severity)) continue;
     const id = (adv.url ?? "").split("/").pop() ?? "";
-    const label = `${name} [${vuln.severity}] ${id}: ${adv.title}`;
-    if (allowed.has(id)) tolerated.push({ label, entry: allowed.get(id) });
+    const label = `${name} [${adv.severity}] ${id}: ${adv.title}`;
+    const entry = allowed.get(id);
+    // Codex P2 on #1023: bind the exception to the reviewed PACKAGE too — a
+    // GHSA can cover multiple npm packages, and the justification/exposure
+    // analysis in the allowlist applies to one specific package only.
+    if (entry && entry.package === name) tolerated.push({ label, entry });
     else offenders.push(label);
   }
 }
