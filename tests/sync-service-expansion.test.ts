@@ -891,4 +891,390 @@ describe("SyncService — v1.12 sync expansion", () => {
       expect(Object.hasOwn(localRow ?? {}, "pressureAdvance")).toBe(false);
     });
   });
+
+  // ── GH #1021 (Codex P1 ×2 on #1022): legacyNozzleConditions cleanup ──
+  // The remote (Atlas) DB never runs dbConnect's startup migrations, and on
+  // first hybrid startup the sync can run BEFORE the local dbConnect does —
+  // while the cleanup preserves updatedAt, so LWW would never propagate it.
+  // sync() must therefore run the marker-guarded helper against BOTH DBs
+  // before any collection sync.
+
+  describe("legacyNozzleConditions cleanup on both sync sides (GH #1021)", () => {
+    it("clears provenance-matched conditions on BOTH DBs exactly once; a later remote pin survives", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      // Earlier tests' sync() calls already completed the one-shot markers
+      // against (empty) DBs — drop them so the cleanups attempt to run.
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+      }
+      const now = new Date();
+      // compatibleNozzles holds ObjectId REFS — each side's cleanup resolves
+      // them against ITS OWN nozzles collection (the exporter's populate()).
+      const rNoz04 = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC r 0.4", diameter: 0.4, _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
+      const rNoz06 = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC r 0.6", diameter: 0.6, _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
+      const rNoz08 = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC r 0.8", diameter: 0.8, _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
+      const lNoz025 = (await localDb.collection("nozzles").insertOne({
+        name: "LNC l 0.25", diameter: 0.25, _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
+      // Machine-derived on the REMOTE (stored equals the derivation from its
+      // compatibleNozzles)…
+      await remoteDb.collection("filaments").insertOne({
+        name: "RemoteLegacy", vendor: "T", type: "PLA",
+        compatibleNozzles: [rNoz06, rNoz04],
+        settings: {
+          compatible_printers_condition: "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6",
+          cooling: "1",
+        },
+        syncId: "fil-remote-legacy", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      // …and on the LOCAL side (the round-6 case: local sync starts before the
+      // Next server's dbConnect migrations have run).
+      await localDb.collection("filaments").insertOne({
+        name: "LocalLegacy", vendor: "T", type: "PLA",
+        compatibleNozzles: [lNoz025],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.25" },
+        syncId: "fil-local-legacy", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+      // A user pin whose ticks do NOT derive to it must survive the cleanup
+      // AND the sync that follows.
+      await remoteDb.collection("filaments").insertOne({
+        name: "RemotePin", vendor: "T", type: "PLA",
+        compatibleNozzles: [rNoz08],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+        syncId: "fil-remote-pin", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      const remoteAfter = await remoteDb.collection("filaments").findOne({ syncId: "fil-remote-legacy" });
+      expect(remoteAfter!.settings.compatible_printers_condition).toBe("");
+      expect(remoteAfter!.settings.cooling).toBe("1"); // sibling key untouched
+      const localAfter = await localDb.collection("filaments").findOne({ syncId: "fil-local-legacy" });
+      expect(localAfter!.settings.compatible_printers_condition).toBe("");
+      // The cleared local doc propagated cleanly to the remote (no stale
+      // machine value pushed back over the cleaned side).
+      const localOnRemote = await remoteDb.collection("filaments").findOne({ syncId: "fil-local-legacy" });
+      expect(localOnRemote!.settings.compatible_printers_condition).toBe("");
+      const pinAfter = await remoteDb.collection("filaments").findOne({ syncId: "fil-remote-pin" });
+      expect(pinAfter!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      for (const dbh of [localDb, remoteDb]) {
+        const marker = await dbh
+          .collection("_migrations")
+          .findOne({ _id: "legacyNozzleConditions" as never });
+        expect(marker?.completed).toBe(true);
+      }
+
+      // A pure nozzle pin authored on the REMOTE after completion is textually
+      // identical to the legacy values — the durable marker must keep every
+      // later cycle from erasing it.
+      await remoteDb.collection("filaments").updateOne(
+        { syncId: "fil-remote-legacy" },
+        { $set: { "settings.compatible_printers_condition": "nozzle_diameter[0]==0.4", updatedAt: new Date(Date.now() + 1000) } },
+      );
+      await sync.sync();
+      const after2 = await remoteDb.collection("filaments").findOne({ syncId: "fil-remote-legacy" });
+      expect(after2!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+    });
+
+    it("strips a stale machine condition IN TRANSIT after both markers completed (r17: mixed-version peer)", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      // Both sides' one-shot cleanups completed long ago.
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+        await dbh.collection("_migrations").insertOne({
+          _id: "legacyNozzleConditions" as never,
+          claimedAt: now,
+          completed: true,
+          processed: [],
+        });
+      }
+      // An OLDER (pre-#1022) desktop edited a filament on the remote side and
+      // its export/sync round-trip re-stamped the machine condition — the doc
+      // is NEWER than the local counterpart, so LWW copies it toLocal.
+      const rNoz = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC t 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-t", createdAt: now, updatedAt: now,
+      })).insertedId;
+      await localDb.collection("nozzles").insertOne({
+        name: "LNC t 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-t", createdAt: now, updatedAt: now,
+      });
+      await remoteDb.collection("filaments").insertOne({
+        name: "TransitLegacy", vendor: "T", type: "PLA",
+        compatibleNozzles: [rNoz],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" },
+        syncId: "fil-transit", _deletedAt: null, createdAt: now, updatedAt: new Date(now.getTime() + 5000),
+      });
+      // A remote PIN that does not match its ticks must ride through intact.
+      await remoteDb.collection("filaments").insertOne({
+        name: "TransitPin", vendor: "T", type: "PLA",
+        compatibleNozzles: [rNoz],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.8" },
+        syncId: "fil-transit-pin", _deletedAt: null, createdAt: now, updatedAt: new Date(now.getTime() + 5000),
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The copy landed VERBATIM (honest timestamps — nothing in-transit is
+      // authoritative, r25), and the post-sync field-level pair-clear then
+      // set the condition to "" on BOTH sides in the same cycle…
+      const localCopy = await localDb.collection("filaments").findOne({ syncId: "fil-transit" });
+      expect(localCopy!.settings.compatible_printers_condition).toBe("");
+      expect(localCopy!.settings.cooling).toBe("1"); // sibling key intact
+      const remoteRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit" });
+      expect(remoteRow!.settings.compatible_printers_condition).toBe("");
+      expect(remoteRow!.settings.cooling).toBe("1");
+      // …with timestamps UNTOUCHED — the pair converges at the source's own
+      // updatedAt, so no synthetic stamp can ever tie or outrun a real edit.
+      expect(remoteRow!.updatedAt.getTime()).toBe(localCopy!.updatedAt.getTime());
+      // …the non-matching pin rode through verbatim (both sides)…
+      const localPin = await localDb.collection("filaments").findOne({ syncId: "fil-transit-pin" });
+      expect(localPin!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+      const remotePin = await remoteDb.collection("filaments").findOne({ syncId: "fil-transit-pin" });
+      expect(remotePin!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+      // …and the durable retry queue is empty (the pair converged in-cycle).
+      const queue = await localDb.collection("_migrations").findOne({ _id: "legacyTransitClears" as never });
+      expect(queue?.entries ?? []).toEqual([]);
+    });
+
+    it("drains a queued pair-clear left by a prior partial failure (r25 durable retry)", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+        await dbh.collection("_migrations").insertOne({
+          _id: "legacyNozzleConditions" as never,
+          claimedAt: now,
+          completed: true,
+          processed: [],
+        });
+      }
+      // The partial state a crashed prior cycle can leave: target already
+      // cleared, source still stale, both at the SAME updatedAt (frozen for
+      // plain LWW) — with the pending pairs durably queued, each carrying
+      // its provenance (r26).
+      const rNoz04 = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC q 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-q04", createdAt: now, updatedAt: now,
+      })).insertedId;
+      const rNozDrift = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC q drift", diameter: 0.8, _deletedAt: null, syncId: "noz-qdr", createdAt: now, updatedAt: now,
+      })).insertedId;
+      const ts = new Date(now.getTime() + 1000);
+      for (const [syncId, name] of [["fil-queued", "QueuedPair"], ["fil-drift", "DriftPair"]] as const) {
+        await localDb.collection("filaments").insertOne({
+          name, vendor: "T", type: "PLA",
+          settings: { compatible_printers_condition: "" },
+          syncId, _deletedAt: null, createdAt: now, updatedAt: ts,
+        });
+        await remoteDb.collection("filaments").insertOne({
+          name, vendor: "T", type: "PLA",
+          settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+          syncId, _deletedAt: null, createdAt: now, updatedAt: ts,
+        });
+      }
+      await localDb.collection("_migrations").updateOne(
+        { _id: "legacyTransitClears" as never },
+        {
+          $addToSet: {
+            entries: {
+              $each: [
+                // Provenance still derives ==0.4 → replay clears the source.
+                { d: "toLocal", s: "fil-queued", c: "nozzle_diameter[0]==0.4", u: ts, p: null, r: [rNoz04] },
+                // Provenance DRIFTED since the enqueue (this nozzle is now
+                // 0.8) → the replay must DROP the entry without clearing:
+                // the surviving value is a possible user pin (r26).
+                { d: "toLocal", s: "fil-drift", c: "nozzle_diameter[0]==0.4", u: ts, p: null, r: [rNozDrift] },
+              ],
+            },
+          },
+        },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The verified pair was cleared (timestamps untouched)…
+      const remoteRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-queued" });
+      expect(remoteRow!.settings.compatible_printers_condition).toBe("");
+      expect(remoteRow!.updatedAt.getTime()).toBe(ts.getTime());
+      const localQueued = await localDb.collection("filaments").findOne({ syncId: "fil-queued" });
+      expect(localQueued!.settings.compatible_printers_condition).toBe("");
+      // …the drifted-provenance pair kept its (possible pin) value on the
+      // source AND had it RESTORED onto the partially-cleared side before
+      // the entry was dropped (r27) — no frozen ""/pin divergence…
+      const driftRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-drift" });
+      expect(driftRow!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      const localDrift = await localDb.collection("filaments").findOne({ syncId: "fil-drift" });
+      expect(localDrift!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      expect(localDrift!.updatedAt.getTime()).toBe(ts.getTime());
+      // …and both entries are dequeued (cleared vs reconciled-and-dropped).
+      const queue = await localDb.collection("_migrations").findOne({ _id: "legacyTransitClears" as never });
+      expect(queue?.entries ?? []).toEqual([]);
+    });
+
+    it("drains a pair-clear queued on the REMOTE db (r27: enqueue fallback survives service recreation)", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+        await dbh.collection("_migrations").insertOne({
+          _id: "legacyNozzleConditions" as never,
+          claimedAt: now,
+          completed: true,
+          processed: [],
+        });
+      }
+      const rNoz = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC rq 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-rq", createdAt: now, updatedAt: now,
+      })).insertedId;
+      const ts = new Date(now.getTime() + 1000);
+      await localDb.collection("filaments").insertOne({
+        name: "RemoteQueued", vendor: "T", type: "PLA",
+        settings: { compatible_printers_condition: "" },
+        syncId: "fil-rqueued", _deletedAt: null, createdAt: now, updatedAt: ts,
+      });
+      await remoteDb.collection("filaments").insertOne({
+        name: "RemoteQueued", vendor: "T", type: "PLA",
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+        syncId: "fil-rqueued", _deletedAt: null, createdAt: now, updatedAt: ts,
+      });
+      // A cycle whose LOCAL enqueue failed fell back to the REMOTE queue —
+      // and the service was recreated since. The drain must read it there.
+      await remoteDb.collection("_migrations").updateOne(
+        { _id: "legacyTransitClears" as never },
+        { $addToSet: { entries: { d: "toLocal", s: "fil-rqueued", c: "nozzle_diameter[0]==0.4", u: ts, p: null, r: [rNoz] } } },
+        { upsert: true },
+      );
+
+      sync = makeSync();
+      await sync.sync();
+
+      const remoteRow = await remoteDb.collection("filaments").findOne({ syncId: "fil-rqueued" });
+      expect(remoteRow!.settings.compatible_printers_condition).toBe("");
+      const remoteQueue = await remoteDb.collection("_migrations").findOne({ _id: "legacyTransitClears" as never });
+      expect(remoteQueue?.entries ?? []).toEqual([]);
+    });
+
+    it("strips a PARENT-provenance transit row via the deferred post-sync revalidation (r22)", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+        await dbh.collection("_migrations").insertOne({
+          _id: "legacyNozzleConditions" as never,
+          claimedAt: now,
+          completed: true,
+          processed: [],
+        });
+      }
+      const rNoz = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC dp 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-dp", createdAt: now, updatedAt: now,
+      })).insertedId;
+      // Parent (stable ticks) + inheriting child stamped from those ticks —
+      // both only on the remote, both newer than (absent) local rows.
+      const rParent = (await remoteDb.collection("filaments").insertOne({
+        name: "DeferParent", vendor: "T", type: "PLA",
+        compatibleNozzles: [rNoz],
+        syncId: "fil-defer-parent", _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
+      await remoteDb.collection("filaments").insertOne({
+        name: "DeferChild", vendor: "T", type: "PLA",
+        compatibleNozzles: [], parentId: rParent,
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" },
+        syncId: "fil-defer-child", _deletedAt: null, createdAt: now, updatedAt: now,
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The deferred post-sync revalidation confirmed the CURRENT remote
+      // parent still derives the condition → the field-level pair-clear set
+      // it to "" on BOTH sides in the same cycle, timestamps untouched.
+      const localChild = await localDb.collection("filaments").findOne({ syncId: "fil-defer-child" });
+      expect(localChild!.settings.compatible_printers_condition).toBe("");
+      expect(localChild!.settings.cooling).toBe("1");
+      const remoteChild = await remoteDb.collection("filaments").findOne({ syncId: "fil-defer-child" });
+      expect(remoteChild!.settings.compatible_printers_condition).toBe("");
+      expect(remoteChild!.settings.cooling).toBe("1");
+    });
+
+    it("preserves a child condition when the SAME pass moved the parent's ticks away from it (r22 regression)", async () => {
+      const localDb = localClient.db("filament-db");
+      const remoteDb = remoteClient.db("filament-db");
+      const now = new Date();
+      for (const dbh of [localDb, remoteDb]) {
+        await dbh.collection("_migrations").deleteOne({ _id: "legacyNozzleConditions" as never });
+        await dbh.collection("_migrations").insertOne({
+          _id: "legacyNozzleConditions" as never,
+          claimedAt: now,
+          completed: true,
+          processed: [],
+        });
+      }
+      // Nozzles exist on both sides with a shared syncId.
+      await localDb.collection("nozzles").insertOne({
+        name: "LNC r22 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-r22-04", createdAt: now, updatedAt: now,
+      });
+      const lNoz08 = (await localDb.collection("nozzles").insertOne({
+        name: "LNC r22 0.8", diameter: 0.8, _deletedAt: null, syncId: "noz-r22-08", createdAt: now, updatedAt: now,
+      })).insertedId;
+      const rNoz04 = (await remoteDb.collection("nozzles").insertOne({
+        name: "LNC r22 0.4", diameter: 0.4, _deletedAt: null, syncId: "noz-r22-04", createdAt: now, updatedAt: now,
+      })).insertedId;
+      await remoteDb.collection("nozzles").insertOne({
+        name: "LNC r22 0.8", diameter: 0.8, _deletedAt: null, syncId: "noz-r22-08", createdAt: now, updatedAt: now,
+      });
+      // The parent exists on BOTH sides: the LOCAL copy is NEWER with ticks
+      // moved to 0.8; the REMOTE copy still has the old 0.4 ticks. The same
+      // pass will push local's 0.8 ticks onto the remote parent…
+      await localDb.collection("filaments").insertOne({
+        name: "R22Parent", vendor: "T", type: "PLA",
+        compatibleNozzles: [lNoz08],
+        syncId: "fil-r22-parent", _deletedAt: null, createdAt: now,
+        updatedAt: new Date(now.getTime() + 10_000),
+      });
+      const rParent = (await remoteDb.collection("filaments").insertOne({
+        name: "R22Parent", vendor: "T", type: "PLA",
+        compatibleNozzles: [rNoz04],
+        syncId: "fil-r22-parent", _deletedAt: null, createdAt: now, updatedAt: now,
+      })).insertedId;
+      // …while the REMOTE child (newer than absent-local) carries a condition
+      // matching the parent's OLD 0.4 ticks. Under the settled state (parent
+      // ticks 0.8) that condition is a PIN and must survive on both sides.
+      await remoteDb.collection("filaments").insertOne({
+        name: "R22Child", vendor: "T", type: "PLA",
+        compatibleNozzles: [], parentId: rParent,
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+        syncId: "fil-r22-child", _deletedAt: null, createdAt: now,
+        updatedAt: new Date(now.getTime() + 5_000),
+      });
+
+      sync = makeSync();
+      await sync.sync();
+
+      // The pre-fix stale tick map would have judged the child against the
+      // OLD 0.4 ticks and stripped it; the deferred revalidation reads the
+      // parent AS IT NOW STANDS (0.8 after the pass) and preserves the pin.
+      const localChild = await localDb.collection("filaments").findOne({ syncId: "fil-r22-child" });
+      expect(localChild!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      const remoteChild = await remoteDb.collection("filaments").findOne({ syncId: "fil-r22-child" });
+      expect(remoteChild!.settings.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      // Sanity: the parent's ticks DID converge to the newer 0.8 set.
+      const remoteParent = await remoteDb.collection("filaments").findOne({ syncId: "fil-r22-parent" });
+      expect(String(remoteParent!.compatibleNozzles[0])).toBe(String((await remoteDb.collection("nozzles").findOne({ syncId: "noz-r22-08" }))!._id));
+    });
+  });
 });

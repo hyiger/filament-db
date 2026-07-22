@@ -198,6 +198,9 @@ export async function POST(
       bedTypeTemps: existing.bedTypeTemps,
       settings: existing.settings as Record<string, unknown> | undefined,
       calibrations: existing.calibrations,
+      // GH #1021 r14: tick refs for the legacy-condition ingestion guard in
+      // prepareBambuUpdate (stripLegacyMachineCondition provenance).
+      compatibleNozzles: existing.compatibleNozzles,
       parentId: existing.parentId ? String(existing.parentId) : null,
       parent,
     };

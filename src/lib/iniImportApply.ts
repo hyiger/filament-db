@@ -31,6 +31,7 @@ import { splitInheritedImportSet } from "@/lib/importFilaments";
 import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { INI_TOP_LEVEL_SETTING_KEYS } from "@/lib/parseIni";
 import { NEVER_BAGGED_KEYS } from "@/lib/slicerSettings";
+import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import type { CollapsedFilamentData } from "@/lib/prusaSlicerBundle";
 
 /**
@@ -50,7 +51,9 @@ import type { CollapsedFilamentData } from "@/lib/prusaSlicerBundle";
  */
 const INI_INHERITANCE_PROJECTION =
   "_id parentId vendor type cost density diameter maxVolumetricSpeed inherits " +
-  "spoolWeight shrinkageXY shrinkageZ temperatures settings";
+  // compatibleNozzles: refs only, for the GH #1021 r10 legacy-condition
+  // ingestion guard in buildIniUpdate (stripLegacyMachineCondition).
+  "spoolWeight shrinkageXY shrinkageZ temperatures settings compatibleNozzles";
 
 /** Loosely-typed lean filament — same posture as resolveFilament / importFilaments. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -230,7 +233,19 @@ async function buildIniUpdate(
   collapsed: CollapsedFilamentData,
   existing: LeanFilament,
 ): Promise<Record<string, unknown>> {
-  const flat = toUpdateSet(collapsed);
+  // GH #1021 (Codex P1 r10): a PRE-upgrade INI still carries the
+  // machine-derived nozzle condition the old export stamped; re-persisting it
+  // would resurrect the hidden-preset bug after the one-shot DB cleanup.
+  // Strip it (→ "") when it provenance-matches the target's effective ticks.
+  // All three update paths (active / resurrect / create-race) funnel through
+  // here; fresh creates carry no ticks to test against and are unguarded.
+  // Codex P2 r15: strip a per-invocation CLONE of the settings bag, never the
+  // shared section object — the caller reuses `collapsed` across its fallback
+  // phases, and a strip decision based on THIS row's ticks must not leak into
+  // a later phase's different target (or the create path).
+  const scoped: CollapsedFilamentData = { ...collapsed, settings: { ...collapsed.settings } };
+  await stripLegacyMachineCondition(scoped.settings, existing);
+  const flat = toUpdateSet(scoped);
   const purge = staleSettingsShadowUnset(existing);
   // Attach the stale-shadow purge (+ any caller unsets) to a `$set`-only body.
   const withUnset = (

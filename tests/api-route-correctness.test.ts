@@ -10,6 +10,7 @@ import { PUT as putSpool } from "@/app/api/filaments/[id]/spools/[spoolId]/route
 import { POST as postPrintHistory } from "@/app/api/print-history/route";
 import { POST as scanPublish } from "@/app/api/scan/publish/route";
 import { POST as slicerSync } from "@/app/api/filaments/[id]/route";
+import { POST as createFilament } from "@/app/api/filaments/route";
 import { POST as orcaSync } from "@/app/api/filaments/[id]/orcaslicer/route";
 import { GET as orcaBulkExport } from "@/app/api/filaments/orcaslicer/route";
 import { GET as prusaBulkExport } from "@/app/api/filaments/prusaslicer/route";
@@ -1876,6 +1877,129 @@ describe("API route correctness", () => {
   });
 
   // ── #950: slicer round-trip fidelity + id-first addressing ──────────
+
+  describe("#1021 r10 — legacy nozzle-condition ingestion guard on the sync boundaries", () => {
+    it("PrusaSlicer sync: strips a provenance-matching machine condition; preserves a mismatched pin", async () => {
+      const brass = await Nozzle.create({ name: "1021 0.4 Brass", diameter: 0.4, type: "Brass" });
+      const f = await Filament.create({
+        name: "Legacy Sync PLA",
+        vendor: "X",
+        type: "PLA",
+        compatibleNozzles: [brass._id],
+      });
+      // A pre-upgrade fork preset still carries the stamped machine condition.
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Legacy%20Sync%20PLA", {
+          config: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" },
+        }),
+        { params: Promise.resolve({ id: "Legacy Sync PLA" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.settings?.compatible_printers_condition).toBe(""); // stripped, not re-persisted
+      expect(fresh.settings?.cooling).toBe("1");
+
+      // A pure nozzle pin that does NOT match the ticks is user input — kept.
+      const res2 = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Legacy%20Sync%20PLA", {
+          config: { compatible_printers_condition: "nozzle_diameter[0]==0.8" },
+        }),
+        { params: Promise.resolve({ id: "Legacy Sync PLA" }) },
+      );
+      expect(res2.status).toBe(200);
+      const fresh2 = await Filament.findById(f._id).lean();
+      expect(fresh2.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+    });
+
+    it("a PARTIAL sync that omits the key never re-judges a stored post-cleanup pin (r11)", async () => {
+      const brass = await Nozzle.create({ name: "1021p 0.4 Brass", diameter: 0.4, type: "Brass" });
+      // A post-migration user pin that happens to be byte-identical to the
+      // tick derivation lives in the stored bag…
+      const f = await Filament.create({
+        name: "Pinned Sync PLA",
+        vendor: "X",
+        type: "PLA",
+        compatibleNozzles: [brass._id],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+      });
+      // …and a sync that does NOT send the key (merge.settings still carries
+      // the stored copy) must leave it alone.
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Pinned%20Sync%20PLA", {
+          config: { cooling: "1" },
+        }),
+        { params: Promise.resolve({ id: "Pinned Sync PLA" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+      expect(fresh.settings?.cooling).toBe("1");
+
+      // Same posture on the Orca path (another passthrough key fires its
+      // persist gate).
+      const res2 = await orcaSync(
+        jsonReq("http://localhost/api/filaments/Pinned%20Sync%20PLA/orcaslicer", {
+          activate_air_filtration: "1",
+        }),
+        { params: Promise.resolve({ id: "Pinned Sync PLA" }) },
+      );
+      expect(res2.status).toBe(200);
+      const fresh3 = await Filament.findById(f._id).lean();
+      expect(fresh3.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+    });
+
+    it("full-document CREATE (shared-catalog import shape) strips a self-provenanced machine condition (r18)", async () => {
+      const brass = await Nozzle.create({ name: "1021c 0.4 Brass", diameter: 0.4, type: "Brass" });
+      // buildFilamentImportBody's shape: remapped tick refs (as strings) +
+      // the source's settings bag verbatim — including a pre-upgrade stamp.
+      const res = await createFilament(
+        jsonReq("http://localhost/api/filaments", {
+          name: "Imported Catalog PLA",
+          vendor: "X",
+          type: "PLA",
+          compatibleNozzles: [String(brass._id)],
+          settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" },
+        }),
+      );
+      expect(res.status).toBe(201);
+      const stored = await Filament.findOne({ name: "Imported Catalog PLA" }).lean();
+      expect(stored.settings?.compatible_printers_condition).toBe(""); // stripped at create
+      expect(stored.settings?.cooling).toBe("1");
+
+      // A non-matching pure nozzle condition rides through as a user pin.
+      const res2 = await createFilament(
+        jsonReq("http://localhost/api/filaments", {
+          name: "Imported Catalog PLA 2",
+          vendor: "X",
+          type: "PLA",
+          compatibleNozzles: [String(brass._id)],
+          settings: { compatible_printers_condition: "nozzle_diameter[0]==0.8" },
+        }),
+      );
+      expect(res2.status).toBe(201);
+      const stored2 = await Filament.findOne({ name: "Imported Catalog PLA 2" }).lean();
+      expect(stored2.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+    });
+
+    it("OrcaSlicer sync: the shared bag's passthrough copy is stripped the same way", async () => {
+      const brass = await Nozzle.create({ name: "1021o 0.6 Brass", diameter: 0.6, type: "Brass" });
+      const f = await Filament.create({
+        name: "Legacy Orca PLA",
+        vendor: "X",
+        type: "PLA",
+        compatibleNozzles: [brass._id],
+      });
+      const res = await orcaSync(
+        jsonReq("http://localhost/api/filaments/Legacy%20Orca%20PLA/orcaslicer", {
+          compatible_printers_condition: "nozzle_diameter[0]==0.6",
+        }),
+        { params: Promise.resolve({ id: "Legacy Orca PLA" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.settings?.compatible_printers_condition).toBe("");
+    });
+  });
 
   describe("#950 — slicer round-trip fidelity + id-first addressing", () => {
     it("950.1 — a per-id sync keeps filament_soluble/abrasive in the settings bag (no dead structured write)", async () => {

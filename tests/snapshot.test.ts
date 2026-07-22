@@ -96,6 +96,187 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(names).toEqual(["Restored Glass", "Restored PEI"]);
   });
 
+  it("GET stamps legacyNozzleCleanupComplete from the durable marker (GH #1021 r12)", async () => {
+    await mongoose.connection.db!.collection("_migrations").deleteMany({});
+    let res = await GET(new NextRequest("http://localhost/api/snapshot"));
+    expect(res.status).toBe(200);
+    let body = await res.json();
+    expect(body.legacyNozzleCleanupComplete).toBe(false);
+    // r13: v5 — provenance-carrying snapshots must be REJECTED by pre-#1022
+    // builds (their #953 guard), which would otherwise drop the flag.
+    expect(body.version).toBe(5);
+
+    await mongoose.connection.db!.collection("_migrations").insertOne({
+      _id: "legacyNozzleConditions" as never,
+      claimedAt: new Date(),
+      completed: true,
+      processed: [],
+    });
+    res = await GET(new NextRequest("http://localhost/api/snapshot"));
+    body = await res.json();
+    expect(body.legacyNozzleCleanupComplete).toBe(true);
+  });
+
+  it("a POST-cleanup snapshot's byte-identical pin SURVIVES restore (GH #1021 r12 provenance)", async () => {
+    await mongoose.connection.db!.collection("_migrations").deleteMany({});
+    const nozId = new mongoose.Types.ObjectId();
+    // The backup was taken AFTER the cleanup completed, so this
+    // provenance-matching pure nozzle condition is a user pin.
+    const snapshot = {
+      version: 2,
+      createdAt: new Date().toISOString(),
+      legacyNozzleCleanupComplete: true,
+      collections: {
+        filaments: [
+          {
+            name: "Snap PostClean PLA",
+            vendor: "X",
+            type: "PLA",
+            compatibleNozzles: [String(nozId)],
+            settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+          },
+        ],
+        nozzles: [{ _id: String(nozId), name: "Snap2 0.4", diameter: 0.4, type: "Brass" }],
+        printers: [],
+        bedTypes: [],
+      },
+    };
+
+    const req = new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+
+    const pin = await Filament.findOne({ name: "Snap PostClean PLA" }).lean();
+    expect(pin!.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4"); // NOT re-judged
+    // The durable marker reflects completion so no later first-connect
+    // re-judges the restored rows either.
+    const marker = await mongoose.connection.db!
+      .collection("_migrations")
+      .findOne({ _id: "legacyNozzleConditions" as never });
+    expect(marker?.completed).toBe(true);
+  });
+
+  it("returns 500 (not fake success) when the cleanup invalidation cannot be persisted (GH #1021 r16)", async () => {
+    const { vi } = await import("vitest");
+    // Steady state: cleanup completed on this DB.
+    await mongoose.connection.db!.collection("_migrations").deleteMany({});
+    await mongoose.connection.db!.collection("_migrations").insertOne({
+      _id: "legacyNozzleConditions" as never,
+      claimedAt: new Date(),
+      completed: true,
+      processed: [],
+    });
+    const snapshot = {
+      version: 2, // pre-provenance backup → restore wants to re-clean
+      createdAt: new Date().toISOString(),
+      collections: {
+        filaments: [{ name: "Snap Inv PLA", vendor: "X", type: "PLA" }],
+        nozzles: [],
+        printers: [],
+        bedTypes: [],
+      },
+    };
+
+    const rawDb = mongoose.connection.db!;
+    const realCollection = rawDb.collection.bind(rawDb);
+    const collSpy = vi
+      .spyOn(rawDb, "collection")
+      .mockImplementation(((name: string) => {
+        const col = realCollection(name);
+        if (name === "_migrations") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).updateOne = () => Promise.reject(new Error("marker write down"));
+        }
+        return col;
+      }) as never);
+    try {
+      const req = new NextRequest("http://localhost/api/snapshot", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(snapshot),
+      });
+      const res = await POST(req);
+      // The durable invalidation never landed: a success response claiming
+      // "will retry" would strand the restored legacy conditions forever.
+      expect(res.status).toBe(500);
+      expect((await res.json()).error).toMatch(/run the restore again/i);
+    } finally {
+      collSpy.mockRestore();
+    }
+    // The data itself WAS restored (the restore is idempotent — re-running it
+    // is the documented recovery).
+    expect(await Filament.countDocuments({ name: "Snap Inv PLA" })).toBe(1);
+    // And the stale completed marker is untouched (nothing half-invalidated).
+    const marker = await mongoose.connection.db!
+      .collection("_migrations")
+      .findOne({ _id: "legacyNozzleConditions" as never });
+    expect(marker?.completed).toBe(true);
+  });
+
+  it("re-runs the legacy nozzle-condition cleanup after a restore (GH #1021 r11)", async () => {
+    // The one-shot cleanup already COMPLETED on this DB…
+    await mongoose.connection.db!.collection("_migrations").deleteMany({});
+    await mongoose.connection.db!.collection("_migrations").insertOne({
+      _id: "legacyNozzleConditions" as never,
+      claimedAt: new Date(),
+      completed: true,
+      processed: [],
+    });
+    // …and the user restores a PRE-upgrade snapshot whose filament still
+    // carries the stamped machine condition (with its tick provenance).
+    const nozId = new mongoose.Types.ObjectId();
+    const snapshot = {
+      version: 2,
+      createdAt: new Date().toISOString(),
+      collections: {
+        filaments: [
+          {
+            name: "Snap Legacy PLA",
+            vendor: "X",
+            type: "PLA",
+            compatibleNozzles: [String(nozId)],
+            settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" },
+          },
+          {
+            name: "Snap Pin PLA",
+            vendor: "X",
+            type: "PLA",
+            compatibleNozzles: [String(nozId)],
+            settings: { compatible_printers_condition: "nozzle_diameter[0]==0.8" },
+          },
+        ],
+        nozzles: [{ _id: String(nozId), name: "Snap 0.4", diameter: 0.4, type: "Brass" }],
+        printers: [],
+        bedTypes: [],
+      },
+    };
+
+    const req = new NextRequest("http://localhost/api/snapshot", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(snapshot),
+    });
+    const res = await POST(req);
+    expect(res.status).toBe(200);
+
+    // The stale completed marker did NOT suppress the re-clean: the restored
+    // machine value is cleared, the non-matching pin survives, and the marker
+    // is freshly completed for the restored dataset.
+    const restored = await Filament.findOne({ name: "Snap Legacy PLA" }).lean();
+    expect(restored!.settings?.compatible_printers_condition).toBe("");
+    expect(restored!.settings?.cooling).toBe("1");
+    const pin = await Filament.findOne({ name: "Snap Pin PLA" }).lean();
+    expect(pin!.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+    const marker = await mongoose.connection.db!
+      .collection("_migrations")
+      .findOne({ _id: "legacyNozzleConditions" as never });
+    expect(marker?.completed).toBe(true);
+  });
+
   it("re-tombstones a purged-but-active zombie on restore (GH #1009 Codex P2)", async () => {
     // A snapshot from an install affected by the purged-zombie bug carries a
     // filament with _purged: true but _deletedAt: null — an active zombie the
@@ -770,9 +951,9 @@ describe("snapshot route — Location + PrintHistory round-trip", () => {
     it("rejects a snapshot from a newer version with 400 and does NOT wipe", async () => {
       const canary = await Location.create({ name: "Canary Loc" });
       const res = await postSnapshot({
-        version: 5,
+        version: 6,
         createdAt: new Date().toISOString(),
-        // A v5 file could carry a new/renamed collection the v4 restore would drop.
+        // A v6 file could carry a new/renamed collection the v5 restore would drop.
         collections: { filaments: [], nozzles: [], printers: [], bedTypes: [] },
       });
       expect(res.status).toBe(400);

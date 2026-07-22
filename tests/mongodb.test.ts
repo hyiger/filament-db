@@ -1,6 +1,10 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import mongoose from "mongoose";
-import dbConnect, { isDuplicateKeyError } from "@/lib/mongodb";
+import dbConnect, {
+  isDuplicateKeyError,
+  rerunLegacyNozzleCleanupAfterRestore,
+  RestoreCleanupInvalidationError,
+} from "@/lib/mongodb";
 
 describe("dbConnect", () => {
   beforeEach(() => {
@@ -1011,5 +1015,309 @@ describe("legacyShrinkage migration (GH #1008 F1)", () => {
     cached.promise = null;
     await dbConnect();
     expect(cached.migrations.legacyShrinkage).toBe(true);
+  });
+});
+
+/**
+ * GH #1021 (#1022) — one-shot clear of machine-derived
+ * `nozzle_diameter[0]==D [or ...]` compatibility conditions the pre-#1021
+ * export wrote and round-trips persisted into settings. After this runs, any
+ * pure nozzle-only condition in a bag is user-authored by construction, so the
+ * export passes every pin through untouched. These tests pin the dbConnect
+ * WIRING (flag + logging + retry); the helper's own branches (claim-first
+ * race, claim release, skip-if-claimed) are covered in
+ * tests/legacyNozzleConditions.test.ts.
+ */
+describe("legacyNozzleConditions migration (GH #1021)", () => {
+  function resetMigrations() {
+    const cached = (global as Record<string, unknown>).mongoose as {
+      conn: unknown; promise: unknown; migrations: Record<string, boolean>;
+    };
+    cached.migrations = {
+      instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false,
+      nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false,
+      legacyShrinkage: false, legacyNozzleConditions: false,
+    };
+    cached.conn = null;
+    cached.promise = null;
+    return cached;
+  }
+
+  const MARKER = { _id: "legacyNozzleConditions" as never };
+  async function deleteMarker() {
+    await mongoose.connection.db!.collection("_migrations").deleteOne(MARKER);
+  }
+
+  it("clears provenance-matched machine conditions and leaves user pins + human expressions", async () => {
+    await dbConnect();
+    await deleteMarker(); // fresh-upgrade state: no durable marker yet
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    // compatibleNozzles holds ObjectId REFS — provenance resolves them
+    // against the nozzles collection (mirroring the exporter's populate()).
+    const nozzles = mongoose.connection.db!.collection("nozzles");
+    const noz04 = (await nozzles.insertOne({ name: "LNCM 0.4", diameter: 0.4 })).insertedId;
+    const noz06 = (await nozzles.insertOne({ name: "LNCM 0.6", diameter: 0.6 })).insertedId;
+    const noz025 = (await nozzles.insertOne({ name: "LNCM 0.25", diameter: 0.25 })).insertedId;
+    await Filament.collection.insertMany([
+      // Machine-derived: stored value equals the legacy derivation from the
+      // row's compatibleNozzles (the provenance test).
+      { name: "MachineSingle", vendor: "T", type: "PLA",
+        compatibleNozzles: [noz04],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" } },
+      { name: "MachineMulti", vendor: "T", type: "PLA",
+        compatibleNozzles: [noz06, noz025],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.25 or nozzle_diameter[0]==0.6" } },
+      // Same SYNTAX but the ticks don't derive to it → a pre-upgrade user pin
+      // (Codex P1 r6) — must survive.
+      { name: "PreUpgradePin", vendor: "T", type: "PLA",
+        compatibleNozzles: [noz06],
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" } },
+      { name: "HumanCompound", vendor: "T", type: "PLA",
+        settings: { compatible_printers_condition: "printer_model==MK4 and nozzle_diameter[0]==0.4" } },
+      { name: "HumanComparison", vendor: "T", type: "PLA",
+        settings: { compatible_printers_condition: "nozzle_diameter[0]>=0.4" } },
+      { name: "NoCondition", vendor: "T", type: "PLA", settings: { cooling: "1" } },
+    ]);
+
+    const cached = resetMigrations();
+    await dbConnect();
+
+    const byName = async (n: string) => Filament.collection.findOne({ name: n });
+    expect((await byName("MachineSingle"))!.settings.compatible_printers_condition).toBe("");
+    expect((await byName("MachineSingle"))!.settings.cooling).toBe("1"); // untouched sibling key
+    expect((await byName("MachineMulti"))!.settings.compatible_printers_condition).toBe("");
+    expect((await byName("PreUpgradePin"))!.settings.compatible_printers_condition)
+      .toBe("nozzle_diameter[0]==0.4");
+    expect((await byName("HumanCompound"))!.settings.compatible_printers_condition)
+      .toBe("printer_model==MK4 and nozzle_diameter[0]==0.4");
+    expect((await byName("HumanComparison"))!.settings.compatible_printers_condition)
+      .toBe("nozzle_diameter[0]>=0.4");
+    expect((await byName("NoCondition"))!.settings.compatible_printers_condition).toBeUndefined();
+    expect(cached.migrations.legacyNozzleConditions).toBe(true);
+    // Completion persisted DURABLY, not just in the process-local flag.
+    expect(await mongoose.connection.db!.collection("_migrations").findOne(MARKER)).not.toBeNull();
+
+    // Codex P1 r3 on #1022 — THE point of the marker: a pure nozzle pin
+    // authored AFTER the one-shot cleanup must SURVIVE a restart (simulated by
+    // resetting the process-local flags), even when it is byte-identical to a
+    // provenance-matching legacy machine value.
+    await Filament.collection.insertOne({
+      name: "PostUpgradePin", vendor: "T", type: "PLA",
+      compatibleNozzles: [noz04],
+      settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+    });
+    resetMigrations();
+    await dbConnect();
+    expect((await byName("PostUpgradePin"))!.settings.compatible_printers_condition)
+      .toBe("nozzle_diameter[0]==0.4"); // NOT cleared — the durable marker skips the re-run
+
+    await Filament.collection.deleteMany({
+      name: { $in: ["MachineSingle", "MachineMulti", "PreUpgradePin", "HumanCompound", "HumanComparison", "NoCondition", "PostUpgradePin"] },
+    });
+    await nozzles.deleteMany({ name: /^LNCM / });
+  });
+
+  it("FAILS the current dbConnect on a transient failure (prerequisite), then retries and clears", async () => {
+    await dbConnect();
+    await deleteMarker(); // ensure the clear actually attempts to run
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    // A provenance-matching row (ref → nozzles join) so the cleanup actually
+    // reaches its conditional updateOne.
+    const noz = await mongoose.connection.db!.collection("nozzles")
+      .insertOne({ name: "LNCT 0.4", diameter: 0.4 });
+    await Filament.collection.insertOne({
+      name: "TransientVictim", vendor: "T", type: "PLA",
+      compatibleNozzles: [noz.insertedId],
+      settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+    });
+
+    const cached = resetMigrations();
+    // The cleanup helper reaches "filaments" through the RAW driver handle
+    // (connection.db.collection(...)), not Filament.collection — so inject the
+    // failure there, poisoning only the "filaments" handle's updateOne and
+    // passing "_migrations" (claim/release) through untouched.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rawDb = mongoose.connection.db!;
+    const realCollection = rawDb.collection.bind(rawDb);
+    const collSpy = vi
+      .spyOn(rawDb, "collection")
+      .mockImplementation(((name: string) => {
+        const col = realCollection(name);
+        if (name === "filaments") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).updateOne = () => Promise.reject(new Error("transient"));
+        }
+        return col;
+      }) as never);
+    try {
+      // Codex P1 r7: the CURRENT caller must fail too — a request served
+      // before the DB reaches a terminal cleanup state could write a pin the
+      // eventual retry would legitimately clear.
+      await expect(dbConnect()).rejects.toThrow("transient");
+      expect(cached.migrations.legacyNozzleConditions).toBe(false); // retries next connect
+      expect(errSpy).toHaveBeenCalledWith(
+        expect.stringContaining("legacy nozzle conditions"),
+        expect.any(Error),
+      );
+      // The claim was durably marked RELEASED (progress kept, failed row
+      // rolled back) so the retry resumes instead of waiting on a dead claim.
+      const failedMarker = await mongoose.connection.db!.collection("_migrations").findOne(MARKER);
+      expect(failedMarker).not.toBeNull();
+      expect(failedMarker!.released).toBe(true);
+      expect(failedMarker!.completed).toBeUndefined();
+    } finally {
+      collSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+
+    cached.conn = null;
+    cached.promise = null;
+    await dbConnect();
+    expect(cached.migrations.legacyNozzleConditions).toBe(true);
+    // The successful retry completed the durable marker AND cleared the row.
+    const marker = await mongoose.connection.db!.collection("_migrations").findOne(MARKER);
+    expect(marker).not.toBeNull();
+    expect(marker!.completed).toBe(true);
+    const victim = await Filament.collection.findOne({ name: "TransientVictim" });
+    expect(victim!.settings.compatible_printers_condition).toBe("");
+
+    await Filament.collection.deleteMany({ name: "TransientVictim" });
+    await mongoose.connection.db!.collection("nozzles").deleteMany({ name: "LNCT 0.4" });
+  });
+
+  it("restore re-clean deletes the marker BEFORE flipping the flag — a racing dbConnect can't cancel the retry (r12)", async () => {
+    // Reach a normal steady state first: cleanup completed, flag true.
+    await dbConnect();
+    await deleteMarker();
+    let cached = resetMigrations();
+    await dbConnect();
+    expect(cached.migrations.legacyNozzleConditions).toBe(true);
+
+    // Simulate a just-restored PRE-upgrade dataset: a stamped machine
+    // condition with tick provenance, sitting under the stale completed marker.
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    const noz = await mongoose.connection.db!.collection("nozzles")
+      .insertOne({ name: "LNCR 0.4", diameter: 0.4 });
+    await Filament.collection.insertOne({
+      name: "RestoreRace", vendor: "T", type: "PLA",
+      compatibleNozzles: [noz.insertedId],
+      settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+    });
+
+    // Rig the re-clean: a dbConnect RACES it inside the marker delete (the
+    // r12 window), and its cleanup then fails transiently.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rawDb = mongoose.connection.db!;
+    const realCollection = rawDb.collection.bind(rawDb);
+    let flagSeenByRacerPath = false;
+    let raced = false;
+    const collSpy = vi
+      .spyOn(rawDb, "collection")
+      .mockImplementation(((name: string) => {
+        const col = realCollection(name);
+        if (name === "filaments") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).updateOne = () => Promise.reject(new Error("transient"));
+        }
+        if (name === "_migrations") {
+          const realUpdateOne = col.updateOne.bind(col);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).updateOne = async (
+            filter: Record<string, unknown>,
+            update: Record<string, unknown>,
+          ) => {
+            // Intercept the durable INVALIDATION write (the FIRST
+            // released-carrying marker write; the cleanup's own release-mark
+            // comes later and must pass through untouched). The racer
+            // connects at the worst moment. Pre-fix (flag flipped BEFORE the
+            // invalidation) it would observe flag-false + completed marker →
+            // "already-done" → flip the flag back to TRUE, silently
+            // cancelling the retry. Post-fix the flag is still true here, so
+            // it early-returns without touching migration state.
+            if (!raced && JSON.stringify(update).includes("released")) {
+              raced = true;
+              await dbConnect();
+              flagSeenByRacerPath = cached.migrations.legacyNozzleConditions;
+            }
+            return realUpdateOne(filter, update);
+          };
+        }
+        return col;
+      }) as never);
+    try {
+      await expect(rerunLegacyNozzleCleanupAfterRestore(false)).rejects.toThrow("transient");
+      expect(flagSeenByRacerPath).toBe(true); // racer saw the still-true flag (early return)
+      // THE r12 assertion: the failed re-clean leaves the flag FALSE — the
+      // racer could not flip it back — so the retry-on-next-connect survives.
+      expect(cached.migrations.legacyNozzleConditions).toBe(false);
+    } finally {
+      collSpy.mockRestore();
+      errSpy.mockRestore();
+    }
+
+    // And the retry actually happens and finishes the clean.
+    cached = (global as Record<string, unknown>).mongoose as ReturnType<typeof resetMigrations>;
+    cached.conn = null;
+    cached.promise = null;
+    await dbConnect();
+    expect(cached.migrations.legacyNozzleConditions).toBe(true);
+    const cleaned = await Filament.collection.findOne({ name: "RestoreRace" });
+    expect(cleaned!.settings.compatible_printers_condition).toBe("");
+
+    await Filament.collection.deleteMany({ name: "RestoreRace" });
+    await mongoose.connection.db!.collection("nozzles").deleteMany({ name: "LNCR 0.4" });
+  });
+
+  it("a failed durable invalidation surfaces RestoreCleanupInvalidationError and changes NOTHING (r16)", async () => {
+    await dbConnect();
+    await deleteMarker();
+    const cached = resetMigrations();
+    await dbConnect(); // completes the cleanup: marker completed, flag true
+    expect(cached.migrations.legacyNozzleConditions).toBe(true);
+
+    const rawDb = mongoose.connection.db!;
+    const realCollection = rawDb.collection.bind(rawDb);
+    const collSpy = vi
+      .spyOn(rawDb, "collection")
+      .mockImplementation(((name: string) => {
+        const col = realCollection(name);
+        if (name === "_migrations") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).updateOne = () => Promise.reject(new Error("marker write down"));
+        }
+        return col;
+      }) as never);
+    try {
+      // The durable state was never touched — reporting "will retry" would be
+      // a lie (even across restarts), so the typed error must surface…
+      await expect(rerunLegacyNozzleCleanupAfterRestore(false)).rejects.toBeInstanceOf(
+        RestoreCleanupInvalidationError,
+      );
+      // …and both the marker and the process-local flag are untouched.
+      expect(cached.migrations.legacyNozzleConditions).toBe(true);
+    } finally {
+      collSpy.mockRestore();
+    }
+    const marker = await mongoose.connection.db!.collection("_migrations").findOne(MARKER);
+    expect(marker!.completed).toBe(true);
+
+    // Same posture for the post-cleanup branch's marker upsert.
+    const collSpy2 = vi
+      .spyOn(rawDb, "collection")
+      .mockImplementation(((name: string) => {
+        const col = realCollection(name);
+        if (name === "_migrations") {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (col as any).updateOne = () => Promise.reject(new Error("marker write down"));
+        }
+        return col;
+      }) as never);
+    try {
+      await expect(rerunLegacyNozzleCleanupAfterRestore(true)).rejects.toBeInstanceOf(
+        RestoreCleanupInvalidationError,
+      );
+    } finally {
+      collSpy2.mockRestore();
+    }
   });
 });

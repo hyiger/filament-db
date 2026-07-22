@@ -25,6 +25,7 @@ import {
   type SettingsMergeResult,
 } from "@/lib/slicerSettings";
 import { resolveSyncBackColor } from "@/lib/prusaSlicerBundle";
+import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { isUpdateNozzleRangeInverted, type NozzleTemperatureRange } from "@/lib/temperatureRange";
 import type {
   BambuParseResult,
@@ -72,6 +73,10 @@ export interface ExistingFilamentForApply {
   }>;
   settings?: Record<string, unknown>;
   calibrations?: unknown[];
+  /** GH #1021 r14: nozzle-tick refs for the legacy-condition ingestion
+   * guard (stripLegacyMachineCondition). Both routes pass full docs, so
+   * this is present whenever the filament has ticks. */
+  compatibleNozzles?: unknown;
   /** GH #403: variant detection. When the existing doc is a variant
    * (has a parentId), inheritable scalars whose parsed value already
    * matches what the parent provides should be SKIPPED — writing the
@@ -153,6 +158,22 @@ export async function prepareBambuUpdate(
   // Bambu sync that only updates structured fields on a row with a stale
   // filament_settings_id/filamentdb_id returns 200 but never persists the cleaned
   // bag, so the stale key keeps shadowing the re-derived name/id on later exports.
+  // GH #1021 (Codex P1 r14): same ingestion guard as the PrusaSlicer/Orca
+  // sync + INI import boundaries — a Bambu/Orca JSON exported before the
+  // one-shot cleanup carries the machine-derived nozzle condition as
+  // passthrough, and re-persisting it here (either Bambu route; both funnel
+  // through this shared apply) would resurrect the hidden-preset bug. Strip
+  // it (→ "") when the INCOMING profile owns the key and it
+  // provenance-matches the target's effective ticks; incoming-only, so a
+  // profile that omits the key never re-judges a stored post-cleanup pin.
+  // Creates (`existing === null`) have no ticks to test against.
+  if (
+    existing &&
+    parsed.filament.settings &&
+    Object.prototype.hasOwnProperty.call(parsed.filament.settings, "compatible_printers_condition")
+  ) {
+    await stripLegacyMachineCondition(settingsResult.settings, existing);
+  }
   if (settingsResult.added.length > 0 || settingsResult.removed.length > 0) {
     update.settings = settingsResult.settings;
   }

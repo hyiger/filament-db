@@ -9,6 +9,7 @@ import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicat
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { validateSpoolPhotoDataUrl, isValidIsoDateString } from "@/lib/validateSpoolBody";
 import { decodedTagToFilamentPayload } from "@/lib/decodedTagToFilament";
+import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import {
   isInvertedNozzleRange,
   effectiveNozzleRangeForUpdate,
@@ -500,6 +501,21 @@ export async function POST(request: NextRequest) {
         "Nozzle range minimum temperature must be less than or equal to the maximum",
         400,
       );
+    }
+
+    // GH #1021 (Codex P1 r18): a full-document create can carry BOTH the
+    // ticks and a pre-upgrade stamped machine condition — the shared-catalog
+    // import flow (buildFilamentImportBody) sends exactly that shape — and
+    // with the one-shot marker completed no migration is left to catch it.
+    // Same provenance-matched strip as the other ingestion boundaries; the
+    // body IS the incoming payload on a create, so it is incoming-only by
+    // construction. Mongoose casts the body's string refs in the helper's
+    // lookups. A non-matching pure nozzle condition persists as a user pin.
+    if (body.settings && typeof body.settings === "object" && !Array.isArray(body.settings)) {
+      await stripLegacyMachineCondition(body.settings as Record<string, unknown>, {
+        compatibleNozzles: body.compatibleNozzles,
+        parentId: body.parentId,
+      });
     }
 
     const filament = await Filament.create(body);

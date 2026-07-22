@@ -160,7 +160,13 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.compatible_printers_condition).toBe("");
   });
 
-  it("#872: derives compatible_printers_condition from compatible nozzle diameters (deduped + sorted)", () => {
+  it("#1021: compatibleNozzles ticks do NOT derive a condition — preset stays visible on every printer", () => {
+    // The #872 derivation turned "compatible nozzles" bookkeeping into a hard
+    // PrusaSlicer visibility filter (nozzle_diameter[0]==D), silently hiding
+    // whole filament groups whose ticked diameters didn't match the active
+    // printer — and variants inherited the parent's ticks, so unlinking a
+    // variant made it reappear while the parent stayed hidden. Ticks are
+    // metadata now; only calibrated per-nozzle presets carry the condition.
     const keys = filamentToSlicerKeys({
       name: "PA12-CF",
       vendor: "X",
@@ -170,9 +176,7 @@ describe("filamentToSlicerKeys", () => {
       settings: {},
       compatibleNozzles: [{ diameter: 0.6 }, { diameter: 0.4 }, { diameter: 0.4 }],
     });
-    expect(keys.compatible_printers_condition).toBe(
-      "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6",
-    );
+    expect(keys.compatible_printers_condition).toBe("");
   });
 
   it("#872: a user-pinned compatible_printers_condition wins over the nozzle-diameter derivation", () => {
@@ -188,7 +192,54 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.compatible_printers_condition).toBe("printer_model==MK4");
   });
 
-  it("#872: an EMPTY settings condition (round-tripped default) is overridden by the nozzle derivation", () => {
+  it("#1021/#1022: EVERY non-empty bag condition passes through — incl. a pure nozzle-only one", () => {
+    // Post-migration semantics: the `legacyNozzleConditions` startup migration
+    // (src/lib/mongodb.ts) cleared machine-derived values from the DB once, so
+    // any condition remaining in a settings bag is user-authored by
+    // construction. The export must NOT purge at export time — an export-time
+    // rule cannot distinguish a user's pure nozzle pin from a stale machine
+    // value (the two Codex P1 rounds on #1022 hit opposite sides of exactly
+    // that ambiguity).
+    for (const pin of [
+      "nozzle_diameter[0]==0.4",
+      "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6",
+      "printer_model==MK4 and nozzle_diameter[0]==0.4",
+      "nozzle_diameter[0]>=0.4",
+      "printer_notes=~/.*PRUSA.*/",
+    ]) {
+      const keys = filamentToSlicerKeys({
+        name: "PinnedAnyShape",
+        vendor: "X",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: {},
+        settings: { compatible_printers_condition: pin },
+        compatibleNozzles: [{ diameter: 0.4 }],
+      });
+      expect(keys.compatible_printers_condition).toBe(pin);
+    }
+  });
+
+  it("#1021/#1022: a bag-pinned nozzle condition WINS over the calibration bake (pin precedence)", () => {
+    // Post-migration a bag value is a user pin, and #950's rule applies: the
+    // per-nozzle calibration bake only sets the condition when it is
+    // absent-or-empty — it never overwrites a pin.
+    const keys = filamentToSlicerKeys(
+      {
+        name: "PinnedCalibrated",
+        vendor: "X",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: {},
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.8" },
+        compatibleNozzles: [{ diameter: 0.8 }],
+      },
+      { nozzle: { diameter: 0.4, type: "Brass" }, extrusionMultiplier: 1.02 } as never,
+    );
+    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+  });
+
+  it("#1021: an EMPTY round-tripped condition stays empty (no nozzle derivation over it)", () => {
     const keys = filamentToSlicerKeys({
       name: "RoundTripped",
       vendor: "X",
@@ -199,7 +250,7 @@ describe("filamentToSlicerKeys", () => {
       settings: { compatible_printers_condition: "" },
       compatibleNozzles: [{ diameter: 0.4 }],
     });
-    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+    expect(keys.compatible_printers_condition).toBe("");
   });
 
   it("#872: a NULL (nil/inherit) settings condition is preserved, not derived over", () => {
@@ -607,9 +658,9 @@ describe("filamentToSlicerKeys", () => {
     expect(keys.filament_settings_id).toBe("");
   });
 
-  it("ignores non-numeric compatibleNozzles entries when deriving the condition (line 374)", () => {
-    // Entries without a numeric `diameter`, and non-object entries, map to null and
-    // are filtered out; only the valid 0.4 survives the derivation.
+  it("#1021: any compatibleNozzles shape (valid, malformed, zero) yields an empty condition", () => {
+    // The derivation (and its input sanitizing) is gone entirely — the ticks
+    // never restrict visibility, whatever their shape.
     const keys = filamentToSlicerKeys({
       name: "Mixed",
       vendor: "V",
@@ -618,25 +669,15 @@ describe("filamentToSlicerKeys", () => {
       settings: {},
       compatibleNozzles: [
         { diameter: 0.4 },
-        { diameter: "0.6" }, // non-number → dropped
-        { type: "Brass" }, // no diameter → dropped
-        null, // non-object → dropped
-        "0.8", // non-object → dropped
+        { diameter: "0.6" },
+        { type: "Brass" },
+        null,
+        "0.8",
+        { diameter: 0 },
+        { diameter: -1 },
       ],
     });
-    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
-  });
-
-  it("drops zero / negative nozzle diameters from the derived condition", () => {
-    const keys = filamentToSlicerKeys({
-      name: "ZeroDia",
-      vendor: "V",
-      type: "PLA",
-      temperatures: {},
-      settings: {},
-      compatibleNozzles: [{ diameter: 0 }, { diameter: -1 }, { diameter: 0.4 }],
-    });
-    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+    expect(keys.compatible_printers_condition).toBe("");
   });
 
   it("coextruded with an empty-string first secondary omits filament_colour (line 38 branch)", () => {

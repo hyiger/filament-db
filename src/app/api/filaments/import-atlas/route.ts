@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { MongoClient } from "mongodb";
+import { MongoClient, type ObjectId as ObjectIdType } from "mongodb";
 import dbConnect from "@/lib/mongodb";
 import Filament, { generateInstanceId } from "@/models/Filament";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { assertSafeMongoUri } from "@/lib/mongoUriGuard";
 import { validateSpoolPhotoDataUrl } from "@/lib/validateSpoolBody";
+import {
+  deriveLegacyNozzleCondition,
+  LEGACY_NOZZLE_CONDITION_RE,
+} from "@/lib/legacyNozzleConditions";
 
 /**
  * GH #255: explicit ALLOW-LIST of filament fields that may be copied
@@ -126,6 +130,58 @@ export async function POST(request: NextRequest) {
         const filamentData: Record<string, unknown> = {};
         for (const key of IMPORTABLE_FILAMENT_FIELDS) {
           if (remote[key] !== undefined) filamentData[key] = remote[key];
+        }
+
+        // GH #1021 (Codex P1 r20): a pre-#1022 source Atlas can carry the
+        // stamped machine condition in the allow-listed `settings` bag — and
+        // the local one-shot marker is already completed, so nothing later
+        // catches it. The provenance lives in the SOURCE database's nozzle
+        // refs, which the block below is about to discard — so resolve them
+        // against the SOURCE db first (own refs, else the ACTIVE source
+        // parent's) and strip a provenance-matching value into the cloned
+        // bag. A non-matching pure nozzle condition imports as a user pin;
+        // the source Atlas itself stays read-only by contract (its own
+        // deployment's migration owns cleaning it).
+        const importedSettings = filamentData.settings;
+        if (
+          importedSettings &&
+          typeof importedSettings === "object" &&
+          !Array.isArray(importedSettings)
+        ) {
+          const cond = (importedSettings as Record<string, unknown>).compatible_printers_condition;
+          if (typeof cond === "string" && LEGACY_NOZZLE_CONDITION_RE.test(cond)) {
+            let refs: unknown[] | null =
+              Array.isArray(remote.compatibleNozzles) && remote.compatibleNozzles.length > 0
+                ? (remote.compatibleNozzles as unknown[])
+                : null;
+            if (!refs && remote.parentId != null) {
+              const srcParent = await db
+                .collection("filaments")
+                .findOne(
+                  { _id: remote.parentId, _deletedAt: null },
+                  { projection: { compatibleNozzles: 1 } },
+                );
+              refs =
+                Array.isArray(srcParent?.compatibleNozzles) && srcParent.compatibleNozzles.length > 0
+                  ? (srcParent.compatibleNozzles as unknown[])
+                  : null;
+            }
+            if (refs) {
+              const nozzleDocs = await db
+                .collection("nozzles")
+                .find(
+                  { _id: { $in: refs as ObjectIdType[] } },
+                  { projection: { _id: 1, diameter: 1 } },
+                )
+                .toArray();
+              if (deriveLegacyNozzleCondition(nozzleDocs) === cond) {
+                filamentData.settings = {
+                  ...(importedSettings as Record<string, unknown>),
+                  compatible_printers_condition: "",
+                };
+              }
+            }
+          }
         }
 
         // Foreign-ObjectId references point at documents in the *source*

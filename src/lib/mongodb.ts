@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { clearLegacyNozzleConditionsOnce, type MinimalDb } from "./legacyNozzleConditions";
 
 interface MongooseCache {
   conn: typeof mongoose | null;
@@ -52,6 +53,20 @@ interface MongooseCache {
      * a converted value lands in [0, 50] — below the threshold for every real
      * input, and the x = 50 boundary maps to itself (a no-op re-match). */
     legacyShrinkage: boolean;
+    /** GH #1021 — clear machine-derived `nozzle_diameter[0]==D [or ...]`
+     * values the pre-#1021 export wrote into
+     * `settings.compatible_printers_condition` and round-trips persisted.
+     * One-shot by design: after this runs, any pure nozzle-only condition in
+     * a settings bag is user-authored by construction, so the export can pass
+     * every pin through untouched (an export-time purge cannot distinguish
+     * the two — Codex P1 ×2 on #1022). UNLIKE the other migrations this one
+     * is NOT safe to re-run (a pin authored AFTER the cleanup is
+     * indistinguishable from the legacy values), and this in-process flag
+     * resets on every restart — so completion is persisted DURABLY as a
+     * marker document in the `_migrations` collection; the clear runs only
+     * when the marker is absent (Codex P1 r3 on #1022). This flag then only
+     * records "checked this process". */
+    legacyNozzleConditions: boolean;
   };
 }
 
@@ -88,7 +103,7 @@ export default async function dbConnect() {
     promise: null,
     uri: null,
     migrationsPromise: null,
-    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false },
+    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false },
   };
 
   if (!global.mongoose) {
@@ -103,7 +118,7 @@ export default async function dbConnect() {
     cached.promise = null;
     cached.uri = null;
     cached.migrationsPromise = null;
-    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false };
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false };
   }
 
   // GH #312: a cached connection can go dead after a DB outage or an
@@ -128,7 +143,8 @@ export default async function dbConnect() {
     cached.migrations.nozzlePhysicalInstances &&
     cached.migrations.coreModelIndexes &&
     cached.migrations.purgedZombies &&
-    cached.migrations.legacyShrinkage
+    cached.migrations.legacyShrinkage &&
+    cached.migrations.legacyNozzleConditions
   ) {
     return cached.conn;
   }
@@ -215,6 +231,51 @@ export default async function dbConnect() {
         "[migration] Failed to normalize legacy shrinkage values (will retry on next connect):",
         err,
       );
+    }
+  }
+
+  // GH #1021 (#1022) — clear machine-derived nozzle-diameter compatibility
+  // conditions. The pre-#1021 export derived `nozzle_diameter[0]==D [or ...]`
+  // from the compatibleNozzles ticks, and any round-trip (fork sync-back /
+  // bulk INI re-import) persisted that value into
+  // `settings.compatible_printers_condition` — hiding the preset in PrusaSlicer
+  // for non-matching printers even after the derivation was removed. Cleared
+  // HERE, once, rather than at export time: post-cleanup, any pure nozzle-only
+  // condition in a bag is user-authored by construction, so the export passes
+  // all pins through (an export-time purge cannot tell a user's pure nozzle
+  // pin from a stale machine value). Values become "" (the round-trip "no
+  // restriction" representation); compound/human expressions are untouched.
+  if (!cached.migrations.legacyNozzleConditions) {
+    try {
+      // Full rationale in src/lib/legacyNozzleConditions.ts: durable per-DB
+      // marker (NOT this process-local flag), CLAIM-FIRST so racing processes
+      // serialize before any destructive write; a failed attempt durably
+      // marks the claim released with per-row progress kept, so the next
+      // connect RESUMES (never repeats) it. The hybrid remote (Atlas) side
+      // runs the same helper from electron/sync-service.ts — this call only
+      // covers whatever DB this process connects to.
+      const db = mongoose.connection.db;
+      if (!db) throw new Error("no db handle on the mongoose connection");
+      const result = await clearLegacyNozzleConditionsOnce(db as unknown as MinimalDb);
+      if (result.ran && result.cleared > 0) {
+        console.log(
+          `[migration] Cleared ${result.cleared} legacy machine-derived nozzle condition(s) (GH #1021)`,
+        );
+      }
+      cached.migrations.legacyNozzleConditions = true;
+    } catch (err) {
+      console.error(
+        "[migration] Failed to clear legacy nozzle conditions (will retry on next connect):",
+        err,
+      );
+      // Codex P1 r7 on #1022: unlike the best-effort migrations above (all
+      // safe to re-run), this one gates correctness — a request served before
+      // the DB reaches a terminal cleanup state could export stale conditions
+      // or author a pin while a claimed destructive update is still in flight
+      // (LegacyCleanupInProgressError), or author a pin that the eventual
+      // retry would then legitimately match and clear. So the CURRENT caller
+      // must fail too, not just leave the flag false for the next one.
+      throw err;
     }
   }
 
@@ -549,4 +610,106 @@ export default async function dbConnect() {
   }
 
   return cached.conn;
+}
+
+/**
+ * GH #1021 (Codex P1 r11/r12): a snapshot restore REPLACES the filament +
+ * nozzle collections, but snapshots don't carry `_migrations` — so a
+ * completed legacyNozzleConditions marker would keep reporting "already-done"
+ * over freshly-restored PRE-upgrade data, and any stamped machine conditions
+ * in the backup would survive and hide presets forever. Call this AFTER a
+ * successful restore with the snapshot's own provenance flag
+ * (`legacyNozzleCleanupComplete`, stamped by the snapshot GET since r12):
+ *
+ *  - `true` — the backup's data is already post-cleanup, so a byte-identical
+ *    pure nozzle condition in it is a USER PIN; re-running the intentionally
+ *    non-repeatable cleanup would erase it (Codex P1 r12). We only make sure
+ *    the durable marker reflects completion so no later first-connect
+ *    re-judges the restored rows either.
+ *  - `false`/absent — a pre-upgrade or unknown-provenance backup: invalidate
+ *    the marker (the restored dataset is a different world — old observations
+ *    are meaningless) and re-run the cleanup against the restored rows.
+ *
+ * ORDER MATTERS in the re-run branch (Codex P1 r12): the marker is deleted
+ * BEFORE the process-local flag flips, so no concurrent dbConnect can observe
+ * (flag false + completed marker), return "already-done", and flip the flag
+ * back to true — which would silently cancel the retry-on-next-connect if the
+ * cleanup below then failed transiently. With the marker gone first, a racer
+ * either early-returns on the still-true flag (the same unavoidable dirty
+ * window the restore's own wipe/insert phase has) or joins the cleanup
+ * through the claim protocol. On failure the flag stays false, so the next
+ * dbConnect retries (and, per the r7 prerequisite posture, fails requests
+ * until the DB reaches a terminal cleanup state again).
+ */
+/** Thrown when the DURABLE marker state could not be updated to reflect the
+ * restore — nothing was invalidated, so no later dbConnect (or restart) will
+ * re-run the cleanup. The caller must NOT report the retry as scheduled; the
+ * snapshot route surfaces this as a restore failure so the user re-runs the
+ * (idempotent) restore instead. Codex P1 r16. */
+export class RestoreCleanupInvalidationError extends Error {
+  constructor(cause: unknown) {
+    super(
+      "snapshot restore could not update the legacyNozzleConditions cleanup marker — re-run the restore",
+      { cause },
+    );
+    this.name = "RestoreCleanupInvalidationError";
+  }
+}
+
+export async function rerunLegacyNozzleCleanupAfterRestore(
+  snapshotIsPostCleanup: boolean,
+): Promise<void> {
+  const cached = global.mongoose;
+  const db = mongoose.connection.db;
+  if (!db) throw new Error("no db handle on the mongoose connection");
+  const markers = db.collection("_migrations");
+
+  if (snapshotIsPostCleanup) {
+    try {
+      await markers.updateOne(
+        { _id: "legacyNozzleConditions" as never },
+        {
+          $set: { completed: true, completedAt: new Date() },
+          $setOnInsert: { claimedAt: new Date(), processed: [] },
+        },
+        { upsert: true },
+      );
+    } catch (err) {
+      // Without a completed marker a later first-connect could re-judge the
+      // restored post-cleanup pins — surface as a restore failure (r16).
+      throw new RestoreCleanupInvalidationError(err);
+    }
+    if (cached) cached.migrations.legacyNozzleConditions = true;
+    return;
+  }
+
+  // Codex P1 r16: the durable invalidation is ONE atomic marker conversion
+  // (completed → released, prior-world observations wiped, claim token
+  // unset so any in-flight pre-restore runner is fenced out). If it fails,
+  // NOTHING changed — the completed marker and the true flag both stand — so
+  // the "dbConnect will retry" promise would be a lie even across restarts;
+  // surface it as a restore failure instead (the restore is idempotent).
+  // A matched-nothing result is fine: no marker existed, nothing to convert.
+  try {
+    await markers.updateOne(
+      { _id: "legacyNozzleConditions" as never },
+      {
+        $set: { released: true, processed: [] },
+        $unset: { completed: "", completedAt: "", claimToken: "" },
+      },
+    );
+  } catch (err) {
+    throw new RestoreCleanupInvalidationError(err);
+  }
+  // Codex P1 r12 ordering: only AFTER the durable state reflects "not
+  // completed" may the process-local flag flip — a racer can then never
+  // observe (flag false + completed marker) and flip it back.
+  if (cached) cached.migrations.legacyNozzleConditions = false;
+  const result = await clearLegacyNozzleConditionsOnce(db as unknown as MinimalDb);
+  if (result.ran && result.cleared > 0) {
+    console.log(
+      `[migration] Cleared ${result.cleared} legacy machine-derived nozzle condition(s) after snapshot restore (GH #1021)`,
+    );
+  }
+  if (cached) cached.migrations.legacyNozzleConditions = true;
 }

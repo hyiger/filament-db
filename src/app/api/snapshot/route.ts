@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
-import dbConnect from "@/lib/mongodb";
+import dbConnect, {
+  rerunLegacyNozzleCleanupAfterRestore,
+  RestoreCleanupInvalidationError,
+} from "@/lib/mongodb";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { checkContentLength } from "@/lib/apiErrorHandler";
 import Filament from "@/models/Filament";
@@ -19,9 +22,14 @@ import SharedCatalog from "@/models/SharedCatalog";
 let restoreInProgress = false;
 
 /** Current snapshot schema version (see the version history in GET). Bumped
- * whenever the `collections` shape changes so restore can reject newer files
- * (GH #953). */
-const CURRENT_SNAPSHOT_VERSION = 4;
+ * whenever the snapshot shape changes so restore can reject newer files
+ * (GH #953). v5 changes no collection, but carries the
+ * `legacyNozzleCleanupComplete` provenance flag (GH #1021 r13) — a pre-#1022
+ * build restoring a v5 file would silently DROP that provenance, and the
+ * post-upgrade migration would then re-judge (and could erase) a
+ * byte-identical post-cleanup user pin; the #953 version guard in those
+ * builds rejects v5 instead. */
+const CURRENT_SNAPSHOT_VERSION = 5;
 
 /** The collection keys a v≤4 snapshot carries. Restore requires at least one to
  * be present so a wrong-shape / newer file 400s instead of silently wiping the
@@ -179,11 +187,25 @@ export async function GET(request: NextRequest) {
   //        snapshot/restore round-trip, silently losing every published
   //        share link; now symmetric with /api/snapshot/delete which
   //        always cleared SharedCatalog)
+  //   v5 — adds the top-level legacyNozzleCleanupComplete provenance flag
+  //        (GH #1021: restore must know whether the data predates the
+  //        one-shot nozzle-condition cleanup; bumped so pre-#1022 builds —
+  //        which would drop the flag — reject the file via the #953 guard)
   // Older snapshots still restore cleanly because POST destructures
   // missing collections to `[]`.
+  // GH #1021 r12: cleanup provenance. Restore uses this to decide whether the
+  // snapshot's data predates the one-shot legacy nozzle-condition cleanup
+  // (absent/false → re-run it over the restored rows) or is post-cleanup
+  // (true → a byte-identical pure nozzle condition in the backup is a USER
+  // pin, and re-judging it would erase legitimate configuration).
+  const cleanupMarker = await mongoose.connection.db
+    ?.collection("_migrations")
+    .findOne({ _id: "legacyNozzleConditions" as never });
+
   const snapshot = {
     version: CURRENT_SNAPSHOT_VERSION,
     createdAt: new Date().toISOString(),
+    legacyNozzleCleanupComplete: cleanupMarker?.completed === true,
     collections: {
       filaments,
       nozzles,
@@ -243,6 +265,7 @@ async function restoreSnapshot(request: NextRequest) {
 
   let snapshot: {
     version?: number;
+    legacyNozzleCleanupComplete?: boolean;
     collections?: {
       filaments?: unknown[];
       nozzles?: unknown[];
@@ -516,6 +539,40 @@ async function restoreSnapshot(request: NextRequest) {
       const docs = (sharedCatalogs as Record<string, unknown>[]).map(restoreTypes).map(normalizePurgedTombstone);
       await SharedCatalog.insertMany(docs, { ordered: true });
       results.sharedCatalogs = sharedCatalogs.length;
+    }
+
+    // GH #1021 (Codex P1 r11/r12): the restore replaced filaments+nozzles,
+    // but snapshots don't carry `_migrations` — a completed marker would keep
+    // skipping the cleanup over freshly-restored PRE-upgrade data. The
+    // snapshot's own provenance flag decides (r12): post-cleanup backups keep
+    // their pins (no re-run — a byte-identical condition there is user
+    // input); pre-cleanup/older backups get re-cleaned. Best-effort: a
+    // transient failure leaves the process-local flag false, so the next
+    // dbConnect retries (and fails requests until terminal, per the r7
+    // posture) — the restore itself already succeeded either way.
+    try {
+      await rerunLegacyNozzleCleanupAfterRestore(snapshot.legacyNozzleCleanupComplete === true);
+    } catch (cleanupErr) {
+      // Codex P1 r16: distinguish the two failure shapes. If the DURABLE
+      // marker state was never updated, no later dbConnect (or restart) will
+      // re-run the cleanup — reporting success would strand restored legacy
+      // conditions forever. The restore is idempotent, so fail the request
+      // and have the user run it again. A failure AFTER the durable
+      // invalidation genuinely retries on the next connect.
+      if (cleanupErr instanceof RestoreCleanupInvalidationError) {
+        console.error("[snapshot] Restore cleanup invalidation failed:", cleanupErr);
+        return NextResponse.json(
+          {
+            error:
+              "Snapshot data was restored, but the legacy nozzle-condition cleanup could not be scheduled. Run the restore again.",
+          },
+          { status: 500 },
+        );
+      }
+      console.error(
+        "[snapshot] Post-restore legacy nozzle-condition cleanup failed (dbConnect will retry):",
+        cleanupErr,
+      );
     }
 
     return NextResponse.json({

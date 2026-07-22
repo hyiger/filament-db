@@ -332,6 +332,9 @@ async function augmentExistingWithParent(existing: {
     bedTypeTemps: existing.bedTypeTemps,
     settings: existing.settings,
     calibrations: existing.calibrations,
+    // GH #1021 r14: tick refs for the legacy-condition ingestion guard in
+    // prepareBambuUpdate (stripLegacyMachineCondition provenance).
+    compatibleNozzles: existing.compatibleNozzles,
     parentId: existing.parentId ? String(existing.parentId) : null,
     parent,
   };
