@@ -8,6 +8,7 @@ import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
+import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { resolveSyncBackColor } from "@/lib/prusaSlicerBundle";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
 import { escapeRegex } from "@/lib/matchFilament";
@@ -924,6 +925,12 @@ export async function POST(
     if (merge.error) {
       return errorResponse(merge.error, 400);
     }
+    // GH #1021 (Codex P1 r10): a PRE-upgrade fork preset still carries the
+    // machine-derived nozzle condition the old export stamped; persisting it
+    // would resurrect the hidden-preset bug after the one-shot DB cleanup.
+    // Strip it (→ "") when it provenance-matches this filament's effective
+    // ticks; a non-matching pure nozzle condition is a user pin and persists.
+    await stripLegacyMachineCondition(merge.settings, filament);
     update.settings = merge.settings;
 
     // #867 Phase 2 companion: on the AUTHORITATIVE ObjectId path, honor a renamed

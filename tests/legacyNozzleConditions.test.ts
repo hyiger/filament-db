@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import {
   clearLegacyNozzleConditionsOnce,
   deriveLegacyNozzleCondition,
+  isLegacyMachineNozzleCondition,
   LegacyCleanupInProgressError,
   LEGACY_NOZZLE_CONDITION_RE,
   type MinimalDb,
@@ -258,6 +259,118 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     const marker = await rawDb().collection("_migrations").findOne(MARKER);
     expect(marker!.claimToken).toBe("someone-else");
     expect(marker!.released).toBeUndefined();
+  });
+
+  it("a TRANSIENT completion-write failure releases the claim — no wait-until-stale outage (r10)", async () => {
+    const noz04 = await seedNozzle(0.4);
+    await seed("almost-done", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    const real = db();
+    let failCompletion = true;
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "_migrations") return col;
+        return {
+          findOne: col.findOne.bind(col),
+          find: col.find.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: async (f: Record<string, unknown>, u: Record<string, unknown>) => {
+            if (failCompletion && JSON.stringify(u).includes("completed")) {
+              failCompletion = false;
+              throw new Error("completion blip");
+            }
+            return col.updateOne(f, u);
+          },
+        };
+      },
+    };
+    await expect(clearLegacyNozzleConditionsOnce(wrapper)).rejects.toThrow("completion blip");
+    // The row work is DONE and the claim was released — not left live-shaped
+    // (which would make every dbConnect wait waitMs and fail until staleMs).
+    expect(await conditionOf("almost-done")).toBe("");
+    const marker = await rawDb().collection("_migrations").findOne(MARKER);
+    expect(marker!.released).toBe(true);
+    expect(marker!.completed).toBeUndefined();
+    // The resumed retry finds no candidates left and just completes.
+    expect(await clearLegacyNozzleConditionsOnce(wrapper)).toEqual({ ran: true, cleared: 0 });
+    expect((await rawDb().collection("_migrations").findOne(MARKER))!.completed).toBe(true);
+  });
+
+  it("completion-crash worst case: completion AND its release both fail → waiters throw, stale takeover completes (r10)", async () => {
+    const noz04 = await seedNozzle(0.4);
+    await seed("done-but-stuck", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    const real = db();
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "_migrations") return col;
+        return {
+          findOne: col.findOne.bind(col),
+          find: col.find.bind(col),
+          insertOne: col.insertOne.bind(col),
+          updateOne: async (f: Record<string, unknown>, u: Record<string, unknown>) => {
+            const body = JSON.stringify(u);
+            if (body.includes("completed")) throw new Error("completion blip");
+            if (body.includes("released")) throw new Error("release blip");
+            return col.updateOne(f, u);
+          },
+        };
+      },
+    };
+    await expect(clearLegacyNozzleConditionsOnce(wrapper)).rejects.toThrow("completion blip");
+    // Row work done, but the claim stayed live-shaped → contenders throw…
+    expect(await conditionOf("done-but-stuck")).toBe("");
+    await expect(
+      clearLegacyNozzleConditionsOnce(db(), { waitMs: 40, pollMs: 10 }),
+    ).rejects.toBeInstanceOf(LegacyCleanupInProgressError);
+    // …until the stale takeover resumes: nothing left to clear, completes.
+    await new Promise((r) => setTimeout(r, 5));
+    const res = await clearLegacyNozzleConditionsOnce(db(), { waitMs: 40, pollMs: 10, staleMs: 0 });
+    expect(res).toEqual({ ran: true, cleared: 0 });
+    expect((await rawDb().collection("_migrations").findOne(MARKER))!.completed).toBe(true);
+  });
+
+  it("re-asserts ownership at the destructive-write boundary (r10 P2)", async () => {
+    const noz04 = await seedNozzle(0.4);
+    await seed("boundary", "nozzle_diameter[0]==0.4", { compatibleNozzles: [noz04] });
+    const real = db();
+    // _migrations findOne call order in a fresh run: (1) claim-loop observe,
+    // (2) progress re-read, (3+) the per-row ownership re-check.
+    let findOneCalls = 0;
+    let mode: "swap" | "vanish" = "swap";
+    const wrapper: MinimalDb = {
+      collection(name) {
+        const col = real.collection(name);
+        if (name !== "_migrations") return col;
+        return {
+          insertOne: col.insertOne.bind(col),
+          find: col.find.bind(col),
+          updateOne: col.updateOne.bind(col),
+          findOne: async (filter) => {
+            findOneCalls += 1;
+            if (findOneCalls === 3) {
+              if (mode === "vanish") return null; // marker hard-deleted mid-run
+              // A takeover lands between the record and the clear.
+              await col.updateOne(MARKER, { $set: { claimToken: "someone-else" } });
+            }
+            return col.findOne(filter);
+          },
+        };
+      },
+    };
+    await expect(clearLegacyNozzleConditionsOnce(wrapper)).rejects.toBeInstanceOf(
+      LegacyCleanupInProgressError,
+    );
+    expect(await conditionOf("boundary")).toBe("nozzle_diameter[0]==0.4"); // clear never ran
+
+    // Same abort when the marker is GONE at the boundary.
+    await rawDb().collection("_migrations").deleteMany({});
+    findOneCalls = 0;
+    mode = "vanish";
+    await expect(clearLegacyNozzleConditionsOnce(wrapper)).rejects.toBeInstanceOf(
+      LegacyCleanupInProgressError,
+    );
+    expect(await conditionOf("boundary")).toBe("nozzle_diameter[0]==0.4");
   });
 
   it("a takeover between the last clear and completion surfaces the in-progress error (r9)", async () => {
@@ -601,6 +714,25 @@ describe("clearLegacyNozzleConditionsOnce", () => {
     expect(deriveLegacyNozzleCondition([])).toBeNull();
     expect(deriveLegacyNozzleCondition(undefined)).toBeNull();
     expect(deriveLegacyNozzleCondition("0.4")).toBeNull();
+  });
+
+  it("isLegacyMachineNozzleCondition = machine grammar AND byte-equal derivation (the ingestion predicate)", () => {
+    const nozzles = [{ diameter: 0.4 }, { diameter: 0.6 }];
+    expect(
+      isLegacyMachineNozzleCondition("nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6", nozzles),
+    ).toBe(true);
+    // Grammar match but wrong ticks → user pin.
+    expect(isLegacyMachineNozzleCondition("nozzle_diameter[0]==0.8", nozzles)).toBe(false);
+    // Right value but not the machine grammar → never condemned.
+    expect(
+      isLegacyMachineNozzleCondition("printer_model==MK4 and nozzle_diameter[0]==0.4", nozzles),
+    ).toBe(false);
+    // No derivable ticks → nothing provable.
+    expect(isLegacyMachineNozzleCondition("nozzle_diameter[0]==0.4", [])).toBe(false);
+    expect(isLegacyMachineNozzleCondition("nozzle_diameter[0]==0.4", undefined)).toBe(false);
+    // Non-string values.
+    expect(isLegacyMachineNozzleCondition(null, nozzles)).toBe(false);
+    expect(isLegacyMachineNozzleCondition(42, nozzles)).toBe(false);
   });
 
   it("regex matches only the machine grammar", () => {

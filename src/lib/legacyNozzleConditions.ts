@@ -23,6 +23,14 @@
  *    value whose ticks were edited AFTER the round-trip no longer matches and
  *    survives — visible in the settings bag and clearable by hand, strictly
  *    better than silently deleting a pin.
+ *  - INGESTION-GUARD companion (Codex P1 r10): cleaning the DB once is not
+ *    enough — a pre-upgrade fork's sync-back or a pre-upgrade INI re-import
+ *    keeps re-sending the stamped machine condition afterwards, and with the
+ *    one-shot spent it would re-persist and resurrect the hidden-preset bug.
+ *    The slicer write boundaries (per-id PrusaSlicer/OrcaSlicer sync, bulk
+ *    INI import) therefore strip a provenance-matching INCOMING value via
+ *    src/lib/stripLegacyNozzleCondition.ts, built on the same
+ *    isLegacyMachineNozzleCondition predicate exported below.
  *  - TOCTOU-safe clears: claim serialization only excludes other cleanup
  *    runners, not ordinary filament writers (an Atlas DB shared by several
  *    clients keeps serving them). Each destructive write is therefore a
@@ -108,6 +116,27 @@ export function deriveLegacyNozzleCondition(compatibleNozzles: unknown): string 
   ).sort((a, b) => a - b);
   if (diameters.length === 0) return null;
   return diameters.map((d) => `nozzle_diameter[0]==${d}`).join(" or ");
+}
+
+/**
+ * GH #1021 (Codex P1 r10): the provenance test as a reusable predicate — true
+ * when `value` is exactly the machine grammar AND byte-equals the legacy
+ * derivation from `populatedNozzles` (docs carrying numeric `diameter`).
+ * Used by the one-shot DB cleanup above and by the INGESTION guard
+ * (src/lib/stripLegacyNozzleCondition.ts): pre-upgrade forks/INIs keep
+ * re-sending the stamped machine condition long after the cleanup completed,
+ * so the sync/import write paths must strip it at the boundary or the
+ * hidden-preset bug resurrects on the first sync-back.
+ */
+export function isLegacyMachineNozzleCondition(
+  value: unknown,
+  populatedNozzles: unknown,
+): boolean {
+  return (
+    typeof value === "string" &&
+    LEGACY_NOZZLE_CONDITION_RE.test(value) &&
+    value === deriveLegacyNozzleCondition(populatedNozzles)
+  );
 }
 
 /** Minimal driver surface (mongodb Db / collection) so the helper works with
@@ -324,6 +353,15 @@ export async function clearLegacyNozzleConditionsOnce(
       // matchedCount (not modifiedCount): the fence asks "does the claim
       // still carry OUR token", not "did the $addToSet change anything".
       if (recorded.matchedCount !== 1) throw new LegacyCleanupInProgressError();
+      // Codex P2 r10: re-assert ownership at the destructive-write boundary —
+      // a takeover in the record→clear window would let the new holder skip
+      // this recorded row and complete while our clear lands after. The
+      // residual (takeover between this read and the write below) is
+      // benign-convergent: the condition+updatedAt predicate means a late
+      // clear can only apply the exact clear the migration intended, and any
+      // user save in between bumps updatedAt and blocks it.
+      const owned = await markers.findOne({ _id: MARKER_ID });
+      if (!owned || owned.claimToken !== token) throw new LegacyCleanupInProgressError();
       try {
         const res = await filaments.updateOne(
           {
@@ -356,11 +394,24 @@ export async function clearLegacyNozzleConditionsOnce(
 
   // Fenced completion: if the claim was taken over mid-run, the new holder
   // owns the terminal state — surface the in-progress error instead of
-  // reporting a terminal result the marker does not reflect.
-  const done = await markers.updateOne(
-    { _id: MARKER_ID, claimToken: token },
-    { $set: { completed: true, completedAt: new Date() } },
-  );
+  // reporting a terminal result the marker does not reflect. A TRANSIENT
+  // failure of this write releases the claim (Codex P1 r10) — otherwise a
+  // one-off error here would leave a live-shaped claim that every dbConnect
+  // waits on and fails against until staleMs, an avoidable outage; all row
+  // work is recorded, so the released-claim resume just re-runs this
+  // completion against an empty candidate set.
+  let done;
+  try {
+    done = await markers.updateOne(
+      { _id: MARKER_ID, claimToken: token },
+      { $set: { completed: true, completedAt: new Date() } },
+    );
+  } catch (err) {
+    await markers
+      .updateOne({ _id: MARKER_ID, claimToken: token }, { $set: { released: true } })
+      .catch(() => {});
+    throw err;
+  }
   if (done.matchedCount !== 1) throw new LegacyCleanupInProgressError();
   return { ran: true, cleared };
 }

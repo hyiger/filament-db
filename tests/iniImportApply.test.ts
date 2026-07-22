@@ -358,6 +358,38 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
   //    omitting the temp keys rode parseIni's all-null `temperatures` (and
   //    `inherits: null`) into the importer's dot-key $set and wiped all four
   //    stored temps + inherits on a name-matched filament. ────────────────────
+  describe("legacy nozzle-condition ingestion guard (GH #1021 r10)", () => {
+    it("strips a provenance-matching machine condition on update; preserves a mismatched pin", async () => {
+      const Nozzle = (await import("@/models/Nozzle")).default;
+      const n4 = await Nozzle.create({ name: "Ini 0.4", diameter: 0.4, type: "Brass" });
+      await Filament.create({
+        name: "Ini Legacy PLA",
+        vendor: "Acme",
+        type: "PLA",
+        compatibleNozzles: [n4._id],
+      });
+      // A pre-upgrade INI export of this filament carries the stamped
+      // machine-derived condition — re-importing must NOT re-persist it.
+      const outcome = await upsertIniFilament({
+        ...section("Ini Legacy PLA"),
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4", cooling: "1" },
+      });
+      expect(outcome).toBe("updated");
+      const fresh = await Filament.findOne({ name: "Ini Legacy PLA" }).lean();
+      expect(fresh!.settings?.compatible_printers_condition).toBe("");
+      expect(fresh!.settings?.cooling).toBe("1");
+
+      // A pure nozzle pin that does NOT match the ticks is user input — kept.
+      const outcome2 = await upsertIniFilament({
+        ...section("Ini Legacy PLA"),
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.8" },
+      });
+      expect(outcome2).toBe("updated");
+      const fresh2 = await Filament.findOne({ name: "Ini Legacy PLA" }).lean();
+      expect(fresh2!.settings?.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+    });
+  });
+
   describe("leave-when-omitted temps + inherits (GH #1008 F3)", () => {
     /** Parse a raw INI through the actual import pipeline (parse → collapse). */
     const collapse = (ini: string) => collapsePerNozzleImportSections(parseIniFilaments(ini));

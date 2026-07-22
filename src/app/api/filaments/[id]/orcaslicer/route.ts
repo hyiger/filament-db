@@ -10,6 +10,7 @@ import {
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
+import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { isUpdateNozzleRangeInverted } from "@/lib/temperatureRange";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
 
@@ -254,6 +255,14 @@ export async function POST(
     if (merge.error) {
       return errorResponse(merge.error, 400);
     }
+    // GH #1021 (Codex P1 r10): the shared settings bag rides every slicer
+    // export, so an Orca preset exported before the cleanup can carry the
+    // machine-derived nozzle condition as passthrough and re-persist it here.
+    // Strip it (→ "") when it provenance-matches this filament's effective
+    // ticks (same guard as the PrusaSlicer sync + INI import boundaries). The
+    // key arrives in `merge.added` whenever the body carries it, so the
+    // added/removed persist-gate below still writes the stripped bag.
+    await stripLegacyMachineCondition(merge.settings, filament);
     const settingsAdded = merge.added;
     // GH #950 (Codex P2 on PR #968 r5): also write when the merge PURGED a stale
     // structured key from the existing bag (`removed`) — otherwise a sync that
