@@ -4,6 +4,7 @@ import Filament from "@/models/Filament";
 import PrintHistory from "@/models/PrintHistory";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 import { displayColor } from "@/lib/filamentColors";
+import { MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
 
 /**
  * GET /api/analytics?days=30 — usage analytics aggregation.
@@ -212,17 +213,18 @@ export async function GET(request: NextRequest) {
           { color: fdoc?.color ?? null, secondaryColors: fdoc?.secondaryColors ?? null },
           fdoc?.parentId,
         );
+        const g = safeGrams(u.grams);
         const existing = byFilament.get(fid);
-        if (existing) existing.grams += u.grams;
-        else byFilament.set(fid, { name, vendor, cost, grams: u.grams });
-        byVendor.set(vendor, (byVendor.get(vendor) ?? 0) + u.grams);
-        totalGrams += u.grams;
-        if (cost != null) totalCost += (u.grams / 1000) * cost;
+        if (existing) existing.grams += g;
+        else byFilament.set(fid, { name, vendor, cost, grams: g });
+        byVendor.set(vendor, (byVendor.get(vendor) ?? 0) + g);
+        totalGrams += g;
+        if (cost != null) totalCost += (g / 1000) * cost;
         const dayBucket = byDayFilament.get(dayKey);
         if (dayBucket) {
           const fEntry = dayBucket.get(fid);
-          if (fEntry) fEntry.grams += u.grams;
-          else dayBucket.set(fid, { name, color, grams: u.grams });
+          if (fEntry) fEntry.grams += g;
+          else dayBucket.set(fid, { name, color, grams: g });
         }
       }
 
@@ -252,23 +254,24 @@ export async function GET(request: NextRequest) {
             { color: f.color ?? null, secondaryColors: f.secondaryColors ?? null },
             f.parentId,
           );
+          const g = safeGrams(u.grams);
           const existing = byFilament.get(fid);
-          if (existing) existing.grams += u.grams;
+          if (existing) existing.grams += g;
           else
             byFilament.set(fid, {
               name: f.name,
               vendor: f.vendor,
               cost: fCost,
-              grams: u.grams,
+              grams: g,
             });
-          byVendor.set(f.vendor, (byVendor.get(f.vendor) ?? 0) + u.grams);
-          totalGrams += u.grams;
-          if (fCost != null) totalCost += (u.grams / 1000) * fCost;
+          byVendor.set(f.vendor, (byVendor.get(f.vendor) ?? 0) + g);
+          totalGrams += g;
+          if (fCost != null) totalCost += (g / 1000) * fCost;
           const dayBucket = byDayFilament.get(dayKey);
           if (dayBucket) {
             const fEntry = dayBucket.get(fid);
-            if (fEntry) fEntry.grams += u.grams;
-            else dayBucket.set(fid, { name: f.name, color: fColor, grams: u.grams });
+            if (fEntry) fEntry.grams += g;
+            else dayBucket.set(fid, { name: f.name, color: fColor, grams: g });
           }
           manualEntries++;
         }
@@ -354,6 +357,29 @@ export async function GET(request: NextRequest) {
   }
 }
 
+/**
+ * GH #1030: clamp one stored `grams` value to a sane, finite, non-negative
+ * number before it enters ANY aggregate.
+ *
+ * The write boundaries now reject `grams > MAX_USAGE_GRAMS`, but rows that
+ * predate that cap — or arrive through a path that doesn't go through the
+ * routes (snapshot restore, hybrid sync) — can still carry a pathological
+ * magnitude. Sanitising at INGESTION rather than at the six emit points keeps
+ * every downstream invariant intact by construction: with all inputs finite,
+ * `rawDaySum` can no longer overflow, so the Hamilton apportionment's
+ * `ideal = (raw / rawDaySum) * dayGrams` can never evaluate `0 * Infinity`
+ * → NaN, which used to make EVERY segment of that day — including unrelated,
+ * correctly-sized filaments — serialize as JSON `null`.
+ *
+ * A clamped row renders as MAX_USAGE_GRAMS rather than vanishing, so the
+ * corruption stays visible in the UI instead of silently under-reporting; a
+ * NaN/negative/missing value contributes 0.
+ */
+function safeGrams(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
+  return Math.min(value, MAX_USAGE_GRAMS);
+}
+
 function sumGrams(usage: { grams: number }[] | undefined): number {
-  return (usage || []).reduce((sum, u) => sum + u.grams, 0);
+  return (usage || []).reduce((sum, u) => sum + safeGrams(u.grams), 0);
 }

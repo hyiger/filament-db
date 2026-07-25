@@ -3,7 +3,7 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { errorResponse, errorResponseFromCaught, handleVersionError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
-import { capUsageHistory, MAX_SPOOL_HISTORY } from "@/lib/capUsageHistory";
+import { capUsageHistory, MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
 
 /**
  * POST /api/filaments/{id}/spools/{spoolId}/usage — manually log grams used.
@@ -33,6 +33,17 @@ export async function POST(
   }
   if (typeof body.grams !== "number" || !Number.isFinite(body.grams) || body.grams <= 0) {
     return errorResponse("grams must be a positive number", 400);
+  }
+  // GH #1030: bound the MAGNITUDE too. `Number.isFinite` only excludes
+  // Infinity/NaN, so 1e308 passed here, cast, and persisted — and once a day's
+  // analytics sum overflows to Infinity the per-day apportionment yields NaN
+  // for EVERY segment of that day, so unrelated filaments that printed the same
+  // day also serialize as JSON null. See MAX_USAGE_GRAMS for the bound's derivation.
+  if (body.grams > MAX_USAGE_GRAMS) {
+    return errorResponse(
+      `grams must be no greater than ${MAX_USAGE_GRAMS}`,
+      400,
+    );
   }
   // Label + notes length bounds keep pathological input from bloating the
   // subdocument. 200 is generous for any realistic job name.

@@ -1136,3 +1136,139 @@ describe("/api/analytics — spool projection (GH #1005 F1)", () => {
     }
   });
 });
+
+/**
+ * GH #1030 — an oversized stored `grams` must not poison the aggregates.
+ *
+ * `Number.isFinite` only excludes Infinity/NaN, so a value like 1e308 used to
+ * cast, validate and persist. Analytics then summed raw doubles; once a day's
+ * sum overflowed to Infinity the Hamilton apportionment computed
+ * `ideal = (raw / Infinity) * Infinity` = `0 * Infinity` = NaN for EVERY
+ * segment of that day, and JSON.stringify renders both Infinity and NaN as
+ * `null` — so `totals.grams` AND an unrelated, correctly-sized filament that
+ * merely printed the same UTC day both came back as null, breaking the numeric
+ * contract public/openapi.json declares.
+ *
+ * These assert the RESPONSE stays numeric, which is the property that actually
+ * matters — a test that only checked the new 400 would not catch a regression
+ * in the ingestion-time clamp that protects pre-existing / synced rows.
+ */
+describe("/api/analytics — oversized grams cannot produce null totals (GH #1030)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    delete mongoose.models.Filament;
+    Filament = (await import("@/models/Filament")).default;
+    delete mongoose.models.PrintHistory;
+    await import("@/models/PrintHistory");
+  });
+
+  async function analytics() {
+    const res = await getAnalytics(
+      new NextRequest("http://localhost:3456/api/analytics?days=30"),
+    );
+    expect(res.status).toBe(200);
+    return res.json();
+  }
+
+  it("keeps totals and every day segment numeric when two overflowing entries exist", async () => {
+    const day = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000);
+
+    // Two pathological rows on the SAME day — the shape that overflows the sum.
+    // Written directly to the DB to simulate data that predates the route cap
+    // (or arrived via snapshot restore / hybrid sync, which bypass the routes).
+    await Filament.create({
+      name: "Poisoned PLA",
+      vendor: "V",
+      type: "PLA",
+      spools: [
+        {
+          label: "S",
+          totalWeight: 1000,
+          usageHistory: [
+            { grams: 1e308, date: day, source: "manual", jobId: null, jobLabel: "" },
+            { grams: 1e308, date: day, source: "manual", jobId: null, jobLabel: "" },
+          ],
+        },
+      ],
+    });
+    // An unrelated, perfectly normal filament that printed the same day.
+    await Filament.create({
+      name: "Innocent PLA",
+      vendor: "V",
+      type: "PLA",
+      spools: [
+        {
+          label: "S",
+          totalWeight: 1000,
+          usageHistory: [
+            { grams: 42, date: day, source: "manual", jobId: null, jobLabel: "" },
+          ],
+        },
+      ],
+    });
+
+    const data = await analytics();
+
+    // The headline must be a real number, not null.
+    expect(data.totals.grams).not.toBeNull();
+    expect(Number.isFinite(data.totals.grams)).toBe(true);
+    expect(data.totals.cost).not.toBeNull();
+    expect(Number.isFinite(data.totals.cost)).toBe(true);
+
+    // Every per-day bucket and every segment stays numeric.
+    for (const d of data.usageByDay) {
+      expect(Number.isFinite(d.grams)).toBe(true);
+      for (const seg of d.byFilament) {
+        expect(seg.grams).not.toBeNull();
+        expect(Number.isFinite(seg.grams)).toBe(true);
+      }
+    }
+
+    // THE REGRESSION THAT MATTERS: the innocent filament's 42 g survives
+    // intact. Pre-fix it serialized as null purely because another filament
+    // overflowed the same day's sum.
+    const innocent = data.byFilament.find(
+      (f: { name: string }) => f.name === "Innocent PLA",
+    );
+    expect(innocent).toBeDefined();
+    expect(innocent.grams).toBe(42);
+
+    // And the clamped row is still VISIBLE (renders at the cap) rather than
+    // silently dropped, so the bad data stays discoverable in the UI.
+    const poisoned = data.byFilament.find(
+      (f: { name: string }) => f.name === "Poisoned PLA",
+    );
+    expect(poisoned).toBeDefined();
+    expect(poisoned.grams).toBeGreaterThan(0);
+  });
+
+  it("treats a negative / NaN stored grams as zero rather than corrupting the sum", async () => {
+    const day = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
+    await Filament.create({
+      name: "Odd PLA",
+      vendor: "V",
+      type: "PLA",
+      spools: [
+        {
+          label: "S",
+          totalWeight: 1000,
+          usageHistory: [
+            { grams: 10, date: day, source: "manual", jobId: null, jobLabel: "" },
+          ],
+        },
+      ],
+    });
+    // Bypass schema casting to plant a non-numeric value the way a corrupt
+    // import or a legacy row could.
+    await Filament.collection.updateOne(
+      { name: "Odd PLA" },
+      { $set: { "spools.0.usageHistory.1": { grams: -5, date: day, source: "manual", jobId: null, jobLabel: "" } } },
+    );
+
+    const data = await analytics();
+    expect(Number.isFinite(data.totals.grams)).toBe(true);
+    expect(data.totals.grams).toBe(10); // the -5 contributes 0, not -5
+  });
+});

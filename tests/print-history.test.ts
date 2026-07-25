@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { POST as postPrintHistory } from "@/app/api/print-history/route";
 import { DELETE as deletePrintHistory } from "@/app/api/print-history/[id]/route";
 import { GET as getAnalytics } from "@/app/api/analytics/route";
-import { MAX_SPOOL_HISTORY } from "@/lib/capUsageHistory";
+import { MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
 
 /**
  * Covers two behaviours added in the v1.11 review round:
@@ -253,6 +253,59 @@ describe("print-history POST", () => {
     const entry = fresh.spools[0].usageHistory[0];
     expect(entry.jobId).toBeDefined();
     expect(String(entry.jobId)).toBe(String(created._id));
+  });
+  // ── GH #1030: grams magnitude bound at the print-history boundary ────
+
+  it("#1030 — rejects a usage entry past MAX_USAGE_GRAMS and persists nothing", async () => {
+    const f = await Filament.create({
+      name: "Grams Bound PLA",
+      vendor: "Test",
+      type: "PLA",
+      spools: [{ label: "Main", totalWeight: 1000 }],
+    });
+
+    const res = await postPrintHistory(
+      makeReq({
+        jobLabel: "overflow",
+        startedAt: new Date().toISOString(),
+        usage: [{ filamentId: String(f._id), grams: 1e308 }],
+      }),
+    );
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/no greater than/i);
+
+    // Atomic: no PrintHistory row, no spool debit, no ledger entry.
+    expect(await PrintHistory.countDocuments({})).toBe(0);
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools[0].totalWeight).toBe(1000);
+    expect(fresh.spools[0].usageHistory ?? []).toHaveLength(0);
+  });
+
+  it("#1030 — accepts exactly the cap and still accepts an ordinary job", async () => {
+    const f = await Filament.create({
+      name: "Grams Bound OK PLA",
+      vendor: "Test",
+      type: "PLA",
+      spools: [{ label: "Main", totalWeight: 1000 }],
+    });
+
+    const atCap = await postPrintHistory(
+      makeReq({
+        jobLabel: "at-cap",
+        startedAt: new Date().toISOString(),
+        usage: [{ filamentId: String(f._id), grams: MAX_USAGE_GRAMS }],
+      }),
+    );
+    expect(atCap.status).toBe(201);
+
+    const ordinary = await postPrintHistory(
+      makeReq({
+        jobLabel: "normal",
+        startedAt: new Date().toISOString(),
+        usage: [{ filamentId: String(f._id), grams: 25 }],
+      }),
+    );
+    expect(ordinary.status).toBe(201);
   });
 });
 
@@ -1027,4 +1080,6 @@ describe("analytics GET — double-counting regression", () => {
     const body = await res.json();
     expect(body.totals.grams).toBe(50);
   });
+
+
 });
