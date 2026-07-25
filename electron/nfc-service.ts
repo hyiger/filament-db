@@ -31,6 +31,14 @@ import {
   NTAG_NAME_TO_NDEF_BYTES,
   type NtagSizeName,
 } from "../src/lib/ntagVersion";
+import {
+  NTAG_CC_OFFSET,
+  NTAG_TLV_OFFSET,
+  NTAG_FIRST_DATA_PAGE,
+  NTAG_MAX_PAGE,
+  ndefBytesFromCc,
+  isReadablePage,
+} from "../src/lib/ntagPages";
 import { deriveBambuKeys, parseBambuBlocks, bambuToDecodedTag } from "./bambu-tag";
 import {
   classifyNfcError as classifyNfcErrorImpl,
@@ -88,12 +96,16 @@ const BLOCK_SIZE = 4;
 const DEFAULT_BLOCK_COUNT = 80;
 
 // NTAG (NFC-A / ISO 14443 Type 2) read tuning (#864). FF B0 READ BINARY returns
-// a 4-page (16-byte) burst; the Type-2 CC sits in page 3 (bytes 12–15) with the
-// NDEF TLV area starting at page 4 (byte 16). NTAG216 tops out near 872 user
-// bytes, so 1 KB is a generous ceiling that bounds the read loop.
-const NTAG_CC_OFFSET = 12;
-const NTAG_TLV_OFFSET = 16;
-const NTAG_MAX_NDEF_BYTES = 1024;
+// a 4-page (16-byte) burst; the Type-2 CC sits in page 3 (bytes 12-15) with the
+// NDEF TLV area starting at page 4 (byte 16).
+//
+// GH #1028: the offsets, the extent ceiling and the page bound now live in the
+// pure, unit-tested ../src/lib/ntagPages.ts. The old local ceiling of 1024 was
+// arithmetically unreachable — one Type-2 sector is 256 pages x 4 = 1024 bytes
+// TOTAL and the data area starts at page 4, so the real maximum is
+// (256 - 4) x 4 = 1008. Being off by the 16-byte head is exactly what let the
+// read loop run one burst PAST the addressable end and wrap the single-byte
+// page field back to 0.
 // Write-side extent caps (Codex #927) now live in the pure, unit-tested
 // resolveNtagWriteSize (src/lib/ntagVersion.ts): NTAG216_MAX_NDEF_BYTES (872,
 // the largest real NTAG) and NTAG213_NDEF_BYTES (144, safe on ANY chip).
@@ -776,6 +788,17 @@ export class NfcService extends EventEmitter {
 
   /** Read one 16-byte (4-page) burst via the PC/SC READ BINARY pseudo-APDU. */
   private async readNtagBurst(protocol: number, startPage: number): Promise<Buffer> {
+    // GH #1028: the start page rides in a SINGLE APDU byte, and
+    // `Buffer.from(array)` applies `& 0xff` SILENTLY — so page 256 would emit
+    // `ffb0000010`, a read of pages 0-3 (UID / static lock bytes / CC), and the
+    // caller would splice that head into the tail of the NDEF image. Mirror the
+    // backstop `writeNtagPage` has had since #927. Page 0 is legal here (the
+    // head burst) whereas the write bound starts at 3.
+    if (!isReadablePage(startPage)) {
+      throw new Error(
+        `Refusing unsafe NTAG page read: page ${startPage} is outside the addressable [0,${NTAG_MAX_PAGE}] range`,
+      );
+    }
     const cmd = Buffer.from([0xff, 0xb0, 0x00, startPage, 0x10]);
     const resp = await this.transmit(cmd, 20, protocol);
     if (!this.checkSW(resp)) {
@@ -794,14 +817,24 @@ export class NfcService extends EventEmitter {
     protocol: number,
     head: Buffer,
   ): Promise<{ data: Buffer; written: number }> {
-    const mlen = head[NTAG_CC_OFFSET + 2]; // CC byte 2 = NDEF area size / 8
-    const ndefBytes = Math.min(Math.max(0, mlen * 8), NTAG_MAX_NDEF_BYTES);
+    // GH #1028: `ndefBytesFromCc` (pure, unit-tested in src/lib/ntagPages.ts)
+    // clamps the TAG-CONTROLLED CC byte to what a 1-byte page address can
+    // actually reach, and tolerates a short head — the write-verify caller at
+    // writeNtagImpl does NOT length-check its head first, so a truncated burst
+    // used to produce `Buffer.alloc(16 + NaN)` and a raw RangeError.
+    const ndefBytes = ndefBytesFromCc(head);
     const data = Buffer.alloc(NTAG_TLV_OFFSET + ndefBytes);
     head.copy(data, 0);
 
-    let page = 4;
+    let page = NTAG_FIRST_DATA_PAGE;
     let written = NTAG_TLV_OFFSET;
-    while (written < data.length) {
+    // GH #1028: bound the walk explicitly. `readNtagBurst` now refuses an
+    // out-of-range page too, but relying on that throw (caught below and turned
+    // into a `break`) would be too subtle to survive future edits. Do NOT
+    // "fix" this by clamping (`page = Math.min(page, NTAG_MAX_PAGE)`): clamping
+    // keeps the loop alive and converts the old accidental wrap into a
+    // permanent re-read of the same page — an NFC deadlock.
+    while (written < data.length && page <= NTAG_MAX_PAGE) {
       let burst: Buffer;
       try {
         burst = await this.readNtagBurst(protocol, page);
@@ -813,6 +846,11 @@ export class NfcService extends EventEmitter {
         }
       }
       const copyLen = Math.min(burst.length, data.length - written);
+      // GH #1028: a zero-length burst would leave `written` unchanged and spin
+      // forever. Before the page bound above, the accidental wrap to page 0 was
+      // what kept data flowing and masked this; with the bound in place it must
+      // be handled explicitly.
+      if (copyLen === 0) break;
       burst.copy(data, written, 0, copyLen);
       written += copyLen;
       page += 4;
