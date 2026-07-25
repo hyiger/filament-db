@@ -34,6 +34,37 @@
  * per-spool history; a backstop against unbounded document growth (GH #304). */
 export const MAX_SPOOL_HISTORY = 1000;
 
+/**
+ * Hard cap on the MAGNITUDE of a single usage entry, in grams (GH #1030).
+ *
+ * `MAX_SPOOL_HISTORY` bounds how MANY entries a spool can hold; nothing bounded
+ * how BIG one could be. Both write boundaries validated only `Number.isFinite`
+ * + a floor, and `Number.isFinite` excludes just `Infinity`/`NaN` — so
+ * `JSON.parse('{"grams":1e308}')` produced a finite value that cast, validated
+ * and persisted. Analytics then sums raw doubles, and once a day's sum
+ * overflows to `Infinity` the per-day apportionment computes
+ * `ideal = (raw / Infinity) * Infinity` = `0 * Infinity` = **NaN for every
+ * segment of that day** — so an unrelated, correctly-sized filament that merely
+ * printed on the same UTC day also serializes as JSON `null` (JSON.stringify
+ * renders both Infinity and NaN as null), violating the numeric response
+ * contract `public/openapi.json` declares.
+ *
+ * 1 tonne: 1000x a standard 1 kg spool and ~50x the largest FDM spool sold
+ * (20 kg), so no real entry can approach it — while still making overflow
+ * structurally unreachable. A spool's ledger is capped at
+ * MAX_SPOOL_HISTORY (1000) x 1e6 = 1e9 g, and the largest plausible window
+ * total stays exactly integer-representable (< Number.MAX_SAFE_INTEGER,
+ * ~9.007e15), so no aggregate can lose precision, let alone overflow.
+ *
+ * Deliberately NOT tightened to catch unit-confusion bugs (a fork posting mm
+ * of filament, ~330,000 mm/kg, or mm^3, ~806,000 mm^3/kg, would land just
+ * under this cap). A tighter 100 kg bound would catch those but is close
+ * enough to plausible bulk backfill logging to risk rejecting a real entry.
+ * This constant exists for overflow safety; unit validation is a separate
+ * concern and should not be smuggled in by lowering it.
+ */
+export const MAX_USAGE_GRAMS = 1_000_000;
+
 /** The subset of an `IUsageEntry` this cap reasons about. Kept structural (and
  * dependency-free) so the helper stays a pure, fast unit-testable module usable
  * over both hydrated Mongoose subdocuments and plain objects. */

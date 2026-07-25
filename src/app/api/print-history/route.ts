@@ -5,7 +5,7 @@ import Filament from "@/models/Filament";
 import PrintHistory from "@/models/PrintHistory";
 import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
-import { capUsageHistory, MAX_SPOOL_HISTORY } from "@/lib/capUsageHistory";
+import { capUsageHistory, MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
 
 /**
  * Thrown when a precondition that pass 1 validated no longer holds on the
@@ -141,6 +141,16 @@ export async function POST(request: NextRequest) {
     }
     if (typeof u.grams !== "number" || !Number.isFinite(u.grams) || u.grams < 0) {
       return errorResponse("usage[i].grams must be a non-negative number", 400);
+    }
+    // GH #1030: bound the MAGNITUDE too — `Number.isFinite` only excludes
+    // Infinity/NaN, so 1e308 persisted here and poisoned every analytics
+    // aggregate. Kept in lockstep with the spool usage route's identical cap;
+    // see MAX_USAGE_GRAMS for the bound's derivation.
+    if (u.grams > MAX_USAGE_GRAMS) {
+      return errorResponse(
+        `usage[i].grams must be no greater than ${MAX_USAGE_GRAMS}`,
+        400,
+      );
     }
   }
 

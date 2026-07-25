@@ -5,7 +5,7 @@ import { POST as postUsage } from "@/app/api/filaments/[id]/spools/[spoolId]/usa
 import { POST as postDryCycle } from "@/app/api/filaments/[id]/spools/[spoolId]/dry-cycles/route";
 import { DELETE as deleteSpool } from "@/app/api/filaments/[id]/spools/[spoolId]/route";
 import * as spoolSlots from "@/lib/spoolSlots";
-import { MAX_SPOOL_HISTORY } from "@/lib/capUsageHistory";
+import { MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
 
 /**
  * Tests for the two v1.11 spool-ledger sub-endpoints:
@@ -381,6 +381,50 @@ describe("spool sub-routes", () => {
       );
       expect(res2.status).toBe(200);
       expect((await Filament.findById(f._id)).spools).toHaveLength(0);
+    });
+  });
+
+  // ── GH #1030: grams magnitude bound at the write boundary ────────────
+
+  describe("POST .../usage — grams upper bound (GH #1030)", () => {
+    async function logGrams(grams: number) {
+      const f = await seedFilament();
+      const sid = String(f.spools[0]._id);
+      const res = await postUsage(
+        postReq(
+          `http://localhost/api/filaments/${f._id}/spools/${sid}/usage`,
+          { grams },
+        ),
+        { params: Promise.resolve({ id: String(f._id), spoolId: sid }) },
+      );
+      return { res, f };
+    }
+
+    it("rejects a value past MAX_USAGE_GRAMS with 400 and persists nothing", async () => {
+      // Pre-fix this passed `Number.isFinite` and persisted, poisoning every
+      // analytics aggregate for the whole window.
+      const { res, f } = await logGrams(1e308);
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/no greater than/i);
+
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.spools[0].usageHistory ?? []).toHaveLength(0);
+      expect(fresh.spools[0].totalWeight).toBe(1000); // no debit either
+    });
+
+    it("rejects exactly one gram over the cap", async () => {
+      const { res } = await logGrams(MAX_USAGE_GRAMS + 1);
+      expect(res.status).toBe(400);
+    });
+
+    it("accepts exactly the cap (boundary is inclusive)", async () => {
+      const { res } = await logGrams(MAX_USAGE_GRAMS);
+      expect(res.status).toBe(201);
+    });
+
+    it("still accepts an ordinary log", async () => {
+      const { res } = await logGrams(40);
+      expect(res.status).toBe(201);
     });
   });
 });

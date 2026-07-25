@@ -4563,7 +4563,9 @@
                 "properties": {
                   "grams": {
                     "type": "number",
-                    "exclusiveMinimum": 0
+                    "exclusiveMinimum": 0,
+                    "maximum": 1000000,
+                    "description": "Grams consumed. Bounded above (GH #1030) so a pathological magnitude cannot overflow the analytics aggregates; an over-cap value is rejected with 400."
                   },
                   "jobLabel": {
                     "type": "string",
@@ -4817,7 +4819,9 @@
                         },
                         "grams": {
                           "type": "number",
-                          "minimum": 0
+                          "minimum": 0,
+                          "maximum": 1000000,
+                          "description": "Grams consumed by this filament. Bounded above (GH #1030) so a pathological magnitude cannot overflow the analytics aggregates; an over-cap value is rejected with 400."
                         }
                       }
                     }
