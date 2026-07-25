@@ -187,4 +187,70 @@ describe("mass-assignment & data-integrity hardening", () => {
     const fresh = await Filament.findById(body._id);
     expect(fresh.openprinttagSnapshot).toBeNull();
   });
+
+  // ── GH #1026: prototype pollution via a __proto__-dotted body key ────
+  //
+  // GHSA-664h-wqgq-64gw. Pre-fix, this exact request set
+  // `Object.prototype.$fullPath = "__proto__"` (ENUMERABLE, so it leaked into
+  // every `for...in` in the process) and 500d, on mongoose 9.5.0. The
+  // `$`-operator guard did not cover it: `"__proto__.x".startsWith("$")` is
+  // false. Asserting the 400 alone would NOT catch a regression where the
+  // guard runs after the write — so these assert the prototype directly.
+
+  it("#1026 — PUT rejects a __proto__-dotted key and leaves Object.prototype clean", async () => {
+    const f = await Filament.create({
+      name: "Proto Guard PLA",
+      vendor: "T",
+      type: "PLA",
+      color: "#111111",
+      diameter: 1.75,
+    });
+
+    const proto = Object.prototype as unknown as Record<string, unknown>;
+    expect(proto.$fullPath).toBeUndefined(); // sanity: clean to start
+
+    // request.json() parses the body, and JSON.parse creates a genuine OWN
+    // "__proto__.polluted" key — a shape an object literal cannot express.
+    const body = JSON.parse('{"name":"Renamed","__proto__.polluted":"yes"}');
+    expect(Object.keys(body)).toContain("__proto__.polluted");
+
+    const res = await PUT(
+      jsonReq(`http://localhost:3456/api/filaments/${f._id}`, body, "PUT"),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(400);
+
+    // The actual regression assertion — the guard must run BEFORE the
+    // findOneAndUpdate that does the casting.
+    expect(proto.$fullPath).toBeUndefined();
+    const probe: Record<string, number> = { a: 1 };
+    const seen: string[] = [];
+    for (const k in probe) seen.push(k);
+    expect(seen).toEqual(["a"]);
+
+    // Rejection is atomic — the legitimate field in the same body is not applied.
+    const after = await Filament.findById(f._id).lean();
+    expect(after.name).toBe("Proto Guard PLA");
+  });
+
+  it("#1026 — PUT still accepts a legitimate dotted temperatures path", async () => {
+    const f = await Filament.create({
+      name: "Proto Guard OK PLA",
+      vendor: "T",
+      type: "PLA",
+      color: "#222222",
+      diameter: 1.75,
+    });
+    const res = await PUT(
+      jsonReq(
+        `http://localhost:3456/api/filaments/${f._id}`,
+        { "temperatures.nozzle": 215 },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const after = await Filament.findById(f._id).lean();
+    expect(after.temperatures.nozzle).toBe(215);
+  });
 });

@@ -6,7 +6,7 @@ import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
-import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { assertSameOriginRequest, assertSafeUpdateBody } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { resolveSyncBackColor } from "@/lib/prusaSlicerBundle";
@@ -235,6 +235,18 @@ export async function PUT(
         400,
       );
     }
+
+    // GH #1026: the SECOND injection class the operator check above does not
+    // cover. `body` is forwarded verbatim to findOneAndUpdate below, and a
+    // `__proto__`-prefixed DOTTED key (e.g. `{"__proto__.x": 1}`) is neither a
+    // `$`-operator nor an exact key the strip block matches — it reaches
+    // Mongoose's update casting and pollutes `Object.prototype`
+    // (GHSA-664h-wqgq-64gw; confirmed reproducible on mongoose 9.5.0 through
+    // this exact call, which also 500s). Patched upstream in >= 9.7.2, which
+    // package.json now pins as its floor; this guard keeps a downgraded
+    // lockfile or an upstream regression from silently reopening it.
+    const unsafePath = assertSafeUpdateBody(body);
+    if (unsafePath) return unsafePath;
 
     // Validate parentId if provided
     if (body.parentId) {

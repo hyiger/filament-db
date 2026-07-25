@@ -111,3 +111,65 @@ export function assertSameOriginRequest(request: NextRequest): NextResponse | nu
 
   return null;
 }
+
+/**
+ * Path segments that must never appear in a client-supplied update document.
+ *
+ * Anchored on a segment boundary (`^` or `.`) at both ends so it matches the
+ * dotted-path grammar Mongo/Mongoose use — `__proto__`, `__proto__.x`,
+ * `a.__proto__`, `a.constructor.b` — while leaving legitimate field names that
+ * merely CONTAIN one of the words alone (e.g. a hypothetical
+ * `prototypeNotes`).
+ */
+const UNSAFE_UPDATE_PATH_RE = /(^|\.)(__proto__|constructor|prototype)(\.|$)/;
+
+/**
+ * GH #1026: reject a client update body carrying a prototype-polluting key.
+ *
+ * GHSA-664h-wqgq-64gw — a `__proto__`-prefixed DOTTED key (e.g.
+ * `{"__proto__.x": 1}`) reaching Mongoose's update casting pollutes
+ * `Object.prototype`. `Schema.prototype.path()` does an unguarded
+ * `this.paths[path]` lookup on a plain object, so `"__proto__"` resolves up the
+ * prototype chain and returns `Object.prototype` itself; `_getSchema` then
+ * treats that as a schematype and writes `$fullPath` onto it — ENUMERABLE, so
+ * it leaks into every `for...in` in the process. Confirmed reproducible on
+ * mongoose 9.5.0 through `PUT /api/filaments/{id}`, which also 500s.
+ *
+ * Fixed upstream in mongoose >= 9.7.2 (this repo pins the patched floor). This
+ * guard is the belt-and-braces layer so a future regression, a downgraded
+ * lockfile, or a newly-added raw-body route cannot silently reopen it.
+ *
+ * WHERE TO USE IT: any handler that forwards a client-shaped object into an
+ * update. Today that is exactly ONE route — `PUT /api/filaments/{id}`, which
+ * passes the parsed body straight to `findOneAndUpdate`. Every other mutating
+ * route builds its update from string-LITERAL keys (`update.name = body.name`,
+ * `update["spools.$.totalWeight"] = …`), so no client-controlled key can reach
+ * the update document and the guard would be dead code there. Add the call
+ * alongside the existing `$`-operator check if you ever introduce another
+ * raw-body passthrough.
+ *
+ * Sibling of the `$`-operator guard in that route: that one blocks Mongo
+ * UPDATE OPERATORS, this one blocks PROTOTYPE PATHS. Neither subsumes the
+ * other — `"__proto__.x".startsWith("$")` is false.
+ *
+ * Only own enumerable keys are inspected, which is what `findOneAndUpdate`
+ * casts. Returns a 400 `NextResponse` to short-circuit the handler, or `null`
+ * when the body may proceed.
+ */
+export function assertSafeUpdateBody(body: unknown): NextResponse | null {
+  if (body === null || typeof body !== "object" || Array.isArray(body)) {
+    // Not an object update document — the caller's own shape checks own this;
+    // nothing here can pollute, so let it through rather than changing an
+    // existing route's error contract.
+    return null;
+  }
+  for (const key of Object.keys(body)) {
+    if (UNSAFE_UPDATE_PATH_RE.test(key)) {
+      return errorResponse(
+        "Unsafe field path in request body — keys may not reference __proto__, constructor, or prototype.",
+        400,
+      );
+    }
+  }
+  return null;
+}
