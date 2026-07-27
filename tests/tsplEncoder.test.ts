@@ -460,6 +460,76 @@ describe("sanitizeTsplLiteral — defensive quoting", () => {
   });
 });
 
+describe("render — bitmap payloads and non-finite geometry (PR #1038 review)", () => {
+  const spec: LabelSpec = { widthMm: 100, heightMm: 150, gapMm: 3, gapOffsetMm: 0, dpi: DPI_203 };
+
+  /** Byte offset where a BITMAP command's raw payload begins. Locates the
+   *  full header rather than counting commas — the header itself contains
+   *  five of them. latin1 decodes one char per byte, so string indices map
+   *  straight onto byte offsets. */
+  const payloadOffset = (bytes: Uint8Array, header: string): number => {
+    const at = new TextDecoder("latin1").decode(bytes).indexOf(header);
+    expect(at).toBeGreaterThanOrEqual(0);
+    return at + header.length;
+  };
+
+  it("renders a full-page raster without blowing the call stack", () => {
+    // A 4×6 page at 203 dpi is 812×1218 dots = 102 bytes/row × 1218 rows
+    // = 124,236 payload bytes. Spreading that into Array.push passes one
+    // argument per byte and V8 throws RangeError, so the emitter appends
+    // chunks with set() instead. This is the exact geometry the module's
+    // own docblock cites, so it is the case most likely to be tried first.
+    const widthBytes = 102;
+    const heightDots = 1218;
+    const data = new Uint8Array(widthBytes * heightDots);
+    const bytes = render({
+      spec,
+      commands: [{ kind: "bitmap", x: 0, y: 0, widthBytes, heightDots, mode: 0, data }],
+    });
+    expect(bytes.length).toBeGreaterThan(widthBytes * heightDots);
+    // The payload must survive verbatim, positioned right after the header.
+    const start = payloadOffset(bytes, `BITMAP 0,0,${widthBytes},${heightDots},0,`);
+    expect(bytes.slice(start, start + data.length)).toEqual(data);
+  });
+
+  it("accepts a bitmap payload containing a bare 0x0a", () => {
+    // Raster bytes are arbitrary binary: 0x0a is a perfectly ordinary dot
+    // pattern, not a line terminator. A whole-buffer bare-LF scan cannot
+    // tell the two apart and would reject a valid raster, so framing is
+    // guaranteed by construction instead.
+    const data = new Uint8Array([0x41, 0x0a, 0x42, 0x43]);
+    const bytes = render({
+      spec,
+      commands: [{ kind: "bitmap", x: 0, y: 0, widthBytes: 2, heightDots: 2, mode: 0, data }],
+    });
+    expect(bytes[bytes.length - 2]).toBe(0x0d);
+    expect(bytes[bytes.length - 1]).toBe(0x0a);
+    const start = payloadOffset(bytes, "BITMAP 0,0,2,2,0,");
+    expect(bytes.slice(start, start + 4)).toEqual(data);
+  });
+
+  it("rejects non-finite dimensions on every dimensional field", () => {
+    // Infinity satisfies `> 0` and NaN satisfies nothing, so without an
+    // explicit finite check these emit `SIZE Infinity mm,...` or
+    // `GAP 3 mm,NaN mm` — invalid TSPL produced without any error.
+    for (const field of ["widthMm", "heightMm", "gapMm", "gapOffsetMm"] as const) {
+      for (const bad of [Infinity, -Infinity, NaN]) {
+        expect(() => render({ spec: { ...spec, [field]: bad }, commands: [] })).toThrow(
+          new RegExp(`LabelSpec\\.${field} must be a finite number`),
+        );
+      }
+    }
+  });
+
+  it("still rejects finite-but-invalid dimensions", () => {
+    expect(() => render({ spec: { ...spec, widthMm: 0 }, commands: [] })).toThrow(/must be positive/);
+    expect(() => render({ spec: { ...spec, gapMm: -1 }, commands: [] })).toThrow(/gapMm must be >= 0/);
+    // A negative gap OFFSET stays legal — it is a signed alignment nudge,
+    // unlike the gap itself.
+    expect(() => render({ spec: { ...spec, gapOffsetMm: -2 }, commands: [] })).not.toThrow();
+  });
+});
+
 describe("assertCrlfFramed", () => {
   it("accepts a properly framed job", () => {
     expect(() => assertCrlfFramed(new Uint8Array([0x41, 0x0d, 0x0a]))).not.toThrow();

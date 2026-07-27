@@ -331,23 +331,40 @@ export function sanitizeTsplLiteral(input: string): string {
   return toAscii(singleLine).replace(/"/g, "'").replace(/\\/g, "/");
 }
 
-/** Encode an already-ASCII string to bytes. */
-function asciiBytes(text: string): number[] {
-  const bytes: number[] = [];
+/**
+ * Encode an already-ASCII string to bytes.
+ *
+ * Returns a Uint8Array rather than number[] so callers can append it to
+ * the output with `set()` instead of spreading it into `push(...)` —
+ * spreading a large payload passes one argument per byte and blows V8's
+ * call-stack limit (a 812x1218 one-bit raster is 124,236 bytes, well
+ * past it).
+ */
+function asciiBytes(text: string): Uint8Array {
+  const out = new Uint8Array(text.length);
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
-    /* c8 ignore next 5 -- unreachable: every caller routes through
-       sanitizeTsplLiteral/toAscii, which guarantee < 0x80. Kept as an
-       internal-consistency assert so a future caller that bypasses them
-       fails loudly rather than emitting a mangled byte. */
+    /* c8 ignore start -- unreachable internal-consistency asserts. Every
+       caller routes user content through sanitizeTsplLiteral (which folds
+       to ASCII and strips line terminators) and every other fragment comes
+       from a numeric interpolation or a closed string-union, so neither
+       branch is reachable today. They are kept so a future caller that
+       bypasses sanitisation fails loudly rather than emitting a mangled
+       byte or, worse, splicing an extra command into the job. */
     if (code > 0x7f) {
       throw new TsplRenderError(
         `Non-ASCII codepoint U+${code.toString(16).toUpperCase()} reached the byte encoder`,
       );
     }
-    bytes.push(code);
+    if (code === 0x0a || code === 0x0d) {
+      throw new TsplRenderError(
+        `Raw line terminator at offset ${i} inside a TSPL command: ${JSON.stringify(text)}`,
+      );
+    }
+    /* c8 ignore stop */
+    out[i] = code;
   }
-  return bytes;
+  return out;
 }
 
 function assertInt(value: number, label: string): void {
@@ -363,9 +380,15 @@ function assertRange(value: number, min: number, max: number, label: string): vo
   }
 }
 
-/** Render one command to its TSPL line. Bitmap returns bytes because its
- *  payload is raw binary appended after the comma, not a quoted string. */
-function renderCommand(cmd: TsplCommand): number[] {
+/**
+ * Render one command to its TSPL line, as a list of byte chunks.
+ *
+ * Chunks rather than a single array because a BITMAP's payload is raw
+ * binary spliced in after the comma: keeping it as its own chunk means it
+ * is never copied element-by-element and never passes through the ASCII
+ * encoder.
+ */
+function renderCommand(cmd: TsplCommand): Uint8Array[] {
   switch (cmd.kind) {
     case "text": {
       assertInt(cmd.x, "text.x");
@@ -373,9 +396,11 @@ function renderCommand(cmd: TsplCommand): number[] {
       assertRange(cmd.xScale, 1, 10, "text.xScale");
       assertRange(cmd.yScale, 1, 10, "text.yScale");
       const content = sanitizeTsplLiteral(cmd.content);
-      return asciiBytes(
-        `TEXT ${cmd.x},${cmd.y},"${cmd.font}",${cmd.rotation},${cmd.xScale},${cmd.yScale},"${content}"`,
-      );
+      return [
+        asciiBytes(
+          `TEXT ${cmd.x},${cmd.y},"${cmd.font}",${cmd.rotation},${cmd.xScale},${cmd.yScale},"${content}"`,
+        ),
+      ];
     }
     case "qrcode": {
       assertInt(cmd.x, "qrcode.x");
@@ -387,9 +412,11 @@ function renderCommand(cmd: TsplCommand): number[] {
       }
       // ecc and mode are bare tokens here, NOT quoted — matches the
       // hardware-verified fixtures (QRCODE 24,560,H,6,A,0,"...").
-      return asciiBytes(
-        `QRCODE ${cmd.x},${cmd.y},${cmd.ecc},${cmd.cell},${cmd.mode},${cmd.rotation},"${content}"`,
-      );
+      return [
+        asciiBytes(
+          `QRCODE ${cmd.x},${cmd.y},${cmd.ecc},${cmd.cell},${cmd.mode},${cmd.rotation},"${content}"`,
+        ),
+      ];
     }
     case "barcode": {
       assertInt(cmd.x, "barcode.x");
@@ -401,10 +428,12 @@ function renderCommand(cmd: TsplCommand): number[] {
       if (content.length === 0) {
         throw new TsplRenderError("barcode.content must not be empty");
       }
-      return asciiBytes(
-        `BARCODE ${cmd.x},${cmd.y},"${cmd.symbology}",${cmd.height},${cmd.humanReadable},` +
-          `${cmd.rotation},${cmd.narrow},${cmd.wide},"${content}"`,
-      );
+      return [
+        asciiBytes(
+          `BARCODE ${cmd.x},${cmd.y},"${cmd.symbology}",${cmd.height},${cmd.humanReadable},` +
+            `${cmd.rotation},${cmd.narrow},${cmd.wide},"${content}"`,
+        ),
+      ];
     }
     case "box": {
       assertInt(cmd.x0, "box.x0");
@@ -412,21 +441,21 @@ function renderCommand(cmd: TsplCommand): number[] {
       assertInt(cmd.x1, "box.x1");
       assertInt(cmd.y1, "box.y1");
       assertRange(cmd.thickness, 1, 32767, "box.thickness");
-      return asciiBytes(`BOX ${cmd.x0},${cmd.y0},${cmd.x1},${cmd.y1},${cmd.thickness}`);
+      return [asciiBytes(`BOX ${cmd.x0},${cmd.y0},${cmd.x1},${cmd.y1},${cmd.thickness}`)];
     }
     case "bar": {
       assertInt(cmd.x, "bar.x");
       assertInt(cmd.y, "bar.y");
       assertRange(cmd.width, 1, 32767, "bar.width");
       assertRange(cmd.height, 1, 32767, "bar.height");
-      return asciiBytes(`BAR ${cmd.x},${cmd.y},${cmd.width},${cmd.height}`);
+      return [asciiBytes(`BAR ${cmd.x},${cmd.y},${cmd.width},${cmd.height}`)];
     }
     case "reverse": {
       assertInt(cmd.x, "reverse.x");
       assertInt(cmd.y, "reverse.y");
       assertRange(cmd.width, 1, 32767, "reverse.width");
       assertRange(cmd.height, 1, 32767, "reverse.height");
-      return asciiBytes(`REVERSE ${cmd.x},${cmd.y},${cmd.width},${cmd.height}`);
+      return [asciiBytes(`REVERSE ${cmd.x},${cmd.y},${cmd.width},${cmd.height}`)];
     }
     case "bitmap": {
       assertInt(cmd.x, "bitmap.x");
@@ -437,15 +466,16 @@ function renderCommand(cmd: TsplCommand): number[] {
       if (cmd.data.length !== expected) {
         throw new TsplRenderError(
           `bitmap.data length ${cmd.data.length} does not match ` +
-            `widthBytes (${cmd.widthBytes}) × heightDots (${cmd.heightDots}) = ${expected}`,
+            `widthBytes (${cmd.widthBytes}) x heightDots (${cmd.heightDots}) = ${expected}`,
         );
       }
       // Width is in BYTES and height in DOTS — the argument units differ,
       // which is the classic TSPL BITMAP trap. Payload follows the comma
-      // as raw binary with no quoting and no terminator of its own.
+      // as raw binary with no quoting and no terminator of its own, and
+      // rides as its own chunk so it is never spread or re-encoded.
       return [
-        ...asciiBytes(`BITMAP ${cmd.x},${cmd.y},${cmd.widthBytes},${cmd.heightDots},${cmd.mode},`),
-        ...cmd.data,
+        asciiBytes(`BITMAP ${cmd.x},${cmd.y},${cmd.widthBytes},${cmd.heightDots},${cmd.mode},`),
+        cmd.data,
       ];
     }
     /* c8 ignore next 4 -- exhaustiveness guard: the union is closed, so
@@ -460,7 +490,17 @@ function renderCommand(cmd: TsplCommand): number[] {
 }
 
 /** CRLF. Mandatory — an LF-only job is silently discarded by the firmware. */
-const CRLF = [0x0d, 0x0a];
+const CRLF = new Uint8Array([0x0d, 0x0a]);
+
+function concatChunks(chunks: Uint8Array[], totalLength: number): Uint8Array {
+  const out = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return out;
+}
 
 /**
  * Render a label document to the TSPL byte stream.
@@ -478,20 +518,46 @@ const CRLF = [0x0d, 0x0a];
  * proves the parser is alive consists of SIZE/GAP/CLS/PRINT and nothing
  * else, so the header has to be structurally optional, not merely
  * value-optional.
+ *
+ * CRLF framing is guaranteed BY CONSTRUCTION: every fragment is appended
+ * through a helper that follows it with CRLF, and asciiBytes rejects a raw
+ * terminator inside a command. That is what makes the framing correct even
+ * for jobs carrying a binary BITMAP payload, where a byte-level scan
+ * cannot tell a payload 0x0A from a line terminator.
  */
 export function render(doc: LabelDocument): Uint8Array {
   const { spec } = doc;
-  const bytes: number[] = [];
+  const chunks: Uint8Array[] = [];
+  let totalLength = 0;
+  const push = (bytes: Uint8Array): void => {
+    chunks.push(bytes);
+    totalLength += bytes.length;
+  };
   const line = (text: string): void => {
-    bytes.push(...asciiBytes(text), ...CRLF);
+    push(asciiBytes(text));
+    push(CRLF);
   };
 
-  if (!(spec.widthMm > 0) || !(spec.heightMm > 0)) {
+  // Finite first: Infinity satisfies `> 0` and NaN satisfies nothing, so
+  // without this an Infinity width or a NaN gap offset would sail through
+  // the comparisons below and emit `SIZE Infinity mm,...` — a job the
+  // printer cannot parse, produced without a single error.
+  for (const [label, value] of [
+    ["widthMm", spec.widthMm],
+    ["heightMm", spec.heightMm],
+    ["gapMm", spec.gapMm],
+    ["gapOffsetMm", spec.gapOffsetMm],
+  ] as const) {
+    if (!Number.isFinite(value)) {
+      throw new TsplRenderError(`LabelSpec.${label} must be a finite number, got ${value}`);
+    }
+  }
+  if (spec.widthMm <= 0 || spec.heightMm <= 0) {
     throw new TsplRenderError(
-      `LabelSpec width/height must be positive, got ${spec.widthMm}×${spec.heightMm} mm`,
+      `LabelSpec width/height must be positive, got ${spec.widthMm}x${spec.heightMm} mm`,
     );
   }
-  if (!(spec.gapMm >= 0)) {
+  if (spec.gapMm < 0) {
     throw new TsplRenderError(`LabelSpec gapMm must be >= 0, got ${spec.gapMm}`);
   }
 
@@ -518,7 +584,10 @@ export function render(doc: LabelDocument): Uint8Array {
   line("CLS");
 
   for (const cmd of doc.commands) {
-    bytes.push(...renderCommand(cmd), ...CRLF);
+    for (const chunk of renderCommand(cmd)) {
+      push(chunk);
+    }
+    push(CRLF);
   }
 
   const sets = doc.sets ?? 1;
@@ -527,29 +596,38 @@ export function render(doc: LabelDocument): Uint8Array {
   assertRange(copies, 1, 999999999, "doc.copies");
   line(`PRINT ${sets},${copies}`);
 
-  const out = new Uint8Array(bytes);
-  assertCrlfFramed(out);
+  const out = concatChunks(chunks, totalLength);
+  assertEndsWithCrlf(out);
   return out;
 }
 
-/**
- * Assert every command in a rendered job is CRLF-terminated.
- *
- * Cheap insurance against the single failure mode with no diagnostic:
- * an LF-only job produces no error, no output, and no paper movement, so
- * it presents identically to a dead printer.
- */
-export function assertCrlfFramed(bytes: Uint8Array): void {
+function assertEndsWithCrlf(bytes: Uint8Array): void {
   if (bytes.length < 2) {
     throw new TsplRenderError("Rendered job is empty");
   }
   if (bytes[bytes.length - 2] !== 0x0d || bytes[bytes.length - 1] !== 0x0a) {
     throw new TsplRenderError("Rendered job does not end with CRLF");
   }
-  // A bare LF is only legal as the second byte of a CRLF pair. Scanning
-  // for the violation directly is more useful than counting pairs: a
-  // BITMAP payload can legitimately contain 0x0A bytes, but never as a
-  // line terminator, and this check runs before any bitmap support ships.
+}
+
+/**
+ * Assert a job is CRLF-framed throughout.
+ *
+ * Cheap insurance against the single failure mode with no diagnostic: an
+ * LF-only job produces no error, no output, and no paper movement, so it
+ * presents identically to a dead printer.
+ *
+ * ONLY VALID FOR JOBS WITH NO BITMAP COMMAND. A BITMAP payload is
+ * arbitrary binary and may legitimately contain a 0x0A that is not
+ * preceded by 0x0D; this scan cannot distinguish that from a broken line
+ * terminator and would reject a perfectly good raster. `render()` therefore
+ * does not call it — its output is framed by construction — and this is
+ * exported for validating jobs from OUTSIDE the emitter, such as a .prn
+ * file read from disk.
+ */
+export function assertCrlfFramed(bytes: Uint8Array): void {
+  assertEndsWithCrlf(bytes);
+  // A bare LF is only legal as the second byte of a CRLF pair.
   for (let i = 0; i < bytes.length; i++) {
     if (bytes[i] === 0x0a && (i === 0 || bytes[i - 1] !== 0x0d)) {
       throw new TsplRenderError(`Bare LF at byte ${i} — TSPL requires CRLF framing`);
