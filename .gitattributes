@@ -1,0 +1,5 @@
+# Golden TSPL jobs captured from working hardware. Never apply line-ending
+# normalisation: TSPL requires CRLF framing and an LF-only job is silently
+# discarded by the firmware, so a normalised fixture would still "look right"
+# in a diff while no longer matching what the printer accepts.
+*.prn -text -diff

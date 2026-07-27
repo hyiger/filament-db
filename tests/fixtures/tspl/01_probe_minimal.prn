@@ -1,0 +1,4 @@
+SIZE 100 mm,150 mm
+GAP 3 mm,0 mm
+CLS
+PRINT 1,1
