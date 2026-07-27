@@ -549,4 +549,27 @@ describe("assertCrlfFramed", () => {
     expect(() => assertCrlfFramed(new Uint8Array([0x0a, 0x0d, 0x0a]))).toThrow(/Bare LF at byte 0/);
     expect(() => assertCrlfFramed(new Uint8Array([0x41, 0x0a, 0x42, 0x0d, 0x0a]))).toThrow(/Bare LF at byte 1/);
   });
+
+  it("rejects a bare CR — checking only the LF half under-enforces the contract", () => {
+    // "A\rB\r\n" ends in CRLF and contains no unpaired LF, so an LF-only
+    // scan approves it even though the first CR terminates nothing.
+    expect(() => assertCrlfFramed(new Uint8Array([0x41, 0x0d, 0x42, 0x0d, 0x0a]))).toThrow(
+      /Bare CR at byte 1/,
+    );
+    // A CR as the final byte has nothing following it at all.
+    expect(() => assertCrlfFramed(new Uint8Array([0x0d, 0x0a, 0x0d]))).toThrow(
+      /does not end with CRLF/,
+    );
+  });
+
+  it("accepts a multi-line job where every terminator is a proper pair", () => {
+    const job = new TextEncoder().encode("SIZE 100 mm,150 mm\r\nCLS\r\nPRINT 1,1\r\n");
+    expect(() => assertCrlfFramed(job)).not.toThrow();
+  });
+
+  it("accepts every golden fixture — they are what the contract is calibrated against", () => {
+    for (const name of ["01_probe_minimal", "02_probe_text", "03_probe_full", "04_drybox_label"]) {
+      expect(() => assertCrlfFramed(goldenFixture(`${name}.prn`))).not.toThrow();
+    }
+  });
 });

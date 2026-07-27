@@ -627,10 +627,19 @@ function assertEndsWithCrlf(bytes: Uint8Array): void {
  */
 export function assertCrlfFramed(bytes: Uint8Array): void {
   assertEndsWithCrlf(bytes);
-  // A bare LF is only legal as the second byte of a CRLF pair.
+  // Both halves of the pair are checked. Scanning only for unpaired LF
+  // would let `A\rB\r\n` through — its first CR terminates nothing — and
+  // the whole point of this helper is that a job it approves is framed
+  // THROUGHOUT, not merely at the end. In a bitmap-free job every byte is
+  // ASCII command text or a terminator (asciiBytes rejects CR and LF
+  // inside a command), so a CR that is not followed by LF is malformed
+  // with no legitimate reading.
   for (let i = 0; i < bytes.length; i++) {
     if (bytes[i] === 0x0a && (i === 0 || bytes[i - 1] !== 0x0d)) {
       throw new TsplRenderError(`Bare LF at byte ${i} — TSPL requires CRLF framing`);
+    }
+    if (bytes[i] === 0x0d && bytes[i + 1] !== 0x0a) {
+      throw new TsplRenderError(`Bare CR at byte ${i} — TSPL requires CRLF framing`);
     }
   }
 }
