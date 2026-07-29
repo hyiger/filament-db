@@ -290,9 +290,7 @@ export function collapsePerNozzleImportSections(
         // base filament's settings bag, and stamped on EVERY fan-out section by
         // the export gate — hiding the standard preset from standard printers,
         // worse than the bug it fixes.
-        const isDerived =
-          typeof v === "string" &&
-          /^nozzle_diameter\[\d+\]==\d+(?:\.\d+)?(?: and (?:! )?nozzle_high_flow\[\d+\])?(?: or nozzle_diameter\[\d+\]==\d+(?:\.\d+)?(?: and (?:! )?nozzle_high_flow\[\d+\])?)*$/.test(v);
+        const isDerived = isAnyMachineDerivedNozzleCondition(v);
         const isEmpty = v === "" || v === undefined;
         if (isDerived || isEmpty) delete settings[k];
         // else: user pin (non-derived string) or nil (null) → keep for round-trip.
@@ -372,6 +370,23 @@ export function isMachineDerivedPerNozzleCondition(
   return new RegExp(
     `^nozzle_diameter\\[0\\]==${d}(?: and (?:! )?nozzle_high_flow\\[0\\])?$`,
   ).test(value);
+}
+
+/**
+ * Matches ANY condition string a Filament DB exporter (any vintage) can have
+ * machine-written: one or more `nozzle_diameter[n]==D` terms joined by
+ * ` or `, each optionally carrying the HF discriminator tail. The
+ * single-nozzle predicate above anchors to ONE known diameter; this one is
+ * the diameter-agnostic union used where the writing nozzle is unknown —
+ * the bulk-import collapse and the export-time normalization in the bake.
+ */
+export function isAnyMachineDerivedNozzleCondition(value: unknown): boolean {
+  return (
+    typeof value === "string" &&
+    /^nozzle_diameter\[\d+\]==\d+(?:\.\d+)?(?: and (?:! )?nozzle_high_flow\[\d+\])?(?: or nozzle_diameter\[\d+\]==\d+(?:\.\d+)?(?: and (?:! )?nozzle_high_flow\[\d+\])?)*$/.test(
+      value,
+    )
+  );
 }
 
 export function filamentToSlicerKeys(
@@ -501,9 +516,20 @@ export function filamentToSlicerKeys(
       // `nil` inheritance marker (null) must win. Only set when the key is absent
       // or an empty-string "no restriction". `filamentdb_nozzle` stays
       // unconditional — it's a routing hint for THIS nozzle, not a user setting.
+      // PR #1045 review: ALSO re-derive over a MACHINE-SHAPED bag value. The
+      // pre-fix tick-less sync leak kept re-polluting the shared bag AFTER
+      // the #1021 one-shot cleanup, so "post-cleanup pure nozzle condition =
+      // user pin by construction" does not hold on real installs — a stale
+      // `nozzle_diameter[0]==0.4` in the bag would win this gate and keep
+      // the HF fix inert until the next lucky sync re-stripped it. Scoped to
+      // the per-nozzle BAKE path (these sections are machine-generated); a
+      // user pin byte-identical to a machine shape being re-derived here is
+      // the same accepted residue as the existing #1021/#950 guards. Genuine
+      // pins (compound conditions, unspaced `!`) never match and still win.
       if (
         !("compatible_printers_condition" in keys) ||
-        keys.compatible_printers_condition === ""
+        keys.compatible_printers_condition === "" ||
+        isAnyMachineDerivedNozzleCondition(keys.compatible_printers_condition)
       ) {
         keys.compatible_printers_condition = perNozzleCondition(nz, includeHfTerm);
       }

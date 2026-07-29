@@ -219,10 +219,13 @@ describe("filamentToSlicerKeys", () => {
     }
   });
 
-  it("#1021/#1022: a bag-pinned nozzle condition WINS over the calibration bake (pin precedence)", () => {
-    // Post-migration a bag value is a user pin, and #950's rule applies: the
-    // per-nozzle calibration bake only sets the condition when it is
-    // absent-or-empty — it never overwrites a pin.
+  it("#1021/#1022 → PR #1045: a machine-SHAPED bag value is re-derived by the bake; genuine pins win", () => {
+    // SUPERSEDED CONTRACT. This test used to pin "post-migration a pure
+    // nozzle condition in the bag is a user pin" — but the tick-less sync
+    // leak (#1040/#1045) kept machine values landing AFTER the one-shot
+    // cleanup, so that construction never held on real installs. On the
+    // machine-generated per-nozzle bake path, a machine-derivable shape now
+    // re-derives (here: the 0.8 stale value replaced by THIS nozzle's 0.4)…
     const keys = filamentToSlicerKeys(
       {
         name: "PinnedCalibrated",
@@ -235,7 +238,22 @@ describe("filamentToSlicerKeys", () => {
       },
       { nozzle: { diameter: 0.4, type: "Brass" }, extrusionMultiplier: 1.02 } as never,
     );
-    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.8");
+    expect(keys.compatible_printers_condition).toBe("nozzle_diameter[0]==0.4");
+    // …while a condition that is NOT a machine shape — a genuine user pin —
+    // still wins over the bake, exactly as before.
+    const pinned = filamentToSlicerKeys(
+      {
+        name: "PinnedCalibrated",
+        vendor: "X",
+        type: "PLA",
+        diameter: 1.75,
+        temperatures: {},
+        settings: { compatible_printers_condition: 'printer_model=="MK4" and nozzle_diameter[0]==0.8' },
+        compatibleNozzles: [{ diameter: 0.8 }],
+      },
+      { nozzle: { diameter: 0.4, type: "Brass" }, extrusionMultiplier: 1.02 } as never,
+    );
+    expect(pinned.compatible_printers_condition).toBe('printer_model=="MK4" and nozzle_diameter[0]==0.8');
   });
 
   it("#1021: an EMPTY round-tripped condition stays empty (no nozzle derivation over it)", () => {
@@ -1655,6 +1673,42 @@ describe("GH #1040 — high-flow discriminator in compatible_printers_condition"
       null,
       42,
     ]) expect(isMachineDerivedPerNozzleCondition(v, 0.4)).toBe(false);
+  });
+
+  it("PR #1045 review — a STALE machine-shaped bag value is re-derived, not treated as a pin", () => {
+    // The pre-fix tick-less sync leak left `nozzle_diameter[0]==0.4` in real
+    // installs' settings bags AFTER the #1021 cleanup. Treating it as a user
+    // pin froze all fan-out siblings on the stale plain condition and made
+    // the HF fix inert until the next sync happened to strip it. The bake
+    // now re-derives over any machine-derivable shape — first export after
+    // upgrading is already correct.
+    const stale = generatePrusaSlicerBundle([
+      {
+        name: "PLA", vendor: "Generic", type: "PLA", diameter: 1.75,
+        temperatures: { nozzle: 210 },
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4" },
+        calibrations: [
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95 },
+          { nozzle: { name: "0.4 Brass HF", diameter: 0.4, type: "Brass", highFlow: true }, printer: null, extrusionMultiplier: 0.9 },
+        ],
+      },
+    ]);
+    expect(stale).toContain("nozzle_diameter[0]==0.4 and ! nozzle_high_flow[0]");
+    expect(stale).toContain("nozzle_diameter[0]==0.4 and nozzle_high_flow[0]");
+    // The or-joined legacy multi-term shape re-derives too.
+    const multi = generatePrusaSlicerBundle([
+      {
+        name: "PLA", vendor: "Generic", type: "PLA", diameter: 1.75,
+        temperatures: { nozzle: 210 },
+        settings: { compatible_printers_condition: "nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6" },
+        calibrations: [
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95 },
+          { nozzle: { name: "0.4 Brass HF", diameter: 0.4, type: "Brass", highFlow: true }, printer: null, extrusionMultiplier: 0.9 },
+        ],
+      },
+    ]);
+    expect(multi).toContain("nozzle_diameter[0]==0.4 and ! nozzle_high_flow[0]");
+    expect(multi).not.toContain("nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6");
   });
 
   it("bulk-import collapse strips both HF-tailed machine shapes but keeps hand-written pins", () => {
