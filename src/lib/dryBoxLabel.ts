@@ -33,6 +33,10 @@ import {
 const QR_MAX_CELL = 8;
 /** Below this, a 203 dpi thermal print is unreliable to scan in a garage. */
 const QR_MIN_CELL = 4;
+/** Clear modules required on every side of a QR by the spec. Matches
+ *  QR_QUIET_ZONE_MODULES in src/lib/labelBitmap.ts, which passes it to the
+ *  qrcode renderer as `margin: 4` for the same reason. */
+const QR_QUIET_ZONE_MODULES = 4;
 /** Right-hand margin kept clear of the printable edge. */
 const EDGE_MARGIN = 8;
 /** Advance width in dots of TSPL internal font "3" (16x24). */
@@ -43,7 +47,12 @@ const FONT5_WIDTH = 32;
 export interface FittedQr {
   ecc: TsplEcc;
   cell: number;
+  /** The data symbol itself, excluding its quiet zone. */
   sizeDots: number;
+  /** Clear space required on EACH side. */
+  quietDots: number;
+  /** sizeDots + 2 * quietDots — the space the symbol actually needs. */
+  footprintDots: number;
 }
 
 /**
@@ -66,9 +75,24 @@ export function fitQr(payload: string, maxDots: number): FittedQr {
   for (const ecc of ["H", "Q", "M", "L"] as const) {
     const modules = qrModuleCount(payload, ecc);
     if (modules == null) continue;
+    // Fit the FOOTPRINT, not the symbol. A QR needs four clear modules on
+    // every side; sizing the data area alone lets a neighbouring border sit
+    // inside the quiet zone, which is another "prints fine, never scans"
+    // failure. Counting the quiet zone as part of what must fit makes it
+    // impossible to squeeze out.
+    const perSide = QR_QUIET_ZONE_MODULES;
+    const cell = Math.min(QR_MAX_CELL, Math.floor(maxDots / (modules + 2 * perSide)));
     // First (strongest) ECC that reaches a readable module size wins.
-    const cell = Math.min(QR_MAX_CELL, Math.floor(maxDots / modules));
-    if (cell >= QR_MIN_CELL) return { ecc, cell, sizeDots: modules * cell };
+    if (cell >= QR_MIN_CELL) {
+      const quietDots = perSide * cell;
+      return {
+        ecc,
+        cell,
+        sizeDots: modules * cell,
+        quietDots,
+        footprintDots: modules * cell + 2 * quietDots,
+      };
+    }
   }
   // QR_MIN_CELL is a floor, not a preference. Returning a 2- or 3-dot symbol
   // "so something prints" hands the user a label whose QR does not scan at
@@ -364,8 +388,9 @@ export function dryBoxGeometry(spec: LabelSpec, qrPayload: string): DryBoxGeomet
   }
   const qr = fitQr(qrPayload, qrRegion);
 
-  // Grow the header box to contain the QR rather than letting it spill.
-  const headerBottom = Math.max(L.headerBox.minBottom, L.qr.y + qr.sizeDots + EDGE_MARGIN);
+  // Grow the header box to clear the QR's FOOTPRINT, so the border never
+  // lands inside its quiet zone.
+  const headerBottom = Math.max(L.headerBox.minBottom, L.qr.y + qr.footprintDots);
   const firstRowY = headerBottom + L.rowsOffset;
   const footerTop = heightDots - L.footerHeight;
   // Without this the footer lands at a NEGATIVE y on very short stock (20mm
@@ -457,8 +482,10 @@ export function dryBoxLabel(
     ),
     {
       kind: "qrcode",
-      x: L.qr.x,
-      y: L.qr.y,
+      // L.qr.{x,y} is the FOOTPRINT origin; inset the symbol by its quiet
+      // zone so the clear space is reserved on the leading edges too.
+      x: L.qr.x + g.qr.quietDots,
+      y: L.qr.y + g.qr.quietDots,
       ecc: g.qr.ecc,
       cell: g.qr.cell,
       mode: "A",

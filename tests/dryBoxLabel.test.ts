@@ -297,9 +297,14 @@ describe("fitQr — payload-aware sizing", () => {
     // modules; dropping ECC keeps the symbol scannable instead. This is the
     // trade-off the handoff spec calls for past ~60 characters.
     const long = "https://filament-db.example.com/inventory?location=507f1f77bcf86cd799439011&spool=507f191e810c19729de860ea";
-    const fitted = fitQr(long, 160);
+    // 200 dots: H needs a 260-dot footprint at the 4-dot floor, so it steps
+    // down to M, which fits in 196. (The numbers moved when the quiet zone
+    // became part of the footprint — the behaviour did not.)
+    const fitted = fitQr(long, 200);
     expect(fitted.cell).toBeGreaterThanOrEqual(4);
-    expect(["H", "Q", "M", "L"]).toContain(fitted.ecc);
+    expect(fitted.ecc).toBe("M");
+    // Given more room it keeps the stronger correction.
+    expect(fitQr(long, 260).ecc).toBe("H");
   });
 
   it("never returns a symbol larger than the region it was given", () => {
@@ -553,11 +558,12 @@ describe("PR #1042 review round 4", () => {
     expect(() => dryBoxLabel(input({ spec: { heightMm: 20 } }))).toThrow(/too small|too short/);
     expect(() => dryBoxLabel(input({ spec: { widthMm: 60 } }))).toThrow(/too small|too short/);
     // The footer guard has its own narrow window: a SHORT payload shrinks the
-    // QR fine, but the 180-dot minimum header still overruns the footer on
-    // mid-height stock. 50mm is that case; 55mm clears it.
-    expect(() => dryBoxLabel(input({ qrPayload: "x", spec: { heightMm: 50 } })))
+    // QR fine, but the 180-dot MINIMUM header still overruns the footer.
+    // Reserving the quiet zone narrowed it to roughly 52-53mm — below that
+    // the QR itself can no longer fit, above it the header clears.
+    expect(() => dryBoxLabel(input({ qrPayload: "x", spec: { heightMm: 52 } })))
       .toThrow(/too short/);
-    expect(() => dryBoxLabel(input({ qrPayload: "x", spec: { heightMm: 55 } }))).not.toThrow();
+    expect(() => dryBoxLabel(input({ qrPayload: "x", spec: { heightMm: 53 } }))).not.toThrow();
   });
 
   it("derives header box and rules from the stock width", () => {
@@ -590,5 +596,56 @@ describe("PR #1042 review round 4", () => {
         }
       }
     }
+  });
+});
+
+describe("PR #1042 review round 5 — QR quiet zone", () => {
+  const symbolBox = (spec = DRY_BOX_SPEC, qr = QR) => {
+    const g = dryBoxGeometry(spec, qr);
+    const x = DRY_BOX_LAYOUT.qr.x + g.qr.quietDots;
+    const y = DRY_BOX_LAYOUT.qr.y + g.qr.quietDots;
+    return { g, x, y, right: x + g.qr.sizeDots, bottom: y + g.qr.sizeDots };
+  };
+
+  it("reserves four clear modules on every side of the symbol", () => {
+    // A QR with an intruded quiet zone is the same failure class as one
+    // clipped at the edge: it prints, it looks correct, and it never scans.
+    // src/lib/labelBitmap.ts already reserves this via `margin: 4`.
+    for (const widthMm of [100, 120]) {
+      for (const heightMm of [100, 150, 200]) {
+        const spec = { ...DRY_BOX_SPEC, widthMm, heightMm };
+        const { g, x, y, right, bottom } = symbolBox(spec);
+        const q = g.qr.quietDots;
+        expect(q).toBe(4 * g.qr.cell);
+        expect(g.headerBottom - bottom).toBeGreaterThanOrEqual(q);
+        expect(g.headerRight - right).toBeGreaterThanOrEqual(q);
+        expect(y - DRY_BOX_LAYOUT.headerBox.y0).toBeGreaterThanOrEqual(q);
+        expect(x - DRY_BOX_LAYOUT.headerBox.x0).toBeGreaterThanOrEqual(q);
+      }
+    }
+  });
+
+  it("emits the symbol inset by its quiet zone, not at the footprint origin", () => {
+    const { g } = symbolBox();
+    const qr = dryBoxLabel(input()).commands.find(
+      (c): c is Extract<TsplCommand, { kind: "qrcode" }> => c.kind === "qrcode",
+    )!;
+    expect(qr.x).toBe(DRY_BOX_LAYOUT.qr.x + g.qr.quietDots);
+    expect(qr.y).toBe(DRY_BOX_LAYOUT.qr.y + g.qr.quietDots);
+  });
+
+  it("counts the quiet zone as part of what must fit", () => {
+    // Sizing the data area alone let a symbol claim to fit while its clear
+    // space overflowed the region.
+    for (const dots of [200, 231, 300]) {
+      const f = fitQr(QR, dots);
+      expect(f.footprintDots).toBe(f.sizeDots + 2 * f.quietDots);
+      expect(f.footprintDots).toBeLessThanOrEqual(dots);
+    }
+  });
+
+  it("still keeps the whole footprint on the sheet", () => {
+    const { g, right } = symbolBox();
+    expect(right + g.qr.quietDots).toBeLessThanOrEqual(g.widthDots);
   });
 });
