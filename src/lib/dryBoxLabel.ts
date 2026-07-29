@@ -21,29 +21,105 @@
 import {
   DPI_203,
   mmToDots,
+  qrModuleCount,
   type LabelDocument,
   type LabelSpec,
   type TsplCommand,
+  type TsplEcc,
 } from "./tsplEncoder";
+
+/** Largest module size we will use. Bigger scans easier but wastes sheet. */
+const QR_MAX_CELL = 8;
+/** Below this, a 203 dpi thermal print is unreliable to scan in a garage. */
+const QR_MIN_CELL = 4;
+/** Right-hand margin kept clear of the printable edge. */
+const EDGE_MARGIN = 8;
+/** Advance width in dots of TSPL internal font "3" (16x24). */
+const FONT3_WIDTH = 16;
+
+export interface FittedQr {
+  ecc: TsplEcc;
+  cell: number;
+  sizeDots: number;
+}
+
+/**
+ * Choose the ECC level and module size for a QR that must fit `maxDots`.
+ *
+ * A `QRCODE` command's printed size is NOT implied by its arguments — the
+ * firmware picks the symbol version from the payload at print time. Hardcoding
+ * a cell size therefore prints a symbol whose dimensions depend on the data:
+ * the 16-byte payload in the original fixture is 29 modules, but a real deep
+ * link is 67 bytes and 49 modules, which at the fixture's cell 7 runs 104 dots
+ * past the edge of 100mm stock and simply isn't printed.
+ *
+ * Prefers the STRONGEST error correction that still prints at a scannable
+ * module size — a dry-box label gets handled, smudged and scanned in a
+ * workshop, so ECC earns its space — and steps down only when geometry
+ * forces it. That is the trade-off the handoff spec calls for ("beyond ~60
+ * characters, drop to ECC M and document the tradeoff").
+ */
+export function fitQr(payload: string, maxDots: number): FittedQr {
+  let best: FittedQr | null = null;
+  for (const ecc of ["H", "Q", "M", "L"] as const) {
+    const modules = qrModuleCount(payload, ecc);
+    if (modules == null) continue;
+    const cell = Math.min(QR_MAX_CELL, Math.floor(maxDots / modules));
+    if (cell < 1) continue;
+    const candidate: FittedQr = { ecc, cell, sizeDots: modules * cell };
+    // First (strongest) ECC that reaches a readable module size wins.
+    if (cell >= QR_MIN_CELL) return candidate;
+    if (!best || candidate.cell > best.cell) best = candidate;
+  }
+  if (!best) {
+    throw new Error(
+      `QR payload is too long to print in ${maxDots} dots (${payload.length} chars). ` +
+        `Shorten the deep link or use a larger label.`,
+    );
+  }
+  return best;
+}
+
+/**
+ * Truncate a manifest row to what actually fits the sheet.
+ *
+ * TSPL `TEXT` does not wrap and does not clip — it just runs off the edge, so
+ * an over-long spool label silently loses its tail with no indication. An
+ * explicit "..." at least shows the row was cut.
+ */
+export function fitRowText(text: string, maxChars: number): string {
+  if (maxChars <= 0) return "";
+  if (text.length <= maxChars) return text;
+  if (maxChars <= 3) return text.slice(0, maxChars);
+  return `${text.slice(0, maxChars - 3)}...`;
+}
+
+/** How many font-3 characters fit on a manifest row for this stock. */
+export function maxRowChars(spec: LabelSpec): number {
+  const usable = mmToDots(spec.widthMm, spec.dpi) - DRY_BOX_LAYOUT.rows.x - EDGE_MARGIN;
+  return Math.max(0, Math.floor(usable / FONT3_WIDTH));
+}
 
 /**
  * Layout geometry, in dots at 203 dpi, kept in one object so the label can be
  * tuned without hunting through the builder.
  *
- * Values below y=640 are derived rather than fixed: the footer is pinned to
- * the bottom of whatever stock is configured so the contents list gets every
- * remaining row.
+ * Only the header block is fixed. Everything below it is DERIVED, because the
+ * QR's printed size depends on the payload (see fitQr) — a fixed contents
+ * position would either collide with a large QR or waste a band of sheet
+ * under a small one.
  */
 export const DRY_BOX_LAYOUT = {
-  /** Header box enclosing the location name + QR. */
-  headerBox: { x0: 16, y0: 16, x1: 796, y1: 180, thickness: 5 },
+  headerBox: { x0: 16, y0: 16, x1: 796, thickness: 5, minBottom: 180 },
   name: { x: 40, y: 50, font: "5" as const },
   subtitle: { x: 40, y: 130, font: "3" as const },
-  qr: { x: 560, y: 40, cell: 7, ecc: "H" as const },
-  contentsHeading: { x: 40, y: 230, font: "3" as const },
-  contentsRule: { x: 40, y: 268, width: 740, height: 3 },
-  /** First contents row, and the vertical pitch between rows. */
-  rows: { x: 56, firstY: 290, pitch: 40, font: "3" as const },
+  /** QR origin, and the tallest square region it may occupy. */
+  qr: { x: 560, y: 40, maxRegion: 300 },
+  /** Offsets below the header box for the contents block. */
+  headingOffset: 50,
+  ruleOffset: 88,
+  rowsOffset: 110,
+  rows: { x: 56, pitch: 40, font: "3" as const },
   /** Height reserved at the bottom for the footer block (rule, desiccant
    *  line, replace hint, barcode). Contents stop above this. */
   footerHeight: 240,
@@ -163,11 +239,51 @@ export function describeItem(item: DryBoxLabelItem): string {
   return parts.join(" ").trim();
 }
 
-/** How many manifest rows fit between the contents rule and the footer. */
-export function maxContentRows(spec: LabelSpec): number {
+/** Everything about the label's geometry that depends on the stock and the
+ *  QR payload. Exported so the preview and the tests can assert placement
+ *  without re-deriving it. */
+export interface DryBoxGeometry {
+  widthDots: number;
+  heightDots: number;
+  qr: FittedQr;
+  headerBottom: number;
+  headingY: number;
+  ruleY: number;
+  firstRowY: number;
+  footerTop: number;
+  /** Manifest rows that fit between the rule and the footer. */
+  capacity: number;
+  /** Characters that fit on one manifest row. */
+  rowChars: number;
+}
+
+export function dryBoxGeometry(spec: LabelSpec, qrPayload: string): DryBoxGeometry {
+  const L = DRY_BOX_LAYOUT;
+  const widthDots = mmToDots(spec.widthMm, spec.dpi);
   const heightDots = mmToDots(spec.heightMm, spec.dpi);
-  const available = heightDots - DRY_BOX_LAYOUT.footerHeight - DRY_BOX_LAYOUT.rows.firstY;
-  return Math.max(0, Math.floor(available / DRY_BOX_LAYOUT.rows.pitch));
+
+  // The QR gets whatever square fits between its origin and the right edge,
+  // capped so a short payload doesn't swallow the sheet.
+  const qrRegion = Math.min(L.qr.maxRegion, widthDots - L.qr.x - EDGE_MARGIN);
+  const qr = fitQr(qrPayload, qrRegion);
+
+  // Grow the header box to contain the QR rather than letting it spill.
+  const headerBottom = Math.max(L.headerBox.minBottom, L.qr.y + qr.sizeDots + EDGE_MARGIN);
+  const firstRowY = headerBottom + L.rowsOffset;
+  const footerTop = heightDots - L.footerHeight;
+
+  return {
+    widthDots,
+    heightDots,
+    qr,
+    headerBottom,
+    headingY: headerBottom + L.headingOffset,
+    ruleY: headerBottom + L.ruleOffset,
+    firstRowY,
+    footerTop,
+    capacity: Math.max(0, Math.floor((footerTop - firstRowY) / L.rows.pitch)),
+    rowChars: maxRowChars(spec),
+  };
 }
 
 /**
@@ -184,116 +300,102 @@ export function dryBoxLabel(
   const spec: LabelSpec = { ...DRY_BOX_SPEC, ...input.spec };
   const fmt = input.formatDate ?? isoDate;
   const L = DRY_BOX_LAYOUT;
-  const heightDots = mmToDots(spec.heightMm, spec.dpi);
+  const g = dryBoxGeometry(spec, input.qrPayload);
+
+  const text = (
+    x: number,
+    y: number,
+    font: "2" | "3" | "5",
+    content: string,
+  ): TsplCommand => ({ kind: "text", x, y, font, rotation: 0, xScale: 1, yScale: 1, content });
 
   const commands: TsplCommand[] = [
-    { kind: "box", ...L.headerBox },
     {
-      kind: "text",
-      x: L.name.x,
-      y: L.name.y,
-      font: L.name.font,
-      rotation: 0,
-      xScale: 1,
-      yScale: 1,
-      content: input.location.name,
+      kind: "box",
+      x0: L.headerBox.x0,
+      y0: L.headerBox.y0,
+      x1: L.headerBox.x1,
+      y1: g.headerBottom,
+      thickness: L.headerBox.thickness,
     },
-    {
-      kind: "text",
-      x: L.subtitle.x,
-      y: L.subtitle.y,
-      font: L.subtitle.font,
-      rotation: 0,
-      xScale: 1,
-      yScale: 1,
-      content:
-        input.location.humidity != null
-          ? `${strings.subtitle}  ${input.location.humidity}% RH`
-          : strings.subtitle,
-    },
+    text(L.name.x, L.name.y, L.name.font, input.location.name),
+    text(
+      L.subtitle.x,
+      L.subtitle.y,
+      L.subtitle.font,
+      input.location.humidity != null
+        ? `${strings.subtitle}  ${input.location.humidity}% RH`
+        : strings.subtitle,
+    ),
     {
       kind: "qrcode",
       x: L.qr.x,
       y: L.qr.y,
-      ecc: L.qr.ecc,
-      cell: L.qr.cell,
+      ecc: g.qr.ecc,
+      cell: g.qr.cell,
       mode: "A",
       rotation: 0,
       content: input.qrPayload,
     },
+    text(
+      L.headerBox.x0 + 24,
+      g.headingY,
+      L.subtitle.font,
+      `${strings.contents}  (${strings.asOf} ${fmt(input.asOf)})`,
+    ),
     {
-      kind: "text",
-      x: L.contentsHeading.x,
-      y: L.contentsHeading.y,
-      font: L.contentsHeading.font,
-      rotation: 0,
-      xScale: 1,
-      yScale: 1,
-      content: `${strings.contents}  (${strings.asOf} ${fmt(input.asOf)})`,
+      kind: "bar",
+      x: L.footer.x,
+      y: g.ruleY,
+      width: L.footer.ruleWidth,
+      height: L.footer.ruleHeight,
     },
-    { kind: "bar", x: L.contentsRule.x, y: L.contentsRule.y, width: L.contentsRule.width, height: L.contentsRule.height },
   ];
 
   // --- contents manifest -------------------------------------------------
-  const capacity = maxContentRows(spec);
   const labels = input.items.map(describeItem).filter((s) => s.length > 0);
   const rowText: string[] = [];
   if (labels.length === 0) {
     rowText.push(strings.empty);
-  } else if (labels.length <= capacity) {
+  } else if (labels.length <= g.capacity) {
     rowText.push(...labels.map((s) => `- ${s}`));
   } else {
     // Reserve the final row for the overflow count so the label never
     // implies it is showing everything.
-    const shown = Math.max(0, capacity - 1);
+    const shown = Math.max(0, g.capacity - 1);
     rowText.push(...labels.slice(0, shown).map((s) => `- ${s}`));
     rowText.push(strings.more.replace("{count}", String(labels.length - shown)));
   }
   rowText.forEach((content, i) => {
-    commands.push({
-      kind: "text",
-      x: L.rows.x,
-      y: L.rows.firstY + i * L.rows.pitch,
-      font: L.rows.font,
-      rotation: 0,
-      xScale: 1,
-      yScale: 1,
-      content,
-    });
+    commands.push(
+      text(L.rows.x, g.firstRowY + i * L.rows.pitch, L.rows.font, fitRowText(content, g.rowChars)),
+    );
   });
 
   // --- footer, pinned to the bottom of the stock -------------------------
-  const footerTop = heightDots - L.footerHeight;
   const desiccant = input.location.desiccantChangedAt
     ? fmt(new Date(input.location.desiccantChangedAt))
     : strings.desiccantNever;
 
   commands.push(
-    { kind: "bar", x: L.footer.x, y: footerTop, width: L.footer.ruleWidth, height: L.footer.ruleHeight },
     {
-      kind: "text",
+      kind: "bar",
       x: L.footer.x,
-      y: footerTop + 20,
-      font: L.footer.font,
-      rotation: 0,
-      xScale: 1,
-      yScale: 1,
-      content: `${strings.desiccantChanged}  ${desiccant}`,
+      y: g.footerTop,
+      width: L.footer.ruleWidth,
+      height: L.footer.ruleHeight,
     },
-    {
-      kind: "text",
-      x: L.footer.x,
-      y: footerTop + 64,
-      font: L.footer.hintFont,
-      rotation: 0,
-      xScale: 1,
-      yScale: 1,
-      content: strings.replaceHint,
-    },
+    text(
+      L.footer.x,
+      g.footerTop + 20,
+      L.footer.font,
+      fitRowText(`${strings.desiccantChanged}  ${desiccant}`, g.rowChars),
+    ),
+    text(L.footer.x, g.footerTop + 64, L.footer.hintFont, strings.replaceHint),
     {
       kind: "barcode",
       x: L.footer.x,
-      y: footerTop + 120,
+      y: g.footerTop + 120,
       symbology: "128",
       height: L.footer.barcode.height,
       humanReadable: 1,

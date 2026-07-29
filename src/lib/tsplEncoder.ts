@@ -166,6 +166,41 @@ export interface LabelDocument {
   copies?: number;
 }
 
+/**
+ * QR byte-mode data capacity per symbol version, indexed by ECC level.
+ *
+ * Versions 1–20; a label QR past v20 has modules too fine to scan reliably
+ * off a 203 dpi thermal print anyway. Symbol side in modules is
+ * `17 + 4 * version`, so the printed size is `(17 + 4v) * cell` dots.
+ *
+ * This exists because the physical size of a `QRCODE` command is NOT implied
+ * by its arguments — it is driven by the payload length, which the firmware
+ * resolves at print time. Placing a QR without computing this prints a symbol
+ * that silently runs off the edge of the stock.
+ */
+const QR_BYTE_CAPACITY: Readonly<Record<TsplEcc, readonly number[]>> = {
+  L: [17, 32, 53, 78, 106, 134, 154, 192, 230, 271, 321, 367, 425, 458, 520, 586, 644, 718, 792, 858],
+  M: [14, 26, 42, 62, 84, 106, 122, 152, 180, 213, 251, 287, 331, 362, 412, 450, 504, 560, 624, 666],
+  Q: [11, 20, 32, 46, 60, 74, 86, 108, 130, 151, 177, 203, 241, 258, 292, 322, 364, 394, 442, 482],
+  H: [7, 14, 24, 34, 44, 58, 64, 84, 98, 119, 137, 155, 177, 194, 220, 250, 280, 310, 338, 382],
+};
+
+/**
+ * Symbol side, in modules, for a payload at the given ECC level.
+ *
+ * Returns null when the payload exceeds v20 capacity — the caller must then
+ * shorten it or drop to a weaker ECC rather than emit an unprintable symbol.
+ * Counts UTF-8 BYTES, not characters, because QR byte mode encodes bytes.
+ */
+export function qrModuleCount(payload: string, ecc: TsplEcc): number | null {
+  const bytes = new TextEncoder().encode(payload).length;
+  const table = QR_BYTE_CAPACITY[ecc];
+  for (let v = 0; v < table.length; v++) {
+    if (bytes <= table[v]) return 17 + 4 * (v + 1);
+  }
+  return null;
+}
+
 /** Thrown when a document cannot be rendered to valid TSPL. */
 export class TsplRenderError extends Error {
   constructor(message: string) {

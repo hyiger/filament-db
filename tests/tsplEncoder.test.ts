@@ -8,6 +8,7 @@ import {
   toAscii,
   sanitizeTsplLiteral,
   assertCrlfFramed,
+  qrModuleCount,
   TsplRenderError,
   DPI_203,
   type LabelDocument,
@@ -571,5 +572,45 @@ describe("assertCrlfFramed", () => {
     for (const name of ["01_probe_minimal", "02_probe_text", "03_probe_full", "04_drybox_label"]) {
       expect(() => assertCrlfFramed(goldenFixture(`${name}.prn`))).not.toThrow();
     }
+  });
+});
+
+describe("qrModuleCount — symbol sizing", () => {
+  it("returns the symbol side in modules for the payload's version", () => {
+    // A QRCODE command's printed size is NOT implied by its arguments — the
+    // firmware picks the version from the payload at print time, so a caller
+    // that wants the symbol to fit the stock has to compute it. Side is
+    // 17 + 4*version.
+    expect(qrModuleCount("x", "H")).toBe(21); // v1, 21x21
+    expect(qrModuleCount("x".repeat(24), "H")).toBe(29); // v3
+    expect(qrModuleCount("x".repeat(46), "H")).toBe(41); // v6
+    // 46 bytes exceeds v2 L capacity (32), so v3 — still far smaller than
+    // the 41 modules the same payload needs at H.
+    expect(qrModuleCount("x".repeat(46), "L")).toBe(29);
+  });
+
+  it("counts UTF-8 BYTES, not characters — QR byte mode encodes bytes", () => {
+    // Seven 3-byte characters is 21 bytes, which exceeds v2's 14-byte H
+    // capacity even though it is only 7 characters long.
+    const seven = "日本語日本語日";
+    expect(new TextEncoder().encode(seven).length).toBe(21);
+    expect(qrModuleCount(seven, "H")).toBe(qrModuleCount("x".repeat(21), "H"));
+  });
+
+  it("returns null past v20 rather than a symbol too fine to scan at 203 dpi", () => {
+    expect(qrModuleCount("x".repeat(382), "H")).toBe(97); // v20, the last we table
+    expect(qrModuleCount("x".repeat(383), "H")).toBeNull();
+    expect(qrModuleCount("x".repeat(5000), "L")).toBeNull();
+  });
+
+  it("stronger ECC costs capacity at every level", () => {
+    const payload = "x".repeat(100);
+    const h = qrModuleCount(payload, "H")!;
+    const q = qrModuleCount(payload, "Q")!;
+    const m = qrModuleCount(payload, "M")!;
+    const l = qrModuleCount(payload, "L")!;
+    expect(h).toBeGreaterThan(q);
+    expect(q).toBeGreaterThan(m);
+    expect(m).toBeGreaterThan(l);
   });
 });

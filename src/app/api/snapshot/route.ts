@@ -29,7 +29,7 @@ let restoreInProgress = false;
  * post-upgrade migration would then re-judge (and could erase) a
  * byte-identical post-cleanup user pin; the #953 version guard in those
  * builds rejects v5 instead. */
-const CURRENT_SNAPSHOT_VERSION = 5;
+const CURRENT_SNAPSHOT_VERSION = 6;
 
 /** The collection keys a v≤4 snapshot carries. Restore requires at least one to
  * be present so a wrong-shape / newer file 400s instead of silently wiping the
@@ -192,6 +192,13 @@ export async function GET(request: NextRequest) {
   //        (GH #1021: restore must know whether the data predates the
   //        one-shot nozzle-condition cleanup; bumped so pre-#1022 builds —
   //        which would drop the flag — reject the file via the #953 guard)
+  //   v6 — adds Location.desiccantChangedAt. Bumped for the same reason as
+  //        v5 and v4: a build without the field would accept the file and
+  //        its stricter Location schema would silently DROP the date, so the
+  //        user gets a "restored successfully" that quietly lost data. v4
+  //        exists because exactly that happened to share links. Failing
+  //        closed via the #953 guard is the established trade-off here —
+  //        a refused restore is recoverable, a silent partial one isn't.
   // Older snapshots still restore cleanly because POST destructures
   // missing collections to `[]`.
   // GH #1021 r12: cleanup provenance. Restore uses this to decide whether the

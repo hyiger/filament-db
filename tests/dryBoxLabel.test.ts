@@ -2,7 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   dryBoxLabel,
   describeItem,
-  maxContentRows,
+  dryBoxGeometry,
+  fitQr,
+  fitRowText,
+  maxRowChars,
   DRY_BOX_SPEC,
   DRY_BOX_LAYOUT,
   DEFAULT_DRY_BOX_STRINGS,
@@ -22,12 +25,14 @@ import { render, mmToDots, type TsplCommand } from "@/lib/tsplEncoder";
  */
 
 const AS_OF = new Date("2026-07-28T12:00:00.000Z");
+const QR = "https://example.test/inventory?location=abc123";
+const capacityOf = (spec = DRY_BOX_SPEC, qr = QR) => dryBoxGeometry(spec, qr).capacity;
 
 function input(over: Partial<DryBoxLabelInput> = {}): DryBoxLabelInput {
   return {
     location: { name: "BOX-07" },
     items: [],
-    qrPayload: "https://example.test/inventory?location=abc123",
+    qrPayload: QR,
     asOf: AS_OF,
     ...over,
   };
@@ -66,20 +71,40 @@ describe("describeItem", () => {
   });
 });
 
-describe("maxContentRows", () => {
-  it("derives capacity from the configured stock height", () => {
-    const rows = maxContentRows(DRY_BOX_SPEC);
-    const height = mmToDots(DRY_BOX_SPEC.heightMm, DRY_BOX_SPEC.dpi);
-    const available = height - DRY_BOX_LAYOUT.footerHeight - DRY_BOX_LAYOUT.rows.firstY;
-    expect(rows).toBe(Math.floor(available / DRY_BOX_LAYOUT.rows.pitch));
-    // Sanity: the whole point of reflowing is fitting well more than the
-    // three rows the original fixture hardcoded.
-    expect(rows).toBeGreaterThan(12);
+describe("dryBoxGeometry — capacity", () => {
+  it("derives capacity from the stock height and the space the QR leaves", () => {
+    const g = dryBoxGeometry(DRY_BOX_SPEC, QR);
+    expect(g.capacity).toBe(Math.floor((g.footerTop - g.firstRowY) / DRY_BOX_LAYOUT.rows.pitch));
+    // The whole point of reflowing is fitting well more than the three rows
+    // the original fixture hardcoded.
+    expect(g.capacity).toBeGreaterThan(8);
   });
 
   it("taller stock fits more rows; stock too short fits none rather than going negative", () => {
-    expect(maxContentRows({ ...DRY_BOX_SPEC, heightMm: 300 })).toBeGreaterThan(maxContentRows(DRY_BOX_SPEC));
-    expect(maxContentRows({ ...DRY_BOX_SPEC, heightMm: 20 })).toBe(0);
+    expect(capacityOf({ ...DRY_BOX_SPEC, heightMm: 300 })).toBeGreaterThan(capacityOf());
+    expect(capacityOf({ ...DRY_BOX_SPEC, heightMm: 20 })).toBe(0);
+  });
+
+  it("keeps the QR inside the sheet and the header box for any payload length", () => {
+    // The bug this guards: the fixture's cell 7 was fine for its 16-byte
+    // payload (29 modules = 203 dots) but a real 67-byte deep link is 49
+    // modules = 343 dots, which runs 104 dots past the edge of 100mm stock
+    // and simply is not printed. Note a SHORT payload can yield a LARGER
+    // symbol than a long one, because it saturates the max cell size — so
+    // the invariant is containment, not monotonicity.
+    for (const payload of [
+      "x",
+      "fdb://box/B1",
+      QR,
+      "https://filament-db.example.com/inventory?location=507f1f77bcf86cd799439011",
+      "https://filament-db.example.com/inventory?location=507f1f77bcf86cd799439011&spool=507f191e810c19729de860ea",
+    ]) {
+      const g = dryBoxGeometry(DRY_BOX_SPEC, payload);
+      expect(DRY_BOX_LAYOUT.qr.x + g.qr.sizeDots).toBeLessThanOrEqual(g.widthDots);
+      expect(DRY_BOX_LAYOUT.qr.y + g.qr.sizeDots).toBeLessThanOrEqual(g.headerBottom);
+      expect(g.capacity).toBeGreaterThan(0);
+      expect(g.firstRowY).toBeGreaterThan(g.headerBottom);
+    }
   });
 });
 
@@ -102,7 +127,7 @@ describe("dryBoxLabel — structure", () => {
     const doc = dryBoxLabel(input());
     expect(texts(doc.commands)).toContain("BOX-07");
     const qr = doc.commands.find((c) => c.kind === "qrcode");
-    expect(qr && qr.kind === "qrcode" && qr.content).toBe("https://example.test/inventory?location=abc123");
+    expect(qr && qr.kind === "qrcode" && qr.content).toBe(QR);
   });
 
   it("defaults the barcode to the location name but honours an override", () => {
@@ -145,7 +170,7 @@ describe("dryBoxLabel — contents manifest", () => {
   it("reports overflow instead of silently truncating", () => {
     // A label that shows 16 of 40 spools with no indication would read as a
     // complete inventory — the failure mode this guards.
-    const capacity = maxContentRows(DRY_BOX_SPEC);
+    const capacity = capacityOf();
     const out = texts(dryBoxLabel(input({ items: many(capacity + 10) })).commands);
     const shown = out.filter((s) => s.startsWith("- ")).length;
     expect(shown).toBe(capacity - 1);
@@ -153,7 +178,7 @@ describe("dryBoxLabel — contents manifest", () => {
   });
 
   it("fills the sheet exactly at capacity with no overflow row", () => {
-    const capacity = maxContentRows(DRY_BOX_SPEC);
+    const capacity = capacityOf();
     const out = texts(dryBoxLabel(input({ items: many(capacity) })).commands);
     expect(out.filter((s) => s.startsWith("- ")).length).toBe(capacity);
     expect(out.some((s) => s.includes("more"))).toBe(false);
@@ -166,10 +191,11 @@ describe("dryBoxLabel — contents manifest", () => {
       const spec = { ...DRY_BOX_SPEC, heightMm };
       const doc = dryBoxLabel(input({ items: many(200), spec: { heightMm } }));
       const footerTop = mmToDots(heightMm, spec.dpi) - DRY_BOX_LAYOUT.footerHeight;
+      const g = dryBoxGeometry(spec, QR);
       const rowYs = doc.commands
         .filter((c): c is Extract<TsplCommand, { kind: "text" }> => c.kind === "text")
         .map((c) => c.y)
-        .filter((y) => y >= DRY_BOX_LAYOUT.rows.firstY && y < footerTop);
+        .filter((y) => y >= g.firstRowY && y < footerTop);
       for (const y of rowYs) expect(y).toBeLessThan(footerTop);
       // And the barcode stays on the sheet.
       const bc = doc.commands.find((c): c is Extract<TsplCommand, { kind: "barcode" }> => c.kind === "barcode")!;
@@ -230,7 +256,7 @@ describe("dryBoxLabel — localization", () => {
   });
 
   it("substitutes the overflow count into the supplied template", () => {
-    const capacity = maxContentRows(DRY_BOX_SPEC);
+    const capacity = capacityOf();
     const out = texts(
       dryBoxLabel(
         input({ items: Array.from({ length: capacity + 5 }, (_, i) => ({ filamentName: `F${i}` })) }),
@@ -238,5 +264,65 @@ describe("dryBoxLabel — localization", () => {
       ).commands,
     );
     expect(out).toContain(`und ${capacity + 5 - (capacity - 1)} weitere`);
+  });
+});
+
+describe("fitQr — payload-aware sizing", () => {
+  it("prefers the strongest ECC that still prints at a scannable module size", () => {
+    // A short payload leaves room for full error correction.
+    expect(fitQr("fdb://box/B1", 231).ecc).toBe("H");
+  });
+
+  it("steps ECC down rather than shrinking modules below readability", () => {
+    // Squeezed into a small region, a long payload at H would need 2-dot
+    // modules; dropping ECC keeps the symbol scannable instead. This is the
+    // trade-off the handoff spec calls for past ~60 characters.
+    const long = "https://filament-db.example.com/inventory?location=507f1f77bcf86cd799439011&spool=507f191e810c19729de860ea";
+    const fitted = fitQr(long, 160);
+    expect(fitted.cell).toBeGreaterThanOrEqual(4);
+    expect(["Q", "M", "L"]).toContain(fitted.ecc);
+  });
+
+  it("never returns a symbol larger than the region it was given", () => {
+    for (const dots of [60, 100, 160, 231, 300]) {
+      for (const payload of ["x", QR, "y".repeat(120)]) {
+        expect(fitQr(payload, dots).sizeDots).toBeLessThanOrEqual(dots);
+      }
+    }
+  });
+
+  it("throws rather than emit an unprintable symbol", () => {
+    // Better a caught error in the dialog than a label with a QR clipped at
+    // the sheet edge that scans as nothing.
+    expect(() => fitQr("z".repeat(400), 40)).toThrow(/too long to print/);
+  });
+});
+
+describe("fitRowText / maxRowChars", () => {
+  it("computes how many font-3 characters fit the stock", () => {
+    // 799 printable dots - 56 (row x) - 8 (edge margin) = 735; / 16 = 45.
+    expect(maxRowChars(DRY_BOX_SPEC)).toBe(45);
+    expect(maxRowChars({ ...DRY_BOX_SPEC, widthMm: 200 })).toBeGreaterThan(maxRowChars(DRY_BOX_SPEC));
+  });
+
+  it("truncates with an ellipsis rather than running off the edge", () => {
+    // TSPL TEXT neither wraps nor clips — an over-long label silently loses
+    // its tail with no indication that anything was cut.
+    expect(fitRowText("short", 46)).toBe("short");
+    expect(fitRowText("x".repeat(60), 10)).toBe("xxxxxxx...");
+    expect(fitRowText("x".repeat(60), 10)).toHaveLength(10);
+  });
+
+  it("degrades sanely at tiny widths", () => {
+    expect(fitRowText("abcdef", 3)).toBe("abc");
+    expect(fitRowText("abcdef", 0)).toBe("");
+    expect(fitRowText("abcdef", -1)).toBe("");
+  });
+
+  it("truncates over-long manifest rows in a real label", () => {
+    const doc = dryBoxLabel(input({ items: [{ filamentName: "Q".repeat(200) }] }));
+    const row = texts(doc.commands).find((s) => s.startsWith("- Q"))!;
+    expect(row.length).toBeLessThanOrEqual(maxRowChars(DRY_BOX_SPEC));
+    expect(row.endsWith("...")).toBe(true);
   });
 });
