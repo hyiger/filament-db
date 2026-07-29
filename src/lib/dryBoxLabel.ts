@@ -309,6 +309,7 @@ function toCalendarDate(value: string | Date): Date {
   return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
+
 /** Case-folded, separator-normalised and space-padded, so a containment test
  *  matches only WHOLE tokens. Padding is what supplies the word boundaries:
  *  " prusa space gray " does not contain " pa ", where a raw substring test
@@ -343,7 +344,16 @@ export function describeItem(item: DryBoxLabelItem): string {
   const vendor = item.filamentVendor?.trim() || "";
   const type = item.filamentType?.trim() || "";
   const parts: string[] = [];
-  if (vendor && !name.toLowerCase().startsWith(vendor.toLowerCase())) parts.push(vendor);
+  // Match the vendor as WHOLE LEADING TOKENS, not a raw prefix. `startsWith`
+  // suppressed any vendor that merely began the name — "Sun" vanished from
+  // "Sunset Orange", "Pol" from "Polar White" — losing the brand from the
+  // manifest. Same prefix-collision flaw the type dedup below already had.
+  //
+  // The trade-off: "Prusa" + "Prusament PLA" now renders "Prusa Prusament
+  // PLA" rather than suppressing. A redundant word costs nothing; a dropped
+  // vendor loses information. The case this guard was actually written for —
+  // "Prusament" + "Prusament PLA" — still collapses correctly.
+  if (vendor && !tokenized(name).startsWith(tokenized(vendor))) parts.push(vendor);
   if (name) parts.push(name);
   if (type && !tokenized(`${vendor} ${name}`).includes(tokenized(type))) parts.push(type);
   return parts.join(" ").trim();

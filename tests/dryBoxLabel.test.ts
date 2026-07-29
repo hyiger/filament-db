@@ -687,3 +687,32 @@ describe("PR #1042 review round 6 — Code 128 quiet zone", () => {
     expect(fitBarcode("X".repeat(200), 751)).toBeNull();
   });
 });
+
+describe("PR #1042 review round 7 — vendor prefix collision", () => {
+  it("keeps a vendor that merely begins the name", () => {
+    // `startsWith` suppressed any vendor that was a raw prefix, so real
+    // brands vanished from the manifest whenever a colour name happened to
+    // start with the same letters. Same flaw the type dedup already had.
+    expect(describeItem({ filamentVendor: "Sun", filamentName: "Sunset Orange", filamentType: "PLA" }))
+      .toBe("Sun Sunset Orange PLA");
+    expect(describeItem({ filamentVendor: "Pol", filamentName: "Polar White", filamentType: "PETG" }))
+      .toBe("Pol Polar White PETG");
+  });
+
+  it("still collapses a vendor that IS the leading token", () => {
+    // The case the guard was written for.
+    expect(describeItem({ filamentVendor: "Prusament", filamentName: "Prusament PLA", filamentType: "PLA" }))
+      .toBe("Prusament PLA");
+    // Multi-word vendors collapse too. No type here, so the assertion
+    // isolates the vendor rule rather than mixing in the type dedup.
+    expect(describeItem({ filamentVendor: "Fiberon PA6", filamentName: "Fiberon PA6 CF20" }))
+      .toBe("Fiberon PA6 CF20");
+  });
+
+  it("prefers a redundant word over a lost brand", () => {
+    // "Prusa" + "Prusament PLA" is a partial-token match. Repeating is
+    // cosmetic; dropping the vendor loses information the manifest needs.
+    expect(describeItem({ filamentVendor: "Prusa", filamentName: "Prusament PLA", filamentType: "PLA" }))
+      .toBe("Prusa Prusament PLA");
+  });
+});
