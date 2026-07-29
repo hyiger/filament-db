@@ -118,7 +118,8 @@ describe("dryBoxLabel — structure", () => {
     const job = new TextDecoder().decode(bytes);
     expect(job).toContain("SIZE 100 mm,150 mm\r\n");
     expect(job).toContain("QRCODE");
-    expect(job).toContain('BARCODE 40,');
+    // Not a hardcoded x — the barcode is inset by its quiet zone.
+    expect(job).toMatch(/BARCODE \d+,\d+,"128"/);
     expect(job.endsWith("PRINT 1,1\r\n")).toBe(true);
   });
 
@@ -647,5 +648,42 @@ describe("PR #1042 review round 5 — QR quiet zone", () => {
   it("still keeps the whole footprint on the sheet", () => {
     const { g, right } = symbolBox();
     expect(right + g.qr.quietDots).toBeLessThanOrEqual(g.widthDots);
+  });
+});
+
+describe("PR #1042 review round 6 — Code 128 quiet zone", () => {
+  const CODE128_QUIET_MODULES = 10;
+  const modulesFor = (payload: string) => 11 * payload.length + 35;
+
+  it("reserves 10 clear modules on each side when fitting", () => {
+    // The QR fix one commit earlier reserved the 2D quiet zone and left this
+    // one unreserved — same defect, sibling symbology. A 27-character payload
+    // on 90mm stock fits on bars alone (664 of 671 dots) but needs 704 with
+    // its quiet zones, so 2-dot bars must be refused in favour of 1.
+    const avail = mmToDots(90, DRY_BOX_SPEC.dpi) - DRY_BOX_LAYOUT.footer.x - 8;
+    const payload = "X".repeat(27);
+    expect(modulesFor(payload) * 2).toBeLessThanOrEqual(avail); // bars alone fit
+    expect(fitBarcode(payload, avail)).toEqual({ narrow: 1 }); // footprint does not
+  });
+
+  it("keeps both quiet zones on the sheet for every stock width", () => {
+    for (const widthMm of [90, 100, 120]) {
+      for (const nameLen of [1, 6, 20, 27, 40]) {
+        const doc = dryBoxLabel(input({ location: { name: "X".repeat(nameLen) }, spec: { widthMm } }));
+        const bc = doc.commands.find((c): c is Extract<TsplCommand, { kind: "barcode" }> => c.kind === "barcode");
+        if (!bc) continue; // omitted rather than clipped — also valid
+        const quiet = CODE128_QUIET_MODULES * bc.narrow;
+        // Left quiet zone sits inside the sheet, not off the edge.
+        expect(bc.x - DRY_BOX_LAYOUT.footer.x).toBeGreaterThanOrEqual(quiet);
+        // Right quiet zone ends on the sheet.
+        expect(bc.x + modulesFor(bc.content) * bc.narrow + quiet).toBeLessThanOrEqual(
+          mmToDots(widthMm, DRY_BOX_SPEC.dpi),
+        );
+      }
+    }
+  });
+
+  it("still omits the barcode outright when even 1-dot bars cannot fit", () => {
+    expect(fitBarcode("X".repeat(200), 751)).toBeNull();
   });
 });

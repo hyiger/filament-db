@@ -133,6 +133,10 @@ export function fitRowText(text: string, maxChars: number): string {
 const CODE128_FIXED_MODULES = 35;
 /** Each encoded character is 11 modules wide. */
 const CODE128_MODULES_PER_CHAR = 11;
+/** Clear modules required on EACH side of a Code 128 symbol. The QR fix one
+ *  commit ago reserved the 2D quiet zone and left this one unreserved — same
+ *  defect, sibling symbology. */
+const CODE128_QUIET_ZONE_MODULES = 10;
 
 /**
  * Pick a bar width for a Code 128 payload, or null when it cannot fit.
@@ -145,7 +149,14 @@ const CODE128_MODULES_PER_CHAR = 11;
  * something that only appears to work. The QR still carries the identity.
  */
 export function fitBarcode(payload: string, maxDots: number): { narrow: number } | null {
-  const modules = CODE128_MODULES_PER_CHAR * payload.length + CODE128_FIXED_MODULES;
+  // Fit the FOOTPRINT — bars plus both quiet zones — not the bars alone. A
+  // scanner needs the clear space to find the symbol's edges, so a barcode
+  // whose quiet zone is clipped by the sheet edge reads as nothing while
+  // still looking printed. Exactly the QR mistake, one symbology over.
+  const modules =
+    CODE128_MODULES_PER_CHAR * payload.length +
+    CODE128_FIXED_MODULES +
+    2 * CODE128_QUIET_ZONE_MODULES;
   for (const narrow of [2, 1]) {
     if (modules * narrow <= maxDots) return { narrow };
   }
@@ -567,7 +578,8 @@ export function dryBoxLabel(
   if (bars) {
     commands.push({
       kind: "barcode",
-      x: L.footer.x,
+      // Inset by the quiet zone so the clear space is ON the sheet.
+      x: L.footer.x + CODE128_QUIET_ZONE_MODULES * bars.narrow,
       y: g.footerTop + 120,
       symbology: "128",
       height: L.footer.barcode.height,
