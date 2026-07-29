@@ -41,6 +41,9 @@ export interface InventoryLocation {
   name: string;
   kind: string;
   humidity: number | null;
+  /** Arrives JSON-serialized as a string on the client, as a Date in
+   *  server-side tests. */
+  desiccantChangedAt: Date | string | null;
   notes: string;
 }
 

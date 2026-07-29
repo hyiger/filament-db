@@ -409,7 +409,7 @@ export async function GET(request: NextRequest) {
           foreignField: "_id",
           pipeline: [
             { $match: { _deletedAt: null } },
-            { $project: { _id: 1, name: 1, kind: 1, humidity: 1, notes: 1 } },
+            { $project: { _id: 1, name: 1, kind: 1, humidity: 1, desiccantChangedAt: 1, notes: 1 } },
           ],
           as: "_location",
         },

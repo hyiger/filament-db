@@ -4,6 +4,7 @@ import Location from "@/models/Location";
 import Filament from "@/models/Filament";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { isValidIsoDateString } from "@/lib/validateSpoolBody";
 
 export async function GET(
   _request: NextRequest,
@@ -50,6 +51,16 @@ export async function PUT(
     if ("name" in body) update.name = body.name;
     if ("kind" in body) update.kind = body.kind;
     if ("humidity" in body) update.humidity = body.humidity;
+    if ("desiccantChangedAt" in body) {
+      // Mongoose casts an ISO-shaped-but-impossible date (Feb 30, month 13)
+      // by rolling it over rather than rejecting it, so validate the string
+      // explicitly first — same posture as the spool date fields (GH #372).
+      const raw = body.desiccantChangedAt;
+      if (raw !== null && !(typeof raw === "string" && isValidIsoDateString(raw))) {
+        return errorResponse("desiccantChangedAt must be an ISO date string or null", 400);
+      }
+      update.desiccantChangedAt = raw;
+    }
     if ("notes" in body) update.notes = body.notes;
     const location = await Location.findOneAndUpdate(
       { _id: id, _deletedAt: null },

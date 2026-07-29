@@ -30,7 +30,7 @@ function row(id: string, over: Partial<InventoryRow> = {}): Row {
 }
 
 function loc(id: string, name: string) {
-  return { _id: id, name, kind: "shelf", humidity: null, notes: "" };
+  return { _id: id, name, kind: "shelf", humidity: null, desiccantChangedAt: null, notes: "" };
 }
 
 describe("inventoryRemainingGrams", () => {

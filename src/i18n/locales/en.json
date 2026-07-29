@@ -500,6 +500,8 @@
   "locations.form.humidity": "Humidity (%RH)",
   "locations.form.humidityPlaceholder": "e.g. 18",
   "locations.form.humidityHint": "Optional. Typically used for dryboxes — update manually after checking the hygrometer.",
+  "locations.form.desiccantChangedAt": "Desiccant changed",
+  "locations.form.desiccantChangedAtHint": "Optional. Typically used for dryboxes — set it when you swap or regenerate the beads.",
   "locations.form.notes": "Notes",
   "locations.form.notesPlaceholder": "Optional notes about this location...",
   "locations.form.saving": "Saving...",

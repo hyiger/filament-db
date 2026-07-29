@@ -72,6 +72,7 @@ const DATE_FIELDS = new Set([
   "_deletedAt",
   "purchaseDate",
   "openedDate",
+  "desiccantChangedAt",
   "startedAt",
   "date",
   "expiresAt",

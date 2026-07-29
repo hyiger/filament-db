@@ -7,6 +7,8 @@ interface LocationFormData {
   name: string;
   kind: string;
   humidity: string;
+  /** `<input type="date">` value — "YYYY-MM-DD" or "" for unset. */
+  desiccantChangedAt: string;
   notes: string;
 }
 
@@ -14,6 +16,7 @@ interface LocationInitialData {
   name?: string;
   kind?: string;
   humidity?: number | null;
+  desiccantChangedAt?: string | null;
   notes?: string;
 }
 
@@ -39,6 +42,12 @@ export default function LocationForm({ initialData, onSubmit, onDirtyChange }: P
     name: initialData?.name || "",
     kind: initialData?.kind || "shelf",
     humidity: initialData?.humidity != null ? String(initialData.humidity) : "",
+    // `<input type="date">` wants bare YYYY-MM-DD; the API returns a full
+    // ISO timestamp. Slice rather than going through Date, which would
+    // shift the calendar day for anyone west of UTC.
+    desiccantChangedAt: initialData?.desiccantChangedAt
+      ? initialData.desiccantChangedAt.slice(0, 10)
+      : "",
     notes: initialData?.notes || "",
   });
   const [saving, setSaving] = useState(false);
@@ -72,6 +81,9 @@ export default function LocationForm({ initialData, onSubmit, onDirtyChange }: P
         kind: form.kind,
         humidity:
           humidityNum != null && Number.isFinite(humidityNum) ? humidityNum : null,
+        desiccantChangedAt: form.desiccantChangedAt.trim() === ""
+          ? null
+          : form.desiccantChangedAt,
         notes: form.notes,
       });
       savedRef.current = true;
@@ -132,6 +144,22 @@ export default function LocationForm({ initialData, onSubmit, onDirtyChange }: P
           placeholder={t("locations.form.humidityPlaceholder")}
         />
         <p className="text-xs text-gray-400 mt-1">{t("locations.form.humidityHint")}</p>
+      </div>
+
+      <div>
+        <label htmlFor="location-desiccant" className={labelClass}>
+          {t("locations.form.desiccantChangedAt")}
+        </label>
+        <input
+          id="location-desiccant"
+          type="date"
+          className={inputClass}
+          value={form.desiccantChangedAt}
+          onChange={(e) => updateForm({ desiccantChangedAt: e.target.value })}
+        />
+        <p className="text-xs text-gray-400 mt-1">
+          {t("locations.form.desiccantChangedAtHint")}
+        </p>
       </div>
 
       <div>
