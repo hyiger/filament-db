@@ -513,6 +513,7 @@
   "dryBoxLabel.label.empty": "(leer)",
   "dryBoxLabel.label.more": "+{count} weitere",
   "dryBoxLabel.label.asOf": "Stand",
+  "dryBoxLabel.loadingManifest": "Inhalt der Box wird geladen…",
   "dryBoxLabel.preview.alt": "Vorschau des Trockenbox-Etiketts, wie es gedruckt wird",
   "dryBoxLabel.preview.error": "Etikett kann nicht erstellt werden: {error}",
   "dryBoxLabel.print": "Drucken",

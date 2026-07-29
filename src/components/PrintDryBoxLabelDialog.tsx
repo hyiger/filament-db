@@ -49,20 +49,12 @@ interface PrintDryBoxLabelDialogProps {
      *  template accepts both. */
     desiccantChangedAt: string | Date | null;
   };
-  /** The group's spool rows — field names match the by-location response. */
-  spools: Array<
-    DryBoxLabelItem & {
-      _id: string;
-      retired?: boolean | null;
-    }
-  >;
 }
 
 export default function PrintDryBoxLabelDialog({
   open,
   onClose,
   location,
-  spools,
 }: PrintDryBoxLabelDialogProps) {
   const { t } = useTranslation();
   const { toast } = useToast();
@@ -120,12 +112,46 @@ export default function PrintDryBoxLabelDialog({
     };
   }, [publicUrl, location._id]);
 
-  // Retired spools are out of inventory — they are not "in the box" in any
-  // sense the label should assert.
-  const items: DryBoxLabelItem[] = useMemo(
-    () => spools.filter((s) => !s.retired),
-    [spools],
-  );
+  // The manifest is fetched HERE, unfiltered — never taken from the page's
+  // rows. The inventory page passes its type/vendor filters to the API and
+  // search-filters client-side, so its group.spools is the VISIBLE subset;
+  // printing that under an active filter produces a label asserting a
+  // partial list is the box's full contents, dated as if authoritative
+  // (PR #1043 P1). The default query excludes retired spools server-side —
+  // retired means out of inventory, not "in the box".
+  type ManifestState =
+    | { status: "loading" }
+    | { status: "ready"; items: DryBoxLabelItem[] }
+    | { status: "error"; message: string };
+  const [manifest, setManifest] = useState<ManifestState>({ status: "loading" });
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setManifest({ status: "loading" });
+    fetch("/api/spools/by-location")
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((d: { groups: Array<{ location: { _id: string } | null; spools: DryBoxLabelItem[] }> }) => {
+        if (cancelled) return;
+        const group = d.groups.find((g) => g.location?._id === location._id);
+        setManifest({ status: "ready", items: group?.spools ?? [] });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setManifest({
+            status: "error",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, location._id]);
+  const items = manifest.status === "ready" ? manifest.items : null;
 
   // The template's user-visible strings come from the app locale. The
   // emitter folds them to ASCII on the way out (the Y813BT firmware
@@ -149,8 +175,16 @@ export default function PrintDryBoxLabelDialog({
   // preview doesn't re-render every second; dryBoxLabel itself stays pure.
   const asOf = useMemo(() => new Date(), [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  type DocState = { doc: LabelDocument; error: null } | { doc: null; error: string };
+  type DocState =
+    | { doc: LabelDocument; error: null }
+    | { doc: null; error: string | null }; // error null = still loading
   const docState: DocState = useMemo(() => {
+    if (!items) {
+      return {
+        doc: null,
+        error: manifest.status === "error" ? manifest.message : null,
+      };
+    }
     try {
       return {
         doc: dryBoxLabel(
@@ -174,7 +208,7 @@ export default function PrintDryBoxLabelDialog({
       // absurdly long public URL) — surface it instead of a broken preview.
       return { doc: null, error: err instanceof Error ? err.message : String(err) };
     }
-  }, [location, items, qrPayload, asOf, formatDate, strings]);
+  }, [location, items, manifest, qrPayload, asOf, formatDate, strings]);
 
   const [printing, setPrinting] = useState(false);
   const handlePrint = useCallback(async () => {
@@ -285,16 +319,22 @@ export default function PrintDryBoxLabelDialog({
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
             {t("dryBoxLabel.subtitle", {
               name: location.name,
-              count: String(items.length),
+              count: items ? String(items.length) : "…",
             })}
           </p>
         </div>
 
         <div className="px-6 py-4 space-y-3">
           {!docState.doc ? (
-            <p className="text-sm text-red-600 dark:text-red-400">
-              {t("dryBoxLabel.preview.error", { error: docState.error ?? "" })}
-            </p>
+            docState.error === null ? (
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {t("dryBoxLabel.loadingManifest")}
+              </p>
+            ) : (
+              <p className="text-sm text-red-600 dark:text-red-400">
+                {t("dryBoxLabel.preview.error", { error: docState.error })}
+              </p>
+            )
           ) : (
             <TsplLabelPreview doc={docState.doc} ariaLabel={t("dryBoxLabel.preview.alt")} />
           )}

@@ -248,12 +248,13 @@ export default function InventoryPage() {
   }, []);
   const clearSelection = useCallback(() => setSelectedKeys(new Set()), []);
 
-  // Dry-box label printing: the location + spool rows of the group whose
-  // print button was clicked — everything the dialog needs, no second fetch.
-  const [printGroup, setPrintGroup] = useState<{
-    location: NonNullable<Group["location"]>;
-    spools: SpoolRow[];
-  } | null>(null);
+  // Dry-box label printing: the location whose print button was clicked.
+  // Deliberately NOT the group's spool rows — this page's groups reflect the
+  // active type/vendor filters and the client-side search, so they are the
+  // VISIBLE subset, and a label printed from them under a filter would
+  // assert a partial list as the box's full contents (PR #1043 P1). The
+  // dialog fetches its own unfiltered manifest.
+  const [printLocation, setPrintLocation] = useState<NonNullable<Group["location"]> | null>(null);
 
   // Deep link from a printed label's QR: /inventory?location=<id> expands
   // that location's group, scrolls to it and rings it briefly. Same
@@ -267,23 +268,40 @@ export default function InventoryPage() {
     deepLinkHandledRef.current = true;
     const param = new URLSearchParams(window.location.search).get("location");
     if (!param) return;
+    // A scanned label must not depend on the scanning browser's persisted
+    // groupBy preference: under type/vendor/none grouping the section ids
+    // are bucket values, not location ids, and the target simply would not
+    // exist (PR #1043 P2). Forcing location grouping is what the user asked
+    // for by scanning a BOX label; it persists like any manual switch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setGroupBy("location");
     // Groups default to expanded (`collapsed` holds collapsed keys), so the
     // delete only matters when a stored pref collapsed this one.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setCollapsed((prev) => {
       const next = new Set(prev);
       next.delete(param);
       return next;
     });
     setHighlightKey(param);
-    requestAnimationFrame(() => {
+  }, [loading, data]);
+
+  // Deep link, step 2: scroll once the location-grouped DOM exists. Split
+  // from step 1 because the setGroupBy above re-renders the section list —
+  // a same-tick requestAnimationFrame can fire before that commit and find
+  // no element.
+  useEffect(() => {
+    if (!highlightKey || groupBy !== "location" || loading) return;
+    const raf = requestAnimationFrame(() => {
       document
-        .getElementById(`inventory-group-${param}`)
+        .getElementById(`inventory-group-${highlightKey}`)
         ?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
     const timer = setTimeout(() => setHighlightKey(null), 2500);
-    return () => clearTimeout(timer);
-  }, [loading, data]);
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+    };
+  }, [highlightKey, groupBy, loading]);
 
   const fetchInventory = useCallback(
     async (signal?: AbortSignal) => {
@@ -890,10 +908,7 @@ export default function InventoryPage() {
                   <button
                     type="button"
                     onClick={() =>
-                      setPrintGroup({
-                        location: group.location as NonNullable<Group["location"]>,
-                        spools: group.spools,
-                      })
+                      setPrintLocation(group.location as NonNullable<Group["location"]>)
                     }
                     title={t("inventory.printDryBox")}
                     aria-label={t("inventory.printDryBox")}
@@ -956,12 +971,11 @@ export default function InventoryPage() {
         </div>
       )}
 
-      {printGroup?.location && (
+      {printLocation && (
         <PrintDryBoxLabelDialog
           open
-          onClose={() => setPrintGroup(null)}
-          location={printGroup.location}
-          spools={printGroup.spools}
+          onClose={() => setPrintLocation(null)}
+          location={printLocation}
         />
       )}
     </main>

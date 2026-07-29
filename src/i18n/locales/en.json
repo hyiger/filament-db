@@ -513,6 +513,7 @@
   "dryBoxLabel.label.empty": "(empty)",
   "dryBoxLabel.label.more": "+{count} more",
   "dryBoxLabel.label.asOf": "as of",
+  "dryBoxLabel.loadingManifest": "Loading the box's contents…",
   "dryBoxLabel.preview.alt": "Preview of the dry-box label as it will print",
   "dryBoxLabel.preview.error": "Cannot build this label: {error}",
   "dryBoxLabel.print": "Print",
