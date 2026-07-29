@@ -9,8 +9,8 @@
  * Docker / web bundle this committed snapshot as-is.
  */
 
-export const REFERENCE_WIKI_SHA = "6c24943";
-export const REFERENCE_SYNCED_AT = "2026-06-12";
+export const REFERENCE_WIKI_SHA = "cb46e67";
+export const REFERENCE_SYNCED_AT = "2026-07-25";
 
 /** Chapter ids present in the bundled content (empty only in the --stub build).
  *  Lets the detail page gate the Technical Reference panel without importing
