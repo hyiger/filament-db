@@ -5,7 +5,12 @@ import { execFile } from "child_process";
 import Store from "electron-store";
 import http from "http";
 import { NfcService } from "./nfc-service";
-import { listLabelPrinters, printLabel as printLabelToDevice, disableBidi } from "./label-printer";
+import {
+  listLabelPrinters,
+  printLabel as printLabelToDevice,
+  disableBidi,
+  type LabelPrinterKind,
+} from "./label-printer";
 import { isLoopbackHostname } from "../src/lib/loopbackHost";
 import { listLanIpv4 } from "../src/lib/getLanIp";
 import { isNtagSizeName, type NtagSizeName } from "../src/lib/ntagVersion";
@@ -1376,41 +1381,143 @@ ipcMain.handle("label-printer-list-devices", async (event, probeUsb) => {
   );
 });
 
-ipcMain.handle("label-printer-get-device-path", (event) => {
-  assertTrustedSender(event, "label-printer-get-device-path");
-  // The picker's chosen device path lives in the same electron-store
-  // the rest of the app uses — see the get-config handler above. Kept
-  // as a separate handler so the renderer doesn't have to read the
-  // whole config object just to render the Print Label dialog.
-  return (store as unknown as Store<Record<string, unknown>>).get("labelPrinterDevicePath", null);
-});
+/**
+ * The two label printers the app drives, and the electron-store key backing
+ * each one's device selection.
+ *
+ * Registering both from ONE table is deliberate. These handlers are mirrored
+ * by hand in electron/preload.ts and src/types/electron.d.ts with no
+ * compile-time link between the three files, and that hand-mirroring has
+ * already drifted in production once (GH #1006 F4, where preload's local
+ * NfcStatus silently omitted a field). Two hand-copied ~50-line print
+ * handlers would be the same trap: a validation guard tightened on one and
+ * missed on the other is a security fix that only half-lands. Sharing the
+ * body makes divergence impossible.
+ *
+ * "brother" is the PT-P710BT (24mm tape, spool labels, raster bytes).
+ * "tspl" is the KNAON Y813BT (4x6 stock, dry-box labels, TSPL bytes).
+ */
+const LABEL_PRINTER_CHANNELS: readonly {
+  kind: LabelPrinterKind;
+  storeKey: string;
+  channels: { get: string; set: string; print: string };
+  noPrinterMessage: string;
+}[] = [
+  {
+    kind: "brother",
+    storeKey: "labelPrinterDevicePath",
+    channels: {
+      get: "label-printer-get-device-path",
+      set: "label-printer-set-device-path",
+      print: "label-printer-print",
+    },
+    noPrinterMessage: "No label printer selected. Open Settings → Label Printer.",
+  },
+  {
+    kind: "tspl",
+    storeKey: "tsplPrinterDevicePath",
+    channels: {
+      get: "tspl-printer-get-device-path",
+      set: "tspl-printer-set-device-path",
+      print: "tspl-printer-print",
+    },
+    noPrinterMessage: "No dry-box label printer selected. Open Settings → Devices.",
+  },
+];
 
-ipcMain.handle("label-printer-set-device-path", (event, devicePath: string | null) => {
-  assertTrustedSender(event, "label-printer-set-device-path");
-  if (devicePath != null && typeof devicePath !== "string") {
-    throw new Error("devicePath must be a string or null");
-  }
-  if (devicePath == null) {
-    (store as unknown as Store<Record<string, unknown>>).delete("labelPrinterDevicePath");
-  } else {
-    // GH #623: only accept the shapes listLabelPrinters ever surfaces —
-    // a `usb://…` device URI (the one scheme the CUPS lister emits) or an
-    // installed queue / Windows printer name. Anything else (ipp://,
-    // file://, a path with slashes) could otherwise be persisted by a
-    // compromised renderer and later handed to `lpadmin -v` by printCups,
-    // binding the managed queue to an attacker-chosen device URI.
-    const isUsbUri = /^usb:\/\//i.test(devicePath);
-    const isQueueName =
-      !devicePath.includes("/") && !/^[a-z][a-z0-9+.-]*:\/\//i.test(devicePath);
-    if (!isUsbUri && !isQueueName) {
-      throw new Error(
-        "devicePath must be a usb:// device URI or an installed printer/queue name",
-      );
+/**
+ * Safety cap on a single print job.
+ *
+ * A maxed-out 24mm × 200mm Brother label is ~270 KB and a 4x6 TSPL job is
+ * ~600 bytes (or ~124 KB if it ever carries a full-page raster), so 5 MB is
+ * well past any legitimate single label and ensures a misbehaving renderer
+ * can't lock a printer indefinitely.
+ */
+const MAX_PRINT_BYTES = 5_000_000;
+
+for (const spec of LABEL_PRINTER_CHANNELS) {
+  ipcMain.handle(spec.channels.get, (event) => {
+    assertTrustedSender(event, spec.channels.get);
+    // The picker's chosen device path lives in the same electron-store
+    // the rest of the app uses — see the get-config handler above. Kept
+    // as a separate handler so the renderer doesn't have to read the
+    // whole config object just to render a print dialog.
+    return (store as unknown as Store<Record<string, unknown>>).get(spec.storeKey, null);
+  });
+
+  ipcMain.handle(spec.channels.set, (event, devicePath: string | null) => {
+    assertTrustedSender(event, spec.channels.set);
+    if (devicePath != null && typeof devicePath !== "string") {
+      throw new Error("devicePath must be a string or null");
     }
-    (store as unknown as Store<Record<string, unknown>>).set("labelPrinterDevicePath", devicePath);
-  }
-  return { ok: true };
-});
+    if (devicePath == null) {
+      (store as unknown as Store<Record<string, unknown>>).delete(spec.storeKey);
+    } else {
+      // GH #623: only accept the shapes listLabelPrinters ever surfaces —
+      // a `usb://…` device URI (the one scheme the CUPS lister emits) or an
+      // installed queue / Windows printer name. Anything else (ipp://,
+      // file://, a path with slashes) could otherwise be persisted by a
+      // compromised renderer and later handed to `lpadmin -v` by printCups,
+      // binding the managed queue to an attacker-chosen device URI.
+      const isUsbUri = /^usb:\/\//i.test(devicePath);
+      const isQueueName =
+        !devicePath.includes("/") && !/^[a-z][a-z0-9+.-]*:\/\//i.test(devicePath);
+      if (!isUsbUri && !isQueueName) {
+        throw new Error(
+          "devicePath must be a usb:// device URI or an installed printer/queue name",
+        );
+      }
+      (store as unknown as Store<Record<string, unknown>>).set(spec.storeKey, devicePath);
+    }
+    return { ok: true };
+  });
+
+  ipcMain.handle(spec.channels.print, async (event, bytes: number[]) => {
+    assertTrustedSender(event, spec.channels.print);
+    // Validate the payload from the renderer up front — bad inputs here
+    // would otherwise be handed straight to the OS print transport.
+    if (!Array.isArray(bytes) || bytes.length === 0) {
+      throw new Error("bytes must be a non-empty array");
+    }
+    if (bytes.length > MAX_PRINT_BYTES) {
+      throw new Error(`bytes array too large (${bytes.length} bytes)`);
+    }
+    // GH #523: per-byte validation mirroring nfc-write-tag (#278). Without
+    // this, `new Uint8Array(bytes)` silently coerces floats to truncated
+    // ints, NaN/Infinity/strings/objects/null to 0, and out-of-range
+    // values mod-256 wrap. Both wire formats are positional — Brother's
+    // `ESC i z` media width / `ESC i M`/`K` mode bits / `0x1A` trailer, and
+    // TSPL's CRLF framing, where a stray 0x0A splices a command boundary —
+    // so a byte in the wrong slot leaves the printer in a wrong-mode or
+    // chain-stuck state for the next print.
+    //
+    // Codex P2 round 1: use an index loop, not Array.prototype.every —
+    // `every` skips sparse-array holes (`new Array(100)` or
+    // `delete arr[5]`), so a hostile renderer could send a 5MB array
+    // with NO actual bytes and the guard would pass. `new Uint8Array`
+    // would then convert every hole to 0x00, reintroducing the silent
+    // coercion this hardening is meant to block.
+    for (let i = 0; i < bytes.length; i++) {
+      const b = bytes[i];
+      if (!Number.isInteger(b) || b < 0 || b > 255) {
+        throw new Error("bytes must contain only integers in [0, 255]");
+      }
+    }
+    const target = (store as unknown as Store<Record<string, unknown>>).get(
+      spec.storeKey,
+      null,
+    ) as string | null;
+    if (!target) {
+      throw new Error(spec.noPrinterMessage);
+    }
+    await withIpcTimeout(
+      () => printLabelToDevice(target, new Uint8Array(bytes), spec.kind),
+      spec.channels.print,
+      30_000, // give long labels + a slow spooler a generous window
+    );
+    return { ok: true };
+  });
+}
 
 // Public base URL used for URL-mode label QR payloads (e.g.
 // "https://filament-db.lan" or "https://my-instance.example.com").
@@ -1475,55 +1582,6 @@ ipcMain.handle("label-printer-set-public-url", (event, url: string | null) => {
   return { ok: true };
 });
 
-ipcMain.handle("label-printer-print", async (event, bytes: number[]) => {
-  assertTrustedSender(event, "label-printer-print");
-  // Validate the payload from the renderer up front — bad inputs here
-  // would otherwise be handed straight to the OS print transport.
-  if (!Array.isArray(bytes) || bytes.length === 0) {
-    throw new Error("bytes must be a non-empty array");
-  }
-  if (bytes.length > 5_000_000) {
-    // Safety cap. A maxed-out 24mm × 200mm label is ~270 KB, so 5 MB
-    // is well past any legitimate single-label print and ensures a
-    // misbehaving renderer can't lock the printer indefinitely.
-    throw new Error(`bytes array too large (${bytes.length} bytes)`);
-  }
-  // GH #523: per-byte validation mirroring nfc-write-tag (#278). Without
-  // this, `new Uint8Array(bytes)` silently coerces floats to truncated
-  // ints, NaN/Infinity/strings/objects/null to 0, and out-of-range
-  // values mod-256 wrap. Brother's raster protocol is positional —
-  // `ESC i z` media width, `ESC i M`/`K` mode bits, `0x1A`/`0x0C`
-  // trailer — and a stray byte in the wrong slot leaves the printer
-  // in a wrong-mode / chain-stuck state for the next print.
-  //
-  // Codex P2 round 1: use an index loop, not Array.prototype.every —
-  // `every` skips sparse-array holes (`new Array(100)` or
-  // `delete arr[5]`), so a hostile renderer could send a 5MB array
-  // with NO actual bytes and the guard would pass. `new Uint8Array`
-  // would then convert every hole to 0x00, reintroducing the silent
-  // coercion this hardening is meant to block.
-  for (let i = 0; i < bytes.length; i++) {
-    const b = bytes[i];
-    if (!Number.isInteger(b) || b < 0 || b > 255) {
-      throw new Error("bytes must contain only integers in [0, 255]");
-    }
-  }
-  const target = (store as unknown as Store<Record<string, unknown>>).get(
-    "labelPrinterDevicePath",
-    null,
-  ) as string | null;
-  if (!target) {
-    throw new Error(
-      "No label printer selected. Open Settings → Label Printer.",
-    );
-  }
-  await withIpcTimeout(
-    () => printLabelToDevice(target, new Uint8Array(bytes)),
-    "label-printer-print",
-    30_000, // give long labels + a slow spooler a generous window
-  );
-  return { ok: true };
-});
 
 // Disable bidirectional support on a Windows printer queue via an elevated
 // helper (UAC). Some drivers (Brother PT-P710BT) crash the Print Spooler with

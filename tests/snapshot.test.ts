@@ -104,7 +104,7 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(body.legacyNozzleCleanupComplete).toBe(false);
     // r13: v5 — provenance-carrying snapshots must be REJECTED by pre-#1022
     // builds (their #953 guard), which would otherwise drop the flag.
-    expect(body.version).toBe(5);
+    expect(body.version).toBe(6);
 
     await mongoose.connection.db!.collection("_migrations").insertOne({
       _id: "legacyNozzleConditions" as never,
@@ -951,9 +951,14 @@ describe("snapshot route — Location + PrintHistory round-trip", () => {
     it("rejects a snapshot from a newer version with 400 and does NOT wipe", async () => {
       const canary = await Location.create({ name: "Canary Loc" });
       const res = await postSnapshot({
-        version: 6,
+        // Deliberately far above CURRENT_SNAPSHOT_VERSION rather than
+        // "current + 1": this test asserts the guard, not any particular
+        // version, and hardcoding the next number silently breaks the guard's
+        // own coverage on every bump (it did, when v6 landed).
+        version: 999,
         createdAt: new Date().toISOString(),
-        // A v6 file could carry a new/renamed collection the v5 restore would drop.
+        // A newer file could carry a new/renamed collection this restore would
+        // drop, so it must fail closed rather than partially restore.
         collections: { filaments: [], nozzles: [], printers: [], bedTypes: [] },
       });
       expect(res.status).toBe(400);

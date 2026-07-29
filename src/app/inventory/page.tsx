@@ -76,7 +76,16 @@ interface SpoolRow {
 
 interface Group {
   locationId: string | null;
-  location: { _id: string; name: string; kind: string; humidity: number | null; notes: string } | null;
+  location: {
+    _id: string;
+    name: string;
+    kind: string;
+    humidity: number | null;
+    /** ISO string over the wire; drives the dry-box label's
+     *  "DESICCANT CHANGED" line. */
+    desiccantChangedAt: string | null;
+    notes: string;
+  } | null;
   spools: SpoolRow[];
   count: number;
   totalGrams: number;

@@ -4,6 +4,7 @@ import Location from "@/models/Location";
 import Filament from "@/models/Filament";
 import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { isValidIsoDateString } from "@/lib/validateSpoolBody";
 
 export async function GET(request: NextRequest) {
   try {
@@ -120,6 +121,13 @@ export async function POST(request: NextRequest) {
     delete body.updatedAt;
     delete body.__v;
     delete body.syncId;
+    // Same explicit ISO check as the PUT path: Mongoose rolls an
+    // impossible-but-ISO-shaped date over instead of rejecting it (GH #372).
+    if (body.desiccantChangedAt != null &&
+        !(typeof body.desiccantChangedAt === "string" &&
+          isValidIsoDateString(body.desiccantChangedAt))) {
+      return errorResponse("desiccantChangedAt must be an ISO date string or null", 400);
+    }
     const location = await Location.create(body);
     return NextResponse.json(location, { status: 201 });
   } catch (err) {

@@ -166,6 +166,41 @@ export interface LabelDocument {
   copies?: number;
 }
 
+/**
+ * QR byte-mode data capacity per symbol version, indexed by ECC level.
+ *
+ * Versions 1–20; a label QR past v20 has modules too fine to scan reliably
+ * off a 203 dpi thermal print anyway. Symbol side in modules is
+ * `17 + 4 * version`, so the printed size is `(17 + 4v) * cell` dots.
+ *
+ * This exists because the physical size of a `QRCODE` command is NOT implied
+ * by its arguments — it is driven by the payload length, which the firmware
+ * resolves at print time. Placing a QR without computing this prints a symbol
+ * that silently runs off the edge of the stock.
+ */
+const QR_BYTE_CAPACITY: Readonly<Record<TsplEcc, readonly number[]>> = {
+  L: [17, 32, 53, 78, 106, 134, 154, 192, 230, 271, 321, 367, 425, 458, 520, 586, 644, 718, 792, 858],
+  M: [14, 26, 42, 62, 84, 106, 122, 152, 180, 213, 251, 287, 331, 362, 412, 450, 504, 560, 624, 666],
+  Q: [11, 20, 32, 46, 60, 74, 86, 108, 130, 151, 177, 203, 241, 258, 292, 322, 364, 394, 442, 482],
+  H: [7, 14, 24, 34, 44, 58, 64, 84, 98, 119, 137, 155, 177, 194, 220, 250, 280, 310, 338, 382],
+};
+
+/**
+ * Symbol side, in modules, for a payload at the given ECC level.
+ *
+ * Returns null when the payload exceeds v20 capacity — the caller must then
+ * shorten it or drop to a weaker ECC rather than emit an unprintable symbol.
+ * Counts UTF-8 BYTES, not characters, because QR byte mode encodes bytes.
+ */
+export function qrModuleCount(payload: string, ecc: TsplEcc): number | null {
+  const bytes = new TextEncoder().encode(payload).length;
+  const table = QR_BYTE_CAPACITY[ecc];
+  for (let v = 0; v < table.length; v++) {
+    if (bytes <= table[v]) return 17 + 4 * (v + 1);
+  }
+  return null;
+}
+
 /** Thrown when a document cannot be rendered to valid TSPL. */
 export class TsplRenderError extends Error {
   constructor(message: string) {
@@ -207,21 +242,29 @@ export function dotsToMm(dots: number, dpi: number = DPI_203): number {
 /**
  * Transliteration table for characters outside 7-bit ASCII.
  *
- * WHY TRANSLITERATE RATHER THAN PICK A CODEPAGE
- *   TSPL wants single bytes, but which byte depends on the printer's
- *   active codepage, and the two obvious candidates disagree on exactly
- *   the characters this app produces: `°` is 0xF8 in cp437 but 0xB0 in
- *   latin1, and `³` exists in latin1 (0xB3) but has NO cp437 codepoint
- *   at all. The reference generator used cp437 with errors="replace", so
- *   `mm³/s` silently degraded to `mm?/s` there.
+ * WHY TRANSLITERATE — SETTLED ON HARDWARE 2026-07-28
+ *   Originally a safe default pending a codepage probe. The probe has now
+ *   run on the Y813BT and the answer is stronger than expected: THERE IS
+ *   NO CODEPAGE TO SWITCH TO, and a raw high byte is DESTRUCTIVE.
  *
- *   All four golden fixtures are pure ASCII, so they cannot validate any
- *   encoding choice — this needs its own targeted test, and ultimately a
- *   codepage probe on hardware. Until that lands, transliterating to
- *   strict ASCII is the choice that is deterministic, testable, needs no
- *   CODEPAGE command, and cannot silently emit a byte the firmware reads
- *   as something else. Swap in a real codepage map here once the probe
- *   settles it; the rest of the emitter is unaffected.
+ *   A stage-05 probe printed `°`, `³`, `²`, `ä` and `ß` at both their
+ *   latin1 and cp437 byte values, in three blocks — with no CODEPAGE
+ *   command, after `CODEPAGE 1252`, and after `CODEPAGE 437`. Every one of
+ *   the twelve high-byte rows printed as `[` and then STOPPED: the closing
+ *   `]` never appeared. So a byte >= 0x80 inside a quoted TEXT literal
+ *   truncates the string at that point and the remainder of the line is
+ *   silently lost. The CODEPAGE commands are accepted (they did not abort
+ *   the job) and ignored — the B and C blocks failed identically to A.
+ *   The pure-ASCII control row rendered perfectly.
+ *
+ *   So folding to ASCII is not a lossy compromise, it is what prevents
+ *   DATA LOSS: without it a filament named "Grün" prints as "Gr" and drops
+ *   the rest of its row. That also makes the >= 0x80 guard in asciiBytes
+ *   genuinely load-bearing rather than a defensive nicety, and it is why
+ *   fitRowText measures the SANITIZED string — the transliteration is
+ *   mandatory, so its length changes are part of the real output.
+ *
+ *   Do not "simplify" this back to a codepage. The hardware says no.
  */
 const TRANSLITERATIONS: ReadonlyMap<string, string> = new Map([
   // Units and symbols this app actually produces.

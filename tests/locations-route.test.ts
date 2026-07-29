@@ -246,6 +246,47 @@ describe("/api/locations", () => {
       expect(body.name).toBe("New");
       expect(body.notes).toBe("updated");
     });
+
+    it("persists desiccantChangedAt and accepts null to clear it", async () => {
+      const loc = await Location.create({ name: "Drybox 1", kind: "drybox" });
+      const put = (payload: unknown) =>
+        updateLocation(
+          new NextRequest(`http://localhost/api/locations/${loc._id}`, {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(payload),
+          }),
+          { params: Promise.resolve({ id: String(loc._id) }) },
+        );
+
+      const set = await put({ desiccantChangedAt: "2026-07-12" });
+      expect(new Date((await set.json()).desiccantChangedAt).toISOString()).toBe(
+        "2026-07-12T00:00:00.000Z",
+      );
+
+      const cleared = await put({ desiccantChangedAt: null });
+      expect((await cleared.json()).desiccantChangedAt).toBeNull();
+    });
+
+    it("rejects an ISO-shaped but impossible desiccantChangedAt", async () => {
+      // Mongoose ROLLS OVER an impossible date rather than rejecting it, so
+      // "2026-02-30" would silently persist as March 2nd. Same trap the spool
+      // date fields hit in GH #372 — validate the string before it casts.
+      const loc = await Location.create({ name: "Drybox 2", kind: "drybox" });
+      for (const bad of ["2026-02-30", "2026-13-01", "2026-04-31", "not-a-date", 12345]) {
+        const res = await updateLocation(
+          new NextRequest(`http://localhost/api/locations/${loc._id}`, {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ desiccantChangedAt: bad }),
+          }),
+          { params: Promise.resolve({ id: String(loc._id) }) },
+        );
+        expect(res.status).toBe(400);
+      }
+      const after = await Location.findById(loc._id).lean();
+      expect(after!.desiccantChangedAt).toBeNull();
+    });
   });
 
   describe("DELETE /api/locations/[id]", () => {

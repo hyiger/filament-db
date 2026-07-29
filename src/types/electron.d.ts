@@ -128,6 +128,15 @@ interface ElectronAPI {
         detail?: string;
       }
   >;
+  /** KNAON Y813BT dry-box label printer (TSPL) — a SECOND, independent device
+   *  selection from the Brother one above. There is no `tsplPrinterListDevices`
+   *  on purpose: `labelPrinterListDevices` is printer-agnostic (it lists every
+   *  CUPS queue / usb:// device / Windows printer) and both pickers share it. */
+  tsplPrinterGetDevicePath: () => Promise<string | null>;
+  tsplPrinterSetDevicePath: (devicePath: string | null) => Promise<{ ok: boolean }>;
+  /** Bytes come from `render()` in src/lib/tsplEncoder.ts, not from the
+   *  Brother raster encoder. Serialized through IPC as a plain number[]. */
+  tsplPrinterPrint: (bytes: number[]) => Promise<{ ok: boolean }>;
 
   /** Runtime-environment flags. Used by the DevModeBanner to warn the
    *  user when their connection-mode wizard selection has no effect on

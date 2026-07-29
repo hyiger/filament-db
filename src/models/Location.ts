@@ -16,6 +16,14 @@ export interface ILocation extends Document {
   kind: string;
   /** Optional humidity reading (%RH) for dryboxes the user updates manually. */
   humidity: number | null;
+  /**
+   * When the desiccant was last changed. Meaningful for `kind: "drybox"`,
+   * where it drives the "DESICCANT CHANGED" line on a printed dry-box label
+   * and answers the only question a glance at the box can't: whether the
+   * beads are still doing anything. Null on every other kind, and optional
+   * even on dryboxes.
+   */
+  desiccantChangedAt: Date | null;
   notes: string;
   _deletedAt: Date | null;
   createdAt: Date;
@@ -28,6 +36,7 @@ const LocationSchema = new Schema<ILocation>(
     syncId: { type: String, unique: true, sparse: true, index: true },
     kind: { type: String, default: "shelf", index: true },
     humidity: { type: Number, default: null, min: 0, max: 100 },
+    desiccantChangedAt: { type: Date, default: null },
     notes: { type: String, default: "" },
     _deletedAt: { type: Date, default: null },
   },

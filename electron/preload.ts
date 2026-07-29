@@ -138,6 +138,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
   labelPrinterDisableBidi: (printerName: string) =>
     ipcRenderer.invoke("label-printer-disable-bidi", printerName),
 
+  // KNAON Y813BT dry-box label printer (TSPL). A SECOND, independent device
+  // selection — the two printers never print the same thing, so they get
+  // separate settings rather than a shared "which kind" toggle. Device
+  // listing is deliberately NOT duplicated: labelPrinterListDevices is
+  // printer-agnostic (it lists every CUPS queue / usb:// device) and both
+  // pickers share it.
+  tsplPrinterGetDevicePath: () => ipcRenderer.invoke("tspl-printer-get-device-path"),
+  tsplPrinterSetDevicePath: (devicePath: string | null) =>
+    ipcRenderer.invoke("tspl-printer-set-device-path", devicePath),
+  tsplPrinterPrint: (bytes: number[]) => ipcRenderer.invoke("tspl-printer-print", bytes),
+
   // Runtime mode (packaged vs dev). Used by the DevModeBanner to warn
   // when the renderer's data source (next dev's .env.local) doesn't
   // match the connection-mode wizard the user clicked through (#489).

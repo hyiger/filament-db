@@ -500,6 +500,8 @@
   "locations.form.humidity": "Luftfeuchtigkeit (%rF)",
   "locations.form.humidityPlaceholder": "z.B. 18",
   "locations.form.humidityHint": "Optional. Typisch für Trockenboxen — nach Hygrometer-Ablesung manuell aktualisieren.",
+  "locations.form.desiccantChangedAt": "Trockenmittel gewechselt",
+  "locations.form.desiccantChangedAtHint": "Optional. Üblicherweise für Trockenboxen — setzen Sie es, wenn Sie das Granulat wechseln oder regenerieren.",
   "locations.form.notes": "Notizen",
   "locations.form.notesPlaceholder": "Optionale Notizen zu diesem Standort...",
   "locations.form.saving": "Wird gespeichert...",
