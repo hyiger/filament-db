@@ -30,5 +30,20 @@ export function buildFilamentDeepLink(
  */
 export function buildLocationDeepLink(base: string, locationId: string): string {
   const root = base.replace(/\/+$/, "");
-  return `${root}/inventory?location=${encodeURIComponent(locationId)}`;
+  const url = `${root}/inventory?location=${encodeURIComponent(locationId)}`;
+  // Canonicalize to the URL's ASCII serialization — WHATWG href punycodes an
+  // internationalized hostname and percent-encodes non-ASCII path segments.
+  // This matters because the TSPL emitter ASCII-FOLDS every payload (the
+  // Y813BT firmware truncates a TEXT literal at any byte >= 0x80, hardware-
+  // verified), and transliteration is the WRONG transform for a URL: folding
+  // "münchen" to "munchen" produces a QR that scans fine and points at a
+  // domain the user does not own. Punycode/percent-encoding is the SAME url
+  // in ASCII, so the fold downstream becomes a no-op instead of a rewrite.
+  try {
+    return new URL(url).href;
+  } catch {
+    // Not parseable as a URL — return as built; the emitter's fold is then
+    // the best remaining behaviour.
+    return url;
+  }
 }
