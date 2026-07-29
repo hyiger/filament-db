@@ -276,7 +276,30 @@ export default function LabelPrinterSettings() {
             {t("settings.labelPrinter.retry")}
           </button>
         </div>
-      ) : state.devices.length === 0 ? (
+      ) : (
+        <>
+          {/* Same stale-selection escape hatch as the TSPL panel (PR #1043
+              round 7 — found there, fixed in BOTH; this feature has been
+              bitten four times by fixing one sibling and not the other). */}
+          {state.selectedPath &&
+            !state.devices.some((d) => d.path === state.selectedPath) && (
+              <div className="mb-2 border border-amber-300 dark:border-amber-700 rounded p-3 bg-amber-50 dark:bg-amber-950/40">
+                <p className="text-sm text-amber-800 dark:text-amber-300">
+                  {t("settings.printerPicker.stale")}
+                </p>
+                <code className="text-xs text-amber-700 dark:text-amber-400 font-mono block mt-0.5">
+                  {state.selectedPath}
+                </code>
+                <button
+                  type="button"
+                  onClick={handleClear}
+                  className="mt-1.5 text-sm text-amber-800 dark:text-amber-300 underline"
+                >
+                  {t("settings.printerPicker.clear")}
+                </button>
+              </div>
+            )}
+          {state.devices.length === 0 ? (
         <div className="border border-gray-200 dark:border-gray-700 rounded p-3 bg-gray-50 dark:bg-gray-800">
           <p className="text-sm text-gray-700 dark:text-gray-300">
             {t("settings.labelPrinter.noDevices")}
@@ -365,6 +388,8 @@ export default function LabelPrinterSettings() {
             )}
           </div>
         </div>
+          )}
+        </>
       )}
 
       {/* Public base URL for URL-mode QR codes. Without this the

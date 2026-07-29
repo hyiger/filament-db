@@ -542,6 +542,8 @@
   "settings.tsplPrinter.testing": "Wird gedruckt…",
   "settings.tsplPrinter.testSuccess": "Testetikett gesendet — prüfen Sie den Drucker.",
   "settings.tsplPrinter.testFailed": "Testdruck fehlgeschlagen: {error}",
+  "settings.printerPicker.stale": "Der ausgewählte Drucker ist nicht mehr verfügbar:",
+  "settings.printerPicker.clear": "Auswahl aufheben",
   "locations.form.notes": "Notizen",
   "locations.form.notesPlaceholder": "Optionale Notizen zu diesem Standort...",
   "locations.form.saving": "Wird gespeichert...",

@@ -73,7 +73,7 @@ export default function TsplPrinterSettings() {
   }, [isElectron, loadDevices]);
 
   const handlePick = useCallback(
-    async (path: string) => {
+    async (path: string | null) => {
       if (!window.electronAPI?.tsplPrinterSetDevicePath) return;
       try {
         await window.electronAPI.tsplPrinterSetDevicePath(path);
@@ -164,7 +164,31 @@ export default function TsplPrinterSettings() {
             {t("settings.tsplPrinter.retry")}
           </button>
         </div>
-      ) : state.devices.length === 0 ? (
+      ) : (
+        <>
+          {/* A selection whose device has vanished (unplugged, queue removed)
+              would otherwise be invisible AND unclearable — no radio matches
+              it, and with no devices left the picker isn't rendered at all.
+              Prints would go to the dead target until a device reappears. */}
+          {state.selectedPath &&
+            !state.devices.some((d) => d.path === state.selectedPath) && (
+              <div className="mb-2 border border-amber-300 dark:border-amber-700 rounded p-3 bg-amber-50 dark:bg-amber-950/40">
+                <p className="text-sm text-amber-800 dark:text-amber-300">
+                  {t("settings.printerPicker.stale")}
+                </p>
+                <code className="text-xs text-amber-700 dark:text-amber-400 font-mono block mt-0.5">
+                  {state.selectedPath}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => handlePick(null)}
+                  className="mt-1.5 text-sm text-amber-800 dark:text-amber-300 underline"
+                >
+                  {t("settings.printerPicker.clear")}
+                </button>
+              </div>
+            )}
+          {state.devices.length === 0 ? (
         <div className="border border-gray-200 dark:border-gray-700 rounded p-3 bg-gray-50 dark:bg-gray-800">
           <p className="text-sm text-gray-700 dark:text-gray-300">
             {t("settings.tsplPrinter.noDevices")}
@@ -180,7 +204,7 @@ export default function TsplPrinterSettings() {
             {t("settings.tsplPrinter.scanUsb")}
           </button>
         </div>
-      ) : (
+          ) : (
         <div className="space-y-2">
           <PrinterDevicePicker
             devices={state.devices}
@@ -218,6 +242,8 @@ export default function TsplPrinterSettings() {
             </button>
           </div>
         </div>
+          )}
+        </>
       )}
     </section>
   );

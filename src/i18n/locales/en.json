@@ -542,6 +542,8 @@
   "settings.tsplPrinter.testing": "Printing…",
   "settings.tsplPrinter.testSuccess": "Test label sent — check the printer.",
   "settings.tsplPrinter.testFailed": "Test print failed: {error}",
+  "settings.printerPicker.stale": "The selected printer is no longer available:",
+  "settings.printerPicker.clear": "Clear selection",
   "locations.form.notes": "Notes",
   "locations.form.notesPlaceholder": "Optional notes about this location...",
   "locations.form.saving": "Saving...",
