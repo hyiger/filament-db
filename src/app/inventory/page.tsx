@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useToast } from "@/components/Toast";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
@@ -16,6 +17,14 @@ import {
 } from "@/lib/inventorySort";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { isKnownLocationKind } from "@/lib/locationKind";
+
+// Loaded on demand — the dialog pulls in the TSPL emitter + the qrcode
+// package for its preview, none of which the page needs until a print is
+// actually requested.
+const PrintDryBoxLabelDialog = dynamic(
+  () => import("@/components/PrintDryBoxLabelDialog"),
+  { ssr: false },
+);
 
 /**
  * GH #389 — Spool Inventory page.
@@ -238,6 +247,43 @@ export default function InventoryPage() {
     });
   }, []);
   const clearSelection = useCallback(() => setSelectedKeys(new Set()), []);
+
+  // Dry-box label printing: the location + spool rows of the group whose
+  // print button was clicked — everything the dialog needs, no second fetch.
+  const [printGroup, setPrintGroup] = useState<{
+    location: NonNullable<Group["location"]>;
+    spools: SpoolRow[];
+  } | null>(null);
+
+  // Deep link from a printed label's QR: /inventory?location=<id> expands
+  // that location's group, scrolls to it and rings it briefly. Same
+  // fired-once pattern as the filament detail page's ?spool= (no
+  // useSearchParams — reading window.location avoids a Suspense boundary).
+  const deepLinkHandledRef = useRef(false);
+  const [highlightKey, setHighlightKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (deepLinkHandledRef.current || loading || !data) return;
+    deepLinkHandledRef.current = true;
+    const param = new URLSearchParams(window.location.search).get("location");
+    if (!param) return;
+    // Groups default to expanded (`collapsed` holds collapsed keys), so the
+    // delete only matters when a stored pref collapsed this one.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      next.delete(param);
+      return next;
+    });
+    setHighlightKey(param);
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`inventory-group-${param}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+    const timer = setTimeout(() => setHighlightKey(null), 2500);
+    return () => clearTimeout(timer);
+  }, [loading, data]);
 
   const fetchInventory = useCallback(
     async (signal?: AbortSignal) => {
@@ -784,16 +830,26 @@ export default function InventoryPage() {
                   ? t(`locations.kind.${group.location.kind}`)
                   : group.location.kind
                 : "";
+            // Dry-box groups get a print-label action in the header. Gated on
+            // the drybox kind — the label template is dry-box specific (its
+            // subtitle, desiccant line and replace hint would be wrong on a
+            // shelf) — and on location grouping, where a group IS a location.
+            const canPrintLabel =
+              groupBy === "location" && group.location?.kind === "drybox";
             return (
               <section
                 key={key}
-                className="border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden"
+                id={`inventory-group-${key}`}
+                className={`border border-gray-200 dark:border-gray-800 rounded-lg overflow-hidden ${
+                  highlightKey === key ? "ring-2 ring-blue-500" : ""
+                }`}
               >
+                <div className="flex items-stretch bg-gray-50 dark:bg-gray-900/50">
                 <button
                   type="button"
                   onClick={() => toggleCollapse(key)}
                   aria-expanded={!isCollapsed}
-                  className="w-full flex items-center justify-between px-4 py-3 bg-gray-50 dark:bg-gray-900/50 hover:bg-gray-100 dark:hover:bg-gray-900 text-left"
+                  className="flex-1 min-w-0 flex items-center justify-between px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-900 text-left"
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <span className="text-gray-400 text-sm" aria-hidden="true">
@@ -830,6 +886,23 @@ export default function InventoryPage() {
                     )}
                   </div>
                 </button>
+                {canPrintLabel && group.location && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setPrintGroup({
+                        location: group.location as NonNullable<Group["location"]>,
+                        spools: group.spools,
+                      })
+                    }
+                    title={t("inventory.printDryBox")}
+                    aria-label={t("inventory.printDryBox")}
+                    className="px-3 border-l border-gray-200 dark:border-gray-800 text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-100 dark:hover:bg-gray-900"
+                  >
+                    <span aria-hidden="true">🖨</span>
+                  </button>
+                )}
+                </div>
                 {!isCollapsed && (
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
@@ -881,6 +954,15 @@ export default function InventoryPage() {
             );
           })}
         </div>
+      )}
+
+      {printGroup?.location && (
+        <PrintDryBoxLabelDialog
+          open
+          onClose={() => setPrintGroup(null)}
+          location={printGroup.location}
+          spools={printGroup.spools}
+        />
       )}
     </main>
   );

@@ -6,6 +6,7 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 import { useIsElectron } from "@/hooks/useIsElectron";
 import { useNfcContext } from "@/components/NfcProvider";
 import LabelPrinterSettings from "@/components/LabelPrinterSettings";
+import TsplPrinterSettings from "@/components/TsplPrinterSettings";
 import LabelFormatEditor from "@/components/LabelFormatEditor";
 import { useNtagDefaultSize, type NtagDefaultSize } from "@/hooks/useNtagDefaultSize";
 
@@ -269,6 +270,13 @@ export default function DevicesSettingsPage() {
         {isElectron && (
           <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-5">
             <LabelPrinterSettings />
+          </div>
+        )}
+        {/* KNAON Y813BT dry-box label printer (TSPL) — an independent second
+            device selection; same Electron gate as the Brother card. */}
+        {isElectron && (
+          <div className="rounded-lg border border-gray-200 dark:border-gray-800 p-5">
+            <TsplPrinterSettings />
           </div>
         )}
         {/* Label format — applies to the web .bin-download path too (#592), never gated. */}

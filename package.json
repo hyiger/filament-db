@@ -26,6 +26,7 @@
     "electron:fixlinks": "node -e \"const fs=require('fs'),path=require('path');function fix(d){fs.readdirSync(d,{withFileTypes:true}).forEach(e=>{const f=path.join(d,e.name);if(e.isSymbolicLink()){const t=fs.realpathSync(f);fs.rmSync(f);fs.cpSync(t,f,{recursive:true})}else if(e.isDirectory())fix(f)})}fix('.next/standalone');fs.cpSync('.next/standalone','standalone',{recursive:true});fs.cpSync('.next/static','standalone/.next/static',{recursive:true});fs.cpSync('public','standalone/public',{recursive:true})\"",
     "electron:pack": "electron-builder --config electron-builder.yml",
     "label:print": "tsx scripts/print-label.ts",
+    "label:tspl": "tsx scripts/print-tspl.ts",
     "label:sim": "tsx scripts/print-label-sim.ts",
     "nfc:write-opentag3d": "tsx scripts/write-opentag3d-tag.ts",
     "fetch:reference": "node scripts/fetch-reference.mjs",

@@ -17,3 +17,18 @@ export function buildFilamentDeepLink(
   const spool = (spoolId ?? "").trim();
   return spool ? `${url}?spool=${encodeURIComponent(spool)}` : url;
 }
+
+/**
+ * Deep link a dry-box label's QR encodes — the /inventory page filtered to
+ * one location.
+ *
+ * Deliberately NOT a dedicated location page: there is no location VIEW
+ * route (only /locations/{id}/edit), and /inventory already answers the
+ * question a scanned box label asks — "what is in this box right now" —
+ * live from the by-location aggregation. The page reads `?location=` and
+ * expands + scrolls to that group.
+ */
+export function buildLocationDeepLink(base: string, locationId: string): string {
+  const root = base.replace(/\/+$/, "");
+  return `${root}/inventory?location=${encodeURIComponent(locationId)}`;
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildFilamentDeepLink } from "../src/lib/labelDeepLink";
+import { buildFilamentDeepLink, buildLocationDeepLink } from "../src/lib/labelDeepLink";
 
 describe("buildFilamentDeepLink (GH #595)", () => {
   it("builds the plain filament link with no spool", () => {
@@ -26,5 +26,31 @@ describe("buildFilamentDeepLink (GH #595)", () => {
 
   it("URL-encodes the ids", () => {
     expect(buildFilamentDeepLink("https://x", "a b", "s/1")).toBe("https://x/filaments/a%20b?spool=s%2F1");
+  });
+});
+
+describe("buildLocationDeepLink (dry-box labels)", () => {
+  it("targets /inventory?location= — the live answer to 'what is in this box'", () => {
+    // Deliberately not a location page: none exists (only /locations/{id}/edit),
+    // and /inventory already shows the box's contents from the by-location
+    // aggregation. The page expands + scrolls to the group.
+    expect(buildLocationDeepLink("https://fdb.lan", "abc123")).toBe(
+      "https://fdb.lan/inventory?location=abc123",
+    );
+  });
+
+  it("trims trailing slashes on the base", () => {
+    expect(buildLocationDeepLink("https://fdb.lan/", "abc")).toBe(
+      "https://fdb.lan/inventory?location=abc",
+    );
+    expect(buildLocationDeepLink("https://fdb.lan///", "abc")).toBe(
+      "https://fdb.lan/inventory?location=abc",
+    );
+  });
+
+  it("URL-encodes the id", () => {
+    expect(buildLocationDeepLink("https://x", "a b/c")).toBe(
+      "https://x/inventory?location=a%20b%2Fc",
+    );
   });
 });
