@@ -1344,6 +1344,12 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
       _id: printerId, name: "SlotRepairPrinter", manufacturer: "T", printerModel: "P",
       _deletedAt: null,
       amsSlots: [
+        // An EMPTY slot first — the normal partially-loaded AMS shape. This
+        // is the regression pin for PR #1046 round 2: the bare negated-array
+        // query `"amsSlots.spoolId": {$ne: null}` requires EVERY slot to be
+        // non-null, so this one empty slot silently excluded the whole
+        // printer from the repair.
+        { _id: new mongoose.Types.ObjectId(), slotName: "empty", spoolId: null, filamentId: null },
         // Orphaned: spool tracked, no loaded filament (the #1041 shape).
         { _id: new mongoose.Types.ObjectId(), slotName: "orphan", spoolId: spoolA, filamentId: null },
         // Mismatched: spool tracked, but the slot claims a DIFFERENT filament
@@ -1367,6 +1373,9 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
       expect(String(byName.orphan.filamentId)).toBe(String(owner._id));
       // Mismatch: the spool's owner WINS (the slot reflects what's loaded).
       expect(String(byName.mismatch.filamentId)).toBe(String(owner._id));
+      // The empty slot is untouched.
+      expect(byName.empty.spoolId).toBeNull();
+      expect(byName.empty.filamentId).toBeNull();
       // Dangling: tracking ref dropped; the dedication stays.
       expect(byName.dangling.spoolId).toBeNull();
       expect(String(byName.dangling.filamentId)).toBe(String(otherFilament));

@@ -304,8 +304,17 @@ export default async function dbConnect() {
       // a slot already dedicated to a DIFFERENT filament (an "Any spool"
       // dedication), leaving a non-null but MISMATCHED pair that renders the
       // wrong filament's spools in the form.
+      // $elemMatch is REQUIRED here (PR #1046 round 2): the bare form
+      // `"amsSlots.spoolId": { $ne: null }` applies MongoDB's negated-array
+      // semantics — it matches only when EVERY element differs from null —
+      // so a printer with one tracked and one empty slot (the normal
+      // partially-loaded AMS shape) was excluded entirely. $elemMatch scopes
+      // the predicate to "at least one slot tracks a spool".
       const printers = await Printer.find(
-        { _deletedAt: null, "amsSlots.spoolId": { $ne: null } },
+        {
+          _deletedAt: null,
+          amsSlots: { $elemMatch: { spoolId: { $ne: null } } },
+        },
         { amsSlots: 1 },
       ).lean();
       let repaired = 0;
