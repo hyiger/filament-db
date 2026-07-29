@@ -283,9 +283,16 @@ export function collapsePerNozzleImportSections(
         // ` or `-joined set). A substring test would wrongly strip a legitimate
         // user pin that merely REFERENCES a nozzle diameter, e.g.
         // `printer_model==MK4 and nozzle_diameter[0]==0.4`.
+        // GH #1040: each term may carry the HF discriminator tail the new bake
+        // emits (` and nozzle_high_flow[0]` / ` and ! nozzle_high_flow[0]`,
+        // spaced `! ` only — the machine shape). Without this, one sibling's
+        // HF-tailed condition would be misread as a user pin, frozen into the
+        // base filament's settings bag, and stamped on EVERY fan-out section by
+        // the export gate — hiding the standard preset from standard printers,
+        // worse than the bug it fixes.
         const isDerived =
           typeof v === "string" &&
-          /^nozzle_diameter\[\d+\]==\d+(?:\.\d+)?(?: or nozzle_diameter\[\d+\]==\d+(?:\.\d+)?)*$/.test(v);
+          /^nozzle_diameter\[\d+\]==\d+(?:\.\d+)?(?: and (?:! )?nozzle_high_flow\[\d+\])?(?: or nozzle_diameter\[\d+\]==\d+(?:\.\d+)?(?: and (?:! )?nozzle_high_flow\[\d+\])?)*$/.test(v);
         const isEmpty = v === "" || v === undefined;
         if (isDerived || isEmpty) delete settings[k];
         // else: user pin (non-derived string) or nil (null) → keep for round-trip.
@@ -323,6 +330,50 @@ export function collapsePerNozzleImportSections(
   return out;
 }
 
+/**
+ * The baked per-nozzle `compatible_printers_condition` (GH #1040).
+ *
+ * `includeHfTerm` appends the high-flow discriminator, using the fork's
+ * per-extruder `nozzle_high_flow` printer option — the exact construct
+ * Prusa's own MK4S system profiles use (`... and nozzle_high_flow[0]` /
+ * `... and ! nozzle_high_flow[0]`; note the SPACED `! `, matching those
+ * field-tested profiles). It is emitted ONLY when the fan-out group carries
+ * two same-diameter nozzles differing in highFlow — the one case diameter
+ * alone cannot disambiguate. Unambiguous exports keep the plain diameter
+ * condition so nothing that is visible today disappears (the GH #1021
+ * lesson). On a slicer without `nozzle_high_flow` the expression fails
+ * open — visible everywhere, i.e. today's behavior.
+ */
+export function perNozzleCondition(
+  nz: { diameter: number; highFlow?: boolean | null },
+  includeHfTerm: boolean,
+): string {
+  const base = `nozzle_diameter[0]==${nz.diameter}`;
+  if (!includeHfTerm) return base;
+  return nz.highFlow ? `${base} and nozzle_high_flow[0]` : `${base} and ! nozzle_high_flow[0]`;
+}
+
+/**
+ * Matches every condition string the per-nozzle bake (either vintage) can
+ * MACHINE-WRITE for a nozzle of `diameter`: the pre-#1040 plain shape and
+ * both HF-tailed polarities. Byte-shape matching on purpose — a user pin
+ * that merely REFERENCES these variables (`printer_model=="MK4" and
+ * nozzle_diameter[0]==0.4`, or an unspaced `!nozzle_high_flow[0]` someone
+ * typed by hand) does NOT match and is preserved.
+ */
+export function isMachineDerivedPerNozzleCondition(
+  value: unknown,
+  diameter: number,
+): boolean {
+  if (typeof value !== "string") return false;
+  // A DB diameter is a plain number; escaping the dot is all a numeric
+  // string can need, and avoids fragile character-class escapes here.
+  const d = String(diameter).replace(/\./g, "\\.");
+  return new RegExp(
+    `^nozzle_diameter\\[0\\]==${d}(?: and (?:! )?nozzle_high_flow\\[0\\])?$`,
+  ).test(value);
+}
+
 export function filamentToSlicerKeys(
   filament: FilamentDoc,
   // #872: when present, BAKE this per-nozzle calibration's filament-level values
@@ -330,6 +381,10 @@ export function filamentToSlicerKeys(
   // PrusaSlicer has no parent/child for user presets). Pressure advance is
   // printer-scoped and stays dynamic via the /calibration endpoint — not baked.
   calibration?: FilamentDoc,
+  // GH #1040: append the high-flow discriminator to the baked condition —
+  // set by the fan-out when THIS nozzle's diameter appears in the group with
+  // both highFlow states (see perNozzleCondition).
+  includeHfTerm = false,
 ): Record<string, string | null> {
   // Start with the settings bag as the base — these are passthrough
   // PrusaSlicer keys preserved from a previous import
@@ -450,7 +505,7 @@ export function filamentToSlicerKeys(
         !("compatible_printers_condition" in keys) ||
         keys.compatible_printers_condition === ""
       ) {
-        keys.compatible_printers_condition = `nozzle_diameter[0]==${nz.diameter}`;
+        keys.compatible_printers_condition = perNozzleCondition(nz, includeHfTerm);
       }
       keys.filamentdb_nozzle = nozzleSuffix(nz);
     }
@@ -564,11 +619,25 @@ export function generatePrusaSlicerBundle(filaments: FilamentDoc[]): string {
       // parent/child for USER filament presets. Each bakes its nozzle's filament-level
       // calibration; all share one filamentdb_id and carry a filamentdb_nozzle hint
       // so the sync-back routes updates to the right per-nozzle calibration entry.
+      //
+      // GH #1040: when a diameter appears with BOTH highFlow states in the group,
+      // diameter alone cannot disambiguate the two presets and each section's
+      // condition additionally encodes its nozzle's HF flag. Diameters present in
+      // only one state keep the plain condition (today's visibility).
+      const hfStatesByDiameter = new Map<number, Set<boolean>>();
       for (const cal of byNozzle.values()) {
+        const nz = cal.nozzle as { diameter: number; highFlow?: boolean | null };
+        const states = hfStatesByDiameter.get(nz.diameter) ?? new Set<boolean>();
+        states.add(!!nz.highFlow);
+        hfStatesByDiameter.set(nz.diameter, states);
+      }
+      for (const cal of byNozzle.values()) {
+        const nz = cal.nozzle as { diameter: number };
+        const ambiguous = (hfStatesByDiameter.get(nz.diameter)?.size ?? 0) > 1;
         writeSection(
           lines,
           `${filament.name} ${nozzleSuffix(cal.nozzle)}`,
-          filamentToSlicerKeys(filament, cal),
+          filamentToSlicerKeys(filament, cal, ambiguous),
         );
       }
     } else {

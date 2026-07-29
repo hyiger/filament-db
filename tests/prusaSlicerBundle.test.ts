@@ -4,8 +4,7 @@ import {
   generatePrusaSlicerBundle,
   collapsePerNozzleImportSections,
   resolveSyncBackColor,
-  nozzleSuffix,
-} from "@/lib/prusaSlicerBundle";
+  nozzleSuffix, perNozzleCondition, isMachineDerivedPerNozzleCondition } from "@/lib/prusaSlicerBundle";
 import { parseIniFilaments } from "@/lib/parseIni";
 
 describe("filamentToSlicerKeys", () => {
@@ -1555,5 +1554,125 @@ describe("resolveSyncBackColor (#883)", () => {
   it("returns undefined for an absent incoming color", () => {
     expect(resolveSyncBackColor({ color: null, secondaryColors: ["#112233"] }, null)).toBeUndefined();
     expect(resolveSyncBackColor({ color: "#000000" }, "")).toBeUndefined();
+  });
+});
+
+describe("GH #1040 — high-flow discriminator in compatible_printers_condition", () => {
+  const filamentWith = (cals: object[]) => ({
+    name: "PLA",
+    vendor: "Generic",
+    type: "PLA",
+    diameter: 1.75,
+    temperatures: { nozzle: 210 },
+    settings: {},
+    calibrations: cals,
+  });
+
+  it("same-diameter std/HF pair: each section encodes its nozzle's HF state", () => {
+    // The reported bug: both sections carried the identical
+    // `nozzle_diameter[0]==0.4`, so PrusaSlicer showed each preset as
+    // compatible with BOTH printers. The exact strings below are the
+    // construct Prusa's own MK4S system profiles use (spaced `! `).
+    const bundle = generatePrusaSlicerBundle([
+      filamentWith([
+        { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95 },
+        { nozzle: { name: "0.4 Brass HF", diameter: 0.4, type: "Brass", highFlow: true }, printer: null, extrusionMultiplier: 0.9 },
+      ]),
+    ]);
+    const sections = bundle.split(/(?=\[filament:)/).filter((s) => s.startsWith("[filament:"));
+    const std = sections.find((s) => s.includes("[filament:PLA 0.4 Brass]"))!;
+    const hf = sections.find((s) => s.includes("[filament:PLA 0.4 Brass HF]"))!;
+    expect(std).toContain("compatible_printers_condition = nozzle_diameter[0]==0.4 and ! nozzle_high_flow[0]");
+    expect(hf).toContain("compatible_printers_condition = nozzle_diameter[0]==0.4 and nozzle_high_flow[0]");
+  });
+
+  it("different-diameter fan-out stays on the plain condition (only-when-ambiguous)", () => {
+    // Diameter alone already disambiguates 0.4 vs 0.8 — adding the HF term
+    // would newly HIDE a 0.4-standard preset from a 0.4-HF printer where
+    // users see it today (the GH #1021 surprise class).
+    const bundle = generatePrusaSlicerBundle([
+      filamentWith([
+        { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95 },
+        { nozzle: { name: "0.8 Brass", diameter: 0.8, type: "Brass" }, printer: null, extrusionMultiplier: 0.9 },
+      ]),
+    ]);
+    expect(bundle).toContain("compatible_printers_condition = nozzle_diameter[0]==0.4\n");
+    expect(bundle).toContain("compatible_printers_condition = nozzle_diameter[0]==0.8\n");
+    expect(bundle).not.toContain("nozzle_high_flow");
+  });
+
+  it("mixed group: only the ambiguous diameter gets the HF term", () => {
+    // 0.4 exists in both states; 0.8 exists only as HF. The 0.8 section keeps
+    // the plain condition — its diameter alone finds the right printer, and
+    // hiding it from a hypothetical 0.8-standard printer would be the #1021
+    // regression again.
+    const bundle = generatePrusaSlicerBundle([
+      filamentWith([
+        { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95 },
+        { nozzle: { name: "0.4 Brass HF", diameter: 0.4, type: "Brass", highFlow: true }, printer: null, extrusionMultiplier: 0.9 },
+        { nozzle: { name: "0.8 Brass HF", diameter: 0.8, type: "Brass", highFlow: true }, printer: null, extrusionMultiplier: 0.85 },
+      ]),
+    ]);
+    expect(bundle).toContain("nozzle_diameter[0]==0.4 and ! nozzle_high_flow[0]");
+    expect(bundle).toContain("nozzle_diameter[0]==0.4 and nozzle_high_flow[0]");
+    expect(bundle).toContain("compatible_printers_condition = nozzle_diameter[0]==0.8\n");
+  });
+
+  it("a settings-bag user pin still wins over the HF-aware bake", () => {
+    const bundle = generatePrusaSlicerBundle([
+      filamentWith([
+        { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95 },
+        { nozzle: { name: "0.4 Brass HF", diameter: 0.4, type: "Brass", highFlow: true }, printer: null, extrusionMultiplier: 0.9 },
+      ]),
+    ].map((f) => ({ ...f, settings: { compatible_printers_condition: 'printer_model=="MK4"' } })));
+    const count = (bundle.match(/compatible_printers_condition = printer_model=="MK4"/g) ?? []).length;
+    expect(count).toBe(2);
+    expect(bundle).not.toContain("nozzle_high_flow");
+  });
+
+  it("perNozzleCondition emits the three shapes exactly", () => {
+    expect(perNozzleCondition({ diameter: 0.4 }, false)).toBe("nozzle_diameter[0]==0.4");
+    expect(perNozzleCondition({ diameter: 0.4, highFlow: true }, true)).toBe(
+      "nozzle_diameter[0]==0.4 and nozzle_high_flow[0]",
+    );
+    expect(perNozzleCondition({ diameter: 0.4, highFlow: false }, true)).toBe(
+      "nozzle_diameter[0]==0.4 and ! nozzle_high_flow[0]",
+    );
+  });
+
+  it("isMachineDerivedPerNozzleCondition matches machine shapes only", () => {
+    for (const v of [
+      "nozzle_diameter[0]==0.4",
+      "nozzle_diameter[0]==0.4 and nozzle_high_flow[0]",
+      "nozzle_diameter[0]==0.4 and ! nozzle_high_flow[0]",
+    ]) expect(isMachineDerivedPerNozzleCondition(v, 0.4)).toBe(true);
+    for (const v of [
+      "nozzle_diameter[0]==0.6", // different diameter
+      'printer_model=="MK4" and nozzle_diameter[0]==0.4', // user pin referencing it
+      "nozzle_diameter[0]==0.4 and !nozzle_high_flow[0]", // unspaced ! — hand-typed
+      "nozzle_diameter[0]==0.4 and nozzle_high_flow[0] and 1", // extra term
+      "", // empty
+      null,
+      42,
+    ]) expect(isMachineDerivedPerNozzleCondition(v, 0.4)).toBe(false);
+  });
+
+  it("bulk-import collapse strips both HF-tailed machine shapes but keeps hand-written pins", () => {
+    // Without this, one sibling's HF-tailed condition round-trips into the
+    // base filament's settings bag as a fake "user pin" and the export gate
+    // stamps it on EVERY fan-out section — hiding the standard preset.
+    const parse = (cond: string) =>
+      parseIniFilaments(
+        `[filament:PLA 0.4 Brass HF]\nfilament_type = PLA\nfilamentdb_nozzle = 0.4 Brass HF\ncompatible_printers_condition = ${cond}\n`,
+      );
+    const stripped = collapsePerNozzleImportSections(parse("nozzle_diameter[0]==0.4 and nozzle_high_flow[0]"))[0];
+    expect("compatible_printers_condition" in stripped.settings).toBe(false);
+    const strippedNeg = collapsePerNozzleImportSections(parse("nozzle_diameter[0]==0.4 and ! nozzle_high_flow[0]"))[0];
+    expect("compatible_printers_condition" in strippedNeg.settings).toBe(false);
+    // A hand-typed variant (unspaced !) is NOT the machine shape — kept.
+    const kept = collapsePerNozzleImportSections(parse("nozzle_diameter[0]==0.4 and !nozzle_high_flow[0]"))[0];
+    expect(kept.settings.compatible_printers_condition).toBe(
+      "nozzle_diameter[0]==0.4 and !nozzle_high_flow[0]",
+    );
   });
 });
