@@ -503,6 +503,7 @@
   "locations.form.desiccantChangedAt": "Desiccant changed",
   "locations.form.desiccantChangedAtHint": "Optional. Typically used for dryboxes — set it when you swap or regenerate the beads.",
   "inventory.printDryBox": "Print dry-box label",
+  "locations.table.printLabel": "Print label",
   "inventory.deepLinkEmpty": "That label's box has no active spools right now (or the location was removed) — nothing to show.",
   "dryBoxLabel.title": "Print dry-box label",
   "dryBoxLabel.subtitle": "4×6 label for {name} — {count} spool(s) on the manifest",
