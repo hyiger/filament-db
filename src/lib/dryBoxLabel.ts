@@ -36,6 +36,8 @@ const QR_MIN_CELL = 4;
 const EDGE_MARGIN = 8;
 /** Advance width in dots of TSPL internal font "3" (16x24). */
 const FONT3_WIDTH = 16;
+/** Advance width in dots of TSPL internal font "5" (32x48). */
+const FONT5_WIDTH = 32;
 
 export interface FittedQr {
   ecc: TsplEcc;
@@ -222,10 +224,27 @@ function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+/** Case-folded, separator-normalised and space-padded, so a containment test
+ *  matches only WHOLE tokens. Padding is what supplies the word boundaries:
+ *  " prusa space gray " does not contain " pa ", where a raw substring test
+ *  would find the "pa" inside "space". */
+function tokenized(value: string): string {
+  return ` ${value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+}
+
 /** One manifest line: the spool's own label when it has one, else the
  *  filament identity. Vendor is prefixed only when it isn't already the
  *  first word of the name, so "Prusament PLA" doesn't become
- *  "Prusament Prusament PLA". */
+ *  "Prusament Prusament PLA".
+ *
+ *  The type dedup matches WHOLE TOKENS, not substrings. A bare
+ *  `includes(type)` silently swallowed short material codes that happen to
+ *  occur inside a colour or vendor word — "Prusa Space Gray" + "PA" printed
+ *  without its material, as did "Papaya"/PA, "Sapphire"/PP and
+ *  "Petrol Blue"/PET. On a dry-box manifest the material is the one thing a
+ *  glance needs, so dropping it is the worst available failure. Normalising
+ *  separators also keeps hyphenated types like "PC-ABS" matching a
+ *  "PC ABS" name. */
 export function describeItem(item: DryBoxLabelItem): string {
   const own = item.label?.trim();
   if (own) return own;
@@ -235,7 +254,7 @@ export function describeItem(item: DryBoxLabelItem): string {
   const parts: string[] = [];
   if (vendor && !name.toLowerCase().startsWith(vendor.toLowerCase())) parts.push(vendor);
   if (name) parts.push(name);
-  if (type && !`${vendor} ${name}`.toLowerCase().includes(type.toLowerCase())) parts.push(type);
+  if (type && !tokenized(`${vendor} ${name}`).includes(tokenized(type))) parts.push(type);
   return parts.join(" ").trim();
 }
 
@@ -255,6 +274,10 @@ export interface DryBoxGeometry {
   capacity: number;
   /** Characters that fit on one manifest row. */
   rowChars: number;
+  /** Characters of the location name that fit before the QR column. */
+  nameChars: number;
+  /** Characters of the subtitle that fit before the QR column. */
+  subtitleChars: number;
 }
 
 export function dryBoxGeometry(spec: LabelSpec, qrPayload: string): DryBoxGeometry {
@@ -283,6 +306,11 @@ export function dryBoxGeometry(spec: LabelSpec, qrPayload: string): DryBoxGeomet
     footerTop,
     capacity: Math.max(0, Math.floor((footerTop - firstRowY) / L.rows.pitch)),
     rowChars: maxRowChars(spec),
+    // The header's two text fields share their row with the QR, so they get
+    // their own budget ending at the QR column — the manifest's full-width
+    // budget would let a normal location name overprint the symbol.
+    nameChars: Math.max(0, Math.floor((L.qr.x - L.name.x - EDGE_MARGIN) / FONT5_WIDTH)),
+    subtitleChars: Math.max(0, Math.floor((L.qr.x - L.subtitle.x - EDGE_MARGIN) / FONT3_WIDTH)),
   };
 }
 
@@ -318,14 +346,17 @@ export function dryBoxLabel(
       y1: g.headerBottom,
       thickness: L.headerBox.thickness,
     },
-    text(L.name.x, L.name.y, L.name.font, input.location.name),
+    text(L.name.x, L.name.y, L.name.font, fitRowText(input.location.name, g.nameChars)),
     text(
       L.subtitle.x,
       L.subtitle.y,
       L.subtitle.font,
-      input.location.humidity != null
-        ? `${strings.subtitle}  ${input.location.humidity}% RH`
-        : strings.subtitle,
+      fitRowText(
+        input.location.humidity != null
+          ? `${strings.subtitle}  ${input.location.humidity}% RH`
+          : strings.subtitle,
+        g.subtitleChars,
+      ),
     ),
     {
       kind: "qrcode",
@@ -355,7 +386,11 @@ export function dryBoxLabel(
   // --- contents manifest -------------------------------------------------
   const labels = input.items.map(describeItem).filter((s) => s.length > 0);
   const rowText: string[] = [];
-  if (labels.length === 0) {
+  if (g.capacity === 0) {
+    // Stock too short for even one row. Emitting one anyway would print it
+    // over the footer rule and barcode; better to show no manifest than a
+    // corrupted one.
+  } else if (labels.length === 0) {
     rowText.push(strings.empty);
   } else if (labels.length <= g.capacity) {
     rowText.push(...labels.map((s) => `- ${s}`));

@@ -185,22 +185,37 @@ describe("dryBoxLabel — contents manifest", () => {
   });
 
   it("keeps every row above the footer, whatever the stock height", () => {
-    // The invariant a printed label would otherwise reveal by running rows
-    // off the bottom edge or over the barcode.
-    for (const heightMm of [100, 150, 200]) {
+    // Rows are selected STRUCTURALLY (x === rows.x is unique to manifest rows;
+    // every other text sits at x=40) rather than by a y-range filter. The
+    // previous version filtered on `y < footerTop` and then asserted
+    // `y < footerTop`, so any offending row was removed before the assertion
+    // and the test could not fail for any implementation.
+    for (const heightMm of [65, 70, 100, 150, 200]) {
       const spec = { ...DRY_BOX_SPEC, heightMm };
-      const doc = dryBoxLabel(input({ items: many(200), spec: { heightMm } }));
-      const footerTop = mmToDots(heightMm, spec.dpi) - DRY_BOX_LAYOUT.footerHeight;
       const g = dryBoxGeometry(spec, QR);
-      const rowYs = doc.commands
-        .filter((c): c is Extract<TsplCommand, { kind: "text" }> => c.kind === "text")
-        .map((c) => c.y)
-        .filter((y) => y >= g.firstRowY && y < footerTop);
-      for (const y of rowYs) expect(y).toBeLessThan(footerTop);
+      const doc = dryBoxLabel(input({ items: many(200), spec: { heightMm } }));
+      const rows = doc.commands.filter(
+        (c): c is Extract<TsplCommand, { kind: "text" }> =>
+          c.kind === "text" && c.x === DRY_BOX_LAYOUT.rows.x,
+      );
+      expect(rows.length).toBeLessThanOrEqual(g.capacity);
+      for (const r of rows) {
+        expect(r.y).toBeGreaterThanOrEqual(g.firstRowY);
+        expect(r.y).toBeLessThan(g.footerTop);
+      }
       // And the barcode stays on the sheet.
       const bc = doc.commands.find((c): c is Extract<TsplCommand, { kind: "barcode" }> => c.kind === "barcode")!;
       expect(bc.y + bc.height).toBeLessThan(mmToDots(heightMm, spec.dpi));
     }
+  });
+
+  it("emits no manifest at all on stock too short for one row", () => {
+    // 65mm leaves capacity 0. Emitting a row anyway printed it over the
+    // footer rule and barcode.
+    const g = dryBoxGeometry({ ...DRY_BOX_SPEC, heightMm: 65 }, QR);
+    expect(g.capacity).toBe(0);
+    const doc = dryBoxLabel(input({ items: many(5), spec: { heightMm: 65 } }));
+    expect(doc.commands.filter((c) => c.kind === "text" && c.x === DRY_BOX_LAYOUT.rows.x)).toHaveLength(0);
   });
 });
 
@@ -324,5 +339,62 @@ describe("fitRowText / maxRowChars", () => {
     const row = texts(doc.commands).find((s) => s.startsWith("- Q"))!;
     expect(row.length).toBeLessThanOrEqual(maxRowChars(DRY_BOX_SPEC));
     expect(row.endsWith("...")).toBe(true);
+  });
+});
+
+describe("describeItem — whole-token type dedup", () => {
+  it("keeps the material when its code merely occurs inside another word", () => {
+    // A bare substring test swallowed short material codes hiding in colour
+    // and vendor words. On a dry-box manifest the material is the one thing a
+    // glance needs, so dropping it is the worst available failure.
+    expect(describeItem({ filamentVendor: "Prusa", filamentName: "Space Gray", filamentType: "PA" }))
+      .toBe("Prusa Space Gray PA");
+    expect(describeItem({ filamentVendor: "Prusa", filamentName: "Papaya", filamentType: "PA" }))
+      .toBe("Prusa Papaya PA");
+    expect(describeItem({ filamentVendor: "Elegoo", filamentName: "Sapphire Blue", filamentType: "PP" }))
+      .toBe("Elegoo Sapphire Blue PP");
+    expect(describeItem({ filamentVendor: "Prusa", filamentName: "Petrol Blue", filamentType: "PET" }))
+      .toBe("Prusa Petrol Blue PET");
+  });
+
+  it("still drops a genuinely duplicated material token", () => {
+    expect(describeItem({ filamentVendor: "Prusa", filamentName: "PLA Galaxy", filamentType: "PLA" }))
+      .toBe("Prusa PLA Galaxy");
+    expect(describeItem({ filamentVendor: "Prusa", filamentName: "Galaxy PLA", filamentType: "pla" }))
+      .toBe("Prusa Galaxy PLA");
+  });
+
+  it("normalises separators so a hyphenated type matches a spaced name", () => {
+    expect(describeItem({ filamentVendor: "Prusa", filamentName: "PC ABS Blend", filamentType: "PC-ABS" }))
+      .toBe("Prusa PC ABS Blend");
+    expect(describeItem({ filamentVendor: "Prusa", filamentName: "Tough Blend", filamentType: "PC-ABS" }))
+      .toBe("Prusa Tough Blend PC-ABS");
+  });
+});
+
+describe("header fields share their row with the QR", () => {
+  it("truncates a long location name rather than overprinting the QR", () => {
+    // The name is font 5 (32 dots wide) at x=40 and the QR column starts at
+    // x=560, so only 16 characters fit — well inside normal naming.
+    const g = dryBoxGeometry(DRY_BOX_SPEC, QR);
+    const doc = dryBoxLabel(input({ location: { name: "Garage Cabinet Drybox #2" } }));
+    const name = texts(doc.commands)[0];
+    expect(name.length).toBeLessThanOrEqual(g.nameChars);
+    expect(name.endsWith("...")).toBe(true);
+    expect(DRY_BOX_LAYOUT.name.x + name.length * 32).toBeLessThanOrEqual(DRY_BOX_LAYOUT.qr.x);
+  });
+
+  it("truncates the subtitle too", () => {
+    const g = dryBoxGeometry(DRY_BOX_SPEC, QR);
+    const doc = dryBoxLabel(input({ location: { name: "B", humidity: 18 } }), {
+      ...DEFAULT_DRY_BOX_STRINGS,
+      subtitle: "A VERY LONG LOCALIZED SUBTITLE THAT WOULD RUN INTO THE QR",
+    });
+    const subtitle = texts(doc.commands)[1];
+    expect(subtitle.length).toBeLessThanOrEqual(g.subtitleChars);
+  });
+
+  it("leaves a short name untouched", () => {
+    expect(texts(dryBoxLabel(input()).commands)[0]).toBe("BOX-07");
   });
 });
