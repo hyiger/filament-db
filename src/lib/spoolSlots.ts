@@ -104,23 +104,44 @@ export async function assignSpoolToSlot(
   PrinterModel: Model<any>,
   spoolId: mongoose.Types.ObjectId | string,
   target: { printerId: string; slotId: string } | null,
+  // GH #1041: the spool's OWNING filament. A slot carries TWO parallel refs
+  // (filamentId = loaded filament, spoolId = tracked spool) and PrinterForm
+  // renders slots keyed on filamentId — so a spool-side assignment that
+  // writes only spoolId is present in the data but UNRENDERABLE on the
+  // printer side (the spool select is disabled while filamentId is null).
+  // Both refs are maintained together from here on.
+  filamentId?: mongoose.Types.ObjectId | string | null,
 ): Promise<void> {
   const spoolObjId = new mongoose.Types.ObjectId(String(spoolId));
 
+  // Clear pass: the slot was TRACKING this spool, and the physical spool —
+  // i.e. the loaded filament — is leaving with it, so both refs clear
+  // ("currently-loaded" semantics per the schema docblock). "Any spool"
+  // slots (filamentId set, spoolId null) never match this filter and keep
+  // their dedication.
   await PrinterModel.updateMany(
     { _deletedAt: null, "amsSlots.spoolId": spoolObjId },
-    { $set: { "amsSlots.$[s].spoolId": null } },
+    { $set: { "amsSlots.$[s].spoolId": null, "amsSlots.$[s].filamentId": null } },
     { arrayFilters: [{ "s.spoolId": spoolObjId }] },
   );
 
   if (target) {
+    // Assign pass: when the owning filament is known, write it alongside —
+    // silently replacing whatever filament the slot previously showed (the
+    // newly-assigned spool IS what is physically loaded now; matches this
+    // helper's existing self-healing posture of stealing the spool from any
+    // other slot without prompting).
+    const set: Record<string, unknown> = { "amsSlots.$.spoolId": spoolObjId };
+    if (filamentId != null) {
+      set["amsSlots.$.filamentId"] = new mongoose.Types.ObjectId(String(filamentId));
+    }
     await PrinterModel.updateOne(
       {
         _id: target.printerId,
         _deletedAt: null,
         "amsSlots._id": target.slotId,
       },
-      { $set: { "amsSlots.$.spoolId": spoolObjId } },
+      { $set: set },
     );
   }
 }
@@ -216,7 +237,10 @@ export async function clearSpoolsFromOtherPrinters(
       _deletedAt: null,
       "amsSlots.spoolId": { $in: ids },
     },
-    { $set: { "amsSlots.$[s].spoolId": null } },
+    // GH #1041: null the loaded filament alongside the tracked spool — the
+    // spool physically moved to the other printer, so leaving filamentId
+    // behind showed a phantom loaded filament on the losing printer.
+    { $set: { "amsSlots.$[s].spoolId": null, "amsSlots.$[s].filamentId": null } },
     { arrayFilters: [{ "s.spoolId": { $in: ids } }] },
   );
 }

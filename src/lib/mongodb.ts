@@ -53,6 +53,14 @@ interface MongooseCache {
      * a converted value lands in [0, 50] — below the threshold for every real
      * input, and the x = 50 boundary maps to itself (a no-op re-match). */
     legacyShrinkage: boolean;
+    /** GH #1041 — repair AMS slots tracking a spool with no loaded-filament
+     * ref. The pre-#1041 filament-side assignment wrote only
+     * `amsSlots[].spoolId`; PrinterForm renders slots keyed on `filamentId`,
+     * so these assignments were invisible (and trample-prone) on the printer
+     * side. Backfill `filamentId` from the spool's owning filament; a spool
+     * that no longer exists clears the dangling `spoolId` instead.
+     * Idempotent: matches nothing once repaired. */
+    amsSlotFilamentIds: boolean;
     /** GH #1021 — clear machine-derived `nozzle_diameter[0]==D [or ...]`
      * values the pre-#1021 export wrote into
      * `settings.compatible_printers_condition` and round-trips persisted.
@@ -103,7 +111,7 @@ export default async function dbConnect() {
     promise: null,
     uri: null,
     migrationsPromise: null,
-    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false },
+    migrations: { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false },
   };
 
   if (!global.mongoose) {
@@ -118,7 +126,7 @@ export default async function dbConnect() {
     cached.promise = null;
     cached.uri = null;
     cached.migrationsPromise = null;
-    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false };
+    cached.migrations = { instanceIds: false, spoolInstanceIds: false, sharedCatalogIndexes: false, nozzlePhysicalInstances: false, coreModelIndexes: false, purgedZombies: false, legacyShrinkage: false, legacyNozzleConditions: false, amsSlotFilamentIds: false };
   }
 
   // GH #312: a cached connection can go dead after a DB outage or an
@@ -144,7 +152,8 @@ export default async function dbConnect() {
     cached.migrations.coreModelIndexes &&
     cached.migrations.purgedZombies &&
     cached.migrations.legacyShrinkage &&
-    cached.migrations.legacyNozzleConditions
+    cached.migrations.legacyNozzleConditions &&
+    cached.migrations.amsSlotFilamentIds
   ) {
     return cached.conn;
   }
@@ -276,6 +285,64 @@ export default async function dbConnect() {
       // retry would then legitimately match and clear. So the CURRENT caller
       // must fail too, not just leave the flag false for the next one.
       throw err;
+    }
+  }
+
+  // GH #1041 — repair AMS slots that track a spool with no loaded-filament
+  // ref. The pre-#1041 filament-side assignment wrote only amsSlots[].spoolId;
+  // PrinterForm keys slot rendering on filamentId, so the assignment existed
+  // in the data but was invisible on the printer side — and a user "fixing"
+  // the seemingly-empty slot silently wiped the spool ref. Backfill the
+  // owning filament; clear a spoolId whose spool no longer exists. Idempotent
+  // and cheap: the $elemMatch matches nothing once repaired.
+  if (!cached.migrations.amsSlotFilamentIds) {
+    try {
+      const { default: Printer } = await import("@/models/Printer");
+      const { default: Filament } = await import("@/models/Filament");
+      const printers = await Printer.find(
+        {
+          _deletedAt: null,
+          amsSlots: {
+            $elemMatch: {
+              spoolId: { $ne: null },
+              $or: [{ filamentId: null }, { filamentId: { $exists: false } }],
+            },
+          },
+        },
+        { amsSlots: 1 },
+      ).lean();
+      let repaired = 0;
+      let cleared = 0;
+      for (const pr of printers) {
+        for (const slot of pr.amsSlots ?? []) {
+          if (!slot?.spoolId || slot.filamentId) continue;
+          const owner = await Filament.findOne(
+            { _deletedAt: null, "spools._id": slot.spoolId },
+            { _id: 1 },
+          ).lean();
+          const set = owner
+            ? { "amsSlots.$[s].filamentId": owner._id }
+            : { "amsSlots.$[s].spoolId": null };
+          await Printer.updateOne(
+            { _id: pr._id },
+            { $set: set },
+            { arrayFilters: [{ "s._id": slot._id }] },
+          );
+          if (owner) repaired += 1;
+          else cleared += 1;
+        }
+      }
+      if (repaired > 0 || cleared > 0) {
+        console.log(
+          `[migration] AMS slots: backfilled ${repaired} loaded-filament ref(s), cleared ${cleared} dangling spool ref(s) (GH #1041)`,
+        );
+      }
+      cached.migrations.amsSlotFilamentIds = true;
+    } catch (err) {
+      console.error(
+        "[migration] Failed to repair AMS slot filament refs (will retry on next connect):",
+        err,
+      );
     }
   }
 

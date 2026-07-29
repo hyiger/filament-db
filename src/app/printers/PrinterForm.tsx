@@ -282,7 +282,29 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
     const ac = new AbortController();
     fetch("/api/filaments", { signal: ac.signal })
       .then((r) => (r.ok ? r.json() : []))
-      .then(setFilamentOptions)
+      .then((options: FilamentOption[]) => {
+        setFilamentOptions(options);
+        // GH #1041 belt-and-braces: a legacy slot may track a spool with no
+        // loaded-filament ref (written by a pre-#1041 filament-side
+        // assignment, or by an old app version sharing this DB after the
+        // startup migration ran). Backfill filamentId from the spool's owner
+        // in FORM STATE — not just the render — so the slot displays, the
+        // spool select enables, and a subsequent save persists the repaired
+        // pair instead of re-writing the orphaned shape.
+        setForm((prev) => {
+          let changed = false;
+          const amsSlots = prev.amsSlots.map((slot) => {
+            if (slot.filamentId || !slot.spoolId) return slot;
+            const owner = options.find((f) =>
+              f.spools?.some((sp) => sp._id === slot.spoolId),
+            );
+            if (!owner) return slot;
+            changed = true;
+            return { ...slot, filamentId: owner._id };
+          });
+          return changed ? { ...prev, amsSlots } : prev;
+        });
+      })
       .catch(() => {});
     return () => ac.abort();
   }, [form.amsSlots.length, filamentOptions.length]);
