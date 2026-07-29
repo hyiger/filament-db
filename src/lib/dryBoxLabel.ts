@@ -22,6 +22,7 @@ import {
   DPI_203,
   mmToDots,
   qrModuleCount,
+  sanitizeTsplLiteral,
   type LabelDocument,
   type LabelSpec,
   type TsplCommand,
@@ -88,12 +89,21 @@ export function fitQr(payload: string, maxDots: number): FittedQr {
  * TSPL `TEXT` does not wrap and does not clip — it just runs off the edge, so
  * an over-long spool label silently loses its tail with no indication. An
  * explicit "..." at least shows the row was cut.
+ *
+ * Measures the SANITIZED string, not the input. The encoder folds text to
+ * 7-bit ASCII on the way out and several of those substitutions are
+ * length-INCREASING — "ß" becomes "ss", "°" becomes "deg", "€" becomes "EUR"
+ * — so budgeting against the raw string under-counts the printed width and
+ * lets a fitted row overflow anyway. Sixteen "ß" characters print as
+ * thirty-two. Sanitisation is idempotent, so re-folding at encode time is a
+ * no-op.
  */
 export function fitRowText(text: string, maxChars: number): string {
+  const printed = sanitizeTsplLiteral(text);
   if (maxChars <= 0) return "";
-  if (text.length <= maxChars) return text;
-  if (maxChars <= 3) return text.slice(0, maxChars);
-  return `${text.slice(0, maxChars - 3)}...`;
+  if (printed.length <= maxChars) return printed;
+  if (maxChars <= 3) return printed.slice(0, maxChars);
+  return `${printed.slice(0, maxChars - 3)}...`;
 }
 
 /** How many font-3 characters fit on a manifest row for this stock. */
@@ -227,9 +237,15 @@ function isoDate(date: Date): string {
 /** Case-folded, separator-normalised and space-padded, so a containment test
  *  matches only WHOLE tokens. Padding is what supplies the word boundaries:
  *  " prusa space gray " does not contain " pa ", where a raw substring test
- *  would find the "pa" inside "space". */
+ *  would find the "pa" inside "space".
+ *
+ *  "+" survives normalisation because it is a MATERIAL DISTINCTION, not
+ *  punctuation: collapsing it made tokenized("PLA+") equal tokenized("PLA"),
+ *  so a PLA+ spool whose name mentions PLA printed as plain "PLA" and the
+ *  label understated the material. Hyphens and slashes still collapse, which
+ *  is what lets a "PC-ABS" type match a "PC ABS" name. */
 function tokenized(value: string): string {
-  return ` ${value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim()} `;
+  return ` ${value.toLowerCase().replace(/[^a-z0-9+]+/g, " ").trim()} `;
 }
 
 /** One manifest line: the spool's own label when it has one, else the
@@ -368,28 +384,35 @@ export function dryBoxLabel(
       rotation: 0,
       content: input.qrPayload,
     },
-    text(
-      L.headerBox.x0 + 24,
-      g.headingY,
-      L.subtitle.font,
-      `${strings.contents}  (${strings.asOf} ${fmt(input.asOf)})`,
-    ),
-    {
-      kind: "bar",
-      x: L.footer.x,
-      y: g.ruleY,
-      width: L.footer.ruleWidth,
-      height: L.footer.ruleHeight,
-    },
   ];
+
+  // The contents block is emitted as a UNIT — heading, rule and rows — or not
+  // at all. Suppressing only the rows still printed a "CONTENTS" heading and
+  // its rule on top of the footer on short stock (at 65mm the heading lands
+  // at y=303 against a footer starting at 279).
+  if (g.capacity > 0) {
+    commands.push(
+      text(
+        L.headerBox.x0 + 24,
+        g.headingY,
+        L.subtitle.font,
+        fitRowText(`${strings.contents}  (${strings.asOf} ${fmt(input.asOf)})`, g.rowChars),
+      ),
+      {
+        kind: "bar",
+        x: L.footer.x,
+        y: g.ruleY,
+        width: L.footer.ruleWidth,
+        height: L.footer.ruleHeight,
+      },
+    );
+  }
 
   // --- contents manifest -------------------------------------------------
   const labels = input.items.map(describeItem).filter((s) => s.length > 0);
   const rowText: string[] = [];
   if (g.capacity === 0) {
-    // Stock too short for even one row. Emitting one anyway would print it
-    // over the footer rule and barcode; better to show no manifest than a
-    // corrupted one.
+    // Stock too short for even one row — see the contents-block guard above.
   } else if (labels.length === 0) {
     rowText.push(strings.empty);
   } else if (labels.length <= g.capacity) {

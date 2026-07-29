@@ -12,7 +12,7 @@ import {
   type DryBoxLabelInput,
   type DryBoxLabelItem,
 } from "@/lib/dryBoxLabel";
-import { render, mmToDots, type TsplCommand } from "@/lib/tsplEncoder";
+import { render, mmToDots, sanitizeTsplLiteral, type TsplCommand } from "@/lib/tsplEncoder";
 
 /**
  * Coverage for the dry-box label template.
@@ -396,5 +396,57 @@ describe("header fields share their row with the QR", () => {
 
   it("leaves a short name untouched", () => {
     expect(texts(dryBoxLabel(input()).commands)[0]).toBe("BOX-07");
+  });
+});
+
+describe("PR #1042 review round 2", () => {
+  it("suppresses the whole contents block — heading and rule too — when nothing fits", () => {
+    // Suppressing only the rows still printed a "CONTENTS" heading and its
+    // rule on top of the footer: at 65mm the heading lands at y=303 against a
+    // footer starting at 279.
+    const g = dryBoxGeometry({ ...DRY_BOX_SPEC, heightMm: 65 }, QR);
+    expect(g.capacity).toBe(0);
+    const doc = dryBoxLabel(input({ items: [{ filamentName: "PLA" }], spec: { heightMm: 65 } }));
+    expect(texts(doc.commands).some((s) => s.includes("CONTENTS"))).toBe(false);
+    // No command anywhere may land in the footer band except the footer's own.
+    const strays = doc.commands.filter(
+      (c) => (c.kind === "text" || c.kind === "bar") && c.y >= g.headingY && c.y < g.footerTop,
+    );
+    expect(strays).toEqual([]);
+  });
+
+  it("still emits the contents block on normal stock", () => {
+    expect(texts(dryBoxLabel(input()).commands).some((s) => s.includes("CONTENTS"))).toBe(true);
+  });
+
+  it("budgets width AFTER ASCII expansion, not before", () => {
+    // The encoder folds to 7-bit ASCII on the way out and several of those
+    // substitutions GROW the string, so measuring the raw input under-counts
+    // the printed width. Sixteen "ß" print as thirty-two "s".
+    for (const raw of ["ß".repeat(16), "240°C ".repeat(6), "€".repeat(20), "±3 mm³/s"]) {
+      const fitted = fitRowText(raw, 16);
+      expect(fitted.length).toBeLessThanOrEqual(16);
+      // Already sanitized, so the encoder's own fold cannot grow it further.
+      expect(sanitizeTsplLiteral(fitted).length).toBeLessThanOrEqual(16);
+    }
+  });
+
+  it("keeps a manifest row within budget even when its text expands", () => {
+    const doc = dryBoxLabel(input({ items: [{ filamentName: "ß".repeat(60) }] }));
+    const row = texts(doc.commands).find((s) => s.startsWith("- s"))!;
+    expect(row.length).toBeLessThanOrEqual(maxRowChars(DRY_BOX_SPEC));
+  });
+
+  it("treats PLA+ as a distinct material from PLA", () => {
+    // Collapsing "+" made tokenized("PLA+") equal tokenized("PLA"), so a PLA+
+    // spool whose name mentions PLA printed as plain PLA — the label
+    // understating the material.
+    expect(describeItem({ filamentVendor: "Prusa", filamentName: "PLA Galaxy", filamentType: "PLA+" }))
+      .toBe("Prusa PLA Galaxy PLA+");
+    expect(describeItem({ filamentVendor: "Prusa", filamentName: "PLA+ Galaxy", filamentType: "PLA+" }))
+      .toBe("Prusa PLA+ Galaxy");
+    // Hyphen collapsing still works — that is what matches PC-ABS to PC ABS.
+    expect(describeItem({ filamentVendor: "Prusa", filamentName: "PC ABS Blend", filamentType: "PC-ABS" }))
+      .toBe("Prusa PC ABS Blend");
   });
 });
