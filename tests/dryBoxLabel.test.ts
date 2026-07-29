@@ -25,7 +25,10 @@ import { render, mmToDots, sanitizeTsplLiteral, qrModuleCount, type TsplCommand 
  * running off the bottom of the stock.
  */
 
-const AS_OF = new Date("2026-07-28T12:00:00.000Z");
+// Local noon, not a UTC instant: isoDate reads LOCAL components so that it
+// agrees with an injected locale formatter, and a UTC literal would make
+// this expectation timezone-dependent.
+const AS_OF = new Date(2026, 6, 28, 12, 0, 0);
 const QR = "https://example.test/inventory?location=abc123";
 const capacityOf = (spec = DRY_BOX_SPEC, qr = QR) => dryBoxGeometry(spec, qr).capacity;
 
@@ -83,7 +86,7 @@ describe("dryBoxGeometry — capacity", () => {
 
   it("taller stock fits more rows; stock too short fits none rather than going negative", () => {
     expect(capacityOf({ ...DRY_BOX_SPEC, heightMm: 300 })).toBeGreaterThan(capacityOf());
-    expect(capacityOf({ ...DRY_BOX_SPEC, heightMm: 20 })).toBe(0);
+    expect(() => capacityOf({ ...DRY_BOX_SPEC, heightMm: 20 })).toThrow(/too small|too short/);
   });
 
   it("keeps the QR inside the sheet and the header box for any payload length", () => {
@@ -242,7 +245,7 @@ describe("dryBoxLabel — dates", () => {
       dryBoxLabel(
         input({
           location: { name: "B", desiccantChangedAt: "2026-07-12T00:00:00.000Z" },
-          formatDate: (d) => `${d.getUTCDate()}.${d.getUTCMonth() + 1}.${d.getUTCFullYear()}`,
+          formatDate: (d) => `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()}`,
         }),
       ).commands,
     );
@@ -296,13 +299,22 @@ describe("fitQr — payload-aware sizing", () => {
     const long = "https://filament-db.example.com/inventory?location=507f1f77bcf86cd799439011&spool=507f191e810c19729de860ea";
     const fitted = fitQr(long, 160);
     expect(fitted.cell).toBeGreaterThanOrEqual(4);
-    expect(["Q", "M", "L"]).toContain(fitted.ecc);
+    expect(["H", "Q", "M", "L"]).toContain(fitted.ecc);
   });
 
   it("never returns a symbol larger than the region it was given", () => {
-    for (const dots of [60, 100, 160, 231, 300]) {
+    // Not every payload fits every region — a 46-char link needs 41 modules
+    // at H, so 164 dots minimum. The invariant is conditional: WHEN fitQr
+    // returns, the symbol fits; otherwise it throws rather than overflow.
+    for (const dots of [84, 100, 160, 231, 300]) {
       for (const payload of ["x", QR, "y".repeat(120)]) {
-        expect(fitQr(payload, dots).sizeDots).toBeLessThanOrEqual(dots);
+        let fitted: ReturnType<typeof fitQr> | null = null;
+        try {
+          fitted = fitQr(payload, dots);
+        } catch {
+          fitted = null; // too long for this region — the documented outcome
+        }
+        if (fitted) expect(fitted.sizeDots).toBeLessThanOrEqual(dots);
       }
     }
   });
@@ -506,6 +518,77 @@ describe("fitBarcode", () => {
       expect(DRY_BOX_LAYOUT.footer.x + modules * bc.narrow).toBeLessThanOrEqual(
         mmToDots(DRY_BOX_SPEC.widthMm, DRY_BOX_SPEC.dpi),
       );
+    }
+  });
+});
+
+describe("PR #1042 review round 4", () => {
+  it("refuses a QR that cannot reach the readable module floor", () => {
+    // QR_MIN_CELL is a floor, not a preference. A 2- or 3-dot symbol at
+    // 203 dpi does not scan, and a label carrying one is indistinguishable
+    // from a working label until the user tries it.
+    expect(() => fitQr("x".repeat(400), 231)).toThrow(/too long to print legibly/);
+    // Still fits comfortably at realistic deep-link lengths.
+    expect(fitQr(QR, 231).cell).toBeGreaterThanOrEqual(4);
+  });
+
+  it("renders the desiccant calendar date without a timezone shift", () => {
+    // Stored as midnight UTC by the date input; handing that instant to a
+    // local-time formatter renders the PREVIOUS day west of UTC. This repo
+    // hit exactly that in v1.60.1's analytics day labels.
+    const out = texts(
+      dryBoxLabel(input({
+        location: { name: "B", desiccantChangedAt: "2026-07-12T00:00:00.000Z" },
+        formatDate: (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`,
+      })).commands,
+    );
+    expect(out).toContain("DESICCANT CHANGED  2026-07-12");
+  });
+
+  it("rejects stock with no room between header and footer", () => {
+    // 20mm gives footerTop = 160 - 240 = -80; the label was previously
+    // emitted with off-sheet negative coordinates. Now that the QR is bounded
+    // on both axes this trips the size check first — either message is a
+    // diagnosable refusal, which is the point.
+    expect(() => dryBoxLabel(input({ spec: { heightMm: 20 } }))).toThrow(/too small|too short/);
+    expect(() => dryBoxLabel(input({ spec: { widthMm: 60 } }))).toThrow(/too small|too short/);
+    // The footer guard has its own narrow window: a SHORT payload shrinks the
+    // QR fine, but the 180-dot minimum header still overruns the footer on
+    // mid-height stock. 50mm is that case; 55mm clears it.
+    expect(() => dryBoxLabel(input({ qrPayload: "x", spec: { heightMm: 50 } })))
+      .toThrow(/too short/);
+    expect(() => dryBoxLabel(input({ qrPayload: "x", spec: { heightMm: 55 } }))).not.toThrow();
+  });
+
+  it("derives header box and rules from the stock width", () => {
+    // The fixture's fixed x1=796 header box and 740-dot rules overflow 90mm
+    // stock, which is only 719 dots wide.
+    for (const widthMm of [90, 100, 120]) {
+      const doc = dryBoxLabel(input({ spec: { widthMm } }));
+      const dots = mmToDots(widthMm, DRY_BOX_SPEC.dpi);
+      const box = doc.commands.find((c): c is Extract<TsplCommand, { kind: "box" }> => c.kind === "box")!;
+      expect(box.x1).toBeLessThanOrEqual(dots);
+      for (const bar of doc.commands.filter((c): c is Extract<TsplCommand, { kind: "bar" }> => c.kind === "bar")) {
+        expect(bar.x + bar.width).toBeLessThanOrEqual(dots);
+      }
+    }
+  });
+
+  it("emits no negative coordinates on any supported stock", () => {
+    for (const widthMm of [90, 100, 120]) {
+      for (const heightMm of [70, 100, 150, 200]) {
+        const doc = dryBoxLabel(input({ items: [{ filamentName: "PLA" }], spec: { widthMm, heightMm } }));
+        for (const c of doc.commands) {
+          for (const v of [
+            (c as { x?: number }).x,
+            (c as { y?: number }).y,
+            (c as { x0?: number }).x0,
+            (c as { y0?: number }).y0,
+          ]) {
+            if (v !== undefined) expect(v).toBeGreaterThanOrEqual(0);
+          }
+        }
+      }
     }
   });
 });

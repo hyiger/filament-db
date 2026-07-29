@@ -63,24 +63,23 @@ export interface FittedQr {
  * characters, drop to ECC M and document the tradeoff").
  */
 export function fitQr(payload: string, maxDots: number): FittedQr {
-  let best: FittedQr | null = null;
   for (const ecc of ["H", "Q", "M", "L"] as const) {
     const modules = qrModuleCount(payload, ecc);
     if (modules == null) continue;
-    const cell = Math.min(QR_MAX_CELL, Math.floor(maxDots / modules));
-    if (cell < 1) continue;
-    const candidate: FittedQr = { ecc, cell, sizeDots: modules * cell };
     // First (strongest) ECC that reaches a readable module size wins.
-    if (cell >= QR_MIN_CELL) return candidate;
-    if (!best || candidate.cell > best.cell) best = candidate;
+    const cell = Math.min(QR_MAX_CELL, Math.floor(maxDots / modules));
+    if (cell >= QR_MIN_CELL) return { ecc, cell, sizeDots: modules * cell };
   }
-  if (!best) {
-    throw new Error(
-      `QR payload is too long to print in ${maxDots} dots (${payload.length} chars). ` +
-        `Shorten the deep link or use a larger label.`,
-    );
-  }
-  return best;
+  // QR_MIN_CELL is a floor, not a preference. Returning a 2- or 3-dot symbol
+  // "so something prints" hands the user a label whose QR does not scan at
+  // 203 dpi — indistinguishable from a working one until they try it. A
+  // payload that cannot reach the floor at ANY ECC level is too long for this
+  // label, and saying so is more useful than printing decoration.
+  throw new Error(
+    `QR payload is too long to print legibly in ${maxDots} dots ` +
+      `(${payload.length} chars needs modules under ${QR_MIN_CELL} dots at every ECC level). ` +
+      `Shorten the deep link or use a larger label.`,
+  );
 }
 
 /**
@@ -253,8 +252,26 @@ export const DEFAULT_DRY_BOX_STRINGS: DryBoxLabelStrings = {
   asOf: "as of",
 };
 
+/** Default formatter: ISO `YYYY-MM-DD` from LOCAL components, so it agrees
+ *  with an injected locale-aware formatter rather than disagreeing by a day. */
 function isoDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/**
+ * Re-anchor a stored calendar date to local midnight.
+ *
+ * `desiccantChangedAt` comes from a `<input type="date">` and is stored as
+ * midnight UTC, so handing that instant to any local-time formatter renders
+ * the PREVIOUS day for every user west of UTC. This repo has already been
+ * bitten by exactly that (v1.60.1 added a `timeZone` option to formatDate for
+ * the analytics day labels). Re-anchoring keeps the calendar day intact no
+ * matter which formatter the caller injects.
+ */
+function toCalendarDate(value: string | Date): Date {
+  const d = new Date(value);
+  return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
 /** Case-folded, separator-normalised and space-padded, so a containment test
@@ -317,6 +334,10 @@ export interface DryBoxGeometry {
   nameChars: number;
   /** Characters of the subtitle that fit before the QR column. */
   subtitleChars: number;
+  /** Right edge of the header box, derived from the stock width. */
+  headerRight: number;
+  /** Width of the contents and footer rules, derived from the stock width. */
+  ruleWidth: number;
 }
 
 export function dryBoxGeometry(spec: LabelSpec, qrPayload: string): DryBoxGeometry {
@@ -326,18 +347,45 @@ export function dryBoxGeometry(spec: LabelSpec, qrPayload: string): DryBoxGeomet
 
   // The QR gets whatever square fits between its origin and the right edge,
   // capped so a short payload doesn't swallow the sheet.
-  const qrRegion = Math.min(L.qr.maxRegion, widthDots - L.qr.x - EDGE_MARGIN);
+  // Bound the QR by BOTH axes. Sizing off width alone let wide-but-short
+  // stock (120x70mm) grow a 287-dot symbol that pushed the header past the
+  // footer and turned a printable label into an error; shrinking the symbol
+  // to the available height is the more useful outcome.
+  const qrRegion = Math.min(
+    L.qr.maxRegion,
+    widthDots - L.qr.x - EDGE_MARGIN,
+    heightDots - L.footerHeight - L.qr.y - EDGE_MARGIN,
+  );
+  if (qrRegion < 1) {
+    throw new Error(
+      `Stock is too small for a dry-box label ` +
+        `(${spec.widthMm}x${spec.heightMm}mm leaves no room for the QR).`,
+    );
+  }
   const qr = fitQr(qrPayload, qrRegion);
 
   // Grow the header box to contain the QR rather than letting it spill.
   const headerBottom = Math.max(L.headerBox.minBottom, L.qr.y + qr.sizeDots + EDGE_MARGIN);
   const firstRowY = headerBottom + L.rowsOffset;
   const footerTop = heightDots - L.footerHeight;
+  // Without this the footer lands at a NEGATIVE y on very short stock (20mm
+  // gives 160 - 240 = -80) and the label is emitted with off-sheet
+  // coordinates instead of a diagnosable error.
+  if (footerTop <= headerBottom) {
+    throw new Error(
+      `Stock is too short for a dry-box label (${spec.heightMm}mm leaves no room ` +
+        `between the header and the footer).`,
+    );
+  }
 
   return {
     widthDots,
     heightDots,
     qr,
+    // Decorations are DERIVED from the stock, not fixed: the fixture's
+    // x1=796 header box and 740-dot rules overflow 90mm stock (719 dots).
+    headerRight: widthDots - EDGE_MARGIN,
+    ruleWidth: widthDots - 2 * L.footer.x,
     headerBottom,
     headingY: headerBottom + L.headingOffset,
     ruleY: headerBottom + L.ruleOffset,
@@ -391,7 +439,7 @@ export function dryBoxLabel(
       kind: "box",
       x0: L.headerBox.x0,
       y0: L.headerBox.y0,
-      x1: L.headerBox.x1,
+      x1: g.headerRight,
       y1: g.headerBottom,
       thickness: L.headerBox.thickness,
     },
@@ -435,7 +483,7 @@ export function dryBoxLabel(
         kind: "bar",
         x: L.footer.x,
         y: g.ruleY,
-        width: L.footer.ruleWidth,
+        width: g.ruleWidth,
         height: L.footer.ruleHeight,
       },
     );
@@ -465,7 +513,7 @@ export function dryBoxLabel(
 
   // --- footer, pinned to the bottom of the stock -------------------------
   const desiccant = input.location.desiccantChangedAt
-    ? fmt(new Date(input.location.desiccantChangedAt))
+    ? fmt(toCalendarDate(input.location.desiccantChangedAt))
     : strings.desiccantNever;
 
   commands.push(
@@ -473,7 +521,7 @@ export function dryBoxLabel(
       kind: "bar",
       x: L.footer.x,
       y: g.footerTop,
-      width: L.footer.ruleWidth,
+      width: g.ruleWidth,
       height: L.footer.ruleHeight,
     },
     text(
