@@ -294,11 +294,15 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
         setForm((prev) => {
           let changed = false;
           const amsSlots = prev.amsSlots.map((slot) => {
-            if (slot.filamentId || !slot.spoolId) return slot;
+            if (!slot.spoolId) return slot;
             const owner = options.find((f) =>
               f.spools?.some((sp) => sp._id === slot.spoolId),
             );
-            if (!owner) return slot;
+            // Repair a MISMATCHED pair too (PR #1046 review): the old path
+            // could track a spool in a slot dedicated to a different
+            // filament, which rendered the wrong filament's spool list and
+            // invited the same trample the null case did.
+            if (!owner || owner._id === slot.filamentId) return slot;
             changed = true;
             return { ...slot, filamentId: owner._id };
           });

@@ -299,27 +299,31 @@ export default async function dbConnect() {
     try {
       const { default: Printer } = await import("@/models/Printer");
       const { default: Filament } = await import("@/models/Filament");
+      // Every slot TRACKING a spool is checked — not just filamentId-null
+      // ones (PR #1046 review): the old path could also overwrite spoolId on
+      // a slot already dedicated to a DIFFERENT filament (an "Any spool"
+      // dedication), leaving a non-null but MISMATCHED pair that renders the
+      // wrong filament's spools in the form.
       const printers = await Printer.find(
-        {
-          _deletedAt: null,
-          amsSlots: {
-            $elemMatch: {
-              spoolId: { $ne: null },
-              $or: [{ filamentId: null }, { filamentId: { $exists: false } }],
-            },
-          },
-        },
+        { _deletedAt: null, "amsSlots.spoolId": { $ne: null } },
         { amsSlots: 1 },
       ).lean();
       let repaired = 0;
       let cleared = 0;
       for (const pr of printers) {
         for (const slot of pr.amsSlots ?? []) {
-          if (!slot?.spoolId || slot.filamentId) continue;
+          if (!slot?.spoolId) continue;
           const owner = await Filament.findOne(
             { _deletedAt: null, "spools._id": slot.spoolId },
             { _id: 1 },
           ).lean();
+          if (owner && String(owner._id) === String(slot.filamentId ?? "")) {
+            continue; // pair already consistent
+          }
+          // Dead spool → drop the tracking ref; an existing filamentId
+          // reverts to a plain dedication. Live owner → the slot reflects
+          // the physically-loaded spool, so the owner wins (the same
+          // overwrite posture as the fixed assignment path).
           const set = owner
             ? { "amsSlots.$[s].filamentId": owner._id }
             : { "amsSlots.$[s].spoolId": null };
