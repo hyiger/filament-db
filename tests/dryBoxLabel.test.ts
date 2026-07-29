@@ -716,3 +716,42 @@ describe("PR #1042 review round 7 — vendor prefix collision", () => {
       .toBe("Prusa Prusament PLA");
   });
 });
+
+describe("footer lines are budgeted with their own fonts (first-print photo)", () => {
+  const hintOf = (doc: ReturnType<typeof dryBoxLabel>) =>
+    texts(doc.commands).find((s) => s.startsWith("Replace"))!;
+
+  it("prints the default replace hint WHOLE on default stock", () => {
+    // The first physical label printed "...when indicator tu..." — the hint
+    // is font 2 (12 dots/char, 62 fit) but was budgeted with the font-3 row
+    // width (45). The truncation guard worked; it was measuring the wrong
+    // font, cutting 16 characters that had room to print.
+    expect(hintOf(dryBoxLabel(input()))).toBe(DEFAULT_DRY_BOX_STRINGS.replaceHint);
+  });
+
+  it("gives the hint a wider budget than font-3 lines", () => {
+    const g = dryBoxGeometry(DRY_BOX_SPEC, QR);
+    expect(g.hintChars).toBeGreaterThan(g.footerChars);
+    expect(g.hintChars).toBe(62);
+    expect(g.footerChars).toBe(46);
+  });
+
+  it("still truncates a genuinely over-long hint with an ellipsis", () => {
+    const doc = dryBoxLabel(input(), {
+      ...DEFAULT_DRY_BOX_STRINGS,
+      replaceHint: "Replace " + "x".repeat(90),
+    });
+    const hint = hintOf(doc);
+    expect(hint).toHaveLength(62);
+    expect(hint.endsWith("...")).toBe(true);
+  });
+
+  it("keeps the desiccant line within its font-3 budget", () => {
+    const doc = dryBoxLabel(
+      input({ location: { name: "B".repeat(40), desiccantChangedAt: "2026-07-12T00:00:00.000Z" } }),
+      { ...DEFAULT_DRY_BOX_STRINGS, desiccantChanged: "D".repeat(60) },
+    );
+    const line = texts(doc.commands).find((s) => s.startsWith("D"))!;
+    expect(line.length).toBeLessThanOrEqual(46);
+  });
+});

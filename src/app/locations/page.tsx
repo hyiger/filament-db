@@ -7,12 +7,22 @@ import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { isKnownLocationKind } from "@/lib/locationKind";
+import dynamic from "next/dynamic";
+
+// Loaded on demand — the dialog pulls in the TSPL emitter + qrcode preview,
+// which the locations list doesn't need until a print is requested.
+const PrintDryBoxLabelDialog = dynamic(
+  () => import("@/components/PrintDryBoxLabelDialog"),
+  { ssr: false },
+);
 
 interface Location {
   _id: string;
   name: string;
   kind: string;
   humidity: number | null;
+  /** ISO string over the wire; drives the label's DESICCANT CHANGED line. */
+  desiccantChangedAt: string | null;
   notes: string;
   spoolCount: number;
   totalGrams: number;
@@ -27,6 +37,14 @@ export default function LocationsPage() {
   const confirm = useConfirm();
   const { t } = useTranslation();
   const { formatGrams } = useNumberFormat();
+
+  // Dry-box label printing. This page lists EVERY location — including
+  // empty and freshly created dryboxes, which /inventory cannot show (its
+  // groups are built from spools), so this is the entry point that makes a
+  // box printable at exactly the moment you most want to label it: before
+  // it has contents (PR #1043 round 4). The dialog fetches its own
+  // manifest; an empty box prints "(empty)".
+  const [printLocation, setPrintLocation] = useState<Location | null>(null);
 
   const fetchLocations = useCallback(
     async (signal?: AbortSignal) => {
@@ -225,6 +243,15 @@ export default function LocationsPage() {
                   </td>
                   <td className="py-2 px-2 text-gray-500 text-xs">{l.notes || "—"}</td>
                   <td className="py-2 px-2 text-right">
+                    {l.kind === "drybox" && (
+                      <button
+                        onClick={() => setPrintLocation(l)}
+                        title={t("inventory.printDryBox")}
+                        className="text-blue-600 hover:underline mr-3 text-xs"
+                      >
+                        {t("locations.table.printLabel")}
+                      </button>
+                    )}
                     <Link
                       href={`/locations/${l._id}/edit`}
                       className="text-blue-600 hover:underline mr-3 text-xs"
@@ -243,6 +270,14 @@ export default function LocationsPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {printLocation && (
+        <PrintDryBoxLabelDialog
+          open
+          onClose={() => setPrintLocation(null)}
+          location={printLocation}
+        />
       )}
     </main>
   );

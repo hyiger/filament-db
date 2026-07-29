@@ -41,6 +41,11 @@ const QR_QUIET_ZONE_MODULES = 4;
 const EDGE_MARGIN = 8;
 /** Advance width in dots of TSPL internal font "3" (16x24). */
 const FONT3_WIDTH = 16;
+/** Advance width in dots of TSPL internal font "2" (12x20) — the footer
+ *  hint's font. Budgeting the hint with FONT3_WIDTH truncated it 16
+ *  characters early on the first physical label ("...indicator tu...")
+ *  while a third of the line's real width sat unused. */
+const FONT2_WIDTH = 12;
 /** Advance width in dots of TSPL internal font "5" (32x48). */
 const FONT5_WIDTH = 32;
 
@@ -379,6 +384,11 @@ export interface DryBoxGeometry {
   nameChars: number;
   /** Characters of the subtitle that fit before the QR column. */
   subtitleChars: number;
+  /** Characters that fit on a font-3 footer line (x = footer.x). */
+  footerChars: number;
+  /** Characters that fit on the font-2 footer hint line. Budgeted with its
+   *  OWN font width — see FONT2_WIDTH. */
+  hintChars: number;
   /** Right edge of the header box, derived from the stock width. */
   headerRight: number;
   /** Width of the contents and footer rules, derived from the stock width. */
@@ -444,6 +454,8 @@ export function dryBoxGeometry(spec: LabelSpec, qrPayload: string): DryBoxGeomet
     // budget would let a normal location name overprint the symbol.
     nameChars: Math.max(0, Math.floor((L.qr.x - L.name.x - EDGE_MARGIN) / FONT5_WIDTH)),
     subtitleChars: Math.max(0, Math.floor((L.qr.x - L.subtitle.x - EDGE_MARGIN) / FONT3_WIDTH)),
+    footerChars: Math.max(0, Math.floor((widthDots - L.footer.x - EDGE_MARGIN) / FONT3_WIDTH)),
+    hintChars: Math.max(0, Math.floor((widthDots - L.footer.x - EDGE_MARGIN) / FONT2_WIDTH)),
   };
 }
 
@@ -576,9 +588,9 @@ export function dryBoxLabel(
       L.footer.x,
       g.footerTop + 20,
       L.footer.font,
-      fitRowText(`${strings.desiccantChanged}  ${desiccant}`, g.rowChars),
+      fitRowText(`${strings.desiccantChanged}  ${desiccant}`, g.footerChars),
     ),
-    text(L.footer.x, g.footerTop + 64, L.footer.hintFont, fitRowText(strings.replaceHint, g.rowChars)),
+    text(L.footer.x, g.footerTop + 64, L.footer.hintFont, fitRowText(strings.replaceHint, g.hintChars)),
   );
 
   // Omit the barcode entirely rather than print a clipped one — a Code 128

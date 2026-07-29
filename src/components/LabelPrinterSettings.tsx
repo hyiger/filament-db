@@ -9,6 +9,7 @@ import { renderLabelBitmap } from "@/lib/labelBitmap";
 import { encodeLabel, packGrayscaleBitmap } from "@/lib/labelEncoder";
 import { useLabelFormat } from "@/hooks/useLabelFormat";
 import { SAMPLE_FILAMENT } from "@/lib/labelFormat";
+import PrinterDevicePicker from "@/components/PrinterDevicePicker";
 
 /**
  * Settings panel for the Brother PT-P710BT label printer. Electron
@@ -275,7 +276,30 @@ export default function LabelPrinterSettings() {
             {t("settings.labelPrinter.retry")}
           </button>
         </div>
-      ) : state.devices.length === 0 ? (
+      ) : (
+        <>
+          {/* Same stale-selection escape hatch as the TSPL panel (PR #1043
+              round 7 — found there, fixed in BOTH; this feature has been
+              bitten four times by fixing one sibling and not the other). */}
+          {state.selectedPath &&
+            !state.devices.some((d) => d.path === state.selectedPath) && (
+              <div className="mb-2 border border-amber-300 dark:border-amber-700 rounded p-3 bg-amber-50 dark:bg-amber-950/40">
+                <p className="text-sm text-amber-800 dark:text-amber-300">
+                  {t("settings.printerPicker.stale")}
+                </p>
+                <code className="text-xs text-amber-700 dark:text-amber-400 font-mono block mt-0.5">
+                  {state.selectedPath}
+                </code>
+                <button
+                  type="button"
+                  onClick={handleClear}
+                  className="mt-1.5 text-sm text-amber-800 dark:text-amber-300 underline"
+                >
+                  {t("settings.printerPicker.clear")}
+                </button>
+              </div>
+            )}
+          {state.devices.length === 0 ? (
         <div className="border border-gray-200 dark:border-gray-700 rounded p-3 bg-gray-50 dark:bg-gray-800">
           <p className="text-sm text-gray-700 dark:text-gray-300">
             {t("settings.labelPrinter.noDevices")}
@@ -293,64 +317,40 @@ export default function LabelPrinterSettings() {
         </div>
       ) : (
         <div className="space-y-2">
-          {state.devices.map((d) => {
-            const selected = state.selectedPath === d.path;
-            return (
-              <label
-                key={d.path}
-                className={`flex items-start gap-2 p-3 border rounded cursor-pointer ${
-                  selected
-                    ? "border-blue-500 bg-blue-50 dark:bg-blue-950/40"
-                    : "border-gray-200 dark:border-gray-700"
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="labelPrinterDevice"
-                  checked={selected}
-                  onChange={() => handlePick(d.path)}
-                  className="mt-0.5"
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                    {d.friendlyName}
-                    {d.looksLikePrinter && (
-                      <span className="ml-2 inline-block px-1.5 py-0.5 text-[10px] uppercase tracking-wide bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 rounded">
-                        {t("settings.labelPrinter.looksLikePrinter")}
-                      </span>
-                    )}
+          <PrinterDevicePicker
+            devices={state.devices}
+            selectedPath={state.selectedPath}
+            radioName="labelPrinterDevice"
+            onPick={handlePick}
+            isBadged={(d) => d.looksLikePrinter}
+            badgeLabel={t("settings.labelPrinter.looksLikePrinter")}
+            renderRowExtra={(d) =>
+              d.bidiEnabled ? (
+                <div className="mt-1">
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    {t("settings.labelPrinter.bidiWarning")}
                   </p>
-                  <code className="text-xs text-gray-500 dark:text-gray-400 font-mono">
-                    {d.path}
-                  </code>
-                  {d.bidiEnabled && (
-                    <div className="mt-1">
-                      <p className="text-xs text-amber-700 dark:text-amber-400">
-                        {t("settings.labelPrinter.bidiWarning")}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          // Don't let the wrapping <label> also toggle the
-                          // radio (select this device) on a Fix click.
-                          e.preventDefault();
-                          e.stopPropagation();
-                          handleFixBidi(d.path);
-                        }}
-                        disabled={fixingPath === d.path}
-                        title={t("settings.labelPrinter.fixBidi.title")}
-                        className="mt-1.5 px-2.5 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50"
-                      >
-                        {fixingPath === d.path
-                          ? t("settings.labelPrinter.fixBidi.elevating")
-                          : t("settings.labelPrinter.fixBidi")}
-                      </button>
-                    </div>
-                  )}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      // Don't let the wrapping <label> also toggle the
+                      // radio (select this device) on a Fix click.
+                      e.preventDefault();
+                      e.stopPropagation();
+                      handleFixBidi(d.path);
+                    }}
+                    disabled={fixingPath === d.path}
+                    title={t("settings.labelPrinter.fixBidi.title")}
+                    className="mt-1.5 px-2.5 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    {fixingPath === d.path
+                      ? t("settings.labelPrinter.fixBidi.elevating")
+                      : t("settings.labelPrinter.fixBidi")}
+                  </button>
                 </div>
-              </label>
-            );
-          })}
+              ) : null
+            }
+          />
           <div className="flex flex-wrap gap-2 pt-2">
             <button
               type="button"
@@ -388,6 +388,8 @@ export default function LabelPrinterSettings() {
             )}
           </div>
         </div>
+          )}
+        </>
       )}
 
       {/* Public base URL for URL-mode QR codes. Without this the
