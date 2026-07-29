@@ -40,12 +40,12 @@ export const REFERENCE_CHAPTERS: Record<string, ReferenceChapter> = {
   ch13: { id: "ch13", number: 13, title: "Aliphatic nylons (PA6, PA66, PA12, PA612, PA11)", part: "VI — Polyamides" },
   ch14: { id: "ch14", number: 14, title: "PPA / semi-aromatic polyamides", part: "VI — Polyamides" },
   ch15: { id: "ch15", number: 15, title: "PC and PC blends", part: "VII — Polycarbonates" },
-  ch16: { id: "ch16", number: 16, title: "TPU, TPEE, PEBA, and foaming elastomers", part: "VIII — Specialty and high-performance" },
-  ch17: { id: "ch17", number: 17, title: "PMMA, POM, PVDF", part: "VIII — Specialty and high-performance" },
-  ch18: { id: "ch18", number: 18, title: "PPS, PSU, PPSU, PEI", part: "VIII — Specialty and high-performance" },
-  ch19: { id: "ch19", number: 19, title: "PAEK family (PEEK, PEKK)", part: "VIII — Specialty and high-performance" },
-  ch20: { id: "ch20", number: 20, title: "Soluble support polymers (PVA, BVOH, proprietary)", part: "VIII — Specialty and high-performance" },
-  ch21: { id: "ch21", number: 21, title: "Niche polymers (PHA, PCL, PVB)", part: "VIII — Specialty and high-performance" },
+  ch16: { id: "ch16", number: 16, title: "TPU, TPEE, PEBA, and foaming elastomers", part: "VIII — Thermoplastic elastomers" },
+  ch17: { id: "ch17", number: 17, title: "PMMA, POM, PVDF", part: "IX — Specialty engineering thermoplastics" },
+  ch18: { id: "ch18", number: 18, title: "PPS, PSU, PPSU, PEI", part: "IX — Specialty engineering thermoplastics" },
+  ch19: { id: "ch19", number: 19, title: "PAEK family (PEEK, PEKK)", part: "X — High-temperature polymers" },
+  ch20: { id: "ch20", number: 20, title: "Soluble support polymers (PVA, BVOH, proprietary)", part: "XI — Support and niche polymers" },
+  ch21: { id: "ch21", number: 21, title: "Niche polymers (PHA, PCL, PVB)", part: "XI — Support and niche polymers" },
 };
 
 /**
