@@ -84,6 +84,8 @@ import {
 
 const BYTES = new Uint8Array([0x1b, 0x40, 0x41, 0x42]);
 const BROTHER_URI = "usb://Brother/PT-P710BT?serial=000M5G671606";
+/** The second label printer — KNAON Y813BT, 4x6 dry-box labels over TSPL. */
+const KNAON_URI = "usb://KNAON/Y813BT?serial=Y813B0042";
 
 beforeEach(() => {
   h.state.execCalls = [];
@@ -226,6 +228,80 @@ d("printLabel (CUPS)", () => {
     };
     await expect(printLabel(BROTHER_URI, BYTES)).resolves.toBeUndefined();
     expect(h.state.execCalls.some((c) => c.cmd === "lpadmin")).toBe(false);
+  });
+
+  // The app drives two USB label printers. ensureManagedQueue REBINDS its
+  // queue to whichever device is printing, so a single shared queue name
+  // would let a Brother print and a dry-box print rebind it away from each
+  // other — and CUPS delivery is asynchronous, so a spooled job could drain
+  // to the WRONG PHYSICAL PRINTER. These pin the per-kind separation.
+  it("binds the TSPL printer to its OWN managed queue, never the Brother one", async () => {
+    // Only the queue-existence probe fails (queue not created yet);
+    // lpadmin itself must succeed or we are testing the wrong path.
+    h.state.execImpl = (cmd) =>
+      cmd === "lpstat" ? { error: new Error("lpstat: unknown printer") } : { stdout: "" };
+    await expect(printLabel(KNAON_URI, BYTES, "tspl")).resolves.toBeUndefined();
+    const lpadmin = h.state.execCalls.find((c) => c.cmd === "lpadmin");
+    expect(lpadmin!.args).toEqual(
+      expect.arrayContaining(["-p", "FilamentDB_Label_TSPL", "-v", KNAON_URI, "-E"]),
+    );
+    const lp = h.state.spawnCalls.find((c) => c.cmd === "lp");
+    expect(lp!.args).toEqual(["-d", "FilamentDB_Label_TSPL", "-o", "raw"]);
+  });
+
+  it("defaults to the Brother queue so existing installs are untouched", async () => {
+    // Only the queue-existence probe fails (queue not created yet);
+    // lpadmin itself must succeed or we are testing the wrong path.
+    h.state.execImpl = (cmd) =>
+      cmd === "lpstat" ? { error: new Error("lpstat: unknown printer") } : { stdout: "" };
+    // No kind argument — the pre-existing call shape.
+    await expect(printLabel(BROTHER_URI, BYTES)).resolves.toBeUndefined();
+    const lp = h.state.spawnCalls.find((c) => c.cmd === "lp");
+    expect(lp!.args).toEqual(["-d", "FilamentDB_Label", "-o", "raw"]);
+  });
+
+  it("gives the two queues distinct descriptions so they aren't duplicates in the OS printer list", async () => {
+    // Only the queue-existence probe fails (queue not created yet);
+    // lpadmin itself must succeed or we are testing the wrong path.
+    h.state.execImpl = (cmd) =>
+      cmd === "lpstat" ? { error: new Error("lpstat: unknown printer") } : { stdout: "" };
+    await printLabel(KNAON_URI, BYTES, "tspl");
+    const tsplAdmin = h.state.execCalls.find((c) => c.cmd === "lpadmin");
+    const dIdx = tsplAdmin!.args.indexOf("-D");
+    expect(tsplAdmin!.args[dIdx + 1]).toBe("Filament DB Dry-Box Label Printer");
+  });
+
+  it("checks the TSPL queue's own binding, not the Brother queue's", async () => {
+    // Brother queue already bound to the Brother; TSPL queue already bound to
+    // the KNAON. A TSPL print must consult the TSPL queue and skip lpadmin.
+    h.state.execImpl = (cmd, args) => {
+      if (cmd === "lpstat" && args.includes("FilamentDB_Label_TSPL")) {
+        return { stdout: `device for FilamentDB_Label_TSPL: ${KNAON_URI}\n` };
+      }
+      if (cmd === "lpstat" && args.includes("FilamentDB_Label")) {
+        return { stdout: `device for FilamentDB_Label: ${BROTHER_URI}\n` };
+      }
+      return { stdout: "" };
+    };
+    await expect(printLabel(KNAON_URI, BYTES, "tspl")).resolves.toBeUndefined();
+    expect(h.state.execCalls.some((c) => c.cmd === "lpadmin")).toBe(false);
+  });
+
+  it("surfaces BOTH managed queues as their underlying usb devices", async () => {
+    h.state.execImpl = (cmd, args) => {
+      if (cmd === "lpstat" && args[0] === "-v") {
+        return {
+          stdout:
+            `device for FilamentDB_Label: ${BROTHER_URI}\n` +
+            `device for FilamentDB_Label_TSPL: ${KNAON_URI}\n`,
+        };
+      }
+      return { stdout: "" };
+    };
+    const devices = await listLabelPrinters();
+    expect(devices.map((x) => x.path).sort()).toEqual([BROTHER_URI, KNAON_URI].sort());
+    // Neither managed queue name leaks as a selectable target.
+    expect(devices.some((x) => x.path.startsWith("FilamentDB_Label"))).toBe(false);
   });
 
   it("rejects with lp's stderr when the print job fails", async () => {

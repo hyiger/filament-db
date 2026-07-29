@@ -30,13 +30,61 @@ import { join, win32 } from "node:path";
 
 const execFileP = promisify(execFile);
 
-/** Heuristic match for "this printer/device is a PT-series label printer". */
-const PRINTER_PATTERN = /pt-?p710bt|p-?touch|brother/i;
+/** Heuristic match for "this device is a label printer we know about" —
+ *  the PT-series (Brother raster) or the Y813BT (KNAON, TSPL). Drives a
+ *  badge in the picker only; it never gates printing. */
+const PRINTER_PATTERN = /pt-?p710bt|p-?touch|brother|knaon|y-?813/i;
+
+/**
+ * Which label printer a job is bound for.
+ *
+ * The app drives two physically different printers that never overlap:
+ * "brother" is the PT-P710BT on 24mm tape (spool labels, raster bytes) and
+ * "tspl" is the KNAON Y813BT on 4x6 stock (dry-box labels, TSPL bytes).
+ * The transport itself is byte-agnostic — this only selects which managed
+ * queue and description a raw `usb://` device gets bound to.
+ */
+export type LabelPrinterKind = "brother" | "tspl";
 
 /** Name of the hidden raw CUPS queue we manage for raw `usb://` devices
  *  that aren't already installed as a queue. CUPS queue names allow only
  *  letters, digits and underscores. */
 const MANAGED_QUEUE = "FilamentDB_Label";
+
+/**
+ * The TSPL printer gets its OWN managed queue, and that is load-bearing
+ * rather than tidiness.
+ *
+ * `ensureManagedQueue` REBINDS its queue to whichever device is currently
+ * printing. With both printers sharing one queue name, a Brother print and
+ * a dry-box print overlapping in time would rebind the queue away from each
+ * other — and because CUPS delivery is asynchronous (the `lp` job is spooled
+ * after the rebind but drains later) a job could be delivered to the WRONG
+ * PHYSICAL PRINTER. Per-kind queues make that impossible.
+ *
+ * The Brother queue keeps its original name so existing installs, which
+ * already have `FilamentDB_Label` bound, are untouched by the upgrade.
+ */
+const MANAGED_QUEUE_TSPL = `${MANAGED_QUEUE}_TSPL`;
+
+/** Every queue this app creates and owns. */
+const MANAGED_QUEUES: readonly string[] = [MANAGED_QUEUE, MANAGED_QUEUE_TSPL];
+
+/** True when `name` is one of OUR managed queues — an implementation detail
+ *  the picker surfaces as the underlying USB device rather than as a queue. */
+function isManagedQueueName(name: string): boolean {
+  return MANAGED_QUEUES.includes(name);
+}
+
+function managedQueueFor(kind: LabelPrinterKind): string {
+  return kind === "tspl" ? MANAGED_QUEUE_TSPL : MANAGED_QUEUE;
+}
+
+/** `lpadmin -D` description, so the two queues are distinguishable in the
+ *  user's system printer list rather than appearing as duplicates. */
+function queueDescriptionFor(kind: LabelPrinterKind): string {
+  return kind === "tspl" ? "Filament DB Dry-Box Label Printer" : "Filament DB Label Printer";
+}
 
 /** Per-subprocess timeout for listing + the CUPS `lp` print. Listing and a
  *  single 24mm label both complete well under this; the IPC handler wraps the
@@ -156,7 +204,7 @@ async function listCupsPrinters(probeUsb: boolean): Promise<LabelPrinterDevice[]
       const name = m[1].trim();
       const uri = m[2].trim();
       seenUris.add(uri);
-      if (name === MANAGED_QUEUE) {
+      if (isManagedQueueName(name)) {
         // Our own managed queue is an implementation detail — surface it as
         // the underlying USB *device* (path = the uri), so selecting it and
         // printing both route through ensureManagedQueue idempotently. Without
@@ -437,19 +485,33 @@ function isLegacySerialTarget(target: string): boolean {
  * Send the raster byte stream to the selected print target. Rejects with a
  * descriptive Error on failure; the IPC handler surfaces it to the renderer.
  */
-export async function printLabel(target: string, bytes: Uint8Array): Promise<void> {
+export async function printLabel(
+  target: string,
+  bytes: Uint8Array,
+  kind: LabelPrinterKind = "brother",
+): Promise<void> {
   if (isLegacySerialTarget(target)) {
+    // Only the Brother setting can hold a legacy serial value — the TSPL
+    // setting postdates the Bluetooth transport entirely — so the Brother
+    // copy stays, and the TSPL case gets wording that isn't a lie.
     throw new Error(
-      `"${target}" is a serial-port setting from an older version that printed over Bluetooth. ` +
-        `The PT-P710BT now prints over USB — open Settings → Label Printer and select your printer again.`,
+      kind === "tspl"
+        ? `"${target}" is a serial-port setting, which is not a valid print target. ` +
+            `Open Settings → Devices and select your label printer again.`
+        : `"${target}" is a serial-port setting from an older version that printed over Bluetooth. ` +
+            `The PT-P710BT now prints over USB — open Settings → Label Printer and select your printer again.`,
     );
   }
   if (process.platform === "win32") return printWindows(target, bytes);
-  if (isCups()) return printCups(target, bytes);
+  if (isCups()) return printCups(target, bytes, kind);
   throw new Error(`Label printing is not supported on platform "${process.platform}".`);
 }
 
-async function printCups(target: string, bytes: Uint8Array): Promise<void> {
+async function printCups(
+  target: string,
+  bytes: Uint8Array,
+  kind: LabelPrinterKind,
+): Promise<void> {
   // A `usb://…` target is a raw device → route it through our managed raw
   // queue. Otherwise it's an installed queue name. Only the usb scheme is
   // accepted — it's the only scheme listLabelPrinters ever surfaces — so a
@@ -457,8 +519,8 @@ async function printCups(target: string, bytes: Uint8Array): Promise<void> {
   // instead of being forwarded verbatim to `lpadmin -v` (GH #623).
   let queue = target;
   if (/^usb:\/\//i.test(target)) {
-    await ensureManagedQueue(target);
-    queue = MANAGED_QUEUE;
+    queue = managedQueueFor(kind);
+    await ensureManagedQueue(target, kind);
   } else if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target)) {
     throw new Error(
       `Unsupported print target "${target}" — only usb:// devices and installed ` +
@@ -504,10 +566,11 @@ async function printCups(target: string, bytes: Uint8Array): Promise<void> {
  * Ensure the hidden raw queue exists and points at `uri`. Idempotent —
  * a no-op when it's already bound correctly.
  */
-async function ensureManagedQueue(uri: string): Promise<void> {
+async function ensureManagedQueue(uri: string, kind: LabelPrinterKind): Promise<void> {
+  const queueName = managedQueueFor(kind);
   let current: string | null = null;
   try {
-    const stdout = await runCupsTool("lpstat", ["-v", MANAGED_QUEUE]);
+    const stdout = await runCupsTool("lpstat", ["-v", queueName]);
     const m = stdout.match(/^device for .+?:\s*(.+)$/m);
     current = m ? m[1].trim() : null;
   } catch {
@@ -516,12 +579,13 @@ async function ensureManagedQueue(uri: string): Promise<void> {
   if (current === uri) return;
 
   // No `-m <model>` → CUPS creates a *raw* queue (no PPD), which is exactly
-  // what we want: the raster bytes pass straight through.
+  // what we want: the bytes pass straight through. That is what lets one
+  // transport carry both Brother raster and TSPL — neither is interpreted.
   const args = [
-    "-p", MANAGED_QUEUE,
+    "-p", queueName,
     "-v", uri,
     "-E",
-    "-D", "Filament DB Label Printer",
+    "-D", queueDescriptionFor(kind),
     "-o", "printer-is-shared=false",
   ];
   try {
