@@ -106,6 +106,29 @@ export function fitRowText(text: string, maxChars: number): string {
   return `${printed.slice(0, maxChars - 3)}...`;
 }
 
+/** Code 128 overhead in modules: start (11) + checksum (11) + stop (13). */
+const CODE128_FIXED_MODULES = 35;
+/** Each encoded character is 11 modules wide. */
+const CODE128_MODULES_PER_CHAR = 11;
+
+/**
+ * Pick a bar width for a Code 128 payload, or null when it cannot fit.
+ *
+ * Like the QR, a barcode's printed width is driven by its payload, and
+ * location names have no schema or form length limit — a 40-character name at
+ * the fixture's 2-dot bars is 950 dots against 751 available. A clipped
+ * Code 128 has no stop pattern, so it scans as nothing while still looking
+ * like a barcode; returning null lets the caller OMIT it rather than print
+ * something that only appears to work. The QR still carries the identity.
+ */
+export function fitBarcode(payload: string, maxDots: number): { narrow: number } | null {
+  const modules = CODE128_MODULES_PER_CHAR * payload.length + CODE128_FIXED_MODULES;
+  for (const narrow of [2, 1]) {
+    if (modules * narrow <= maxDots) return { narrow };
+  }
+  return null;
+}
+
 /** How many font-3 characters fit on a manifest row for this stock. */
 export function maxRowChars(spec: LabelSpec): number {
   const usable = mmToDots(spec.widthMm, spec.dpi) - DRY_BOX_LAYOUT.rows.x - EDGE_MARGIN;
@@ -344,7 +367,17 @@ export function dryBoxLabel(
   const spec: LabelSpec = { ...DRY_BOX_SPEC, ...input.spec };
   const fmt = input.formatDate ?? isoDate;
   const L = DRY_BOX_LAYOUT;
-  const g = dryBoxGeometry(spec, input.qrPayload);
+
+  // Sanitize EVERY payload once, here, and use the sanitized string for both
+  // sizing and emission. renderCommand sanitizes on the way out anyway, and
+  // several of those substitutions GROW the string ("GBP" for "£"), so any
+  // measurement taken against the raw input under-counts what the printer
+  // receives — twelve "£" size a 203-dot symbol and print a 259-dot one.
+  // Measuring the raw string bit the manifest rows first and then the QR; the
+  // fix is structural so a third call site cannot repeat it.
+  const qrPayload = sanitizeTsplLiteral(input.qrPayload);
+  const barcodePayload = sanitizeTsplLiteral(input.barcodePayload ?? input.location.name);
+  const g = dryBoxGeometry(spec, qrPayload);
 
   const text = (
     x: number,
@@ -382,7 +415,7 @@ export function dryBoxLabel(
       cell: g.qr.cell,
       mode: "A",
       rotation: 0,
-      content: input.qrPayload,
+      content: qrPayload,
     },
   ];
 
@@ -449,8 +482,15 @@ export function dryBoxLabel(
       L.footer.font,
       fitRowText(`${strings.desiccantChanged}  ${desiccant}`, g.rowChars),
     ),
-    text(L.footer.x, g.footerTop + 64, L.footer.hintFont, strings.replaceHint),
-    {
+    text(L.footer.x, g.footerTop + 64, L.footer.hintFont, fitRowText(strings.replaceHint, g.rowChars)),
+  );
+
+  // Omit the barcode entirely rather than print a clipped one — a Code 128
+  // without its stop pattern scans as nothing while still looking like a
+  // barcode. The QR carries the identity regardless.
+  const bars = fitBarcode(barcodePayload, g.widthDots - L.footer.x - EDGE_MARGIN);
+  if (bars) {
+    commands.push({
       kind: "barcode",
       x: L.footer.x,
       y: g.footerTop + 120,
@@ -458,11 +498,11 @@ export function dryBoxLabel(
       height: L.footer.barcode.height,
       humanReadable: 1,
       rotation: 0,
-      narrow: L.footer.barcode.narrow,
-      wide: L.footer.barcode.wide,
-      content: input.barcodePayload ?? input.location.name,
-    },
-  );
+      narrow: bars.narrow,
+      wide: bars.narrow,
+      content: barcodePayload,
+    });
+  }
 
   return { spec, commands };
 }

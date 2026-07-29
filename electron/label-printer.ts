@@ -30,10 +30,17 @@ import { join, win32 } from "node:path";
 
 const execFileP = promisify(execFile);
 
-/** Heuristic match for "this device is a label printer we know about" —
- *  the PT-series (Brother raster) or the Y813BT (KNAON, TSPL). Drives a
- *  badge in the picker only; it never gates printing. */
-const PRINTER_PATTERN = /pt-?p710bt|p-?touch|brother|knaon|y-?813/i;
+/**
+ * Heuristic match for "this device is a Brother PT-series label printer".
+ *
+ * Deliberately NOT widened to cover the KNAON. The only consumer today is the
+ * Brother picker in LabelPrinterSettings, which renders this flag as a
+ * "PT-Touch" badge and saves the selection for labelPrinterPrint — whose test
+ * job is Brother raster. Badging a Y813BT there would actively invite the user
+ * to select it and print raster bytes to a TSPL printer. Per-kind badging
+ * belongs with the TSPL picker, alongside a pattern of its own.
+ */
+const PRINTER_PATTERN = /pt-?p710bt|p-?touch|brother/i;
 
 /**
  * Which label printer a job is bound for.

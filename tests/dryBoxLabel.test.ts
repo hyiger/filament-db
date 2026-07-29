@@ -5,6 +5,7 @@ import {
   dryBoxGeometry,
   fitQr,
   fitRowText,
+  fitBarcode,
   maxRowChars,
   DRY_BOX_SPEC,
   DRY_BOX_LAYOUT,
@@ -12,7 +13,7 @@ import {
   type DryBoxLabelInput,
   type DryBoxLabelItem,
 } from "@/lib/dryBoxLabel";
-import { render, mmToDots, sanitizeTsplLiteral, type TsplCommand } from "@/lib/tsplEncoder";
+import { render, mmToDots, sanitizeTsplLiteral, qrModuleCount, type TsplCommand } from "@/lib/tsplEncoder";
 
 /**
  * Coverage for the dry-box label template.
@@ -448,5 +449,63 @@ describe("PR #1042 review round 2", () => {
     // Hyphen collapsing still works — that is what matches PC-ABS to PC ABS.
     expect(describeItem({ filamentVendor: "Prusa", filamentName: "PC ABS Blend", filamentType: "PC-ABS" }))
       .toBe("Prusa PC ABS Blend");
+  });
+});
+
+describe("PR #1042 review round 3", () => {
+  it("sizes the QR from the SANITIZED payload the printer receives", () => {
+    // renderCommand sanitizes on the way out and some substitutions GROW the
+    // string ("GBP" for "£"), so sizing against the raw input under-counts.
+    // Twelve "£" sized a 203-dot symbol and printed a 259-dot one. This bit
+    // the manifest rows first, then the QR — hence a structural fix.
+    const payload = "£".repeat(12);
+    const g = dryBoxGeometry(DRY_BOX_SPEC, sanitizeTsplLiteral(payload));
+    const doc = dryBoxLabel(input({ qrPayload: payload }));
+    const qr = doc.commands.find((c): c is Extract<TsplCommand, { kind: "qrcode" }> => c.kind === "qrcode")!;
+    // The emitted payload is the sanitized one...
+    expect(qr.content).toBe("GBP".repeat(12));
+    // ...and the symbol it produces genuinely fits.
+    const actual = qrModuleCount(qr.content, qr.ecc)! * qr.cell;
+    expect(DRY_BOX_LAYOUT.qr.x + actual).toBeLessThanOrEqual(g.widthDots);
+    expect(actual).toBeLessThanOrEqual(g.qr.sizeDots);
+  });
+
+  it("emits the sanitized barcode payload too", () => {
+    const doc = dryBoxLabel(input({ barcodePayload: "BOX £7" }));
+    const bc = doc.commands.find((c): c is Extract<TsplCommand, { kind: "barcode" }> => c.kind === "barcode")!;
+    expect(bc.content).toBe("BOX GBP7");
+  });
+});
+
+describe("fitBarcode", () => {
+  it("uses 2-dot bars when they fit and falls back to 1", () => {
+    expect(fitBarcode("BOX-07", 751)).toEqual({ narrow: 2 });
+    // 40 chars at 2 dots is 950 dots; at 1 dot it is 475 and fits.
+    expect(fitBarcode("X".repeat(40), 751)).toEqual({ narrow: 1 });
+  });
+
+  it("returns null rather than a clipped barcode", () => {
+    // A Code 128 without its stop pattern scans as nothing while still
+    // LOOKING like a barcode — worse than no barcode at all.
+    expect(fitBarcode("X".repeat(200), 751)).toBeNull();
+  });
+
+  it("omits the barcode from the label when it cannot fit", () => {
+    const long = dryBoxLabel(input({ location: { name: "X".repeat(200) } }));
+    expect(long.commands.some((c) => c.kind === "barcode")).toBe(false);
+    // The QR still carries the identity.
+    expect(long.commands.some((c) => c.kind === "qrcode")).toBe(true);
+  });
+
+  it("keeps the barcode within the printable width for every name length", () => {
+    for (const n of [1, 6, 24, 30, 40, 60]) {
+      const doc = dryBoxLabel(input({ location: { name: "X".repeat(n) } }));
+      const bc = doc.commands.find((c): c is Extract<TsplCommand, { kind: "barcode" }> => c.kind === "barcode");
+      if (!bc) continue;
+      const modules = 11 * bc.content.length + 35;
+      expect(DRY_BOX_LAYOUT.footer.x + modules * bc.narrow).toBeLessThanOrEqual(
+        mmToDots(DRY_BOX_SPEC.widthMm, DRY_BOX_SPEC.dpi),
+      );
+    }
   });
 });
