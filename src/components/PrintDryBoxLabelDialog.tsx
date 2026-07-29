@@ -83,9 +83,22 @@ export default function PrintDryBoxLabelDialog({
 
   // The QR base URL — shared with the Brother labels (one public URL per
   // install; see the labelPrinterPublicUrl setting).
-  const [publicUrl, setPublicUrl] = useState<string | null>(null);
+  //
+  // THREE states, and the distinction is load-bearing: `undefined` = the
+  // IPC read is still pending, `null` = resolved as not-configured, string
+  // = configured. Collapsing pending into null let a fast manifest fetch
+  // enable Print before the saved URL arrived, baking localhost into a
+  // PHYSICAL label for a user who had configured a public URL correctly
+  // (PR #1043 round 3) — a race whose loser is a reprint.
+  const [publicUrl, setPublicUrl] = useState<string | null | undefined>(undefined);
   useEffect(() => {
-    if (!open || !isElectron || !window.electronAPI?.labelPrinterGetPublicUrl) return;
+    if (!open) return;
+    if (!isElectron || !window.electronAPI?.labelPrinterGetPublicUrl) {
+      // Web: there is no stored URL to wait for — resolve immediately.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPublicUrl(null);
+      return;
+    }
     let cancelled = false;
     window.electronAPI
       .labelPrinterGetPublicUrl()
@@ -101,7 +114,9 @@ export default function PrintDryBoxLabelDialog({
   }, [open, isElectron]);
 
   const { qrPayload, qrReachable } = useMemo(() => {
-    if (typeof window === "undefined") return { qrPayload: "", qrReachable: false };
+    if (typeof window === "undefined" || publicUrl === undefined) {
+      return { qrPayload: null, qrReachable: false };
+    }
     if (publicUrl) {
       return { qrPayload: buildLocationDeepLink(publicUrl, location._id), qrReachable: true };
     }
@@ -179,7 +194,9 @@ export default function PrintDryBoxLabelDialog({
     | { doc: LabelDocument; error: null }
     | { doc: null; error: string | null }; // error null = still loading
   const docState: DocState = useMemo(() => {
-    if (!items) {
+    // Wait for BOTH async inputs — the manifest and the saved public URL —
+    // before building a printable document.
+    if (!items || qrPayload === null) {
       return {
         doc: null,
         error: manifest.status === "error" ? manifest.message : null,

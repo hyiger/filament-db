@@ -268,6 +268,16 @@ export default function InventoryPage() {
     deepLinkHandledRef.current = true;
     const param = new URLSearchParams(window.location.search).get("location");
     if (!param) return;
+    // A physical label can outlive its box's contents: once every active
+    // spool moves out (or the location is deleted), the by-location
+    // aggregation returns NO group for it — it builds groups from spools —
+    // so there is nothing to scroll to and the scan would silently do
+    // nothing. A printed QR pointing at silence reads as "the app is
+    // broken"; say what actually happened instead (PR #1043 round 3).
+    if (!data.groups.some((g) => g.locationId === param)) {
+      toast(t("inventory.deepLinkEmpty"), "info");
+      return;
+    }
     // A scanned label must not depend on the scanning browser's persisted
     // groupBy preference: under type/vendor/none grouping the section ids
     // are bucket values, not location ids, and the target simply would not
@@ -283,7 +293,7 @@ export default function InventoryPage() {
       return next;
     });
     setHighlightKey(param);
-  }, [loading, data]);
+  }, [loading, data, t, toast]);
 
   // Deep link, step 2: scroll once the location-grouped DOM exists. Split
   // from step 1 because the setGroupBy above re-renders the section list —

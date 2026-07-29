@@ -503,6 +503,7 @@
   "locations.form.desiccantChangedAt": "Trockenmittel gewechselt",
   "locations.form.desiccantChangedAtHint": "Optional. Üblicherweise für Trockenboxen — setzen Sie es, wenn Sie das Granulat wechseln oder regenerieren.",
   "inventory.printDryBox": "Trockenbox-Etikett drucken",
+  "inventory.deepLinkEmpty": "Die Box dieses Etiketts enthält derzeit keine aktiven Spulen (oder der Lagerort wurde entfernt) — nichts anzuzeigen.",
   "dryBoxLabel.title": "Trockenbox-Etikett drucken",
   "dryBoxLabel.subtitle": "10×15-cm-Etikett für {name} — {count} Spule(n) auf der Inhaltsliste",
   "dryBoxLabel.label.subtitle": "FILAMENT-TROCKENBOX",
