@@ -44,8 +44,8 @@ export const REFERENCE_CHAPTERS: Record<string, ReferenceChapter> = {
   ch17: { id: "ch17", number: 17, title: "PMMA, POM, PVDF", part: "VIII — Specialty and high-performance" },
   ch18: { id: "ch18", number: 18, title: "PPS, PSU, PPSU, PEI", part: "VIII — Specialty and high-performance" },
   ch19: { id: "ch19", number: 19, title: "PAEK family (PEEK, PEKK)", part: "VIII — Specialty and high-performance" },
-  ch20: { id: "ch20", number: 20, title: "Soluble support polymers (PVA, BVOH)", part: "VIII — Specialty and high-performance" },
-  ch21: { id: "ch21", number: 21, title: "Niche biodegradables (PHA, PCL, PVB)", part: "VIII — Specialty and high-performance" },
+  ch20: { id: "ch20", number: 20, title: "Soluble support polymers (PVA, BVOH, proprietary)", part: "VIII — Specialty and high-performance" },
+  ch21: { id: "ch21", number: 21, title: "Niche polymers (PHA, PCL, PVB)", part: "VIII — Specialty and high-performance" },
 };
 
 /**
