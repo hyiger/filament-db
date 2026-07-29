@@ -1,0 +1,33 @@
+SIZE 100 mm,150 mm
+GAP 3 mm,0 mm
+DENSITY 8
+SPEED 4
+REFERENCE 0,0
+DIRECTION 1
+CLS
+TEXT 24,24,"4",0,1,1,"CODEPAGE PROBE"
+TEXT 24,64,"2",0,1,1,"Report which numbered rows show the RIGHT glyph."
+BAR 24,96,760,4
+TEXT 24,120,"3",0,1,1,"A  no CODEPAGE cmd (firmware default)"
+TEXT 44,160,"3",0,1,1,"A1 degree 0xB0 -> [°]"
+TEXT 44,200,"3",0,1,1,"A2 degree 0xF8 -> [ø]"
+TEXT 44,240,"3",0,1,1,"A3 sup3   0xB3 -> [³]"
+TEXT 44,280,"3",0,1,1,"A4 sup2   0xFD -> [ý]"
+CODEPAGE 1252
+TEXT 24,340,"3",0,1,1,"B  after CODEPAGE 1252"
+TEXT 44,380,"3",0,1,1,"B1 degree 0xB0 -> [°]"
+TEXT 44,420,"3",0,1,1,"B2 sup3   0xB3 -> [³]"
+TEXT 44,460,"3",0,1,1,"B3 a-uml  0xE4 -> [ä]"
+TEXT 44,500,"3",0,1,1,"B4 eszett 0xDF -> [ß]"
+CODEPAGE 437
+TEXT 24,560,"3",0,1,1,"C  after CODEPAGE 437"
+TEXT 44,600,"3",0,1,1,"C1 degree 0xF8 -> [ø]"
+TEXT 44,640,"3",0,1,1,"C2 sup2   0xFD -> [ý]"
+TEXT 44,680,"3",0,1,1,"C3 a-uml  0x84 -> [„]"
+TEXT 44,720,"3",0,1,1,"C4 eszett 0xE1 -> [á]"
+BAR 24,780,760,4
+TEXT 24,800,"2",0,1,1,"Blank/garbage = that codepage is not active."
+TEXT 24,832,"2",0,1,1,"cp437 has NO superscript-3 at any byte, by design."
+TEXT 24,880,"3",0,1,1,"ASCII control (always works):"
+TEXT 44,920,"3",0,1,1,"D1 240degC   12 mm3/s   Gruen   Strasse"
+PRINT 1,1

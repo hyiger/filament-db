@@ -378,7 +378,17 @@ describe("mmToDots / dotsToMm", () => {
   });
 });
 
-describe("toAscii — the encoding decision the fixtures cannot cover", () => {
+describe("toAscii — the encoding decision, settled on hardware", () => {
+  // tests/fixtures/tspl/05_codepage_probe.prn is a DIAGNOSTIC, not a render
+  // target — it is committed so the result is reproducible, and is
+  // deliberately not compared against render() output (it is hand-authored
+  // with raw high bytes the emitter refuses to produce, which is the point).
+  //
+  // Printed on a Y813BT 2026-07-28: all twelve high-byte rows truncated at
+  // the offending byte, under no CODEPAGE and under both CODEPAGE 1252 and
+  // CODEPAGE 437. There is no codepage to switch to, and a raw high byte
+  // costs the remainder of the line. See the docblock in src/lib/tsplEncoder.ts.
+
   it("transliterates the units this app actually produces", () => {
     // °C and mm³/s are everywhere in filament data and neither is ASCII.
     // cp437 has ° but NO ³ at all; latin1 has both at different bytes.
