@@ -9,7 +9,7 @@ import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDupl
 import { assertSameOriginRequest, assertSafeUpdateBody } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
-import { resolveSyncBackColor } from "@/lib/prusaSlicerBundle";
+import { resolveSyncBackColor, isMachineDerivedPerNozzleCondition } from "@/lib/prusaSlicerBundle";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
 import { escapeRegex } from "@/lib/matchFilament";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
@@ -948,6 +948,28 @@ export async function POST(
     // legitimately lives there.
     if (Object.prototype.hasOwnProperty.call(config, "compatible_printers_condition")) {
       await stripLegacyMachineCondition(merge.settings, filament);
+      // GH #1040: a recognized per-nozzle preset's condition is machine-written
+      // by construction — the export bakes it from the hinted nozzle and the
+      // fork echoes every key back on sync (build_sync_body serializes the
+      // whole preset). Persisting it would freeze ONE sibling's condition into
+      // the SHARED settings bag, and the export gate then stamps it on every
+      // fan-out section (for the HF-tailed shape that hides the standard
+      // preset outright; for the plain shape on a mixed-diameter fan-out it
+      // pins the wrong diameter onto the other sibling — a latent pre-#1040
+      // bug on tick-less filaments, since stripLegacyMachineCondition bails
+      // without ticks provenance). Shape-matched via the same module that
+      // emits it, so the two can't drift; a user-authored condition — even one
+      // referencing these variables — doesn't match and persists.
+      if (
+        isPerNozzlePreset &&
+        Number.isFinite(hintDiameter) &&
+        isMachineDerivedPerNozzleCondition(
+          merge.settings["compatible_printers_condition"],
+          hintDiameter,
+        )
+      ) {
+        merge.settings["compatible_printers_condition"] = "";
+      }
     }
     update.settings = merge.settings;
 
