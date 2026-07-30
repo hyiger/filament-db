@@ -4,7 +4,7 @@ import {
   generatePrusaSlicerBundle,
   collapsePerNozzleImportSections,
   resolveSyncBackColor,
-  nozzleSuffix, perNozzleCondition, isMachineDerivedPerNozzleCondition } from "@/lib/prusaSlicerBundle";
+  nozzleSuffix, perNozzleCondition, isMachineDerivedPerNozzleCondition, isAnyMachineDerivedNozzleCondition } from "@/lib/prusaSlicerBundle";
 import { parseIniFilaments } from "@/lib/parseIni";
 
 describe("filamentToSlicerKeys", () => {
@@ -1709,6 +1709,29 @@ describe("GH #1040 — high-flow discriminator in compatible_printers_condition"
     ]);
     expect(multi).toContain("nozzle_diameter[0]==0.4 and ! nozzle_high_flow[0]");
     expect(multi).not.toContain("nozzle_diameter[0]==0.4 or nozzle_diameter[0]==0.6");
+  });
+
+  it("PR #1045 round 2 — a multi-extruder user pin (index != 0) is NOT machine-shaped and survives", () => {
+    // No exporter vintage ever wrote an extruder index other than 0, so
+    // `nozzle_diameter[1]==0.4` can only be a user's multi-extruder pin. A
+    // \d+ index in the predicate classified it as machine-derived and the
+    // bake overwrote it with an index-0 condition.
+    expect(isAnyMachineDerivedNozzleCondition("nozzle_diameter[1]==0.4")).toBe(false);
+    expect(isAnyMachineDerivedNozzleCondition("nozzle_diameter[0]==0.4 and nozzle_high_flow[1]")).toBe(false);
+    const bundle = generatePrusaSlicerBundle([
+      {
+        name: "PLA", vendor: "Generic", type: "PLA", diameter: 1.75,
+        temperatures: { nozzle: 210 },
+        settings: { compatible_printers_condition: "nozzle_diameter[1]==0.4" },
+        calibrations: [
+          { nozzle: { name: "0.4 Brass", diameter: 0.4, type: "Brass" }, printer: null, extrusionMultiplier: 0.95 },
+          { nozzle: { name: "0.4 Brass HF", diameter: 0.4, type: "Brass", highFlow: true }, printer: null, extrusionMultiplier: 0.9 },
+        ],
+      },
+    ]);
+    const pins = (bundle.match(/compatible_printers_condition = nozzle_diameter\[1\]==0\.4/g) ?? []).length;
+    expect(pins).toBe(2); // the pin wins on every fan-out section
+    expect(bundle).not.toContain("nozzle_high_flow");
   });
 
   it("bulk-import collapse strips both HF-tailed machine shapes but keeps hand-written pins", () => {

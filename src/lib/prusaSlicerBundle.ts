@@ -374,16 +374,23 @@ export function isMachineDerivedPerNozzleCondition(
 
 /**
  * Matches ANY condition string a Filament DB exporter (any vintage) can have
- * machine-written: one or more `nozzle_diameter[n]==D` terms joined by
+ * machine-written: one or more `nozzle_diameter[0]==D` terms joined by
  * ` or `, each optionally carrying the HF discriminator tail. The
  * single-nozzle predicate above anchors to ONE known diameter; this one is
  * the diameter-agnostic union used where the writing nozzle is unknown —
  * the bulk-import collapse and the export-time normalization in the bake.
+ *
+ * INDEX [0] ONLY (PR #1045 round 2): every exporter vintage has only ever
+ * written extruder index 0 — the bake, the or-joined derivation, and the
+ * #1021 legacy strip all say `[0]`. A user's multi-extruder pin such as
+ * `nozzle_diameter[1]==0.4` is NOT a shape we ever emitted, and a `\d+`
+ * index here classified it as machine-derived — overwriting a legitimate
+ * pin with an index-0 bake.
  */
 export function isAnyMachineDerivedNozzleCondition(value: unknown): boolean {
   return (
     typeof value === "string" &&
-    /^nozzle_diameter\[\d+\]==\d+(?:\.\d+)?(?: and (?:! )?nozzle_high_flow\[\d+\])?(?: or nozzle_diameter\[\d+\]==\d+(?:\.\d+)?(?: and (?:! )?nozzle_high_flow\[\d+\])?)*$/.test(
+    /^nozzle_diameter\[0\]==\d+(?:\.\d+)?(?: and (?:! )?nozzle_high_flow\[0\])?(?: or nozzle_diameter\[0\]==\d+(?:\.\d+)?(?: and (?:! )?nozzle_high_flow\[0\])?)*$/.test(
       value,
     )
   );
