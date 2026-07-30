@@ -648,6 +648,62 @@ describe("API route correctness", () => {
     expect(fresh.settings?.filamentdb_nozzle).toBeUndefined(); // routing hint, not stored
   });
 
+  it("GH #1040 — a hinted per-nozzle sync strips its own machine-derived condition from the bag", async () => {
+    // build_sync_body serializes EVERY preset key, so the fork echoes the
+    // baked compatible_printers_condition back on each sync. Persisting it
+    // would freeze ONE sibling's condition into the SHARED settings bag —
+    // and the export gate then stamps it on every fan-out section (the
+    // HF-tailed shape would hide the standard preset from standard
+    // printers). Covers the new HF-tailed shapes AND the plain-diameter
+    // shape, which on a tick-less filament previously slipped through
+    // stripLegacyMachineCondition (provenance bail) into the shared bag.
+    const hf = await Nozzle.create({ name: "0.4 Brass HF", diameter: 0.4, type: "Brass", highFlow: true });
+    const f = await Filament.create({ name: "PLA", vendor: "X", type: "PLA", compatibleNozzles: [] });
+    void hf;
+    for (const cond of [
+      "nozzle_diameter[0]==0.4 and nozzle_high_flow[0]",
+      "nozzle_diameter[0]==0.4 and ! nozzle_high_flow[0]",
+      "nozzle_diameter[0]==0.4",
+    ]) {
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/PLA%200.4%20Brass%20HF", {
+          config: {
+            filamentdb_id: String(f._id),
+            filamentdb_nozzle: "0.4 Brass HF",
+            compatible_printers_condition: cond,
+          },
+        }),
+        { params: Promise.resolve({ id: "PLA 0.4 Brass HF" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.settings?.compatible_printers_condition).toBe(""); // stripped, re-derived on export
+    }
+  });
+
+  it("GH #1040 — a hinted sync KEEPS a user-authored condition, even one referencing the HF variable", async () => {
+    const f = await Filament.create({ name: "PLA", vendor: "X", type: "PLA", compatibleNozzles: [] });
+    for (const cond of [
+      'printer_model=="MK4S" and nozzle_diameter[0]==0.4', // compound user pin
+      "nozzle_diameter[0]==0.4 and !nozzle_high_flow[0]", // hand-typed unspaced ! — not the machine shape
+      "nozzle_diameter[0]==0.6", // machine shape but for a DIFFERENT diameter than the hint
+    ]) {
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/PLA%200.4%20Brass%20HF", {
+          config: {
+            filamentdb_id: String(f._id),
+            filamentdb_nozzle: "0.4 Brass HF",
+            compatible_printers_condition: cond,
+          },
+        }),
+        { params: Promise.resolve({ id: "PLA 0.4 Brass HF" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id);
+      expect(fresh.settings?.compatible_printers_condition).toBe(cond); // user pin persists
+    }
+  });
+
   it("#872 — a per-nozzle preset disambiguates same-diameter nozzles by type", async () => {
     const brass = await Nozzle.create({ name: "0.4 Brass", diameter: 0.4, type: "Brass" });
     const diamond = await Nozzle.create({ name: "0.4 Diamondback", diameter: 0.4, type: "Diamondback" });
