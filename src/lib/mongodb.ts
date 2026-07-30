@@ -336,10 +336,17 @@ export default async function dbConnect() {
           const set = owner
             ? { "amsSlots.$[s].filamentId": owner._id }
             : { "amsSlots.$[s].spoolId": null };
+          // Compare-and-set (PR #1046 round 3): the filter matches the
+          // spoolId this repair was COMPUTED from, not just the slot id.
+          // Another process (a second desktop on the same Atlas DB) can
+          // reassign the slot between our read and this write; an id-only
+          // filter would let the stale repair overwrite that fresh
+          // assignment. If the slot changed, the filter matches nothing and
+          // the repair is a no-op — the next connect re-reads and converges.
           await Printer.updateOne(
             { _id: pr._id },
             { $set: set },
-            { arrayFilters: [{ "s._id": slot._id }] },
+            { arrayFilters: [{ "s._id": slot._id, "s.spoolId": slot.spoolId }] },
           );
           if (owner) repaired += 1;
           else cleared += 1;
