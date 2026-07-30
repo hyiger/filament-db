@@ -221,6 +221,126 @@ describe("spool ↔ printer-slot assignment (GH #242)", () => {
     });
   });
 
+  describe("GH #1041 — slots maintain BOTH refs (loaded filament + tracked spool)", () => {
+    it("assignSpoolToSlot writes filamentId alongside spoolId when the owner is given", async () => {
+      const spoolId = new mongoose.Types.ObjectId();
+      const filamentId = new mongoose.Types.ObjectId();
+      const printer = await Printer.create({
+        name: "P", manufacturer: "X", printerModel: "P",
+        amsSlots: [{ slotName: "S1" }],
+      });
+      await assignSpoolToSlot(
+        Printer, spoolId,
+        { printerId: String(printer._id), slotId: String(printer.amsSlots[0]._id) },
+        filamentId,
+      );
+      const fresh = await Printer.findById(printer._id);
+      expect(String(fresh.amsSlots[0].spoolId)).toBe(String(spoolId));
+      // The printer form keys slot rendering on filamentId — without this the
+      // assignment existed in the data but rendered as an Empty slot.
+      expect(String(fresh.amsSlots[0].filamentId)).toBe(String(filamentId));
+    });
+
+    it("assignSpoolToSlot overwrites a DIFFERENT loaded filament with the spool's owner", async () => {
+      // Product call on #1041: the slot reflects physical reality — the
+      // newly-assigned spool IS what's loaded — matching the helper's
+      // existing self-healing posture (no prompt).
+      const spoolId = new mongoose.Types.ObjectId();
+      const petg = new mongoose.Types.ObjectId();
+      const pla = new mongoose.Types.ObjectId();
+      const printer = await Printer.create({
+        name: "P", manufacturer: "X", printerModel: "P",
+        amsSlots: [{ slotName: "S1", filamentId: petg }],
+      });
+      await assignSpoolToSlot(
+        Printer, spoolId,
+        { printerId: String(printer._id), slotId: String(printer.amsSlots[0]._id) },
+        pla,
+      );
+      const fresh = await Printer.findById(printer._id);
+      expect(String(fresh.amsSlots[0].filamentId)).toBe(String(pla));
+    });
+
+    it("moving a spool clears BOTH refs on the losing slot", async () => {
+      // The spool physically left, and the loaded filament left with it —
+      // leaving filamentId behind showed a phantom loaded filament.
+      const spoolId = new mongoose.Types.ObjectId();
+      const filamentId = new mongoose.Types.ObjectId();
+      const a = await Printer.create({
+        name: "A", manufacturer: "X", printerModel: "P",
+        amsSlots: [{ slotName: "S1", spoolId, filamentId }],
+      });
+      const b = await Printer.create({
+        name: "B", manufacturer: "X", printerModel: "P",
+        amsSlots: [{ slotName: "S1" }],
+      });
+      await assignSpoolToSlot(
+        Printer, spoolId,
+        { printerId: String(b._id), slotId: String(b.amsSlots[0]._id) },
+        filamentId,
+      );
+      const freshA = await Printer.findById(a._id);
+      expect(freshA.amsSlots[0].spoolId).toBeNull();
+      expect(freshA.amsSlots[0].filamentId).toBeNull();
+    });
+
+    it("clearing (target null) clears both refs but leaves 'Any spool' slots alone", async () => {
+      const spoolId = new mongoose.Types.ObjectId();
+      const loaded = new mongoose.Types.ObjectId();
+      const dedicated = new mongoose.Types.ObjectId();
+      const printer = await Printer.create({
+        name: "P", manufacturer: "X", printerModel: "P",
+        amsSlots: [
+          { slotName: "tracked", spoolId, filamentId: loaded },
+          // "Any spool": a filament dedication with no tracked spool — must
+          // never be touched by a spool-keyed clear.
+          { slotName: "any", filamentId: dedicated },
+        ],
+      });
+      await assignSpoolToSlot(Printer, spoolId, null);
+      const fresh = await Printer.findById(printer._id);
+      expect(fresh.amsSlots[0].spoolId).toBeNull();
+      expect(fresh.amsSlots[0].filamentId).toBeNull();
+      expect(String(fresh.amsSlots[1].filamentId)).toBe(String(dedicated));
+      expect(fresh.amsSlots[1].spoolId ?? null).toBeNull();
+    });
+
+    it("clearSpoolsFromOtherPrinters clears both refs on the losing printer", async () => {
+      const spoolId = new mongoose.Types.ObjectId();
+      const filamentId = new mongoose.Types.ObjectId();
+      const loser = await Printer.create({
+        name: "L", manufacturer: "X", printerModel: "P",
+        amsSlots: [{ slotName: "S1", spoolId, filamentId }],
+      });
+      const winner = await Printer.create({
+        name: "W", manufacturer: "X", printerModel: "P",
+        amsSlots: [{ slotName: "S1", spoolId, filamentId }],
+      });
+      await clearSpoolsFromOtherPrinters(Printer, [spoolId], winner._id);
+      const freshL = await Printer.findById(loser._id);
+      expect(freshL.amsSlots[0].spoolId).toBeNull();
+      expect(freshL.amsSlots[0].filamentId).toBeNull();
+      const freshW = await Printer.findById(winner._id);
+      expect(String(freshW.amsSlots[0].spoolId)).toBe(String(spoolId));
+      expect(String(freshW.amsSlots[0].filamentId)).toBe(String(filamentId));
+    });
+
+    it("omitting filamentId keeps the pre-#1041 behavior (spoolId only)", async () => {
+      const spoolId = new mongoose.Types.ObjectId();
+      const printer = await Printer.create({
+        name: "P", manufacturer: "X", printerModel: "P",
+        amsSlots: [{ slotName: "S1" }],
+      });
+      await assignSpoolToSlot(Printer, spoolId, {
+        printerId: String(printer._id),
+        slotId: String(printer.amsSlots[0]._id),
+      });
+      const fresh = await Printer.findById(printer._id);
+      expect(String(fresh.amsSlots[0].spoolId)).toBe(String(spoolId));
+      expect(fresh.amsSlots[0].filamentId ?? null).toBeNull();
+    });
+  });
+
   describe("findInvalidSlotSpoolRef slot labelling (GH #631)", () => {
     it("labels an offending slot by its slotName when present", async () => {
       // Named slot with an invalid ObjectId — the message quotes the name.
@@ -324,6 +444,27 @@ describe("spool ↔ printer-slot assignment (GH #242)", () => {
       expect(
         String((await Printer.findById(printer._id)).amsSlots[0].spoolId),
       ).toBe(String(spoolId));
+    });
+
+    it("GH #1041 — PUT writes the owning filament onto the slot, visible to the printer form", async () => {
+      // The core of the issue: the filament-side assignment wrote only
+      // spoolId, and PrinterForm keys slot rendering on filamentId, so the
+      // assignment rendered as an Empty slot on the printer side.
+      const { filament, spoolId } = await makeSpool("PLA both refs");
+      const printer = await Printer.create({
+        name: "P", manufacturer: "X", printerModel: "P",
+        amsSlots: [{ slotName: "S1" }],
+      });
+      const res = await putAssignment(
+        ...req(spoolId, "PUT", {
+          printerId: String(printer._id),
+          slotId: String(printer.amsSlots[0]._id),
+        }),
+      );
+      expect(res.status).toBe(200);
+      const slot = (await Printer.findById(printer._id)).amsSlots[0];
+      expect(String(slot.spoolId)).toBe(String(spoolId));
+      expect(String(slot.filamentId)).toBe(String(filament._id));
     });
 
     it("PUT moves the spool, clearing its previous slot", async () => {

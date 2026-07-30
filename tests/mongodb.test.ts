@@ -1320,4 +1320,72 @@ describe("legacyNozzleConditions migration (GH #1021)", () => {
       collSpy2.mockRestore();
     }
   });
+
+  // GH #1041: the amsSlotFilamentIds repair — orphaned, MISMATCHED, and
+  // dangling slot refs all converge on a consistent pair.
+  it("repairs orphaned, mismatched and dangling AMS slot refs (GH #1041)", async () => {
+    await dbConnect();
+    const Filament = mongoose.models.Filament || (await import("@/models/Filament")).default;
+    const Printer = mongoose.models.Printer || (await import("@/models/Printer")).default;
+    const spoolA = new mongoose.Types.ObjectId();
+    const spoolB = new mongoose.Types.ObjectId();
+    const deadSpool = new mongoose.Types.ObjectId();
+    const otherFilament = new mongoose.Types.ObjectId();
+    await Filament.collection.insertOne({
+      name: "SlotRepairOwner", vendor: "Test", type: "PLA", color: "#808080",
+      diameter: 1.75, instanceId: "slotrepair1", _deletedAt: null,
+      spools: [
+        { _id: spoolA, label: "A", totalWeight: 1000, instanceId: "aaaaaaaaaa" },
+        { _id: spoolB, label: "B", totalWeight: 1000, instanceId: "bbbbbbbbbb" },
+      ],
+    });
+    const printerId = new mongoose.Types.ObjectId();
+    await Printer.collection.insertOne({
+      _id: printerId, name: "SlotRepairPrinter", manufacturer: "T", printerModel: "P",
+      _deletedAt: null,
+      amsSlots: [
+        // An EMPTY slot first — the normal partially-loaded AMS shape. This
+        // is the regression pin for PR #1046 round 2: the bare negated-array
+        // query `"amsSlots.spoolId": {$ne: null}` requires EVERY slot to be
+        // non-null, so this one empty slot silently excluded the whole
+        // printer from the repair.
+        { _id: new mongoose.Types.ObjectId(), slotName: "empty", spoolId: null, filamentId: null },
+        // Orphaned: spool tracked, no loaded filament (the #1041 shape).
+        { _id: new mongoose.Types.ObjectId(), slotName: "orphan", spoolId: spoolA, filamentId: null },
+        // Mismatched: spool tracked, but the slot claims a DIFFERENT filament
+        // (old path overwrote spoolId on an "Any spool" dedication).
+        { _id: new mongoose.Types.ObjectId(), slotName: "mismatch", spoolId: spoolB, filamentId: otherFilament },
+        // Dangling: tracked spool no longer exists anywhere.
+        { _id: new mongoose.Types.ObjectId(), slotName: "dangling", spoolId: deadSpool, filamentId: otherFilament },
+      ],
+    });
+    const cached = (global as Record<string, unknown>).mongoose as Record<string, unknown>;
+    cached.migrations = { instanceIds: true, spoolInstanceIds: true, sharedCatalogIndexes: true, nozzlePhysicalInstances: true, coreModelIndexes: true, purgedZombies: true, legacyShrinkage: true, legacyNozzleConditions: true, amsSlotFilamentIds: false };
+    cached.conn = null;
+    cached.promise = null;
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await dbConnect();
+      const owner = await Filament.findOne({ name: "SlotRepairOwner" }).lean();
+      const pr = await Printer.findById(printerId).lean();
+      const byName = Object.fromEntries(pr.amsSlots.map((sl: { slotName: string }) => [sl.slotName, sl]));
+      // Orphan: owner backfilled.
+      expect(String(byName.orphan.filamentId)).toBe(String(owner._id));
+      // Mismatch: the spool's owner WINS (the slot reflects what's loaded).
+      expect(String(byName.mismatch.filamentId)).toBe(String(owner._id));
+      // The empty slot is untouched.
+      expect(byName.empty.spoolId).toBeNull();
+      expect(byName.empty.filamentId).toBeNull();
+      // Dangling: tracking ref dropped; the dedication stays.
+      expect(byName.dangling.spoolId).toBeNull();
+      expect(String(byName.dangling.filamentId)).toBe(String(otherFilament));
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[migration] AMS slots: backfilled 2"),
+      );
+    } finally {
+      logSpy.mockRestore();
+      await Filament.deleteMany({ name: "SlotRepairOwner" });
+      await Printer.deleteMany({ name: "SlotRepairPrinter" });
+    }
+  });
 });

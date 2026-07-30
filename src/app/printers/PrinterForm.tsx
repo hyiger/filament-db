@@ -282,7 +282,33 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
     const ac = new AbortController();
     fetch("/api/filaments", { signal: ac.signal })
       .then((r) => (r.ok ? r.json() : []))
-      .then(setFilamentOptions)
+      .then((options: FilamentOption[]) => {
+        setFilamentOptions(options);
+        // GH #1041 belt-and-braces: a legacy slot may track a spool with no
+        // loaded-filament ref (written by a pre-#1041 filament-side
+        // assignment, or by an old app version sharing this DB after the
+        // startup migration ran). Backfill filamentId from the spool's owner
+        // in FORM STATE — not just the render — so the slot displays, the
+        // spool select enables, and a subsequent save persists the repaired
+        // pair instead of re-writing the orphaned shape.
+        setForm((prev) => {
+          let changed = false;
+          const amsSlots = prev.amsSlots.map((slot) => {
+            if (!slot.spoolId) return slot;
+            const owner = options.find((f) =>
+              f.spools?.some((sp) => sp._id === slot.spoolId),
+            );
+            // Repair a MISMATCHED pair too (PR #1046 review): the old path
+            // could track a spool in a slot dedicated to a different
+            // filament, which rendered the wrong filament's spool list and
+            // invited the same trample the null case did.
+            if (!owner || owner._id === slot.filamentId) return slot;
+            changed = true;
+            return { ...slot, filamentId: owner._id };
+          });
+          return changed ? { ...prev, amsSlots } : prev;
+        });
+      })
       .catch(() => {});
     return () => ac.abort();
   }, [form.amsSlots.length, filamentOptions.length]);

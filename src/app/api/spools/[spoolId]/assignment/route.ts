@@ -103,7 +103,12 @@ export async function PUT(
       return errorResponse("Printer or slot not found", 404);
     }
 
-    await assignSpoolToSlot(Printer, spoolId, { printerId, slotId });
+    // GH #1041: thread the owning filament so the slot's loaded-filament ref
+    // is maintained alongside the tracked spool — the printer form renders
+    // slots keyed on filamentId, so without it this assignment was invisible
+    // (and trample-prone) on the printer side. The positional projection
+    // above still returns the parent _id.
+    await assignSpoolToSlot(Printer, spoolId, { printerId, slotId }, filament._id);
     const assignment = await findSpoolSlot(Printer, spoolId);
     return NextResponse.json({ assignment });
   } catch (err) {
