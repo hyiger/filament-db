@@ -319,6 +319,7 @@ export default async function dbConnect() {
       ).lean();
       let repaired = 0;
       let cleared = 0;
+      let casMisses = 0;
       for (const pr of printers) {
         for (const slot of pr.amsSlots ?? []) {
           if (!slot?.spoolId) continue;
@@ -343,12 +344,18 @@ export default async function dbConnect() {
           // filter would let the stale repair overwrite that fresh
           // assignment. If the slot changed, the filter matches nothing and
           // the repair is a no-op — the next connect re-reads and converges.
-          await Printer.updateOne(
+          const res = await Printer.updateOne(
             { _id: pr._id },
             { $set: set },
             { arrayFilters: [{ "s._id": slot._id, "s.spoolId": slot.spoolId }] },
           );
-          if (owner) repaired += 1;
+          // PR #1046 round 4: a CAS miss means a concurrent writer changed
+          // the slot — possibly a still-running pre-#1041 process writing a
+          // NEW orphaned pair. Swallowing the miss and flipping the flag
+          // would leave that slot unrepaired for this process's lifetime.
+          if (res.modifiedCount === 0) {
+            casMisses += 1;
+          } else if (owner) repaired += 1;
           else cleared += 1;
         }
       }
@@ -357,7 +364,17 @@ export default async function dbConnect() {
           `[migration] AMS slots: backfilled ${repaired} loaded-filament ref(s), cleared ${cleared} dangling spool ref(s) (GH #1041)`,
         );
       }
-      cached.migrations.amsSlotFilamentIds = true;
+      if (casMisses > 0) {
+        // Leave the flag UNSET — the per-migration retry semantics every
+        // other step uses ("will retry on next connect"). The next connect
+        // re-reads the changed slots and converges; an in-process retry loop
+        // could chase a still-running old writer forever.
+        console.warn(
+          `[migration] AMS slots: ${casMisses} slot(s) changed concurrently during repair — will re-check on next connect (GH #1041)`,
+        );
+      } else {
+        cached.migrations.amsSlotFilamentIds = true;
+      }
     } catch (err) {
       console.error(
         "[migration] Failed to repair AMS slot filament refs (will retry on next connect):",
