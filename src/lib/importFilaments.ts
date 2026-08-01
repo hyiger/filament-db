@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { unsanitizeCsvCell } from "@/lib/csvWriter";
+import { hasVariants } from "@/lib/resolveFilament";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 export interface ImportRow {
   name?: string;
@@ -565,6 +567,60 @@ export function pruneInheritedCreateDoc(
   return out;
 }
 
+/**
+ * GH #605 (codex round 3 sweep): reason a row must be skipped because its
+ * write would surface the FIRST live variant of a parent that still holds
+ * its own INVENTORY (spools / a legacy totalWeight). The interactive routes
+ * resolve this with the 409-confirm-promote round-trip, but a bulk import
+ * has no way to confirm a per-parent promotion — and promotion is NEVER
+ * silent (owner decision) — so the row rejects with a per-row error
+ * instead. Once the user promotes the parent ("Convert to template" on its
+ * detail page), a re-import of the same row sails through.
+ *
+ * DELIBERATELY NARROWER than parentPromotionState: only the inventory
+ * fields gate here, NOT color/colorName. The Filament schema defaults
+ * `color` to #808080, so every parent this same batch just created from a
+ * CSV row without a Color cell "carries" a color it never really had —
+ * gating on it would reject the variant rows of every in-batch
+ * parent+variant round-trip (the GH #379/#951 export→reimport flows this
+ * importer exists for), and a colorless template can't even round-trip
+ * (an empty Color cell re-imports as the gray default). A color-carrying
+ * parent gaining variants is exactly the legacy pre-#605 shape the app
+ * tolerates enforce-forward and surfaces with the "Convert to template"
+ * banner; stranded INVENTORY is the state #605 forbids, and spools /
+ * totalWeight never enter through this importer, so a true positive here
+ * is always pre-existing DB inventory worth stopping for.
+ *
+ * Returns null when the write is fine: parent missing (dangling ref — the
+ * pre-existing posture writes the doc as-is), parent holds no inventory,
+ * or parent already a template (≥1 live variant — nothing left to gate).
+ *
+ * Call INSIDE `runExclusive(filamentLockKey(parentId))` together with the
+ * write it protects, so the decision and the create/resurrect serialize
+ * with the interactive promotion gate and the spool routes on the same key.
+ */
+async function firstVariantGateReason(
+  parentId: mongoose.Types.ObjectId | string,
+): Promise<string | null> {
+  const parent = await Filament.findOne({ _id: parentId, _deletedAt: null })
+    // Only what the inventory check reads — spools projected to bare _ids
+    // (the count is what matters; photoDataUrl can be MBs).
+    .select("name totalWeight spools._id")
+    .lean();
+  if (!parent) return null;
+  const spoolCount = Array.isArray(parent.spools) ? parent.spools.length : 0;
+  if (spoolCount === 0 && parent.totalWeight == null) return null;
+  if (await hasVariants(Filament, String(parentId))) return null;
+  const inventory =
+    spoolCount > 0 ? `${spoolCount} spool(s)` : "a tracked total weight";
+  return (
+    `Parent "${parent.name}" still holds its own inventory (${inventory}), which would be ` +
+    `stranded on a template by its first variant. Promote the parent first ("Convert to ` +
+    `template" on its detail page) or create the variant in the app to confirm the ` +
+    `promotion, then re-import this row`
+  );
+}
+
 export async function upsertImportRows(
   rows: ImportRow[],
 ): Promise<ImportResult> {
@@ -954,68 +1010,105 @@ export async function upsertImportRows(
         if (parentDoc) writeDoc = pruneInheritedCreateDoc(doc, parentDoc);
       }
 
-      if (softDeleted) {
-        // GH #228: the resurrect path was the only Filament write in the
-        // codebase running `updateOne` without `runValidators`. The pre-
-        // update hook on `tdsUrl` still fires (it's gated by the
-        // `update.tdsUrl` check inside the hook, not by `runValidators`),
-        // but every other schema-level validator — `cost.min`,
-        // `lowStockThreshold.min`, type coercions — was bypassed. A
-        // malformed re-import of a previously-trashed row could persist
-        // invalid numeric fields.
-        // GH #1004 F1 (race belt-and-suspenders): the bucketing above
-        // already excludes _purged tombstones, but a permanent delete can
-        // land BETWEEN the batch load and this row's write. Guard the
-        // filter so the resurrect can never revive a purge tombstone; a
-        // zero-match falls through to the create path below instead of
-        // incrementing `updated` against a write that matched nothing.
-        const res = await Filament.updateOne(
-          { _id: softDeleted._id, _purged: { $ne: true } },
-          { ...writeDoc, _deletedAt: null },
-          { runValidators: true, context: "query" },
-        );
-        if (res.matchedCount === 0) {
-          // The tombstone was purged mid-import — mint a fresh doc (the
-          // partial-unique name index permits it; the purged row keeps
-          // its gone-forever state). `writeDoc` carries parentId only
-          // when a Parent column was supplied, matching the plain-create
-          // branch's semantics.
-          //
-          // Codex P2 on #1009: writeDoc may have been pruned against the
-          // TOMBSTONE's parent (createParentId = softDeleted.parentId) to
-          // support a variant resurrect. But this fallback creates a STANDALONE
-          // record whenever no Parent column was supplied (resolvedParentId is
-          // null) — and a standalone doc has no parent to inherit the pruned
-          // fields from, so creating from the pruned doc would drop every
-          // flattened CSV value that matched the old parent to null/[]. Use the
-          // UNPRUNED doc in that case; keep the pruned writeDoc only when the
-          // created row is actually a variant (a Parent column resolved).
-          const createDoc = resolvedParentId ? writeDoc : doc;
-          const newDoc = await Filament.create(createDoc);
-          activeByName.set(row.name, { _id: newDoc._id, parentId: resolvedParentId });
-          deletedByName.delete(row.name);
-          created++;
+      // Captured as a narrowed const: the `!row.name` early-return above
+      // proves it's a string, but that property narrowing doesn't survive
+      // into the closure below.
+      const rowName = row.name;
+      const performWrite = async (): Promise<void> => {
+        if (softDeleted) {
+          // GH #228: the resurrect path was the only Filament write in the
+          // codebase running `updateOne` without `runValidators`. The pre-
+          // update hook on `tdsUrl` still fires (it's gated by the
+          // `update.tdsUrl` check inside the hook, not by `runValidators`),
+          // but every other schema-level validator — `cost.min`,
+          // `lowStockThreshold.min`, type coercions — was bypassed. A
+          // malformed re-import of a previously-trashed row could persist
+          // invalid numeric fields.
+          // GH #1004 F1 (race belt-and-suspenders): the bucketing above
+          // already excludes _purged tombstones, but a permanent delete can
+          // land BETWEEN the batch load and this row's write. Guard the
+          // filter so the resurrect can never revive a purge tombstone; a
+          // zero-match falls through to the create path below instead of
+          // incrementing `updated` against a write that matched nothing.
+          const res = await Filament.updateOne(
+            { _id: softDeleted._id, _purged: { $ne: true } },
+            { ...writeDoc, _deletedAt: null },
+            { runValidators: true, context: "query" },
+          );
+          if (res.matchedCount === 0) {
+            // The tombstone was purged mid-import — mint a fresh doc (the
+            // partial-unique name index permits it; the purged row keeps
+            // its gone-forever state). `writeDoc` carries parentId only
+            // when a Parent column was supplied, matching the plain-create
+            // branch's semantics.
+            //
+            // Codex P2 on #1009: writeDoc may have been pruned against the
+            // TOMBSTONE's parent (createParentId = softDeleted.parentId) to
+            // support a variant resurrect. But this fallback creates a STANDALONE
+            // record whenever no Parent column was supplied (resolvedParentId is
+            // null) — and a standalone doc has no parent to inherit the pruned
+            // fields from, so creating from the pruned doc would drop every
+            // flattened CSV value that matched the old parent to null/[]. Use the
+            // UNPRUNED doc in that case; keep the pruned writeDoc only when the
+            // created row is actually a variant (a Parent column resolved).
+            const createDoc = resolvedParentId ? writeDoc : doc;
+            const newDoc = await Filament.create(createDoc);
+            activeByName.set(rowName, { _id: newDoc._id, parentId: resolvedParentId });
+            deletedByName.delete(rowName);
+            created++;
+          } else {
+            // GH #379: re-promote into activeByName so a later pass-2 row
+            // referencing this name as Parent resolves correctly. The
+            // effective parentId after resurrect is `resolvedParentId ??
+            // softDeleted.parentId` because we only include `parentId` in
+            // `doc` when a Parent column was provided — without it the
+            // soft-deleted row's prior parentId survives unchanged, and a
+            // pass-2 row that tried to point its Parent at this resurrected
+            // row would otherwise wrongly skip the variant-of-variant guard.
+            const effectiveParentId = resolvedParentId ?? softDeleted.parentId;
+            activeByName.set(rowName, { _id: softDeleted._id, parentId: effectiveParentId });
+            deletedByName.delete(rowName);
+            updated++;
+          }
         } else {
-          // GH #379: re-promote into activeByName so a later pass-2 row
-          // referencing this name as Parent resolves correctly. The
-          // effective parentId after resurrect is `resolvedParentId ??
-          // softDeleted.parentId` because we only include `parentId` in
-          // `doc` when a Parent column was provided — without it the
-          // soft-deleted row's prior parentId survives unchanged, and a
-          // pass-2 row that tried to point its Parent at this resurrected
-          // row would otherwise wrongly skip the variant-of-variant guard.
-          const effectiveParentId = resolvedParentId ?? softDeleted.parentId;
-          activeByName.set(row.name, { _id: softDeleted._id, parentId: effectiveParentId });
-          deletedByName.delete(row.name);
-          updated++;
+          const newDoc = await Filament.create(writeDoc);
+          // GH #379: seed activeByName with the freshly-created row so a
+          // later pass-2 row referencing it as Parent can resolve in-batch
+          // (the round-trip case: parent and variant rows in the same CSV).
+          activeByName.set(rowName, { _id: newDoc._id, parentId: resolvedParentId });
+          created++;
+        }
+      };
+
+      // GH #605 (codex round 3 sweep): when this row's write surfaces a live
+      // VARIANT (a create with a resolved Parent column, or a resurrect of a
+      // trashed variant), gate it on the parent's held INVENTORY (see
+      // firstVariantGateReason for why color deliberately doesn't gate
+      // here) and run the decision + write inside the same per-parent mutex
+      // the interactive promotion gate locks — so a concurrent spool push
+      // or first-variant promotion strictly serializes with this write. A
+      // bulk import can't confirm a promotion, so a gated row SKIPS with a
+      // per-row reason rather than silently minting the mixed
+      // template-with-inventory state #605 forbids. `createParentId` covers
+      // both shapes (it already resolves `resolvedParentId ??
+      // softDeleted.parentId` above).
+      if (createParentId) {
+        const gateReason = await runExclusive(
+          filamentLockKey(createParentId),
+          async (): Promise<string | null> => {
+            const reason = await firstVariantGateReason(createParentId);
+            if (reason) return reason;
+            await performWrite();
+            return null;
+          },
+        );
+        if (gateReason) {
+          skippedRows.push({ row: rowIdx + 2, name: row.name, reason: gateReason });
+          skipped++;
+          return;
         }
       } else {
-        const newDoc = await Filament.create(writeDoc);
-        // GH #379: seed activeByName with the freshly-created row so a
-        // later pass-2 row referencing it as Parent can resolve in-batch
-        // (the round-trip case: parent and variant rows in the same CSV).
-        activeByName.set(row.name, { _id: newDoc._id, parentId: resolvedParentId });
-        created++;
+        await performWrite();
       }
     }
   }

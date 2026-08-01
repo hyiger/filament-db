@@ -5,7 +5,7 @@ import Filament, { generateInstanceId, isSpoolInstanceIdTaken } from "@/models/F
 import Location from "@/models/Location";
 import { hasVariants } from "@/lib/resolveFilament";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
-import { pushSpoolWithTemplateGuard } from "@/lib/spoolTemplateGuard";
+import { pushSpoolWithTemplateGuard, TEMPLATE_NO_SPOOLS_BODY } from "@/lib/spoolTemplateGuard";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
@@ -148,16 +148,9 @@ export async function POST(
     );
 
     if (result.outcome === "template") {
-      // Machine-readable `error` code, human `message` — the shape the
-      // other structured rejections use (name_id_mismatch).
-      return NextResponse.json(
-        {
-          error: "template_no_spools",
-          message:
-            "This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead.",
-        },
-        { status: 400 },
-      );
+      // Shared body constant (codex round 3, Finding B) so this route and
+      // the Prusament importer answer byte-identically.
+      return NextResponse.json(TEMPLATE_NO_SPOOLS_BODY, { status: 400 });
     }
     if (result.outcome === "not_found") {
       return NextResponse.json({ error: "Not found" }, { status: 404 });

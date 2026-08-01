@@ -187,6 +187,81 @@ describe("POST /api/prusament/import", () => {
     });
   });
 
+  describe("template guard (GH #605, codex round 3 Finding B)", () => {
+    /** A template: a parent with one live variant. Inventory belongs on
+     *  the variants, so every spool-attach path must refuse it. */
+    async function seedTemplate(name = "Prusament PLA Galaxy Black") {
+      const parent = await Filament.create({
+        name,
+        vendor: "Prusa Research",
+        type: "PLA",
+        color: null,
+      });
+      await Filament.create({
+        name: `${name} — Red`,
+        vendor: "Prusa Research",
+        type: "PLA",
+        color: "#FF0000",
+        parentId: parent._id,
+      });
+      return parent;
+    }
+
+    it("add-spool onto a template → 400 template_no_spools (same contract as the spools route)", async () => {
+      const template = await seedTemplate("Template Target");
+      const res = await POST(
+        postReq({
+          spool: validSpool(),
+          action: "add-spool",
+          filamentId: String(template._id),
+        }),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBe("template_no_spools");
+      expect(body.message).toMatch(/template/i);
+
+      const fresh = await Filament.findById(template._id);
+      expect(fresh.spools).toHaveLength(0);
+    });
+
+    it("create-flow fallback against an existing TEMPLATE name → 400, template untouched", async () => {
+      // The scraped material's derived name collides with a template — the
+      // pre-#605 code $push-ed straight onto it by name.
+      const template = await seedTemplate();
+      const res = await POST(postReq({ spool: validSpool(), action: "create" }));
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.error).toBe("template_no_spools");
+
+      const fresh = await Filament.findById(template._id);
+      expect(fresh.spools).toHaveLength(0);
+      // And no duplicate active row was minted around the refusal.
+      expect(
+        await Filament.countDocuments({ name: "Prusament PLA Galaxy Black", _deletedAt: null }),
+      ).toBe(1);
+    });
+
+    it("a standalone (non-template) still takes the spool through the guard", async () => {
+      const standalone = await Filament.create({
+        name: "Standalone Prusament",
+        vendor: "Prusa Research",
+        type: "PLA",
+      });
+      const res = await POST(
+        postReq({
+          spool: validSpool(),
+          action: "add-spool",
+          filamentId: String(standalone._id),
+        }),
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(standalone._id);
+      expect(fresh.spools).toHaveLength(1);
+      expect(fresh.spools[0].lotNumber).toBe("1086170252");
+    });
+  });
+
   describe("trashed-row resurrect phase (GH #622)", () => {
     it("resurrects a soft-deleted filament instead of creating a duplicate", async () => {
       const trashed = await Filament.create({
@@ -271,6 +346,57 @@ describe("POST /api/prusament/import", () => {
         expect(rows).toHaveLength(1);
         expect(rows[0].spools).toHaveLength(1);
         expect(rows[0].spools[0].lotNumber).toBe("1086170252");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("recovery against a TEMPLATE winner → 400 template_no_spools, no spool attached", async () => {
+      // GH #605 (codex round 3, Finding B): even the E11000 recovery push
+      // must not land inventory on a template.
+      const FilamentModel = (await import("@/models/Filament")).default;
+      const spy = vi
+        .spyOn(FilamentModel, "create")
+        .mockImplementationOnce((async () => {
+          // Raw inserts bypass schema defaults — distinct instanceIds keep
+          // the second insert clear of the partial-unique instanceId index
+          // (both docs are active, and "missing" collides with "missing").
+          const winner = await FilamentModel.collection.insertOne({
+            name: "Prusament PLA Galaxy Black",
+            vendor: "Prusa Research",
+            type: "PLA",
+            instanceId: "aaaaaaaa01",
+            spools: [],
+            _deletedAt: null,
+          });
+          await FilamentModel.collection.insertOne({
+            name: "Prusament PLA Galaxy Black — Red",
+            vendor: "Prusa Research",
+            type: "PLA",
+            instanceId: "aaaaaaaa02",
+            parentId: winner.insertedId,
+            spools: [],
+            _deletedAt: null,
+          });
+          const err = new Error(
+            "E11000 duplicate key error collection: filaments index: name_1",
+          ) as Error & { code?: number };
+          err.code = 11000;
+          throw err;
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        }) as any);
+
+      try {
+        const res = await POST(postReq({ spool: validSpool(), action: "create" }));
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.error).toBe("template_no_spools");
+
+        const winner = await Filament.findOne({
+          name: "Prusament PLA Galaxy Black",
+          _deletedAt: null,
+        });
+        expect(winner.spools).toHaveLength(0);
       } finally {
         spy.mockRestore();
       }

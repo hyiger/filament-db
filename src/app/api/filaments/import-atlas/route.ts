@@ -5,6 +5,8 @@ import Filament, { generateInstanceId } from "@/models/Filament";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { assertSafeMongoUri } from "@/lib/mongoUriGuard";
 import { validateSpoolPhotoDataUrl } from "@/lib/validateSpoolBody";
+import { hasVariants } from "@/lib/resolveFilament";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import {
   deriveLegacyNozzleCondition,
   LEGACY_NOZZLE_CONDITION_RE,
@@ -122,6 +124,10 @@ export async function POST(request: NextRequest) {
 
       let created = 0;
       let updated = 0;
+      // GH #605 (codex round 3 sweep): per-row notes for content the import
+      // refused to apply (remote spools aimed at a local template). The row
+      // itself still imports — only the offending payload is skipped.
+      const errors: string[] = [];
 
       for (const remote of remoteFilaments) {
         // GH #255: copy ONLY allow-listed fields from the (attacker-
@@ -243,13 +249,52 @@ export async function POST(request: NextRequest) {
         const existing = await Filament.findOne({ name: importName, _deletedAt: null });
         if (existing) {
           preserveLocalSpoolIds(existing.spools);
-          // GH #255: runValidators so schema constraints (cost.min, etc.)
-          // are enforced on the update path, not just on create.
-          await Filament.updateOne(
-            { _id: existing._id },
-            filamentData,
-            { runValidators: true, context: "query" },
-          );
+          // GH #605 (codex round 3 sweep): when the LOCAL row is a TEMPLATE
+          // (it has live color variants), the remote's spools must not be
+          // written onto it — a template holds no inventory. Drop only the
+          // `spools` key (the rest of the update still applies, and the
+          // local spool state stays untouched) and report it per-row; an
+          // import can't confirm the alternative (a promotion). Decided and
+          // written inside the same per-filament mutex the promotion gate
+          // locks, so a concurrent first-variant promotion can't land
+          // between the check and the update and have this write re-attach
+          // the just-moved inventory.
+          await runExclusive(filamentLockKey(existing._id), async () => {
+            const remoteSpools = filamentData.spools;
+            const carriesSpools = Array.isArray(remoteSpools) && remoteSpools.length > 0;
+            // `totalWeight` is the OTHER inventory field (legacy pre-spools
+            // tracking) and is allow-listed above — PUT strips exactly a
+            // non-null totalWeight on templates, so this path must too or
+            // a re-import would re-attach legacy inventory the promotion
+            // just moved off. An explicit remote null still applies
+            // (clearing a legacy leftover is legitimate cleanup — same
+            // posture as PUT).
+            const carriesTotalWeight = filamentData.totalWeight != null;
+            if (
+              (carriesSpools || carriesTotalWeight) &&
+              (await hasVariants(Filament, String(existing._id)))
+            ) {
+              const droppedParts: string[] = [];
+              if (carriesSpools) {
+                delete filamentData.spools;
+                droppedParts.push(`${(remoteSpools as unknown[]).length} spool(s)`);
+              }
+              if (carriesTotalWeight) {
+                delete filamentData.totalWeight;
+                droppedParts.push("a tracked total weight");
+              }
+              errors.push(
+                `${importName}: skipped ${droppedParts.join(" and ")} — the local filament is a template (inventory lives on its variants)`,
+              );
+            }
+            // GH #255: runValidators so schema constraints (cost.min, etc.)
+            // are enforced on the update path, not just on create.
+            await Filament.updateOne(
+              { _id: existing._id },
+              filamentData,
+              { runValidators: true, context: "query" },
+            );
+          });
           updated++;
         } else {
           // If a soft-deleted doc with the same name exists, resurrect it.
@@ -271,6 +316,12 @@ export async function POST(request: NextRequest) {
             _purged: { $ne: true },
           });
           if (softDeleted) {
+            // GH #605 sweep: no template check needed on the resurrect — a
+            // trashed doc cannot have live variants (soft-deleting a parent
+            // with variants is refused; restoring a variant under a trashed
+            // parent is refused; variant creation requires an ACTIVE
+            // parent), so the revived row is never a template at this
+            // write. The create below is a fresh doc — same reasoning.
             preserveLocalSpoolIds(softDeleted.spools);
             await Filament.updateOne(
               { _id: softDeleted._id },
@@ -290,11 +341,15 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      let message = `Imported ${remoteFilaments.length} filament${remoteFilaments.length !== 1 ? "s" : ""} (${created} new, ${updated} updated)`;
+      if (errors.length > 0) message += `. ${errors.length} note(s).`;
       return NextResponse.json({
-        message: `Imported ${remoteFilaments.length} filament${remoteFilaments.length !== 1 ? "s" : ""} (${created} new, ${updated} updated)`,
+        message,
         total: remoteFilaments.length,
         created,
         updated,
+        // Same optional shape the OpenPrintTag importer uses.
+        errors: errors.length > 0 ? errors : undefined,
       });
     }
 

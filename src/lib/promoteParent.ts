@@ -181,6 +181,17 @@ export async function performParentPromotion(
   // Clear LAST (see module header) — and clear ONLY the moved fields; the
   // SPEC pair stays on the parent. `_deletedAt: null` re-filter so a
   // concurrent soft-delete can't be resurrected into a mutated tombstone.
+  //
+  // `$inc __v` (codex round 3 sweep, verified by repro): overwriting the
+  // spools array via save() would bump the version key (VERSION_INC), so
+  // this raw updateOne must too — otherwise a HYDRATED doc loaded before
+  // the promotion that modified a spool positionally (`spools.0.totalWeight`
+  // — the print-history debit/refund saves, the spool usage route, a CSV
+  // import's update-only bucket) still matches its `__v` in save()'s
+  // VERSION_WHERE filter and re-materializes a phantom spool fragment onto
+  // the freshly-cleared template. With the bump, every such stale save
+  // fails as a VersionError, which those callers already map to their
+  // designed 409-retry / failed-bucket paths.
   await FilamentModel.updateOne(
     { _id: parent._id, _deletedAt: null },
     {
@@ -191,6 +202,7 @@ export async function performParentPromotion(
         totalWeight: null,
         lowStockThreshold: null,
       },
+      $inc: { __v: 1 },
     },
   );
 

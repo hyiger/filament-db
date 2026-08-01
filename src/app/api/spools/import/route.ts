@@ -13,6 +13,9 @@ import {
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { unsanitizeCsvCell } from "@/lib/csvWriter";
 import { isValidIsoDateString, validateSpoolInstanceId, MAX_SPOOL_TEXT_LENGTH } from "@/lib/validateSpoolBody";
+import { hasVariants } from "@/lib/resolveFilament";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
+import { TEMPLATE_NO_SPOOLS_BODY } from "@/lib/spoolTemplateGuard";
 
 /**
  * Slack added to the 10 MB cap for the multipart Content-Length preflight, to
@@ -249,6 +252,20 @@ export async function POST(request: NextRequest) {
     // POST /spools route takes the same posture).
     const claimedInstanceIds = new Set<string>();
 
+    // GH #605 (codex round 3 sweep): template status per filament id, so a
+    // 50-row paste against one template asks the DB once. Advisory only —
+    // the save loop re-checks INSIDE the per-filament lock before
+    // persisting any bucket that appends spools.
+    const templateCache = new Map<string, boolean>();
+    async function isTemplate(fid: string): Promise<boolean> {
+      let cached = templateCache.get(fid);
+      if (cached === undefined) {
+        cached = await hasVariants(Filament, fid);
+        templateCache.set(fid, cached);
+      }
+      return cached;
+    }
+
     for (let i = 0; i < rows.length; i++) {
       const r = rows[i];
       // Strip the formula guard apostrophe (`csvCell` adds `'` in front
@@ -449,6 +466,31 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // GH #605 (codex round 3 sweep): a row that would CREATE a spool on a
+      // TEMPLATE (a filament with live color variants) fails its row —
+      // inventory lives on the variants, and a bulk paste can't confirm a
+      // promotion, so it rejects rather than silently attaching (same
+      // contract text as POST /filaments/{id}/spools). UPDATE rows (spoolId
+      // matches an existing spool) stay allowed: a legacy template's
+      // pre-#605 spools remain editable — the enforce-forward posture.
+      // Checked BEFORE resolveLocationId auto-creates a Location so the
+      // failure is side-effect-free (mirrors the date checks above). The
+      // create-vs-update split matches the later `filament.spools.id(...)`
+      // decision: a CSV can only reference persisted subdoc _ids (fresh
+      // in-batch _ids are minted in memory and unknowable to the file), so
+      // probing `resolved` here is equivalent.
+      const wouldUpdateExisting = incomingSpoolId
+        ? Boolean(
+            (resolved.spools as unknown as {
+              id(id: string): Record<string, unknown> | null;
+            }).id(incomingSpoolId),
+          )
+        : false;
+      if (!wouldUpdateExisting && (await isTemplate(String(resolved._id)))) {
+        rowResults[i] = { row: i + 2, ok: false, error: TEMPLATE_NO_SPOOLS_BODY.message };
+        continue;
+      }
+
       const locationId = await resolveLocationId(
         unsanitizeCsvCell((r.location || "").trim()),
       );
@@ -546,16 +588,38 @@ export async function POST(request: NextRequest) {
     // save() throw VersionError — caught per filament so a conflict on
     // one material reports against only its rows (not the whole batch),
     // and the rest of the import still completes with partial results.
+    //
+    // GH #605 (codex round 3 sweep): each save runs inside the same
+    // per-filament mutex the promotion/spool routes lock, and a bucket that
+    // APPENDED spools re-checks template status in-lock first — the per-row
+    // check above is check-then-act, so a first-variant promotion landing
+    // mid-import could otherwise have this save() write the (moved) spools
+    // array back onto the freshly-cleared template. A trip fails the whole
+    // bucket (all its rows share the one save), same all-or-nothing posture
+    // as a VersionError.
     for (const { doc, rows: bucketRows } of touched.values()) {
-      try {
-        await doc.save();
+      const appendsSpools = bucketRows.some((b) => b.action === "created");
+      const failure = await runExclusive(
+        filamentLockKey(doc._id),
+        async (): Promise<string | null> => {
+          if (appendsSpools && (await hasVariants(Filament, String(doc._id)))) {
+            return TEMPLATE_NO_SPOOLS_BODY.message;
+          }
+          try {
+            await doc.save();
+            return null;
+          } catch (saveErr) {
+            return `save failed: ${getErrorMessage(saveErr)}`;
+          }
+        },
+      );
+      if (failure === null) {
         for (const { index, action, name } of bucketRows) {
           rowResults[index] = { row: index + 2, ok: true, action, filament: name };
         }
-      } catch (saveErr) {
-        const msg = `save failed: ${getErrorMessage(saveErr)}`;
+      } else {
         for (const { index } of bucketRows) {
-          rowResults[index] = { row: index + 2, ok: false, error: msg };
+          rowResults[index] = { row: index + 2, ok: false, error: failure };
         }
       }
     }

@@ -222,7 +222,10 @@ export default function PrusamentImportDialog({
       const data = await res.json();
       if (ac.signal.aborted) return;
       if (!res.ok) {
-        setError(data.error || t("prusament.import.importFailed"));
+        // Structured rejections (GH #605 `template_no_spools`) carry a
+        // machine-readable `error` code plus a human `message` — show the
+        // message when present so the user never sees the raw code.
+        setError(data.message || data.error || t("prusament.import.importFailed"));
         setStep("preview");
         return;
       }

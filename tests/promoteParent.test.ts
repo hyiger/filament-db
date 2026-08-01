@@ -293,4 +293,34 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     ).rejects.toThrow("boom");
     expect(calls).toEqual([]);
   });
+
+  it("the clear bumps __v so a stale positional spool save VersionErrors instead of phantom-writing onto the template (codex round 3 sweep)", async () => {
+    // A hydrated doc loaded BEFORE the promotion, holding a positional
+    // modification to an existing spool — the shape of the print-history
+    // debit/refund saves and a CSV import's update-only bucket. Without the
+    // clear's `$inc __v`, save()'s VERSION_WHERE filter still matches the
+    // promoted parent and $sets `spools.0.totalWeight` onto the cleared
+    // array, materializing a phantom spool fragment on the template
+    // (verified by repro). With the bump it VersionErrors — the conflict
+    // path every one of those callers already handles.
+    const parent = await Filament.create({
+      name: "Version Bump Parent",
+      vendor: "V",
+      type: "PLA",
+      color: "#336699",
+      spools: [{ label: "roll", totalWeight: 1000 }],
+    });
+    const stale = await Filament.findById(parent._id);
+    stale.spools[0].totalWeight = 500;
+
+    await performParentPromotion(Filament, parent.toObject());
+
+    await expect(stale.save()).rejects.toMatchObject({ name: "VersionError" });
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.spools).toHaveLength(0); // template stayed clean
+    // The inventory lives (only) on the promoted variant, unchanged.
+    const variant = await Filament.findOne({ parentId: parent._id }).lean();
+    expect(variant.spools).toHaveLength(1);
+    expect(variant.spools[0].totalWeight).toBe(1000);
+  });
 });

@@ -15,14 +15,10 @@ import {
   effectiveNozzleRangeForUpdate,
   inheritNozzleRangeFromParent,
 } from "@/lib/temperatureRange";
-import { hasVariants } from "@/lib/resolveFilament";
-import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import {
-  parentPromotionState,
-  promotionVariantBaseName,
-  resolvePromotionVariantName,
-  performParentPromotion,
-} from "@/lib/promoteParent";
+  createVariantGated,
+  promotionRequired409Body,
+} from "@/lib/createVariantGated";
 
 /**
  * GH #519: collect every cross-collection ref carried by a filament body and
@@ -558,82 +554,30 @@ export async function POST(request: NextRequest) {
     // would do, so the UI can raise its confirmation dialog and a bare API
     // client isn't surprised by a mutation of a second document.
     //
-    // Review P1-a: the whole gate→promote→create section is SERIALIZED per
-    // parent id (runExclusive) and decides off a snapshot RE-FETCHED inside
-    // the lock — never the `variantParent` doc loaded before it. The spool
-    // POST route locks the same key, so a spool accepted before this lock
-    // is in the fresh snapshot (the promotion copies it onto the promoted
-    // variant); one arriving after serializes behind the create and gets
-    // the template 400 from its guard. The process-local lock is the belt;
-    // the spool guard's re-check + compensating $pull stays as braces for
-    // writers outside this process (see src/lib/filamentMutex.ts).
+    // The gate→promote→create sequence lives in createVariantGated (codex
+    // round 3, Finding A): it is SERIALIZED per parent id (runExclusive)
+    // and decides off a snapshot RE-FETCHED inside the lock — never the
+    // `variantParent` doc loaded above (review P1-a) — and it is SHARED
+    // with the OpenPrintTag variant import so no secondary entry point can
+    // mint the first variant of a carrying parent without this exact
+    // confirmation contract. See src/lib/createVariantGated.ts.
     if (variantParent) {
-      const parentKey = filamentLockKey(variantParent._id);
-      return await runExclusive(parentKey, async () => {
-        const parent = await Filament.findOne({ _id: parentKey, _deletedAt: null }).lean();
-        if (!parent) {
+      const result = await createVariantGated(Filament, variantParent._id, body, promoteParent);
+      switch (result.outcome) {
+        case "parent_not_found":
           // The parent was validated above but vanished (soft-deleted)
           // before the lock — same 400 the pre-lock check would have given.
           return errorResponse("Parent filament not found", 400);
-        }
-        const promoState = parentPromotionState(parent);
-        if (promoState.needed && !(await hasVariants(Filament, parentKey))) {
-          // The requested variant's own name is treated as taken when
-          // resolving the promoted copy's name — the copy must never squat on
-          // the name this request is about to create.
-          const alsoTaken =
-            typeof body.name === "string" ? new Set([body.name as string]) : undefined;
-          if (!promoteParent) {
-            const variantName = await resolvePromotionVariantName(
-              Filament,
-              promotionVariantBaseName(parent.name, parent.colorName),
-              alsoTaken,
-            );
-            return NextResponse.json(
-              {
-                error: "parent_promotion_required",
-                message:
-                  `Creating the first variant makes "${parent.name}" a template: ` +
-                  `its color and ${promoState.spoolCount} spool(s) move to a new variant ` +
-                  `named "${variantName}". Repeat the request with promoteParent: true to confirm.`,
-                parentName: parent.name,
-                parentColor: promoState.parentColor,
-                spoolCount: promoState.spoolCount,
-                variantName,
-              },
-              { status: 409 },
-            );
-          }
-          // Confirmed. Fail a doomed duplicate-named request BEFORE mutating —
-          // it would otherwise E11000 with the parent already promoted. No
-          // transactions available (standalone mongod), so the residual risk
-          // window is the name race between this pre-check and the create;
-          // the promotion itself is copy-first/clear-last and self-consistent.
-          if (
-            typeof body.name === "string" &&
-            (await Filament.exists({ name: body.name, _deletedAt: null }))
-          ) {
-            return errorResponse(
-              `A filament with that name already exists: "${body.name}"`,
-              409,
-            );
-          }
-          // Same principle for a schema-invalid request (bad color hex,
-          // negative cost, …): the route-level guards above don't run Mongoose
-          // validation, so without this dry run the promotion would
-          // permanently restructure the parent and THEN the create below would
-          // 400 — an error response after an irreversible side effect.
-          // Validate the exact payload the create will use; a ValidationError
-          // propagates to the route's catch, which surfaces it as the same
-          // 400 the failed create would have produced — with the parent
-          // completely untouched.
-          await new Filament(body).validate();
-          await performParentPromotion(Filament, parent, alsoTaken);
-        }
-
-        const filament = await Filament.create(body);
-        return NextResponse.json(filament, { status: 201 });
-      });
+        case "promotion_required":
+          return NextResponse.json(promotionRequired409Body(result), { status: 409 });
+        case "name_taken":
+          return errorResponse(
+            `A filament with that name already exists: "${result.name}"`,
+            409,
+          );
+        default:
+          return NextResponse.json(result.filament, { status: 201 });
+      }
     }
 
     const filament = await Filament.create(body);

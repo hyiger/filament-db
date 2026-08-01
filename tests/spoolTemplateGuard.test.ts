@@ -123,6 +123,49 @@ describe("pushSpoolWithTemplateGuard (review F3 on GH #605)", () => {
     expect(model.calls.map((c) => c.op)).toEqual(["push"]);
   });
 
+  it("extraFilter conditions merge into the atomic push filter (codex round 3, Finding B)", async () => {
+    // The Prusament importer pins the row by name and enforces its spool
+    // cap in the SAME atomic write — the guard must carry those conditions
+    // verbatim alongside its own _id/_deletedAt filter.
+    const after = { _id: "f1", spools: [{ _id: "s1", ...SPOOL }] };
+    const model = mockModel(after);
+    const check = vi.fn().mockResolvedValue(false);
+    const capExpr = { $lt: [{ $size: { $ifNull: ["$spools", []] } }, 500] };
+
+    const result = await pushSpoolWithTemplateGuard(model, "f1", SPOOL, check, {
+      extraFilter: { name: "Prusament PLA", $expr: capExpr },
+    });
+
+    expect(result).toEqual({ outcome: "created", filament: after });
+    expect(model.calls[0].args[0]).toEqual({
+      _id: "f1",
+      _deletedAt: null,
+      name: "Prusament PLA",
+      $expr: capExpr,
+    });
+  });
+
+  it("an unmet extraFilter (at cap / renamed) reports not_found, template pre-check still wins", async () => {
+    // Filter miss → findOneAndUpdate resolves null → not_found, exactly the
+    // signal the Prusament route probes to differentiate cap-vs-gone.
+    const model = mockModel(null);
+    const check = vi.fn().mockResolvedValue(false);
+
+    const result = await pushSpoolWithTemplateGuard(model, "f1", SPOOL, check, {
+      extraFilter: { name: "Renamed Since" },
+    });
+    expect(result).toEqual({ outcome: "not_found" });
+
+    // And a template refusal fires BEFORE the filter is ever consulted.
+    const templateCheck = vi.fn().mockResolvedValue(true);
+    const model2 = mockModel(null);
+    const result2 = await pushSpoolWithTemplateGuard(model2, "f1", SPOOL, templateCheck, {
+      extraFilter: { name: "Whatever" },
+    });
+    expect(result2).toEqual({ outcome: "template" });
+    expect(model2.calls).toEqual([]);
+  });
+
   it("a push error propagates unchanged (nothing was written, nothing to compensate)", async () => {
     const model = {
       calls: [] as Array<{ op: string }>,

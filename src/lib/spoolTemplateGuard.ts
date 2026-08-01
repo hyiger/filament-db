@@ -36,10 +36,24 @@ export type GuardedSpoolPushResult =
    *  post-push detection has already been compensated by pulling the spool
    *  back out). Callers respond 400 `template_no_spools` either way. */
   | { outcome: "template" }
-  /** No live filament with that id. */
+  /** No live filament matched the push filter — the id doesn't exist, or an
+   *  `extraFilter` condition (spool cap, name pin) didn't hold. */
   | { outcome: "not_found" }
   /** The spool landed; `filament` is the post-push document. */
   | { outcome: "created"; filament: FilamentDoc };
+
+/**
+ * The exact 400 body every spool-attach route returns when the target is a
+ * template — shared (codex round 3, Finding B) so POST /filaments/{id}/spools
+ * and the Prusament importer answer byte-identically and a client can handle
+ * both the same way. Machine-readable `error` code, human `message` — the
+ * shape the other structured rejections use (name_id_mismatch).
+ */
+export const TEMPLATE_NO_SPOOLS_BODY = {
+  error: "template_no_spools",
+  message:
+    "This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead.",
+} as const;
 
 /**
  * Push `newSpool` onto filament `id` unless the filament is a template —
@@ -53,6 +67,13 @@ export type GuardedSpoolPushResult =
  *
  * A push error propagates to the caller unchanged (the route's catch maps
  * it), with nothing to compensate — the failed `$push` wrote nothing.
+ *
+ * `options.extraFilter` (codex round 3, Finding B) merges additional
+ * conditions into the atomic push's filter — the Prusament importer needs
+ * its per-filament spool cap (`$expr` on the spools size) and, on the
+ * match-by-name fallbacks, a `name` pin enforced in the SAME atomic write
+ * the original route used. A filter miss reports `not_found`; the caller
+ * differentiates (cap vs gone) with its own probe, exactly as before.
  */
 export async function pushSpoolWithTemplateGuard(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -61,13 +82,14 @@ export async function pushSpoolWithTemplateGuard(
   newSpool: Record<string, unknown>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   checkHasVariants: (FilamentModel: any, id: string) => Promise<boolean>,
+  options?: { extraFilter?: Record<string, unknown> },
 ): Promise<GuardedSpoolPushResult> {
   if (await checkHasVariants(FilamentModel, id)) {
     return { outcome: "template" };
   }
 
   const filament = await FilamentModel.findOneAndUpdate(
-    { _id: id, _deletedAt: null },
+    { _id: id, _deletedAt: null, ...(options?.extraFilter ?? {}) },
     { $push: { spools: newSpool } },
     { returnDocument: "after" },
   ).lean();

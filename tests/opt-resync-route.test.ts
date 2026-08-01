@@ -712,6 +712,11 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
       name: "Variant Import Parent",
       vendor: "Prusament",
       type: "PLA",
+      // Colorless (template-shaped) parent: this test is about PRUNING, so
+      // keep it out of the GH #605 promotion gate (the schema's gray
+      // default would count as "carrying" and 409 the first variant —
+      // covered by the dedicated gate tests below).
+      color: null,
       density: 1.24, // equals OPT → pruned
       temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
       shoreHardnessD: 81,
@@ -753,6 +758,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
       name: "Differ Parent",
       vendor: "Prusament",
       type: "PLA",
+      color: null, // out of the #605 gate — see the pruning test above
       density: 1.5, // differs from OPT's 1.24 → variant keeps its own 1.24
       temperatures: { nozzle: 200 }, // differs from OPT 225 → variant keeps 225
     });
@@ -818,6 +824,97 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     );
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/one slug/i);
+  });
+
+  // ── GH #605 (codex round 3, Finding A): the promotion gate on the OPT
+  //    variant import — the same contract as POST /api/filaments ──────────
+
+  it("import-variant: first variant of a carrying parent → structured 409, nothing created", async () => {
+    const parent = await Filament.create({
+      name: "OPT Gate Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#336699",
+      spools: [{ label: "roll 1", totalWeight: 1000 }],
+    });
+    const res = await importPOST(
+      importReq({ slugs: ["prusament-pla-galaxy-black"], parentId: String(parent._id) }),
+    );
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe("parent_promotion_required");
+    expect(body.parentName).toBe("OPT Gate Parent");
+    expect(body.parentColor).toBe("#336699");
+    expect(body.spoolCount).toBe(1);
+    expect(body.variantName).toBe("OPT Gate Parent — Original");
+    // Nothing created, parent untouched — promotion is never silent.
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#336699");
+    expect(fresh.spools).toHaveLength(1);
+  });
+
+  it("import-variant: promoteParent: true promotes the parent, then imports the variant", async () => {
+    const parent = await Filament.create({
+      name: "OPT Promote Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#336699",
+      colorName: "Steel Blue",
+      spools: [{ label: "roll 1", totalWeight: 1000 }],
+    });
+    const res = await importPOST(
+      importReq({
+        slugs: ["prusament-pla-galaxy-black"],
+        parentId: String(parent._id),
+        promoteParent: true,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.created).toBe(1);
+
+    // The parent is now a colorless, inventoryless template …
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.color ?? null).toBeNull();
+    expect(freshParent.colorName ?? null).toBeNull();
+    expect(freshParent.spools).toHaveLength(0);
+    // … its state moved onto the promoted copy …
+    const promoted = await Filament.findOne({ name: "OPT Promote Parent — Steel Blue" }).lean();
+    expect(promoted).toBeTruthy();
+    expect(String(promoted.parentId)).toBe(String(parent._id));
+    expect(promoted.color).toBe("#336699");
+    expect(promoted.spools).toHaveLength(1);
+    // … and the imported variant exists alongside it, linked for re-sync.
+    const imported = await Filament.findById(body.filament._id).lean();
+    expect(String(imported.parentId)).toBe(String(parent._id));
+    expect(imported.settings.openprinttag_slug).toBe("prusament-pla-galaxy-black");
+  });
+
+  it("import-variant: the SECOND variant of a template needs no gate", async () => {
+    // A legacy-shaped template: still carries a color (enforce-forward
+    // keeps it), but already has a live variant — nothing left to gate.
+    const parent = await Filament.create({
+      name: "OPT Second Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#336699",
+    });
+    await Filament.create({
+      name: "OPT Second Parent — Red",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+    });
+    const res = await importPOST(
+      importReq({ slugs: ["prusament-pla-galaxy-black"], parentId: String(parent._id) }),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).created).toBe(1);
+    // The legacy color stays — no silent promotion of an existing template.
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#336699");
   });
 
   // ── GH #605: colorless templates in check + sync ─────────────────────

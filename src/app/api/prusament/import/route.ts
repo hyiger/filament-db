@@ -5,6 +5,12 @@ import Filament, { generateInstanceId } from "@/models/Filament";
 import type { PrusamentScrapeResult } from "../route";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { isValidIsoDateString } from "@/lib/validateSpoolBody";
+import { hasVariants } from "@/lib/resolveFilament";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
+import {
+  pushSpoolWithTemplateGuard,
+  TEMPLATE_NO_SPOOLS_BODY,
+} from "@/lib/spoolTemplateGuard";
 import {
   errorResponseFromCaught,
   handleDuplicateKeyError,
@@ -189,29 +195,33 @@ export async function POST(request: NextRequest) {
         ? new Date(purchaseDateStr)
         : null;
 
-      const filament = await Filament.findOneAndUpdate(
-        {
-          _id: filamentId,
-          _deletedAt: null,
-          $expr: SPOOL_CAP_EXPR,
-        },
-        {
-          $push: {
-            spools: {
-              // #732: stamp the spool id explicitly (belt-and-suspenders;
-              // the schema default would also fire on $push).
-              instanceId: generateInstanceId(),
-              label: spoolLabel,
-              totalWeight: spool.totalWeight,
-              lotNumber: spool.spoolId,
-              ...(purchaseDate ? { purchaseDate } : {}),
-            },
+      // GH #605 (codex round 3, Finding B): route through the same
+      // race-hardened template guard the dedicated spool route uses, inside
+      // the same per-filament mutex — a raw $push here could land inventory
+      // on a TEMPLATE (a filament with live color variants). The spool cap
+      // stays enforced atomically via the guard's extraFilter.
+      const result = await runExclusive(filamentLockKey(filamentId), () =>
+        pushSpoolWithTemplateGuard(
+          Filament,
+          filamentId,
+          {
+            // #732: stamp the spool id explicitly (belt-and-suspenders;
+            // the schema default would also fire on $push).
+            instanceId: generateInstanceId(),
+            label: spoolLabel,
+            totalWeight: spool.totalWeight,
+            lotNumber: spool.spoolId,
+            ...(purchaseDate ? { purchaseDate } : {}),
           },
-        },
-        { returnDocument: "after" },
-      ).lean();
+          hasVariants,
+          { extraFilter: { $expr: SPOOL_CAP_EXPR } },
+        ),
+      );
 
-      if (!filament) {
+      if (result.outcome === "template") {
+        return NextResponse.json(TEMPLATE_NO_SPOOLS_BODY, { status: 400 });
+      }
+      if (result.outcome === "not_found") {
         // The conditional didn't match — either the filament doesn't
         // exist, or it's already at cap. Probe to differentiate so the
         // caller gets a clear error rather than a generic 404.
@@ -232,8 +242,8 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({
         action: "add-spool",
-        filament,
-        message: `Added spool ${spool.spoolId} to ${filament.name}`,
+        filament: result.filament,
+        message: `Added spool ${spool.spoolId} to ${result.filament.name}`,
       });
     }
 
@@ -269,22 +279,38 @@ export async function POST(request: NextRequest) {
     // applied to the dedicated add-spool branch above, so a hostile
     // client routed through the default `action=create` flow could
     // push past the limit by re-importing against an existing name.
-    const conditionalUpdate = await Filament.findOneAndUpdate(
-      {
-        name,
-        _deletedAt: null,
-        $expr: SPOOL_CAP_EXPR,
-      },
-      { $push: { spools: prusamentSpoolFields } },
-      { returnDocument: "after" },
-    ).lean();
-
-    if (conditionalUpdate) {
-      return NextResponse.json({
-        action: "add-spool",
-        filament: conditionalUpdate,
-        message: `Filament "${name}" already exists. Added spool ${spool.spoolId}.`,
-      });
+    //
+    // GH #605 (codex round 3, Finding B): the fallback now resolves the
+    // active row's id first and routes the push through the template guard
+    // inside the per-filament mutex — re-importing a spool against a name
+    // that has since become a TEMPLATE must 400, not attach inventory to
+    // it. The `name` pin plus the cap ride the guard's extraFilter so the
+    // atomic-write semantics of the original single findOneAndUpdate hold.
+    const activeByName = await Filament.findOne({ name, _deletedAt: null })
+      .select("_id")
+      .lean();
+    if (activeByName) {
+      const guarded = await runExclusive(filamentLockKey(activeByName._id), () =>
+        pushSpoolWithTemplateGuard(
+          Filament,
+          String(activeByName._id),
+          prusamentSpoolFields,
+          hasVariants,
+          { extraFilter: { name, $expr: SPOOL_CAP_EXPR } },
+        ),
+      );
+      if (guarded.outcome === "template") {
+        return NextResponse.json(TEMPLATE_NO_SPOOLS_BODY, { status: 400 });
+      }
+      if (guarded.outcome === "created") {
+        return NextResponse.json({
+          action: "add-spool",
+          filament: guarded.filament,
+          message: `Filament "${name}" already exists. Added spool ${spool.spoolId}.`,
+        });
+      }
+      // not_found: the row vanished / was renamed mid-flight, or it is at
+      // cap — fall through to the same probe the pre-guard code used.
     }
 
     // No conditional match — either the name doesn't exist (continue
@@ -312,6 +338,17 @@ export async function POST(request: NextRequest) {
     // the name conflict forever). Like the active-name fallback above,
     // the resurrect only adds the spool; it doesn't rewrite the
     // filament's structured fields.
+    //
+    // GH #605 (codex round 3 sweep): this $push needs NO template guard —
+    // a trashed doc cannot be a template. Soft-deleting a parent with live
+    // variants is refused (DELETE's hasVariants guard), restoring a variant
+    // under a trashed parent is refused (restore's parent-active check),
+    // and variant creation requires an ACTIVE parent — so no live variant
+    // can point at a trashed doc, and the resurrect+push is one atomic
+    // findOneAndUpdate (no window between the revive and the push). A
+    // first-variant create racing the just-revived row serializes behind
+    // the promotion gate's own in-lock re-fetch, which then sees (and
+    // moves) this spool.
     const resurrected = await Filament.findOneAndUpdate(
       {
         name,
@@ -387,17 +424,35 @@ export async function POST(request: NextRequest) {
       });
     } catch (createErr) {
       if (!isDuplicateKeyError(createErr)) throw createErr;
-      const raced = await Filament.findOneAndUpdate(
-        { name, _deletedAt: null, $expr: SPOOL_CAP_EXPR },
-        { $push: { spools: prusamentSpoolFields } },
-        { returnDocument: "after" },
-      ).lean();
-      // The winning row vanished (or is at cap) — surface the original
-      // duplicate-key error via the outer catch's 409 mapping.
-      if (!raced) throw createErr;
+      // GH #605 (codex round 3, Finding B): same guard treatment as the
+      // active-name fallback above — the race winner is normally a fresh
+      // spool-less row, but nothing stops it from being (or instantly
+      // becoming) a template, so the recovery push must not bypass the
+      // guard either.
+      const winner = await Filament.findOne({ name, _deletedAt: null })
+        .select("_id")
+        .lean();
+      // The winning row vanished — surface the original duplicate-key
+      // error via the outer catch's 409 mapping.
+      if (!winner) throw createErr;
+      const raced = await runExclusive(filamentLockKey(winner._id), () =>
+        pushSpoolWithTemplateGuard(
+          Filament,
+          String(winner._id),
+          prusamentSpoolFields,
+          hasVariants,
+          { extraFilter: { name, $expr: SPOOL_CAP_EXPR } },
+        ),
+      );
+      if (raced.outcome === "template") {
+        return NextResponse.json(TEMPLATE_NO_SPOOLS_BODY, { status: 400 });
+      }
+      // not_found: gone again, or at cap — same posture as before (the
+      // original code threw whenever its conditional update missed).
+      if (raced.outcome !== "created") throw createErr;
       return NextResponse.json({
         action: "add-spool",
-        filament: raced,
+        filament: raced.filament,
         message: `Filament "${name}" already exists. Added spool ${spool.spoolId}.`,
       });
     }

@@ -13,6 +13,10 @@ import {
 } from "@/lib/optResync";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
+import {
+  createVariantGated,
+  promotionRequired409Body,
+} from "@/lib/createVariantGated";
 
 /**
  * POST /api/openprinttag/import
@@ -30,6 +34,13 @@ import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
  * parent onto the variant (everything identical to the parent is left to
  * inherit dynamically). The variant is linked to the OPT material so it can use
  * the "Check for updates" re-sync loop afterwards.
+ *
+ * GH #605 (codex round 3, Finding A): variant mode runs through the SAME
+ * promotion gate as POST /api/filaments (createVariantGated) — importing the
+ * FIRST variant of a parent that still carries its own color/spools 409s
+ * with the structured `parent_promotion_required` payload until the caller
+ * confirms with `promoteParent: true` in the body. Promotion is never
+ * silent, on any entry point.
  */
 export async function POST(request: NextRequest) {
   const guard = assertSameOriginRequest(request);
@@ -70,9 +81,11 @@ export async function POST(request: NextRequest) {
 
     // Issue #753 (approach A): variant mode — import a single material as a
     // variant of an existing parent, pulling only its distinct fields.
+    // `promoteParent` is the GH #605 confirmation flag, mirroring
+    // POST /api/filaments — a control flag, never a schema field.
     const parentId = body.parentId;
     if (parentId != null && parentId !== "") {
-      return importAsVariant(slugs, parentId);
+      return importAsVariant(slugs, parentId, body.promoteParent === true);
     }
 
     // Get the cached database (should already be cached from the browse page)
@@ -301,7 +314,7 @@ export async function POST(request: NextRequest) {
  * use the re-sync loop. Create-only: a name collision is refused, never
  * silently updating / re-parenting another row.
  */
-async function importAsVariant(slugs: string[], parentId: string) {
+async function importAsVariant(slugs: string[], parentId: string, promoteParent: boolean) {
   if (typeof parentId !== "string" || !mongoose.isValidObjectId(parentId)) {
     return NextResponse.json({ error: "'parentId' must be a valid filament id" }, { status: 400 });
   }
@@ -354,6 +367,14 @@ async function importAsVariant(slugs: string[], parentId: string) {
   // Prune against the parent's effective values (the parent is a root, so its
   // stored values ARE its effective values). Strict equality only — a value
   // that merely resembles the parent's is kept as the variant's distinct data.
+  //
+  // Pruning against THIS pre-lock snapshot is equivalent to pruning against
+  // the post-promotion parent the gate below may produce: a promotion moves
+  // only color/colorName/spools/totalWeight/lowStockThreshold, and NONE of
+  // those participate in the prune (color/colorName are never pruned by
+  // design, and the inventory trio is neither inheritable nor present in an
+  // OPT payload). So the payload the gate dry-run validates is exactly the
+  // payload the create persists.
   const variantPayload = pruneOptPayloadAgainstParent(
     payload,
     parent as unknown as Record<string, unknown>,
@@ -366,14 +387,34 @@ async function importAsVariant(slugs: string[], parentId: string) {
   variantPayload.diameter = null;
 
   try {
-    const created = await Filament.create(variantPayload);
-    return NextResponse.json({
-      message: `Imported "${name}" as a variant`,
-      total: 1,
-      created: 1,
-      updated: 0,
-      filament: created,
-    });
+    // GH #605 (codex round 3, Finding A): the same in-lock gate sequence as
+    // POST /api/filaments — per-parent mutex, in-lock parent re-fetch,
+    // structured 409 until `promoteParent: true`, dry-run validate, then
+    // promote copy-first/clear-last and create. See createVariantGated.
+    const result = await createVariantGated(Filament, parentId, variantPayload, promoteParent);
+    switch (result.outcome) {
+      case "parent_not_found":
+        // Vanished (soft-deleted) between the pre-lock validation above and
+        // the lock — same 400 the pre-lock check would have given.
+        return NextResponse.json({ error: "Parent filament not found" }, { status: 400 });
+      case "promotion_required":
+        return NextResponse.json(promotionRequired409Body(result), { status: 409 });
+      case "name_taken":
+        // Same copy as the pre-lock collision check — this is the raced
+        // variant of it, caught by the gate's pre-promotion re-check.
+        return NextResponse.json(
+          { error: `A filament named "${name}" already exists — rename it, or import it without a parent.` },
+          { status: 409 },
+        );
+      default:
+        return NextResponse.json({
+          message: `Imported "${name}" as a variant`,
+          total: 1,
+          created: 1,
+          updated: 0,
+          filament: result.filament,
+        });
+    }
   } catch (createErr) {
     // A concurrent create can win the unique-name race between the collision
     // check and here — surface it as a 409, never leak the raw E11000.
