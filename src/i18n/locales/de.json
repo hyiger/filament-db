@@ -71,6 +71,7 @@
   "filaments.expandAll": "Alle ausklappen",
   "filaments.remaining": "{pct}% verbleibend",
   "filaments.remainingWithSpools": "{pct}% verbleibend ({spools} Spulen)",
+  "filaments.remainingGramsOnly": "Netto-Filamentgewicht festlegen, um den Prozentwert zu sehen",
   "filaments.spools.expand": "Spulen & Standorte anzeigen",
   "filaments.spools.collapse": "Spulen ausblenden",
   "filaments.spools.location": "Standort",

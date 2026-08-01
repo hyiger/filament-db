@@ -71,6 +71,36 @@ export function getRemainingGrams(f: InventoryFilament): number | null {
   return Math.max(0, f.totalWeight - f.spoolWeight);
 }
 
+/** Three-tier decision for a "remaining" table cell (GH #1048).
+ *
+ * The home list used to branch only on `getRemainingPct` and rendered a
+ * bare em-dash whenever the percentage was null — but the percentage
+ * needs `netFilamentWeight` as a denominator while the gram math does
+ * not (see the #310 note on `getRemainingGrams`). A legacy record like
+ * { totalWeight: 1035, spoolWeight: 184, netFilamentWeight: null }
+ * therefore showed "851 g" on the detail page and "—" on the list.
+ *
+ * Tiers, matching the inventory page's cell:
+ *   1. pct computable        → "bar"   (percentage bar)
+ *   2. only grams computable → "grams" (plain gram figure)
+ *   3. neither               → "none"  (em-dash)
+ *
+ * Extracted here (rather than inlined in the client page) so the
+ * decision is unit-testable — the home page is a `use client` component
+ * the node-only vitest env can't render. */
+export type RemainingDisplay =
+  | { kind: "bar"; pct: number }
+  | { kind: "grams"; grams: number }
+  | { kind: "none" };
+
+export function getRemainingDisplay(f: InventoryFilament): RemainingDisplay {
+  const pct = getRemainingPct(f);
+  if (pct != null) return { kind: "bar", pct };
+  const grams = getRemainingGrams(f);
+  if (grams != null) return { kind: "grams", grams };
+  return { kind: "none" };
+}
+
 /** Percentage remaining (0-100, integer). Excludes retired spools so
  * the bar matches the low-stock chip. Falls back to legacy
  * single-spool math when `spools` is empty. */

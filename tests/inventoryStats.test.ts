@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   getSpoolCount,
+  getRemainingDisplay,
   getRemainingGrams,
   getRemainingPct,
   type InventoryFilament,
@@ -137,6 +138,21 @@ describe("inventoryStats", () => {
       ).toBe(0);
     });
 
+    it("computes legacy no-spools grams when netFilamentWeight is blank (#310/#1048)", () => {
+      // The reported #1048 record: a pre-migration filament with no
+      // spools[] and no net weight. The grams need no denominator —
+      // 1035 - 184 = 851 shows on the detail page and must not be
+      // suppressed. (The #310 case above pins the same rule for the
+      // spools-array shape; this is its legacy-shape twin.)
+      expect(
+        getRemainingGrams({
+          totalWeight: 1035,
+          spoolWeight: 184,
+          netFilamentWeight: null,
+        }),
+      ).toBe(851);
+    });
+
     it("returns null in the legacy path when totalWeight or spoolWeight is missing", () => {
       expect(
         getRemainingGrams({ ...baseTracked, totalWeight: null, spools: [] }),
@@ -215,6 +231,20 @@ describe("inventoryStats", () => {
       ).toBeNull();
     });
 
+    it("is null without a net weight but recovers once it's set (#1048)", () => {
+      // The reported record: grams are computable (851, above) but the
+      // percentage has no denominator — null, NOT 0 or NaN.
+      const reported: InventoryFilament = {
+        totalWeight: 1035,
+        spoolWeight: 184,
+        netFilamentWeight: null,
+      };
+      expect(getRemainingPct(reported)).toBeNull();
+      // Setting the net weight is the documented remedy (the grams-only
+      // tooltip says so): 851/1000 = 85.1 → 85.
+      expect(getRemainingPct({ ...reported, netFilamentWeight: 1000 })).toBe(85);
+    });
+
     it("clamps to 0..100", () => {
       // Over-full spool (e.g. brand new + extra) should clamp to 100, not 110+
       const over: InventoryFilament = {
@@ -231,6 +261,55 @@ describe("inventoryStats", () => {
         spools: [{ totalWeight: 100 }], // would be -12.5%
       };
       expect(getRemainingPct(under)).toBe(0);
+    });
+  });
+
+  describe("getRemainingDisplay (#1048)", () => {
+    // The home list's remaining cell can't be render-tested (client
+    // component, node-only vitest env), so the three-tier decision it
+    // delegates to is pinned here instead.
+
+    it("picks the bar tier whenever a percentage is computable", () => {
+      expect(
+        getRemainingDisplay({ ...baseTracked, totalWeight: 600, spools: [] }),
+      ).toEqual({ kind: "bar", pct: 50 });
+    });
+
+    it("falls back to grams-only when only the gram math has inputs", () => {
+      // The reported #1048 shape: legacy record, no netFilamentWeight.
+      // Pre-fix the list rendered the em-dash tier here while the
+      // detail page showed 851 g.
+      expect(
+        getRemainingDisplay({
+          totalWeight: 1035,
+          spoolWeight: 184,
+          netFilamentWeight: null,
+        }),
+      ).toEqual({ kind: "grams", grams: 851 });
+    });
+
+    it("renders the em-dash tier when neither figure is computable", () => {
+      expect(
+        getRemainingDisplay({
+          totalWeight: null,
+          spoolWeight: null,
+          netFilamentWeight: null,
+          spools: [],
+        }),
+      ).toEqual({ kind: "none" });
+    });
+
+    it("agrees with the tooltip's remedy: setting net weight upgrades grams to bar", () => {
+      const reported: InventoryFilament = {
+        totalWeight: 1035,
+        spoolWeight: 184,
+        netFilamentWeight: null,
+      };
+      expect(getRemainingDisplay(reported).kind).toBe("grams");
+      expect(getRemainingDisplay({ ...reported, netFilamentWeight: 1000 })).toEqual({
+        kind: "bar",
+        pct: 85,
+      });
     });
   });
 });
