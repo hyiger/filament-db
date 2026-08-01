@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { hasVariants } from "@/lib/resolveFilament";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { parentPromotionState, performParentPromotion } from "@/lib/promoteParent";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
@@ -11,7 +12,8 @@ import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
  * POST /api/filaments/{id}/promote  (GH #605, Phase 2b)
  *
  * "Convert to template": moves a legacy parent's own color/colorName/spools/
- * inventory totalWeight onto a NEW variant (named
+ * inventory totalWeight (plus the lowStockThreshold that alarms on that
+ * inventory) onto a NEW variant (named
  * `<parent> — <colorName|Original>`), then clears them on the parent — the
  * same copy-first/clear-last promotion the first-variant create path runs,
  * at the user's explicit initiative (decision 4 on #605: enforce forward
@@ -44,40 +46,51 @@ export async function POST(
 
     await dbConnect();
 
-    const filament = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
-    if (!filament) {
-      return errorResponse("Not found", 404);
-    }
+    // Review P1-b: claim the parent BEFORE reading it. The whole
+    // read→guards→promote sequence is serialized per filament id
+    // (runExclusive — the same key the first-variant create and the
+    // totalWeight PUT lock), and the snapshot is fetched INSIDE the lock.
+    // Two overlapping /promote calls thus run one after the other: the
+    // second sees the already-cleared parent and takes the existing 400
+    // `nothing_to_convert` exit instead of minting a duplicate "(2)"
+    // promotion copy. A /promote overlapping a first-variant POST
+    // serializes the same way (both key on this id).
+    return await runExclusive(filamentLockKey(id), async () => {
+      const filament = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
+      if (!filament) {
+        return errorResponse("Not found", 404);
+      }
 
-    // Variants can't be templates (no nested inheritance), and a standalone
-    // isn't one yet — both fail the same derived-template test.
-    if (filament.parentId || !(await hasVariants(Filament, id))) {
-      return NextResponse.json(
-        {
-          error: "not_a_template",
-          message:
-            "Only a filament that already has color variants can be converted — a standalone becomes a template when its first variant is created.",
-        },
-        { status: 400 },
-      );
-    }
+      // Variants can't be templates (no nested inheritance), and a standalone
+      // isn't one yet — both fail the same derived-template test.
+      if (filament.parentId || !(await hasVariants(Filament, id))) {
+        return NextResponse.json(
+          {
+            error: "not_a_template",
+            message:
+              "Only a filament that already has color variants can be converted — a standalone becomes a template when its first variant is created.",
+          },
+          { status: 400 },
+        );
+      }
 
-    const state = parentPromotionState(filament);
-    if (!state.needed) {
-      return NextResponse.json(
-        {
-          error: "nothing_to_convert",
-          message:
-            "This template already carries nothing that belongs on a variant — no color, no color name, no spools, no inventory weight.",
-        },
-        { status: 400 },
-      );
-    }
+      const state = parentPromotionState(filament);
+      if (!state.needed) {
+        return NextResponse.json(
+          {
+            error: "nothing_to_convert",
+            message:
+              "This template already carries nothing that belongs on a variant — no color, no color name, no spools, no inventory weight.",
+          },
+          { status: 400 },
+        );
+      }
 
-    const variant = await performParentPromotion(Filament, filament);
-    const parent = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
+      const variant = await performParentPromotion(Filament, filament);
+      const parent = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
 
-    return NextResponse.json({ variant, parent });
+      return NextResponse.json({ variant, parent });
+    });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to convert to template");
   }

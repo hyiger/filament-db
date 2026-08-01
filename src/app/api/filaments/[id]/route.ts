@@ -5,6 +5,7 @@ import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest, assertSafeUpdateBody } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
@@ -223,28 +224,6 @@ export async function PUT(
     // edit form never sends `spools`; strip it as a hard guarantee.
     delete body.spools;
 
-    // GH #605: a filament with ≥1 live variant is a TEMPLATE and must not
-    // carry its own INVENTORY — that is `totalWeight` only. STRIP (don't
-    // reject) a non-null totalWeight write — the edit form echoes every
-    // field back on save, so a 400 would brick parent edits entirely. An
-    // explicit null passes through: clearing a legacy parent's leftover
-    // value is legitimate cleanup, and blocking it would freeze exactly the
-    // state we're trying to migrate away from. The response carries
-    // `_strippedTemplateFields` (response-only, underscore-prefixed like
-    // _parent/_variants) so a client can surface a warning.
-    //
-    // `spoolWeight` / `netFilamentWeight` are deliberately NOT stripped:
-    // they are SPEC — the product line's tare and nominal net weight — and
-    // stay editable on templates, where every variant inherits them
-    // (resolveFilament's INHERITABLE_FIELDS). That is what makes GH #1048's
-    // recommended workaround possible: set the net weight on the parent so
-    // the whole family inherits the remaining-percentage denominator.
-    let strippedTemplateFields: string[] = [];
-    if (body.totalWeight != null && (await hasVariants(Filament, id))) {
-      delete body.totalWeight;
-      strippedTemplateFields = ["totalWeight"];
-    }
-
     // Codex P2 on PR #577: the renderer only ever sends a plain field object.
     // A Mongo update OPERATOR ($set / $inc / $rename / …) in the body would be
     // forwarded verbatim to findOneAndUpdate and slip past every field-level
@@ -402,11 +381,44 @@ export async function PUT(
       }
     }
 
-    const filament = await Filament.findOneAndUpdate(
-      { _id: id, _deletedAt: null },
-      body,
-      { returnDocument: "after", runValidators: true }
-    ).lean();
+    // GH #605: a filament with ≥1 live variant is a TEMPLATE and must not
+    // carry its own INVENTORY — that is `totalWeight` only. STRIP (don't
+    // reject) a non-null totalWeight write — the edit form echoes every
+    // field back on save, so a 400 would brick parent edits entirely. An
+    // explicit null passes through: clearing a legacy parent's leftover
+    // value is legitimate cleanup, and blocking it would freeze exactly the
+    // state we're trying to migrate away from. The response carries
+    // `_strippedTemplateFields` (response-only, underscore-prefixed like
+    // _parent/_variants) so a client can surface a warning.
+    //
+    // `spoolWeight` / `netFilamentWeight` are deliberately NOT stripped:
+    // they are SPEC — the product line's tare and nominal net weight — and
+    // stay editable on templates, where every variant inherits them
+    // (resolveFilament's INHERITABLE_FIELDS). That is what makes GH #1048's
+    // recommended workaround possible: set the net weight on the parent so
+    // the whole family inherits the remaining-percentage denominator.
+    //
+    // Review P1-c: the strip DECISION and the persisting write share one
+    // per-id critical section (runExclusive — the same key the promotion
+    // paths lock). Decided-then-written across a gap, a totalWeight PUT
+    // racing a first-variant promotion could pass the hasVariants check
+    // while the parent was still a standalone and then persist AFTER the
+    // promotion cleared the parent — re-materializing inventory on a fresh
+    // template. Serialized, either the PUT lands first (and the promotion's
+    // fresh snapshot moves the new value onto the promoted variant) or the
+    // promotion lands first (and this re-check strips the write).
+    let strippedTemplateFields: string[] = [];
+    const filament = await runExclusive(filamentLockKey(id), async () => {
+      if (body.totalWeight != null && (await hasVariants(Filament, id))) {
+        delete body.totalWeight;
+        strippedTemplateFields = ["totalWeight"];
+      }
+      return await Filament.findOneAndUpdate(
+        { _id: id, _deletedAt: null },
+        body,
+        { returnDocument: "after", runValidators: true }
+      ).lean();
+    });
     if (!filament) {
       return errorResponse("Not found", 404);
     }

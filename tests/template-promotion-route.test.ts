@@ -199,6 +199,26 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect(effective.netFilamentWeight).toBe(1000);
   });
 
+  it("a parent with ONLY a lowStockThreshold does NOT gate → 201 (review P2: no inventory to protect)", async () => {
+    const parent = await Filament.create({
+      name: "Threshold-Only PLA",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      lowStockThreshold: 150,
+    });
+
+    const res = await createFilament(
+      jsonReq(variantBody(parent._id, { name: "Threshold-Only PLA — Red" })),
+    );
+    expect(res.status).toBe(201);
+    // Exactly the requested variant — no promoted sibling was spawned; the
+    // threshold stays where it was (nothing moved, nothing was gated).
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(1);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBe(150);
+  });
+
   it("first variant of a CLEAN parent (color null, no spools) needs no flag → 201, no promotion copy", async () => {
     const parent = await Filament.create({
       name: "Clean PLA",
@@ -241,6 +261,7 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
       colorName: "Steel Blue",
       spoolWeight: 240,
       netFilamentWeight: 1000,
+      lowStockThreshold: 300,
     });
     const parentLean = await Filament.findById(parent._id).lean();
 
@@ -262,6 +283,8 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect(promoted.colorName).toBe("Steel Blue");
     expect(promoted.spoolWeight ?? null).toBeNull();
     expect(promoted.netFilamentWeight ?? null).toBeNull();
+    // Review P2: the low-stock alarm moved with the inventory it watches.
+    expect(promoted.lowStockThreshold).toBe(300);
     expect(promoted.spools).toHaveLength(2);
     expect(promoted.spools.map((s: { label: string }) => s.label)).toEqual(["roll 1", "roll 2"]);
     // Physical-roll identity preserved, fresh subdoc ids.
@@ -277,6 +300,7 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect(fresh.color).toBeNull();
     expect(fresh.colorName).toBeNull();
     expect(fresh.spools).toEqual([]);
+    expect(fresh.lowStockThreshold).toBeNull();
     expect(fresh.spoolWeight).toBe(240);
     expect(fresh.netFilamentWeight).toBe(1000);
 
@@ -484,6 +508,56 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect(body.parent.totalWeight).toBeNull();
     expect(body.parent.spoolWeight).toBe(250);
     expect(body.parent.netFilamentWeight).toBe(1000);
+  });
+
+  it("promote: threshold-only template → nothing_to_convert; a carrying one moves the threshold with the inventory", async () => {
+    // Review P2: lowStockThreshold alone is not "carrying" — same predicate
+    // as the create gate.
+    const thresholdOnly = await Filament.create({
+      name: "Threshold Template PLA",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      lowStockThreshold: 100,
+    });
+    await Filament.create({
+      name: "Threshold Template PLA — Red",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: thresholdOnly._id,
+    });
+    const resThreshold = await promoteReq(String(thresholdOnly._id));
+    expect(resThreshold.status).toBe(400);
+    expect((await resThreshold.json()).error).toBe("nothing_to_convert");
+    // Untouched — no promotion ran.
+    const freshThresholdOnly = await Filament.findById(thresholdOnly._id).lean();
+    expect(freshThresholdOnly.lowStockThreshold).toBe(100);
+
+    // But when the parent DOES carry inventory, the threshold rides along:
+    // it alarms on the spools/totalWeight being moved.
+    const carrying = await Filament.create({
+      name: "Alarmed Template PLA",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      totalWeight: 900,
+      lowStockThreshold: 250,
+    });
+    await Filament.create({
+      name: "Alarmed Template PLA — Red",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: carrying._id,
+    });
+    const res = await promoteReq(String(carrying._id));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.variant.totalWeight).toBe(900);
+    expect(body.variant.lowStockThreshold).toBe(250);
+    expect(body.parent.totalWeight).toBeNull();
+    expect(body.parent.lowStockThreshold).toBeNull();
   });
 
   it("promote: 400 on a malformed id, 404 on a missing one", async () => {

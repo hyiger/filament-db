@@ -4,6 +4,7 @@ import dbConnect from "@/lib/mongodb";
 import Filament, { generateInstanceId, isSpoolInstanceIdTaken } from "@/models/Filament";
 import Location from "@/models/Location";
 import { hasVariants } from "@/lib/resolveFilament";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { pushSpoolWithTemplateGuard } from "@/lib/spoolTemplateGuard";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
@@ -134,7 +135,17 @@ export async function POST(
     // in pushSpoolWithTemplateGuard so a concurrent first-variant creation
     // between check and $push can't strand a fresh spool on a template —
     // the guard re-checks after the push and pulls the spool back out.
-    const result = await pushSpoolWithTemplateGuard(Filament, id, newSpool, hasVariants);
+    //
+    // Review P1-a companion: the guard runs inside the same per-id lock
+    // the promotion paths take (belt), so within this process a spool push
+    // and a first-variant promotion strictly serialize — a spool accepted
+    // here is visible to the promotion's fresh snapshot and moves with the
+    // inventory; one queued behind a promotion sees hasVariants=true and
+    // 400s. The guard's own re-check + compensating $pull stays (braces)
+    // for writers outside the process (see src/lib/filamentMutex.ts).
+    const result = await runExclusive(filamentLockKey(id), () =>
+      pushSpoolWithTemplateGuard(Filament, id, newSpool, hasVariants),
+    );
 
     if (result.outcome === "template") {
       // Machine-readable `error` code, human `message` — the shape the

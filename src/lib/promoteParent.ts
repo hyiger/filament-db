@@ -12,6 +12,13 @@
  *      variant, THEN
  *   2. clear those fields on the parent.
  *
+ * `lowStockThreshold` MOVES WITH the inventory (review P2): it alarms on the
+ * remaining weight of the spools/totalWeight being moved, so leaving it on a
+ * now-inventoryless template would fire "low stock" forever against an empty
+ * parent while the variant that actually holds the rolls has no threshold.
+ * It does NOT gate promotion, though — a threshold with no inventory to
+ * protect is not "carrying" (see parentPromotionState).
+ *
  * `spoolWeight` and `netFilamentWeight` deliberately do NOT move (GH #1048):
  * they are SPEC — the product line's tare and nominal net weight — not
  * inventory, and they STAY on the parent template where every variant
@@ -56,7 +63,10 @@ export interface ParentPromotionState {
  * per-variant identity templates must not carry), as does a non-null
  * inventory `totalWeight`. The SPEC pair (`spoolWeight` /
  * `netFilamentWeight`) does NOT gate — spec alone is not "carrying": it
- * belongs on the template, where variants inherit it (GH #1048).
+ * belongs on the template, where variants inherit it (GH #1048). Nor does
+ * `lowStockThreshold` alone — a threshold with no inventory to protect
+ * moves nothing worth confirming (it still MOVES when a promotion runs for
+ * the fields that DO gate; see performParentPromotion).
  */
 export function parentPromotionState(parent: FilamentDoc): ParentPromotionState {
   const parentColor =
@@ -162,6 +172,9 @@ export async function performParentPromotion(
     color: parent.color ?? null,
     colorName: parent.colorName ?? null,
     totalWeight: parent.totalWeight ?? null,
+    // The low-stock alarm follows the inventory it watches (review P2) —
+    // same copy-first/clear-last write set as totalWeight.
+    lowStockThreshold: parent.lowStockThreshold ?? null,
     spools: Array.isArray(parent.spools) ? parent.spools.map(spoolForMove) : [],
   });
 
@@ -176,6 +189,7 @@ export async function performParentPromotion(
         colorName: null,
         spools: [],
         totalWeight: null,
+        lowStockThreshold: null,
       },
     },
   );

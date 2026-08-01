@@ -84,6 +84,18 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     });
   });
 
+  it("parentPromotionState: lowStockThreshold alone does NOT gate (review P2 — no inventory to protect)", () => {
+    // The threshold MOVES when a promotion runs (see performParentPromotion),
+    // but a threshold-only parent carries nothing worth a confirmation gate.
+    expect(
+      parentPromotionState({ color: null, spools: [], lowStockThreshold: 200 }),
+    ).toEqual({
+      needed: false,
+      parentColor: null,
+      spoolCount: 0,
+    });
+  });
+
   it("parentPromotionState: empty-string color and missing spools count as nothing", () => {
     expect(parentPromotionState({ color: "" })).toEqual({
       needed: false,
@@ -145,6 +157,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       diameter: 2.85,
       syncId: "parent-sync-1",
       totalWeight: 1250,
+      lowStockThreshold: 200,
       spoolWeight: 250,
       netFilamentWeight: 1000,
       spools: [
@@ -162,6 +175,8 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     expect(variant.color).toBe("#123456");
     expect(variant.colorName).toBe("Deep Blue");
     expect(variant.totalWeight).toBe(1250);
+    // Review P2: the low-stock alarm follows the inventory it watches.
+    expect(variant.lowStockThreshold).toBe(200);
     // The SPEC pair is NOT copied — the variant's own fields stay blank so
     // it inherits them from the template (GH #1048).
     expect(variant.spoolWeight ?? null).toBeNull();
@@ -193,6 +208,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     expect(fresh.colorName).toBeNull();
     expect(fresh.spools).toEqual([]);
     expect(fresh.totalWeight).toBeNull();
+    expect(fresh.lowStockThreshold).toBeNull();
     expect(fresh.spoolWeight).toBe(250);
     expect(fresh.netFilamentWeight).toBe(1000);
     // The parent's own untouched fields survive.
