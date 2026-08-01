@@ -12,6 +12,7 @@ import {
   diffOptFields,
   OPT_MANAGED_FIELD_KEYS,
 } from "@/lib/optResync";
+import { hasVariants } from "@/lib/resolveFilament";
 import { resolveEffectiveFilament } from "@/lib/resolveEffectiveFilament";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
@@ -127,10 +128,15 @@ export async function POST(
     const { effective, parentEffective } = await resolveEffectiveFilament(
       filament as unknown as Record<string, unknown>,
     );
+    // GH #605: templates (filaments with ≥1 live variant) are colorless —
+    // the check route drops `color` from a template's changelist, so the
+    // same flag here makes a sync naming `color` for a template fall out of
+    // `offered` and 400 as not-offered, exactly like any other stale field.
+    const excludeColor = await hasVariants(Filament, id);
     const offered = new Set(
-      diffOptFields(effective, payload, snapshotForDiff, parentEffective).map(
-        (c) => c.field,
-      ),
+      diffOptFields(effective, payload, snapshotForDiff, parentEffective, {
+        excludeColor,
+      }).map((c) => c.field),
     );
     const notOffered = fields.filter((f) => !offered.has(f));
     if (notOffered.length > 0) {

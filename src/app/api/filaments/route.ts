@@ -15,6 +15,13 @@ import {
   effectiveNozzleRangeForUpdate,
   inheritNozzleRangeFromParent,
 } from "@/lib/temperatureRange";
+import { hasVariants } from "@/lib/resolveFilament";
+import {
+  parentPromotionState,
+  promotionVariantBaseName,
+  resolvePromotionVariantName,
+  performParentPromotion,
+} from "@/lib/promoteParent";
 
 /**
  * GH #519: collect every cross-collection ref carried by a filament body and
@@ -371,6 +378,13 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // GH #605 (Phase 2b): `promoteParent` is a control flag, never a schema
+  // field — capture it, then strip it so it can't ride into Filament.create
+  // (captured after the tagData merge above so an `overrides` copy of it is
+  // honoured/stripped the same way).
+  const promoteParent = body?.promoteParent === true;
+  delete body.promoteParent;
+
   delete body._id;
   delete body._deletedAt;
   // GH #222: parallel of the PUT-handler fix. `_purged` is a sync-engine
@@ -459,6 +473,16 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    // GH #605: when this request creates the FIRST variant of a parent that
+    // still carries a real color or its own spools, the parent must be
+    // PROMOTED to a template (color/spools move to a new sibling variant).
+    // The parent doc is captured here; the gate + promotion run right
+    // before the create, AFTER every other guard — so an otherwise-invalid
+    // request gets its 400 (not a promotion 409 it would only re-hit), and
+    // a rejected request can never leave a half-promoted parent.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let variantParent: Record<string, any> | null = null;
+
     // Validate parentId if provided
     if (body.parentId) {
       const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null }).lean();
@@ -476,6 +500,7 @@ export async function POST(request: NextRequest) {
       if (body.diameter === undefined || body.diameter === null || body.diameter === "") {
         body.diameter = null;
       }
+      variantParent = parent;
     }
 
     const refGuard = await assertFilamentBodyRefs(body);
@@ -516,6 +541,61 @@ export async function POST(request: NextRequest) {
         compatibleNozzles: body.compatibleNozzles,
         parentId: body.parentId,
       });
+    }
+
+    // GH #605 (Phase 2b): promotion gate — FIRST variant only (from the
+    // second variant on the parent is already a template and carries
+    // nothing to move). Runs LAST, after every other guard, so the 409
+    // means "this request would succeed, but it has a side effect on the
+    // parent you must opt into". Without the explicit `promoteParent: true`
+    // flag, the structured 409 tells the caller exactly what the promotion
+    // would do, so the UI can raise its confirmation dialog and a bare API
+    // client isn't surprised by a mutation of a second document.
+    if (variantParent) {
+      const promoState = parentPromotionState(variantParent);
+      if (promoState.needed && !(await hasVariants(Filament, String(variantParent._id)))) {
+        // The requested variant's own name is treated as taken when
+        // resolving the promoted copy's name — the copy must never squat on
+        // the name this request is about to create.
+        const alsoTaken =
+          typeof body.name === "string" ? new Set([body.name as string]) : undefined;
+        if (!promoteParent) {
+          const variantName = await resolvePromotionVariantName(
+            Filament,
+            promotionVariantBaseName(variantParent.name, variantParent.colorName),
+            alsoTaken,
+          );
+          return NextResponse.json(
+            {
+              error: "parent_promotion_required",
+              message:
+                `Creating the first variant makes "${variantParent.name}" a template: ` +
+                `its color and ${promoState.spoolCount} spool(s) move to a new variant ` +
+                `named "${variantName}". Repeat the request with promoteParent: true to confirm.`,
+              parentName: variantParent.name,
+              parentColor: promoState.parentColor,
+              spoolCount: promoState.spoolCount,
+              variantName,
+            },
+            { status: 409 },
+          );
+        }
+        // Confirmed. Fail a doomed duplicate-named request BEFORE mutating —
+        // it would otherwise E11000 with the parent already promoted. No
+        // transactions available (standalone mongod), so the residual risk
+        // window is the name race between this pre-check and the create;
+        // the promotion itself is copy-first/clear-last and self-consistent.
+        if (
+          typeof body.name === "string" &&
+          (await Filament.exists({ name: body.name, _deletedAt: null }))
+        ) {
+          return errorResponse(
+            `A filament with that name already exists: "${body.name}"`,
+            409,
+          );
+        }
+        await performParentPromotion(Filament, variantParent, alsoTaken);
+      }
     }
 
     const filament = await Filament.create(body);

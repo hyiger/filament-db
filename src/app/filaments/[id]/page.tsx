@@ -1182,6 +1182,36 @@ function FilamentDetail() {
     }
   };
 
+  // GH #605 (Phase 2b): "Convert to template" — a legacy parent that still
+  // carries its own color/spools (from before the template guards) moves
+  // that state onto a NEW variant via POST /promote (server-side copy-first
+  // / clear-last), leaving the template colorless and inventory-free.
+  const handleConvertToTemplate = async () => {
+    if (!filament) return;
+    const ok = await confirm({
+      title: t("detail.template.convertTitle"),
+      message: t("detail.template.convertConfirm", {
+        count: filament.spools?.length ?? 0,
+      }),
+      confirmLabel: t("detail.template.convertAction"),
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/filaments/${filament._id}/promote`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast(body?.message || body?.error || t("detail.template.convertFailed"), "error");
+        return;
+      }
+      toast(t("detail.template.converted"));
+      refetchFilament();
+    } catch {
+      toast(t("detail.template.convertFailed"), "error");
+    }
+  };
+
   if (notFound) return (
     <div className="p-8">
       <p className="text-red-500 mb-4">{t("detail.error.notFound")}</p>
@@ -1645,16 +1675,54 @@ function FilamentDetail() {
           )}
       </div>
 
-      {/* Spool Tracker — always rendered. Pre-fix the outer gate hid the
-          entire section (header + Add Spool button) when the filament had
-          neither spools nor any spool-weight metadata, leaving users with
-          no in-app affordance to add their first spool (e.g. a freshly-
-          imported Siraya Tech PPS-CF row with the OpenPrintTag defaults).
-          Empty state now surfaces an Add Spool CTA via the fallback at
-          the bottom of this block, gated on hasSpools + totalWeight only.
-          (Regression of #346 — that fix covered "no spools but weights
-          set"; the "no spools AND no weights" case still fell through.) */}
+      {/* Spool Tracker — always rendered (for non-templates). Pre-fix the
+          outer gate hid the entire section (header + Add Spool button) when
+          the filament had neither spools nor any spool-weight metadata,
+          leaving users with no in-app affordance to add their first spool
+          (e.g. a freshly-imported Siraya Tech PPS-CF row with the
+          OpenPrintTag defaults). Empty state now surfaces an Add Spool CTA
+          via the fallback at the bottom of this block, gated on hasSpools +
+          totalWeight only. (Regression of #346 — that fix covered "no spools
+          but weights set"; the "no spools AND no weights" case still fell
+          through.) */}
       {(() => {
+        // GH #605: templates (filaments with variants) hold no inventory —
+        // spools live on the color variants, and the spools POST rejects a
+        // template target (template_no_spools). Replace the whole tracker
+        // (including the NFC/scale weight-update paths inside it) with a
+        // short explanatory line. Legacy parent spools created before the
+        // guard keep counting on the home page (#552/#616) but aren't
+        // manageable here — the Phase-2 "Convert to template" action moves
+        // them onto a variant.
+        if (isParent) {
+          // GH #605 (Phase 2b): a legacy parent that still carries its own
+          // color or spools (predating the template guards) gets the
+          // explicit "Convert to template" action — enforce-forward only,
+          // at the user's initiative (decision 4).
+          const carriesLegacyState =
+            (typeof filament.color === "string" && filament.color !== "") ||
+            (filament.spools?.length ?? 0) > 0;
+          return (
+            <div className="mb-8 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+              <h2 className="text-sm font-medium text-gray-500 mb-2">{t("detail.section.spoolTracker")}</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">{t("detail.spool.templateNote")}</p>
+              {carriesLegacyState && (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <p className="text-sm text-amber-700 dark:text-amber-400">
+                    {t("detail.template.convertHint")}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleConvertToTemplate}
+                    className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded hover:bg-amber-700"
+                  >
+                    {t("detail.template.convertAction")}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        }
         const hasSpools = filament.spools?.length > 0;
         const legacyRemaining = !hasSpools ? computeRemaining(filament) : null;
 

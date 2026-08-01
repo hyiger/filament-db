@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament, { generateInstanceId, isSpoolInstanceIdTaken } from "@/models/Filament";
 import Location from "@/models/Location";
+import { hasVariants } from "@/lib/resolveFilament";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
@@ -82,6 +83,23 @@ export async function POST(
     // rather than a 400 with a useful message.
     if (!mongoose.isValidObjectId(id)) {
       return errorResponse("Invalid filament id", 400);
+    }
+
+    // GH #605: a filament with ≥1 live variant is a TEMPLATE — inventory
+    // lives on its color variants, never on the template itself. Enforced
+    // forward only: spools a legacy parent already carries stay untouched,
+    // but no NEW spool may land here (same variant-existence check the
+    // DELETE guard uses). Machine-readable `error` code, human `message` —
+    // the shape the other structured rejections use (name_id_mismatch).
+    if (await hasVariants(Filament, id)) {
+      return NextResponse.json(
+        {
+          error: "template_no_spools",
+          message:
+            "This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead.",
+        },
+        { status: 400 },
+      );
     }
 
     // GH #953: a new spool's locationId must reference an active Location, so a

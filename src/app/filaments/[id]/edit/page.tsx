@@ -13,7 +13,7 @@ export default function EditFilament() {
   const params = useParams();
   const { toast } = useToast();
   const { t } = useTranslation();
-  const [filament, setFilament] = useState(null);
+  const [filament, setFilament] = useState<Record<string, unknown> | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [fetchError, setFetchError] = useState(false);
 
@@ -78,7 +78,15 @@ export default function EditFilament() {
         </Link>
       </div>
       <h1 className="text-2xl font-bold mb-6">{t("edit.title")}</h1>
-      <FilamentForm initialData={filament} onSubmit={handleSubmit} onDirtyChange={onDirtyChange} />
+      {/* GH #605: `_variants` rides the raw GET response — ≥1 live variant
+          makes this filament a template, which hides the Weight Tracking
+          fields in the form (templates hold no inventory). */}
+      <FilamentForm
+        initialData={filament}
+        isParent={Array.isArray(filament._variants) && filament._variants.length > 0}
+        onSubmit={handleSubmit}
+        onDirtyChange={onDirtyChange}
+      />
 
       {showUnsavedDialog && (
         <UnsavedChangesDialog onCancel={cancelNav} onDiscard={confirmNav} />

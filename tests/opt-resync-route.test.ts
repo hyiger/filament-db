@@ -819,4 +819,90 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/one slug/i);
   });
+
+  // ── GH #605: colorless templates in check + sync ─────────────────────
+
+  /** A linked parent (diverged color + density) with one live variant —
+   *  i.e. a TEMPLATE per the derived rule. */
+  async function seedLinkedTemplate() {
+    const parent = await Filament.create({
+      name: "OPT Template PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#111111",
+      density: 1.0,
+      settings: {
+        openprinttag_slug: "prusament-pla-galaxy-black",
+        openprinttag_uuid: "1aaca54a-431f-5601-adf5-85dd018f487f",
+      },
+    });
+    await Filament.create({
+      name: "OPT Template PLA — Red",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+    });
+    return parent;
+  }
+
+  it("check: a template's changelist excludes color but still offers secondaryColors + scalars", async () => {
+    // Upstream carries a primary AND secondaries — the mapped payload keeps
+    // both (mapToFilamentPayload only nulls the primary when there is none).
+    dbMock.mockResolvedValue({
+      brands: [],
+      materials: [{ ...UPSTREAM_MATERIAL, secondaryColors: ["#FF0000", "#00FF00"] }],
+      cachedAt: new Date(0).toISOString(),
+      totalFFF: 1,
+      totalSLA: 0,
+    });
+    const parent = await seedLinkedTemplate();
+
+    const res = await checkGET({} as NextRequest, params(String(parent._id)));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const fields = body.changes.map((c: { field: string }) => c.field);
+    // Templates are colorless — the diverged primary (#111111 vs #3d3e3d)
+    // must NOT be offered…
+    expect(fields).not.toContain("color");
+    // …while the inheritable secondaryColors (decision 3) and the diverged
+    // scalar (density 1.0 vs 1.24) still are.
+    expect(fields).toContain("secondaryColors");
+    expect(fields).toContain("density");
+  });
+
+  it("check: the same diverged color IS offered while the filament has no variants", async () => {
+    const parent = await seedLinkedTemplate();
+    // Soft-delete the only variant → not a template anymore (derived rule).
+    await Filament.updateMany({ parentId: parent._id }, { _deletedAt: new Date() });
+
+    const res = await checkGET({} as NextRequest, params(String(parent._id)));
+    const body = await res.json();
+    const fields = body.changes.map((c: { field: string }) => c.field);
+    expect(fields).toContain("color");
+  });
+
+  it("sync: naming `color` for a template is rejected as not-offered (400), nothing written", async () => {
+    const parent = await seedLinkedTemplate();
+
+    const res = await syncPOST(syncReq(String(parent._id), ["color"]), params(String(parent._id)));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/no current openprinttag update.*color/i);
+
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#111111");
+  });
+
+  it("sync: a template can still adopt a non-color field (density)", async () => {
+    const parent = await seedLinkedTemplate();
+
+    const res = await syncPOST(syncReq(String(parent._id), ["density"]), params(String(parent._id)));
+    expect(res.status).toBe(200);
+    expect((await res.json()).applied).toEqual(["density"]);
+
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.density).toBe(1.24);
+    // The color was never touched — only the requested field applied.
+    expect(fresh.color).toBe("#111111");
+  });
 });

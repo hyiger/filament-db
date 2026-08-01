@@ -284,6 +284,10 @@ describe("variant edit round-trip preserves inheritance", () => {
       name: "Route Parent 2.85mm",
       vendor: "Test",
       type: "PLA",
+      // GH #605: colorless parent — a first variant of a color-carrying
+      // parent now 409s (parent_promotion_required) until confirmed; this
+      // test is about the diameter default, not the promotion flow.
+      color: null,
       diameter: 2.85,
     });
 
@@ -388,7 +392,10 @@ describe("variant edit round-trip preserves inheritance", () => {
       name: "Loaded Parent",
       vendor: "Test",
       type: "PLA",
-      color: "#000000",
+      // GH #605: colorless parent — a first variant of a color-carrying
+      // parent now 409s (parent_promotion_required) until confirmed; this
+      // test pins the clone whitelist contract, not the promotion flow.
+      color: null,
       cost: 30,
       density: 1.24,
       diameter: 1.75,

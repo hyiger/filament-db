@@ -227,6 +227,21 @@ function classify(
 }
 
 /**
+ * GH #605: options for `diffOptFields`.
+ *
+ * `excludeColor` — the target filament is a TEMPLATE (it has ≥1 live
+ * variant). Templates are colorless: color lives on the variants, so the
+ * primary `color` must never be offered (neither as an adopt nor as a
+ * conflict). `secondaryColors` deliberately stays offered — it is
+ * inheritable (GH #477 / decision 3 on #605), so a template CAN carry the
+ * shared multi-color set its variants inherit. `colorName` isn't OPT-managed
+ * at all, so `color` is the only key this drops.
+ */
+export interface DiffOptOptions {
+  excludeColor?: boolean;
+}
+
+/**
  * Diff a stored filament against the current OPT material (already mapped
  * through `mapToFilamentPayload`). Returns one entry per field that differs
  * AND that OPT actually offers a value for. Fields OPT doesn't carry, and
@@ -247,9 +262,15 @@ export function diffOptFields(
   payload: Record<string, unknown>,
   snapshot: Record<string, unknown> | null | undefined,
   parentEffective?: Record<string, unknown> | null,
+  options?: DiffOptOptions,
 ): OptFieldChange[] {
   const changes: OptFieldChange[] = [];
   for (const { field, labelKey, isColor } of OPT_MANAGED_FIELDS) {
+    // GH #605: templates are colorless — never offer the primary color to a
+    // parent. Both the check and sync routes pass the same flag, so a sync
+    // naming `color` for a parent falls out of the offered set and is
+    // rejected as not-offered.
+    if (field === "color" && options?.excludeColor) continue;
     const incoming = getPath(payload, field);
     // The gray sentinel is "OPT has no real color" — never offer to push it
     // onto the user's filament.

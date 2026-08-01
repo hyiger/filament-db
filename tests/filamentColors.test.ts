@@ -10,8 +10,12 @@ import {
   displayColor,
   allColors,
   parentSwatchColors,
+  seedFormColorHex,
+  normalizeColorHexInput,
+  submittedColorValue,
   type ColorArrangement,
 } from "@/lib/filamentColors";
+import { BLANK_COLOR_HEX } from "@/lib/cssNamedColors";
 
 describe("deriveArrangement", () => {
   it("returns 'solid' for null/undefined/empty optTags", () => {
@@ -235,5 +239,72 @@ describe("parentSwatchColors (GH #597)", () => {
   it("returns [] when nothing valid is known (caller falls back to cross-hatch)", () => {
     expect(parentSwatchColors([])).toEqual([]);
     expect(parentSwatchColors([null, "nope", ""])).toEqual([]);
+  });
+});
+
+// ── GH #605: color clearable end-to-end — form seed / input / submit ──────
+
+describe("seedFormColorHex (GH #605)", () => {
+  it("seeds a stored null as '' — editing must NOT resurrect the gray sentinel", () => {
+    expect(seedFormColorHex(null)).toBe("");
+  });
+
+  it("keeps the gray default for an absent value (fresh form / no prefill)", () => {
+    expect(seedFormColorHex(undefined)).toBe(BLANK_COLOR_HEX);
+  });
+
+  it("passes a stored real color through verbatim", () => {
+    expect(seedFormColorHex("#FA6E1C")).toBe("#FA6E1C");
+    // The sentinel itself is a storable, user-pickable gray — not special.
+    expect(seedFormColorHex(BLANK_COLOR_HEX)).toBe(BLANK_COLOR_HEX);
+  });
+});
+
+describe("normalizeColorHexInput (GH #605)", () => {
+  it("returns '' for an emptied box (pre-fix this normalized to a dangling '#')", () => {
+    expect(normalizeColorHexInput("")).toBe("");
+    expect(normalizeColorHexInput("   ")).toBe("");
+  });
+
+  it("returns '' when only the '#' remains or no hex chars survive filtering", () => {
+    expect(normalizeColorHexInput("#")).toBe("");
+    expect(normalizeColorHexInput("xyz")).toBe("");
+    expect(normalizeColorHexInput("#zz")).toBe("");
+  });
+
+  it("prepends # when missing and keeps only hex chars", () => {
+    expect(normalizeColorHexInput("FA6E1C")).toBe("#FA6E1C");
+    expect(normalizeColorHexInput("#FA6E1C")).toBe("#FA6E1C");
+    expect(normalizeColorHexInput("fa6e1c")).toBe("#fa6e1c");
+    expect(normalizeColorHexInput("#FA-6E-1C")).toBe("#FA6E1C");
+  });
+
+  it("keeps partial hexes while typing and caps at 6 hex chars", () => {
+    expect(normalizeColorHexInput("#F")).toBe("#F");
+    expect(normalizeColorHexInput("#FA6E")).toBe("#FA6E");
+    expect(normalizeColorHexInput("#FA6E1C99")).toBe("#FA6E1C");
+  });
+});
+
+describe("submittedColorValue (GH #605)", () => {
+  it("maps a cleared color ('') to null on submit", () => {
+    expect(submittedColorValue("", [])).toBeNull();
+  });
+
+  it("maps an incomplete hex ('#', '#12') to null on submit", () => {
+    expect(submittedColorValue("#", [])).toBeNull();
+    expect(submittedColorValue("#12", [])).toBeNull();
+  });
+
+  it("submits a full #RRGGBB verbatim — including the gray sentinel", () => {
+    expect(submittedColorValue("#FA6E1C", [])).toBe("#FA6E1C");
+    expect(submittedColorValue(BLANK_COLOR_HEX, null)).toBe(BLANK_COLOR_HEX);
+  });
+
+  it("coextruded arrangement (tags 28/29) always submits null (GH #477/#533)", () => {
+    expect(submittedColorValue("#FA6E1C", [28])).toBeNull();
+    expect(submittedColorValue("#FA6E1C", [29])).toBeNull();
+    // Gradient keeps its primary.
+    expect(submittedColorValue("#FA6E1C", [27])).toBe("#FA6E1C");
   });
 });

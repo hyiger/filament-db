@@ -13,12 +13,16 @@ import {
   lookupCssNamedColor,
   isBlankColorHex,
   isIncompleteColorHex,
+  BLANK_COLOR_HEX,
   type ColorSuggestion,
 } from "@/lib/cssNamedColors";
 import {
   deriveArrangement,
   arrangementToOptTag,
   stripArrangementTags,
+  seedFormColorHex,
+  normalizeColorHexInput,
+  submittedColorValue,
   type ColorArrangement,
 } from "@/lib/filamentColors";
 import { isInvertedNozzleRange } from "@/lib/temperatureRange";
@@ -38,9 +42,9 @@ interface FilamentFormData {
   /** GH #477: primary color (OpenPrintTag spec key 19). Nullable for
    *  coextruded / rainbow filaments where the spec says primary "can
    *  be null". The form normalises `null` to empty string in the input
-   *  for editing purposes, but the submit handler converts back to
-   *  null when the user has explicitly cleared it (multi-color
-   *  arrangement was set). */
+   *  (seedFormColorHex), and the submit handler converts back to null
+   *  when the arrangement is coextruded OR the user cleared / never
+   *  completed the hex (submittedColorValue — GH #605). */
   color: string;
   /** GH #477: up to 5 additional color hexes (OpenPrintTag spec keys
    *  20–24). The arrangement radio derived from optTags (27 = gradient,
@@ -197,6 +201,12 @@ interface Props {
   initialData?: FilamentInitialData;
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
+  /** GH #605: true when the edited filament currently has ≥1 variant — it is
+   * a TEMPLATE. Templates don't hold inventory, so the Weight Tracking
+   * fields are hidden (the PUT route strips those writes anyway). Derived by
+   * the edit page from the detail GET's `_variants`; template-ness is never
+   * a schema flag. */
+  isParent?: boolean;
 }
 
 const DEFAULT_FILAMENT_TYPES = [
@@ -222,7 +232,7 @@ function extractPressureAdvance(data: Record<string, unknown> | undefined): stri
   return match ? match[1] : "";
 }
 
-export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: Props) {
+export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isParent = false }: Props) {
   const { symbol: currencySymbol } = useCurrency();
   const { t } = useTranslation();
   const [nozzles, setNozzles] = useState<NozzleOption[]>([]);
@@ -250,7 +260,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
     name: initialData?.name || "",
     vendor: initialData?.vendor || "",
     type: initialData?.type || "PLA",
-    color: initialData?.color ?? "#808080",
+    // GH #605: a stored null (explicitly cleared color) seeds "" so editing
+    // doesn't silently resurrect the gray sentinel; absent → "#808080".
+    color: seedFormColorHex(initialData?.color),
     secondaryColors: initialData?.secondaryColors ?? [],
     colorName: initialData?.colorName || "",
     cost: initialData?.cost?.toString() || "",
@@ -384,6 +396,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
   // can still gap-fill it.
   const [colorHexUserSet, setColorHexUserSet] = useState(() => !isBlankColorHex(initialData?.color));
   const colorNameRef = useRef<HTMLDivElement>(null);
+  // GH #605: hidden <input type="color"> behind the cleared-color placeholder
+  // button — clicking the hatch re-opens the native picker in one step.
+  const colorPickerRef = useRef<HTMLInputElement>(null);
   const nozzleRangeMaxRef = useRef<HTMLInputElement>(null);
   const [fetchErrors, setFetchErrors] = useState<string[]>([]);
 
@@ -803,12 +818,13 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
       // the triple_color tag (29) represent coextruded — pre-fix this
       // only checked 29, so a dual-color save (the common 2-secondary
       // shape) kept the primary on the doc and rendered with an extra
-      // unwanted stripe. Use deriveArrangement to stay aligned with
-      // every other render site.
-      const submittedColor =
-        deriveArrangement(form.optTags) === "coextruded"
-          ? null
-          : form.color;
+      // unwanted stripe. submittedColorValue uses deriveArrangement to
+      // stay aligned with every other render site.
+      //
+      // GH #605: a cleared / incomplete hex ("" or "#12") also submits
+      // null — the API and schema accept it; pre-fix the UI could never
+      // produce a null color outside the coextruded arrangement.
+      const submittedColor = submittedColorValue(form.color, form.optTags);
       await onSubmit({
         name: form.name,
         vendor: form.vendor,
@@ -1390,17 +1406,71 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           out of alignment with the rest of the row. Two columns matches
           the vendor/type row above and gives every field room. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {/* GH #605: templates (filaments with variants) are colorless — the
+            primary color + color name live on each variant, and FilamentSwatch
+            renders parents as the hatched color group regardless. Hide both
+            editors and explain; the untouched seeded values are resubmitted
+            verbatim so a legacy parent's stored color survives an edit until
+            the user explicitly converts (decision 4, enforce forward only).
+            The multi-color editor below stays: secondaryColors is inheritable
+            (GH #477), so the shared set legitimately lives on the template. */}
+        {isParent ? (
+          <p className="sm:col-span-2 text-sm text-gray-500 dark:text-gray-400">
+            {t("form.color.templateNote")}
+          </p>
+        ) : (
+        <>
         <div>
           <label className={labelClass}>{t("form.color")}</label>
           <div className="flex gap-2">
+            {form.color === "" ? (
+              // GH #605: cleared color. <input type="color"> can't render an
+              // empty value, so show a hatched placeholder instead — same
+              // hatch vocabulary as FilamentSwatch's "no single color"
+              // treatment. Clicking forwards to the always-mounted hidden
+              // picker below so choosing a color back is still one click.
+              <button
+                type="button"
+                aria-label={t("form.color.cleared")}
+                title={t("form.color.cleared")}
+                className="h-10 w-12 rounded border border-gray-400 dark:border-gray-500 cursor-pointer flex-shrink-0"
+                style={{
+                  backgroundColor: "#e5e7eb",
+                  backgroundImage: [
+                    "repeating-linear-gradient(45deg, rgba(75,85,99,0.55) 0 2px, transparent 2px 6px)",
+                    "repeating-linear-gradient(-45deg, rgba(75,85,99,0.55) 0 2px, transparent 2px 6px)",
+                  ].join(", "),
+                }}
+                onClick={() => colorPickerRef.current?.click()}
+              />
+            ) : (
+              <input
+                type="color"
+                aria-label={t("form.color")}
+                className="h-10 w-12 rounded border border-gray-300 dark:border-gray-600 cursor-pointer bg-transparent flex-shrink-0"
+                value={form.color}
+                onChange={(e) => {
+                  // Manual pick → this hex is now user-owned (even if it's the
+                  // gray sentinel); a later color name must not overwrite it (#794).
+                  setForm({ ...form, color: e.target.value });
+                  setColorHexUserSet(true);
+                }}
+              />
+            )}
+            {/* GH #605: hidden picker backing the cleared-state placeholder.
+                Mounted unconditionally so the native dialog it opened doesn't
+                close the instant the first picked value flips the branch
+                above. Seeded with the neutral sentinel while cleared (the
+                cleared state has no hex to show; incomplete fragments would
+                be non-conforming input values). */}
             <input
+              ref={colorPickerRef}
               type="color"
-              aria-label={t("form.color")}
-              className="h-10 w-12 rounded border border-gray-300 dark:border-gray-600 cursor-pointer bg-transparent flex-shrink-0"
-              value={form.color}
+              aria-hidden="true"
+              tabIndex={-1}
+              className="sr-only"
+              value={isIncompleteColorHex(form.color) ? BLANK_COLOR_HEX : form.color}
               onChange={(e) => {
-                // Manual pick → this hex is now user-owned (even if it's the
-                // gray sentinel); a later color name must not overwrite it (#794).
                 setForm({ ...form, color: e.target.value });
                 setColorHexUserSet(true);
               }}
@@ -1413,11 +1483,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
               placeholder="#RRGGBB"
               maxLength={7}
               onChange={(e) => {
-                const raw = e.target.value.trim();
-                // Allow incremental typing: prepend # if missing, keep only hex chars
-                let v = raw.startsWith("#") ? raw : `#${raw}`;
-                v = "#" + v.slice(1).replace(/[^0-9a-fA-F]/g, "");
-                setForm({ ...form, color: v.slice(0, 7) });
+                // Allow incremental typing: prepend # if missing, keep only
+                // hex chars. GH #605: an emptied box stores "" (no color) —
+                // not a dangling "#" — so the submit maps it to null.
+                setForm({ ...form, color: normalizeColorHexInput(e.target.value) });
                 // Manual edit → user-owned hex; don't let a name overwrite it (#794).
                 setColorHexUserSet(true);
               }}
@@ -1601,6 +1670,8 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
             );
           })()}
         </div>
+        </>
+        )}
         {/* GH #477: Multi-color editor + arrangement radio. Spans the
             full 2-col grid via sm:col-span-2. */}
         <div className="sm:col-span-2">
@@ -1638,6 +1709,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
         </div>
       </div>
 
+      {/* GH #605: a template (filament with variants) doesn't hold inventory —
+          spools and weights live on its color variants, and the PUT route
+          strips these fields for parents. Hide the section rather than offer
+          inputs whose values would silently not persist. */}
+      {!isParent && (
       <CollapsibleSection
         id="spool-weight"
         title={t("form.section.spoolWeight")}
@@ -1706,6 +1782,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange }: P
           </div>
         </div>
       </CollapsibleSection>
+      )}
 
       <div>
         <label className={labelClass}>{t("form.tdsUrl")}</label>

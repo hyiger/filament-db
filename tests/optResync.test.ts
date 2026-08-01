@@ -606,3 +606,26 @@ describe("buildOptLinkUpdate (Issue #753)", () => {
     expect(update.openprinttagSnapshot).toBeTruthy();
   });
 });
+
+describe("diffOptFields excludeColor (GH #605 — colorless templates)", () => {
+  it("drops the primary color from a template's changelist but keeps secondaryColors + scalars", () => {
+    const stored = { color: "#111111", density: 1.0, secondaryColors: [] as string[] };
+    const p = payload({ secondaryColors: ["#ff0000", "#00ff00"] });
+    const changes = diffOptFields(stored, p, null, null, { excludeColor: true });
+    const fields = changes.map((c) => c.field);
+    // Templates are colorless — color must never be offered…
+    expect(fields).not.toContain("color");
+    // …but secondaryColors stays inheritable (decision 3 on #605) and the
+    // scalar fields are untouched.
+    expect(fields).toContain("secondaryColors");
+    expect(fields).toContain("density");
+  });
+
+  it("color stays offered when the option is absent or explicitly false", () => {
+    const stored = { color: "#111111" };
+    expect(diffOptFields(stored, payload(), null).map((c) => c.field)).toContain("color");
+    expect(
+      diffOptFields(stored, payload(), null, null, { excludeColor: false }).map((c) => c.field),
+    ).toContain("color");
+  });
+});

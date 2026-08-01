@@ -7,6 +7,7 @@ import {
   mapToFilamentPayload,
 } from "@/lib/openprinttagBrowser";
 import { diffOptFields } from "@/lib/optResync";
+import { hasVariants } from "@/lib/resolveFilament";
 import { resolveEffectiveFilament } from "@/lib/resolveEffectiveFilament";
 
 /**
@@ -76,7 +77,16 @@ export async function GET(
     );
 
     const snapshot = filament.openprinttagSnapshot as Record<string, unknown> | undefined;
-    const changes = diffOptFields(effective, payload, snapshot, parentEffective);
+    // GH #605: a filament with ≥1 live variant is a TEMPLATE — templates are
+    // colorless (color lives on the variants), so the diff must not offer
+    // the primary color. secondaryColors stays offered: it's inheritable
+    // (GH #477), so the shared multi-color set legitimately lives on the
+    // template. The sibling sync route passes the same flag so check and
+    // sync agree on what's offered.
+    const excludeColor = await hasVariants(Filament, id);
+    const changes = diffOptFields(effective, payload, snapshot, parentEffective, {
+      excludeColor,
+    });
 
     return NextResponse.json({
       linked: true,

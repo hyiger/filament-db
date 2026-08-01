@@ -214,6 +214,7 @@ export async function PUT(
     delete body._parent;
     delete body._variants;
     delete body._inherited;
+    delete body._strippedTemplateFields;
     // GH #260: `spools` is NOT editable through the filament PUT. Spools
     // have dedicated CRUD endpoints (POST/PUT/DELETE /spools/...) that
     // validate via validateSpoolBody — a bulk PUT of the whole `spools`
@@ -221,6 +222,25 @@ export async function PUT(
     // usageHistory ledger, inject a non-numeric totalWeight, etc. The
     // edit form never sends `spools`; strip it as a hard guarantee.
     delete body.spools;
+
+    // GH #605: a filament with ≥1 live variant is a TEMPLATE and must not
+    // carry its own inventory weights. STRIP (don't reject) non-null writes
+    // to the weight trio — the edit form echoes every field back on save, so
+    // a 400 would brick parent edits entirely. An explicit null passes
+    // through: clearing a legacy parent's leftover value is legitimate
+    // cleanup, and blocking it would freeze exactly the state we're trying
+    // to migrate away from. The response carries `_strippedTemplateFields`
+    // (response-only, underscore-prefixed like _parent/_variants) so a
+    // client can surface a warning.
+    let strippedTemplateFields: string[] = [];
+    {
+      const weightFields = ["totalWeight", "spoolWeight", "netFilamentWeight"];
+      const attempted = weightFields.filter((k) => body[k] != null);
+      if (attempted.length > 0 && (await hasVariants(Filament, id))) {
+        for (const k of attempted) delete body[k];
+        strippedTemplateFields = attempted;
+      }
+    }
 
     // Codex P2 on PR #577: the renderer only ever sends a plain field object.
     // A Mongo update OPERATOR ($set / $inc / $rename / …) in the body would be
@@ -436,7 +456,11 @@ export async function PUT(
       }
     }
 
-    return NextResponse.json(filament);
+    return NextResponse.json(
+      strippedTemplateFields.length > 0
+        ? { ...filament, _strippedTemplateFields: strippedTemplateFields }
+        : filament,
+    );
   } catch (err) {
     // Surface MongoDB duplicate-key errors (renaming a filament to a
     // name that already exists) as a specific 409 rather than the
