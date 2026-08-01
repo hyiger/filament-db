@@ -166,6 +166,17 @@ export interface PerformParentPromotionOptions {
  * documents (a multi-material job, a multi-slot AMS) remap every matching
  * entry in one write; entries whose spoolId is NOT in the moved set (or
  * whose filamentId isn't the parent) are untouched.
+ *
+ * Codex round 6, F2: Printer AMS slots ALSO support a filament-only "Any
+ * spool" assignment (`filamentId` set, `spoolId: null`) that the moved-set
+ * remap above can't see. Those slots follow the promotion too — an AMS slot
+ * is a FORWARD-looking assignment ("load some spool of this filament next"),
+ * and after promotion the template will never hold inventory again, so "any
+ * spool of the parent" is permanently unsatisfiable there; the promoted
+ * variant is where the spools now live. PrintHistory rows with
+ * `spoolId: null` deliberately do NOT get the same treatment — history is a
+ * BACKWARD-looking record of what was consumed under that name at the time,
+ * so those rows stay on the parent (the round-4 posture, unchanged).
  */
 async function remapExternalSpoolRefs(
   refs: PromotionExternalRefModels,
@@ -173,15 +184,29 @@ async function remapExternalSpoolRefs(
   variantId: unknown,
   movedSpoolIds: unknown[],
 ): Promise<void> {
-  await refs.printHistory.updateMany(
-    { usage: { $elemMatch: { filamentId: parentId, spoolId: { $in: movedSpoolIds } } } },
-    { $set: { "usage.$[u].filamentId": variantId } },
-    { arrayFilters: [{ "u.filamentId": parentId, "u.spoolId": { $in: movedSpoolIds } }] },
-  );
+  if (movedSpoolIds.length > 0) {
+    await refs.printHistory.updateMany(
+      { usage: { $elemMatch: { filamentId: parentId, spoolId: { $in: movedSpoolIds } } } },
+      { $set: { "usage.$[u].filamentId": variantId } },
+      { arrayFilters: [{ "u.filamentId": parentId, "u.spoolId": { $in: movedSpoolIds } }] },
+    );
+    await refs.printer.updateMany(
+      { amsSlots: { $elemMatch: { filamentId: parentId, spoolId: { $in: movedSpoolIds } } } },
+      { $set: { "amsSlots.$[s].filamentId": variantId } },
+      { arrayFilters: [{ "s.filamentId": parentId, "s.spoolId": { $in: movedSpoolIds } }] },
+    );
+  }
+  // Round 6 F2: filament-only ("Any spool") AMS assignments follow the
+  // promotion regardless of whether any spools moved — a color-only parent
+  // can be promoted with zero spools, and its Any-spool slots would
+  // otherwise dangle on the inventory-less template forever. `spoolId: null`
+  // in both the $elemMatch and the arrayFilter also matches a missing field
+  // (Mongo null semantics), which the schema's `default: null` makes
+  // equivalent anyway.
   await refs.printer.updateMany(
-    { amsSlots: { $elemMatch: { filamentId: parentId, spoolId: { $in: movedSpoolIds } } } },
-    { $set: { "amsSlots.$[s].filamentId": variantId } },
-    { arrayFilters: [{ "s.filamentId": parentId, "s.spoolId": { $in: movedSpoolIds } }] },
+    { amsSlots: { $elemMatch: { filamentId: parentId, spoolId: null } } },
+    { $set: { "amsSlots.$[a].filamentId": variantId } },
+    { arrayFilters: [{ "a.filamentId": parentId, "a.spoolId": null }] },
   );
 }
 
@@ -249,7 +274,11 @@ export async function performParentPromotion(
   // spools BEFORE the parent's copies are cleared — see remapExternalSpoolRefs
   // and the crash-posture note in the docblock. Every spool subdoc from a
   // Mongoose document carries an `_id`, so no filtering is needed here.
-  if (opts.externalRefs && movedSpools.length > 0) {
+  // Round 6 F2: the remap runs even when NO spools moved — a color-only
+  // promotion still has to carry the parent's filament-only ("Any spool")
+  // AMS assignments over to the variant; the spool-set remaps inside are
+  // self-gated on a non-empty moved set.
+  if (opts.externalRefs) {
     await remapExternalSpoolRefs(
       opts.externalRefs,
       parent._id,

@@ -254,8 +254,10 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       color: "#808080",
     });
 
-    // Real externalRefs + a spool-less parent: the remap is skipped on the
-    // moved-spools-empty branch even with models supplied.
+    // Real externalRefs + a spool-less parent: the moved-set remaps are
+    // self-gated off on the empty moved set (round 6 F2 moved that gate
+    // inside remapExternalSpoolRefs so the Any-spool AMS remap still runs —
+    // a no-op here, no printers exist).
     const variant = await performParentPromotion(
       Filament,
       await Filament.findById(parent._id).lean(),
@@ -287,8 +289,16 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
         },
       },
       printer: {
-        updateMany: async () => {
-          calls.push("remap-slots");
+        // Two printer writes since round 6 F2: the moved-set remap keys on
+        // `spoolId: { $in: ... }`, the Any-spool remap on `spoolId: null` —
+        // tell them apart by the $elemMatch shape.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        updateMany: async (filter: any) => {
+          calls.push(
+            filter?.amsSlots?.$elemMatch?.spoolId === null
+              ? "remap-any-slots"
+              : "remap-slots",
+          );
           return { acknowledged: true };
         },
       },
@@ -312,7 +322,13 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       },
       { externalRefs: mockRefs },
     );
-    expect(calls).toEqual(["create", "remap-history", "remap-slots", "clear"]);
+    expect(calls).toEqual([
+      "create",
+      "remap-history",
+      "remap-slots",
+      "remap-any-slots",
+      "clear",
+    ]);
   });
 
   it("externalRefs: null (unit-test escape hatch) skips the remap entirely", async () => {
@@ -435,6 +451,11 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
         { filamentId: other._id, spoolId: bystanderSpool._id, grams: 5 },
         // Untouched: the parent without a tracked spool — spoolId null is
         // not in the moved set, so the job row keeps pointing at the parent.
+        // Deliberate, and NOT symmetric with the AMS Any-spool slot below
+        // (codex round 6, F2): history is a BACKWARD-looking record of what
+        // was consumed under that name at the time, while an AMS slot is a
+        // FORWARD-looking assignment that must follow where the inventory
+        // now lives.
         { filamentId: parent._id, spoolId: null, grams: 3 },
       ],
       startedAt: new Date(),
@@ -446,7 +467,11 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       amsSlots: [
         { slotName: "A1", filamentId: parent._id, spoolId: amsSpool._id },
         { slotName: "A2", filamentId: other._id, spoolId: bystanderSpool._id },
+        // "Any spool" of the parent — filament-only assignment, follows the
+        // promotion (codex round 6, F2).
         { slotName: "A3", filamentId: parent._id, spoolId: null },
+        // "Any spool" of a DIFFERENT filament — untouched.
+        { slotName: "A4", filamentId: other._id, spoolId: null },
       ],
     });
 
@@ -466,8 +491,14 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     expect(String(freshPrinter.amsSlots[0].filamentId)).toBe(String(variant._id));
     expect(String(freshPrinter.amsSlots[0].spoolId)).toBe(String(amsSpool._id));
     expect(String(freshPrinter.amsSlots[1].filamentId)).toBe(String(other._id));
-    expect(String(freshPrinter.amsSlots[2].filamentId)).toBe(String(parent._id));
+    // Round 6 F2: the parent's Any-spool slot now points at the promoted
+    // variant ("any spool of the parent" is dead on an inventory-less
+    // template); it stays an Any-spool assignment (spoolId null).
+    expect(String(freshPrinter.amsSlots[2].filamentId)).toBe(String(variant._id));
     expect(freshPrinter.amsSlots[2].spoolId).toBeNull();
+    // A different filament's Any-spool slot is untouched.
+    expect(String(freshPrinter.amsSlots[3].filamentId)).toBe(String(other._id));
+    expect(freshPrinter.amsSlots[3].spoolId).toBeNull();
 
     // And the (filamentId, spoolId) pairs the remap produced actually
     // resolve: the promoted variant holds those spool subdoc ids.
@@ -475,6 +506,33 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     const variantSpoolIds = variantLean.spools.map((s: { _id: unknown }) => String(s._id));
     expect(variantSpoolIds).toContain(String(historySpool._id));
     expect(variantSpoolIds).toContain(String(amsSpool._id));
+  });
+
+  it("an Any-spool AMS slot follows a color-only promotion with ZERO moved spools (codex round 6, F2)", async () => {
+    // The moved set is empty, so before round 6 the whole remap was skipped
+    // and the slot kept pointing at the (now inventory-less) template.
+    const parent = await Filament.create({
+      name: "Colorful Spool-less PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#AA00AA",
+    });
+    const printer = await Printer.create({
+      name: "Any-Slot Printer",
+      manufacturer: "Prusa",
+      printerModel: "XL",
+      amsSlots: [{ slotName: "T1", filamentId: parent._id, spoolId: null }],
+    });
+
+    const variant = await performParentPromotion(
+      Filament,
+      await Filament.findById(parent._id).lean(),
+      { externalRefs },
+    );
+
+    const freshPrinter = await Printer.findById(printer._id).lean();
+    expect(String(freshPrinter.amsSlots[0].filamentId)).toBe(String(variant._id));
+    expect(freshPrinter.amsSlots[0].spoolId).toBeNull();
   });
 
   it("spool-addressed routes still resolve after a promotion (assignment lookup + spool deep-link resolve)", async () => {

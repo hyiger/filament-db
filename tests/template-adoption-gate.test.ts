@@ -265,6 +265,64 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
     expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
   });
 
+  it("confirmed re-parenting PUT with a schema-invalid body → 400 BEFORE any promotion (codex round 6, F1)", async () => {
+    // Same defect class as the create path's round-1 fix: the PUT's own
+    // write runs runValidators, but only AFTER a confirmed adoption gate has
+    // already promoted the parent — so a body that fails Mongoose validation
+    // would surface its 400 with the parent's restructuring already
+    // irreversible. The round-6 dry-run must reject first, everything
+    // untouched.
+    const parent = await seedCarryingParent("Prevalidated Parent");
+    const standalone = await Filament.create({
+      name: "Prevalidated Target",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+      cost: 10,
+    });
+    const parentBefore = await Filament.findById(parent._id).lean();
+    const targetBefore = await Filament.findById(standalone._id).lean();
+
+    // cost: -5 violates the schema's min bound.
+    const badCost = await putFilament(
+      jsonReq(
+        `http://localhost/api/filaments/${standalone._id}`,
+        { parentId: String(parent._id), promoteParent: true, cost: -5 },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(standalone._id) }) },
+    );
+    expect(badCost.status).toBe(400);
+    const badCostBody = await badCost.json();
+    expect(badCostBody.error).toMatch(/cost/);
+
+    // A bad color hex fails the same way.
+    const badColor = await putFilament(
+      jsonReq(
+        `http://localhost/api/filaments/${standalone._id}`,
+        { parentId: String(parent._id), promoteParent: true, color: "not-a-hex" },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(standalone._id) }) },
+    );
+    expect(badColor.status).toBe(400);
+    const badColorBody = await badColor.json();
+    expect(badColorBody.error).toMatch(/color/);
+
+    // Parent byte-for-byte untouched — color/spools/state all still there,
+    // and no promotion copy was minted.
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent).toEqual(parentBefore);
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+    expect(
+      await Filament.findOne({ name: "Prevalidated Parent — Steel Blue" }).lean(),
+    ).toBeNull();
+
+    // Target unchanged too — not adopted, values intact.
+    const freshTarget = await Filament.findById(standalone._id).lean();
+    expect(freshTarget).toEqual(targetBefore);
+  });
+
   // ── F3: the in-lock template strip covers all per-variant fields ────────
 
   it("a form loaded pre-promotion cannot re-materialize color/colorName/lowStockThreshold/totalWeight on the template", async () => {

@@ -398,8 +398,9 @@ export async function PUT(
     // gates — so it must round-trip the same confirmation: 409
     // `parent_promotion_required` until the caller repeats the request with
     // `promoteParent: true`, which promotes the carrying parent first. The
-    // gate runs LAST, after every other guard above, so an otherwise-invalid
-    // request gets its 400 before any promotion side effect.
+    // gate runs LAST, after every other guard above PLUS the round-6 schema
+    // dry-run inside this block, so an otherwise-invalid request gets its
+    // 400 before any promotion side effect.
     //
     // Lock ordering: the gate (and a confirmed promotion) runs under the
     // PARENT's key inside gateFirstVariantAdoption; the write section below
@@ -418,6 +419,29 @@ export async function PUT(
     // error response. (`stored` is the pre-lock snapshot; the write's own
     // `_deletedAt: null` filter still owns the final answer.)
     if (stored && body.parentId && reparenting) {
+      // Codex round 6, F1: dry-run-validate the target AS IT WOULD BE AFTER
+      // this PUT before the gate can promote the parent. The write below
+      // runs `runValidators` — but only AFTER a confirmed adoption has
+      // already restructured the parent, so a schema-invalid body (cost: -5,
+      // a bad color hex) would surface its 400 with the promotion side
+      // effect already irreversible. Same defect class (and same cure) as
+      // the create path's `new Filament(body).validate()` inside
+      // createVariantGated: fail the doomed request while the parent is
+      // completely untouched. The PUT's update is a plain field object
+      // ($-operators rejected above), i.e. a top-level $set — `doc.set(body)`
+      // on a hydrated, never-saved copy of the stored doc reproduces exactly
+      // the document state findOneAndUpdate would persist; a ValidationError
+      // propagates to the catch below and maps to the same 400 shape the
+      // write-time validators produce (errorResponseFromCaught).
+      const dryRunTarget = await Filament.findOne({ _id: id, _deletedAt: null });
+      if (!dryRunTarget) {
+        // Vanished since the `stored` snapshot — same 404 the write would
+        // return, taken here so a confirmed request can't promote first.
+        return errorResponse("Not found", 404);
+      }
+      dryRunTarget.set(body);
+      await dryRunTarget.validate();
+
       const adoption = await gateFirstVariantAdoption(Filament, body.parentId, {
         promoteParent,
         // Reserve the name this document will carry after the PUT (a rename
