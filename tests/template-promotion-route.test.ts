@@ -34,6 +34,7 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
       ["Printer", await import("@/models/Printer")],
       ["BedType", await import("@/models/BedType")],
       ["Location", await import("@/models/Location")],
+      ["PrintHistory", await import("@/models/PrintHistory")],
     ] as const;
     for (const [name, mod] of mods) {
       if (!mongoose.models[name]) mongoose.model(name, mod.default.schema);
@@ -452,6 +453,129 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect(
       copies[0].spools.map((s: { _id: unknown }) => String(s._id)),
     ).toEqual(parentLean.spools.map((s: { _id: unknown }) => String(s._id)));
+  });
+
+  // ── round 9 F1: gate RETRIES resume interrupted promotions too ──────────
+
+  it("create RETRY after an interrupted promotion resumes it first (round 9 F1): 201, parent clean, refs remapped, one promotion copy", async () => {
+    const PrintHistory = mongoose.models.PrintHistory;
+    const Printer = mongoose.models.Printer;
+    // Manufacture the interrupted state: the promotion copy exists (verbatim
+    // spool subdoc ids) but the original confirmed run died before the remap
+    // and the clear — the parent still carries, and external refs still
+    // point at it.
+    const parent = await seedCarryingParent({ colorName: "Steel Blue" });
+    const parentLean = await Filament.findById(parent._id).lean();
+    const partial = await Filament.create({
+      name: "Carrying PLA — Steel Blue",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      color: parentLean.color,
+      colorName: parentLean.colorName,
+      spools: parentLean.spools,
+    });
+    const job = await PrintHistory.create({
+      jobLabel: "ref job",
+      startedAt: new Date(),
+      usage: [{ filamentId: parent._id, spoolId: parentLean.spools[0]._id, grams: 10 }],
+    });
+    const printer = await Printer.create({
+      name: "AMS Printer",
+      manufacturer: "Bambu Lab",
+      printerModel: "X1C",
+      amsSlots: [{ slotName: "A1", filamentId: parent._id, spoolId: parentLean.spools[1]._id }],
+    });
+
+    // The RETRY of the original confirmed request. Before round 9 the gate
+    // skipped promotion entirely (hasVariants is true because of the partial
+    // copy) and created the variant with the parent still carrying and every
+    // ref still stale.
+    const res = await createFilament(
+      jsonReq(variantBody(parent._id, { promoteParent: true })),
+    );
+    expect(res.status).toBe(201);
+    expect((await res.json()).name).toBe("Carrying PLA — Red");
+
+    // The parent ends clean.
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.color).toBeNull();
+    expect(freshParent.colorName).toBeNull();
+    expect(freshParent.spools).toEqual([]);
+
+    // External refs got their owed remap onto the adopted partial copy.
+    const freshJob = await PrintHistory.findById(job._id).lean();
+    expect(String(freshJob.usage[0].filamentId)).toBe(String(partial._id));
+    const freshPrinter = await Printer.findById(printer._id).lean();
+    expect(String(freshPrinter.amsSlots[0].filamentId)).toBe(String(partial._id));
+
+    // Exactly ONE promotion copy — the family is the adopted copy plus the
+    // requested variant, and only the copy holds the rolls (no " (2)"
+    // duplicate of the inventory).
+    const family = await Filament.find({ parentId: parent._id, _deletedAt: null }).lean();
+    expect(family).toHaveLength(2);
+    const carrying = family.filter(
+      (f: { spools: unknown[] }) => (f.spools ?? []).length > 0,
+    );
+    expect(carrying).toHaveLength(1);
+    expect(String(carrying[0]._id)).toBe(String(partial._id));
+    expect(
+      carrying[0].spools.map((s: { _id: unknown }) => String(s._id)),
+    ).toEqual(parentLean.spools.map((s: { _id: unknown }) => String(s._id)));
+  });
+
+  it("legacy carrying template (spools, no partial copy) stays untouched on a non-first variant create — round 9 F1 enforce-forward", async () => {
+    // A genuine pre-#605 legacy shape: the parent carries color+spools AND
+    // has a live variant that is NOT a promotion copy (its own name, its own
+    // color, none of the parent's spool subdoc ids).
+    const parent = await seedCarryingParent({ colorName: "Steel Blue" });
+    await Filament.create({
+      name: "Carrying PLA — Mint",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      color: "#00FF88",
+    });
+    const parentBefore = await Filament.findById(parent._id).lean();
+
+    const res = await createFilament(jsonReq(variantBody(parent._id)));
+    expect(res.status).toBe(201);
+
+    // Enforce-forward: the legacy parent's carried state is exactly as it
+    // was — no resume fired, no promotion copy was minted.
+    expect(await Filament.findById(parent._id).lean()).toEqual(parentBefore);
+    expect(
+      await Filament.findOne({ name: "Carrying PLA — Steel Blue" }).lean(),
+    ).toBeNull();
+  });
+
+  it("legacy carrying template (no spools, near-miss variant name) stays untouched — carried-set equality gates the resume", async () => {
+    // No-spools detection is name + FULL carried-set equality. A variant
+    // whose name matches the deterministic promotion name but whose carried
+    // values differ is a near-miss, not a partial copy — the parent must be
+    // left exactly as-is.
+    const parent = await Filament.create({
+      name: "Legacy Colorful PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#336699",
+      colorName: "Steel Blue",
+    });
+    await Filament.create({
+      name: "Legacy Colorful PLA — Steel Blue",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      color: "#FF00FF", // differs from the parent's carried color
+    });
+    const parentBefore = await Filament.findById(parent._id).lean();
+
+    const res = await createFilament(
+      jsonReq(variantBody(parent._id, { name: "Legacy Colorful PLA — Red" })),
+    );
+    expect(res.status).toBe(201);
+
+    expect(await Filament.findById(parent._id).lean()).toEqual(parentBefore);
   });
 
   it("promote: 400 not_a_template for a standalone (no live variants)", async () => {

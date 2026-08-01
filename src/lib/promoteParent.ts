@@ -365,6 +365,48 @@ async function clearPromotedParentFields(
 }
 
 /**
+ * Round 9 F1: the RESUME half of performParentPromotion, callable on its
+ * own. Probes for an interrupted earlier promotion's partial copy (see
+ * findPartialPromotionVariant) and, on a hit, completes the promotion —
+ * re-running the idempotent external-ref remaps and clearing the parent's
+ * moved fields — WITHOUT creating anything. Returns the adopted partial
+ * copy, or null when no partial copy exists (a genuine legacy carrying
+ * template — the caller must leave it exactly as-is, enforce-forward).
+ *
+ * Exists because the round-8 detector inside performParentPromotion was
+ * unreachable from the variant-creation/adoption gate's RETRY path: after a
+ * partial promotion (copy created, remap/clear failed) the parent already
+ * HAS a live variant, so a retried create/adopt request skips the gate — and
+ * with it the promotion — entirely. The gate now probes this directly (see
+ * gateAndPromoteInLock). Callers MUST hold the parent's mutex, with `parent`
+ * fetched inside that hold, exactly like performParentPromotion.
+ *
+ * No confirmation gating here by design: resuming completes an ALREADY-
+ * confirmed promotion — it moves nothing new, it only finishes the remap and
+ * clear the interrupted run still owed.
+ */
+export async function resumePartialParentPromotion(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: any,
+  parent: FilamentDoc,
+  externalRefs: PromotionExternalRefModels | null,
+): Promise<FilamentDoc | null> {
+  const movedSpools: FilamentDoc[] = Array.isArray(parent.spools) ? parent.spools : [];
+  const partial = await findPartialPromotionVariant(FilamentModel, parent, movedSpools);
+  if (!partial) return null;
+  if (externalRefs) {
+    await remapExternalSpoolRefs(
+      externalRefs,
+      parent._id,
+      partial._id,
+      movedSpools.map((s) => s._id),
+    );
+  }
+  await clearPromotedParentFields(FilamentModel, parent._id);
+  return partial;
+}
+
+/**
  * Perform the promotion: create the carrying variant, remap external spool
  * references onto it, then clear the moved fields on the parent. Returns the
  * created variant document plus whether the run RESUMED an interrupted
@@ -405,18 +447,14 @@ export async function performParentPromotion(
   // threw) left its partial copy behind — RESUME it instead of creating a
   // second one. Skip the create; re-run the remaps (idempotent — updateMany
   // with filters scoped to refs still pointing at the parent) and the clear
-  // against the adopted copy.
-  const partial = await findPartialPromotionVariant(FilamentModel, parent, movedSpools);
+  // against the adopted copy. The probe+resume half is factored out (round 9
+  // F1) so the gate's retry path can call it directly.
+  const partial = await resumePartialParentPromotion(
+    FilamentModel,
+    parent,
+    opts.externalRefs,
+  );
   if (partial) {
-    if (opts.externalRefs) {
-      await remapExternalSpoolRefs(
-        opts.externalRefs,
-        parent._id,
-        partial._id,
-        movedSpools.map((s) => s._id),
-      );
-    }
-    await clearPromotedParentFields(FilamentModel, parent._id);
     return { variant: partial, resumed: true };
   }
 

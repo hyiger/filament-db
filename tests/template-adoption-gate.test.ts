@@ -323,6 +323,181 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
     expect(freshTarget).toEqual(targetBefore);
   });
 
+  // ── round 9 F1: a retried adoption resumes an interrupted promotion ─────
+
+  it("PUT adoption RETRY after an interrupted promotion resumes it first (round 9 F1): 200, parent clean, refs remapped, one promotion copy", async () => {
+    const PrintHistory = mongoose.models.PrintHistory;
+    const parent = await seedCarryingParent("Interrupted Adoption Parent");
+    const parentLean = await Filament.findById(parent._id).lean();
+    // The original confirmed adoption's promotion died between the copy and
+    // the remap/clear: the partial copy exists (verbatim spool subdoc ids),
+    // the parent still carries, and the history ref still points at it.
+    const partial = await Filament.create({
+      name: "Interrupted Adoption Parent — Steel Blue",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      color: parentLean.color,
+      colorName: parentLean.colorName,
+      spools: parentLean.spools,
+    });
+    const job = await PrintHistory.create({
+      jobLabel: "ref job",
+      startedAt: new Date(),
+      usage: [{ filamentId: parent._id, spoolId: parentLean.spools[0]._id, grams: 7 }],
+    });
+    const standalone = await Filament.create({
+      name: "Adoptee Red",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+    });
+
+    // The RETRY of the original confirmed PUT. Before round 9 the gate saw
+    // hasVariants (the partial copy) and skipped promotion entirely — the
+    // adoption succeeded with the parent still carrying.
+    const res = await putFilament(
+      jsonReq(
+        `http://localhost/api/filaments/${standalone._id}`,
+        {
+          name: "Adoptee Red",
+          color: "#FF0000",
+          parentId: String(parent._id),
+          promoteParent: true,
+        },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(standalone._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    // Parent ends clean; the owed remap ran onto the adopted partial copy.
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.color ?? null).toBeNull();
+    expect(freshParent.colorName ?? null).toBeNull();
+    expect(freshParent.spools).toHaveLength(0);
+    const freshJob = await PrintHistory.findById(job._id).lean();
+    expect(String(freshJob.usage[0].filamentId)).toBe(String(partial._id));
+
+    // Exactly one promotion copy: the family is the copy + the adopted doc,
+    // and only the copy holds the roll.
+    const family = await Filament.find({ parentId: parent._id, _deletedAt: null }).lean();
+    expect(family).toHaveLength(2);
+    const carrying = family.filter(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (f: any) => (f.spools ?? []).length > 0,
+    );
+    expect(carrying).toHaveLength(1);
+    expect(String(carrying[0]._id)).toBe(String(partial._id));
+    const adopted = await Filament.findById(standalone._id).lean();
+    expect(String(adopted.parentId)).toBe(String(parent._id));
+  });
+
+  it("PUT adoption onto a legacy carrying template with NO partial copy leaves it untouched (round 9 F1 enforce-forward)", async () => {
+    const parent = await seedCarryingParent("Legacy Carrying Template");
+    // A live variant that is NOT a promotion copy — none of the parent's
+    // spool subdoc ids, its own name/color.
+    await Filament.create({
+      name: "Legacy Carrying Template — Mint",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      color: "#00FF88",
+    });
+    const parentBefore = await Filament.findById(parent._id).lean();
+    const standalone = await Filament.create({
+      name: "Second Adoptee",
+      vendor: "V",
+      type: "PLA",
+      color: "#0000FF",
+    });
+
+    const res = await putFilament(
+      jsonReq(
+        `http://localhost/api/filaments/${standalone._id}`,
+        { parentId: String(parent._id) },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(standalone._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    // Enforce-forward: no resume fired, no promotion copy, parent unchanged.
+    expect(await Filament.findById(parent._id).lean()).toEqual(parentBefore);
+    expect(
+      await Filament.findOne({ name: "Legacy Carrying Template — Steel Blue" }).lean(),
+    ).toBeNull();
+  });
+
+  // ── round 9 F2: rename collisions fail BEFORE the adoption gate ─────────
+
+  it("confirmed reparent+rename to a TAKEN name → 409 before any promotion (round 9 F2): parent byte-for-byte untouched", async () => {
+    const parent = await seedCarryingParent("Renamed-Into Parent");
+    await Filament.create({ name: "Occupied Name", vendor: "V", type: "PLA" });
+    const standalone = await Filament.create({
+      name: "Rename Adoptee",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+    });
+    const parentBefore = await Filament.findById(parent._id).lean();
+    const targetBefore = await Filament.findById(standalone._id).lean();
+
+    const res = await putFilament(
+      jsonReq(
+        `http://localhost/api/filaments/${standalone._id}`,
+        {
+          name: "Occupied Name",
+          parentId: String(parent._id),
+          promoteParent: true,
+        },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(standalone._id) }) },
+    );
+    expect(res.status).toBe(409);
+    // The same shape the write-time E11000 produces via
+    // handleDuplicateKeyError — one consistent client contract.
+    expect((await res.json()).error).toBe(
+      'A filament with that name already exists: "Occupied Name"',
+    );
+
+    // The prospective parent was NOT promoted — byte-for-byte identical, and
+    // no promotion copy exists.
+    expect(await Filament.findById(parent._id).lean()).toEqual(parentBefore);
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+    // The target is unchanged too: not renamed, not adopted.
+    expect(await Filament.findById(standalone._id).lean()).toEqual(targetBefore);
+  });
+
+  it("reparent re-sending the target's OWN name (form echo / no-op rename) does not false-positive the round 9 F2 pre-check", async () => {
+    const parent = await Filament.create({
+      name: "Clean Adoption Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+    });
+    const standalone = await Filament.create({
+      name: "Echoed Name",
+      vendor: "V",
+      type: "PLA",
+      color: "#00FF00",
+    });
+
+    const res = await putFilament(
+      jsonReq(
+        `http://localhost/api/filaments/${standalone._id}`,
+        { name: "Echoed Name", parentId: String(parent._id) },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(standalone._id) }) },
+    );
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(standalone._id).lean();
+    expect(String(fresh.parentId)).toBe(String(parent._id));
+    expect(fresh.name).toBe("Echoed Name");
+  });
+
   // ── F3: the in-lock template strip covers all per-variant fields ────────
 
   it("a form loaded pre-promotion cannot re-materialize color/colorName/lowStockThreshold/totalWeight on the template", async () => {

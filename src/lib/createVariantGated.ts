@@ -41,6 +41,7 @@ import {
   promotionVariantBaseName,
   resolvePromotionVariantName,
   performParentPromotion,
+  resumePartialParentPromotion,
   orphansThresholdOnFirstVariant,
   clearOrphanedParentThreshold,
 } from "@/lib/promoteParent";
@@ -154,10 +155,29 @@ async function gateAndPromoteInLock(
   // confirmation for a promotion that moves nothing) but to flag the
   // threshold as orphaned so the caller clears it AFTER its variant write.
   const orphansThreshold = orphansThresholdOnFirstVariant(parent);
-  if (
-    (promoState.needed || orphansThreshold) &&
-    !(await checkHasVariants(FilamentModel, String(parent._id)))
-  ) {
+  if (promoState.needed || orphansThreshold) {
+    if (await checkHasVariants(FilamentModel, String(parent._id))) {
+      // The parent already has live variants, so this is a NON-first variant
+      // and nothing gates. But a template should never be CARRYING — when it
+      // is, the likeliest cause is an INTERRUPTED promotion (round 8 F2's
+      // crash window: copy created, remap/clear failed), and the round-8
+      // detector inside performParentPromotion is unreachable from here: a
+      // RETRY of the original confirmed create/adopt request lands in this
+      // branch (hasVariants is true because of the partial copy) and would
+      // succeed while the parent still holds the moved inventory and every
+      // external ref still points at it (round 9 F1). Probe for the partial
+      // copy and resume it — remaps + clear only — BEFORE proceeding with
+      // the requested create/adoption. No confirmation needed: resuming
+      // completes an ALREADY-confirmed promotion; it moves nothing new.
+      // A carrying template with NO partial copy is the genuine pre-#605
+      // legacy shape: resumePartialParentPromotion returns null and leaves
+      // it exactly as-is (enforce-forward; "Convert to template" remains the
+      // recovery affordance).
+      if (promoState.needed) {
+        await resumePartialParentPromotion(FilamentModel, parent, EXTERNAL_REFS);
+      }
+      return { kind: "ready", clearOrphanedThreshold: false };
+    }
     if (!promoState.needed) {
       // Ungated first-variant creation on a threshold-only parent: proceed
       // without any promotion, but tell the caller the parent's threshold

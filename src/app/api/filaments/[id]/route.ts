@@ -450,6 +450,38 @@ export async function PUT(
       dryRunTarget.set(body);
       await dryRunTarget.validate();
 
+      // Round 9 F2: fail a doomed RENAME before the gate can promote the
+      // parent. The dry-run above runs document validators, but the unique
+      // name constraint is a partial INDEX (unique among non-deleted docs —
+      // src/models/Filament.ts), not a validator — so a confirmed
+      // reparent+rename to a taken name would pass the dry-run, promote the
+      // parent, and THEN E11000 at the write: an error response after the
+      // irreversible restructuring. The POST create path has pre-checked the
+      // requested name since round 1 (createVariantGated's beforePromote);
+      // this is the same check for the adoption path. Query shape matches
+      // that pre-check (non-deleted, exact name equality — the index's own
+      // semantics) plus an exclusion of the target itself, so re-sending the
+      // target's OWN current name (the edit form echoes `name` on every
+      // save) never false-positives. The 409 is byte-identical to what the
+      // write-time E11000 produces via handleDuplicateKeyError, so the
+      // client contract is unchanged — the collision just surfaces before
+      // any promotion side effect. Residual TOCTOU window between this check
+      // and the write still falls back to that same E11000 handler.
+      const effectiveName =
+        typeof body.name === "string" ? body.name : dryRunTarget.name;
+      if (
+        await Filament.exists({
+          name: effectiveName,
+          _deletedAt: null,
+          _id: { $ne: id },
+        })
+      ) {
+        return errorResponse(
+          `A filament with that name already exists: "${effectiveName}"`,
+          409,
+        );
+      }
+
       const adoption = await gateFirstVariantAdoption(Filament, body.parentId, {
         promoteParent,
         // Reserve the name this document will carry after the PUT (a rename
