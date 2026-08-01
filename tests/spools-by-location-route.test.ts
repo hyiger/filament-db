@@ -428,6 +428,74 @@ describe("GET /api/spools/by-location", () => {
     expect(spool.parentNetFilamentWeight).toBe(1000);
   });
 
+  it("GH #1050: surfaces EFFECTIVE secondaryColors + optTags for the /inventory swatch (own wins; empty inherits parent's)", async () => {
+    const shelf = await Location.create({ name: "Shelf A", kind: "shelf" });
+
+    // Coextruded standalone: null primary (explicit — the schema default
+    // is the #808080 sentinel), colors in its own secondaryColors.
+    await Filament.create({
+      name: "Coex Green Purple",
+      vendor: "QA",
+      type: "PLA",
+      diameter: 1.75,
+      color: null,
+      secondaryColors: ["#00FF00", "#800080"],
+      optTags: [28], // dual_color → coextruded
+      spools: [{ label: "C1", totalWeight: 1000, locationId: shelf._id }],
+    });
+
+    // Variant with EMPTY arrays under a multi-color parent → inherits the
+    // parent's whole arrays (GH #477 array-fallback rule, mirroring the
+    // /api/filaments list aggregation's merge).
+    const parent = await Filament.create({
+      name: "Rainbow Parent",
+      vendor: "QA",
+      type: "PLA",
+      diameter: 1.75,
+      secondaryColors: ["#FF0000", "#0000FF"],
+      optTags: [27], // gradient
+    });
+    await Filament.create({
+      name: "Rainbow Variant",
+      vendor: "QA",
+      type: "PLA",
+      diameter: 1.75,
+      parentId: parent._id,
+      spools: [{ label: "V1", totalWeight: 1000, locationId: shelf._id }],
+    });
+
+    // Plain standalone with no arrays anywhere → empty arrays, not
+    // null/missing, so the client can index without guards.
+    await Filament.create({
+      name: "Plain Black",
+      vendor: "QA",
+      type: "PLA",
+      diameter: 1.75,
+      color: "#111111",
+      spools: [{ label: "P1", totalWeight: 1000, locationId: shelf._id }],
+    });
+
+    const { GET } = await import("@/app/api/spools/by-location/route");
+    const body = await (await GET(req())).json();
+    const spools = body.groups[0].spools;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const byName = Object.fromEntries(spools.map((s: any) => [s.filamentName, s]));
+
+    // Own arrays win; the null primary rides through un-coalesced so the
+    // swatch falls back to secondaryColors[0] instead of rendering gray.
+    expect(byName["Coex Green Purple"].filamentColor).toBeNull();
+    expect(byName["Coex Green Purple"].secondaryColors).toEqual(["#00FF00", "#800080"]);
+    expect(byName["Coex Green Purple"].optTags).toEqual([28]);
+
+    // Empty own arrays inherit the parent's whole arrays.
+    expect(byName["Rainbow Variant"].secondaryColors).toEqual(["#FF0000", "#0000FF"]);
+    expect(byName["Rainbow Variant"].optTags).toEqual([27]);
+
+    // No arrays anywhere → empties.
+    expect(byName["Plain Black"].secondaryColors).toEqual([]);
+    expect(byName["Plain Black"].optTags).toEqual([]);
+  });
+
   it("excludes soft-deleted filaments and their spools", async () => {
     const shelf = await Location.create({ name: "Shelf A", kind: "shelf" });
     await Filament.create({

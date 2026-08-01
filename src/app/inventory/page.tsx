@@ -17,6 +17,9 @@ import {
 } from "@/lib/inventorySort";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { isKnownLocationKind } from "@/lib/locationKind";
+import FilamentSwatch from "@/components/FilamentSwatch";
+import { deriveArrangement } from "@/lib/filamentColors";
+import { deriveFinish } from "@/lib/filamentFinish";
 
 // Loaded on demand — the dialog pulls in the TSPL emitter + the qrcode
 // package for its preview, none of which the page needs until a print is
@@ -72,7 +75,17 @@ interface SpoolRow {
   filamentName: string;
   filamentVendor: string;
   filamentType: string;
-  filamentColor: string;
+  /** Raw variant primary — null for coextruded filaments, whose colors
+   * live in `secondaryColors`. Don't coalesce to a gray before handing it
+   * to FilamentSwatch; the swatch's own secondaryColors fallback handles
+   * the null-primary case (GH #1050). */
+  filamentColor: string | null;
+  /** GH #1050: effective (parent-fallback) color arrays from the
+   * aggregation — drive the multi-color / finish swatch treatment.
+   * Optional so a stale client cache of the pre-#1050 payload shape
+   * doesn't explode. */
+  secondaryColors?: string[];
+  optTags?: number[];
   spoolWeight: number | null;
   netFilamentWeight: number | null;
   parentSpoolWeight: number | null;
@@ -1103,18 +1116,28 @@ function SpoolEditRow({
       <tr className="border-b border-gray-100 dark:border-gray-900">
         <td className="py-2 px-2" aria-hidden="true" />
         <td className="py-2 px-3">
-          <div className="flex items-center gap-2 min-w-0">
-            <span
-              className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 dark:border-gray-700 shrink-0"
-              style={{ backgroundColor: row.filamentColor || "#808080" }}
-              aria-hidden="true"
+          {/* GH #1050: 32px rounded-square swatch spanning both text lines —
+              larger color area without growing the row. */}
+          <div className="flex items-center gap-2.5 min-w-0">
+            <FilamentSwatch
+              color={row.filamentColor}
+              secondaryColors={row.secondaryColors}
+              arrangement={deriveArrangement(row.optTags)}
+              finish={deriveFinish(row.optTags)}
+              shape="square"
+              size={32}
+              title={row.filamentColor ?? undefined}
             />
-            <Link href={`/filaments/${row.filamentId}`} className="text-blue-600 hover:underline truncate">
-              {row.filamentName}
-            </Link>
-            <span className="text-xs text-gray-500 shrink-0">{row.filamentType}</span>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <Link href={`/filaments/${row.filamentId}`} className="text-blue-600 hover:underline truncate">
+                  {row.filamentName}
+                </Link>
+                <span className="text-xs text-gray-500 shrink-0">{row.filamentType}</span>
+              </div>
+              <div className="text-xs text-gray-500 truncate">{row.filamentVendor}</div>
+            </div>
           </div>
-          <div className="text-xs text-gray-500 truncate">{row.filamentVendor}</div>
         </td>
         <td className="py-2 px-3">
           <span
@@ -1152,23 +1175,34 @@ function SpoolEditRow({
         />
       </td>
       <td className="py-2 px-3">
-        <div className="flex items-center gap-2 min-w-0">
-          <span
-            className="inline-block w-3.5 h-3.5 rounded-full border border-gray-300 dark:border-gray-700 shrink-0"
-            style={{ backgroundColor: row.filamentColor || "#808080" }}
-            aria-hidden="true"
+        {/* GH #1050: 32px rounded-square swatch spanning both text lines —
+            larger color area without growing the row. Multi-color and
+            finish treatments now render here like on the home list. */}
+        <div className="flex items-center gap-2.5 min-w-0">
+          <FilamentSwatch
+            color={row.filamentColor}
+            secondaryColors={row.secondaryColors}
+            arrangement={deriveArrangement(row.optTags)}
+            finish={deriveFinish(row.optTags)}
+            shape="square"
+            size={32}
+            title={row.filamentColor ?? undefined}
           />
-          <Link
-            href={`/filaments/${row.filamentId}`}
-            className="text-blue-600 hover:underline truncate"
-          >
-            {row.filamentName}
-          </Link>
-          <span className="text-xs text-gray-500 shrink-0">{row.filamentType}</span>
-        </div>
-        <div className="text-xs text-gray-500 truncate">
-          {row.filamentVendor}
-          {row.lotNumber && ` · lot ${row.lotNumber}`}
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <Link
+                href={`/filaments/${row.filamentId}`}
+                className="text-blue-600 hover:underline truncate"
+              >
+                {row.filamentName}
+              </Link>
+              <span className="text-xs text-gray-500 shrink-0">{row.filamentType}</span>
+            </div>
+            <div className="text-xs text-gray-500 truncate">
+              {row.filamentVendor}
+              {row.lotNumber && ` · lot ${row.lotNumber}`}
+            </div>
+          </div>
         </div>
       </td>
       <td className="py-2 px-3">
