@@ -29,7 +29,7 @@ type FilamentDoc = Record<string, any>;
  * Filament schema's top-level paths — a new schema field that lands in
  * neither list would otherwise silently vanish from every resolved variant.
  */
-export const VARIANT_ONLY_FIELDS = ["_id", "name", "color", "colorName", "parentId", "spools", "createdAt", "updatedAt", "__v", "instanceId", "syncId", "_deletedAt", "_purged", "totalWeight", "openprinttagSnapshot", "lowStockThreshold"];
+export const VARIANT_ONLY_FIELDS = ["_id", "name", "color", "colorName", "parentId", "spools", "createdAt", "updatedAt", "__v", "instanceId", "syncId", "_deletedAt", "_purged", "totalWeight", "openprinttagSnapshot", "lowStockThreshold", "promotionInFlight", "promotedByToken"];
 
 /** Numeric/string fields that can be inherited from parent */
 export const INHERITABLE_FIELDS = [

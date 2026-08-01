@@ -32,9 +32,28 @@
  * mongod), so a crash between the steps leaves a parent that still carries
  * its legacy state (recoverable via the "Convert to template" action) rather
  * than data loss. Since round 8 (F2) that recovery is IDEMPOTENT: a retried
- * promotion detects the interrupted run's partial copy (see
- * findPartialPromotionVariant) and resumes — re-running only the remap and
- * clear — instead of minting a second " (N)" copy of the inventory.
+ * promotion detects the interrupted run's partial copy and resumes —
+ * re-running only the remap and clear — instead of minting a second " (N)"
+ * copy of the inventory.
+ *
+ * Round 10: resume detection is DURABLE-MARKER-DRIVEN, never inferred. The
+ * protocol writes a `promotionInFlight: { token, at }` marker on the parent
+ * as step 0 (non-destructive — the copy-first invariant governs destructive
+ * clears, and this write is trivially reversible), creates the copy carrying
+ * `promotedByToken: token` as step 1, remaps external refs as step 2, and
+ * completes with ONE final parent write (step 3) that clears the moved
+ * fields AND the marker atomically. A resume therefore requires PROOF: the
+ * parent's marker plus a live variant holding the matching token. The
+ * round-8/9 heuristics (spool-subdoc-id overlap; deterministic name + full
+ * carried-set equality) are retired — value equality is not record identity,
+ * and the no-spools heuristic could adopt a LEGITIMATE lookalike child
+ * (auto-style name from manual pre-#605 organizing, ubiquitous equal
+ * totalWeight values) and clear the parent's fields without creating the
+ * sibling that should have received them, losing an inventory record. The
+ * spool-id overlap probe is removed rather than kept as a corroborating
+ * assertion: the marker pair is already unforgeable through client bodies
+ * (server-owned, stripped everywhere), so a second signal adds branches
+ * without adding proof.
  *
  * Two entry points share this module:
  *   - POST /api/filaments (variant creation): the FIRST variant of a
@@ -265,73 +284,86 @@ async function remapExternalSpoolRefs(
 }
 
 /**
- * Round 8 F2: detect the partial copy an INTERRUPTED earlier promotion left
+ * Round 10: the parent's in-flight promotion token, or null when the parent
+ * carries no (well-formed) marker. Malformed markers — an object without a
+ * usable token string — are treated as absent: nothing can match them, so
+ * they can never prove a resume.
+ */
+function promotionMarkerToken(parent: FilamentDoc): string | null {
+  const token = parent?.promotionInFlight?.token;
+  return typeof token === "string" && token !== "" ? token : null;
+}
+
+/** Fresh random promotion token. `globalThis.crypto` (Node ≥ 20 and every
+ *  browser) rather than an imported node:crypto — this module is imported by
+ *  client components for parentPromotionState and must stay bundle-safe. */
+function newPromotionToken(): string {
+  return globalThis.crypto.randomUUID();
+}
+
+/**
+ * Round 10: detect the partial copy an INTERRUPTED earlier promotion left
  * behind, so a retry resumes instead of minting a second copy. The crash
  * window is create-succeeded-then-remap/clear-threw: the variant exists,
- * the parent still carries. Without this, a retry's create would land a
- * `<base> (2)` duplicate holding a SECOND copy of the spools.
+ * the parent still carries.
  *
- * Detection, against the parent's CURRENT in-lock state:
- *
- *  (a) spools case — a LIVE variant of this parent holding ANY of the
- *      parent's current spool subdoc `_id`s IS the partial promotion.
- *      Unambiguous: subdoc ids are copied verbatim and cleared from the
- *      parent only in the final step, so parent/variant overlap can only
- *      mean an interrupted run (no other write path copies spool subdocs
- *      across documents — a completed promotion leaves the parent with no
- *      spools, and any re-acquired spools get fresh ids).
- *
- *  (b) no-spools case — a LIVE variant of this parent whose name matches
- *      the deterministic promotionVariantBaseName (or its " (N)" suffixes)
- *      AND whose stored carried set — color, colorName, totalWeight,
- *      lowStockThreshold — equals the parent's. A genuine partial copy
- *      satisfies every one of those (they were copied verbatim from this
- *      same parent, whose carried fields a template's write paths won't
- *      have changed since: non-null writes are stripped). Residual
- *      ambiguity, documented honestly: a USER-created variant could
- *      coincide on the whole set. We cannot tell those apart — but full
- *      equality of the carried set makes the resume WRITE-EQUIVALENT to a
- *      fresh promotion: the variant already holds exactly the values the
- *      promotion would move, and the parent is cleared of the same values,
- *      so adopting the lookalike loses nothing either way. A parent that
- *      re-acquired a DIFFERENT carried set after a completed promotion
- *      fails the equality and gets its fresh copy (suffixed name) as
- *      before; the only cost of a near-miss is the pre-round-8 behavior (a
- *      fresh " (N)" copy), never data loss.
+ * Detection is marker-driven ONLY — the parent's `promotionInFlight.token`
+ * paired with a LIVE variant whose `promotedByToken` equals it. That pair
+ * can only be produced by steps 0+1 of this module's protocol (both fields
+ * are server-owned and stripped from every client body), so a hit is PROOF
+ * of an interrupted run — never a guess. No marker (or no matching variant)
+ * means no resume, full stop: a legacy carrying template keeps its
+ * enforce-forward posture byte-for-byte, and a lookalike child (auto-style
+ * name, coincidentally equal carried values — the round-9 heuristic's
+ * failure mode) is just another variant.
  */
 async function findPartialPromotionVariant(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   FilamentModel: any,
   parent: FilamentDoc,
-  movedSpools: FilamentDoc[],
 ): Promise<FilamentDoc | null> {
-  if (movedSpools.length > 0) {
-    return await FilamentModel.findOne({
-      parentId: parent._id,
-      _deletedAt: null,
-      "spools._id": { $in: movedSpools.map((s) => s._id) },
-    });
-  }
-  const base = promotionVariantBaseName(parent.name, parent.colorName);
-  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const token = promotionMarkerToken(parent);
+  if (token == null) return null;
   return await FilamentModel.findOne({
     parentId: parent._id,
     _deletedAt: null,
-    name: new RegExp(`^${escaped}( \\(\\d+\\))?$`),
-    // The full carried set (null matches null-or-missing) — see (b) above.
-    color: parent.color ?? null,
-    colorName: parent.colorName ?? null,
-    totalWeight: parent.totalWeight ?? null,
-    lowStockThreshold: parent.lowStockThreshold ?? null,
+    promotedByToken: token,
   });
 }
 
 /**
- * Clear the moved fields on the parent — the promotion's LAST step (see the
- * module header's crash posture), shared by the fresh and resumed paths.
- * Clears ONLY the moved fields; the SPEC pair stays. `_deletedAt: null`
- * re-filter so a concurrent soft-delete can't be resurrected into a mutated
- * tombstone.
+ * Round 10: lazily drop a STALE promotion marker — one still set on a
+ * parent whose promotion state no longer gates (`parentPromotionState().
+ * needed === false`, the caller's responsibility to have checked). A marker
+ * lingering after COMPLETION is impossible by construction (the step-3
+ * write clears it atomically with the moved fields), so a marker on a
+ * non-carrying parent means a run crashed mid-protocol and the carried
+ * state was later cleared by hand (or a crashed-after-step-0 parent was
+ * manually emptied). There is nothing left to move or complete, so the next
+ * gate / promote pass clears the marker and does NOT resume. The copy-side
+ * `promotedByToken` (if a copy exists) stays — harmless residue; resume
+ * detection also requires the parent marker, and a future promotion mints a
+ * fresh token.
+ */
+export async function clearStalePromotionMarker(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: any,
+  parentId: unknown,
+): Promise<void> {
+  await FilamentModel.updateOne(
+    { _id: parentId, _deletedAt: null },
+    { $set: { promotionInFlight: null } },
+  );
+}
+
+/**
+ * Complete the promotion — the LAST step (see the module header's crash
+ * posture), shared by the fresh and resumed paths: clear the moved fields
+ * on the parent AND drop the `promotionInFlight` marker in the SAME write,
+ * so completion is atomic — a parent can never end up cleared-but-marked or
+ * unmarked-but-still-carrying. Clears ONLY the moved fields; the SPEC pair
+ * stays. `_deletedAt: null` re-filter so a concurrent soft-delete can't be
+ * resurrected into a mutated tombstone.
  *
  * `$inc __v` (codex round 3 sweep, verified by repro): overwriting the
  * spools array via save() would bump the version key (VERSION_INC), so
@@ -344,7 +376,7 @@ async function findPartialPromotionVariant(
  * fails as a VersionError, which those callers already map to their
  * designed 409-retry / failed-bucket paths.
  */
-async function clearPromotedParentFields(
+async function completeParentPromotion(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   FilamentModel: any,
   parentId: unknown,
@@ -358,6 +390,9 @@ async function clearPromotedParentFields(
         spools: [],
         totalWeight: null,
         lowStockThreshold: null,
+        // Round 10: the durable marker dies with the fields it protected —
+        // same write, so a lingering marker after completion is impossible.
+        promotionInFlight: null,
       },
       $inc: { __v: 1 },
     },
@@ -367,11 +402,14 @@ async function clearPromotedParentFields(
 /**
  * Round 9 F1: the RESUME half of performParentPromotion, callable on its
  * own. Probes for an interrupted earlier promotion's partial copy (see
- * findPartialPromotionVariant) and, on a hit, completes the promotion —
- * re-running the idempotent external-ref remaps and clearing the parent's
- * moved fields — WITHOUT creating anything. Returns the adopted partial
- * copy, or null when no partial copy exists (a genuine legacy carrying
- * template — the caller must leave it exactly as-is, enforce-forward).
+ * findPartialPromotionVariant — round 10: marker-driven ONLY) and, on a
+ * hit, completes the promotion — re-running the idempotent external-ref
+ * remaps and clearing the parent's moved fields + marker — WITHOUT creating
+ * anything. Returns the adopted partial copy, or null when the marker/token
+ * proof is absent (a genuine legacy carrying template, or a run that
+ * crashed before its copy landed — the caller must leave the carried state
+ * exactly as-is; only a CONFIRMED promotion may proceed, reusing the
+ * marker).
  *
  * Exists because the round-8 detector inside performParentPromotion was
  * unreachable from the variant-creation/adoption gate's RETRY path: after a
@@ -382,8 +420,9 @@ async function clearPromotedParentFields(
  * fetched inside that hold, exactly like performParentPromotion.
  *
  * No confirmation gating here by design: resuming completes an ALREADY-
- * confirmed promotion — it moves nothing new, it only finishes the remap and
- * clear the interrupted run still owed.
+ * confirmed promotion — the marker proves one started (only confirmed
+ * promotions write it) — it moves nothing new, it only finishes the remap
+ * and clear the interrupted run still owed.
  */
 export async function resumePartialParentPromotion(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -391,9 +430,9 @@ export async function resumePartialParentPromotion(
   parent: FilamentDoc,
   externalRefs: PromotionExternalRefModels | null,
 ): Promise<FilamentDoc | null> {
-  const movedSpools: FilamentDoc[] = Array.isArray(parent.spools) ? parent.spools : [];
-  const partial = await findPartialPromotionVariant(FilamentModel, parent, movedSpools);
+  const partial = await findPartialPromotionVariant(FilamentModel, parent);
   if (!partial) return null;
+  const movedSpools: FilamentDoc[] = Array.isArray(parent.spools) ? parent.spools : [];
   if (externalRefs) {
     await remapExternalSpoolRefs(
       externalRefs,
@@ -402,7 +441,7 @@ export async function resumePartialParentPromotion(
       movedSpools.map((s) => s._id),
     );
   }
-  await clearPromotedParentFields(FilamentModel, parent._id);
+  await completeParentPromotion(FilamentModel, parent._id);
   return partial;
 }
 
@@ -429,11 +468,15 @@ export async function resumePartialParentPromotion(
  * reference it) and stays unique among live spools for the same reason.
  *
  * Ordering + crash posture (no transactions on standalone mongod):
- * copy → remap → clear. A crash after the copy but before the remap/clear
+ * marker → copy → remap → complete (round 10 protocol; see the module
+ * header). A crash after the marker alone leaves a fully intact, still-
+ * carrying parent (the marker is non-destructive; the next confirmed run
+ * reuses its token). A crash after the copy but before the remap/complete
  * leaves the spools present on BOTH documents momentarily, but every
  * external reference still resolves against the parent (its spools are
- * still there) — recoverable via "Convert to template", no reference is
- * ever left dangling and no data is lost.
+ * still there) — recoverable via "Convert to template" or the gate's retry
+ * resume (both marker-proven), no reference is ever left dangling and no
+ * data is lost.
  */
 export async function performParentPromotion(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -443,12 +486,13 @@ export async function performParentPromotion(
 ): Promise<ParentPromotionOutcome> {
   const movedSpools: FilamentDoc[] = Array.isArray(parent.spools) ? parent.spools : [];
 
-  // Round 8 F2: an interrupted earlier run (create succeeded, remap or clear
-  // threw) left its partial copy behind — RESUME it instead of creating a
-  // second one. Skip the create; re-run the remaps (idempotent — updateMany
-  // with filters scoped to refs still pointing at the parent) and the clear
-  // against the adopted copy. The probe+resume half is factored out (round 9
-  // F1) so the gate's retry path can call it directly.
+  // Round 8 F2 / round 10: an interrupted earlier run (copy created, remap
+  // or complete threw) left its marker + token-stamped copy behind — RESUME
+  // it instead of creating a second one. Skip the create; re-run the remaps
+  // (idempotent — updateMany with filters scoped to refs still pointing at
+  // the parent) and the completing clear against the adopted copy. The
+  // probe+resume half is factored out (round 9 F1) so the gate's retry path
+  // can call it directly.
   const partial = await resumePartialParentPromotion(
     FilamentModel,
     parent,
@@ -456,6 +500,20 @@ export async function performParentPromotion(
   );
   if (partial) {
     return { variant: partial, resumed: true };
+  }
+
+  // Step 0 (round 10): stamp the durable marker BEFORE anything else. A
+  // marker may already be present from a run that crashed between its own
+  // step 0 and step 1 (no token-matched copy exists, or the resume above
+  // would have adopted it) — REUSE that token rather than stacking a second
+  // marker, so whichever create eventually lands is provably paired.
+  let token = promotionMarkerToken(parent);
+  if (token == null) {
+    token = newPromotionToken();
+    await FilamentModel.updateOne(
+      { _id: parent._id, _deletedAt: null },
+      { $set: { promotionInFlight: { token, at: new Date() } } },
+    );
   }
 
   const name = await resolvePromotionVariantName(
@@ -480,6 +538,9 @@ export async function performParentPromotion(
     // same copy-first/clear-last write set as totalWeight.
     lowStockThreshold: parent.lowStockThreshold ?? null,
     spools: movedSpools,
+    // Step 1 (round 10): the copy-side half of the durable marker — the
+    // proof a later resume requires.
+    promotedByToken: token,
   });
 
   // Codex round 4, F1: persisted (filamentId, spoolId) consumers follow the
@@ -499,8 +560,9 @@ export async function performParentPromotion(
     );
   }
 
-  // Clear LAST (see module header and clearPromotedParentFields).
-  await clearPromotedParentFields(FilamentModel, parent._id);
+  // Step 3: complete LAST — one atomic parent write clearing the moved
+  // fields and the marker together (see completeParentPromotion).
+  await completeParentPromotion(FilamentModel, parent._id);
 
   return { variant, resumed: false };
 }

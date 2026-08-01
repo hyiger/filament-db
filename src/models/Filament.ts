@@ -233,6 +233,32 @@ export interface IFilament extends Document {
   parentId: mongoose.Types.ObjectId | null;
   settings: Record<string, string | null>;
   /**
+   * GH #605 round 10: the durable parent-side promotion marker. A parent
+   * promotion (performParentPromotion in src/lib/promoteParent.ts) stamps
+   * `{ token, at }` here as its FIRST, non-destructive step; the final
+   * parent write clears it atomically with the moved fields. A resume of an
+   * interrupted promotion requires PROOF — this marker plus a live variant
+   * whose `promotedByToken` equals `token` — never inference from names or
+   * value equality (which misclassified legitimate lookalike children and
+   * could lose an inventory record). Server-owned: every client-facing
+   * write path strips it (like `syncId` / `openprinttagSnapshot`); only the
+   * promotion protocol writes it. Whole-doc copies (hybrid sync, snapshot
+   * backup/restore) carry it verbatim like `syncId` — a synced/restored
+   * mid-promotion state is still exactly that state, and the next gate or
+   * /promote pass completes or lazily clears it.
+   */
+  promotionInFlight: { token: string; at: Date } | null;
+  /**
+   * GH #605 round 10: the copy-side half of the promotion marker — stamped
+   * at create time on the variant that receives a promoted parent's carried
+   * state, with the token from the parent's `promotionInFlight`. Stays on
+   * the copy after completion (harmless residue: resume detection also
+   * requires the parent marker, which the completing write clears; a later
+   * promotion mints a fresh token). Server-owned, stripped from client
+   * bodies like `promotionInFlight`.
+   */
+  promotedByToken: string | null;
+  /**
    * GH #607: provenance for the OpenPrintTag re-sync feature — a flat map of
    * the OPT-offered value per managed field (dot-free keys, e.g.
    * `temperatures_nozzle`) captured at import / last sync. Stored OUTSIDE
@@ -484,6 +510,25 @@ const FilamentSchema = new Schema<IFilament>(
     inherits: { type: String, default: null },
     parentId: { type: Schema.Types.ObjectId, ref: "Filament", default: null, index: true },
     settings: { type: Schema.Types.Mixed, default: {} },
+    // GH #605 round 10: durable promotion marker pair (see the IFilament
+    // docblocks). Declared as real schema paths — strict mode strips unknown
+    // keys, so an undeclared $set would silently no-op — but server-owned:
+    // the POST/PUT handlers strip both from client bodies (the syncId /
+    // openprinttagSnapshot posture) and the atlas import's allow-list
+    // (GH #255) never carries them. Only src/lib/promoteParent.ts writes
+    // them. No dedicated index: resume lookups filter on the already-indexed
+    // `parentId` first.
+    promotionInFlight: {
+      type: new Schema(
+        {
+          token: { type: String, required: true },
+          at: { type: Date, required: true },
+        },
+        { _id: false },
+      ),
+      default: null,
+    },
+    promotedByToken: { type: String, default: null },
     // GH #607: OpenPrintTag re-sync provenance (see the IFilament docblock).
     // Kept out of `settings` so it never renders in the scalar settings
     // table or leaks into slicer exports.

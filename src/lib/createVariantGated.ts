@@ -42,6 +42,7 @@ import {
   resolvePromotionVariantName,
   performParentPromotion,
   resumePartialParentPromotion,
+  clearStalePromotionMarker,
   orphansThresholdOnFirstVariant,
   clearOrphanedParentThreshold,
 } from "@/lib/promoteParent";
@@ -150,6 +151,14 @@ async function gateAndPromoteInLock(
   }
 
   const promoState = parentPromotionState(parent);
+  // Round 10: a marker on a parent whose promotion state does NOT gate is
+  // STALE by construction (completion clears the marker atomically with the
+  // fields, so this shape only arises when a crashed run's carried state
+  // was later cleared by hand) — drop it lazily and never resume off it.
+  // Non-destructive housekeeping, safe on every gate pass.
+  if (!promoState.needed && parent.promotionInFlight != null) {
+    await clearStalePromotionMarker(FilamentModel, parent._id);
+  }
   // Round 7 P2: a threshold-ONLY parent (threshold set, nothing that gates)
   // still needs the first-variant check — not to gate (owner decision: no
   // confirmation for a promotion that moves nothing) but to flag the
@@ -159,20 +168,24 @@ async function gateAndPromoteInLock(
     if (await checkHasVariants(FilamentModel, String(parent._id))) {
       // The parent already has live variants, so this is a NON-first variant
       // and nothing gates. But a template should never be CARRYING — when it
-      // is, the likeliest cause is an INTERRUPTED promotion (round 8 F2's
-      // crash window: copy created, remap/clear failed), and the round-8
-      // detector inside performParentPromotion is unreachable from here: a
-      // RETRY of the original confirmed create/adopt request lands in this
-      // branch (hasVariants is true because of the partial copy) and would
-      // succeed while the parent still holds the moved inventory and every
-      // external ref still points at it (round 9 F1). Probe for the partial
-      // copy and resume it — remaps + clear only — BEFORE proceeding with
-      // the requested create/adoption. No confirmation needed: resuming
-      // completes an ALREADY-confirmed promotion; it moves nothing new.
-      // A carrying template with NO partial copy is the genuine pre-#605
-      // legacy shape: resumePartialParentPromotion returns null and leaves
-      // it exactly as-is (enforce-forward; "Convert to template" remains the
-      // recovery affordance).
+      // is, one cause is an INTERRUPTED promotion (round 8 F2's crash
+      // window: copy created, remap/clear failed), and the round-8 detector
+      // inside performParentPromotion is unreachable from here: a RETRY of
+      // the original confirmed create/adopt request lands in this branch
+      // (hasVariants is true because of the partial copy) and would succeed
+      // while the parent still holds the moved inventory and every external
+      // ref still points at it (round 9 F1). Probe for the partial copy and
+      // resume it — remaps + clear only — BEFORE proceeding with the
+      // requested create/adoption. Round 10: the probe is marker-driven
+      // ONLY (parent.promotionInFlight paired with a live promotedByToken
+      // variant — see findPartialPromotionVariant); resuming under that
+      // proof completes an ALREADY-confirmed promotion and moves nothing
+      // new. A carrying template WITHOUT the marker proof — the genuine
+      // pre-#605 legacy shape, or a legitimate lookalike child that merely
+      // coincides on name/values — makes resumePartialParentPromotion
+      // return null and leaves the parent byte-for-byte untouched
+      // (enforce-forward; "Convert to template" remains the recovery
+      // affordance).
       if (promoState.needed) {
         await resumePartialParentPromotion(FilamentModel, parent, EXTERNAL_REFS);
       }

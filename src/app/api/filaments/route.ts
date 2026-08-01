@@ -401,6 +401,21 @@ export async function POST(request: NextRequest) {
   // user-edited fields to silently auto-adopt on the next re-sync. Only the
   // OPT import/sync routes may write it.
   delete body.openprinttagSnapshot;
+  // GH #605 round 10: the durable promotion-marker pair is server-owned —
+  // `promotionInFlight` (parent side) + `promotedByToken` (copy side) are
+  // the PROOF a promotion resume requires; a client-forged pair could trick
+  // a later gate pass into "completing" a promotion that never ran, clearing
+  // a parent's inventory fields with nothing receiving them. Only
+  // src/lib/promoteParent.ts writes them. The dotted sweep also drops
+  // subpath keys (`promotionInFlight.token`), which Mongoose treats as live
+  // paths and which the exact-key deletes above would miss.
+  delete body.promotionInFlight;
+  delete body.promotedByToken;
+  for (const key of Object.keys(body)) {
+    if (key.startsWith("promotionInFlight.") || key.startsWith("promotedByToken.")) {
+      delete body[key];
+    }
+  }
 
   // GH #431: the PUT handler explicitly strips `body.spools` to prevent a
   // bulk rewrite of a spool's `usageHistory` ledger. The POST handler

@@ -325,13 +325,19 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
 
   // ── round 9 F1: a retried adoption resumes an interrupted promotion ─────
 
-  it("PUT adoption RETRY after an interrupted promotion resumes it first (round 9 F1): 200, parent clean, refs remapped, one promotion copy", async () => {
+  it("PUT adoption RETRY after an interrupted promotion resumes it first (round 9 F1 / round 10 marker): 200, parent clean, refs remapped, one promotion copy", async () => {
     const PrintHistory = mongoose.models.PrintHistory;
     const parent = await seedCarryingParent("Interrupted Adoption Parent");
-    const parentLean = await Filament.findById(parent._id).lean();
     // The original confirmed adoption's promotion died between the copy and
-    // the remap/clear: the partial copy exists (verbatim spool subdoc ids),
-    // the parent still carries, and the history ref still points at it.
+    // the remap/clear: the durable marker is stamped, the partial copy
+    // exists (verbatim spool subdoc ids) carrying the matching token, the
+    // parent still carries, and the history ref still points at it.
+    const token = "adoption-retry-token";
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { promotionInFlight: { token, at: new Date() } } },
+    );
+    const parentLean = await Filament.findById(parent._id).lean();
     const partial = await Filament.create({
       name: "Interrupted Adoption Parent — Steel Blue",
       vendor: "V",
@@ -340,6 +346,7 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
       color: parentLean.color,
       colorName: parentLean.colorName,
       spools: parentLean.spools,
+      promotedByToken: token,
     });
     const job = await PrintHistory.create({
       jobLabel: "ref job",
@@ -371,11 +378,13 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
     );
     expect(res.status).toBe(200);
 
-    // Parent ends clean; the owed remap ran onto the adopted partial copy.
+    // Parent ends clean (marker gone); the owed remap ran onto the adopted
+    // partial copy.
     const freshParent = await Filament.findById(parent._id).lean();
     expect(freshParent.color ?? null).toBeNull();
     expect(freshParent.colorName ?? null).toBeNull();
     expect(freshParent.spools).toHaveLength(0);
+    expect(freshParent.promotionInFlight ?? null).toBeNull();
     const freshJob = await PrintHistory.findById(job._id).lean();
     expect(String(freshJob.usage[0].filamentId)).toBe(String(partial._id));
 

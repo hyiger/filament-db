@@ -221,6 +221,20 @@ export async function PUT(
     // edited field from `conflict` to pre-checked `adopt` in the re-sync
     // dialog. Only the OPT import/sync routes may write it.
     delete body.openprinttagSnapshot;
+    // GH #605 round 10: the durable promotion-marker pair is server-owned —
+    // see the parallel strip in the POST handler. A forged
+    // `promotionInFlight`/`promotedByToken` pair could make a later gate
+    // pass "resume" a promotion that never ran and clear the parent's
+    // inventory fields. The dotted sweep matters here especially: this body
+    // feeds findOneAndUpdate, where `promotionInFlight.token` is a live
+    // update path the exact-key deletes would miss.
+    delete body.promotionInFlight;
+    delete body.promotedByToken;
+    for (const key of Object.keys(body)) {
+      if (key.startsWith("promotionInFlight.") || key.startsWith("promotedByToken.")) {
+        delete body[key];
+      }
+    }
     // Server-side response-only fields that clients may echo back (e.g. the
     // edit page fetches with ?raw=true and receives _parent / _variants /
     // _inherited). Strip so they don't become persisted document fields.

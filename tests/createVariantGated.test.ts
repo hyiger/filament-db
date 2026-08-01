@@ -687,4 +687,60 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
     const fresh = await Filament.findById(parent._id).lean();
     expect(fresh.lowStockThreshold).toBe(200);
   });
+
+  // ── round 10: stale promotion markers are lazily cleared by gate passes ─
+
+  it("createVariantGated on a NON-carrying parent with a stale marker: clears the marker, never resumes", async () => {
+    // A crashed promotion's marker outlived its carried state (cleared by
+    // hand): promotionState.needed is false, so the marker proves nothing
+    // completable — the gate drops it as housekeeping and creates normally.
+    const token = "stale-lib-token";
+    const parent = await Filament.create({
+      name: "Stale Lib Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      promotionInFlight: { token, at: new Date() },
+    });
+    // Even a token-paired leftover variant must NOT trigger a resume here.
+    const paired = await Filament.create({
+      name: "Stale Lib Parent — Leftover",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      color: "#336699",
+      totalWeight: 750,
+      promotedByToken: token,
+    });
+
+    const result = await createVariantGated(
+      Filament,
+      parent._id,
+      { name: "Stale Lib Parent — Red", vendor: "V", type: "PLA", parentId: String(parent._id) },
+      false,
+    );
+    expect(result.outcome).toBe("created");
+
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.promotionInFlight ?? null).toBeNull();
+    // The leftover keeps its own record — no resume ran (nothing was owed).
+    const freshPaired = await Filament.findById(paired._id).lean();
+    expect(freshPaired.totalWeight).toBe(750);
+  });
+
+  it("gateFirstVariantAdoption clears a stale marker the same way", async () => {
+    const parent = await Filament.create({
+      name: "Stale Adoption Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      promotionInFlight: { token: "stale-adoption-token", at: new Date() },
+    });
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: false,
+    });
+    expect(result).toEqual({ outcome: "ready", clearOrphanedThreshold: false });
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.promotionInFlight ?? null).toBeNull();
+  });
 });

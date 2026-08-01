@@ -5,6 +5,7 @@ import {
   promotionVariantBaseName,
   resolvePromotionVariantName,
   performParentPromotion,
+  resumePartialParentPromotion,
 } from "@/lib/promoteParent";
 
 /**
@@ -221,6 +222,9 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     expect(variant.instanceId).toBeTruthy();
     expect(variant.instanceId).not.toBe(parentLean.instanceId);
     expect(variant.syncId ?? null).toBeNull();
+    // Round 10: the copy carries its run's token (harmless residue after
+    // completion — resume also requires the parent marker, cleared below).
+    expect(variant.promotedByToken).toBeTruthy();
 
     // Parent cleared: colorless, inventory-free — but the SPEC pair
     // (tare + nominal net weight) STAYS on the template.
@@ -230,6 +234,8 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     expect(fresh.spools).toEqual([]);
     expect(fresh.totalWeight).toBeNull();
     expect(fresh.lowStockThreshold).toBeNull();
+    // Round 10: completion clears the durable marker in the same write.
+    expect(fresh.promotionInFlight ?? null).toBeNull();
     expect(fresh.spoolWeight).toBe(250);
     expect(fresh.netFilamentWeight).toBe(1000);
     // The parent's own untouched fields survive.
@@ -270,20 +276,31 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
 
   // ── ordering contract (mock model) ──────────────────────────────────────
 
-  it("copies FIRST, remaps external refs SECOND, clears LAST", async () => {
+  // Round 10: the two parent updateOne writes are told apart by payload —
+  // the step-0 marker $sets `promotionInFlight` to an OBJECT and nothing
+  // else; the completing clear $sets the moved fields (color et al.) to
+  // null/empty alongside `promotionInFlight: null` + the `$inc __v`.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function classifyParentWrite(update: any): "marker" | "clear" {
+    return update?.$set?.color === undefined ? "marker" : "clear";
+  }
+
+  it("stamps the marker FIRST, copies SECOND, remaps external refs THIRD, completes LAST", async () => {
     const calls: string[] = [];
     const mockModel = {
       exists: async () => null,
-      // Round 8 F2: the resume detection probes for a partial copy before
-      // creating — none here (deliberately unrecorded: not part of the
-      // write-ordering contract this test pins).
+      // Round 10: resume detection is marker-driven; this parent carries no
+      // promotionInFlight, so no probe query is ever issued (findOne would
+      // throw if called — the mock returning null keeps the contract loose
+      // for the name resolution below, which uses exists()).
       findOne: async () => null,
       create: async (body: Record<string, unknown>) => {
         calls.push("create");
         return { ...body, _id: "variant-1" };
       },
-      updateOne: async () => {
-        calls.push("clear");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      updateOne: async (_filter: any, update: any) => {
+        calls.push(classifyParentWrite(update));
         return { acknowledged: true };
       },
     };
@@ -329,6 +346,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       { externalRefs: mockRefs },
     );
     expect(calls).toEqual([
+      "marker",
       "create",
       "remap-history",
       "remap-slots",
@@ -346,8 +364,9 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
         calls.push("create");
         return { ...body, _id: "variant-1" };
       },
-      updateOne: async () => {
-        calls.push("clear");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      updateOne: async (_filter: any, update: any) => {
+        calls.push(classifyParentWrite(update));
         return { acknowledged: true };
       },
     };
@@ -363,10 +382,10 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       },
       { externalRefs: null },
     );
-    expect(calls).toEqual(["create", "clear"]);
+    expect(calls).toEqual(["marker", "create", "clear"]);
   });
 
-  it("a failed copy never clears the parent (no transactions — crash-safe order)", async () => {
+  it("a failed copy never clears the parent — only the non-destructive marker was written (crash-safe order)", async () => {
     const calls: string[] = [];
     const mockModel = {
       exists: async () => null,
@@ -374,8 +393,9 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       create: async () => {
         throw new Error("boom");
       },
-      updateOne: async () => {
-        calls.push("clear");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      updateOne: async (_filter: any, update: any) => {
+        calls.push(classifyParentWrite(update));
         return { acknowledged: true };
       },
     };
@@ -392,7 +412,93 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
         { externalRefs: null },
       ),
     ).rejects.toThrow("boom");
-    expect(calls).toEqual([]);
+    // The step-0 marker is the ONLY write that landed — reversible by
+    // design (the parent still carries everything; a retried confirmed
+    // promotion reuses the token, and if the state is instead cleared by
+    // hand the marker is lazily dropped as stale). Never the clear.
+    expect(calls).toEqual(["marker"]);
+  });
+
+  it("REUSES a lingering marker token (crashed between step 0 and the copy) instead of stacking a second marker", async () => {
+    // A parent whose in-lock snapshot already carries a marker but has no
+    // token-matched copy — the crash-after-step-0 shape. The retried
+    // promotion must not write a new marker (no updateOne with a fresh
+    // token) and must stamp the EXISTING token on the copy it creates.
+    const calls: Array<{ kind: string; token?: string }> = [];
+    const staleToken = "token-from-crashed-run";
+    const mockModel = {
+      exists: async () => null,
+      // The marker-driven probe DOES query here (marker present) — no
+      // matching copy exists.
+      findOne: async () => null,
+      create: async (body: Record<string, unknown>) => {
+        calls.push({ kind: "create", token: body.promotedByToken as string });
+        return { ...body, _id: "variant-1" };
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      updateOne: async (_filter: any, update: any) => {
+        calls.push({ kind: classifyParentWrite(update) });
+        return { acknowledged: true };
+      },
+    };
+    const { resumed } = await performParentPromotion(
+      mockModel,
+      {
+        _id: "parent-1",
+        name: "P",
+        vendor: "V",
+        type: "PLA",
+        color: "#123456",
+        promotionInFlight: { token: staleToken, at: new Date() },
+      },
+      { externalRefs: null },
+    );
+    expect(resumed).toBe(false);
+    // No second marker write — straight to create (with the reused token),
+    // then the completing clear.
+    expect(calls).toEqual([
+      { kind: "create", token: staleToken },
+      { kind: "clear" },
+    ]);
+  });
+
+  it("a MALFORMED marker (no usable token string) is treated as absent — fresh token, no resume probe", async () => {
+    const calls: string[] = [];
+    let probed = false;
+    const mockModel = {
+      exists: async () => null,
+      findOne: async () => {
+        probed = true;
+        return null;
+      },
+      create: async (body: Record<string, unknown>) => {
+        calls.push("create");
+        expect(typeof body.promotedByToken).toBe("string");
+        expect(body.promotedByToken).not.toBe("");
+        return { ...body, _id: "variant-1" };
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      updateOne: async (_filter: any, update: any) => {
+        calls.push(classifyParentWrite(update));
+        return { acknowledged: true };
+      },
+    };
+    await performParentPromotion(
+      mockModel,
+      {
+        _id: "parent-1",
+        name: "P",
+        vendor: "V",
+        type: "PLA",
+        color: "#123456",
+        promotionInFlight: { token: "", at: new Date() },
+      },
+      { externalRefs: null },
+    );
+    // Nothing can match an empty token, so no probe ran and a REAL marker
+    // (fresh token) was stamped before the copy.
+    expect(probed).toBe(false);
+    expect(calls).toEqual(["marker", "create", "clear"]);
   });
 
   it("the clear bumps __v so a stale positional spool save VersionErrors instead of phantom-writing onto the template (codex round 3 sweep)", async () => {
@@ -598,9 +704,9 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     ).toBe(`/filaments/${variant._id}?spool=${spoolId}`);
   });
 
-  // ── round 8 F2: interrupted promotions resume instead of duplicating ────
+  // ── round 8 F2 / round 10: interrupted promotions resume off the marker ─
 
-  it("interrupted at the REMAP (spools case): the retry resumes the partial copy by spool-id overlap — one copy, parent clean", async () => {
+  it("interrupted at the REMAP (spools case): the retry resumes the marker-paired partial copy — one copy, parent clean, marker gone", async () => {
     const parent = await Filament.create({
       name: "Interrupted PLA",
       vendor: "V",
@@ -642,11 +748,16 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       performParentPromotion(Filament, parentLean, { externalRefs: flakyRefs }),
     ).rejects.toThrow("interrupted after create");
 
-    // The interrupted state: partial copy exists (same spool subdoc ids),
-    // parent still carries, history ref still points at the parent.
+    // The interrupted state: the durable marker is stamped on the parent,
+    // the partial copy exists (same spool subdoc ids) carrying the matching
+    // token, the parent still carries, and the history ref still points at
+    // the parent.
     const midParent = await Filament.findById(parent._id).lean();
     expect(midParent.spools).toHaveLength(2);
-    expect(await Filament.countDocuments({ parentId: parent._id, _deletedAt: null })).toBe(1);
+    expect(midParent.promotionInFlight?.token).toBeTruthy();
+    const midCopies = await Filament.find({ parentId: parent._id, _deletedAt: null }).lean();
+    expect(midCopies).toHaveLength(1);
+    expect(midCopies[0].promotedByToken).toBe(midParent.promotionInFlight.token);
 
     // RETRY the same promotion off a fresh in-lock-style snapshot.
     const { variant, resumed } = await performParentPromotion(
@@ -664,17 +775,19 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     expect(copies[0].spools.map((s: { _id: unknown }) => String(s._id))).toEqual(spoolIds);
     expect(copies[0].totalWeight).toBe(1100);
 
-    // Parent ends clean, and the remap DID run on the retry.
+    // Parent ends clean — marker gone (cleared atomically with the fields)
+    // — and the remap DID run on the retry.
     const freshParent = await Filament.findById(parent._id).lean();
     expect(freshParent.color).toBeNull();
     expect(freshParent.colorName).toBeNull();
     expect(freshParent.spools).toEqual([]);
     expect(freshParent.totalWeight).toBeNull();
+    expect(freshParent.promotionInFlight ?? null).toBeNull();
     const freshJob = await PrintHistory.findById(job._id).lean();
     expect(String(freshJob.usage[0].filamentId)).toBe(String(variant._id));
   });
 
-  it("interrupted at the CLEAR (no-spools case): the retry resumes by name + carried-set equality — no ' (2)' copy", async () => {
+  it("interrupted at the CLEAR (no-spools case): the retry resumes off the marker/token pair — no ' (2)' copy, marker gone", async () => {
     const parent = await Filament.create({
       name: "Colorful Interrupted PLA",
       vendor: "V",
@@ -685,8 +798,10 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     });
     const parentLean = await Filament.findById(parent._id).lean();
 
-    // A delegating model whose FIRST updateOne (the clear) throws — the
-    // create and remap already succeeded.
+    // A delegating model whose COMPLETING clear throws — the step-0 marker
+    // write, the create, and the remap all succeeded. The two parent
+    // updateOne writes are told apart by payload: only the completing clear
+    // carries the `$inc __v`.
     let clearThrew = false;
     const flakyModel = {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -697,7 +812,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       create: (...args: any[]) => Filament.create(...args),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       updateOne: async (...args: any[]) => {
-        if (!clearThrew) {
+        if (!clearThrew && args[1]?.$inc?.__v != null) {
           clearThrew = true;
           throw new Error("interrupted at clear");
         }
@@ -709,10 +824,14 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       performParentPromotion(flakyModel, parentLean, { externalRefs }),
     ).rejects.toThrow("interrupted at clear");
 
-    // Partial copy exists; parent still carries its color pair.
-    expect(await Filament.countDocuments({ parentId: parent._id, _deletedAt: null })).toBe(1);
+    // Partial copy exists carrying the parent's marker token; the parent
+    // still carries its color pair.
     const midParent = await Filament.findById(parent._id).lean();
     expect(midParent.color).toBe("#AB34CD");
+    expect(midParent.promotionInFlight?.token).toBeTruthy();
+    const midCopies = await Filament.find({ parentId: parent._id, _deletedAt: null }).lean();
+    expect(midCopies).toHaveLength(1);
+    expect(midCopies[0].promotedByToken).toBe(midParent.promotionInFlight.token);
 
     const { variant, resumed } = await performParentPromotion(
       Filament,
@@ -732,6 +851,36 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     expect(freshParent.color).toBeNull();
     expect(freshParent.colorName).toBeNull();
     expect(freshParent.lowStockThreshold).toBeNull();
+    expect(freshParent.promotionInFlight ?? null).toBeNull();
+  });
+
+  it("resumePartialParentPromotion tolerates a marker-bearing parent snapshot without a spools array and null externalRefs (mock)", async () => {
+    // Defensive-shape pin: a lean snapshot missing `spools` (Mongoose
+    // always materializes it, but the helper takes loose docs) resumes with
+    // an empty moved set; `externalRefs: null` (the unit-test escape hatch)
+    // skips the remap and still completes.
+    const calls: string[] = [];
+    const mockModel = {
+      findOne: async () => ({ _id: "copy-1", promotedByToken: "t-1" }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      updateOne: async (_filter: any, update: any) => {
+        expect(update.$set.promotionInFlight).toBeNull();
+        expect(update.$inc.__v).toBe(1);
+        calls.push("clear");
+        return { acknowledged: true };
+      },
+    };
+    const partial = await resumePartialParentPromotion(
+      mockModel,
+      {
+        _id: "parent-1",
+        name: "P",
+        promotionInFlight: { token: "t-1", at: new Date() },
+      },
+      null,
+    );
+    expect(partial).toEqual({ _id: "copy-1", promotedByToken: "t-1" });
+    expect(calls).toEqual(["clear"]);
   });
 
   it("a genuine SECOND promotion after a COMPLETED one (parent re-acquired state) still creates a fresh suffixed copy", async () => {
@@ -750,6 +899,9 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     );
     expect(first.resumed).toBe(false);
     expect(first.variant.name).toBe("Twice Promoted PLA — Coal");
+    // Completion cleared the marker atomically with the moved fields.
+    const afterFirst = await Filament.findById(parent._id).lean();
+    expect(afterFirst.promotionInFlight ?? null).toBeNull();
 
     // The parent re-acquires carrying state (legacy/direct write — NEW spool
     // subdocs, so the ids don't overlap the completed promotion's copy).
@@ -769,16 +921,23 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       await Filament.findById(parent._id).lean(),
       { externalRefs },
     );
-    // Fresh, not resumed: no spool-id overlap, and the base name is taken.
+    // Fresh, not resumed: the first promotion's marker is long gone, so
+    // there is no proof to resume off — and the base name is taken.
     expect(second.resumed).toBe(false);
     expect(second.variant.name).toBe("Twice Promoted PLA — Coal (2)");
     expect(String(second.variant._id)).not.toBe(String(first.variant._id));
 
-    // Both copies hold exactly their own inventory; the parent is clean.
+    // Both copies hold exactly their own inventory; each run minted its own
+    // token; the parent is clean and unmarked.
     const copies = await Filament.find({ parentId: parent._id, _deletedAt: null }).lean();
     expect(copies).toHaveLength(2);
+    const tokens = copies.map((c: { promotedByToken: string | null }) => c.promotedByToken);
+    expect(tokens[0]).toBeTruthy();
+    expect(tokens[1]).toBeTruthy();
+    expect(tokens[0]).not.toBe(tokens[1]);
     const freshParent = await Filament.findById(parent._id).lean();
     expect(freshParent.spools).toEqual([]);
     expect(freshParent.color).toBeNull();
+    expect(freshParent.promotionInFlight ?? null).toBeNull();
   });
 });

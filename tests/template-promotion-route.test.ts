@@ -421,10 +421,18 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect(fresh.spools).toEqual([]);
   });
 
-  it("promote: RESUMES an interrupted promotion (partial copy holding the parent's spool ids) instead of minting a ' (2)' duplicate — round 8 F2", async () => {
-    // Manufacture the interrupted state directly: the copy was created (same
-    // spool subdoc _ids, verbatim) but the run died before the parent clear.
+  it("promote: RESUMES an interrupted promotion (marker + token-paired copy) instead of minting a ' (2)' duplicate — round 8 F2 / round 10", async () => {
+    // Manufacture the interrupted state directly: the durable marker was
+    // stamped (step 0) and the copy created carrying the token (step 1,
+    // spool subdoc _ids verbatim), but the run died before the parent
+    // clear. Round 10: the marker/token pair — not the copied values — is
+    // what proves this state.
     const parent = await seedCarryingParent({ colorName: "Steel Blue" });
+    const token = "route-resume-token";
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { promotionInFlight: { token, at: new Date() } } },
+    );
     const parentLean = await Filament.findById(parent._id).lean();
     await Filament.create({
       name: "Carrying PLA — Steel Blue",
@@ -434,6 +442,7 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
       color: parentLean.color,
       colorName: parentLean.colorName,
       spools: parentLean.spools,
+      promotedByToken: token,
     });
 
     // "Convert to template" is the documented recovery path for exactly this
@@ -445,6 +454,8 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect(body.variant.name).toBe("Carrying PLA — Steel Blue");
     expect(body.parent.spools).toEqual([]);
     expect(body.parent.color).toBeNull();
+    // Completion dropped the marker atomically with the clear.
+    expect(body.parent.promotionInFlight ?? null).toBeNull();
 
     // Exactly ONE copy; the family carries the two rolls once.
     const copies = await Filament.find({ parentId: parent._id, _deletedAt: null }).lean();
@@ -457,14 +468,19 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
 
   // ── round 9 F1: gate RETRIES resume interrupted promotions too ──────────
 
-  it("create RETRY after an interrupted promotion resumes it first (round 9 F1): 201, parent clean, refs remapped, one promotion copy", async () => {
+  it("create RETRY after an interrupted promotion resumes it first (round 9 F1 / round 10 marker): 201, parent clean, refs remapped, one promotion copy", async () => {
     const PrintHistory = mongoose.models.PrintHistory;
     const Printer = mongoose.models.Printer;
-    // Manufacture the interrupted state: the promotion copy exists (verbatim
-    // spool subdoc ids) but the original confirmed run died before the remap
-    // and the clear — the parent still carries, and external refs still
-    // point at it.
+    // Manufacture the interrupted state: marker stamped, promotion copy
+    // created carrying the token (verbatim spool subdoc ids), but the
+    // original confirmed run died before the remap and the clear — the
+    // parent still carries, and external refs still point at it.
     const parent = await seedCarryingParent({ colorName: "Steel Blue" });
+    const token = "gate-retry-token";
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { promotionInFlight: { token, at: new Date() } } },
+    );
     const parentLean = await Filament.findById(parent._id).lean();
     const partial = await Filament.create({
       name: "Carrying PLA — Steel Blue",
@@ -474,6 +490,7 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
       color: parentLean.color,
       colorName: parentLean.colorName,
       spools: parentLean.spools,
+      promotedByToken: token,
     });
     const job = await PrintHistory.create({
       jobLabel: "ref job",
@@ -497,11 +514,12 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect(res.status).toBe(201);
     expect((await res.json()).name).toBe("Carrying PLA — Red");
 
-    // The parent ends clean.
+    // The parent ends clean, marker gone.
     const freshParent = await Filament.findById(parent._id).lean();
     expect(freshParent.color).toBeNull();
     expect(freshParent.colorName).toBeNull();
     expect(freshParent.spools).toEqual([]);
+    expect(freshParent.promotionInFlight ?? null).toBeNull();
 
     // External refs got their owed remap onto the adopted partial copy.
     const freshJob = await PrintHistory.findById(job._id).lean();
@@ -549,10 +567,10 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     ).toBeNull();
   });
 
-  it("legacy carrying template (no spools, near-miss variant name) stays untouched — carried-set equality gates the resume", async () => {
-    // No-spools detection is name + FULL carried-set equality. A variant
-    // whose name matches the deterministic promotion name but whose carried
-    // values differ is a near-miss, not a partial copy — the parent must be
+  it("legacy carrying template (no spools, promotion-style variant name) stays untouched — no marker means no resume", async () => {
+    // Round 10: resume detection is marker-driven ONLY. A variant whose
+    // name matches the deterministic promotion name is just a variant when
+    // no promotionInFlight/promotedByToken pair exists — the parent must be
     // left exactly as-is.
     const parent = await Filament.create({
       name: "Legacy Colorful PLA",
@@ -566,7 +584,7 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
       vendor: "V",
       type: "PLA",
       parentId: parent._id,
-      color: "#FF00FF", // differs from the parent's carried color
+      color: "#FF00FF",
     });
     const parentBefore = await Filament.findById(parent._id).lean();
 
@@ -576,6 +594,265 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect(res.status).toBe(201);
 
     expect(await Filament.findById(parent._id).lean()).toEqual(parentBefore);
+  });
+
+  it("round 10 (the codex P1 repro): a LEGITIMATE lookalike child — auto-style name, WHOLE carried set equal — is never adopted; both inventory records survive", async () => {
+    // The round-9 heuristic's failure mode: a legacy carrying template
+    // whose child coincides on the deterministic promotion name AND the
+    // full carried set (color / colorName / totalWeight / threshold —
+    // 1000 g is the ubiquitous full-spool value, and auto-style names are
+    // plausible from manual pre-#605 organizing). These are SEPARATE
+    // inventory records that merely hold equal values — value equality is
+    // not record identity. The old resume would have cleared the parent's
+    // fields without creating the sibling that should have received them,
+    // silently losing one 1000 g record. With marker-driven detection
+    // there is no marker, so nothing fires.
+    const parent = await Filament.create({
+      name: "Legacy Stock PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#336699",
+      colorName: "Steel Blue",
+      totalWeight: 1000,
+      lowStockThreshold: 200,
+    });
+    const lookalike = await Filament.create({
+      name: "Legacy Stock PLA — Steel Blue", // exactly the auto-style name
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      color: "#336699",
+      colorName: "Steel Blue",
+      totalWeight: 1000, // a SEPARATE full spool, coincidentally equal
+      lowStockThreshold: 200,
+    });
+    const parentBefore = await Filament.findById(parent._id).lean();
+
+    // A new (non-first) variant lands under the carrying template.
+    const res = await createFilament(
+      jsonReq(variantBody(parent._id, { name: "Legacy Stock PLA — Red" })),
+    );
+    expect(res.status).toBe(201);
+
+    // NO resume: the parent is byte-for-byte untouched — its 1000 g record
+    // included — and the lookalike keeps its own 1000 g record. Two
+    // records, still two records.
+    expect(await Filament.findById(parent._id).lean()).toEqual(parentBefore);
+    const freshLookalike = await Filament.findById(lookalike._id).lean();
+    expect(freshLookalike.totalWeight).toBe(1000);
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.totalWeight).toBe(1000);
+    expect(freshParent.colorName).toBe("Steel Blue");
+    expect(freshParent.lowStockThreshold).toBe(200);
+  });
+
+  // ── round 10: step-boundary interruptions, retried via gate AND /promote ─
+
+  /** Manufacture a carrying parent frozen at a protocol step boundary.
+   *  `step` 0 = marker stamped, no copy; 1 = marker + token-paired copy,
+   *  refs unmapped; 2 = marker + copy + refs already remapped (the
+   *  completing clear is all that's owed). Returns the pieces the
+   *  assertions need. */
+  async function seedInterruptedAt(step: 0 | 1 | 2, name: string) {
+    const PrintHistory = mongoose.models.PrintHistory;
+    const token = `boundary-token-${name}`;
+    const parent = await seedCarryingParent({ name, colorName: "Steel Blue" });
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { promotionInFlight: { token, at: new Date() } } },
+    );
+    const parentLean = await Filament.findById(parent._id).lean();
+    let copy = null;
+    if (step >= 1) {
+      copy = await Filament.create({
+        name: `${name} — Steel Blue`,
+        vendor: "V",
+        type: "PLA",
+        parentId: parent._id,
+        color: parentLean.color,
+        colorName: parentLean.colorName,
+        spools: parentLean.spools,
+        promotedByToken: token,
+      });
+    }
+    // An external ref that must end up on the promotion copy: still on the
+    // parent at steps 0/1, already remapped at step 2.
+    const refTarget = step === 2 && copy ? copy._id : parent._id;
+    const job = await PrintHistory.create({
+      jobLabel: "boundary job",
+      startedAt: new Date(),
+      usage: [{ filamentId: refTarget, spoolId: parentLean.spools[0]._id, grams: 5 }],
+    });
+    return { parent, parentLean, copy, job, token };
+  }
+
+  /** The shared end-state contract: exactly one promotion copy holding the
+   *  rolls, parent clean, marker gone, the external ref on the copy. */
+  async function expectRecovered(
+    seeded: Awaited<ReturnType<typeof seedInterruptedAt>>,
+    opts: { extraVariants?: number } = {},
+  ) {
+    const PrintHistory = mongoose.models.PrintHistory;
+    const freshParent = await Filament.findById(seeded.parent._id).lean();
+    expect(freshParent.color).toBeNull();
+    expect(freshParent.colorName).toBeNull();
+    expect(freshParent.spools).toEqual([]);
+    expect(freshParent.promotionInFlight ?? null).toBeNull();
+
+    const family = await Filament.find({
+      parentId: seeded.parent._id,
+      _deletedAt: null,
+    }).lean();
+    const carrying = family.filter(
+      (f: { spools: unknown[] }) => (f.spools ?? []).length > 0,
+    );
+    expect(carrying).toHaveLength(1);
+    expect(
+      carrying[0].spools.map((s: { _id: unknown }) => String(s._id)),
+    ).toEqual(seeded.parentLean.spools.map((s: { _id: unknown }) => String(s._id)));
+    if (seeded.copy) {
+      // Steps 1/2: the pre-existing token-paired copy was ADOPTED, not
+      // duplicated.
+      expect(String(carrying[0]._id)).toBe(String(seeded.copy._id));
+    }
+    if (opts.extraVariants != null) {
+      expect(family).toHaveLength(1 + opts.extraVariants);
+    }
+
+    const freshJob = await PrintHistory.findById(seeded.job._id).lean();
+    expect(String(freshJob.usage[0].filamentId)).toBe(String(carrying[0]._id));
+  }
+
+  for (const step of [0, 1, 2] as const) {
+    it(`interrupted after step ${step}, retried via the CREATE gate: one copy, parent clean, marker gone`, async () => {
+      const seeded = await seedInterruptedAt(step, `Gate Boundary ${step} PLA`);
+
+      // The retry of the original confirmed request. At step 0 the parent
+      // is still variant-less, so this runs the full (gated) promotion,
+      // REUSING the lingering token; at steps 1/2 the gate's probe adopts
+      // the token-paired copy and completes what is owed.
+      const res = await createFilament(
+        jsonReq(
+          variantBody(seeded.parent._id, {
+            name: `Gate Boundary ${step} PLA — Red`,
+            promoteParent: true,
+          }),
+        ),
+      );
+      expect(res.status).toBe(201);
+
+      // Family = the (one) promotion copy + the requested variant.
+      await expectRecovered(seeded, { extraVariants: 1 });
+      // The copy is paired with the run's token — at step 0 the retry
+      // reused the crashed run's marker token rather than stacking.
+      const carrying = await Filament.findOne({
+        parentId: seeded.parent._id,
+        _deletedAt: null,
+        "spools.0": { $exists: true },
+      }).lean();
+      expect(carrying.promotedByToken).toBe(seeded.token);
+    });
+
+    it(`interrupted after step ${step}, retried via /promote: one copy, parent clean, marker gone`, async () => {
+      const seeded = await seedInterruptedAt(step, `Promote Boundary ${step} PLA`);
+      // /promote requires a live variant. At step 0 no copy exists yet, so
+      // give the legacy template an unrelated pre-existing variant (the
+      // realistic shape: the crashed run was itself a /promote on a
+      // template that already had variants).
+      let extraVariants = 0;
+      if (step === 0) {
+        await Filament.create({
+          name: `Promote Boundary ${step} PLA — Mint`,
+          vendor: "V",
+          type: "PLA",
+          parentId: seeded.parent._id,
+          color: "#00FF88",
+        });
+        extraVariants = 1;
+      }
+
+      const res = await promoteReq(String(seeded.parent._id));
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      // Steps 1/2 adopt the existing copy (resumed); step 0 has nothing to
+      // adopt — a fresh copy is created under the reused token.
+      expect(body.resumed).toBe(step !== 0);
+
+      await expectRecovered(seeded, { extraVariants });
+      const carrying = await Filament.findOne({
+        parentId: seeded.parent._id,
+        _deletedAt: null,
+        "spools.0": { $exists: true },
+      }).lean();
+      expect(carrying.promotedByToken).toBe(seeded.token);
+    });
+  }
+
+  // ── round 10: stale markers are lazily cleared, never resumed ───────────
+
+  it("a stale marker on a NON-carrying template is lazily cleared by a gate pass — no resume, even with a token-paired variant present", async () => {
+    // The manufactured shape: a run crashed mid-protocol and the parent's
+    // carried state was later cleared by hand — marker still set, a
+    // token-paired variant still around, but parentPromotionState.needed
+    // is false. Nothing may resume (there is nothing to move); the marker
+    // is dropped as housekeeping.
+    const token = "stale-token-gate";
+    const parent = await Filament.create({
+      name: "Stale Marker Template",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      promotionInFlight: { token, at: new Date() },
+    });
+    const paired = await Filament.create({
+      name: "Stale Marker Template — Steel Blue",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      color: "#336699",
+      totalWeight: 800,
+      promotedByToken: token,
+    });
+
+    const res = await createFilament(
+      jsonReq(variantBody(parent._id, { name: "Stale Marker Template — Red" })),
+    );
+    expect(res.status).toBe(201);
+
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.promotionInFlight ?? null).toBeNull();
+    // No resume side effects: the paired variant is untouched and no
+    // promotion copy was minted.
+    const freshPaired = await Filament.findById(paired._id).lean();
+    expect(freshPaired.totalWeight).toBe(800);
+    expect(freshPaired.promotedByToken).toBe(token);
+    expect(
+      await Filament.countDocuments({ parentId: parent._id, _deletedAt: null }),
+    ).toBe(2); // the paired variant + the one just created
+  });
+
+  it("promote: a stale marker on a non-carrying template → 400 nothing_to_convert AND the marker is lazily cleared", async () => {
+    const parent = await Filament.create({
+      name: "Stale Marker Promote Template",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      promotionInFlight: { token: "stale-token-promote", at: new Date() },
+    });
+    await Filament.create({
+      name: "Stale Marker Promote Template — Red",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+    });
+
+    const res = await promoteReq(String(parent._id));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("nothing_to_convert");
+
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.promotionInFlight ?? null).toBeNull();
   });
 
   it("promote: 400 not_a_template for a standalone (no live variants)", async () => {

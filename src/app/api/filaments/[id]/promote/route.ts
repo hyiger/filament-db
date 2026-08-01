@@ -6,7 +6,11 @@ import PrintHistory from "@/models/PrintHistory";
 import Printer from "@/models/Printer";
 import { hasVariants } from "@/lib/resolveFilament";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
-import { parentPromotionState, performParentPromotion } from "@/lib/promoteParent";
+import {
+  parentPromotionState,
+  performParentPromotion,
+  clearStalePromotionMarker,
+} from "@/lib/promoteParent";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 
@@ -78,6 +82,12 @@ export async function POST(
 
       const state = parentPromotionState(filament);
       if (!state.needed) {
+        // Round 10: a promotion marker on a NON-carrying template is stale
+        // by construction (completion clears it atomically with the moved
+        // fields) — drop it lazily; there is nothing to resume or convert.
+        if (filament.promotionInFlight != null) {
+          await clearStalePromotionMarker(Filament, filament._id);
+        }
         return NextResponse.json(
           {
             error: "nothing_to_convert",
