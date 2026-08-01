@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import PrintHistory from "@/models/PrintHistory";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { getErrorMessage, errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { capUsageHistory, MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
@@ -379,8 +380,40 @@ export async function POST(request: NextRequest) {
     // this by default, local mongod may not. On a standalone server
     // connection.transaction() throws with a specific error, so we fall
     // back to sequential saves.
+    //
+    // GH #605 round 12: the debit save is a SPOOL WRITE, so it must hold the
+    // same per-filament mutex every promotion path holds — unserialized, a
+    // debit landing between a promotion's snapshot read and its clearing
+    // write was silently erased (the promoted copy is minted from the
+    // pre-debit snapshot; completeParentPromotion then unconditionally
+    // clears the parent's spools after this route already 201'd, so the
+    // acknowledged debit + usageHistory entry exist on NEITHER document).
+    // The lock closes the in-process window; the schema's OCC (VersionError
+    // → 409 below) stays as the guard for out-of-process writers.
+    //
+    // Lock discipline (the established no-nested-locks rule — never hold two
+    // filament keys at once):
+    //   - SINGLE-filament jobs (every usage row addresses one filament — the
+    //     common case): hold that one key across the WHOLE persist, txn
+    //     commit included. A transactional save is invisible until commit,
+    //     so an in-lock save alone would still let a promotion snapshot
+    //     pre-commit state after the key was released and erase the debit
+    //     right after it commits; spanning the commit closes that gap.
+    //   - MULTI-filament jobs: a cross-filament transaction can't be
+    //     protected one key at a time (its commit would need every touched
+    //     key held simultaneously — exactly what the no-nested-locks rule
+    //     forbids), so the job takes the sequential-saves path directly:
+    //     each filament's save runs under its own key, acquired and released
+    //     one at a time, and the explicit rollback below plays the role the
+    //     transaction played (same 409 contract; each single-doc save is
+    //     individually atomic). This mirrors the repo's other multi-filament
+    //     spool writers (POST /api/spools/import, the CSV importer).
     let history;
-    try {
+
+    // The transactional persist, extracted so the single-filament path can
+    // hold its lock across it (GH #949 reload-fresh-per-attempt semantics
+    // unchanged — see the comment inside).
+    const persistWithTransaction = async (): Promise<void> => {
       // GH #949 (+ Codex P1 follow-up): reload the filaments FRESH inside the
       // transaction callback and (re-)apply the debit HERE, per attempt, rather
       // than saving docs mutated once outside it.
@@ -440,40 +473,45 @@ export async function POST(request: NextRequest) {
         );
         history = created[0];
       });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const isTxnUnsupported =
-        msg.includes("Transaction numbers are only allowed") ||
-        msg.includes("not supported on standalone") ||
-        msg.includes("IllegalOperation");
-      // GH #224: surface concurrent-edit conflicts (Mongoose
-      // VersionError) as a 409 so the caller can re-fetch and retry
-      // against the fresh state. Without OCC enabled on the Filament
-      // schema this would never throw — but two near-simultaneous
-      // print-history POSTs that both load the same filament document
-      // would silently end with one job's grams debit lost
-      // (last-writer-wins). The schema-level `optimisticConcurrency:
-      // true` setting in src/models/Filament.ts makes this safe.
-      if (err instanceof mongoose.Error.VersionError) {
-        return errorResponse(
-          "Filament was modified by another request during this job. Please retry.",
-          409,
-        );
-      }
-      if (!isTxnUnsupported) throw err;
+    };
 
-      // Fallback path for non-replicated mongod (offline/test). No transaction
-      // to roll back, so we apply the debit to the pass-1 docs here (the txn
-      // callback above never ran — connection.transaction() throws before
-      // invoking it on a standalone server, so `filaments` is still pristine),
-      // then save sequentially with explicit rollback on failure — without
-      // this, save #2 throwing after save #1 committed would leak a partial
-      // debit (spool weight gone, no PrintHistory row, no refund path).
+    // The sequential-saves persist — the standalone-mongod fallback, and the
+    // multi-filament path (see the round-12 lock-discipline note above).
+    // Returns the 409 response on a concurrent-edit conflict, null on
+    // success; every other failure propagates to the route-level catch.
+    //
+    // `lockEachSave: true` runs every filament save (debit, rollback, cap
+    // trim) under that filament's own key, sequentially — never two keys at
+    // once. `false` means the caller ALREADY holds the single relevant key
+    // (re-acquiring it here would self-deadlock on the chained mutex).
+    const persistSequential = async (
+      lockEachSave: boolean,
+    ): Promise<NextResponse | null> => {
+      const withFilamentLock = <T,>(
+        f: (typeof filaments)[number],
+        fn: () => Promise<T>,
+      ): Promise<T> =>
+        lockEachSave ? runExclusive(filamentLockKey(f._id), fn) : fn();
+
+      // Apply the debit to the pass-1 docs (on the standalone fallback the
+      // txn callback above never ran — connection.transaction() throws
+      // before invoking it — so `filaments` is still pristine), then save
+      // sequentially with explicit rollback on failure — without this, save
+      // #2 throwing after save #1 committed would leak a partial debit
+      // (spool weight gone, no PrintHistory row, no refund path).
       const { resolved: resolvedUsage, touchedSpools } = applyJobToFilaments(byId);
       const savedFilaments: typeof filaments = [];
       try {
         for (const f of filaments) {
-          await f.save({ validateModifiedOnly: true }); // GH #905 (see above)
+          // GH #605 round 12: in-lock so this save can't land inside a
+          // promotion's snapshot→clear window. The doc was loaded in pass 1
+          // (pre-lock); staleness is covered by OCC — a promotion completing
+          // between pass 1 and this hold bumped __v (the $inc in
+          // completeParentPromotion), so the save VersionErrors into the
+          // 409 retry contract below instead of writing anything.
+          await withFilamentLock(f, async () => {
+            await f.save({ validateModifiedOnly: true }); // GH #905 (see above)
+          });
           savedFilaments.push(f);
         }
         history = await PrintHistory.create({
@@ -489,28 +527,31 @@ export async function POST(request: NextRequest) {
         // Reset every already-persisted filament to its pre-call state.
         // Reload from DB to avoid version conflicts, then splice off any
         // usageHistory entries we'd pushed and restore the original
-        // totalWeight from the snapshot.
+        // totalWeight from the snapshot. The rollback is a spool write too,
+        // so it takes the same per-filament key (one at a time).
         for (const f of savedFilaments) {
           try {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const fresh: any = await Filament.findById(f._id);
-            if (!fresh) continue;
-            for (const s of fresh.spools) {
-              const snap = spoolSnapshots.find(
-                (sn) =>
-                  sn.filamentId === String(f._id) &&
-                  sn.spoolId === String(s._id),
-              );
-              if (!snap) continue;
-              if (snap.totalWeight != null) s.totalWeight = snap.totalWeight;
-              if (Array.isArray(s.usageHistory)) {
-                s.usageHistory = s.usageHistory.filter(
-                  (e: { jobId?: unknown }) =>
-                    String(e.jobId ?? "") !== String(historyId),
+            await withFilamentLock(f, async () => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const fresh: any = await Filament.findById(f._id);
+              if (!fresh) return;
+              for (const s of fresh.spools) {
+                const snap = spoolSnapshots.find(
+                  (sn) =>
+                    sn.filamentId === String(f._id) &&
+                    sn.spoolId === String(s._id),
                 );
+                if (!snap) continue;
+                if (snap.totalWeight != null) s.totalWeight = snap.totalWeight;
+                if (Array.isArray(s.usageHistory)) {
+                  s.usageHistory = s.usageHistory.filter(
+                    (e: { jobId?: unknown }) =>
+                      String(e.jobId ?? "") !== String(historyId),
+                  );
+                }
               }
-            }
-            await fresh.save({ validateModifiedOnly: true }); // GH #905 (rollback debit)
+              await fresh.save({ validateModifiedOnly: true }); // GH #905 (rollback debit)
+            });
           } catch {
             // Best-effort rollback — if a save errors here, log via
             // the wrapper and continue. Manual reconciliation is
@@ -541,13 +582,63 @@ export async function POST(request: NextRequest) {
         for (const f of filaments) {
           if (f.spools.some((s) => cappedSpools.has(s))) {
             try {
-              await f.save({ validateModifiedOnly: true });
+              await withFilamentLock(f, async () => {
+                await f.save({ validateModifiedOnly: true });
+              });
             } catch {
               // Best-effort cap; the job is already recorded.
             }
           }
         }
       }
+      return null;
+    };
+
+    if (uniqueIds.length === 1) {
+      // Single-filament job: one key held across the whole persist — the
+      // txn attempt (commit included) and, on standalone mongod, the
+      // sequential fallback. No other key is ever taken inside the hold.
+      const conflict = await runExclusive(
+        filamentLockKey(uniqueIds[0]),
+        async (): Promise<NextResponse | null> => {
+          try {
+            await persistWithTransaction();
+            return null;
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            const isTxnUnsupported =
+              msg.includes("Transaction numbers are only allowed") ||
+              msg.includes("not supported on standalone") ||
+              msg.includes("IllegalOperation");
+            // GH #224: surface concurrent-edit conflicts (Mongoose
+            // VersionError) as a 409 so the caller can re-fetch and retry
+            // against the fresh state. In-process this can no longer fire
+            // (the round-12 lock serializes every same-family spool
+            // writer); it stays as the guard for out-of-process writers
+            // (a second deployment sharing the DB, the sync service,
+            // direct DB writes). The schema-level `optimisticConcurrency:
+            // true` setting in src/models/Filament.ts makes this safe.
+            if (err instanceof mongoose.Error.VersionError) {
+              return errorResponse(
+                "Filament was modified by another request during this job. Please retry.",
+                409,
+              );
+            }
+            if (!isTxnUnsupported) throw err;
+
+            // Fallback path for non-replicated mongod (offline/test) —
+            // already inside the single filament's lock hold.
+            return await persistSequential(false);
+          }
+        },
+      );
+      if (conflict) return conflict;
+    } else {
+      // Multi-filament job: sequential per-filament locked saves — see the
+      // round-12 lock-discipline note above for why the cross-filament
+      // transaction cannot be used here.
+      const conflict = await persistSequential(true);
+      if (conflict) return conflict;
     }
 
     return NextResponse.json(history, { status: 201 });

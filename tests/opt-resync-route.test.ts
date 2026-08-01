@@ -712,6 +712,11 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
       name: "Variant Import Parent",
       vendor: "Prusament",
       type: "PLA",
+      // Colorless (template-shaped) parent: this test is about PRUNING, so
+      // keep it out of the GH #605 promotion gate (the schema's gray
+      // default would count as "carrying" and 409 the first variant —
+      // covered by the dedicated gate tests below).
+      color: null,
       density: 1.24, // equals OPT → pruned
       temperatures: { nozzle: 225, nozzleRangeMin: 205, nozzleRangeMax: 225, bed: 60, standby: 170 },
       shoreHardnessD: 81,
@@ -753,6 +758,7 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
       name: "Differ Parent",
       vendor: "Prusament",
       type: "PLA",
+      color: null, // out of the #605 gate — see the pruning test above
       density: 1.5, // differs from OPT's 1.24 → variant keeps its own 1.24
       temperatures: { nozzle: 200 }, // differs from OPT 225 → variant keeps 225
     });
@@ -818,5 +824,272 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     );
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/one slug/i);
+  });
+
+  // ── GH #605 (codex round 3, Finding A): the promotion gate on the OPT
+  //    variant import — the same contract as POST /api/filaments ──────────
+
+  it("import-variant: first variant of a carrying parent → structured 409, nothing created", async () => {
+    const parent = await Filament.create({
+      name: "OPT Gate Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#336699",
+      spools: [{ label: "roll 1", totalWeight: 1000 }],
+    });
+    const res = await importPOST(
+      importReq({ slugs: ["prusament-pla-galaxy-black"], parentId: String(parent._id) }),
+    );
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe("parent_promotion_required");
+    expect(body.parentName).toBe("OPT Gate Parent");
+    expect(body.parentColor).toBe("#336699");
+    expect(body.spoolCount).toBe(1);
+    expect(body.variantName).toBe("OPT Gate Parent — Original");
+    // Nothing created, parent untouched — promotion is never silent.
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#336699");
+    expect(fresh.spools).toHaveLength(1);
+  });
+
+  it("import-variant: promoteParent: true promotes the parent, then imports the variant", async () => {
+    const parent = await Filament.create({
+      name: "OPT Promote Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#336699",
+      colorName: "Steel Blue",
+      spools: [{ label: "roll 1", totalWeight: 1000 }],
+    });
+    const res = await importPOST(
+      importReq({
+        slugs: ["prusament-pla-galaxy-black"],
+        parentId: String(parent._id),
+        promoteParent: true,
+      }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.created).toBe(1);
+
+    // The parent is now a colorless, inventoryless template …
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.color ?? null).toBeNull();
+    expect(freshParent.colorName ?? null).toBeNull();
+    expect(freshParent.spools).toHaveLength(0);
+    // … its state moved onto the promoted copy …
+    const promoted = await Filament.findOne({ name: "OPT Promote Parent — Steel Blue" }).lean();
+    expect(promoted).toBeTruthy();
+    expect(String(promoted.parentId)).toBe(String(parent._id));
+    expect(promoted.color).toBe("#336699");
+    expect(promoted.spools).toHaveLength(1);
+    // … and the imported variant exists alongside it, linked for re-sync.
+    const imported = await Filament.findById(body.filament._id).lean();
+    expect(String(imported.parentId)).toBe(String(parent._id));
+    expect(imported.settings.openprinttag_slug).toBe("prusament-pla-galaxy-black");
+  });
+
+  it("import-variant: the SECOND variant of a template needs no gate", async () => {
+    // A legacy-shaped template: still carries a color (enforce-forward
+    // keeps it), but already has a live variant — nothing left to gate.
+    const parent = await Filament.create({
+      name: "OPT Second Parent",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#336699",
+    });
+    await Filament.create({
+      name: "OPT Second Parent — Red",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+    });
+    const res = await importPOST(
+      importReq({ slugs: ["prusament-pla-galaxy-black"], parentId: String(parent._id) }),
+    );
+    expect(res.status).toBe(200);
+    expect((await res.json()).created).toBe(1);
+    // The legacy color stays — no silent promotion of an existing template.
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#336699");
+  });
+
+  // ── GH #605: colorless templates in check + sync ─────────────────────
+
+  /** A linked parent (diverged color + density) with one live variant —
+   *  i.e. a TEMPLATE per the derived rule. */
+  async function seedLinkedTemplate() {
+    const parent = await Filament.create({
+      name: "OPT Template PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#111111",
+      density: 1.0,
+      settings: {
+        openprinttag_slug: "prusament-pla-galaxy-black",
+        openprinttag_uuid: "1aaca54a-431f-5601-adf5-85dd018f487f",
+      },
+    });
+    await Filament.create({
+      name: "OPT Template PLA — Red",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+    });
+    return parent;
+  }
+
+  it("check: a template's changelist excludes color but still offers secondaryColors + scalars", async () => {
+    // Upstream carries a primary AND secondaries — the mapped payload keeps
+    // both (mapToFilamentPayload only nulls the primary when there is none).
+    dbMock.mockResolvedValue({
+      brands: [],
+      materials: [{ ...UPSTREAM_MATERIAL, secondaryColors: ["#FF0000", "#00FF00"] }],
+      cachedAt: new Date(0).toISOString(),
+      totalFFF: 1,
+      totalSLA: 0,
+    });
+    const parent = await seedLinkedTemplate();
+
+    const res = await checkGET({} as NextRequest, params(String(parent._id)));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const fields = body.changes.map((c: { field: string }) => c.field);
+    // Templates are colorless — the diverged primary (#111111 vs #3d3e3d)
+    // must NOT be offered…
+    expect(fields).not.toContain("color");
+    // …while the inheritable secondaryColors (decision 3) and the diverged
+    // scalar (density 1.0 vs 1.24) still are.
+    expect(fields).toContain("secondaryColors");
+    expect(fields).toContain("density");
+  });
+
+  it("check: the same diverged color IS offered while the filament has no variants", async () => {
+    const parent = await seedLinkedTemplate();
+    // Soft-delete the only variant → not a template anymore (derived rule).
+    await Filament.updateMany({ parentId: parent._id }, { _deletedAt: new Date() });
+
+    const res = await checkGET({} as NextRequest, params(String(parent._id)));
+    const body = await res.json();
+    const fields = body.changes.map((c: { field: string }) => c.field);
+    expect(fields).toContain("color");
+  });
+
+  it("sync: naming `color` for a template is rejected as not-offered (400), nothing written", async () => {
+    const parent = await seedLinkedTemplate();
+
+    const res = await syncPOST(syncReq(String(parent._id), ["color"]), params(String(parent._id)));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/no current openprinttag update.*color/i);
+
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#111111");
+  });
+
+  it("sync: a template can still adopt a non-color field (density)", async () => {
+    const parent = await seedLinkedTemplate();
+
+    const res = await syncPOST(syncReq(String(parent._id), ["density"]), params(String(parent._id)));
+    expect(res.status).toBe(200);
+    expect((await res.json()).applied).toEqual(["density"]);
+
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.density).toBe(1.24);
+    // The color was never touched — only the requested field applied.
+    expect(fresh.color).toBe("#111111");
+  });
+
+  it("sync: the color check is serialized with variant creation — a first variant minted while the sync waits makes color not-offered (GH #605 round 4, F5)", async () => {
+    // A LINKED filament with a diverged color and NO variants yet — a bare
+    // sync of ["color"] would be offered and applied.
+    const parent = await Filament.create({
+      name: "OPT Race PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#111111",
+      settings: {
+        openprinttag_slug: "prusament-pla-galaxy-black",
+        openprinttag_uuid: "1aaca54a-431f-5601-adf5-85dd018f487f",
+      },
+    });
+
+    // Hold the filament's mutex, start the sync (it queues behind the hold
+    // for its offered-set derivation + write), then mint the FIRST variant
+    // while the sync is queued. Pre-F5 the sync computed `excludeColor`
+    // before any lock and would land #3d3e3d on the freshly-promoted
+    // template; in-lock re-derivation must reject it instead.
+    const { runExclusive, filamentLockKey } = await import("@/lib/filamentMutex");
+    const key = filamentLockKey(String(parent._id));
+    let release!: () => void;
+    const holdUntil = new Promise<void>((r) => (release = r));
+    const holder = runExclusive(key, async () => {
+      await holdUntil;
+    });
+
+    const syncing = syncPOST(
+      syncReq(String(parent._id), ["color"]),
+      params(String(parent._id)),
+    );
+    // Let the sync reach the lock queue, then create the variant (direct
+    // insert — the parent carries only a color here, and the point is the
+    // template state flipping under the queued sync).
+    await new Promise((r) => setTimeout(r, 30));
+    await Filament.create({
+      name: "OPT Race PLA — Red",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+    });
+    release();
+    await holder;
+
+    const res = await syncing;
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/no current openprinttag update.*color/i);
+    // Nothing landed on the (now-)template.
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#111111");
+    expect(fresh.openprinttagSnapshot ?? undefined).toBeUndefined();
+  });
+
+  it("sync: a filament soft-deleted while queued behind its lock answers 404 without writing (round 4, F5 in-lock re-fetch)", async () => {
+    const parent = await Filament.create({
+      name: "OPT Vanishing PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#111111",
+      settings: {
+        openprinttag_slug: "prusament-pla-galaxy-black",
+        openprinttag_uuid: "1aaca54a-431f-5601-adf5-85dd018f487f",
+      },
+    });
+
+    const { runExclusive, filamentLockKey } = await import("@/lib/filamentMutex");
+    const key = filamentLockKey(String(parent._id));
+    let release!: () => void;
+    const holdUntil = new Promise<void>((r) => (release = r));
+    const holder = runExclusive(key, async () => {
+      await holdUntil;
+    });
+
+    const syncing = syncPOST(
+      syncReq(String(parent._id), ["color"]),
+      params(String(parent._id)),
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    await Filament.updateOne({ _id: parent._id }, { $set: { _deletedAt: new Date() } });
+    release();
+    await holder;
+
+    const res = await syncing;
+    expect(res.status).toBe(404);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#111111");
+    expect(fresh.openprinttagSnapshot ?? undefined).toBeUndefined();
   });
 });

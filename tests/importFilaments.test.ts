@@ -668,6 +668,303 @@ describe("upsertImportRows — Parent column (GH #379)", () => {
     expect(result.skippedRows[0].reason).toContain("self");
   });
 
+  // ── GH #605 (codex round 3 sweep): the first-variant inventory gate ─────
+
+  it("skips a first-variant row whose parent still holds spools (bulk can't confirm a promotion)", async () => {
+    const parent = await Filament.create({
+      name: "Inventory Parent",
+      vendor: "V",
+      type: "PLA",
+      spools: [{ label: "roll 1", totalWeight: 1000 }],
+    });
+
+    const result = await upsertImportRows([
+      { name: "Inventory Variant", vendor: "V", type: "PLA", parentName: "Inventory Parent" },
+    ]);
+
+    expect(result.created).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.skippedRows[0].name).toBe("Inventory Variant");
+    expect(result.skippedRows[0].reason).toMatch(/inventory/i);
+    expect(result.skippedRows[0].reason).toMatch(/Convert to template/);
+    // Nothing was created and the parent kept its inventory — no silent
+    // promotion, no template-with-spools mixed state.
+    expect(await Filament.findOne({ name: "Inventory Variant" })).toBeNull();
+    const fresh = await Filament.findById(parent._id);
+    expect(fresh.spools).toHaveLength(1);
+  });
+
+  it("skips a first-variant row whose parent tracks a legacy totalWeight", async () => {
+    await Filament.create({
+      name: "Weight Parent",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 750,
+    });
+
+    const result = await upsertImportRows([
+      { name: "Weight Variant", vendor: "V", type: "PLA", parentName: "Weight Parent" },
+    ]);
+
+    expect(result.skipped).toBe(1);
+    expect(result.skippedRows[0].reason).toMatch(/total weight/i);
+  });
+
+  it("a COLOR-only parent does NOT gate (schema default would break every round-trip)", async () => {
+    // The schema stamps #808080 on parents created without a Color cell —
+    // in-batch parent+variant round-trips would all reject if color gated
+    // here. Color-carrying legacy parents are the tolerated enforce-forward
+    // shape; only stranded inventory blocks a bulk import.
+    const parent = await Filament.create({
+      name: "Gray Default Parent",
+      vendor: "V",
+      type: "PLA",
+      // No color → schema default #808080.
+    });
+
+    const result = await upsertImportRows([
+      { name: "Gray Variant", vendor: "V", type: "PLA", parentName: "Gray Default Parent" },
+    ]);
+
+    expect(result.created).toBe(1);
+    expect(result.skipped).toBe(0);
+    const variant = await Filament.findOne({ name: "Gray Variant" });
+    expect(variant.parentId?.toString()).toBe(parent._id.toString());
+  });
+
+  it("a SECOND variant under a spool-holding legacy template imports fine (nothing left to gate)", async () => {
+    const parent = await Filament.create({
+      name: "Legacy Spooled Template",
+      vendor: "V",
+      type: "PLA",
+      spools: [{ label: "legacy roll", totalWeight: 500 }],
+    });
+    await Filament.create({
+      name: "Legacy Spooled Template — Red",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+
+    const result = await upsertImportRows([
+      { name: "Second Variant", vendor: "V", type: "PLA", parentName: "Legacy Spooled Template" },
+    ]);
+
+    expect(result.created).toBe(1);
+    expect(result.skipped).toBe(0);
+  });
+
+  it("gates the RESURRECT of a trashed variant whose parent re-acquired inventory", async () => {
+    const parent = await Filament.create({
+      name: "Regrown Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+    });
+    const variant = await Filament.create({
+      name: "Trashed Variant",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+    // Trash the only variant, then the (now variant-less) parent takes a
+    // spool again — the exact sequence that would re-mint the mixed state
+    // if a re-import silently revived the variant.
+    await Filament.updateOne({ _id: variant._id }, { $set: { _deletedAt: new Date() } });
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $push: { spools: { label: "new roll", totalWeight: 900 } } },
+    );
+
+    const result = await upsertImportRows([
+      { name: "Trashed Variant", vendor: "V", type: "PLA" },
+    ]);
+
+    expect(result.updated).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.skippedRows[0].reason).toMatch(/inventory/i);
+    const fresh = await Filament.findById(variant._id);
+    expect(fresh._deletedAt).not.toBeNull();
+  });
+
+  // ── round 7 P2: orphaned lowStockThreshold on the ungated import path ───
+
+  it("an ungated first-variant row clears a threshold-ONLY parent's dead threshold (after the write)", async () => {
+    const parent = await Filament.create({
+      name: "Threshold Only Import Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      lowStockThreshold: 120,
+    });
+
+    const result = await upsertImportRows([
+      {
+        name: "Threshold Import Variant",
+        vendor: "V",
+        type: "PLA",
+        parentName: "Threshold Only Import Parent",
+      },
+    ]);
+
+    expect(result.created).toBe(1);
+    expect(result.skipped).toBe(0);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBeNull();
+    // Not moved onto the variant — a new filament, not a copy.
+    const variant = await Filament.findOne({ name: "Threshold Import Variant" }).lean();
+    expect(variant.lowStockThreshold ?? null).toBeNull();
+  });
+
+  it("a COLOR-carrying parent keeps its threshold — the later Convert promotion moves it with the rest", async () => {
+    const parent = await Filament.create({
+      name: "Colored Threshold Parent",
+      vendor: "V",
+      type: "PLA",
+      // Schema default #808080 — the enforce-forward legacy shape the
+      // importer deliberately does not gate on.
+      lowStockThreshold: 120,
+    });
+
+    const result = await upsertImportRows([
+      {
+        name: "Colored Threshold Variant",
+        vendor: "V",
+        type: "PLA",
+        parentName: "Colored Threshold Parent",
+      },
+    ]);
+
+    expect(result.created).toBe(1);
+    const fresh = await Filament.findById(parent._id).lean();
+    // Clearing here would lose the threshold for the Convert-to-template
+    // promotion, which MOVES it together with the color.
+    expect(fresh.lowStockThreshold).toBe(120);
+  });
+
+  it("a SECOND-variant row never touches a template's leftover threshold", async () => {
+    const parent = await Filament.create({
+      name: "Threshold Legacy Template",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      lowStockThreshold: 120,
+    });
+    await Filament.create({
+      name: "Threshold Legacy Template — Live",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+
+    const result = await upsertImportRows([
+      {
+        name: "Threshold Second Variant",
+        vendor: "V",
+        type: "PLA",
+        parentName: "Threshold Legacy Template",
+      },
+    ]);
+
+    expect(result.created).toBe(1);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBe(120);
+  });
+
+  it("RESURRECTING the first variant under a threshold-only parent clears the dead threshold too", async () => {
+    const parent = await Filament.create({
+      name: "Threshold Resurrect Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      lowStockThreshold: 120,
+    });
+    const variant = await Filament.create({
+      name: "Threshold Resurrect Variant",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+    await Filament.updateOne({ _id: variant._id }, { $set: { _deletedAt: new Date() } });
+
+    const result = await upsertImportRows([
+      { name: "Threshold Resurrect Variant", vendor: "V", type: "PLA" },
+    ]);
+
+    expect(result.updated).toBe(1);
+    const freshVariant = await Filament.findById(variant._id).lean();
+    expect(freshVariant._deletedAt).toBeNull();
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBeNull();
+  });
+
+  it("purge-race fallback creating a STANDALONE never clears the threshold (no variant surfaced)", async () => {
+    // Same shape as the Codex P2 purge-race test below: a soft-deleted
+    // VARIANT row with no Parent column whose resurrect updateOne matches 0
+    // (tombstone purged mid-import) falls through to creating a STANDALONE.
+    // The threshold-only parent gained NO variant, so the round 7 P2 clear
+    // must not fire — the post-write hasVariants re-check guards it.
+    const parent = await Filament.create({
+      name: "Threshold Race Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      lowStockThreshold: 120,
+    });
+    const variant = await Filament.create({
+      name: "Threshold Race Variant",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+    await Filament.updateOne({ _id: variant._id }, { $set: { _deletedAt: new Date() } });
+
+    const spy = vi
+      .spyOn(Filament, "updateOne")
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0, acknowledged: true } as any);
+    try {
+      const result = await upsertImportRows([
+        { name: "Threshold Race Variant", vendor: "V", type: "PLA" },
+      ]);
+      expect(result.created).toBe(1);
+      expect(result.updated).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+
+    // The created row is a standalone; the parent still has no live variant
+    // and KEEPS its threshold.
+    const active = await Filament.findOne({
+      name: "Threshold Race Variant",
+      _deletedAt: null,
+    }).lean();
+    expect(active.parentId ?? null).toBeNull();
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBe(120);
+  });
+
+  it("a SPEC-only parent (tare/net) is untouched by an ungated first-variant row", async () => {
+    const parent = await Filament.create({
+      name: "Spec Import Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      spoolWeight: 250,
+      netFilamentWeight: 1000,
+    });
+
+    const result = await upsertImportRows([
+      { name: "Spec Import Variant", vendor: "V", type: "PLA", parentName: "Spec Import Parent" },
+    ]);
+
+    expect(result.created).toBe(1);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.spoolWeight).toBe(250);
+    expect(fresh.netFilamentWeight).toBe(1000);
+    expect(fresh.lowStockThreshold ?? null).toBeNull();
+  });
+
   it("ignores the Parent column when updating an existing active filament", async () => {
     // Active sibling that could appear to be the Parent — but updates
     // never re-parent, per the issue's design.

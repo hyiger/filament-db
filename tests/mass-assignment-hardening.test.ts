@@ -188,6 +188,73 @@ describe("mass-assignment & data-integrity hardening", () => {
     expect(fresh.openprinttagSnapshot).toBeNull();
   });
 
+  // ── GH #605 round 10: the durable promotion-marker pair is server-owned ──
+  //
+  // promotionInFlight (parent side) + promotedByToken (copy side) are the
+  // PROOF a promotion resume requires. A client-forged pair could make a
+  // later gate pass "resume" a promotion that never ran — clearing a
+  // parent's color/colorName/spools/totalWeight with no sibling receiving
+  // them. Only src/lib/promoteParent.ts may write them. (The import paths
+  // are covered structurally: the atlas import copies through the GH #255
+  // allow-list, which lists neither field; the CSV importer maps named
+  // columns; the shared-catalog import posts through this same POST
+  // handler.)
+
+  it("#605 r10 — POST /api/filaments ignores promotionInFlight/promotedByToken (exact and dotted keys)", async () => {
+    const res = await createFilament(
+      jsonReq(
+        "http://localhost/api/filaments",
+        {
+          name: "Forged Marker PLA",
+          vendor: "T",
+          type: "PLA",
+          promotionInFlight: { token: "forged", at: new Date().toISOString() },
+          promotedByToken: "forged",
+          "promotionInFlight.token": "forged-dotted",
+        },
+        "POST",
+      ),
+    );
+    expect(res.status).toBe(201);
+    const body = await res.json();
+
+    const fresh = await Filament.findById(body._id).lean();
+    expect(fresh.promotionInFlight ?? null).toBeNull();
+    expect(fresh.promotedByToken ?? null).toBeNull();
+  });
+
+  it("#605 r10 — PUT /api/filaments/{id} ignores promotionInFlight/promotedByToken (exact and dotted keys)", async () => {
+    const f = await Filament.create({
+      name: "Marker Guard PLA",
+      vendor: "T",
+      type: "PLA",
+    });
+
+    const res = await PUT(
+      jsonReq(
+        `http://localhost/api/filaments/${f._id}`,
+        {
+          name: "Marker Guard PLA",
+          vendor: "T",
+          type: "PLA",
+          promotionInFlight: { token: "forged", at: new Date().toISOString() },
+          promotedByToken: "forged",
+          // Dotted keys are LIVE update paths in findOneAndUpdate — the
+          // sweep must drop them too, not just the exact keys.
+          "promotionInFlight.token": "forged-dotted",
+          "promotedByToken.0": "forged-dotted",
+        },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(f._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Filament.findById(f._id).lean();
+    expect(fresh.promotionInFlight ?? null).toBeNull();
+    expect(fresh.promotedByToken ?? null).toBeNull();
+  });
+
   // ── GH #1026: prototype pollution via a __proto__-dotted body key ────
   //
   // GHSA-664h-wqgq-64gw. Pre-fix, this exact request set

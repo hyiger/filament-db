@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { errorResponse, errorResponseFromCaught, handleVersionError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { capUsageHistory, MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
@@ -62,50 +63,65 @@ export async function POST(
   try {
     await dbConnect();
     const { id, spoolId } = await params;
-    const filament = await Filament.findOne({
-      _id: id,
-      _deletedAt: null,
-      "spools._id": spoolId,
+    // GH #605 round 11 (F1): the read-modify-save sequence mutates an
+    // existing spool subdocument, so it runs under the same per-filament
+    // mutex the promotion paths hold. Unserialized, the save could land
+    // between a promotion's snapshot and its clearing write and the
+    // 201-acknowledged debit/ledger entry would exist on neither document.
+    // (The promotion's completing write $incs __v, so an interleaved save
+    // would actually surface as the 409 VersionError below — with the lock
+    // the in-process case can't happen at all; the version guard stays for
+    // out-of-process writers.) In-lock, either this POST runs first (the
+    // fresh snapshot moves the updated spool onto the variant) or the
+    // promotion runs first and the findOne misses — post-promotion
+    // staleness already 404s (round 4); the lock adds mid-promotion
+    // atomicity. Single key, no nested lock inside.
+    return await runExclusive(filamentLockKey(id), async () => {
+      const filament = await Filament.findOne({
+        _id: id,
+        _deletedAt: null,
+        "spools._id": spoolId,
+      });
+      if (!filament) {
+        return errorResponse("Filament or spool not found", 404);
+      }
+      // Array.find keeps the lookup strictly typed against our ISpool[]
+      // interface; Mongoose's runtime DocumentArray also exposes .id() but
+      // that's untyped in the interface and would need a cast to use.
+      const spool = filament.spools.find((s) => String(s._id) === spoolId);
+      if (!spool) {
+        return errorResponse("Spool not found", 404);
+      }
+      if (typeof spool.totalWeight === "number") {
+        spool.totalWeight = Math.max(0, spool.totalWeight - body.grams);
+      }
+      spool.usageHistory = spool.usageHistory || [];
+      spool.usageHistory.push({
+        grams: body.grams,
+        jobLabel,
+        date,
+        source: "manual",
+        // No PrintHistory record backs a direct spool-UI usage log — the
+        // print-history undo path keys off this being null to skip the
+        // entry. Required by the IUsageEntry interface so the field is
+        // explicit at every call site.
+        jobId: null,
+      });
+      // GH #304 / #954 finding #6: roll off the oldest entries once the cap is
+      // reached so the embedded array can't grow the filament document unbounded.
+      // Undo-aware (capUsageHistory) rather than a plain `slice(-N)`: a manual log
+      // must not evict a still-live `source:"job"` entry, whose later
+      // DELETE /api/print-history refund keys off the entry still being present
+      // (GH #621). Manual/nfc entries are evicted first; job/slicer only as a last
+      // resort when the array is entirely undo-relevant.
+      if (spool.usageHistory.length > MAX_SPOOL_HISTORY) {
+        spool.usageHistory = capUsageHistory(spool.usageHistory, MAX_SPOOL_HISTORY);
+      }
+      // GH #905: usage logging only mutates this spool — validate modified paths
+      // only so a legacy out-of-range field elsewhere can't block the log/debit.
+      await filament.save({ validateModifiedOnly: true });
+      return NextResponse.json(filament.toObject(), { status: 201 });
     });
-    if (!filament) {
-      return errorResponse("Filament or spool not found", 404);
-    }
-    // Array.find keeps the lookup strictly typed against our ISpool[]
-    // interface; Mongoose's runtime DocumentArray also exposes .id() but
-    // that's untyped in the interface and would need a cast to use.
-    const spool = filament.spools.find((s) => String(s._id) === spoolId);
-    if (!spool) {
-      return errorResponse("Spool not found", 404);
-    }
-    if (typeof spool.totalWeight === "number") {
-      spool.totalWeight = Math.max(0, spool.totalWeight - body.grams);
-    }
-    spool.usageHistory = spool.usageHistory || [];
-    spool.usageHistory.push({
-      grams: body.grams,
-      jobLabel,
-      date,
-      source: "manual",
-      // No PrintHistory record backs a direct spool-UI usage log — the
-      // print-history undo path keys off this being null to skip the
-      // entry. Required by the IUsageEntry interface so the field is
-      // explicit at every call site.
-      jobId: null,
-    });
-    // GH #304 / #954 finding #6: roll off the oldest entries once the cap is
-    // reached so the embedded array can't grow the filament document unbounded.
-    // Undo-aware (capUsageHistory) rather than a plain `slice(-N)`: a manual log
-    // must not evict a still-live `source:"job"` entry, whose later
-    // DELETE /api/print-history refund keys off the entry still being present
-    // (GH #621). Manual/nfc entries are evicted first; job/slicer only as a last
-    // resort when the array is entirely undo-relevant.
-    if (spool.usageHistory.length > MAX_SPOOL_HISTORY) {
-      spool.usageHistory = capUsageHistory(spool.usageHistory, MAX_SPOOL_HISTORY);
-    }
-    // GH #905: usage logging only mutates this spool — validate modified paths
-    // only so a legacy out-of-range field elsewhere can't block the log/debit.
-    await filament.save({ validateModifiedOnly: true });
-    return NextResponse.json(filament.toObject(), { status: 201 });
   } catch (err) {
     // GH #504: surface optimistic-concurrency conflicts as 409 with a
     // retry hint so a SpoolCard logging usage while a slicer concurrently

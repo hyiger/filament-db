@@ -268,10 +268,16 @@ describe("GH #223 — variant inheritance in slicer + analytics + restore routes
   });
 
   it("restore succeeds after the parent has been restored first", async () => {
+    // Colorless (template-shaped) parent: this test pins the GH #223
+    // parent-first restore ordering. A parent still CARRYING state (even
+    // the historical #808080 default) would additionally trip the GH #605
+    // round-4 F6 adoption gate (409 parent_promotion_required), which has
+    // its own coverage in tests/template-adoption-gate.test.ts.
     const parent = await Filament.create({
       name: "Orphan2-Parent",
       vendor: "V",
       type: "PLA",
+      color: null,
     });
     const variant = await Filament.create({
       name: "Orphan2-Variant",

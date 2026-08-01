@@ -3,6 +3,22 @@ import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as importSpools } from "@/app/api/spools/import/route";
 
+// GH #605: an overridable hasVariants so the "became a template mid-import"
+// race is testable deterministically — the default passthrough keeps every
+// other test on the real implementation. (A plain vi.spyOn can't patch an
+// ESM namespace export.)
+let hasVariantsOverride:
+  | ((model: unknown, id: string) => Promise<boolean>)
+  | null = null;
+vi.mock("@/lib/resolveFilament", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/resolveFilament")>();
+  return {
+    ...actual,
+    hasVariants: (model: unknown, id: string) =>
+      (hasVariantsOverride ?? actual.hasVariants)(model, id),
+  };
+});
+
 /**
  * Tests for the CSV bulk spool import route. parseCsv itself is covered
  * in parseCsv.test.ts; this file validates the glue between the parser,
@@ -26,6 +42,7 @@ describe("/api/spools/import", () => {
     }
     Filament = mongoose.models.Filament;
     Location = mongoose.models.Location;
+    hasVariantsOverride = null;
   });
 
   function csvRequest(csv: string, contentType = "text/csv") {
@@ -43,6 +60,128 @@ describe("/api/spools/import", () => {
       body: JSON.stringify({ csv }),
     });
   }
+
+  // ── GH #605 (codex round 3 sweep): templates take no NEW spools ────────
+
+  describe("template guard (GH #605)", () => {
+    /** A template: a parent with one live variant. */
+    async function seedTemplate(name = "Template PLA") {
+      const parent = await Filament.create({ name, vendor: "V", type: "PLA", color: null });
+      await Filament.create({
+        name: `${name} — Red`,
+        vendor: "V",
+        type: "PLA",
+        color: "#FF0000",
+        parentId: parent._id,
+      });
+      return parent;
+    }
+
+    it("a CREATE row against a template fails its row; other rows still import", async () => {
+      const template = await seedTemplate();
+      const standalone = await Filament.create({ name: "Plain PLA", vendor: "V", type: "PLA" });
+
+      const csv =
+        "filament,totalWeight,location\n" +
+        "Template PLA,900,Shelf T\n" +
+        "Plain PLA,800,\n";
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.imported).toBe(1);
+      expect(body.failed).toBe(1);
+      expect(body.results[0].ok).toBe(false);
+      expect(body.results[0].error).toMatch(/template/i);
+      expect(body.results[1].ok).toBe(true);
+
+      const freshTemplate = await Filament.findById(template._id);
+      expect(freshTemplate.spools).toHaveLength(0);
+      const freshStandalone = await Filament.findById(standalone._id);
+      expect(freshStandalone.spools).toHaveLength(1);
+      // Side-effect-free failure: the rejected row's location was NOT
+      // auto-created (the check runs before resolveLocationId).
+      expect(await Location.countDocuments({ name: "Shelf T" })).toBe(0);
+    });
+
+    it("an UPDATE row (spoolId match) on a legacy template is still allowed", async () => {
+      // Enforce-forward: a template's pre-#605 spools stay editable — only
+      // NEW spools are refused.
+      const parent = await Filament.create({
+        name: "Legacy Template PLA",
+        vendor: "V",
+        type: "PLA",
+        color: null,
+        spools: [{ label: "legacy roll", totalWeight: 1000 }],
+      });
+      await Filament.create({
+        name: "Legacy Template PLA — Red",
+        vendor: "V",
+        type: "PLA",
+        color: "#FF0000",
+        parentId: parent._id,
+      });
+      const spoolId = String(parent.spools[0]._id);
+
+      const csv =
+        "filament,totalWeight,spoolId\n" +
+        `Legacy Template PLA,750,${spoolId}\n`;
+      const res = await importSpools(csvRequest(csv));
+      const body = await res.json();
+      expect(body.updated).toBe(1);
+      expect(body.failed).toBe(0);
+
+      const fresh = await Filament.findById(parent._id);
+      expect(fresh.spools).toHaveLength(1);
+      expect(fresh.spools[0].totalWeight).toBe(750);
+    });
+
+    it("in-lock re-check: a filament becoming a template mid-import fails the bucket at save", async () => {
+      // The per-row check passes (no variants yet); the first variant lands
+      // before the batched save. The save-time re-check inside the mutex
+      // must refuse to write the appended spool back onto the new template.
+      const parent = await Filament.create({
+        name: "Race Template PLA",
+        vendor: "V",
+        type: "PLA",
+        color: null,
+      });
+
+      // importActual: the plain import resolves to the mock wrapper above,
+      // and calling that from inside the override would recurse.
+      const { hasVariants: realHasVariants } =
+        await vi.importActual<typeof import("@/lib/resolveFilament")>("@/lib/resolveFilament");
+      let firstCall = true;
+      hasVariantsOverride = async (model, id) => {
+        if (firstCall) {
+          // The per-row check: report "not a template", then let the
+          // variant land — simulating a promotion racing the import.
+          firstCall = false;
+          await Filament.create({
+            name: "Race Template PLA — Red",
+            vendor: "V",
+            type: "PLA",
+            color: "#FF0000",
+            parentId: parent._id,
+          });
+          return false;
+        }
+        return realHasVariants(model, id);
+      };
+
+      try {
+        const csv = "filament,totalWeight\n" + "Race Template PLA,900\n";
+        const res = await importSpools(csvRequest(csv));
+        const body = await res.json();
+        expect(body.imported).toBe(0);
+        expect(body.failed).toBe(1);
+        expect(body.results[0].error).toMatch(/template/i);
+
+        const fresh = await Filament.findById(parent._id);
+        expect(fresh.spools).toHaveLength(0);
+      } finally {
+        hasVariantsOverride = null;
+      }
+    });
+  });
 
   it("imports a matching filament's spool", async () => {
     const f = await Filament.create({

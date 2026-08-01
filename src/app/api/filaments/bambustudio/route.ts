@@ -14,6 +14,8 @@ import {
   isDuplicateKeyError,
 } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * Per-phase validation gate for a prepared Bambu update: the settings-bag
@@ -158,13 +160,32 @@ export async function POST(request: NextRequest) {
       if (payloadError) return payloadError;
       delete (payload.update as Record<string, unknown>).spools;
       try {
-        const updated = await Filament.findOneAndUpdate(
-          { _id: existingActive._id, _deletedAt: null },
-          composeMongoUpdate(payload),
-          { runValidators: true, context: "query", returnDocument: "after" },
+        // GH #605 (codex P2, slicer-sync sweep): the name-matched target may
+        // be a TEMPLATE (≥1 live variant) — strip the per-variant fields the
+        // preset echoes (color; the shared list) instead of re-materializing
+        // them, with the SAME semantics as the PUT (non-null only, explicit
+        // nulls pass). Decision + write share the per-id mutex the promotion
+        // paths lock (PUT review P1-c). The strip must not fail the row —
+        // the rest of the preset still applies — and is reported through the
+        // response envelope below, matching the atlas importer's posture.
+        let strippedTemplateFields: string[] = [];
+        const updated = await runExclusive(
+          filamentLockKey(existingActive._id),
+          async () => {
+            strippedTemplateFields = await stripTemplateFieldsForWrite(
+              Filament,
+              existingActive._id,
+              payload.update as Record<string, unknown>,
+            );
+            return await Filament.findOneAndUpdate(
+              { _id: existingActive._id, _deletedAt: null },
+              composeMongoUpdate(payload),
+              { runValidators: true, context: "query", returnDocument: "after" },
+            );
+          },
         );
         if (updated) {
-          return importResponse(updated, false, payload);
+          return importResponse(updated, false, payload, strippedTemplateFields);
         }
       } catch (validationErr) {
         return errorResponseFromCaught(
@@ -194,6 +215,15 @@ export async function POST(request: NextRequest) {
       if (payloadError) return payloadError;
       delete (payload.update as Record<string, unknown>).spools;
       try {
+        // GH #605: no template strip on the resurrect — a TRASHED doc cannot
+        // have live variants (soft-deleting a parent with variants is
+        // refused, in-lock with the trash write since round 8 F3 — the same
+        // per-filament mutex the first-variant gates lock, so the check
+        // can't be raced by a mid-flight first variant; restoring a variant
+        // under a trashed parent is refused; variant creation requires an
+        // ACTIVE parent), so the revived row is never a template at this
+        // write. Same reasoning as the atlas importer's resurrect path.
+        //
         // Splice `_deletedAt: null` into the $set body so the resurrect
         // atomic also drops the tombstone; $unset (if any) for stale
         // variant overrides composes alongside.
@@ -271,15 +301,26 @@ export async function POST(request: NextRequest) {
       if (racePayloadError) return racePayloadError;
       delete (racePayload.update as Record<string, unknown>).spools;
       try {
-        const merged = await Filament.findOneAndUpdate(
-          { _id: racing._id, _deletedAt: null },
-          composeMongoUpdate(racePayload),
-          { runValidators: true, context: "query", returnDocument: "after" },
-        );
+        // GH #605: the racing row is an ACTIVE existing doc — same template
+        // strip as phase 1 (a concurrent import may have landed a parent
+        // that already has variants).
+        let strippedTemplateFields: string[] = [];
+        const merged = await runExclusive(filamentLockKey(racing._id), async () => {
+          strippedTemplateFields = await stripTemplateFieldsForWrite(
+            Filament,
+            racing._id,
+            racePayload.update as Record<string, unknown>,
+          );
+          return await Filament.findOneAndUpdate(
+            { _id: racing._id, _deletedAt: null },
+            composeMongoUpdate(racePayload),
+            { runValidators: true, context: "query", returnDocument: "after" },
+          );
+        });
         if (!merged) {
           return errorResponseFromCaught(createErr, "Failed to create filament");
         }
-        return importResponse(merged, false, racePayload);
+        return importResponse(merged, false, racePayload, strippedTemplateFields);
       } catch (validationErr) {
         return errorResponseFromCaught(
           validationErr,
@@ -357,11 +398,15 @@ function composeMongoUpdate(
 }
 
 /** Common response shape so all three upsert phases return the same
- * envelope. */
+ * envelope. `strippedTemplateFields` (GH #605) is reported under the same
+ * `_strippedTemplateFields` key the PUT uses; the resurrect and fresh-create
+ * phases never strip (a trashed/fresh row can't be a template) so they omit
+ * the argument. */
 function importResponse(
   doc: { _id: unknown; name: string },
   created: boolean,
   payload: Awaited<ReturnType<typeof prepareBambuUpdate>>,
+  strippedTemplateFields: string[] = [],
 ) {
   return NextResponse.json({
     created,
@@ -372,6 +417,9 @@ function importResponse(
     calibrationUnresolved: payload.calibrationOutcome.unresolved || undefined,
     calibrationContext: payload.calibrationOutcome.context || undefined,
     settingsAdded: payload.settingsResult.added,
+    ...(strippedTemplateFields.length > 0
+      ? { _strippedTemplateFields: strippedTemplateFields }
+      : {}),
   });
 }
 

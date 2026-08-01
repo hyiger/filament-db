@@ -15,6 +15,10 @@ import {
   effectiveNozzleRangeForUpdate,
   inheritNozzleRangeFromParent,
 } from "@/lib/temperatureRange";
+import {
+  createVariantGated,
+  promotionRequired409Body,
+} from "@/lib/createVariantGated";
 
 /**
  * GH #519: collect every cross-collection ref carried by a filament body and
@@ -371,6 +375,13 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // GH #605 (Phase 2b): `promoteParent` is a control flag, never a schema
+  // field — capture it, then strip it so it can't ride into Filament.create
+  // (captured after the tagData merge above so an `overrides` copy of it is
+  // honoured/stripped the same way).
+  const promoteParent = body?.promoteParent === true;
+  delete body.promoteParent;
+
   delete body._id;
   delete body._deletedAt;
   // GH #222: parallel of the PUT-handler fix. `_purged` is a sync-engine
@@ -390,6 +401,21 @@ export async function POST(request: NextRequest) {
   // user-edited fields to silently auto-adopt on the next re-sync. Only the
   // OPT import/sync routes may write it.
   delete body.openprinttagSnapshot;
+  // GH #605 round 10: the durable promotion-marker pair is server-owned —
+  // `promotionInFlight` (parent side) + `promotedByToken` (copy side) are
+  // the PROOF a promotion resume requires; a client-forged pair could trick
+  // a later gate pass into "completing" a promotion that never ran, clearing
+  // a parent's inventory fields with nothing receiving them. Only
+  // src/lib/promoteParent.ts writes them. The dotted sweep also drops
+  // subpath keys (`promotionInFlight.token`), which Mongoose treats as live
+  // paths and which the exact-key deletes above would miss.
+  delete body.promotionInFlight;
+  delete body.promotedByToken;
+  for (const key of Object.keys(body)) {
+    if (key.startsWith("promotionInFlight.") || key.startsWith("promotedByToken.")) {
+      delete body[key];
+    }
+  }
 
   // GH #431: the PUT handler explicitly strips `body.spools` to prevent a
   // bulk rewrite of a spool's `usageHistory` ledger. The POST handler
@@ -459,6 +485,21 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    // GH #605: when this request creates the FIRST variant of a parent that
+    // still carries variant state (a real color, a color name, its own
+    // spools, or a legacy inventory totalWeight — see parentPromotionState),
+    // the parent must be PROMOTED to a template (that state moves to a new
+    // sibling variant; the spoolWeight/netFilamentWeight SPEC pair stays).
+    // The parent doc captured here serves the PRE-LOCK validation only
+    // (exists / not nested / diameter default); the gate + promotion run
+    // right before the create, AFTER every other guard — so an
+    // otherwise-invalid request gets its 400 (not a promotion 409 it would
+    // only re-hit), and a rejected request can never leave a half-promoted
+    // parent — and they re-fetch the parent FRESH inside a per-parent lock
+    // (review P1-a; see the gate below).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let variantParent: Record<string, any> | null = null;
+
     // Validate parentId if provided
     if (body.parentId) {
       const parent = await Filament.findOne({ _id: body.parentId, _deletedAt: null }).lean();
@@ -476,6 +517,7 @@ export async function POST(request: NextRequest) {
       if (body.diameter === undefined || body.diameter === null || body.diameter === "") {
         body.diameter = null;
       }
+      variantParent = parent;
     }
 
     const refGuard = await assertFilamentBodyRefs(body);
@@ -516,6 +558,46 @@ export async function POST(request: NextRequest) {
         compatibleNozzles: body.compatibleNozzles,
         parentId: body.parentId,
       });
+    }
+
+    // GH #605 (Phase 2b): promotion gate — FIRST variant only (from the
+    // second variant on the parent is already a template and carries
+    // nothing to move). Runs LAST, after every other guard, so the 409
+    // means "this request would succeed, but it has a side effect on the
+    // parent you must opt into". Without the explicit `promoteParent: true`
+    // flag, the structured 409 tells the caller exactly what the promotion
+    // would do, so the UI can raise its confirmation dialog and a bare API
+    // client isn't surprised by a mutation of a second document.
+    //
+    // The gate→promote→create sequence lives in createVariantGated (codex
+    // round 3, Finding A): it is SERIALIZED per parent id (runExclusive)
+    // and decides off a snapshot RE-FETCHED inside the lock — never the
+    // `variantParent` doc loaded above (review P1-a) — and it is SHARED
+    // with the OpenPrintTag variant import so no secondary entry point can
+    // mint the first variant of a carrying parent without this exact
+    // confirmation contract. See src/lib/createVariantGated.ts.
+    if (variantParent) {
+      const result = await createVariantGated(Filament, variantParent._id, body, promoteParent);
+      switch (result.outcome) {
+        case "parent_not_found":
+          // The parent was validated above but vanished (soft-deleted)
+          // before the lock — same 400 the pre-lock check would have given.
+          return errorResponse("Parent filament not found", 400);
+        case "parent_is_variant":
+          // Validated above as a root, but a concurrent PUT re-parented it
+          // before the gate's in-lock re-fetch (round 8 F1) — same no-nesting
+          // 400 the pre-lock check produces.
+          return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
+        case "promotion_required":
+          return NextResponse.json(promotionRequired409Body(result), { status: 409 });
+        case "name_taken":
+          return errorResponse(
+            `A filament with that name already exists: "${result.name}"`,
+            409,
+          );
+        default:
+          return NextResponse.json(result.filament, { status: 201 });
+      }
     }
 
     const filament = await Filament.create(body);

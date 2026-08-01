@@ -13,6 +13,8 @@ import { mergeSlicerSettings } from "@/lib/slicerSettings";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { isUpdateNozzleRangeInverted } from "@/lib/temperatureRange";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
+import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * Top-level body keys that map to structured Filament DB fields.
@@ -315,13 +317,28 @@ export async function POST(
     // GH #819: also re-filter `_deletedAt: null` on the write so a concurrent
     // soft-delete in the read→write window can't mutate a now-trashed row —
     // mirrors the Bambu/OPT sync+link sibling routes.
+    //
+    // GH #605 (codex P2, slicer-sync sweep): a TEMPLATE (≥1 live variant)
+    // must not re-acquire per-variant color/inventory, but the Orca fork
+    // echoes `color` back on every sync — the same form-echo failure mode
+    // the PUT strips. Apply the SAME strip (shared helper; non-null only,
+    // explicit nulls pass), decided + written inside the per-id mutex the
+    // promotion paths lock (PUT review P1-c), and report it below.
+    let strippedTemplateFields: string[] = [];
     let updateResult: { matchedCount: number };
     try {
-      updateResult = await Filament.updateOne(
-        { _id: filament._id, _deletedAt: null },
-        mongoUpdate,
-        { runValidators: true, context: "query" },
-      );
+      updateResult = await runExclusive(filamentLockKey(filament._id), async () => {
+        strippedTemplateFields = await stripTemplateFieldsForWrite(
+          Filament,
+          filament._id,
+          setBody,
+        );
+        return await Filament.updateOne(
+          { _id: filament._id, _deletedAt: null },
+          mongoUpdate,
+          { runValidators: true, context: "query" },
+        );
+      });
     } catch (validationErr) {
       return errorResponseFromCaught(
         validationErr,
@@ -340,9 +357,15 @@ export async function POST(
       filament: filament.name,
       // GH #1008 F2: report what was actually $set after the inheritance
       // split (dotted `temperatures.*` keys included) — parent-equal fields
-      // the split dropped are not "updated".
+      // the split dropped are not "updated". Template-stripped fields were
+      // deleted from setBody before the write, so they never appear here.
       updated: Object.keys(setBody),
       settingsAdded,
+      // GH #605: per-variant fields the template guard refused to apply —
+      // same reporting key the PUT uses, so clients can surface one warning.
+      ...(strippedTemplateFields.length > 0
+        ? { _strippedTemplateFields: strippedTemplateFields }
+        : {}),
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

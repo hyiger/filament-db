@@ -7,6 +7,7 @@ import {
   mapToFilamentPayload,
 } from "@/lib/openprinttagBrowser";
 import { diffOptFields } from "@/lib/optResync";
+import { hasVariants } from "@/lib/resolveFilament";
 import { resolveEffectiveFilament } from "@/lib/resolveEffectiveFilament";
 
 /**
@@ -25,6 +26,15 @@ import { resolveEffectiveFilament } from "@/lib/resolveEffectiveFilament";
  * `changes[]` entries are `{ field, labelKey, current, incoming, kind }`
  * where `kind ∈ {adopt, conflict}` (see src/lib/optResync.ts). An empty
  * `changes` array means the row is already up to date with OPT.
+ *
+ * GH #605 (codex round 4, F5): this route deliberately does NOT take the
+ * per-filament mutex the sync route holds. Its output is ADVISORY — a
+ * changelist the user picks from — and the sync route re-derives the whole
+ * offered set (including the template `excludeColor` flag) from a fresh
+ * in-lock snapshot before any write, so a changelist staled by a concurrent
+ * first-variant promotion can never be applied; it just 400s on sync and
+ * the user re-checks. Locking here would serialize a read-only endpoint
+ * against every write on the filament for no correctness gain.
  */
 export async function GET(
   _request: NextRequest,
@@ -76,7 +86,16 @@ export async function GET(
     );
 
     const snapshot = filament.openprinttagSnapshot as Record<string, unknown> | undefined;
-    const changes = diffOptFields(effective, payload, snapshot, parentEffective);
+    // GH #605: a filament with ≥1 live variant is a TEMPLATE — templates are
+    // colorless (color lives on the variants), so the diff must not offer
+    // the primary color. secondaryColors stays offered: it's inheritable
+    // (GH #477), so the shared multi-color set legitimately lives on the
+    // template. The sibling sync route passes the same flag so check and
+    // sync agree on what's offered.
+    const excludeColor = await hasVariants(Filament, id);
+    const changes = diffOptFields(effective, payload, snapshot, parentEffective, {
+      excludeColor,
+    });
 
     return NextResponse.json({
       linked: true,

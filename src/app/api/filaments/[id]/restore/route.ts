@@ -3,6 +3,10 @@ import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import {
+  gateFirstVariantAdoption,
+  promotionRequired409Body,
+} from "@/lib/createVariantGated";
 
 /**
  * POST /api/filaments/{id}/restore — un-soft-delete a filament.
@@ -14,6 +18,15 @@ import { assertSameOriginRequest } from "@/lib/requestGuard";
  * restore would violate the index. We detect that up front and refuse with
  * a clear error so the user can rename one or the other rather than getting
  * a Mongo duplicate-key error.
+ *
+ * GH #605 (codex round 4, F6): restoring a trashed VARIANT can mint its
+ * parent's first live variant — and the parent may have re-acquired carrying
+ * state (a color, spools, legacy inventory) while it sat variant-less. That
+ * is the same restructuring event the create/PUT paths gate, so the restore
+ * runs the same adoption gate: 409 `parent_promotion_required` until the
+ * caller repeats the request with `{ "promoteParent": true }` in the body,
+ * which promotes the parent first. The body is optional — a bare POST (the
+ * pre-existing contract) behaves exactly as before for every non-gated case.
  */
 export async function POST(
   request: NextRequest,
@@ -21,6 +34,16 @@ export async function POST(
 ) {
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
+
+  // Optional body: `{ promoteParent: true }` confirms the F6 adoption gate.
+  // Restore historically takes no body, so absent/invalid JSON means false.
+  let promoteParent = false;
+  try {
+    const body = await request.json();
+    promoteParent = (body as { promoteParent?: unknown })?.promoteParent === true;
+  } catch {
+    /* no body — the pre-existing bare-POST contract */
+  }
 
   try {
     await dbConnect();
@@ -54,15 +77,15 @@ export async function POST(
       );
     }
 
-    // GH #223: refuse to restore a variant whose parent is still in the
-    // trash. Without this guard the variant ends up with `parentId`
-    // pointing at a doc whose `_deletedAt != null`, and every read path
-    // filters parents by `_deletedAt: null` — so the variant renders
-    // with no inheritance (empty cost, density, temperatures, etc.) and
-    // the user sees a half-broken row with no obvious cause. Better to
-    // surface the dependency and let the caller restore the parent
-    // first, then the variant.
     if (trashed.parentId) {
+      // GH #223: refuse to restore a variant whose parent is still in the
+      // trash. Without this guard the variant ends up with `parentId`
+      // pointing at a doc whose `_deletedAt != null`, and every read path
+      // filters parents by `_deletedAt: null` — so the variant renders
+      // with no inheritance (empty cost, density, temperatures, etc.) and
+      // the user sees a half-broken row with no obvious cause. Better to
+      // surface the dependency and let the caller restore the parent
+      // first, then the variant.
       const parent = await Filament.findOne({
         _id: trashed.parentId,
         _deletedAt: null,
@@ -75,6 +98,44 @@ export async function POST(
           409,
         );
       }
+
+      // GH #605 (codex round 4, F6): the adoption gate — see the route
+      // docblock. The un-delete save runs via `onReady`, INSIDE the parent's
+      // lock hold, so no window exists between the gate's decision and the
+      // revive: a concurrent write that would hand the parent carrying state
+      // serializes on the same key (the PUT/atlas/OPT-sync writers all lock
+      // it) and lands either before the gate (which then 409s/promotes) or
+      // after the restore (where the PUT's template strip catches it).
+      const adoption = await gateFirstVariantAdoption(Filament, trashed.parentId, {
+        promoteParent,
+        // The promotion copy must never squat on the reviving doc's name.
+        adoptedName: trashed.name,
+        onReady: async () => {
+          trashed._deletedAt = null;
+          // Same validateModifiedOnly rationale as the standalone path below.
+          await trashed.save({ validateModifiedOnly: true });
+        },
+      });
+      if (adoption.outcome === "parent_not_found") {
+        // The parent was active above but vanished before the gate's in-lock
+        // re-fetch — same dependency 409 as the pre-check.
+        return errorResponse(
+          `Cannot restore: this variant's parent is still in the trash. Restore the parent first.`,
+          409,
+        );
+      }
+      if (adoption.outcome === "parent_is_variant") {
+        // Round 8 F1: the parent got re-parented while this variant sat in
+        // the trash (a trashed variant doesn't count toward the PUT's
+        // has-children guard), so reviving would nest inheritance — the same
+        // no-nesting 400 every parentId-setting path returns.
+        return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
+      }
+      if (adoption.outcome === "promotion_required") {
+        return NextResponse.json(promotionRequired409Body(adoption), { status: 409 });
+      }
+
+      return NextResponse.json({ message: "Restored", _id: String(trashed._id) });
     }
 
     trashed._deletedAt = null;

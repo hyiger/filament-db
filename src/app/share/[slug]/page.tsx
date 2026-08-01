@@ -248,7 +248,14 @@ export default function SharedCatalogPage() {
           }
         }
         const errBody = await res.json().catch(() => null);
-        conflicts.push(errBody?.error || String(body.name));
+        // Structured rejections (GH #605 `parent_promotion_required`) carry a
+        // machine-readable `error` code plus a human `message`; plain
+        // conflicts put the human text in `error`. Prefer the message so the
+        // user never sees a raw code. A bulk import can't confirm per-parent
+        // promotions, so a gated variant row fails loudly here (the recipient
+        // promotes the parent via "Convert to template", then re-imports) —
+        // promotion is never silent.
+        conflicts.push(errBody?.message || errBody?.error || String(body.name));
         return false;
       };
 

@@ -13,6 +13,12 @@ import {
 } from "@/lib/optResync";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
+import {
+  createVariantGated,
+  promotionRequired409Body,
+} from "@/lib/createVariantGated";
+import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * POST /api/openprinttag/import
@@ -30,6 +36,13 @@ import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
  * parent onto the variant (everything identical to the parent is left to
  * inherit dynamically). The variant is linked to the OPT material so it can use
  * the "Check for updates" re-sync loop afterwards.
+ *
+ * GH #605 (codex round 3, Finding A): variant mode runs through the SAME
+ * promotion gate as POST /api/filaments (createVariantGated) — importing the
+ * FIRST variant of a parent that still carries its own color/spools 409s
+ * with the structured `parent_promotion_required` payload until the caller
+ * confirms with `promoteParent: true` in the body. Promotion is never
+ * silent, on any entry point.
  */
 export async function POST(request: NextRequest) {
   const guard = assertSameOriginRequest(request);
@@ -70,9 +83,11 @@ export async function POST(request: NextRequest) {
 
     // Issue #753 (approach A): variant mode — import a single material as a
     // variant of an existing parent, pulling only its distinct fields.
+    // `promoteParent` is the GH #605 confirmation flag, mirroring
+    // POST /api/filaments — a control flag, never a schema field.
     const parentId = body.parentId;
     if (parentId != null && parentId !== "") {
-      return importAsVariant(slugs, parentId);
+      return importAsVariant(slugs, parentId, body.promoteParent === true);
     }
 
     // Get the cached database (should already be cached from the browse page)
@@ -195,16 +210,43 @@ export async function POST(request: NextRequest) {
             conditionalSet.shoreHardnessD = conditionalDefaults.shoreHardnessD;
 
           if (Object.keys(conditionalSet).length > 0) {
-            // GH #632: runValidators so the GH #503 hex validators on
-            // color/secondaryColors (and the numeric range validators)
-            // fire on this update path too — bare findByIdAndUpdate
-            // skips schema validators, which let a malformed color_rgba
-            // from a community YAML persist an invalid hex on re-import.
-            await Filament.findByIdAndUpdate(
-              row._id,
-              { $set: conditionalSet },
-              { runValidators: true, context: "query" },
-            );
+            // GH #605 (codex P2, importer sweep): the existing row may be a
+            // TEMPLATE (≥1 live variant). Its color was moved onto the
+            // variants at promotion, but a LEGACY template can still carry
+            // the '#808080' sentinel — the `row.color === "#808080"` branch
+            // above would then backfill the OPT color straight onto it,
+            // re-materializing per-variant state the re-sync flow already
+            // refuses (diffOptFields' excludeColor). Strip the shared
+            // TEMPLATE_STRIP_FIELDS (of which only `color` can appear in
+            // `conditionalSet`) with the PUT's semantics: non-null only, so
+            // the coextruded explicit `color: null` clear still passes.
+            // Decision + write share the per-filament mutex the promotion
+            // paths lock (this route's bulk mode holds no other lock).
+            // The strip never fails the row (atlas posture) — it's reported
+            // as a per-row note on the errors channel.
+            await runExclusive(filamentLockKey(row._id), async () => {
+              const stripped = await stripTemplateFieldsForWrite(
+                Filament,
+                row._id,
+                conditionalSet,
+              );
+              if (stripped.length > 0) {
+                errors.push(
+                  `${material.name}: skipped ${stripped.join(", ")} — the local filament is a template (inventory and color live on its variants)`,
+                );
+              }
+              if (Object.keys(conditionalSet).length === 0) return;
+              // GH #632: runValidators so the GH #503 hex validators on
+              // color/secondaryColors (and the numeric range validators)
+              // fire on this update path too — bare findByIdAndUpdate
+              // skips schema validators, which let a malformed color_rgba
+              // from a community YAML persist an invalid hex on re-import.
+              await Filament.findByIdAndUpdate(
+                row._id,
+                { $set: conditionalSet },
+                { runValidators: true, context: "query" },
+              );
+            });
           }
         };
 
@@ -301,7 +343,7 @@ export async function POST(request: NextRequest) {
  * use the re-sync loop. Create-only: a name collision is refused, never
  * silently updating / re-parenting another row.
  */
-async function importAsVariant(slugs: string[], parentId: string) {
+async function importAsVariant(slugs: string[], parentId: string, promoteParent: boolean) {
   if (typeof parentId !== "string" || !mongoose.isValidObjectId(parentId)) {
     return NextResponse.json({ error: "'parentId' must be a valid filament id" }, { status: 400 });
   }
@@ -354,6 +396,14 @@ async function importAsVariant(slugs: string[], parentId: string) {
   // Prune against the parent's effective values (the parent is a root, so its
   // stored values ARE its effective values). Strict equality only — a value
   // that merely resembles the parent's is kept as the variant's distinct data.
+  //
+  // Pruning against THIS pre-lock snapshot is equivalent to pruning against
+  // the post-promotion parent the gate below may produce: a promotion moves
+  // only color/colorName/spools/totalWeight/lowStockThreshold, and NONE of
+  // those participate in the prune (color/colorName are never pruned by
+  // design, and the inventory trio is neither inheritable nor present in an
+  // OPT payload). So the payload the gate dry-run validates is exactly the
+  // payload the create persists.
   const variantPayload = pruneOptPayloadAgainstParent(
     payload,
     parent as unknown as Record<string, unknown>,
@@ -366,14 +416,42 @@ async function importAsVariant(slugs: string[], parentId: string) {
   variantPayload.diameter = null;
 
   try {
-    const created = await Filament.create(variantPayload);
-    return NextResponse.json({
-      message: `Imported "${name}" as a variant`,
-      total: 1,
-      created: 1,
-      updated: 0,
-      filament: created,
-    });
+    // GH #605 (codex round 3, Finding A): the same in-lock gate sequence as
+    // POST /api/filaments — per-parent mutex, in-lock parent re-fetch,
+    // structured 409 until `promoteParent: true`, dry-run validate, then
+    // promote copy-first/clear-last and create. See createVariantGated.
+    const result = await createVariantGated(Filament, parentId, variantPayload, promoteParent);
+    switch (result.outcome) {
+      case "parent_not_found":
+        // Vanished (soft-deleted) between the pre-lock validation above and
+        // the lock — same 400 the pre-lock check would have given.
+        return NextResponse.json({ error: "Parent filament not found" }, { status: 400 });
+      case "parent_is_variant":
+        // Validated above as a root, but a concurrent PUT re-parented it
+        // before the gate's in-lock re-fetch (round 8 F1) — same no-nesting
+        // 400 the pre-lock check produces.
+        return NextResponse.json(
+          { error: "Cannot set a variant as parent (no nested inheritance)" },
+          { status: 400 },
+        );
+      case "promotion_required":
+        return NextResponse.json(promotionRequired409Body(result), { status: 409 });
+      case "name_taken":
+        // Same copy as the pre-lock collision check — this is the raced
+        // variant of it, caught by the gate's pre-promotion re-check.
+        return NextResponse.json(
+          { error: `A filament named "${name}" already exists — rename it, or import it without a parent.` },
+          { status: 409 },
+        );
+      default:
+        return NextResponse.json({
+          message: `Imported "${name}" as a variant`,
+          total: 1,
+          created: 1,
+          updated: 0,
+          filament: result.filament,
+        });
+    }
   } catch (createErr) {
     // A concurrent create can win the unique-name race between the collision
     // check and here — surface it as a 409, never leak the raw E11000.

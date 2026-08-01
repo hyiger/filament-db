@@ -5,6 +5,12 @@ import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
+import {
+  gateFirstVariantAdoption,
+  promotionRequired409Body,
+} from "@/lib/createVariantGated";
+import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest, assertSafeUpdateBody } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
@@ -12,6 +18,7 @@ import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { resolveSyncBackColor, isMachineDerivedPerNozzleCondition } from "@/lib/prusaSlicerBundle";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
 import { escapeRegex } from "@/lib/matchFilament";
+import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import {
   isInvertedNozzleRange,
@@ -185,6 +192,12 @@ export async function PUT(
   try {
     await dbConnect();
     const { id } = await params;
+    // GH #605 (codex round 4, F2): `promoteParent` is a control flag for the
+    // re-parent adoption gate below, never a schema field — capture it, then
+    // strip it so it can't ride into the update (same posture as the POST
+    // handler's flag).
+    const promoteParent = body?.promoteParent === true;
+    delete body.promoteParent;
     delete body._id;
     delete body._deletedAt;
     // GH #222 (P1 security): `_purged` is a sync-engine tombstone signal,
@@ -208,12 +221,27 @@ export async function PUT(
     // edited field from `conflict` to pre-checked `adopt` in the re-sync
     // dialog. Only the OPT import/sync routes may write it.
     delete body.openprinttagSnapshot;
+    // GH #605 round 10: the durable promotion-marker pair is server-owned —
+    // see the parallel strip in the POST handler. A forged
+    // `promotionInFlight`/`promotedByToken` pair could make a later gate
+    // pass "resume" a promotion that never ran and clear the parent's
+    // inventory fields. The dotted sweep matters here especially: this body
+    // feeds findOneAndUpdate, where `promotionInFlight.token` is a live
+    // update path the exact-key deletes would miss.
+    delete body.promotionInFlight;
+    delete body.promotedByToken;
+    for (const key of Object.keys(body)) {
+      if (key.startsWith("promotionInFlight.") || key.startsWith("promotedByToken.")) {
+        delete body[key];
+      }
+    }
     // Server-side response-only fields that clients may echo back (e.g. the
     // edit page fetches with ?raw=true and receives _parent / _variants /
     // _inherited). Strip so they don't become persisted document fields.
     delete body._parent;
     delete body._variants;
     delete body._inherited;
+    delete body._strippedTemplateFields;
     // GH #260: `spools` is NOT editable through the filament PUT. Spools
     // have dedicated CRUD endpoints (POST/PUT/DELETE /spools/...) that
     // validate via validateSpoolBody — a bulk PUT of the whole `spools`
@@ -379,11 +407,211 @@ export async function PUT(
       }
     }
 
-    const filament = await Filament.findOneAndUpdate(
-      { _id: id, _deletedAt: null },
-      body,
-      { returnDocument: "after", runValidators: true }
-    ).lean();
+    // GH #605 (codex round 4, F2): a PUT that INTRODUCES a parentId (none →
+    // some, or a re-parent to a DIFFERENT parent) can mint that parent's
+    // first live variant — the same restructuring event the POST create path
+    // gates — so it must round-trip the same confirmation: 409
+    // `parent_promotion_required` until the caller repeats the request with
+    // `promoteParent: true`, which promotes the carrying parent first. The
+    // gate runs LAST, after every other guard above PLUS the round-6 schema
+    // dry-run inside this block, so an otherwise-invalid request gets its
+    // 400 before any promotion side effect.
+    //
+    // Lock ordering: the gate (and a confirmed promotion) runs under the
+    // PARENT's key inside gateFirstVariantAdoption; the write section below
+    // runs under the TARGET's key. The two are strictly SEQUENTIAL — never
+    // held together — because two opposing re-parent PUTs (A→B and B→A)
+    // acquiring {parent, target} pairs in opposite orders would deadlock.
+    // Residual window: between the parent-lock release and the target-lock
+    // write, a concurrent writer could hand the parent new carrying state
+    // (its own color PUT, an atlas import). The result is a template that
+    // still carries legacy state — exactly the pre-#605 shape the
+    // enforce-forward posture already tolerates and "Convert to template"
+    // recovers, so the window degrades gracefully instead of corrupting.
+    // Round 11 F2: a soft-DELETE of the TARGET in that same gap is shrunk
+    // from both ends — the gate re-checks the target's liveness inside the
+    // parent lock immediately before promoting (`targetId` below), and the
+    // write section re-checks it again under the target lock. The
+    // microsecond window left between them deliberately stays open: losing
+    // it yields a valid, user-confirmed, COMPLETED promotion with no
+    // adoption (the owner decision: never demote/compensate), and closing
+    // it would need the two-key hold ruled out above.
+    // `stored` gating: a PUT addressed to a missing/trashed target 404s at
+    // the write — without the target check, a confirmed request could
+    // promote the parent and THEN 404, an irreversible side effect on an
+    // error response. (`stored` is the pre-lock snapshot; the write's own
+    // `_deletedAt: null` filter still owns the final answer.)
+    // Round 7 P2: when the adoption below mints the first variant of a
+    // threshold-ONLY parent (nothing gates, so no 409/promotion), the
+    // parent's lowStockThreshold becomes dead config — the gate reports it
+    // and THIS route clears it, but only AFTER the write section succeeds
+    // (parent state change last: an error response, a 404, or the F7 cycle
+    // rollback below must leave the parent untouched).
+    let clearParentThresholdAfterWrite = false;
+    // Round 11 F2: true once the adoption gate cleared for this request —
+    // gates the write section's target-liveness re-check below (only the
+    // adoption path can have promoted a parent in between).
+    let adoptionGateCleared = false;
+    if (stored && body.parentId && reparenting) {
+      // Codex round 6, F1: dry-run-validate the target AS IT WOULD BE AFTER
+      // this PUT before the gate can promote the parent. The write below
+      // runs `runValidators` — but only AFTER a confirmed adoption has
+      // already restructured the parent, so a schema-invalid body (cost: -5,
+      // a bad color hex) would surface its 400 with the promotion side
+      // effect already irreversible. Same defect class (and same cure) as
+      // the create path's `new Filament(body).validate()` inside
+      // createVariantGated: fail the doomed request while the parent is
+      // completely untouched. The PUT's update is a plain field object
+      // ($-operators rejected above), i.e. a top-level $set — `doc.set(body)`
+      // on a hydrated, never-saved copy of the stored doc reproduces exactly
+      // the document state findOneAndUpdate would persist; a ValidationError
+      // propagates to the catch below and maps to the same 400 shape the
+      // write-time validators produce (errorResponseFromCaught).
+      const dryRunTarget = await Filament.findOne({ _id: id, _deletedAt: null });
+      if (!dryRunTarget) {
+        // Vanished since the `stored` snapshot — same 404 the write would
+        // return, taken here so a confirmed request can't promote first.
+        return errorResponse("Not found", 404);
+      }
+      dryRunTarget.set(body);
+      await dryRunTarget.validate();
+
+      // Round 9 F2: fail a doomed RENAME before the gate can promote the
+      // parent. The dry-run above runs document validators, but the unique
+      // name constraint is a partial INDEX (unique among non-deleted docs —
+      // src/models/Filament.ts), not a validator — so a confirmed
+      // reparent+rename to a taken name would pass the dry-run, promote the
+      // parent, and THEN E11000 at the write: an error response after the
+      // irreversible restructuring. The POST create path has pre-checked the
+      // requested name since round 1 (createVariantGated's beforePromote);
+      // this is the same check for the adoption path. Query shape matches
+      // that pre-check (non-deleted, exact name equality — the index's own
+      // semantics) plus an exclusion of the target itself, so re-sending the
+      // target's OWN current name (the edit form echoes `name` on every
+      // save) never false-positives. The 409 is byte-identical to what the
+      // write-time E11000 produces via handleDuplicateKeyError, so the
+      // client contract is unchanged — the collision just surfaces before
+      // any promotion side effect. Residual TOCTOU window between this check
+      // and the write still falls back to that same E11000 handler.
+      const effectiveName =
+        typeof body.name === "string" ? body.name : dryRunTarget.name;
+      if (
+        await Filament.exists({
+          name: effectiveName,
+          _deletedAt: null,
+          _id: { $ne: id },
+        })
+      ) {
+        return errorResponse(
+          `A filament with that name already exists: "${effectiveName}"`,
+          409,
+        );
+      }
+
+      const adoption = await gateFirstVariantAdoption(Filament, body.parentId, {
+        promoteParent,
+        // Reserve the name this document will carry after the PUT (a rename
+        // can ride the same request) so the promotion copy can't squat on it.
+        adoptedName: typeof body.name === "string" ? body.name : undefined,
+        // Round 11 F2a: the round-4 target-existence precondition
+        // (dryRunTarget above) runs PRE-lock, so a soft-DELETE of this
+        // target could land before a confirmed promotion restructures the
+        // parent — a completed promotion with no adoption. Passing the
+        // target id makes the gate re-check its liveness INSIDE the
+        // parent's lock at the last responsible moment, immediately before
+        // performParentPromotion.
+        targetId: id,
+      });
+      if (adoption.outcome === "parent_not_found") {
+        // Validated above but vanished (soft-deleted) before the gate —
+        // same 400 the pre-lock check would have given.
+        return errorResponse("Parent filament not found", 400);
+      }
+      if (adoption.outcome === "parent_is_variant") {
+        // Validated above as a root, but a concurrent PUT re-parented it
+        // before the gate's in-lock re-fetch (round 8 F1) — same no-nesting
+        // 400 the pre-lock check produces.
+        return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
+      }
+      if (adoption.outcome === "target_not_found") {
+        // Round 11 F2a: this PUT's own target was soft-deleted after the
+        // pre-lock checks — caught in-lock BEFORE the promotion, so the
+        // parent is untouched. Same 404 the write below would produce.
+        return errorResponse("Not found", 404);
+      }
+      if (adoption.outcome === "promotion_required") {
+        return NextResponse.json(promotionRequired409Body(adoption), { status: 409 });
+      }
+      clearParentThresholdAfterWrite = adoption.clearOrphanedThreshold;
+      adoptionGateCleared = true;
+    }
+
+    // GH #605: a filament with ≥1 live variant is a TEMPLATE and must not
+    // carry its own INVENTORY or per-variant color identity. STRIP (don't
+    // reject) a non-null write of any of the four per-variant fields —
+    // `totalWeight` (inventory), and since codex round 4 (F3) also `color`,
+    // `colorName`, and `lowStockThreshold`: a form loaded PRE-promotion and
+    // saved POST-promotion echoes the promoted-away values back verbatim and
+    // would re-materialize them on the template (and a 400 would brick
+    // parent edits entirely, since the edit form echoes every field). An
+    // explicit null passes through: clearing a legacy parent's leftover
+    // value is legitimate cleanup, and blocking it would freeze exactly the
+    // state we're trying to migrate away from. For a LEGACY carrying parent
+    // (pre-#605, still holding a color) the form resubmits the STORED value
+    // verbatim — stripping means "not applied", and since the resubmitted
+    // value equals the stored one, behavior is unchanged (the stored color
+    // stays; the response still reports the strip). The response carries
+    // `_strippedTemplateFields` (response-only, underscore-prefixed like
+    // _parent/_variants) so a client can surface a warning.
+    //
+    // `spoolWeight` / `netFilamentWeight` are deliberately NOT stripped:
+    // they are SPEC — the product line's tare and nominal net weight — and
+    // stay editable on templates, where every variant inherits them
+    // (resolveFilament's INHERITABLE_FIELDS). That is what makes GH #1048's
+    // recommended workaround possible: set the net weight on the parent so
+    // the whole family inherits the remaining-percentage denominator.
+    //
+    // Review P1-c: the strip DECISION and the persisting write share one
+    // per-id critical section (runExclusive — the same key the promotion
+    // paths lock). Decided-then-written across a gap, a totalWeight PUT
+    // racing a first-variant promotion could pass the hasVariants check
+    // while the parent was still a standalone and then persist AFTER the
+    // promotion cleared the parent — re-materializing inventory on a fresh
+    // template. Serialized, either the PUT lands first (and the promotion's
+    // fresh snapshot moves the new value onto the promoted variant) or the
+    // promotion lands first (and this re-check strips the write).
+
+    // The per-variant fields a template must not (re-)acquire — inventory
+    // plus color identity (codex round 4, F3) — live in the shared
+    // TEMPLATE_STRIP_FIELDS (src/lib/templateStrip.ts), used verbatim by the
+    // slicer sync-back routes and both INI bulk importers; atlas imports drop
+    // the same set with their own per-field notes (import-atlas/route.ts) —
+    // keep that mirror in lockstep with the shared list.
+    let strippedTemplateFields: string[] = [];
+    const filament = await runExclusive(filamentLockKey(id), async () => {
+      // Round 11 F2b: on the adoption path, re-check the target is still
+      // alive under ITS lock before the adoption write. The parent lock
+      // (gate + promotion) was released above, so a soft-DELETE serialized
+      // on this key can win the gap between the two locks; when it did, the
+      // findOneAndUpdate below would refuse anyway (`_deletedAt: null`) —
+      // this explicit precheck pins the posture at the last responsible
+      // moment. DELIBERATE (owner decision): the promotion, if it ran,
+      // STANDS — a user-confirmed, completed promotion is a valid end state,
+      // not corruption (demoting it back would be a destructive migration),
+      // and closing the remaining microsecond window entirely would require
+      // holding the parent and target locks together — a two-key lock order
+      // the AB/BA deadlock note above rules out.
+      if (adoptionGateCleared) {
+        const targetAlive = await Filament.exists({ _id: id, _deletedAt: null });
+        if (!targetAlive) return null;
+      }
+      strippedTemplateFields = await stripTemplateFieldsForWrite(Filament, id, body);
+      return await Filament.findOneAndUpdate(
+        { _id: id, _deletedAt: null },
+        body,
+        { returnDocument: "after", runValidators: true }
+      ).lean();
+    });
     if (!filament) {
       return errorResponse("Not found", 404);
     }
@@ -436,7 +664,18 @@ export async function PUT(
       }
     }
 
-    return NextResponse.json(filament);
+    // Round 7 P2: the adoption write landed (and the cycle re-assert above
+    // didn't roll it back), so the threshold-only parent's first variant now
+    // exists — clear the parent's dead threshold as the last step.
+    if (clearParentThresholdAfterWrite) {
+      await clearOrphanedParentThreshold(Filament, body.parentId);
+    }
+
+    return NextResponse.json(
+      strippedTemplateFields.length > 0
+        ? { ...filament, _strippedTemplateFields: strippedTemplateFields }
+        : filament,
+    );
   } catch (err) {
     // Surface MongoDB duplicate-key errors (renaming a filament to a
     // name that already exists) as a specific 409 rather than the
@@ -1074,12 +1313,44 @@ export async function POST(
     // regular PUT would have rejected. `context: "query"` matches the
     // Bambu sync route (Codex P2 on #387); the shared helper maps a
     // ValidationError to a JSON 400 rather than a generic 500.
+    //
+    // GH #605 (codex P2, slicer-sync sweep): a TEMPLATE (≥1 live variant)
+    // must not re-acquire per-variant color/inventory — but the preset
+    // echoes `filament_colour` back on every sync, so a template target
+    // would re-materialize `color` here (the exact form-echo failure mode
+    // the PUT strips). Apply the SAME strip (shared helper; non-null only,
+    // explicit nulls pass), decided + written inside the per-id mutex the
+    // promotion paths lock, so a concurrent first-variant promotion can't
+    // land between the check and this write (PUT review P1-c). `color` is
+    // not inheritable, so the split above passed it into `$set` verbatim —
+    // stripping the $set body covers both the split and verbatim shapes.
+    let strippedTemplateFields: string[] = [];
     try {
-      await Filament.findByIdAndUpdate(
-        filament._id,
-        mongoUpdate,
-        { runValidators: true, context: "query" },
-      );
+      await runExclusive(filamentLockKey(filament._id), async () => {
+        const setBody = mongoUpdate.$set as Record<string, unknown>;
+        strippedTemplateFields = await stripTemplateFieldsForWrite(
+          Filament,
+          filament._id,
+          setBody,
+        );
+        // The GH #885 `colorName: null` clear is DERIVED from the color
+        // write (slicers send only a hex) — when the color write is
+        // stripped, its derivation goes with it, or a template holding a
+        // legacy color/colorName pair would keep the color but lose the
+        // name. A template with no legacy color has nothing to clear, so
+        // dropping the null is lossless there too. (This is narrower than
+        // the explicit-null pass-through: that covers CLIENT nulls, and
+        // this null is one the route itself synthesized from the stripped
+        // color.)
+        if (strippedTemplateFields.includes("color") && setBody.colorName === null) {
+          delete setBody.colorName;
+        }
+        await Filament.findByIdAndUpdate(
+          filament._id,
+          mongoUpdate,
+          { runValidators: true, context: "query" },
+        );
+      });
     } catch (validationErr) {
       // #867 Phase 2: a rename that lost a TOCTOU race against a concurrent rename
       // to the same name slips past the pre-check and surfaces here as a duplicate-
@@ -1157,6 +1428,11 @@ export async function POST(
       // returns 409 above without mutating, so it never reaches here.
       matchedBy,
       matchedName: filament.name,
+      // GH #605: per-variant fields the template guard refused to apply —
+      // same reporting key the PUT uses, so clients can surface one warning.
+      ...(strippedTemplateFields.length > 0
+        ? { _strippedTemplateFields: strippedTemplateFields }
+        : {}),
     });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to sync filament");
@@ -1240,32 +1516,51 @@ export async function DELETE(
     }
 
     // Soft delete — the default path.
-    if (await hasVariants(Filament, id)) {
-      return errorResponse(
-        "Cannot delete a filament that has color variants. Delete the variants first.",
-        400,
-      );
-    }
+    //
+    // Round 8 F3: the hasVariants refusal AND the soft-delete write run as
+    // ONE section under the per-filament mutex — the same key the
+    // first-variant creation/adoption gates hold (createVariantGated /
+    // gateFirstVariantAdoption lock the PARENT's id, which is this id when
+    // a parent is being trashed). Unserialized, this check-then-act could
+    // interleave with a first-variant POST: the check passes while the
+    // parent is still childless, the gate's promotion then mints a live
+    // variant (and a promotion copy), and the trailing updateOne trashes
+    // the parent — a TRASHED doc with LIVE variants, breaking the exact
+    // invariant the import resurrect exemptions and the restore guards rely
+    // on ("a trashed doc cannot have live variants"). In-lock, both orders
+    // end lawful: delete-first trashes a childless doc and the gate's
+    // in-lock re-fetch answers parent_not_found (the POST 400s);
+    // create-first makes this hasVariants re-check refuse. Single key, no
+    // nested locks — hasVariants, the findOne, and assignSpoolToSlot (via
+    // clearFilamentSpoolsFromSlots) are plain DB calls.
+    return await runExclusive(filamentLockKey(id), async () => {
+      if (await hasVariants(Filament, id)) {
+        return errorResponse(
+          "Cannot delete a filament that has color variants. Delete the variants first.",
+          400,
+        );
+      }
 
-    const filament = await Filament.findOne({ _id: id, _deletedAt: null })
-      .select("_id spools")
-      .lean();
-    if (!filament) {
-      return errorResponse("Not found", 404);
-    }
-    // GH #261/#333: drop this filament's spools from every printer AMS slot
-    // BEFORE the soft-delete write. If slot cleanup fails the filament is
-    // still active and the whole DELETE is retryable; clearing afterwards
-    // would 404 the retry (`_deletedAt: null` no longer matches) and leave
-    // dangling slot refs behind.
-    await clearFilamentSpoolsFromSlots(
-      (filament as { spools?: { _id?: unknown }[] }).spools,
-    );
-    await Filament.updateOne(
-      { _id: id, _deletedAt: null },
-      { _deletedAt: new Date() },
-    );
-    return NextResponse.json({ message: "Deleted" });
+      const filament = await Filament.findOne({ _id: id, _deletedAt: null })
+        .select("_id spools")
+        .lean();
+      if (!filament) {
+        return errorResponse("Not found", 404);
+      }
+      // GH #261/#333: drop this filament's spools from every printer AMS slot
+      // BEFORE the soft-delete write. If slot cleanup fails the filament is
+      // still active and the whole DELETE is retryable; clearing afterwards
+      // would 404 the retry (`_deletedAt: null` no longer matches) and leave
+      // dangling slot refs behind.
+      await clearFilamentSpoolsFromSlots(
+        (filament as { spools?: { _id?: unknown }[] }).spools,
+      );
+      await Filament.updateOne(
+        { _id: id, _deletedAt: null },
+        { _deletedAt: new Date() },
+      );
+      return NextResponse.json({ message: "Deleted" });
+    });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to delete filament");
   }

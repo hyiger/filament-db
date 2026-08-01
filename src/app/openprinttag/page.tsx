@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { List, type RowComponentProps } from "react-window";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { safeHttpUrl } from "@/lib/safeRenderUrl";
@@ -442,6 +443,7 @@ export default function OpenPrintTagBrowser() {
   >([]);
   const [parentsLoaded, setParentsLoaded] = useState(false);
   const { toast } = useToast();
+  const confirm = useConfirm();
 
   const fetchDatabase = useCallback(
     async (refresh = false) => {
@@ -642,16 +644,37 @@ export default function OpenPrintTagBrowser() {
     if (selected.size === 0) return;
     setImporting(true);
     try {
-      const res = await fetch("/api/openprinttag/import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          asVariant
-            ? { slugs: [...selected], parentId: variantParentId }
-            : { slugs: [...selected] },
-        ),
-      });
-      const data = await res.json();
+      const post = (extra?: Record<string, unknown>) =>
+        fetch("/api/openprinttag/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            asVariant
+              ? { slugs: [...selected], parentId: variantParentId, ...extra }
+              : { slugs: [...selected] },
+          ),
+        });
+      let res = await post();
+      let data = await res.json();
+      // GH #605 (codex round 3, Finding A): importing the FIRST variant of a
+      // parent that still carries its own color/spools promotes that parent
+      // to a template — the server 409s until the user opts in. Same
+      // ConfirmDialog + retry-with-promoteParent flow (and the same
+      // translated copy) as the New Filament page.
+      if (res.status === 409 && data?.error === "parent_promotion_required") {
+        const ok = await confirm({
+          title: t("new.promote.title"),
+          message: t("new.promote.message", {
+            parent: String(data.parentName ?? ""),
+            variant: String(data.variantName ?? ""),
+            count: data.spoolCount ?? 0,
+          }),
+          confirmLabel: t("new.promote.confirm"),
+        });
+        if (!ok) return; // the finally below clears the importing state
+        res = await post({ promoteParent: true });
+        data = await res.json();
+      }
       if (!res.ok) {
         toast(data.error || t("openprinttag.importFailed"), "error");
       } else {

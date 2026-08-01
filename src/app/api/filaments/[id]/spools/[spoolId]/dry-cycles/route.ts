@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
@@ -87,18 +88,30 @@ export async function POST(
   try {
     await dbConnect();
     const { id, spoolId } = await params;
-    const filament = await Filament.findOneAndUpdate(
-      { _id: id, _deletedAt: null, "spools._id": spoolId },
-      // GH #304: $slice: -N keeps only the most recent MAX_DRY_CYCLES
-      // entries, so a looping client can't grow the filament document
-      // toward the 16MB BSON limit.
-      { $push: { "spools.$.dryCycles": { $each: [entry], $slice: -MAX_DRY_CYCLES } } },
-      { returnDocument: "after" },
-    ).lean();
-    if (!filament) {
-      return errorResponse("Filament or spool not found", 404);
-    }
-    return NextResponse.json(filament, { status: 201 });
+    // GH #605 round 11 (F1): the positional $push mutates an existing spool
+    // subdocument, so it serializes on the same per-filament mutex the
+    // promotion paths hold. Unserialized it could land between a promotion's
+    // snapshot and its clearing write — the 201-acknowledged dry cycle would
+    // be minted onto neither document (the copy predates it, the parent is
+    // cleared right after). In-lock, either this POST runs first (the fresh
+    // snapshot moves the cycle with the spool) or the promotion runs first
+    // and the filter no longer matches — post-promotion staleness already
+    // 404s (round 4); the lock adds mid-promotion atomicity. Single key, no
+    // nested lock inside.
+    return await runExclusive(filamentLockKey(id), async () => {
+      const filament = await Filament.findOneAndUpdate(
+        { _id: id, _deletedAt: null, "spools._id": spoolId },
+        // GH #304: $slice: -N keeps only the most recent MAX_DRY_CYCLES
+        // entries, so a looping client can't grow the filament document
+        // toward the 16MB BSON limit.
+        { $push: { "spools.$.dryCycles": { $each: [entry], $slice: -MAX_DRY_CYCLES } } },
+        { returnDocument: "after" },
+      ).lean();
+      if (!filament) {
+        return errorResponse("Filament or spool not found", 404);
+      }
+      return NextResponse.json(filament, { status: 201 });
+    });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to log dry cycle");
   }

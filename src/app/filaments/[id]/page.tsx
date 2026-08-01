@@ -24,6 +24,8 @@ import FilamentSwatch from "@/components/FilamentSwatch";
 import FinishChip from "@/components/FinishChip";
 import { deriveFinish } from "@/lib/filamentFinish";
 import { deriveArrangement } from "@/lib/filamentColors";
+import { parentPromotionState } from "@/lib/promoteParent";
+import { decideSpoolDeepLink, healedSpoolDeepLinkHref } from "@/lib/spoolDeepLink";
 import type { FilamentDetail, FilamentCalibration } from "@/types/filament";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useDateFormat } from "@/hooks/useDateFormat";
@@ -367,11 +369,46 @@ function FilamentDetail() {
   // if `?spool=<id>` is in the URL and matches a spool, scroll to it and
   // highlight it briefly. The ref makes this fire once (not on every later
   // spool edit that re-sets `filament`).
+  //
+  // Round 7 P2 — SELF-HEALING stale labels: a printed QR encodes
+  // `/filaments/<id>?spool=<spoolId>` permanently, but a spool can move to a
+  // different document while its subdoc id stays valid (a GH #605 parent
+  // promotion preserves spool _ids verbatim today; any future move would
+  // too). Printed history can't be reprinted, so when the addressed filament
+  // doesn't carry the spool we resolve the TRUE owner globally by spool id
+  // (GET /api/spools/{spoolId}) and router.replace to the owner's page with
+  // the full query string intact — the keyed remount then runs this effect
+  // again on the owner and highlights the spool. This heals ALL stale
+  // labels, not just promotion-moved ones. A spool that exists nowhere keeps
+  // the pre-existing quiet posture (stay on the addressed page). Decision
+  // logic is pure + unit-tested in src/lib/spoolDeepLink.ts.
   useEffect(() => {
     if (deepLinkHandledRef.current || !filament || typeof window === "undefined") return;
     deepLinkHandledRef.current = true;
-    const spoolId = new URLSearchParams(window.location.search).get("spool");
-    if (!spoolId || !filament.spools?.some((s) => String(s._id) === spoolId)) return;
+    const decision = decideSpoolDeepLink(
+      window.location.search,
+      (filament.spools ?? []).map((s) => String(s._id)),
+    );
+    if (decision.action === "none") return;
+    if (decision.action === "resolve") {
+      let cancelled = false;
+      fetch(`/api/spools/${encodeURIComponent(decision.spoolId)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (cancelled || !data?.filament?._id) return;
+          const href = healedSpoolDeepLinkHref(
+            String(params.id),
+            String(data.filament._id),
+            window.location.search,
+          );
+          if (href) router.replace(href);
+        })
+        .catch(() => {
+          /* offline / resolver error — keep the addressed page as-is */
+        });
+      return () => { cancelled = true; };
+    }
+    const spoolId = decision.spoolId;
     // Wait a frame so the SpoolCard element is in the DOM, then scroll/flag.
     const raf = requestAnimationFrame(() => {
       document.getElementById(`spool-${spoolId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -379,7 +416,7 @@ function FilamentDetail() {
     });
     const clear = setTimeout(() => setHighlightSpoolId(null), 2600);
     return () => { cancelAnimationFrame(raf); clearTimeout(clear); };
-  }, [filament]);
+  }, [filament, params.id, router]);
 
   // Load locations once so the spool cards can show a picker without each
   // spool re-fetching. Small list — OK to keep in state.
@@ -1182,6 +1219,36 @@ function FilamentDetail() {
     }
   };
 
+  // GH #605 (Phase 2b): "Convert to template" — a legacy parent that still
+  // carries its own color/spools (from before the template guards) moves
+  // that state onto a NEW variant via POST /promote (server-side copy-first
+  // / clear-last), leaving the template colorless and inventory-free.
+  const handleConvertToTemplate = async () => {
+    if (!filament) return;
+    const ok = await confirm({
+      title: t("detail.template.convertTitle"),
+      message: t("detail.template.convertConfirm", {
+        count: filament.spools?.length ?? 0,
+      }),
+      confirmLabel: t("detail.template.convertAction"),
+    });
+    if (!ok) return;
+    try {
+      const res = await fetch(`/api/filaments/${filament._id}/promote`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast(body?.message || body?.error || t("detail.template.convertFailed"), "error");
+        return;
+      }
+      toast(t("detail.template.converted"));
+      refetchFilament();
+    } catch {
+      toast(t("detail.template.convertFailed"), "error");
+    }
+  };
+
   if (notFound) return (
     <div className="p-8">
       <p className="text-red-500 mb-4">{t("detail.error.notFound")}</p>
@@ -1645,16 +1712,57 @@ function FilamentDetail() {
           )}
       </div>
 
-      {/* Spool Tracker — always rendered. Pre-fix the outer gate hid the
-          entire section (header + Add Spool button) when the filament had
-          neither spools nor any spool-weight metadata, leaving users with
-          no in-app affordance to add their first spool (e.g. a freshly-
-          imported Siraya Tech PPS-CF row with the OpenPrintTag defaults).
-          Empty state now surfaces an Add Spool CTA via the fallback at
-          the bottom of this block, gated on hasSpools + totalWeight only.
-          (Regression of #346 — that fix covered "no spools but weights
-          set"; the "no spools AND no weights" case still fell through.) */}
+      {/* Spool Tracker — always rendered (for non-templates). Pre-fix the
+          outer gate hid the entire section (header + Add Spool button) when
+          the filament had neither spools nor any spool-weight metadata,
+          leaving users with no in-app affordance to add their first spool
+          (e.g. a freshly-imported Siraya Tech PPS-CF row with the
+          OpenPrintTag defaults). Empty state now surfaces an Add Spool CTA
+          via the fallback at the bottom of this block, gated on hasSpools +
+          totalWeight only. (Regression of #346 — that fix covered "no spools
+          but weights set"; the "no spools AND no weights" case still fell
+          through.) */}
       {(() => {
+        // GH #605: templates (filaments with variants) hold no inventory —
+        // spools live on the color variants, and the spools POST rejects a
+        // template target (template_no_spools). Replace the whole tracker
+        // (including the NFC/scale weight-update paths inside it) with a
+        // short explanatory line. Legacy parent spools created before the
+        // guard keep counting on the home page (#552/#616) but aren't
+        // manageable here — the Phase-2 "Convert to template" action moves
+        // them onto a variant.
+        if (isParent) {
+          // GH #605 (Phase 2b): a legacy parent that still carries its own
+          // variant state (predating the template guards) gets the explicit
+          // "Convert to template" action — enforce-forward only, at the
+          // user's initiative (decision 4). The predicate is the SAME one
+          // the server's promotion gate + /promote route use
+          // (parentPromotionState: real color OR colorName OR spools OR
+          // inventory totalWeight; the spoolWeight/netFilamentWeight SPEC
+          // pair never gates), so the button shows exactly when /promote
+          // would do something rather than 400 nothing_to_convert.
+          const carriesLegacyState = parentPromotionState(filament).needed;
+          return (
+            <div className="mb-8 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+              <h2 className="text-sm font-medium text-gray-500 mb-2">{t("detail.section.spoolTracker")}</h2>
+              <p className="text-sm text-gray-500 dark:text-gray-400">{t("detail.spool.templateNote")}</p>
+              {carriesLegacyState && (
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <p className="text-sm text-amber-700 dark:text-amber-400">
+                    {t("detail.template.convertHint")}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleConvertToTemplate}
+                    className="px-3 py-1.5 text-sm bg-amber-600 text-white rounded hover:bg-amber-700"
+                  >
+                    {t("detail.template.convertAction")}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        }
         const hasSpools = filament.spools?.length > 0;
         const legacyRemaining = !hasSpools ? computeRemaining(filament) : null;
 

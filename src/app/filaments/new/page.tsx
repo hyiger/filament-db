@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ConfirmDialog";
 import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 import { useNfcContext } from "@/components/NfcProvider";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
@@ -21,6 +22,7 @@ interface FilamentOption {
 function NewFilamentContent() {
   const searchParams = useSearchParams();
   const { toast } = useToast();
+  const confirm = useConfirm();
   const { isElectron, status: nfcStatus, tagReadResult, dismissTagRead } = useNfcContext();
   const { t } = useTranslation();
 
@@ -188,11 +190,40 @@ function NewFilamentContent() {
       data.spools = [{ label: "", totalWeight: gross }];
     }
 
-    const res = await fetch("/api/filaments", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
+    const post = (payload: Record<string, unknown>) =>
+      fetch("/api/filaments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+    let res = await post(data);
+
+    // GH #605 (Phase 2b): creating the FIRST variant of a parent that still
+    // carries its own color/spools turns that parent into a template — the
+    // server moves the color + spools onto a new sibling variant, and 409s
+    // until the client explicitly opts in. Show the consequences (the 409
+    // names the would-be variant + spool count), then retry with the
+    // promoteParent flag on confirm.
+    if (res.status === 409) {
+      const conflict = await res.json().catch(() => null);
+      if (conflict?.error !== "parent_promotion_required") {
+        toast(conflict?.error || t("new.toast.createFailed"), "error");
+        return;
+      }
+      const ok = await confirm({
+        title: t("new.promote.title"),
+        message: t("new.promote.message", {
+          parent: String(conflict.parentName ?? ""),
+          variant: String(conflict.variantName ?? ""),
+          count: conflict.spoolCount ?? 0,
+        }),
+        confirmLabel: t("new.promote.confirm"),
+      });
+      if (!ok) return;
+      res = await post({ ...data, promoteParent: true });
+    }
+
     if (res.ok) {
       const created = await res.json();
       toast(t("new.toast.created"));

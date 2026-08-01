@@ -211,7 +211,10 @@ describe("PR A — API validation & semantics", () => {
 
     it("POST a variant whose lone min stays valid against the inherited parent max → 201", async () => {
       const parent = await Filament.create({
-        name: "QA-RangeParentOk", vendor: "x", type: "PLA",
+        // GH #605: colorless parent — the first variant of a color-carrying
+        // parent now 409s (parent_promotion_required) until confirmed; this
+        // test is about the inherited range check, not the promotion flow.
+        name: "QA-RangeParentOk", vendor: "x", type: "PLA", color: null,
         temperatures: { nozzleRangeMin: 180, nozzleRangeMax: 260 },
       });
       const { POST } = await import("@/app/api/filaments/route");

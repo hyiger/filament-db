@@ -47,6 +47,27 @@ describe("GET /api/filaments/export-xlsx", () => {
     expect(dataRow).toContain("Galaxy Black");
   });
 
+  it("exports a null-color filament without throwing (GH #605 — cleared color)", async () => {
+    await Filament.create({
+      name: "Colorless Template PLA",
+      vendor: "Generic",
+      type: "PLA",
+      color: null,
+    });
+
+    const res = await GET();
+    expect(res.status).toBe(200);
+
+    const buf = Buffer.from(await res.arrayBuffer());
+    const wb = new ExcelJS.Workbook();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await wb.xlsx.load(buf as any);
+    const sheet = wb.getWorksheet("Filaments");
+    expect(sheet!.rowCount).toBe(2);
+    const dataRow = sheet!.getRow(2).values as unknown[];
+    expect(dataRow).toContain("Colorless Template PLA");
+  });
+
   it("returns a workbook with just the header when there are no filaments", async () => {
     const res = await GET();
     expect(res.status).toBe(200);

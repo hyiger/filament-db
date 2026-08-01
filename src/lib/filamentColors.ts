@@ -15,6 +15,8 @@
  * filament shape.
  */
 
+import { BLANK_COLOR_HEX, isIncompleteColorHex } from "./cssNamedColors";
+
 /**
  * OpenPrintTag tag IDs that describe color arrangement.
  *
@@ -185,5 +187,54 @@ export function parentSwatchColors(
     out.push(c);
   }
   return out;
+}
+
+/**
+ * GH #605: seed `FilamentForm`'s color state from a stored value.
+ *
+ * A stored `null` means the user explicitly cleared the color (the API and
+ * schema accept null per OpenPrintTag key 19) — seed `""` so the form shows
+ * the cleared state instead of silently resurrecting the gray sentinel on
+ * every edit. An absent value (fresh form, prefill without a color) keeps
+ * the historical `#808080` default.
+ */
+export function seedFormColorHex(stored: string | null | undefined): string {
+  if (stored === null) return "";
+  return stored ?? BLANK_COLOR_HEX;
+}
+
+/**
+ * GH #605: normalize the raw value of the form's hex TEXT input while the
+ * user types. Keeps only hex chars (max 6) behind a single `#` — but when no
+ * hex chars remain (box emptied, or every char filtered out) returns `""`,
+ * the form's "no color" state. Pre-fix an emptied box normalized to the
+ * dangling string `"#"`, which the submit path forwarded verbatim and the
+ * model validator rejected — the UI had no way to produce a null color.
+ */
+export function normalizeColorHexInput(raw: string): string {
+  const hexChars = raw
+    .trim()
+    .replace(/^#/, "")
+    .replace(/[^0-9a-fA-F]/g, "");
+  return hexChars === "" ? "" : `#${hexChars.slice(0, 6)}`;
+}
+
+/**
+ * GH #605: map the form's color state to the value submitted to the API.
+ *
+ *   - coextruded arrangement → null (spec: no primary color — GH #477/#533)
+ *   - cleared (`""`) or incomplete (`"#"`, `"#12"`) hex → null (the user
+ *     never finished picking a color; persisting the fragment would trip
+ *     the `#RRGGBB` model validator, and resurrecting a default would undo
+ *     an explicit clear)
+ *   - anything else (a full `#RRGGBB`, including the gray sentinel the user
+ *     may genuinely have picked) → submitted verbatim
+ */
+export function submittedColorValue(
+  color: string,
+  optTags: number[] | null | undefined,
+): string | null {
+  if (deriveArrangement(optTags) === "coextruded") return null;
+  return isIncompleteColorHex(color) ? null : color;
 }
 

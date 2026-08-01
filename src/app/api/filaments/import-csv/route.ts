@@ -90,7 +90,11 @@ export async function POST(request: NextRequest) {
     const result = await upsertImportRows(rows);
 
     return NextResponse.json({
-      message: `Imported ${result.total} filaments (${result.created} new, ${result.updated} updated${result.skipped ? `, ${result.skipped} skipped` : ""})`,
+      // GH #605: `result.errors` (present only when non-empty) carries
+      // per-row non-fatal notes — e.g. a template target whose echoed
+      // color/colorName the update stripped. Surfaced in the toast via the
+      // note count, same wording as the atlas importer.
+      message: `Imported ${result.total} filaments (${result.created} new, ${result.updated} updated${result.skipped ? `, ${result.skipped} skipped` : ""})${result.errors ? `. ${result.errors.length} note(s).` : ""}`,
       ...result,
     });
   } catch (err) {

@@ -3,6 +3,9 @@ import { NextRequest, NextResponse } from "next/server";
 import dbConnect from "@/lib/mongodb";
 import Filament, { generateInstanceId, isSpoolInstanceIdTaken } from "@/models/Filament";
 import Location from "@/models/Location";
+import { hasVariants } from "@/lib/resolveFilament";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
+import { pushSpoolWithTemplateGuard, TEMPLATE_NO_SPOOLS_BODY } from "@/lib/spoolTemplateGuard";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
@@ -124,20 +127,39 @@ export async function POST(
     if (validation.photoDataUrl !== undefined) newSpool.photoDataUrl = validation.photoDataUrl;
     if (validation.retired !== undefined) newSpool.retired = validation.retired;
 
-    const filament = await Filament.findOneAndUpdate(
-      { _id: id, _deletedAt: null },
-      { $push: { spools: newSpool } },
-      { returnDocument: "after" }
-    ).lean();
+    // GH #605: a filament with ≥1 live variant is a TEMPLATE — inventory
+    // lives on its color variants, never on the template itself. Enforced
+    // forward only: spools a legacy parent already carries stay untouched,
+    // but no NEW spool may land here (same variant-existence check the
+    // DELETE guard uses). The check-push-recheck-compensate sequence lives
+    // in pushSpoolWithTemplateGuard so a concurrent first-variant creation
+    // between check and $push can't strand a fresh spool on a template —
+    // the guard re-checks after the push and pulls the spool back out.
+    //
+    // Review P1-a companion: the guard runs inside the same per-id lock
+    // the promotion paths take (belt), so within this process a spool push
+    // and a first-variant promotion strictly serialize — a spool accepted
+    // here is visible to the promotion's fresh snapshot and moves with the
+    // inventory; one queued behind a promotion sees hasVariants=true and
+    // 400s. The guard's own re-check + compensating $pull stays (braces)
+    // for writers outside the process (see src/lib/filamentMutex.ts).
+    const result = await runExclusive(filamentLockKey(id), () =>
+      pushSpoolWithTemplateGuard(Filament, id, newSpool, hasVariants),
+    );
 
-    if (!filament) {
+    if (result.outcome === "template") {
+      // Shared body constant (codex round 3, Finding B) so this route and
+      // the Prusament importer answer byte-identically.
+      return NextResponse.json(TEMPLATE_NO_SPOOLS_BODY, { status: 400 });
+    }
+    if (result.outcome === "not_found") {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     // GH #341: align with the other create endpoints (nozzles, printers,
     // bed-types, locations, filaments, print-history) which all return 201
     // on a successful POST. This used to return 200 which violates the
     // documented REST semantics and trips polite HTTP clients.
-    return NextResponse.json(filament, { status: 201 });
+    return NextResponse.json(result.filament, { status: 201 });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to add spool");
   }
