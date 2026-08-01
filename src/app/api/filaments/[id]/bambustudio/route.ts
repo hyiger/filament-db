@@ -19,6 +19,8 @@ import {
   errorResponseFromCaught,
 } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * GET /api/filaments/{id}/bambustudio
@@ -243,13 +245,30 @@ export async function POST(
     // and this write doesn't quietly mutate a tombstoned row and
     // return updated:true. Check matchedCount and 404 if the row was
     // removed in the race.
+    //
+    // GH #605 (codex P2, slicer-sync sweep): a TEMPLATE (≥1 live variant)
+    // must not re-acquire per-variant color/inventory, but the Bambu
+    // preset carries `filament_colour` — syncing it into a template would
+    // re-materialize `color` (the form-echo failure mode the PUT strips).
+    // Apply the SAME strip (shared helper; non-null only, explicit nulls
+    // pass), decided + written inside the per-id mutex the promotion paths
+    // lock (PUT review P1-c). `update` IS mongoUpdate.$set, so the in-place
+    // strip reaches the write.
+    let strippedTemplateFields: string[] = [];
     let updateRes: { matchedCount: number };
     try {
-      updateRes = await Filament.updateOne(
-        { _id: existing._id, _deletedAt: null },
-        mongoUpdate,
-        { runValidators: true, context: "query" },
-      );
+      updateRes = await runExclusive(filamentLockKey(existing._id), async () => {
+        strippedTemplateFields = await stripTemplateFieldsForWrite(
+          Filament,
+          existing._id,
+          update as Record<string, unknown>,
+        );
+        return await Filament.updateOne(
+          { _id: existing._id, _deletedAt: null },
+          mongoUpdate,
+          { runValidators: true, context: "query" },
+        );
+      });
     } catch (validationErr) {
       return errorResponseFromCaught(
         validationErr,
@@ -272,6 +291,11 @@ export async function POST(
       calibrationUnresolved: calibrationOutcome.unresolved || undefined,
       calibrationContext: calibrationOutcome.context || undefined,
       settingsAdded: settingsResult.added,
+      // GH #605: per-variant fields the template guard refused to apply —
+      // same reporting key the PUT uses, so clients can surface one warning.
+      ...(strippedTemplateFields.length > 0
+        ? { _strippedTemplateFields: strippedTemplateFields }
+        : {}),
     });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to sync Bambu Studio profile");

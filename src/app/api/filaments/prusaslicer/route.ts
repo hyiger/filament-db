@@ -197,7 +197,16 @@ export async function POST(request: NextRequest) {
         // — the export flattens a variant's inherited values through
         // resolveFilament, so re-importing must NOT pin them as local overrides
         // (that would sever GH #106 live inheritance). See src/lib/iniImportApply.ts.
-        const outcome = await upsertIniFilament(f);
+        const outcome = await upsertIniFilament(f, {
+          // GH #605: a name-matched TEMPLATE target had per-variant fields
+          // (color) stripped rather than re-materialized. Reported as a
+          // per-row note through the existing errors channel — the row
+          // itself still imported (matching the atlas importer's posture).
+          onTemplateFieldsStripped: (fields) =>
+            errors.push(
+              `${f.name}: skipped ${fields.join(", ")} — the local filament is a template (inventory and color live on its variants)`,
+            ),
+        });
         if (outcome === "created") created++;
         else updated++;
         names.push(f.name);

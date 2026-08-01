@@ -28,6 +28,8 @@
 
 import Filament from "@/models/Filament";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
+import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { INI_TOP_LEVEL_SETTING_KEYS } from "@/lib/parseIni";
 import { NEVER_BAGGED_KEYS } from "@/lib/slicerSettings";
@@ -283,6 +285,22 @@ async function buildIniUpdate(
 export type IniUpsertOutcome = "created" | "updated";
 
 /**
+ * GH #605 (codex P2, slicer-sync sweep): optional per-row reporting hooks.
+ * `onTemplateFieldsStripped` fires when the name-matched target was a
+ * TEMPLATE (≥1 live variant) and the section's per-variant fields (`color`
+ * — the INI's `filament_colour` — plus the rest of the shared
+ * TEMPLATE_STRIP_FIELDS) were stripped rather than re-materialized on it.
+ * The strip never fails the row (the rest of the section still applies);
+ * the routes surface the note through their per-row `errors` channel,
+ * matching the atlas importer's posture. A callback (not a changed return
+ * shape) so existing callers/tests of the "created"/"updated" outcome stay
+ * untouched.
+ */
+export interface IniUpsertOptions {
+  onTemplateFieldsStripped?: (fields: string[]) => void;
+}
+
+/**
  * GH #951 (Codex): drop the structured keys that also live in a top-level
  * `FilamentData` field from the raw INI `settings` bag. `parseIniFilaments`
  * dumps every `key=value` line into `settings`, so the bag shadows the
@@ -319,6 +337,7 @@ function stripStructuredSettings(collapsed: CollapsedFilamentData): CollapsedFil
  */
 export async function upsertIniFilament(
   section: CollapsedFilamentData,
+  options?: IniUpsertOptions,
 ): Promise<IniUpsertOutcome> {
   // Strip the settings-bag shadows of top-level fields up front so every write
   // path (update / resurrect / create / race) and both roots and variants see
@@ -354,15 +373,41 @@ export async function upsertIniFilament(
     .select(INI_INHERITANCE_PROJECTION)
     .lean();
   if (existingActive) {
-    const updated = await Filament.findOneAndUpdate(
-      // `name` re-checked so a concurrent rename in the read→write window
-      // misses here and falls through (rather than the by-id write reverting
-      // the rename via the `name` in `$set`). GH #951 (Codex).
-      { _id: existingActive._id, name, _deletedAt: null },
-      await buildIniUpdate(collapsed, existingActive),
-      { runValidators: true, context: "query", returnDocument: "after" },
+    const update = await buildIniUpdate(collapsed, existingActive);
+    // GH #605 (codex P2, slicer-sync sweep): the name-matched target may be a
+    // TEMPLATE (≥1 live variant) — strip the per-variant fields the section
+    // echoes (`color` from filament_colour; the shared TEMPLATE_STRIP_FIELDS)
+    // instead of re-materializing them, with the SAME semantics as the PUT
+    // (non-null only; a null passes — though INI can't express one for color:
+    // parseIni folds `filament_colour = nil` into its gray default).
+    // Decision + write share the per-id mutex the promotion paths lock (PUT
+    // review P1-c). The strip never fails the row; it's reported through the
+    // caller's hook only when the write actually landed (a rename race that
+    // misses the filter falls through to CREATE, where nothing was stripped
+    // from — phase 3 uses `collapsed`, not this $set body).
+    const { doc, stripped } = await runExclusive(
+      filamentLockKey(existingActive._id),
+      async () => {
+        const stripped = await stripTemplateFieldsForWrite(
+          Filament,
+          existingActive._id,
+          update.$set as Record<string, unknown>,
+        );
+        const doc = await Filament.findOneAndUpdate(
+          // `name` re-checked so a concurrent rename in the read→write window
+          // misses here and falls through (rather than the by-id write reverting
+          // the rename via the `name` in `$set`). GH #951 (Codex).
+          { _id: existingActive._id, name, _deletedAt: null },
+          update,
+          { runValidators: true, context: "query", returnDocument: "after" },
+        );
+        return { doc, stripped };
+      },
     );
-    if (updated) return "updated";
+    if (doc) {
+      if (stripped.length > 0) options?.onTemplateFieldsStripped?.(stripped);
+      return "updated";
+    }
     // Soft-deleted or renamed between read and write → fall through to phase 2/3.
   }
 
@@ -378,6 +423,12 @@ export async function upsertIniFilament(
     .lean();
   if (existingTrashed) {
     const update = await buildIniUpdate(collapsed, existingTrashed);
+    // GH #605: no template strip on the resurrect — a TRASHED doc cannot have
+    // live variants (soft-deleting a parent with variants is refused;
+    // restoring a variant under a trashed parent is refused; variant creation
+    // requires an ACTIVE parent), so the revived row is never a template at
+    // this write. Same reasoning as the atlas importer's resurrect path.
+    //
     // Splice the tombstone clear into the $set so the resurrect is one atomic
     // write; any $unset for stale variant overrides composes alongside.
     update.$set = {
@@ -410,13 +461,29 @@ export async function upsertIniFilament(
       .select(INI_INHERITANCE_PROJECTION)
       .lean();
     if (!racing) throw createErr;
-    const merged = await Filament.findOneAndUpdate(
-      // `name` re-checked for the same rename-race reason as phase 1.
-      { _id: racing._id, name, _deletedAt: null },
-      await buildIniUpdate(collapsed, racing),
-      { runValidators: true, context: "query", returnDocument: "after" },
+    // GH #605: the racing row is an ACTIVE existing doc — same template strip
+    // as phase 1 (a concurrent import may have landed a parent that already
+    // has variants).
+    const raceUpdate = await buildIniUpdate(collapsed, racing);
+    const { doc: merged, stripped } = await runExclusive(
+      filamentLockKey(racing._id),
+      async () => {
+        const stripped = await stripTemplateFieldsForWrite(
+          Filament,
+          racing._id,
+          raceUpdate.$set as Record<string, unknown>,
+        );
+        const doc = await Filament.findOneAndUpdate(
+          // `name` re-checked for the same rename-race reason as phase 1.
+          { _id: racing._id, name, _deletedAt: null },
+          raceUpdate,
+          { runValidators: true, context: "query", returnDocument: "after" },
+        );
+        return { doc, stripped };
+      },
     );
     if (!merged) throw createErr;
+    if (stripped.length > 0) options?.onTemplateFieldsStripped?.(stripped);
     return "updated";
   }
 }

@@ -79,6 +79,139 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
     expect(await Filament.findOne({ name: "Ghost PLA" })).toBeNull();
   });
 
+  /** Blind the first `nulls` findOne calls (returning a null .select().lean()
+   *  chain) so the upsert takes the phase-3 create path even though an active
+   *  row exists; later calls hit the real model. Simulates "the row appeared
+   *  between our phase reads and our create". */
+  function blindFindOneCalls(nulls: number) {
+    const orig = Filament.findOne.bind(Filament);
+    let calls = 0;
+    vi.spyOn(Filament, "findOne").mockImplementation((...args: unknown[]) => {
+      calls += 1;
+      if (calls <= nulls) {
+        return { select: () => ({ lean: async () => null }) };
+      }
+      return orig(...args);
+    });
+  }
+
+  it("rethrows the E11000 when the racing row is renamed before the merge write (merged=null)", async () => {
+    await Filament.create({ name: "MergeMiss PLA", vendor: "Acme", type: "PLA" });
+    // Phases 1+2 see nothing; the create loses the (simulated) race; the
+    // racing lookup (call 3) finds the real row but renames it mid-flight so
+    // the name-pinned merge write misses → the original E11000 propagates.
+    const orig = Filament.findOne.bind(Filament);
+    let calls = 0;
+    vi.spyOn(Filament, "findOne").mockImplementation((...args: unknown[]) => {
+      calls += 1;
+      if (calls <= 2) return { select: () => ({ lean: async () => null }) };
+      const query = orig(...args);
+      return {
+        select: () => ({
+          lean: async () => {
+            const snap = await query.lean();
+            if (snap) {
+              await Filament.updateOne({ _id: snap._id }, { $set: { name: "MergeMiss Renamed" } });
+            }
+            return snap;
+          },
+        }),
+      };
+    });
+    vi.spyOn(Filament, "create").mockImplementation(async () => {
+      throw Object.assign(new Error("E11000 duplicate key"), { code: 11000 });
+    });
+
+    await expect(upsertIniFilament(section("MergeMiss PLA"))).rejects.toMatchObject({
+      code: 11000,
+    });
+    // The renamed row was not clobbered by the section (restore the spies
+    // first — the blinded findOne fake doesn't implement plain .lean()).
+    vi.restoreAllMocks();
+    const renamed = await Filament.findOne({ name: "MergeMiss Renamed" }).lean();
+    expect(renamed.cost ?? null).toBeNull();
+  });
+
+  // ── GH #605: the create-race merge path applies the same template strip as
+  //    phase 1 — a concurrent import may have landed a parent that already has
+  //    variants by the time the E11000 recovery re-targets it. ───────────────
+
+  it("strips template fields on the create-race merge target and reports via the hook", async () => {
+    const parent = await Filament.create({
+      name: "Race Tmpl PLA",
+      vendor: "Acme",
+      type: "PLA",
+      color: null,
+    });
+    await Filament.create({
+      name: "Race Tmpl PLA — Red",
+      vendor: "Acme",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+    });
+    // Simulate the race: the template "appears" only at the racing lookup.
+    blindFindOneCalls(2);
+    vi.spyOn(Filament, "create").mockImplementation(async () => {
+      throw Object.assign(new Error("E11000 duplicate key"), { code: 11000 });
+    });
+
+    const strips: string[][] = [];
+    const outcome = await upsertIniFilament(
+      { ...section("Race Tmpl PLA"), color: "#00FF00" },
+      { onTemplateFieldsStripped: (fields) => strips.push(fields) },
+    );
+    expect(outcome).toBe("updated");
+    expect(strips).toEqual([["color"]]);
+
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color ?? null).toBeNull(); // template stayed colorless
+    expect(fresh.cost).toBe(25); // the rest of the section still applied
+  });
+
+  // ── Defensive guards on a section WITHOUT a settings bag (only reachable
+  //    for direct callers — parseIni always materialises `settings`). ────────
+
+  it("tolerates a section with no settings bag on a ROOT target (mergeSettingsDotKeys pass-through)", async () => {
+    const existing = await Filament.create({
+      name: "NoBag PLA",
+      vendor: "Old",
+      type: "PLA",
+      settings: { keep_me: "v" },
+    });
+    const { settings: _drop, ...noBag } = section("NoBag PLA");
+    void _drop;
+    const outcome = await upsertIniFilament({ ...noBag, vendor: "New" } as CollapsedFilamentData);
+    expect(outcome).toBe("updated");
+    const fresh = await Filament.findById(existing._id).lean();
+    expect(fresh.vendor).toBe("New");
+    expect(fresh.settings.keep_me).toBe("v"); // stored bag untouched
+  });
+
+  it("tolerates a section with no settings bag on a VARIANT target (self-heal no-op)", async () => {
+    const parent = await Filament.create({
+      name: "NoBag Parent",
+      vendor: "Acme",
+      type: "PLA",
+      settings: { cooling: "1" },
+    });
+    const variant = await Filament.create({
+      name: "NoBag Variant",
+      vendor: "Acme",
+      type: "PLA",
+      color: "#cc0000",
+      parentId: parent._id,
+      settings: { cooling: "0" },
+    });
+    const outcome = await upsertIniFilament({
+      name: "NoBag Variant",
+      inherits: null,
+    } as unknown as CollapsedFilamentData);
+    expect(outcome).toBe("updated");
+    const fresh = await Filament.findById(variant._id).lean();
+    expect(fresh.settings.cooling).toBe("0"); // no incoming bag → nothing healed
+  });
+
   // ── GH #951 (Codex R2-C): a concurrent rename in the read→write window must
   //    not be reverted / mis-targeted; the `name` in each by-_id filter makes
   //    the write miss and fall through to create a fresh row. ────────────────

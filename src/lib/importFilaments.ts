@@ -4,6 +4,7 @@ import Filament from "@/models/Filament";
 import { unsanitizeCsvCell } from "@/lib/csvWriter";
 import { hasVariants } from "@/lib/resolveFilament";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
+import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
 
 export interface ImportRow {
   name?: string;
@@ -263,6 +264,17 @@ export interface ImportResult {
   updated: number;
   skipped: number;
   skippedRows: SkippedRow[];
+  /**
+   * GH #605 (codex P2, importer sweep): per-row NON-FATAL notes — content a
+   * row's update refused to apply while the row itself still imported. Today
+   * the only producer is the template strip on a name-matched EXISTING row
+   * (the shared TEMPLATE_STRIP_FIELDS: a CSV echoing the promoted-away
+   * color/colorName back onto a template). Distinct from `skippedRows`
+   * (whole-row failures, counted in `skipped`); same optional shape as the
+   * `errors` channel the atlas / INI / OpenPrintTag bulk importers surface.
+   * Present only when non-empty.
+   */
+  errors?: string[];
 }
 
 /**
@@ -630,6 +642,11 @@ export async function upsertImportRows(
   let updated = 0;
   let skipped = 0;
   const skippedRows: SkippedRow[] = [];
+  // GH #605: per-row non-fatal notes (see ImportResult.errors). Collected
+  // with their row number so the final report can be sorted back into
+  // original-row order despite the two-pass driver visiting rows out of
+  // order — same treatment skippedRows gets.
+  const noteRows: { row: number; note: string }[] = [];
 
   // Batch-load all existing filaments by name to avoid N+1 queries.
   // GH #379: also include every Parent value, because a variant row's
@@ -958,14 +975,44 @@ export async function upsertImportRows(
         }
       }
       update.$set = $set;
+      // GH #605 (codex P2, importer sweep): a name-matched EXISTING row may
+      // be a TEMPLATE (≥1 live variant) — a CSV row (like a stale edit form
+      // or a slicer preset) echoes the promoted-away color/colorName back
+      // verbatim, and blindly $set-ing them would re-materialize per-variant
+      // state on the template. Strip the shared TEMPLATE_STRIP_FIELDS with
+      // the PUT's semantics (non-null only; an explicit null — an EMPTY
+      // Color Name cell — still passes as legitimate cleanup). Decision +
+      // write share the per-filament mutex the promotion paths lock (PUT
+      // review P1-c): the round-3 parent-gate lock only covers the
+      // create/resurrect branch below, so this plain-update path needs its
+      // own. The strip never fails the row (atlas posture) — it's reported
+      // as a per-row note on the `errors` channel.
+      //
       // GH #276: runValidators so a CSV updating an existing filament
       // (e.g. `cost = -50`) can't bypass the schema validators — the
       // sibling resurrect path below was already hardened the same way.
-      await Filament.updateOne(
-        { _id: existing._id },
-        update,
-        { runValidators: true, context: "query" },
+      const stripped = await runExclusive(
+        filamentLockKey(existing._id),
+        async () => {
+          const strippedFields = await stripTemplateFieldsForWrite(
+            Filament,
+            existing._id,
+            $set,
+          );
+          await Filament.updateOne(
+            { _id: existing._id },
+            update,
+            { runValidators: true, context: "query" },
+          );
+          return strippedFields;
+        },
       );
+      if (stripped.length > 0) {
+        noteRows.push({
+          row: rowIdx + 2,
+          note: `Row ${rowIdx + 2} "${row.name}": skipped ${stripped.join(", ")} — the local filament is a template (inventory and color live on its variants)`,
+        });
+      }
       updated++;
     } else {
       // For creates/resurrections, include temperatures as a nested object
@@ -1166,6 +1213,16 @@ export async function upsertImportRows(
     if (trimmedParentName(rows[i])) await processRowSafe(i);
   }
   skippedRows.sort((a, b) => a.row - b.row);
+  noteRows.sort((a, b) => a.row - b.row);
 
-  return { total: rows.length, created, updated, skipped, skippedRows };
+  return {
+    total: rows.length,
+    created,
+    updated,
+    skipped,
+    skippedRows,
+    // Optional-when-empty, matching the errors shape the sibling bulk
+    // importers (atlas / INI / OpenPrintTag) return.
+    ...(noteRows.length > 0 ? { errors: noteRows.map((n) => n.note) } : {}),
+  };
 }

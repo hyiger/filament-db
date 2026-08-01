@@ -255,9 +255,12 @@ export async function POST(request: NextRequest) {
           // template holds no inventory (`spools`, `totalWeight`, the
           // `lowStockThreshold` that alarms on it) and no color identity
           // (`color`, `colorName`). PUT-parity rule: whatever the PUT
-          // handler strips on templates ([id]/route.ts
-          // TEMPLATE_STRIP_FIELDS), this path drops — keep the two lists in
-          // lockstep. Drop only the offending keys (the rest of the update
+          // handler strips on templates (the shared TEMPLATE_STRIP_FIELDS
+          // in src/lib/templateStrip.ts, also used by every slicer sync
+          // route), this path drops — keep this inline mirror in lockstep
+          // (it stays hand-rolled for its per-field human-readable notes
+          // and the extra `spools` guard the shared list doesn't carry).
+          // Drop only the offending keys (the rest of the update
           // still applies, and the local state stays untouched) and report
           // it per-row; an import can't confirm the alternative (a
           // promotion). Explicit remote nulls still apply (clearing a

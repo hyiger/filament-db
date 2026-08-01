@@ -17,6 +17,8 @@ import {
   createVariantGated,
   promotionRequired409Body,
 } from "@/lib/createVariantGated";
+import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * POST /api/openprinttag/import
@@ -208,16 +210,43 @@ export async function POST(request: NextRequest) {
             conditionalSet.shoreHardnessD = conditionalDefaults.shoreHardnessD;
 
           if (Object.keys(conditionalSet).length > 0) {
-            // GH #632: runValidators so the GH #503 hex validators on
-            // color/secondaryColors (and the numeric range validators)
-            // fire on this update path too — bare findByIdAndUpdate
-            // skips schema validators, which let a malformed color_rgba
-            // from a community YAML persist an invalid hex on re-import.
-            await Filament.findByIdAndUpdate(
-              row._id,
-              { $set: conditionalSet },
-              { runValidators: true, context: "query" },
-            );
+            // GH #605 (codex P2, importer sweep): the existing row may be a
+            // TEMPLATE (≥1 live variant). Its color was moved onto the
+            // variants at promotion, but a LEGACY template can still carry
+            // the '#808080' sentinel — the `row.color === "#808080"` branch
+            // above would then backfill the OPT color straight onto it,
+            // re-materializing per-variant state the re-sync flow already
+            // refuses (diffOptFields' excludeColor). Strip the shared
+            // TEMPLATE_STRIP_FIELDS (of which only `color` can appear in
+            // `conditionalSet`) with the PUT's semantics: non-null only, so
+            // the coextruded explicit `color: null` clear still passes.
+            // Decision + write share the per-filament mutex the promotion
+            // paths lock (this route's bulk mode holds no other lock).
+            // The strip never fails the row (atlas posture) — it's reported
+            // as a per-row note on the errors channel.
+            await runExclusive(filamentLockKey(row._id), async () => {
+              const stripped = await stripTemplateFieldsForWrite(
+                Filament,
+                row._id,
+                conditionalSet,
+              );
+              if (stripped.length > 0) {
+                errors.push(
+                  `${material.name}: skipped ${stripped.join(", ")} — the local filament is a template (inventory and color live on its variants)`,
+                );
+              }
+              if (Object.keys(conditionalSet).length === 0) return;
+              // GH #632: runValidators so the GH #503 hex validators on
+              // color/secondaryColors (and the numeric range validators)
+              // fire on this update path too — bare findByIdAndUpdate
+              // skips schema validators, which let a malformed color_rgba
+              // from a community YAML persist an invalid hex on re-import.
+              await Filament.findByIdAndUpdate(
+                row._id,
+                { $set: conditionalSet },
+                { runValidators: true, context: "query" },
+              );
+            });
           }
         };
 

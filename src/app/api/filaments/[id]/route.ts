@@ -17,6 +17,7 @@ import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { resolveSyncBackColor, isMachineDerivedPerNozzleCondition } from "@/lib/prusaSlicerBundle";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
 import { escapeRegex } from "@/lib/matchFilament";
+import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
 import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import {
   isInvertedNozzleRange,
@@ -469,23 +470,14 @@ export async function PUT(
     // promotion lands first (and this re-check strips the write).
 
     // The per-variant fields a template must not (re-)acquire — inventory
-    // plus color identity (codex round 4, F3). Atlas imports drop the same
-    // set (import-atlas/route.ts) — keep the two lists in lockstep.
-    const TEMPLATE_STRIP_FIELDS = [
-      "totalWeight",
-      "color",
-      "colorName",
-      "lowStockThreshold",
-    ] as const;
+    // plus color identity (codex round 4, F3) — live in the shared
+    // TEMPLATE_STRIP_FIELDS (src/lib/templateStrip.ts), used verbatim by the
+    // slicer sync-back routes and both INI bulk importers; atlas imports drop
+    // the same set with their own per-field notes (import-atlas/route.ts) —
+    // keep that mirror in lockstep with the shared list.
     let strippedTemplateFields: string[] = [];
     const filament = await runExclusive(filamentLockKey(id), async () => {
-      const offending = TEMPLATE_STRIP_FIELDS.filter((f) => body[f] != null);
-      if (offending.length > 0 && (await hasVariants(Filament, id))) {
-        for (const f of offending) {
-          delete body[f];
-        }
-        strippedTemplateFields = offending;
-      }
+      strippedTemplateFields = await stripTemplateFieldsForWrite(Filament, id, body);
       return await Filament.findOneAndUpdate(
         { _id: id, _deletedAt: null },
         body,
@@ -1186,12 +1178,44 @@ export async function POST(
     // regular PUT would have rejected. `context: "query"` matches the
     // Bambu sync route (Codex P2 on #387); the shared helper maps a
     // ValidationError to a JSON 400 rather than a generic 500.
+    //
+    // GH #605 (codex P2, slicer-sync sweep): a TEMPLATE (≥1 live variant)
+    // must not re-acquire per-variant color/inventory — but the preset
+    // echoes `filament_colour` back on every sync, so a template target
+    // would re-materialize `color` here (the exact form-echo failure mode
+    // the PUT strips). Apply the SAME strip (shared helper; non-null only,
+    // explicit nulls pass), decided + written inside the per-id mutex the
+    // promotion paths lock, so a concurrent first-variant promotion can't
+    // land between the check and this write (PUT review P1-c). `color` is
+    // not inheritable, so the split above passed it into `$set` verbatim —
+    // stripping the $set body covers both the split and verbatim shapes.
+    let strippedTemplateFields: string[] = [];
     try {
-      await Filament.findByIdAndUpdate(
-        filament._id,
-        mongoUpdate,
-        { runValidators: true, context: "query" },
-      );
+      await runExclusive(filamentLockKey(filament._id), async () => {
+        const setBody = mongoUpdate.$set as Record<string, unknown>;
+        strippedTemplateFields = await stripTemplateFieldsForWrite(
+          Filament,
+          filament._id,
+          setBody,
+        );
+        // The GH #885 `colorName: null` clear is DERIVED from the color
+        // write (slicers send only a hex) — when the color write is
+        // stripped, its derivation goes with it, or a template holding a
+        // legacy color/colorName pair would keep the color but lose the
+        // name. A template with no legacy color has nothing to clear, so
+        // dropping the null is lossless there too. (This is narrower than
+        // the explicit-null pass-through: that covers CLIENT nulls, and
+        // this null is one the route itself synthesized from the stripped
+        // color.)
+        if (strippedTemplateFields.includes("color") && setBody.colorName === null) {
+          delete setBody.colorName;
+        }
+        await Filament.findByIdAndUpdate(
+          filament._id,
+          mongoUpdate,
+          { runValidators: true, context: "query" },
+        );
+      });
     } catch (validationErr) {
       // #867 Phase 2: a rename that lost a TOCTOU race against a concurrent rename
       // to the same name slips past the pre-check and surfaces here as a duplicate-
@@ -1269,6 +1293,11 @@ export async function POST(
       // returns 409 above without mutating, so it never reaches here.
       matchedBy,
       matchedName: filament.name,
+      // GH #605: per-variant fields the template guard refused to apply —
+      // same reporting key the PUT uses, so clients can surface one warning.
+      ...(strippedTemplateFields.length > 0
+        ? { _strippedTemplateFields: strippedTemplateFields }
+        : {}),
     });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to sync filament");

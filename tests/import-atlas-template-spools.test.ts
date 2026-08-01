@@ -170,7 +170,7 @@ describe("POST /api/filaments/import-atlas — template spool guard (GH #605)", 
         density: 1.07,
         // Per-variant identity/alarm state — templates are colorless and
         // inventory-free, so none of these may land (PUT-parity with the
-        // TEMPLATE_STRIP_FIELDS list in [id]/route.ts).
+        // shared TEMPLATE_STRIP_FIELDS list in src/lib/templateStrip.ts).
         color: "#123456",
         colorName: "Remote Blue",
         lowStockThreshold: 250,
