@@ -25,6 +25,7 @@ import FinishChip from "@/components/FinishChip";
 import { deriveFinish } from "@/lib/filamentFinish";
 import { deriveArrangement } from "@/lib/filamentColors";
 import { parentPromotionState } from "@/lib/promoteParent";
+import { decideSpoolDeepLink, healedSpoolDeepLinkHref } from "@/lib/spoolDeepLink";
 import type { FilamentDetail, FilamentCalibration } from "@/types/filament";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useDateFormat } from "@/hooks/useDateFormat";
@@ -368,11 +369,46 @@ function FilamentDetail() {
   // if `?spool=<id>` is in the URL and matches a spool, scroll to it and
   // highlight it briefly. The ref makes this fire once (not on every later
   // spool edit that re-sets `filament`).
+  //
+  // Round 7 P2 — SELF-HEALING stale labels: a printed QR encodes
+  // `/filaments/<id>?spool=<spoolId>` permanently, but a spool can move to a
+  // different document while its subdoc id stays valid (a GH #605 parent
+  // promotion preserves spool _ids verbatim today; any future move would
+  // too). Printed history can't be reprinted, so when the addressed filament
+  // doesn't carry the spool we resolve the TRUE owner globally by spool id
+  // (GET /api/spools/{spoolId}) and router.replace to the owner's page with
+  // the full query string intact — the keyed remount then runs this effect
+  // again on the owner and highlights the spool. This heals ALL stale
+  // labels, not just promotion-moved ones. A spool that exists nowhere keeps
+  // the pre-existing quiet posture (stay on the addressed page). Decision
+  // logic is pure + unit-tested in src/lib/spoolDeepLink.ts.
   useEffect(() => {
     if (deepLinkHandledRef.current || !filament || typeof window === "undefined") return;
     deepLinkHandledRef.current = true;
-    const spoolId = new URLSearchParams(window.location.search).get("spool");
-    if (!spoolId || !filament.spools?.some((s) => String(s._id) === spoolId)) return;
+    const decision = decideSpoolDeepLink(
+      window.location.search,
+      (filament.spools ?? []).map((s) => String(s._id)),
+    );
+    if (decision.action === "none") return;
+    if (decision.action === "resolve") {
+      let cancelled = false;
+      fetch(`/api/spools/${encodeURIComponent(decision.spoolId)}`)
+        .then((r) => (r.ok ? r.json() : null))
+        .then((data) => {
+          if (cancelled || !data?.filament?._id) return;
+          const href = healedSpoolDeepLinkHref(
+            String(params.id),
+            String(data.filament._id),
+            window.location.search,
+          );
+          if (href) router.replace(href);
+        })
+        .catch(() => {
+          /* offline / resolver error — keep the addressed page as-is */
+        });
+      return () => { cancelled = true; };
+    }
+    const spoolId = decision.spoolId;
     // Wait a frame so the SpoolCard element is in the DOM, then scroll/flag.
     const raf = requestAnimationFrame(() => {
       document.getElementById(`spool-${spoolId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -380,7 +416,7 @@ function FilamentDetail() {
     });
     const clear = setTimeout(() => setHighlightSpoolId(null), 2600);
     return () => { cancelAnimationFrame(raf); clearTimeout(clear); };
-  }, [filament]);
+  }, [filament, params.id, router]);
 
   // Load locations once so the spool cards can show a picker without each
   // spool re-fetching. Small list — OK to keep in state.

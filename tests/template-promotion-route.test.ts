@@ -212,11 +212,16 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
       jsonReq(variantBody(parent._id, { name: "Threshold-Only PLA — Red" })),
     );
     expect(res.status).toBe(201);
-    // Exactly the requested variant — no promoted sibling was spawned; the
-    // threshold stays where it was (nothing moved, nothing was gated).
+    // Exactly the requested variant — no promoted sibling was spawned.
     expect(await Filament.countDocuments({ parentId: parent._id })).toBe(1);
+    // Round 7 P2: the parent is a template now, and a threshold there is
+    // dead config (form hides it, PUT strips it, the dashboard could still
+    // evaluate it) — the ungated first-variant creation clears it. It does
+    // NOT move to the variant: the variant is a new filament, not a copy.
     const fresh = await Filament.findById(parent._id).lean();
-    expect(fresh.lowStockThreshold).toBe(150);
+    expect(fresh.lowStockThreshold).toBeNull();
+    const variant = await Filament.findOne({ parentId: parent._id }).lean();
+    expect(variant.lowStockThreshold ?? null).toBeNull();
   });
 
   it("first variant of a CLEAN parent (color null, no spools) needs no flag → 201, no promotion copy", async () => {

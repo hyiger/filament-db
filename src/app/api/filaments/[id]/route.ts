@@ -10,6 +10,7 @@ import {
   gateFirstVariantAdoption,
   promotionRequired409Body,
 } from "@/lib/createVariantGated";
+import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest, assertSafeUpdateBody } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
@@ -418,6 +419,13 @@ export async function PUT(
     // promote the parent and THEN 404, an irreversible side effect on an
     // error response. (`stored` is the pre-lock snapshot; the write's own
     // `_deletedAt: null` filter still owns the final answer.)
+    // Round 7 P2: when the adoption below mints the first variant of a
+    // threshold-ONLY parent (nothing gates, so no 409/promotion), the
+    // parent's lowStockThreshold becomes dead config — the gate reports it
+    // and THIS route clears it, but only AFTER the write section succeeds
+    // (parent state change last: an error response, a 404, or the F7 cycle
+    // rollback below must leave the parent untouched).
+    let clearParentThresholdAfterWrite = false;
     if (stored && body.parentId && reparenting) {
       // Codex round 6, F1: dry-run-validate the target AS IT WOULD BE AFTER
       // this PUT before the gate can promote the parent. The write below
@@ -456,6 +464,7 @@ export async function PUT(
       if (adoption.outcome === "promotion_required") {
         return NextResponse.json(promotionRequired409Body(adoption), { status: 409 });
       }
+      clearParentThresholdAfterWrite = adoption.clearOrphanedThreshold;
     }
 
     // GH #605: a filament with ≥1 live variant is a TEMPLATE and must not
@@ -558,6 +567,13 @@ export async function PUT(
           409,
         );
       }
+    }
+
+    // Round 7 P2: the adoption write landed (and the cycle re-assert above
+    // didn't roll it back), so the threshold-only parent's first variant now
+    // exists — clear the parent's dead threshold as the last step.
+    if (clearParentThresholdAfterWrite) {
+      await clearOrphanedParentThreshold(Filament, body.parentId);
     }
 
     return NextResponse.json(

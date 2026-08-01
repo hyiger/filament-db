@@ -627,4 +627,118 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
     const fresh = await Filament.findById(f._id).lean();
     expect(fresh._deletedAt).toBeNull();
   });
+
+  // ── round 7 P2: threshold-only parents on the adoption paths ────────────
+
+  async function seedThresholdOnlyParent(name: string) {
+    return Filament.create({
+      name,
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      lowStockThreshold: 175,
+    });
+  }
+
+  it("PUT re-parent onto a threshold-only parent: no 409, and the parent's dead threshold is cleared AFTER the write", async () => {
+    const parent = await seedThresholdOnlyParent("Threshold Adoption Parent");
+    const standalone = await Filament.create({
+      name: "Adoptee Red",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+    });
+
+    const res = await putFilament(
+      jsonReq(
+        `http://localhost/api/filaments/${standalone._id}`,
+        { name: "Adoptee Red", color: "#FF0000", parentId: String(parent._id) },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(standalone._id) }) },
+    );
+
+    expect(res.status).toBe(200);
+    const freshTarget = await Filament.findById(standalone._id).lean();
+    expect(String(freshTarget.parentId)).toBe(String(parent._id));
+    // The parent is a template now — its threshold was dead config (form
+    // hides it, PUT strips it) and got cleared; nothing else changed and no
+    // promotion copy was minted.
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.lowStockThreshold).toBeNull();
+    expect(await Filament.countDocuments({ parentId: parent._id, _deletedAt: null })).toBe(1);
+    // Not moved onto the adopted variant either.
+    expect(freshTarget.lowStockThreshold ?? null).toBeNull();
+  });
+
+  it("a FAILED re-parent PUT (schema-invalid body) leaves the threshold-only parent untouched", async () => {
+    const parent = await seedThresholdOnlyParent("Threshold Untouched Parent");
+    const standalone = await Filament.create({
+      name: "Invalid Adoptee",
+      vendor: "V",
+      type: "PLA",
+    });
+
+    const res = await putFilament(
+      jsonReq(
+        `http://localhost/api/filaments/${standalone._id}`,
+        { name: "Invalid Adoptee", color: "not-a-hex", parentId: String(parent._id) },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(standalone._id) }) },
+    );
+
+    expect(res.status).toBe(400);
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.lowStockThreshold).toBe(175);
+    const freshTarget = await Filament.findById(standalone._id).lean();
+    expect(freshTarget.parentId ?? null).toBeNull();
+  });
+
+  it("restore reviving the first variant under a threshold-only parent clears the dead threshold (bare POST)", async () => {
+    const parent = await seedThresholdOnlyParent("Threshold Restore Parent");
+    const trashed = await Filament.create({
+      name: "Threshold Restore Parent — Red",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+      _deletedAt: new Date(),
+    });
+
+    const res = await restoreFilament(restoreReq(String(trashed._id)), {
+      params: Promise.resolve({ id: String(trashed._id) }),
+    });
+    expect(res.status).toBe(200);
+    const fresh = await Filament.findById(trashed._id).lean();
+    expect(fresh._deletedAt).toBeNull();
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.lowStockThreshold).toBeNull();
+    // No promotion copy — nothing gated, nothing moved.
+    expect(await Filament.countDocuments({ parentId: parent._id, _deletedAt: null })).toBe(1);
+  });
+
+  it("restore under a threshold-carrying template that still HAS a live variant leaves it alone", async () => {
+    const parent = await seedThresholdOnlyParent("Threshold Populated Template");
+    await Filament.create({
+      name: "Threshold Populated Template — Live",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+    const trashed = await Filament.create({
+      name: "Threshold Populated Template — Trashed",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      _deletedAt: new Date(),
+    });
+
+    const res = await restoreFilament(restoreReq(String(trashed._id)), {
+      params: Promise.resolve({ id: String(trashed._id) }),
+    });
+    expect(res.status).toBe(200);
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.lowStockThreshold).toBe(175);
+  });
 });

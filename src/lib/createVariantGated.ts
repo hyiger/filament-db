@@ -41,6 +41,8 @@ import {
   promotionVariantBaseName,
   resolvePromotionVariantName,
   performParentPromotion,
+  orphansThresholdOnFirstVariant,
+  clearOrphanedParentThreshold,
 } from "@/lib/promoteParent";
 // This module is server-only (imported by API routes exclusively), so it can
 // carry the model imports that promoteParent.ts — imported by client
@@ -127,10 +129,27 @@ async function gateAndPromoteInLock(
 ): Promise<
   | ({ kind: "required" } & PromotionRequiredInfo)
   | { kind: "aborted"; abort: { outcome: "name_taken"; name: string } }
-  | { kind: "ready" }
+  | { kind: "ready"; clearOrphanedThreshold: boolean }
 > {
   const promoState = parentPromotionState(parent);
-  if (promoState.needed && !(await checkHasVariants(FilamentModel, String(parent._id)))) {
+  // Round 7 P2: a threshold-ONLY parent (threshold set, nothing that gates)
+  // still needs the first-variant check — not to gate (owner decision: no
+  // confirmation for a promotion that moves nothing) but to flag the
+  // threshold as orphaned so the caller clears it AFTER its variant write.
+  const orphansThreshold = orphansThresholdOnFirstVariant(parent);
+  if (
+    (promoState.needed || orphansThreshold) &&
+    !(await checkHasVariants(FilamentModel, String(parent._id)))
+  ) {
+    if (!promoState.needed) {
+      // Ungated first-variant creation on a threshold-only parent: proceed
+      // without any promotion, but tell the caller the parent's threshold
+      // becomes dead config the moment its variant exists (the form hides
+      // it, the PUT strips it, the dashboard could evaluate it against a
+      // template). The clear itself is the CALLER's last step — parent
+      // state change last, consistent with the crash posture.
+      return { kind: "ready", clearOrphanedThreshold: true };
+    }
     if (!promoteParent) {
       const variantName = await resolvePromotionVariantName(
         FilamentModel,
@@ -151,12 +170,14 @@ async function gateAndPromoteInLock(
         return { kind: "aborted", abort };
       }
     }
+    // A CARRYING promotion moves the threshold WITH the inventory
+    // (performParentPromotion) — nothing is orphaned on this path.
     await performParentPromotion(FilamentModel, parent, {
       alsoTakenNames: alsoTaken,
       externalRefs: EXTERNAL_REFS,
     });
   }
-  return { kind: "ready" };
+  return { kind: "ready", clearOrphanedThreshold: false };
 }
 
 /**
@@ -243,6 +264,13 @@ export async function createVariantGated(
     }
 
     const filament = await FilamentModel.create(body);
+    // Round 7 P2: the ungated first variant of a threshold-only parent just
+    // came alive — the parent's threshold is now dead config; clear it AFTER
+    // the create (parent state change last: a crash before this leaves a
+    // harmless legacy value, never a variant-less parent without its alarm).
+    if (gate.clearOrphanedThreshold) {
+      await clearOrphanedParentThreshold(FilamentModel, parent._id);
+    }
     return { outcome: "created", filament };
   });
 }
@@ -256,8 +284,16 @@ export type FirstVariantAdoptionResult =
    *  `promotionRequired409Body(info)`. Nothing written. */
   | ({ outcome: "promotion_required" } & PromotionRequiredInfo)
   /** Safe to proceed (no promotion was due, or the confirmed promotion ran).
-   *  When `onReady` was supplied it has already executed, in-lock. */
-  | { outcome: "ready" };
+   *  When `onReady` was supplied it has already executed, in-lock.
+   *
+   *  Round 7 P2 — `clearOrphanedThreshold`: the adoption mints the first
+   *  variant of a threshold-ONLY parent, and the gate could NOT clear the
+   *  now-dead threshold itself because the adoption write is the CALLER's
+   *  (no `onReady`). The caller MUST call `clearOrphanedParentThreshold`
+   *  after its own write succeeds — and skip it when that write fails or is
+   *  rolled back (parent state change last). Always `false` when `onReady`
+   *  was supplied: the gate then clears in-lock right after it. */
+  | { outcome: "ready"; clearOrphanedThreshold: boolean };
 
 /**
  * ADOPTION gate (codex round 4, F2/F6): an EXISTING document is about to
@@ -328,7 +364,17 @@ export async function gateFirstVariantAdoption(
     // gate.kind === "aborted" is unreachable without a beforePromote hook.
     if (opts.onReady) {
       await opts.onReady();
+      // Round 7 P2: the adoption write just ran (in-lock), so the first
+      // variant of a threshold-only parent now exists — clear the parent's
+      // dead threshold last, same posture as the create path.
+      if (gate.kind === "ready" && gate.clearOrphanedThreshold) {
+        await clearOrphanedParentThreshold(FilamentModel, parentKey);
+      }
+      return { outcome: "ready", clearOrphanedThreshold: false };
     }
-    return { outcome: "ready" };
+    return {
+      outcome: "ready",
+      clearOrphanedThreshold: gate.kind === "ready" && gate.clearOrphanedThreshold,
+    };
   });
 }

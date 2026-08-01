@@ -314,7 +314,7 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
         lockedDuringReady = lockedKeyCount();
       },
     });
-    expect(result).toEqual({ outcome: "ready" });
+    expect(result).toEqual({ outcome: "ready", clearOrphanedThreshold: false });
     expect(lockedDuringReady).toBe(1);
     expect(lockedKeyCount()).toBe(0); // drained after settlement
 
@@ -336,7 +336,7 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
       promoteParent: true,
       adoptedName: "Gated Parent — Original",
     });
-    expect(result).toEqual({ outcome: "ready" });
+    expect(result).toEqual({ outcome: "ready", clearOrphanedThreshold: false });
     const promoted = await Filament.findOne({ name: "Gated Parent — Original (2)" }).lean();
     expect(promoted).toBeTruthy();
     expect(promoted.color).toBe("#336699");
@@ -356,7 +356,7 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
         readyRan = true;
       },
     });
-    expect(result).toEqual({ outcome: "ready" });
+    expect(result).toEqual({ outcome: "ready", clearOrphanedThreshold: false });
     expect(readyRan).toBe(true);
     expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
   });
@@ -372,7 +372,7 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
     const result = await gateFirstVariantAdoption(Filament, parent._id, {
       promoteParent: false,
     });
-    expect(result).toEqual({ outcome: "ready" });
+    expect(result).toEqual({ outcome: "ready", clearOrphanedThreshold: false });
     // The legacy carrying state stays put — no silent move.
     const fresh = await Filament.findById(parent._id).lean();
     expect(fresh.color).toBe("#336699");
@@ -399,7 +399,7 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
       promoteParent: false,
       checkHasVariants: async () => true,
     });
-    expect(result).toEqual({ outcome: "ready" });
+    expect(result).toEqual({ outcome: "ready", clearOrphanedThreshold: false });
   });
 
   it("adoption: serializes on the parent's keyed mutex like the creation gate", async () => {
@@ -430,5 +430,175 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
     expect(result.outcome).toBe("promotion_required");
     expect(order).toEqual(["holder", "gate"]);
     expect(lockedKeyCount()).toBe(0);
+  });
+
+  // ── round 7 P2: orphaned lowStockThreshold on ungated first variants ────
+
+  async function seedThresholdOnlyParent(name = "Threshold Parent") {
+    return Filament.create({
+      name,
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      lowStockThreshold: 200,
+    });
+  }
+
+  it("threshold-only parent: ungated first-variant CREATE clears the parent's dead threshold (variant gets none)", async () => {
+    const parent = await seedThresholdOnlyParent();
+    const result = await createVariantGated(
+      Filament,
+      parent._id,
+      { name: "Threshold Parent — Red", vendor: "V", type: "PLA", parentId: String(parent._id) },
+      false, // no confirmation needed — nothing gates
+    );
+    expect(result.outcome).toBe("created");
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBeNull();
+    // The threshold is NOT moved to the variant — it's a new filament, not
+    // a copy — and no promotion sibling was spawned.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const created = (result as any).filament;
+    expect(created.lowStockThreshold ?? null).toBeNull();
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(1);
+  });
+
+  it("threshold-only parent: a FAILED create leaves the threshold intact (parent state change last)", async () => {
+    const parent = await seedThresholdOnlyParent("Doomed Threshold Parent");
+    // A schema-invalid body: create() itself rejects, so the error surfaces
+    // BEFORE the clear step — the parent must keep its threshold.
+    await expect(
+      createVariantGated(
+        Filament,
+        parent._id,
+        {
+          name: "Doomed Threshold Parent — Bad",
+          vendor: "V",
+          type: "PLA",
+          color: "not-a-hex",
+          parentId: String(parent._id),
+        },
+        false,
+      ),
+    ).rejects.toMatchObject({ name: "ValidationError" });
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBe(200);
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+  });
+
+  it("SECOND-variant creation never touches a template's leftover threshold", async () => {
+    const parent = await seedThresholdOnlyParent("Legacy Threshold Template");
+    await Filament.create({
+      name: "Legacy Threshold Template — Existing",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+    const result = await createVariantGated(
+      Filament,
+      parent._id,
+      {
+        name: "Legacy Threshold Template — Second",
+        vendor: "V",
+        type: "PLA",
+        parentId: String(parent._id),
+      },
+      false,
+    );
+    expect(result.outcome).toBe("created");
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBe(200);
+  });
+
+  it("a SPEC-only parent (tare/net) is untouched by an ungated first variant", async () => {
+    const parent = await Filament.create({
+      name: "Spec Only Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+      spoolWeight: 250,
+      netFilamentWeight: 1000,
+    });
+    const result = await createVariantGated(
+      Filament,
+      parent._id,
+      { name: "Spec Only Parent — Red", vendor: "V", type: "PLA", parentId: String(parent._id) },
+      false,
+    );
+    expect(result.outcome).toBe("created");
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.spoolWeight).toBe(250);
+    expect(fresh.netFilamentWeight).toBe(1000);
+    expect(fresh.lowStockThreshold ?? null).toBeNull();
+  });
+
+  it("a CARRYING promotion still MOVES the threshold with the inventory — never orphan-cleared", async () => {
+    const parent = await seedCarryingParent({ lowStockThreshold: 300 });
+    const result = await createVariantGated(
+      Filament,
+      parent._id,
+      variantBody(parent._id),
+      true,
+    );
+    expect(result.outcome).toBe("created");
+    const promoted = await Filament.findOne({ name: "Gated Parent — Original" }).lean();
+    expect(promoted.lowStockThreshold).toBe(300);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBeNull();
+  });
+
+  it("adoption with onReady (restore shape): the gate clears the threshold in-lock AFTER the adoption write", async () => {
+    const parent = await seedThresholdOnlyParent("Adopting Threshold Parent");
+    // A trashed variant about to be revived — the onReady write.
+    const trashed = await Filament.create({
+      name: "Adopting Threshold Parent — Revived",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+    await Filament.updateOne({ _id: trashed._id }, { $set: { _deletedAt: new Date() } });
+    let thresholdWhenReadyRan: number | null | undefined;
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: false,
+      adoptedName: trashed.name,
+      onReady: async () => {
+        // Ordering pin: at write time the threshold is still there — the
+        // clear is strictly AFTER the variant exists.
+        const mid = await Filament.findById(parent._id).lean();
+        thresholdWhenReadyRan = mid.lowStockThreshold;
+        await Filament.updateOne({ _id: trashed._id }, { $set: { _deletedAt: null } });
+      },
+    });
+    expect(result).toEqual({ outcome: "ready", clearOrphanedThreshold: false });
+    expect(thresholdWhenReadyRan).toBe(200);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBeNull();
+  });
+
+  it("adoption without onReady (PUT shape): the gate reports clearOrphanedThreshold and does NOT clear itself", async () => {
+    const parent = await seedThresholdOnlyParent("Deferred Threshold Parent");
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: false,
+    });
+    expect(result).toEqual({ outcome: "ready", clearOrphanedThreshold: true });
+    // The caller owns the write AND the clear — nothing mutated yet.
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBe(200);
+  });
+
+  it("adoption under a threshold-carrying template that already HAS a variant: no clear flag, threshold untouched", async () => {
+    const parent = await seedThresholdOnlyParent("Populated Threshold Template");
+    await Filament.create({
+      name: "Populated Threshold Template — Live",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: false,
+    });
+    expect(result).toEqual({ outcome: "ready", clearOrphanedThreshold: false });
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.lowStockThreshold).toBe(200);
   });
 });

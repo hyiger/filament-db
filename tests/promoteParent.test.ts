@@ -576,5 +576,17 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     const body = await res.json();
     expect(String(body.filament._id)).toBe(String(variant._id));
     expect(String(body.spool._id)).toBe(spoolId);
+
+    // Round 7 P2: a label PRINTED against the parent id self-heals from that
+    // resolver answer — the healed href is the variant's page with ?spool=
+    // preserved (full flow pinned in tests/spoolDeepLink.test.ts).
+    const { healedSpoolDeepLinkHref } = await import("@/lib/spoolDeepLink");
+    expect(
+      healedSpoolDeepLinkHref(
+        String(parent._id),
+        String(body.filament._id),
+        `?spool=${spoolId}`,
+      ),
+    ).toBe(`/filaments/${variant._id}?spool=${spoolId}`);
   });
 });

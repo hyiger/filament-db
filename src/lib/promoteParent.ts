@@ -85,6 +85,46 @@ export function parentPromotionState(parent: FilamentDoc): ParentPromotionState 
 }
 
 /**
+ * Round 7 P2: does creating this parent's FIRST variant leave a dead
+ * `lowStockThreshold` behind? True only for a threshold-ONLY parent — one
+ * whose promotion state does NOT gate (no color, no colorName, no spools, no
+ * totalWeight — nothing to move, so no promotion runs and none is offered)
+ * but which still stores a threshold. The moment the first variant exists
+ * the parent is a template: the form hides the field, the PUT strips any
+ * non-null write of it, and the dashboard could otherwise evaluate the
+ * leftover value against a template — dead config with a live alarm.
+ *
+ * A CARRYING parent deliberately returns false: its promotion (confirmed
+ * now, or later via "Convert to template") MOVES the threshold with the
+ * inventory (performParentPromotion), and clearing early would lose it.
+ * Same for a parent that already has variants — the documented
+ * enforce-forward legacy shape stays untouched.
+ */
+export function orphansThresholdOnFirstVariant(parent: FilamentDoc): boolean {
+  return parent.lowStockThreshold != null && !parentPromotionState(parent).needed;
+}
+
+/**
+ * Clear the orphaned threshold `orphansThresholdOnFirstVariant` diagnosed.
+ * Callers MUST invoke this AFTER the first variant exists — parent state
+ * change last, the same crash posture as performParentPromotion: a crash
+ * before this step leaves harmless legacy config on a still-variant-less
+ * parent, never a parent stripped of its alarm with nothing created.
+ * Idempotent (`$set: null`); the `_deletedAt: null` re-filter keeps a
+ * concurrent soft-delete from being turned into a mutated tombstone.
+ */
+export async function clearOrphanedParentThreshold(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: any,
+  parentId: unknown,
+): Promise<void> {
+  await FilamentModel.updateOne(
+    { _id: parentId, _deletedAt: null },
+    { $set: { lowStockThreshold: null } },
+  );
+}
+
+/**
  * Base name for the variant that receives the parent's color/spools:
  * `<parent name> — <colorName>` when the parent has a color name, else
  * `<parent name> — Original`. (A stored name, not a UI string — deliberately

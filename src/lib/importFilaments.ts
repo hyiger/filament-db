@@ -5,6 +5,10 @@ import { unsanitizeCsvCell } from "@/lib/csvWriter";
 import { hasVariants } from "@/lib/resolveFilament";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
+import {
+  orphansThresholdOnFirstVariant,
+  clearOrphanedParentThreshold,
+} from "@/lib/promoteParent";
 
 export interface ImportRow {
   name?: string;
@@ -610,27 +614,47 @@ export function pruneInheritedCreateDoc(
  * Call INSIDE `runExclusive(filamentLockKey(parentId))` together with the
  * write it protects, so the decision and the create/resurrect serialize
  * with the interactive promotion gate and the spool routes on the same key.
+ *
+ * Round 7 P2 — `orphanedThreshold`: true when the row's write mints the
+ * first variant of a threshold-ONLY parent (`lowStockThreshold` set, nothing
+ * that would gate a promotion — see orphansThresholdOnFirstVariant). The row
+ * proceeds (nothing to confirm), but the caller must clear the parent's now
+ * dead threshold AFTER the write surfaces a live variant. A COLOR-carrying
+ * parent reports false on purpose: it stays the enforce-forward legacy shape
+ * whose later "Convert to template" promotion MOVES the threshold with the
+ * rest — clearing here would lose it.
  */
-async function firstVariantGateReason(
+async function firstVariantGateInfo(
   parentId: mongoose.Types.ObjectId | string,
-): Promise<string | null> {
+): Promise<{ reason: string | null; orphanedThreshold: boolean }> {
   const parent = await Filament.findOne({ _id: parentId, _deletedAt: null })
-    // Only what the inventory check reads — spools projected to bare _ids
-    // (the count is what matters; photoDataUrl can be MBs).
-    .select("name totalWeight spools._id")
+    // Only what the inventory + threshold checks read — spools projected to
+    // bare _ids (the count is what matters; photoDataUrl can be MBs).
+    .select("name color colorName totalWeight lowStockThreshold spools._id")
     .lean();
-  if (!parent) return null;
+  if (!parent) return { reason: null, orphanedThreshold: false };
   const spoolCount = Array.isArray(parent.spools) ? parent.spools.length : 0;
-  if (spoolCount === 0 && parent.totalWeight == null) return null;
-  if (await hasVariants(Filament, String(parentId))) return null;
+  const carriesInventory = spoolCount > 0 || parent.totalWeight != null;
+  const orphansThreshold = orphansThresholdOnFirstVariant(parent);
+  if (!carriesInventory && !orphansThreshold) {
+    return { reason: null, orphanedThreshold: false };
+  }
+  if (await hasVariants(Filament, String(parentId))) {
+    return { reason: null, orphanedThreshold: false };
+  }
+  if (!carriesInventory) {
+    return { reason: null, orphanedThreshold: true };
+  }
   const inventory =
     spoolCount > 0 ? `${spoolCount} spool(s)` : "a tracked total weight";
-  return (
-    `Parent "${parent.name}" still holds its own inventory (${inventory}), which would be ` +
-    `stranded on a template by its first variant. Promote the parent first ("Convert to ` +
-    `template" on its detail page) or create the variant in the app to confirm the ` +
-    `promotion, then re-import this row`
-  );
+  return {
+    reason:
+      `Parent "${parent.name}" still holds its own inventory (${inventory}), which would be ` +
+      `stranded on a template by its first variant. Promote the parent first ("Convert to ` +
+      `template" on its detail page) or create the variant in the app to confirm the ` +
+      `promotion, then re-import this row`,
+    orphanedThreshold: false,
+  };
 }
 
 export async function upsertImportRows(
@@ -1130,7 +1154,7 @@ export async function upsertImportRows(
       // GH #605 (codex round 3 sweep): when this row's write surfaces a live
       // VARIANT (a create with a resolved Parent column, or a resurrect of a
       // trashed variant), gate it on the parent's held INVENTORY (see
-      // firstVariantGateReason for why color deliberately doesn't gate
+      // firstVariantGateInfo for why color deliberately doesn't gate
       // here) and run the decision + write inside the same per-parent mutex
       // the interactive promotion gate locks — so a concurrent spool push
       // or first-variant promotion strictly serializes with this write. A
@@ -1143,9 +1167,23 @@ export async function upsertImportRows(
         const gateReason = await runExclusive(
           filamentLockKey(createParentId),
           async (): Promise<string | null> => {
-            const reason = await firstVariantGateReason(createParentId);
-            if (reason) return reason;
+            const gate = await firstVariantGateInfo(createParentId);
+            if (gate.reason) return gate.reason;
             await performWrite();
+            // Round 7 P2: an ungated first variant of a threshold-ONLY
+            // parent just surfaced — the parent's lowStockThreshold is now
+            // dead config; clear it AFTER the write (parent state change
+            // last), still inside the per-parent lock. Re-checking
+            // hasVariants (rather than trusting the pre-write snapshot)
+            // covers the purged-tombstone fallback above, which can create
+            // a STANDALONE when no Parent column was supplied — no variant
+            // surfaced there, so the threshold must stay.
+            if (
+              gate.orphanedThreshold &&
+              (await hasVariants(Filament, String(createParentId)))
+            ) {
+              await clearOrphanedParentThreshold(Filament, createParentId);
+            }
             return null;
           },
         );
