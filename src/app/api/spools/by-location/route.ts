@@ -71,7 +71,15 @@ interface AggregatedSpool {
   filamentName: string;
   filamentVendor: string;
   filamentType: string;
-  filamentColor: string;
+  /** Raw variant primary — null for coextruded filaments (OpenPrintTag
+   * spec key 19), whose colors live in `secondaryColors`. */
+  filamentColor: string | null;
+  /** GH #1050: EFFECTIVE color arrays (variant's own non-empty array, else
+   * the parent's — the GH #477 array-fallback rule) so the /inventory row
+   * swatch renders multi-color arrangements and finishes like the home
+   * list does. */
+  secondaryColors: string[];
+  optTags: number[];
   /** Variant's own values; null falls back to `parent*` on the client. */
   spoolWeight: number | null;
   netFilamentWeight: number | null;
@@ -162,6 +170,13 @@ export async function GET(request: NextRequest) {
                 netFilamentWeight: 1,
                 type: 1,
                 vendor: 1,
+                // GH #1050: carry the parent's color arrays so the row
+                // projection below can apply the array-fallback inheritance
+                // rule (variant's empty array inherits the parent's whole
+                // array — see resolveFilament / GH #477). Without these the
+                // /inventory swatch renders an inheriting variant single-color.
+                secondaryColors: 1,
+                optTags: 1,
               },
             },
           ],
@@ -339,6 +354,28 @@ export async function GET(request: NextRequest) {
               filamentVendor: "$_effectiveVendor",
               filamentType: "$_effectiveType",
               filamentColor: "$color",
+              // GH #1050: effective (parent-fallback) color arrays for the
+              // /inventory row swatch. Same array-fallback merge as the
+              // /api/filaments list aggregation (GH #477): a variant's own
+              // non-empty array wins; an empty/missing array inherits the
+              // parent's whole array. Without these, a coextruded filament
+              // (null primary, colors in secondaryColors) renders as the
+              // gray #808080 sentinel on /inventory — the exact "can't find
+              // my spool by color" complaint in GH #1050.
+              secondaryColors: {
+                $cond: [
+                  { $gt: [{ $size: { $ifNull: ["$secondaryColors", []] } }, 0] },
+                  "$secondaryColors",
+                  { $ifNull: [{ $arrayElemAt: ["$_parent.secondaryColors", 0] }, []] },
+                ],
+              },
+              optTags: {
+                $cond: [
+                  { $gt: [{ $size: { $ifNull: ["$optTags", []] } }, 0] },
+                  "$optTags",
+                  { $ifNull: [{ $arrayElemAt: ["$_parent.optTags", 0] }, []] },
+                ],
+              },
               spoolWeight: "$spoolWeight",
               netFilamentWeight: "$netFilamentWeight",
               parentSpoolWeight: {

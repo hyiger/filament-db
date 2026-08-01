@@ -57,6 +57,11 @@ interface FilamentSwatchProps {
   finish?: Finish | null;
   /** Pixel size for both width and height. Defaults to 20px (w-5 h-5). */
   size?: number;
+  /** GH #1050: outer shape. "circle" (default) keeps the classic round
+   *  dot; "square" renders a rounded square, which shows noticeably more
+   *  color area at the same footprint — the /inventory rows use it so a
+   *  color can be judged at a glance. */
+  shape?: "circle" | "square";
   /** Optional extra class names (border styling, ring, etc.). */
   className?: string;
   /** Native `title` attribute — appears on hover. */
@@ -83,10 +88,15 @@ export default function FilamentSwatch({
   variantColors = [],
   finish = null,
   size = 20,
+  shape = "circle",
   className = "",
   title,
   ariaLabel,
 }: FilamentSwatchProps) {
+  // GH #1050: every render path below shares the same outer rounding, so
+  // the shape resolves once here. `rounded-md` (not `-lg`/`-xl`) keeps the
+  // square clearly square at the 16–32px sizes callers actually use.
+  const roundedClass = shape === "square" ? "rounded-md" : "rounded-full";
   // GH #638: the fallback labels were hardcoded English, so German SR
   // users heard "Color swatch: …" — translate through the shared catalog
   // (the context carries an en-based default, so the component still
@@ -136,7 +146,7 @@ export default function FilamentSwatch({
             };
       return (
         <div
-          className={`rounded-full border border-gray-300 dark:border-gray-600 flex-shrink-0 ${className}`}
+          className={`${roundedClass} border border-gray-300 dark:border-gray-600 flex-shrink-0 ${className}`}
           style={groupStyle}
           title={title ?? label}
           aria-label={label}
@@ -158,7 +168,7 @@ export default function FilamentSwatch({
     };
     return (
       <div
-        className={`rounded-full border border-gray-400 dark:border-gray-500 flex-shrink-0 dark:bg-gray-700 ${className}`}
+        className={`${roundedClass} border border-gray-400 dark:border-gray-500 flex-shrink-0 dark:bg-gray-700 ${className}`}
         style={hatchStyle}
         title={title ?? t("swatch.colorGroup")}
         aria-label={finalLabel}
@@ -240,7 +250,7 @@ export default function FilamentSwatch({
     const gap = finish === "translucent" ? 6 : 7;
     return (
       <div
-        className={`rounded-full border border-gray-400 dark:border-gray-500 flex-shrink-0 relative overflow-hidden ${className}`}
+        className={`${roundedClass} border border-gray-400 dark:border-gray-500 flex-shrink-0 relative overflow-hidden ${className}`}
         style={{ ...dimensionStyle, backgroundColor: baseColor }}
         title={finalTitle}
         aria-label={finalLabel}
@@ -295,7 +305,7 @@ export default function FilamentSwatch({
     const overlay = solidFinishOverlay(finish, rgb);
     return (
       <div
-        className={`rounded-full border border-gray-300 dark:border-gray-600 flex-shrink-0 relative overflow-hidden ${className}`}
+        className={`${roundedClass} border border-gray-300 dark:border-gray-600 flex-shrink-0 relative overflow-hidden ${className}`}
         style={baseStyle}
         title={finalTitle}
         aria-label={finalLabel}
@@ -317,7 +327,7 @@ export default function FilamentSwatch({
   const overlay = solidFinishOverlay(finish, rgb);
   return (
     <div
-      className={`rounded-full border border-gray-300 dark:border-gray-600 flex-shrink-0 relative overflow-hidden ${className}`}
+      className={`${roundedClass} border border-gray-300 dark:border-gray-600 flex-shrink-0 relative overflow-hidden ${className}`}
       style={{ ...dimensionStyle, backgroundColor: baseColor }}
       title={finalTitle}
       aria-label={finalLabel}
