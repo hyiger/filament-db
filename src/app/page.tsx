@@ -16,7 +16,7 @@ import { deriveArrangement } from "@/lib/filamentColors";
 import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
-import { getRemainingGrams, getRemainingPct, getSpoolCount } from "@/lib/inventoryStats";
+import { getRemainingDisplay, getRemainingGrams, getSpoolCount } from "@/lib/inventoryStats";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { compareFilaments, nextSortState, earliestSpoolDate, type SortKey, type SortDir } from "@/lib/sortFilamentList";
 import { useDateFormat } from "@/hooks/useDateFormat";
@@ -1036,23 +1036,51 @@ export default function Home() {
       </td>
       <td className="py-2 px-2 text-right">
         {(() => {
-          const pct = getRemainingPct(f);
+          // GH #1048: three-tier cell (bar / grams-only / em-dash) — the
+          // decision lives in getRemainingDisplay so it's unit-testable.
+          // A legacy record with no netFilamentWeight has no percentage
+          // denominator but a perfectly computable gram figure; it used
+          // to fall through to the em-dash while the detail page showed
+          // the grams. Mirrors the inventory page's remaining cell.
+          const display = getRemainingDisplay(f);
           const spoolCt = getSpoolCount(f);
           const color =
-            pct == null ? "" : pct > 25 ? "bg-green-500" : pct > 10 ? "bg-yellow-500" : "bg-red-500";
+            display.kind !== "bar"
+              ? ""
+              : display.pct > 25 ? "bg-green-500" : display.pct > 10 ? "bg-yellow-500" : "bg-red-500";
           return (
             <div className="flex items-center gap-1.5 justify-end">
-              {pct == null ? (
+              {display.kind === "none" ? (
                 <span className="text-gray-400">—</span>
+              ) : display.kind === "grams" ? (
+                // w-[86px] matches the bar branch's footprint (w-12 bar +
+                // gap-1.5 + w-8 pct span = 48+6+32px) so the fixed-width
+                // column doesn't shift between the two tiers.
+                <span
+                  className="text-xs text-gray-500 dark:text-gray-400 w-[86px] text-right"
+                  title={
+                    // The tooltip names the input(s) the percentage actually
+                    // lacks — grams tolerates a missing tare (#954) but the
+                    // bar needs both weights, so "set net weight" would name
+                    // an already-set field for a tare-less record.
+                    display.missing === "tare"
+                      ? t("filaments.remainingGramsOnlyTare")
+                      : display.missing === "both"
+                        ? t("filaments.remainingGramsOnlyBoth")
+                        : t("filaments.remainingGramsOnly")
+                  }
+                >
+                  {formatGrams(display.grams)}g
+                </span>
               ) : (
                 <div
                   className="flex items-center gap-1.5"
-                  title={spoolCt > 1 ? t("filaments.remainingWithSpools", { pct, spools: spoolCt }) : t("filaments.remaining", { pct })}
+                  title={spoolCt > 1 ? t("filaments.remainingWithSpools", { pct: display.pct, spools: spoolCt }) : t("filaments.remaining", { pct: display.pct })}
                 >
                   <div className="w-12 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                    <div className={`h-2 rounded-full ${color}`} style={{ width: `${pct}%` }} />
+                    <div className={`h-2 rounded-full ${color}`} style={{ width: `${display.pct}%` }} />
                   </div>
-                  <span className="text-xs text-gray-500 w-8 text-right">{pct}%</span>
+                  <span className="text-xs text-gray-500 w-8 text-right">{display.pct}%</span>
                 </div>
               )}
               {/* #717: per-spool location panel toggle (shared with parents) */}
@@ -1156,19 +1184,42 @@ export default function Home() {
           </td>
           <td className="py-2 px-2 text-right">
             {(() => {
-              const pct = getRemainingPct(f);
+              // GH #1048: same three-tier cell as renderRow. `f` here is
+              // the parent itself, so both the bar and the grams fallback
+              // describe the parent's OWN spools (#552/#616 legacy
+              // carrying preserved) — never a variant aggregate.
+              const display = getRemainingDisplay(f);
               const color =
-                pct == null ? "" : pct > 25 ? "bg-green-500" : pct > 10 ? "bg-yellow-500" : "bg-red-500";
+                display.kind !== "bar"
+                  ? ""
+                  : display.pct > 25 ? "bg-green-500" : display.pct > 10 ? "bg-yellow-500" : "bg-red-500";
               return (
                 <div className="flex items-center gap-1.5 justify-end">
-                  {pct == null ? (
+                  {display.kind === "none" ? (
                     <span className="text-gray-400">—</span>
+                  ) : display.kind === "grams" ? (
+                    // w-[86px]: see the renderRow twin — matches the bar
+                    // branch's 48+6+32px footprint.
+                    <span
+                      className="text-xs text-gray-500 dark:text-gray-400 w-[86px] text-right"
+                      title={
+                        // Tooltip keyed by the actually-missing input(s) —
+                        // see the renderRow twin.
+                        display.missing === "tare"
+                          ? t("filaments.remainingGramsOnlyTare")
+                          : display.missing === "both"
+                            ? t("filaments.remainingGramsOnlyBoth")
+                            : t("filaments.remainingGramsOnly")
+                      }
+                    >
+                      {formatGrams(display.grams)}g
+                    </span>
                   ) : (
-                    <div className="flex items-center gap-1.5" title={t("filaments.remaining", { pct })}>
+                    <div className="flex items-center gap-1.5" title={t("filaments.remaining", { pct: display.pct })}>
                       <div className="w-12 bg-gray-200 dark:bg-gray-700 rounded-full h-2">
-                        <div className={`h-2 rounded-full ${color}`} style={{ width: `${pct}%` }} />
+                        <div className={`h-2 rounded-full ${color}`} style={{ width: `${display.pct}%` }} />
                       </div>
-                      <span className="text-xs text-gray-500 w-8 text-right">{pct}%</span>
+                      <span className="text-xs text-gray-500 w-8 text-right">{display.pct}%</span>
                     </div>
                   )}
                   {/* #717: a parent can carry its own spools (Codex P2 on #721) */}

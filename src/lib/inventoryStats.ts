@@ -71,6 +71,61 @@ export function getRemainingGrams(f: InventoryFilament): number | null {
   return Math.max(0, f.totalWeight - f.spoolWeight);
 }
 
+/** Three-tier decision for a "remaining" table cell (GH #1048).
+ *
+ * The home list used to branch only on `getRemainingPct` and rendered a
+ * bare em-dash whenever the percentage was null — but the percentage
+ * needs `netFilamentWeight` as a denominator while the gram math does
+ * not (see the #310 note on `getRemainingGrams`). A legacy record like
+ * { totalWeight: 1035, spoolWeight: 184, netFilamentWeight: null }
+ * therefore showed "851 g" on the detail page and "—" on the list.
+ *
+ * Tiers, matching the inventory page's cell:
+ *   1. pct computable        → "bar"   (percentage bar)
+ *   2. only grams computable → "grams" (plain gram figure)
+ *   3. neither               → "none"  (em-dash)
+ *
+ * Extracted here (rather than inlined in the client page) so the
+ * decision is unit-testable — the home page is a `use client` component
+ * the node-only vitest env can't render. */
+export type RemainingDisplay =
+  | { kind: "bar"; pct: number }
+  | { kind: "grams"; grams: number; missing: RemainingPctMissing }
+  | { kind: "none" };
+
+/** Which percentage-only input(s) block the bar tier while the grams
+ * tier still renders. `getRemainingGrams` tolerates a null `spoolWeight`
+ * in the spools-array branch (0 g tare fallback, GH #954) but
+ * `getRemainingPct` needs BOTH weights, so the grams tier can be
+ * blocked by the net weight, the tare, or both — the tooltip has to
+ * name the right one(s), not always "set net weight". */
+export type RemainingPctMissing = "net" | "tare" | "both";
+
+export function getRemainingDisplay(f: InventoryFilament): RemainingDisplay {
+  const pct = getRemainingPct(f);
+  if (pct != null) return { kind: "bar", pct };
+  const grams = getRemainingGrams(f);
+  if (grams != null) {
+    // Derived from getRemainingPct's own guards, per branch:
+    //   spools-array: needs spoolWeight != null AND netFilamentWeight > 0
+    //     (≥1 active weighted spool is already guaranteed here — grams
+    //     being non-null in that branch means one exists, so validCount
+    //     can't be the blocker);
+    //   legacy: needs totalWeight, spoolWeight, netFilamentWeight > 0 —
+    //     and grams non-null in the legacy path already required
+    //     totalWeight AND spoolWeight, so only the net can be missing.
+    // Hence: tare can only be the blocker in the spools-array branch
+    // (the #954 0-tare fallback), and at least one of the two flags is
+    // set whenever this tier is reached.
+    const netMissing = f.netFilamentWeight == null || f.netFilamentWeight <= 0;
+    const tareMissing = f.spoolWeight == null;
+    const missing: RemainingPctMissing =
+      netMissing && tareMissing ? "both" : tareMissing ? "tare" : "net";
+    return { kind: "grams", grams, missing };
+  }
+  return { kind: "none" };
+}
+
 /** Percentage remaining (0-100, integer). Excludes retired spools so
  * the bar matches the low-stock chip. Falls back to legacy
  * single-spool math when `spools` is empty. */
