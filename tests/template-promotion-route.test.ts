@@ -287,10 +287,12 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect(promoted.lowStockThreshold).toBe(300);
     expect(promoted.spools).toHaveLength(2);
     expect(promoted.spools.map((s: { label: string }) => s.label)).toEqual(["roll 1", "roll 2"]);
-    // Physical-roll identity preserved, fresh subdoc ids.
+    // Physical-roll identity preserved — and since codex round 4 (F1) the
+    // subdoc _id too, so persisted (filamentId, spoolId) references keep
+    // their spoolId half stable through the promotion.
     for (const [i, s] of promoted.spools.entries()) {
       expect(s.instanceId).toBe(parentLean.spools[i].instanceId);
-      expect(String(s._id)).not.toBe(String(parentLean.spools[i]._id));
+      expect(String(s._id)).toBe(String(parentLean.spools[i]._id));
     }
 
     // The parent ends colorless + inventory-free — but RETAINS the SPEC

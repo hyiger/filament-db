@@ -68,12 +68,52 @@ export default function TrashPage() {
     });
   };
 
+  /**
+   * GH #605 (codex round 4, F6): restoring a trashed VARIANT under a parent
+   * that re-acquired its own color/spools while variant-less would mint the
+   * parent's first live variant — the server 409s
+   * (`parent_promotion_required`) until the client confirms, then promotes
+   * the parent to a template first. Same catch → confirm → retry-with-flag
+   * flow as the create/edit pages. Returns the final response (or null when
+   * the user declined / the request failed at the network level) so both
+   * the single-restore and restore-all paths share it.
+   */
+  const restoreWithPromotionGate = async (
+    item: TrashedFilament,
+  ): Promise<Response | null> => {
+    const post = (payload?: Record<string, unknown>) =>
+      fetch(`/api/filaments/${item._id}/restore`, {
+        method: "POST",
+        ...(payload
+          ? {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            }
+          : {}),
+      });
+
+    const res = await post();
+    if (res.status !== 409) return res;
+    const conflict = await res.clone().json().catch(() => null);
+    if (conflict?.error !== "parent_promotion_required") return res;
+    const ok = await confirm({
+      title: t("trash.promote.title"),
+      message: t("trash.promote.message", {
+        parent: String(conflict.parentName ?? ""),
+        variant: String(conflict.variantName ?? ""),
+        count: conflict.spoolCount ?? 0,
+      }),
+      confirmLabel: t("trash.promote.confirm"),
+    });
+    if (!ok) return null;
+    return post({ promoteParent: true });
+  };
+
   const handleRestore = async (item: TrashedFilament) => {
     markBusy(item._id, true);
     try {
-      const res = await fetch(`/api/filaments/${item._id}/restore`, {
-        method: "POST",
-      });
+      const res = await restoreWithPromotionGate(item);
+      if (!res) return; // user declined the promotion confirm
       const body = await res.json().catch(() => null);
       if (!res.ok) {
         toast(body?.error || t("trash.restoreError"), "error");
@@ -196,10 +236,14 @@ export default function TrashPage() {
       // GH #640: same per-item isolation as handleEmptyTrash — one
       // dropped request must not silently abandon the rest of the batch.
       try {
-        const res = await fetch(`/api/filaments/${item._id}/restore`, {
-          method: "POST",
-        });
-        if (res.ok) {
+        // GH #605 (round 4, F6): a variant whose parent re-acquired carrying
+        // state hits the promotion gate here too — the loop is sequential,
+        // so the confirm dialog appears for that item alone; declining
+        // skips just that item and the batch continues.
+        const res = await restoreWithPromotionGate(item);
+        if (!res) {
+          errors.push(item.name);
+        } else if (res.ok) {
           ok++;
         } else {
           const body = await res.json().catch(() => null);

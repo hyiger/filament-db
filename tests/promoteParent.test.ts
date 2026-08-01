@@ -18,11 +18,25 @@ import {
 describe("promoteParent (GH #605 Phase 2b)", () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let Filament: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let PrintHistory: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Printer: any;
+  // The real external-ref pair (codex round 4, F1) most DB-backed cases pass.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let externalRefs: { printHistory: any; printer: any };
 
   beforeEach(async () => {
     const filMod = await import("@/models/Filament");
+    const histMod = await import("@/models/PrintHistory");
+    const printerMod = await import("@/models/Printer");
     if (!mongoose.models.Filament) mongoose.model("Filament", filMod.default.schema);
+    if (!mongoose.models.PrintHistory) mongoose.model("PrintHistory", histMod.default.schema);
+    if (!mongoose.models.Printer) mongoose.model("Printer", printerMod.default.schema);
     Filament = mongoose.models.Filament;
+    PrintHistory = mongoose.models.PrintHistory;
+    Printer = mongoose.models.Printer;
+    externalRefs = { printHistory: PrintHistory, printer: Printer };
   });
 
   // ── parentPromotionState ────────────────────────────────────────────────
@@ -167,7 +181,9 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     });
     const parentLean = await Filament.findById(parent._id).lean();
 
-    const variant = await performParentPromotion(Filament, parentLean);
+    const variant = await performParentPromotion(Filament, parentLean, {
+      externalRefs,
+    });
 
     // The variant carries the moved state and is named by the colorName rule.
     expect(variant.name).toBe("Legacy PLA — Deep Blue");
@@ -184,13 +200,16 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     // Diameter pinned null → inherits the parent's 2.85 (GH #106 rule).
     expect(variant.diameter).toBeNull();
 
-    // Spools moved: same data + preserved instanceId, FRESH subdoc _ids.
+    // Spools moved VERBATIM: same data, preserved instanceId AND preserved
+    // subdoc _id (codex round 4, F1). Subdoc ids only need uniqueness within
+    // their parent document — and the parent's copies are cleared in the same
+    // operation — so reuse keeps every persisted (filamentId, spoolId)
+    // reference's spoolId half stable through the promotion.
     expect(variant.spools).toHaveLength(2);
     expect(variant.spools.map((s: { label: string }) => s.label)).toEqual(["A", "B"]);
     expect(variant.spools[1].retired).toBe(true);
-    const parentSpoolIds = parentLean.spools.map((s: { _id: unknown }) => String(s._id));
     for (const [i, s] of variant.spools.entries()) {
-      expect(parentSpoolIds).not.toContain(String(s._id));
+      expect(String(s._id)).toBe(String(parentLean.spools[i]._id));
       expect(s.instanceId).toBe(parentLean.spools[i].instanceId);
     }
 
@@ -235,16 +254,19 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       color: "#808080",
     });
 
+    // Real externalRefs + a spool-less parent: the remap is skipped on the
+    // moved-spools-empty branch even with models supplied.
     const variant = await performParentPromotion(
       Filament,
       await Filament.findById(parent._id).lean(),
+      { externalRefs },
     );
     expect(variant.name).toBe("Plain PLA — Original (2)");
   });
 
   // ── ordering contract (mock model) ──────────────────────────────────────
 
-  it("copies FIRST, clears LAST", async () => {
+  it("copies FIRST, remaps external refs SECOND, clears LAST", async () => {
     const calls: string[] = [];
     const mockModel = {
       exists: async () => null,
@@ -257,16 +279,67 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
         return { acknowledged: true };
       },
     };
+    const mockRefs = {
+      printHistory: {
+        updateMany: async () => {
+          calls.push("remap-history");
+          return { acknowledged: true };
+        },
+      },
+      printer: {
+        updateMany: async () => {
+          calls.push("remap-slots");
+          return { acknowledged: true };
+        },
+      },
+    };
     // color deliberately null (spools-only promotion) — the copy still runs
-    // and the ?? fallbacks stay exercised.
-    await performParentPromotion(mockModel, {
-      _id: "parent-1",
-      name: "P",
-      vendor: "V",
-      type: "PLA",
-      color: null,
-      spools: [],
-    });
+    // and the ?? fallbacks stay exercised. One spool so the remap fires:
+    // codex round 4 F1 pins remap BETWEEN copy and clear — a crash after the
+    // copy leaves references resolving against the parent (spools still
+    // there); a crash after the remap leaves them resolving against the
+    // variant (which holds the spools, ids preserved). Either way nothing
+    // dangles.
+    await performParentPromotion(
+      mockModel,
+      {
+        _id: "parent-1",
+        name: "P",
+        vendor: "V",
+        type: "PLA",
+        color: null,
+        spools: [{ _id: "spool-1", label: "roll" }],
+      },
+      { externalRefs: mockRefs },
+    );
+    expect(calls).toEqual(["create", "remap-history", "remap-slots", "clear"]);
+  });
+
+  it("externalRefs: null (unit-test escape hatch) skips the remap entirely", async () => {
+    const calls: string[] = [];
+    const mockModel = {
+      exists: async () => null,
+      create: async (body: Record<string, unknown>) => {
+        calls.push("create");
+        return { ...body, _id: "variant-1" };
+      },
+      updateOne: async () => {
+        calls.push("clear");
+        return { acknowledged: true };
+      },
+    };
+    await performParentPromotion(
+      mockModel,
+      {
+        _id: "parent-1",
+        name: "P",
+        vendor: "V",
+        type: "PLA",
+        color: null,
+        spools: [{ _id: "spool-1", label: "roll" }],
+      },
+      { externalRefs: null },
+    );
     expect(calls).toEqual(["create", "clear"]);
   });
 
@@ -283,13 +356,17 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       },
     };
     await expect(
-      performParentPromotion(mockModel, {
-        _id: "parent-1",
-        name: "P",
-        vendor: "V",
-        type: "PLA",
-        color: "#123456",
-      }),
+      performParentPromotion(
+        mockModel,
+        {
+          _id: "parent-1",
+          name: "P",
+          vendor: "V",
+          type: "PLA",
+          color: "#123456",
+        },
+        { externalRefs: null },
+      ),
     ).rejects.toThrow("boom");
     expect(calls).toEqual([]);
   });
@@ -313,7 +390,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     const stale = await Filament.findById(parent._id);
     stale.spools[0].totalWeight = 500;
 
-    await performParentPromotion(Filament, parent.toObject());
+    await performParentPromotion(Filament, parent.toObject(), { externalRefs });
 
     await expect(stale.save()).rejects.toMatchObject({ name: "VersionError" });
     const fresh = await Filament.findById(parent._id).lean();
@@ -322,5 +399,124 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     const variant = await Filament.findOne({ parentId: parent._id }).lean();
     expect(variant.spools).toHaveLength(1);
     expect(variant.spools[0].totalWeight).toBe(1000);
+  });
+
+  // ── codex round 4, F1: external (filamentId, spoolId) refs follow ───────
+
+  it("remaps PrintHistory usage + Printer AMS slots onto the promoted variant; entries outside the moved set are untouched", async () => {
+    const parent = await Filament.create({
+      name: "Referenced PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#445566",
+      spools: [
+        { label: "in history", totalWeight: 900 },
+        { label: "in AMS", totalWeight: 400 },
+      ],
+    });
+    const other = await Filament.create({
+      name: "Bystander PETG",
+      vendor: "V",
+      type: "PETG",
+      spools: [{ label: "bystander roll", totalWeight: 750 }],
+    });
+    const parentLean = await Filament.findById(parent._id).lean();
+    const otherLean = await Filament.findById(other._id).lean();
+    const historySpool = parentLean.spools[0];
+    const amsSpool = parentLean.spools[1];
+    const bystanderSpool = otherLean.spools[0];
+
+    const job = await PrintHistory.create({
+      jobLabel: "multi-material job",
+      usage: [
+        // Follows: parent's filamentId + a moved spoolId.
+        { filamentId: parent._id, spoolId: historySpool._id, grams: 12 },
+        // Untouched: a different filament's entry (spoolId NOT in the moved set).
+        { filamentId: other._id, spoolId: bystanderSpool._id, grams: 5 },
+        // Untouched: the parent without a tracked spool — spoolId null is
+        // not in the moved set, so the job row keeps pointing at the parent.
+        { filamentId: parent._id, spoolId: null, grams: 3 },
+      ],
+      startedAt: new Date(),
+    });
+    const printer = await Printer.create({
+      name: "AMS Printer",
+      manufacturer: "Bambu Lab",
+      printerModel: "X1C",
+      amsSlots: [
+        { slotName: "A1", filamentId: parent._id, spoolId: amsSpool._id },
+        { slotName: "A2", filamentId: other._id, spoolId: bystanderSpool._id },
+        { slotName: "A3", filamentId: parent._id, spoolId: null },
+      ],
+    });
+
+    const variant = await performParentPromotion(Filament, parentLean, {
+      externalRefs,
+    });
+
+    const freshJob = await PrintHistory.findById(job._id).lean();
+    expect(String(freshJob.usage[0].filamentId)).toBe(String(variant._id));
+    expect(String(freshJob.usage[0].spoolId)).toBe(String(historySpool._id));
+    expect(String(freshJob.usage[1].filamentId)).toBe(String(other._id));
+    expect(String(freshJob.usage[1].spoolId)).toBe(String(bystanderSpool._id));
+    expect(String(freshJob.usage[2].filamentId)).toBe(String(parent._id));
+    expect(freshJob.usage[2].spoolId).toBeNull();
+
+    const freshPrinter = await Printer.findById(printer._id).lean();
+    expect(String(freshPrinter.amsSlots[0].filamentId)).toBe(String(variant._id));
+    expect(String(freshPrinter.amsSlots[0].spoolId)).toBe(String(amsSpool._id));
+    expect(String(freshPrinter.amsSlots[1].filamentId)).toBe(String(other._id));
+    expect(String(freshPrinter.amsSlots[2].filamentId)).toBe(String(parent._id));
+    expect(freshPrinter.amsSlots[2].spoolId).toBeNull();
+
+    // And the (filamentId, spoolId) pairs the remap produced actually
+    // resolve: the promoted variant holds those spool subdoc ids.
+    const variantLean = await Filament.findById(variant._id).lean();
+    const variantSpoolIds = variantLean.spools.map((s: { _id: unknown }) => String(s._id));
+    expect(variantSpoolIds).toContain(String(historySpool._id));
+    expect(variantSpoolIds).toContain(String(amsSpool._id));
+  });
+
+  it("spool-addressed routes still resolve after a promotion (assignment lookup + spool deep-link resolve)", async () => {
+    const parent = await Filament.create({
+      name: "Loaded PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#654321",
+      spools: [{ label: "loaded roll", totalWeight: 800 }],
+    });
+    const parentLean = await Filament.findById(parent._id).lean();
+    const spoolId = String(parentLean.spools[0]._id);
+    await Printer.create({
+      name: "MMU Printer",
+      manufacturer: "Prusa",
+      printerModel: "MK4",
+      amsSlots: [{ slotName: "T0", filamentId: parent._id, spoolId }],
+    });
+
+    const variant = await performParentPromotion(Filament, parentLean, {
+      externalRefs,
+    });
+
+    // GET /api/spools/{spoolId}/assignment — the slot lookup keys on the
+    // preserved spool subdoc id and now reports the variant as loaded.
+    const { findSpoolSlot } = await import("@/lib/spoolSlots");
+    const assignment = await findSpoolSlot(Printer, spoolId);
+    expect(assignment).not.toBeNull();
+    expect(assignment?.slotName).toBe("T0");
+    expect(assignment?.filamentId).toBe(String(variant._id));
+
+    // GET /api/spools/{spoolId} — the label deep-link resolver finds the
+    // spool by subdoc id on the VARIANT (the parent's copy is cleared).
+    const { GET: resolveSpool } = await import("@/app/api/spools/[spoolId]/route");
+    const { NextRequest } = await import("next/server");
+    const res = await resolveSpool(
+      new NextRequest(`http://localhost/api/spools/${spoolId}`),
+      { params: Promise.resolve({ spoolId }) },
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(String(body.filament._id)).toBe(String(variant._id));
+    expect(String(body.spool._id)).toBe(spoolId);
   });
 });

@@ -1002,4 +1002,94 @@ describe("OpenPrintTag re-sync routes (GH #607)", () => {
     // The color was never touched — only the requested field applied.
     expect(fresh.color).toBe("#111111");
   });
+
+  it("sync: the color check is serialized with variant creation — a first variant minted while the sync waits makes color not-offered (GH #605 round 4, F5)", async () => {
+    // A LINKED filament with a diverged color and NO variants yet — a bare
+    // sync of ["color"] would be offered and applied.
+    const parent = await Filament.create({
+      name: "OPT Race PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#111111",
+      settings: {
+        openprinttag_slug: "prusament-pla-galaxy-black",
+        openprinttag_uuid: "1aaca54a-431f-5601-adf5-85dd018f487f",
+      },
+    });
+
+    // Hold the filament's mutex, start the sync (it queues behind the hold
+    // for its offered-set derivation + write), then mint the FIRST variant
+    // while the sync is queued. Pre-F5 the sync computed `excludeColor`
+    // before any lock and would land #3d3e3d on the freshly-promoted
+    // template; in-lock re-derivation must reject it instead.
+    const { runExclusive, filamentLockKey } = await import("@/lib/filamentMutex");
+    const key = filamentLockKey(String(parent._id));
+    let release!: () => void;
+    const holdUntil = new Promise<void>((r) => (release = r));
+    const holder = runExclusive(key, async () => {
+      await holdUntil;
+    });
+
+    const syncing = syncPOST(
+      syncReq(String(parent._id), ["color"]),
+      params(String(parent._id)),
+    );
+    // Let the sync reach the lock queue, then create the variant (direct
+    // insert — the parent carries only a color here, and the point is the
+    // template state flipping under the queued sync).
+    await new Promise((r) => setTimeout(r, 30));
+    await Filament.create({
+      name: "OPT Race PLA — Red",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+    });
+    release();
+    await holder;
+
+    const res = await syncing;
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/no current openprinttag update.*color/i);
+    // Nothing landed on the (now-)template.
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#111111");
+    expect(fresh.openprinttagSnapshot ?? undefined).toBeUndefined();
+  });
+
+  it("sync: a filament soft-deleted while queued behind its lock answers 404 without writing (round 4, F5 in-lock re-fetch)", async () => {
+    const parent = await Filament.create({
+      name: "OPT Vanishing PLA",
+      vendor: "Prusament",
+      type: "PLA",
+      color: "#111111",
+      settings: {
+        openprinttag_slug: "prusament-pla-galaxy-black",
+        openprinttag_uuid: "1aaca54a-431f-5601-adf5-85dd018f487f",
+      },
+    });
+
+    const { runExclusive, filamentLockKey } = await import("@/lib/filamentMutex");
+    const key = filamentLockKey(String(parent._id));
+    let release!: () => void;
+    const holdUntil = new Promise<void>((r) => (release = r));
+    const holder = runExclusive(key, async () => {
+      await holdUntil;
+    });
+
+    const syncing = syncPOST(
+      syncReq(String(parent._id), ["color"]),
+      params(String(parent._id)),
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    await Filament.updateOne({ _id: parent._id }, { $set: { _deletedAt: new Date() } });
+    release();
+    await holder;
+
+    const res = await syncing;
+    expect(res.status).toBe(404);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#111111");
+    expect(fresh.openprinttagSnapshot ?? undefined).toBeUndefined();
+  });
 });

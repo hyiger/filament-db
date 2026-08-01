@@ -249,29 +249,36 @@ export async function POST(request: NextRequest) {
         const existing = await Filament.findOne({ name: importName, _deletedAt: null });
         if (existing) {
           preserveLocalSpoolIds(existing.spools);
-          // GH #605 (codex round 3 sweep): when the LOCAL row is a TEMPLATE
-          // (it has live color variants), the remote's spools must not be
-          // written onto it — a template holds no inventory. Drop only the
-          // `spools` key (the rest of the update still applies, and the
-          // local spool state stays untouched) and report it per-row; an
-          // import can't confirm the alternative (a promotion). Decided and
-          // written inside the same per-filament mutex the promotion gate
-          // locks, so a concurrent first-variant promotion can't land
-          // between the check and the update and have this write re-attach
-          // the just-moved inventory.
+          // GH #605 (codex round 3 sweep; extended round 4, F4): when the
+          // LOCAL row is a TEMPLATE (it has live color variants), the
+          // remote's per-variant state must not be written onto it — a
+          // template holds no inventory (`spools`, `totalWeight`, the
+          // `lowStockThreshold` that alarms on it) and no color identity
+          // (`color`, `colorName`). PUT-parity rule: whatever the PUT
+          // handler strips on templates ([id]/route.ts
+          // TEMPLATE_STRIP_FIELDS), this path drops — keep the two lists in
+          // lockstep. Drop only the offending keys (the rest of the update
+          // still applies, and the local state stays untouched) and report
+          // it per-row; an import can't confirm the alternative (a
+          // promotion). Explicit remote nulls still apply (clearing a
+          // legacy leftover is legitimate cleanup — same posture as PUT).
+          // Decided and written inside the same per-filament mutex the
+          // promotion gate locks, so a concurrent first-variant promotion
+          // can't land between the check and the update and have this write
+          // re-attach the just-moved state.
           await runExclusive(filamentLockKey(existing._id), async () => {
             const remoteSpools = filamentData.spools;
             const carriesSpools = Array.isArray(remoteSpools) && remoteSpools.length > 0;
-            // `totalWeight` is the OTHER inventory field (legacy pre-spools
-            // tracking) and is allow-listed above — PUT strips exactly a
-            // non-null totalWeight on templates, so this path must too or
-            // a re-import would re-attach legacy inventory the promotion
-            // just moved off. An explicit remote null still applies
-            // (clearing a legacy leftover is legitimate cleanup — same
-            // posture as PUT).
             const carriesTotalWeight = filamentData.totalWeight != null;
+            const carriesColor = filamentData.color != null;
+            const carriesColorName = filamentData.colorName != null;
+            const carriesLowStock = filamentData.lowStockThreshold != null;
             if (
-              (carriesSpools || carriesTotalWeight) &&
+              (carriesSpools ||
+                carriesTotalWeight ||
+                carriesColor ||
+                carriesColorName ||
+                carriesLowStock) &&
               (await hasVariants(Filament, String(existing._id)))
             ) {
               const droppedParts: string[] = [];
@@ -283,8 +290,20 @@ export async function POST(request: NextRequest) {
                 delete filamentData.totalWeight;
                 droppedParts.push("a tracked total weight");
               }
+              if (carriesColor) {
+                delete filamentData.color;
+                droppedParts.push("a color");
+              }
+              if (carriesColorName) {
+                delete filamentData.colorName;
+                droppedParts.push("a color name");
+              }
+              if (carriesLowStock) {
+                delete filamentData.lowStockThreshold;
+                droppedParts.push("a low-stock threshold");
+              }
               errors.push(
-                `${importName}: skipped ${droppedParts.join(" and ")} — the local filament is a template (inventory lives on its variants)`,
+                `${importName}: skipped ${droppedParts.join(" and ")} — the local filament is a template (inventory and color live on its variants)`,
               );
             }
             // GH #255: runValidators so schema constraints (cost.min, etc.)

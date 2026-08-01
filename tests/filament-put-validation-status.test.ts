@@ -164,8 +164,15 @@ describe("PUT /api/filaments/[id] — client-input rejections return 400", () =>
     );
   }
 
+  // NOTE (GH #605 round 4, F2): the F7 parents are seeded `color: null` —
+  // a parent still CARRYING state (even the historical #808080 schema
+  // default) would trip the re-parent adoption gate first (409
+  // parent_promotion_required, covered in template-adoption-gate.test.ts)
+  // and, via its own hasVariants countDocuments call, shift the mock
+  // sequences below. These tests pin the POST-WRITE cycle re-assert.
+
   it("F7: re-parenting to a valid root still succeeds (no false 409)", async () => {
-    const parent = await Filament.create({ name: "Root P", vendor: "T", type: "PLA" });
+    const parent = await Filament.create({ name: "Root P", vendor: "T", type: "PLA", color: null });
     const child = await Filament.create({ name: "Child C", vendor: "T", type: "PLA" });
 
     const res = await putReq(String(child._id), { parentId: String(parent._id) });
@@ -179,8 +186,8 @@ describe("PUT /api/filaments/[id] — client-input rejections return 400", () =>
     // The child STARTS as a variant of oldParent (X), so a "roll back to a safe
     // root (null)" is observably different from "restore the old parent (X)" —
     // pinning the Codex P2 (×2) fix.
-    const oldParent = await Filament.create({ name: "Old Parent X", vendor: "T", type: "PLA" });
-    const newParent = await Filament.create({ name: "New Parent B", vendor: "T", type: "PLA" });
+    const oldParent = await Filament.create({ name: "Old Parent X", vendor: "T", type: "PLA", color: null });
+    const newParent = await Filament.create({ name: "New Parent B", vendor: "T", type: "PLA", color: null });
     const child = await Filament.create({
       name: "Child C", vendor: "T", type: "PLA", parentId: oldParent._id,
     });
@@ -253,8 +260,10 @@ describe("PUT /api/filaments/[id] — client-input rejections return 400", () =>
   });
 
   it("F7: two opposing concurrent re-parents never persist a mutual A⇄B cycle", async () => {
-    const a = await Filament.create({ name: "A", vendor: "T", type: "PLA" });
-    const b = await Filament.create({ name: "B", vendor: "T", type: "PLA" });
+    // color: null so both PUTs get PAST the round-4 adoption gate and the
+    // post-write re-assert is what's actually racing here.
+    const a = await Filament.create({ name: "A", vendor: "T", type: "PLA", color: null });
+    const b = await Filament.create({ name: "B", vendor: "T", type: "PLA", color: null });
 
     await Promise.all([
       putReq(String(a._id), { parentId: String(b._id) }),

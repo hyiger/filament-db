@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
 import {
   createVariantGated,
+  gateFirstVariantAdoption,
   promotionRequired409Body,
 } from "@/lib/createVariantGated";
 import { lockedKeyCount, runExclusive, filamentLockKey } from "@/lib/filamentMutex";
@@ -273,5 +274,161 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
       spoolCount: 3,
       variantName: "P — Original",
     });
+  });
+
+  // ── gateFirstVariantAdoption (codex round 4, F2/F6) ───────────────────
+
+  it("adoption: carrying variant-less parent without the flag → promotion_required, onReady never runs", async () => {
+    const parent = await seedCarryingParent();
+    let readyRan = false;
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: false,
+      adoptedName: "Adopted Standalone",
+      onReady: async () => {
+        readyRan = true;
+      },
+    });
+    expect(result).toEqual({
+      outcome: "promotion_required",
+      parentName: "Gated Parent",
+      parentColor: "#336699",
+      spoolCount: 2,
+      variantName: "Gated Parent — Original",
+    });
+    expect(readyRan).toBe(false);
+    // Nothing written.
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#336699");
+    expect(fresh.spools).toHaveLength(2);
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+  });
+
+  it("adoption: promoteParent: true → parent promoted, then onReady runs while the parent's lock is still held", async () => {
+    const parent = await seedCarryingParent();
+    let lockedDuringReady = -1;
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: true,
+      adoptedName: "Adopted Standalone",
+      onReady: async () => {
+        // In-lock execution: the parent's key still holds its chain entry.
+        lockedDuringReady = lockedKeyCount();
+      },
+    });
+    expect(result).toEqual({ outcome: "ready" });
+    expect(lockedDuringReady).toBe(1);
+    expect(lockedKeyCount()).toBe(0); // drained after settlement
+
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color ?? null).toBeNull();
+    expect(fresh.spools).toHaveLength(0);
+    const promoted = await Filament.findOne({ name: "Gated Parent — Original" }).lean();
+    expect(promoted).toBeTruthy();
+    expect(promoted.color).toBe("#336699");
+    expect(promoted.spools).toHaveLength(2);
+  });
+
+  it("adoption: the promotion copy never squats on the adopted document's name", async () => {
+    const parent = await seedCarryingParent({ colorName: "Original" });
+    // The reviving/re-parented doc is ALREADY named exactly what the copy
+    // would take ("Gated Parent — Original") — e.g. a trashed promotion
+    // copy being restored. adoptedName reserves it.
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: true,
+      adoptedName: "Gated Parent — Original",
+    });
+    expect(result).toEqual({ outcome: "ready" });
+    const promoted = await Filament.findOne({ name: "Gated Parent — Original (2)" }).lean();
+    expect(promoted).toBeTruthy();
+    expect(promoted.color).toBe("#336699");
+  });
+
+  it("adoption: a non-carrying parent is ready straight through (onReady runs, no promotion copy)", async () => {
+    const parent = await Filament.create({
+      name: "Clean Adoption Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+    });
+    let readyRan = false;
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: false,
+      onReady: async () => {
+        readyRan = true;
+      },
+    });
+    expect(result).toEqual({ outcome: "ready" });
+    expect(readyRan).toBe(true);
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+  });
+
+  it("adoption: a carrying parent that ALREADY has a live variant skips the gate (enforce-forward)", async () => {
+    const parent = await seedCarryingParent();
+    await Filament.create({
+      name: "Gated Parent — Existing",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+    });
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: false,
+    });
+    expect(result).toEqual({ outcome: "ready" });
+    // The legacy carrying state stays put — no silent move.
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#336699");
+    expect(fresh.spools).toHaveLength(2);
+  });
+
+  it("adoption: parent vanished before the lock → parent_not_found (onReady never runs)", async () => {
+    const parent = await seedCarryingParent();
+    await Filament.updateOne({ _id: parent._id }, { $set: { _deletedAt: new Date() } });
+    let readyRan = false;
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: true,
+      onReady: async () => {
+        readyRan = true;
+      },
+    });
+    expect(result).toEqual({ outcome: "parent_not_found" });
+    expect(readyRan).toBe(false);
+  });
+
+  it("adoption: checkHasVariants is injectable (a stub reporting a variant suppresses the gate)", async () => {
+    const parent = await seedCarryingParent();
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: false,
+      checkHasVariants: async () => true,
+    });
+    expect(result).toEqual({ outcome: "ready" });
+  });
+
+  it("adoption: serializes on the parent's keyed mutex like the creation gate", async () => {
+    const parent = await seedCarryingParent();
+    const key = filamentLockKey(parent._id);
+
+    let release!: () => void;
+    const holdUntil = new Promise<void>((r) => (release = r));
+    const order: string[] = [];
+    const holder = runExclusive(key, async () => {
+      order.push("holder");
+      await holdUntil;
+    });
+
+    const gated = gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: false,
+    }).then((r) => {
+      order.push("gate");
+      return r;
+    });
+
+    await new Promise((r) => setTimeout(r, 20));
+    expect(order).toEqual(["holder"]);
+
+    release();
+    const result = await gated;
+    await holder;
+    expect(result.outcome).toBe("promotion_required");
+    expect(order).toEqual(["holder", "gate"]);
+    expect(lockedKeyCount()).toBe(0);
   });
 });

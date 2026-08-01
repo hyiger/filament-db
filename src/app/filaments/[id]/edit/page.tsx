@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import Link from "next/link";
 import FilamentForm from "@/app/filaments/FilamentForm";
 import { useToast } from "@/components/Toast";
+import { useConfirm } from "@/components/ConfirmDialog";
 import UnsavedChangesDialog from "@/components/UnsavedChangesDialog";
 import { useUnsavedChanges } from "@/hooks/useUnsavedChanges";
 import { useTranslation } from "@/i18n/TranslationProvider";
@@ -12,6 +13,7 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 export default function EditFilament() {
   const params = useParams();
   const { toast } = useToast();
+  const confirm = useConfirm();
   const { t } = useTranslation();
   const [filament, setFilament] = useState<Record<string, unknown> | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -42,11 +44,39 @@ export default function EditFilament() {
   }, [params.id]);
 
   const handleSubmit = async (data: Record<string, unknown>) => {
-    const res = await fetch(`/api/filaments/${params.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    });
+    const put = (payload: Record<string, unknown>) =>
+      fetch(`/api/filaments/${params.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+    let res = await put(data);
+
+    // GH #605 (codex round 4, F2): setting a parent on this filament can make
+    // it the FIRST variant of a parent that still carries its own color /
+    // spools — the server promotes that parent to a template (moving the
+    // state onto a new sibling variant) and 409s until the client opts in.
+    // Same catch → confirm → retry-with-flag flow as the create page.
+    if (res.status === 409) {
+      const conflict = await res.json().catch(() => null);
+      if (conflict?.error !== "parent_promotion_required") {
+        toast(conflict?.error || t("edit.toast.updateFailed"), "error");
+        return;
+      }
+      const ok = await confirm({
+        title: t("edit.promote.title"),
+        message: t("edit.promote.message", {
+          parent: String(conflict.parentName ?? ""),
+          variant: String(conflict.variantName ?? ""),
+          count: conflict.spoolCount ?? 0,
+        }),
+        confirmLabel: t("edit.promote.confirm"),
+      });
+      if (!ok) return;
+      res = await put({ ...data, promoteParent: true });
+    }
+
     if (res.ok) {
       toast(t("edit.toast.updated"));
       navigate(detailUrl);

@@ -9,8 +9,10 @@
  * is promoted:
  *
  *   1. copy color / colorName / spools / totalWeight onto a freshly created
- *      variant, THEN
- *   2. clear those fields on the parent.
+ *      variant (spool subdoc `_id`s preserved), THEN
+ *   2. remap external `(filamentId, spoolId)` references (PrintHistory
+ *      usage entries, Printer AMS slots) onto the variant, THEN
+ *   3. clear those fields on the parent.
  *
  * `lowStockThreshold` MOVES WITH the inventory (review P2): it alarms on the
  * remaining weight of the spools/totalWeight being moved, so leaving it on a
@@ -126,19 +128,67 @@ export async function resolvePromotionVariantName(
   }
 }
 
-/** A moved spool: same data, fresh subdoc `_id` (Mongoose assigns it when
- *  none is supplied). `instanceId` is PRESERVED — it identifies the physical
- *  roll (labels/QR/NFC already reference it) and the parent's copy is
- *  cleared right after, so it stays unique among live spools. */
-function spoolForMove(spool: FilamentDoc): FilamentDoc {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { _id, ...rest } = spool;
-  return rest;
+/**
+ * External collections that address spools by the `(filamentId, spoolId)`
+ * pair. Injected (never imported) so this module stays model-free — it is
+ * imported by client components for `parentPromotionState`, and a static
+ * model import would drag Mongoose into the client bundle. Every server
+ * caller passes the real `PrintHistory` + `Printer` models; `null` skips the
+ * remap and is ONLY for unit tests that pin the FilamentModel-side contract
+ * with mock models (a real promotion must always remap).
+ */
+export interface PromotionExternalRefModels {
+  /** The PrintHistory model — `usage[].{filamentId,spoolId}` entries. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  printHistory: any;
+  /** The Printer model — `amsSlots[].{filamentId,spoolId}` entries. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  printer: any;
+}
+
+export interface PerformParentPromotionOptions {
+  /** Extra names to treat as occupied when naming the promotion copy —
+   *  see resolvePromotionVariantName. */
+  alsoTakenNames?: ReadonlySet<string>;
+  /** Models holding external `(filamentId, spoolId)` references that must
+   *  follow the moved spools (codex round 4, F1) — or `null` in unit tests
+   *  that use mock models. */
+  externalRefs: PromotionExternalRefModels | null;
 }
 
 /**
- * Perform the promotion: create the carrying variant, then clear the moved
- * fields on the parent. Returns the created variant document.
+ * Codex round 4, F1: remap external `(filamentId, spoolId)` references from
+ * the parent to the promoted variant. Spool subdocument `_id`s are PRESERVED
+ * on the promoted copy (they only need uniqueness within their parent
+ * document, and the parent's copies are cleared in the same operation), so
+ * the spoolId half of every persisted reference stays valid — only the
+ * filamentId half has to move. `updateMany` + `arrayFilters` so multi-entry
+ * documents (a multi-material job, a multi-slot AMS) remap every matching
+ * entry in one write; entries whose spoolId is NOT in the moved set (or
+ * whose filamentId isn't the parent) are untouched.
+ */
+async function remapExternalSpoolRefs(
+  refs: PromotionExternalRefModels,
+  parentId: unknown,
+  variantId: unknown,
+  movedSpoolIds: unknown[],
+): Promise<void> {
+  await refs.printHistory.updateMany(
+    { usage: { $elemMatch: { filamentId: parentId, spoolId: { $in: movedSpoolIds } } } },
+    { $set: { "usage.$[u].filamentId": variantId } },
+    { arrayFilters: [{ "u.filamentId": parentId, "u.spoolId": { $in: movedSpoolIds } }] },
+  );
+  await refs.printer.updateMany(
+    { amsSlots: { $elemMatch: { filamentId: parentId, spoolId: { $in: movedSpoolIds } } } },
+    { $set: { "amsSlots.$[s].filamentId": variantId } },
+    { arrayFilters: [{ "s.filamentId": parentId, "s.spoolId": { $in: movedSpoolIds } }] },
+  );
+}
+
+/**
+ * Perform the promotion: create the carrying variant, remap external spool
+ * references onto it, then clear the moved fields on the parent. Returns the
+ * created variant document.
  *
  * The variant body is built explicitly (never spread from the parent) so
  * server-owned identity never leaks across documents: the variant gets its
@@ -147,18 +197,35 @@ function spoolForMove(spool: FilamentDoc): FilamentDoc {
  * `diameter` is pinned null so the schema's 1.75 default can't override a
  * non-1.75 parent (the GH #106 inherit rule); every other inheritable field
  * is simply omitted and inherits live via resolveFilament.
+ *
+ * Spool subdocuments move VERBATIM — subdoc `_id` AND `instanceId` both
+ * preserved (codex round 4, F1). The `_id` only needs uniqueness within its
+ * parent document and the parent's copy is cleared in the same operation, so
+ * reuse is safe — and it keeps every persisted `(filamentId, spoolId)`
+ * consumer's spoolId half stable; `remapExternalSpoolRefs` then moves the
+ * filamentId half. `instanceId` identifies the physical roll (labels/QR/NFC
+ * reference it) and stays unique among live spools for the same reason.
+ *
+ * Ordering + crash posture (no transactions on standalone mongod):
+ * copy → remap → clear. A crash after the copy but before the remap/clear
+ * leaves the spools present on BOTH documents momentarily, but every
+ * external reference still resolves against the parent (its spools are
+ * still there) — recoverable via "Convert to template", no reference is
+ * ever left dangling and no data is lost.
  */
 export async function performParentPromotion(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   FilamentModel: any,
   parent: FilamentDoc,
-  alsoTakenNames?: ReadonlySet<string>,
+  opts: PerformParentPromotionOptions,
 ): Promise<FilamentDoc> {
   const name = await resolvePromotionVariantName(
     FilamentModel,
     promotionVariantBaseName(parent.name, parent.colorName),
-    alsoTakenNames,
+    opts.alsoTakenNames,
   );
+
+  const movedSpools: FilamentDoc[] = Array.isArray(parent.spools) ? parent.spools : [];
 
   // spoolWeight / netFilamentWeight are deliberately NOT copied — they are
   // SPEC, not inventory, and stay on the parent template; the variant's own
@@ -175,8 +242,21 @@ export async function performParentPromotion(
     // The low-stock alarm follows the inventory it watches (review P2) —
     // same copy-first/clear-last write set as totalWeight.
     lowStockThreshold: parent.lowStockThreshold ?? null,
-    spools: Array.isArray(parent.spools) ? parent.spools.map(spoolForMove) : [],
+    spools: movedSpools,
   });
+
+  // Codex round 4, F1: persisted (filamentId, spoolId) consumers follow the
+  // spools BEFORE the parent's copies are cleared — see remapExternalSpoolRefs
+  // and the crash-posture note in the docblock. Every spool subdoc from a
+  // Mongoose document carries an `_id`, so no filtering is needed here.
+  if (opts.externalRefs && movedSpools.length > 0) {
+    await remapExternalSpoolRefs(
+      opts.externalRefs,
+      parent._id,
+      variant._id,
+      movedSpools.map((s) => s._id),
+    );
+  }
 
   // Clear LAST (see module header) — and clear ONLY the moved fields; the
   // SPEC pair stays on the parent. `_deletedAt: null` re-filter so a

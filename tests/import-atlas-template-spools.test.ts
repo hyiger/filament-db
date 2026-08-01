@@ -143,6 +143,114 @@ describe("POST /api/filaments/import-atlas — template spool guard (GH #605)", 
     }
   });
 
+  it("drops non-null remote color/colorName/lowStockThreshold aimed at a local template (round 4 F4 — PUT-strip parity)", async () => {
+    const localTemplate = await Filament.create({
+      name: "Atlas Template ASA",
+      vendor: "L",
+      type: "ASA",
+      color: null,
+      colorName: null,
+    });
+    await Filament.create({
+      name: "Atlas Template ASA — Green",
+      vendor: "L",
+      type: "ASA",
+      color: "#00FF00",
+      parentId: localTemplate._id,
+    });
+
+    const client = await new MongoClient(remoteUri()).connect();
+    try {
+      const remoteId = new ObjectId();
+      await client.db().collection("filaments").insertOne({
+        _id: remoteId,
+        name: "Atlas Template ASA",
+        vendor: "R",
+        type: "ASA",
+        density: 1.07,
+        // Per-variant identity/alarm state — templates are colorless and
+        // inventory-free, so none of these may land (PUT-parity with the
+        // TEMPLATE_STRIP_FIELDS list in [id]/route.ts).
+        color: "#123456",
+        colorName: "Remote Blue",
+        lowStockThreshold: 250,
+        _deletedAt: null,
+      });
+
+      const res = await importAtlas(
+        postReq({ uri: remoteUri(), filamentIds: [String(remoteId)] }),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.updated).toBe(1);
+      expect(body.errors).toHaveLength(1);
+      expect(body.errors[0]).toMatch(/template/i);
+      expect(body.errors[0]).toMatch(/a color/);
+      expect(body.errors[0]).toMatch(/color name/);
+      expect(body.errors[0]).toMatch(/low-stock threshold/);
+
+      const fresh = await Filament.findById(localTemplate._id).lean();
+      expect(fresh!.color ?? null).toBeNull();
+      expect(fresh!.colorName ?? null).toBeNull();
+      expect(fresh!.lowStockThreshold ?? null).toBeNull();
+      // The rest of the remote row still applied.
+      expect(fresh!.density).toBe(1.07);
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("explicit remote NULL color/colorName still applies to a template (legacy cleanup — same posture as PUT)", async () => {
+    // A LEGACY carrying template: still holds a color despite having a live
+    // variant (enforce-forward residue). A remote row that has already been
+    // cleaned (explicit nulls) may propagate that cleanup.
+    const localTemplate = await Filament.create({
+      name: "Atlas Legacy Template",
+      vendor: "L",
+      type: "PLA",
+      color: "#808080",
+      colorName: "Gray",
+      lowStockThreshold: 100,
+    });
+    await Filament.create({
+      name: "Atlas Legacy Template — Red",
+      vendor: "L",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: localTemplate._id,
+    });
+
+    const client = await new MongoClient(remoteUri()).connect();
+    try {
+      const remoteId = new ObjectId();
+      await client.db().collection("filaments").insertOne({
+        _id: remoteId,
+        name: "Atlas Legacy Template",
+        vendor: "R",
+        type: "PLA",
+        color: null,
+        colorName: null,
+        lowStockThreshold: null,
+        _deletedAt: null,
+      });
+
+      const res = await importAtlas(
+        postReq({ uri: remoteUri(), filamentIds: [String(remoteId)] }),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.updated).toBe(1);
+      expect(body.errors).toBeUndefined();
+
+      const fresh = await Filament.findById(localTemplate._id).lean();
+      expect(fresh!.color).toBeNull();
+      expect(fresh!.colorName).toBeNull();
+      expect(fresh!.lowStockThreshold).toBeNull();
+    } finally {
+      await client.close();
+    }
+  });
+
   it("a non-template local row still receives the remote spools (no errors reported)", async () => {
     const local = await Filament.create({
       name: "Atlas Plain PLA",

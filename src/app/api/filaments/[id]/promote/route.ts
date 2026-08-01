@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Filament from "@/models/Filament";
+import PrintHistory from "@/models/PrintHistory";
+import Printer from "@/models/Printer";
 import { hasVariants } from "@/lib/resolveFilament";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { parentPromotionState, performParentPromotion } from "@/lib/promoteParent";
@@ -86,7 +88,12 @@ export async function POST(
         );
       }
 
-      const variant = await performParentPromotion(Filament, filament);
+      // The external-ref models let the promotion remap persisted
+      // (filamentId, spoolId) references onto the carrying variant (codex
+      // round 4, F1) — history rows and AMS slots follow the moved spools.
+      const variant = await performParentPromotion(Filament, filament, {
+        externalRefs: { printHistory: PrintHistory, printer: Printer },
+      });
       const parent = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
 
       return NextResponse.json({ variant, parent });

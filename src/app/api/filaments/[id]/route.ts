@@ -6,6 +6,10 @@ import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import { resolveFilament, hasVariants } from "@/lib/resolveFilament";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
+import {
+  gateFirstVariantAdoption,
+  promotionRequired409Body,
+} from "@/lib/createVariantGated";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest, assertSafeUpdateBody } from "@/lib/requestGuard";
 import { mergeSlicerSettings } from "@/lib/slicerSettings";
@@ -186,6 +190,12 @@ export async function PUT(
   try {
     await dbConnect();
     const { id } = await params;
+    // GH #605 (codex round 4, F2): `promoteParent` is a control flag for the
+    // re-parent adoption gate below, never a schema field — capture it, then
+    // strip it so it can't ride into the update (same posture as the POST
+    // handler's flag).
+    const promoteParent = body?.promoteParent === true;
+    delete body.promoteParent;
     delete body._id;
     delete body._deletedAt;
     // GH #222 (P1 security): `_purged` is a sync-engine tombstone signal,
@@ -381,13 +391,63 @@ export async function PUT(
       }
     }
 
+    // GH #605 (codex round 4, F2): a PUT that INTRODUCES a parentId (none →
+    // some, or a re-parent to a DIFFERENT parent) can mint that parent's
+    // first live variant — the same restructuring event the POST create path
+    // gates — so it must round-trip the same confirmation: 409
+    // `parent_promotion_required` until the caller repeats the request with
+    // `promoteParent: true`, which promotes the carrying parent first. The
+    // gate runs LAST, after every other guard above, so an otherwise-invalid
+    // request gets its 400 before any promotion side effect.
+    //
+    // Lock ordering: the gate (and a confirmed promotion) runs under the
+    // PARENT's key inside gateFirstVariantAdoption; the write section below
+    // runs under the TARGET's key. The two are strictly SEQUENTIAL — never
+    // held together — because two opposing re-parent PUTs (A→B and B→A)
+    // acquiring {parent, target} pairs in opposite orders would deadlock.
+    // Residual window: between the parent-lock release and the target-lock
+    // write, a concurrent writer could hand the parent new carrying state
+    // (its own color PUT, an atlas import). The result is a template that
+    // still carries legacy state — exactly the pre-#605 shape the
+    // enforce-forward posture already tolerates and "Convert to template"
+    // recovers, so the window degrades gracefully instead of corrupting.
+    // `stored` gating: a PUT addressed to a missing/trashed target 404s at
+    // the write — without the target check, a confirmed request could
+    // promote the parent and THEN 404, an irreversible side effect on an
+    // error response. (`stored` is the pre-lock snapshot; the write's own
+    // `_deletedAt: null` filter still owns the final answer.)
+    if (stored && body.parentId && reparenting) {
+      const adoption = await gateFirstVariantAdoption(Filament, body.parentId, {
+        promoteParent,
+        // Reserve the name this document will carry after the PUT (a rename
+        // can ride the same request) so the promotion copy can't squat on it.
+        adoptedName: typeof body.name === "string" ? body.name : undefined,
+      });
+      if (adoption.outcome === "parent_not_found") {
+        // Validated above but vanished (soft-deleted) before the gate —
+        // same 400 the pre-lock check would have given.
+        return errorResponse("Parent filament not found", 400);
+      }
+      if (adoption.outcome === "promotion_required") {
+        return NextResponse.json(promotionRequired409Body(adoption), { status: 409 });
+      }
+    }
+
     // GH #605: a filament with ≥1 live variant is a TEMPLATE and must not
-    // carry its own INVENTORY — that is `totalWeight` only. STRIP (don't
-    // reject) a non-null totalWeight write — the edit form echoes every
-    // field back on save, so a 400 would brick parent edits entirely. An
+    // carry its own INVENTORY or per-variant color identity. STRIP (don't
+    // reject) a non-null write of any of the four per-variant fields —
+    // `totalWeight` (inventory), and since codex round 4 (F3) also `color`,
+    // `colorName`, and `lowStockThreshold`: a form loaded PRE-promotion and
+    // saved POST-promotion echoes the promoted-away values back verbatim and
+    // would re-materialize them on the template (and a 400 would brick
+    // parent edits entirely, since the edit form echoes every field). An
     // explicit null passes through: clearing a legacy parent's leftover
     // value is legitimate cleanup, and blocking it would freeze exactly the
-    // state we're trying to migrate away from. The response carries
+    // state we're trying to migrate away from. For a LEGACY carrying parent
+    // (pre-#605, still holding a color) the form resubmits the STORED value
+    // verbatim — stripping means "not applied", and since the resubmitted
+    // value equals the stored one, behavior is unchanged (the stored color
+    // stays; the response still reports the strip). The response carries
     // `_strippedTemplateFields` (response-only, underscore-prefixed like
     // _parent/_variants) so a client can surface a warning.
     //
@@ -407,11 +467,24 @@ export async function PUT(
     // template. Serialized, either the PUT lands first (and the promotion's
     // fresh snapshot moves the new value onto the promoted variant) or the
     // promotion lands first (and this re-check strips the write).
+
+    // The per-variant fields a template must not (re-)acquire — inventory
+    // plus color identity (codex round 4, F3). Atlas imports drop the same
+    // set (import-atlas/route.ts) — keep the two lists in lockstep.
+    const TEMPLATE_STRIP_FIELDS = [
+      "totalWeight",
+      "color",
+      "colorName",
+      "lowStockThreshold",
+    ] as const;
     let strippedTemplateFields: string[] = [];
     const filament = await runExclusive(filamentLockKey(id), async () => {
-      if (body.totalWeight != null && (await hasVariants(Filament, id))) {
-        delete body.totalWeight;
-        strippedTemplateFields = ["totalWeight"];
+      const offending = TEMPLATE_STRIP_FIELDS.filter((f) => body[f] != null);
+      if (offending.length > 0 && (await hasVariants(Filament, id))) {
+        for (const f of offending) {
+          delete body[f];
+        }
+        strippedTemplateFields = offending;
       }
       return await Filament.findOneAndUpdate(
         { _id: id, _deletedAt: null },

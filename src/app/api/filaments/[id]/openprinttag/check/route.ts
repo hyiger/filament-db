@@ -26,6 +26,15 @@ import { resolveEffectiveFilament } from "@/lib/resolveEffectiveFilament";
  * `changes[]` entries are `{ field, labelKey, current, incoming, kind }`
  * where `kind ∈ {adopt, conflict}` (see src/lib/optResync.ts). An empty
  * `changes` array means the row is already up to date with OPT.
+ *
+ * GH #605 (codex round 4, F5): this route deliberately does NOT take the
+ * per-filament mutex the sync route holds. Its output is ADVISORY — a
+ * changelist the user picks from — and the sync route re-derives the whole
+ * offered set (including the template `excludeColor` flag) from a fresh
+ * in-lock snapshot before any write, so a changelist staled by a concurrent
+ * first-variant promotion can never be applied; it just 400s on sync and
+ * the user re-checks. Locking here would serialize a read-only endpoint
+ * against every write on the filament for no correctness gain.
  */
 export async function GET(
   _request: NextRequest,

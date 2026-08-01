@@ -20,7 +20,9 @@
  * The whole sequence — in-lock parent re-fetch, gate decision, promotion,
  * create — runs inside the per-parent keyed mutex (`runExclusive` on
  * `filamentLockKey(parentId)`), the same key the spool-POST and PUT routes
- * lock, so a spool accepted before this section is visible to the promotion
+ * lock (and, since codex round 4, the atlas import's template guard, the
+ * OPT sync's offered-set+write section, and the restore adoption gate), so
+ * a spool accepted before this section is visible to the promotion
  * snapshot (and moves with the inventory), and one queued behind it hits the
  * spool route's template guard. See src/lib/filamentMutex.ts for why the
  * process-local lock is sufficient (single-process server) and which
@@ -40,6 +42,17 @@ import {
   resolvePromotionVariantName,
   performParentPromotion,
 } from "@/lib/promoteParent";
+// This module is server-only (imported by API routes exclusively), so it can
+// carry the model imports that promoteParent.ts — imported by client
+// components for parentPromotionState — must not. Every promotion routed
+// through here passes them as the external (filamentId, spoolId) reference
+// models the F1 remap updates.
+import PrintHistory from "@/models/PrintHistory";
+import Printer from "@/models/Printer";
+
+/** The real external-reference models every route-facing promotion remaps
+ *  (codex round 4, F1) — see PromotionExternalRefModels. */
+const EXTERNAL_REFS = { printHistory: PrintHistory, printer: Printer };
 
 // Mirrors the loose doc typing the other model-level helpers use
 // (see src/lib/promoteParent.ts).
@@ -91,6 +104,62 @@ export function promotionRequired409Body(
 }
 
 /**
+ * The gate+promote core, shared by CREATION (createVariantGated) and
+ * ADOPTION (gateFirstVariantAdoption — codex round 4, F2/F6). MUST be called
+ * while holding `runExclusive(filamentLockKey(parent._id))`, with a `parent`
+ * snapshot fetched INSIDE that hold.
+ *
+ * `beforePromote` (creation only) runs after the gate decides a CONFIRMED
+ * promotion is due, immediately before the promotion itself — the fail-fast
+ * checks (duplicate-name pre-check, dry-run validation) that must surface
+ * BEFORE the irreversible restructuring of the parent. Returning a result
+ * aborts with the parent untouched; a throw propagates the same way.
+ */
+async function gateAndPromoteInLock(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: any,
+  parent: FilamentDoc,
+  promoteParent: boolean,
+  alsoTaken: ReadonlySet<string> | undefined,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  checkHasVariants: (FilamentModel: any, id: string) => Promise<boolean>,
+  beforePromote?: () => Promise<{ outcome: "name_taken"; name: string } | null>,
+): Promise<
+  | ({ kind: "required" } & PromotionRequiredInfo)
+  | { kind: "aborted"; abort: { outcome: "name_taken"; name: string } }
+  | { kind: "ready" }
+> {
+  const promoState = parentPromotionState(parent);
+  if (promoState.needed && !(await checkHasVariants(FilamentModel, String(parent._id)))) {
+    if (!promoteParent) {
+      const variantName = await resolvePromotionVariantName(
+        FilamentModel,
+        promotionVariantBaseName(parent.name, parent.colorName),
+        alsoTaken,
+      );
+      return {
+        kind: "required",
+        parentName: parent.name,
+        parentColor: promoState.parentColor,
+        spoolCount: promoState.spoolCount,
+        variantName,
+      };
+    }
+    if (beforePromote) {
+      const abort = await beforePromote();
+      if (abort) {
+        return { kind: "aborted", abort };
+      }
+    }
+    await performParentPromotion(FilamentModel, parent, {
+      alsoTakenNames: alsoTaken,
+      externalRefs: EXTERNAL_REFS,
+    });
+  }
+  return { kind: "ready" };
+}
+
+/**
  * Create `body` as a variant of `parentId`, running the full #605 promotion
  * gate inside the per-parent mutex.
  *
@@ -126,50 +195,140 @@ export async function createVariantGated(
       return { outcome: "parent_not_found" };
     }
 
-    const promoState = parentPromotionState(parent);
-    if (promoState.needed && !(await checkHasVariants(FilamentModel, parentKey))) {
-      // The requested variant's own name is treated as taken when resolving
-      // the promoted copy's name — the copy must never squat on the name
-      // this request is about to create.
-      const alsoTaken =
-        typeof body.name === "string" ? new Set([body.name]) : undefined;
-      if (!promoteParent) {
-        const variantName = await resolvePromotionVariantName(
-          FilamentModel,
-          promotionVariantBaseName(parent.name, parent.colorName),
-          alsoTaken,
-        );
-        return {
-          outcome: "promotion_required",
-          parentName: parent.name,
-          parentColor: promoState.parentColor,
-          spoolCount: promoState.spoolCount,
-          variantName,
-        };
-      }
-      // Confirmed. Fail a doomed duplicate-named request BEFORE mutating —
-      // it would otherwise E11000 with the parent already promoted. No
-      // transactions available (standalone mongod), so the residual risk
-      // window is the name race between this pre-check and the create; the
-      // promotion itself is copy-first/clear-last and self-consistent.
-      if (
-        typeof body.name === "string" &&
-        (await FilamentModel.exists({ name: body.name, _deletedAt: null }))
-      ) {
-        return { outcome: "name_taken", name: body.name };
-      }
-      // Same principle for a schema-invalid request (bad color hex, negative
-      // cost, …): the route-level guards don't run Mongoose validation, so
-      // without this dry run the promotion would permanently restructure the
-      // parent and THEN the create below would fail — an error response
-      // after an irreversible side effect. Validate the exact payload the
-      // create will use; a ValidationError propagates to the caller with
-      // the parent completely untouched.
-      await new FilamentModel(body).validate();
-      await performParentPromotion(FilamentModel, parent, alsoTaken);
+    // The requested variant's own name is treated as taken when resolving
+    // the promoted copy's name — the copy must never squat on the name
+    // this request is about to create.
+    const alsoTaken =
+      typeof body.name === "string" ? new Set([body.name]) : undefined;
+    const gate = await gateAndPromoteInLock(
+      FilamentModel,
+      parent,
+      promoteParent,
+      alsoTaken,
+      checkHasVariants,
+      async () => {
+        // Confirmed. Fail a doomed duplicate-named request BEFORE mutating —
+        // it would otherwise E11000 with the parent already promoted. No
+        // transactions available (standalone mongod), so the residual risk
+        // window is the name race between this pre-check and the create; the
+        // promotion itself is copy-first/clear-last and self-consistent.
+        if (
+          typeof body.name === "string" &&
+          (await FilamentModel.exists({ name: body.name, _deletedAt: null }))
+        ) {
+          return { outcome: "name_taken", name: body.name };
+        }
+        // Same principle for a schema-invalid request (bad color hex, negative
+        // cost, …): the route-level guards don't run Mongoose validation, so
+        // without this dry run the promotion would permanently restructure the
+        // parent and THEN the create below would fail — an error response
+        // after an irreversible side effect. Validate the exact payload the
+        // create will use; a ValidationError propagates to the caller with
+        // the parent completely untouched.
+        await new FilamentModel(body).validate();
+        return null;
+      },
+    );
+    if (gate.kind === "required") {
+      return {
+        outcome: "promotion_required",
+        parentName: gate.parentName,
+        parentColor: gate.parentColor,
+        spoolCount: gate.spoolCount,
+        variantName: gate.variantName,
+      };
+    }
+    if (gate.kind === "aborted") {
+      return gate.abort;
     }
 
     const filament = await FilamentModel.create(body);
     return { outcome: "created", filament };
+  });
+}
+
+export type FirstVariantAdoptionResult =
+  /** The parent vanished (soft-deleted) between the caller's own pre-lock
+   *  validation and the in-lock re-fetch. */
+  | { outcome: "parent_not_found" }
+  /** Adopting this document would mint the FIRST live variant of a carrying
+   *  parent and the caller didn't confirm — respond 409 with
+   *  `promotionRequired409Body(info)`. Nothing written. */
+  | ({ outcome: "promotion_required" } & PromotionRequiredInfo)
+  /** Safe to proceed (no promotion was due, or the confirmed promotion ran).
+   *  When `onReady` was supplied it has already executed, in-lock. */
+  | { outcome: "ready" };
+
+/**
+ * ADOPTION gate (codex round 4, F2/F6): an EXISTING document is about to
+ * become `parentId`'s first live variant — a PUT that introduces/changes the
+ * `parentId`, or a restore that revives a trashed variant under a parent
+ * that re-acquired carrying state while it was variant-less. Same contract
+ * as creation: 409 (`parent_promotion_required`) until the caller confirms
+ * with `promoteParent: true`, then the parent is promoted copy-first/
+ * clear-last before the adoption proceeds. No secondary entry point may
+ * mint a carrying parent's first live variant without this round-trip.
+ *
+ * Owns its own `runExclusive` hold on the PARENT's key and re-fetches the
+ * parent fresh inside it — callers must NOT already hold that key (the
+ * chain would deadlock behind itself).
+ *
+ * `opts.onReady` runs while the parent's lock is STILL HELD, after the gate
+ * clears — for adoption writes that can safely live under the parent's key
+ * (the restore's un-delete save). The PUT deliberately does NOT use it: its
+ * write section locks the TARGET id, and holding parent+target locks
+ * simultaneously in caller-dependent order would risk an AB/BA deadlock, so
+ * there the two locks are strictly sequential (residual window documented
+ * at the call site). `opts.adoptedName` reserves the adopted document's
+ * name when naming the promotion copy (the copy must never squat on it).
+ */
+export async function gateFirstVariantAdoption(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: any,
+  parentId: unknown,
+  opts: {
+    promoteParent: boolean;
+    adoptedName?: unknown;
+    onReady?: () => Promise<void>;
+    // Injected for unit tests, like createVariantGated's check.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    checkHasVariants?: (FilamentModel: any, id: string) => Promise<boolean>;
+  },
+): Promise<FirstVariantAdoptionResult> {
+  const parentKey = filamentLockKey(parentId);
+  return runExclusive(parentKey, async (): Promise<FirstVariantAdoptionResult> => {
+    const parent = await FilamentModel.findOne({
+      _id: parentKey,
+      _deletedAt: null,
+    }).lean();
+    if (!parent) {
+      return { outcome: "parent_not_found" };
+    }
+
+    const alsoTaken =
+      typeof opts.adoptedName === "string" ? new Set([opts.adoptedName]) : undefined;
+    const gate = await gateAndPromoteInLock(
+      FilamentModel,
+      parent,
+      opts.promoteParent,
+      alsoTaken,
+      opts.checkHasVariants ?? hasVariants,
+      // No beforePromote: adoption introduces no new document/name — the
+      // adopted doc already exists, and its own write runs after "ready".
+    );
+    if (gate.kind === "required") {
+      return {
+        outcome: "promotion_required",
+        parentName: gate.parentName,
+        parentColor: gate.parentColor,
+        spoolCount: gate.spoolCount,
+        variantName: gate.variantName,
+      };
+    }
+    // gate.kind === "aborted" is unreachable without a beforePromote hook.
+    if (opts.onReady) {
+      await opts.onReady();
+    }
+    return { outcome: "ready" };
   });
 }
