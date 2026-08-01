@@ -1322,6 +1322,7 @@
   "form.placeholder.colorName": "z.B. Galaxy Black",
   "form.addItem": "+ \"{item}\" hinzufügen",
   "form.section.spoolWeight": "Spulengewicht",
+  "form.spoolWeight.templateNote": "Vorlagen führen keinen Bestand — Spulen und Gesamtgewicht liegen bei den Farbvarianten. Die hier gesetzten Werte für Leerspule und Netto-Filament sind gemeinsame Kennwerte, die jede Variante erbt.",
   "form.section.printSpeed": "Druckgeschwindigkeit",
   "form.tabs.aria": "Filament-Einstellungsbereiche",
   "form.tab.basics": "Grundlagen",

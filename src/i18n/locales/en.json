@@ -1322,6 +1322,7 @@
   "form.placeholder.colorName": "e.g. Galaxy Black",
   "form.addItem": "+ Add \"{item}\"",
   "form.section.spoolWeight": "Spool Weight",
+  "form.spoolWeight.templateNote": "Templates don't hold inventory — spools and total weight live on the color variants. The empty-spool and net-filament weights set here are shared spec values every variant inherits.",
   "form.section.printSpeed": "Print Speed",
   "form.tabs.aria": "Filament settings sections",
   "form.tab.basics": "Basics",

@@ -50,6 +50,40 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     });
   });
 
+  it("parentPromotionState: colorName-only and totalWeight-only parents gate too", () => {
+    // A color NAME without a hex is still per-variant identity — it names
+    // THIS roll's color and must move on promotion.
+    expect(parentPromotionState({ color: null, colorName: "Galaxy Black", spools: [] })).toEqual({
+      needed: true,
+      parentColor: null,
+      spoolCount: 0,
+    });
+    // Whitespace-only colorName is not a name.
+    expect(parentPromotionState({ color: null, colorName: "   ", spools: [] })).toEqual({
+      needed: false,
+      parentColor: null,
+      spoolCount: 0,
+    });
+    // A legacy inventory totalWeight is inventory — it gates.
+    expect(parentPromotionState({ color: null, spools: [], totalWeight: 1250 })).toEqual({
+      needed: true,
+      parentColor: null,
+      spoolCount: 0,
+    });
+  });
+
+  it("parentPromotionState: the SPEC pair alone (spoolWeight/netFilamentWeight) does NOT gate", () => {
+    // Spec describes the product line, not a roll — it belongs on the
+    // template, where variants inherit it (GH #1048).
+    expect(
+      parentPromotionState({ color: null, spools: [], spoolWeight: 250, netFilamentWeight: 1000 }),
+    ).toEqual({
+      needed: false,
+      parentColor: null,
+      spoolCount: 0,
+    });
+  });
+
   it("parentPromotionState: empty-string color and missing spools count as nothing", () => {
     expect(parentPromotionState({ color: "" })).toEqual({
       needed: false,
@@ -101,7 +135,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
 
   // ── performParentPromotion (real model) ─────────────────────────────────
 
-  it("moves color/colorName/spools/weights to the new variant and clears the parent", async () => {
+  it("moves color/colorName/spools/totalWeight to the new variant, clears them on the parent, and leaves the SPEC pair behind", async () => {
     const parent = await Filament.create({
       name: "Legacy PLA",
       vendor: "V",
@@ -128,8 +162,10 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     expect(variant.color).toBe("#123456");
     expect(variant.colorName).toBe("Deep Blue");
     expect(variant.totalWeight).toBe(1250);
-    expect(variant.spoolWeight).toBe(250);
-    expect(variant.netFilamentWeight).toBe(1000);
+    // The SPEC pair is NOT copied — the variant's own fields stay blank so
+    // it inherits them from the template (GH #1048).
+    expect(variant.spoolWeight ?? null).toBeNull();
+    expect(variant.netFilamentWeight ?? null).toBeNull();
     // Diameter pinned null → inherits the parent's 2.85 (GH #106 rule).
     expect(variant.diameter).toBeNull();
 
@@ -150,17 +186,28 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     expect(variant.instanceId).not.toBe(parentLean.instanceId);
     expect(variant.syncId ?? null).toBeNull();
 
-    // Parent cleared: colorless, inventory-free.
+    // Parent cleared: colorless, inventory-free — but the SPEC pair
+    // (tare + nominal net weight) STAYS on the template.
     const fresh = await Filament.findById(parent._id).lean();
     expect(fresh.color).toBeNull();
     expect(fresh.colorName).toBeNull();
     expect(fresh.spools).toEqual([]);
     expect(fresh.totalWeight).toBeNull();
-    expect(fresh.spoolWeight).toBeNull();
-    expect(fresh.netFilamentWeight).toBeNull();
+    expect(fresh.spoolWeight).toBe(250);
+    expect(fresh.netFilamentWeight).toBe(1000);
     // The parent's own untouched fields survive.
     expect(fresh.diameter).toBe(2.85);
     expect(fresh.name).toBe("Legacy PLA");
+
+    // And the promoted variant INHERITS the spec pair live (GH #1048) —
+    // the whole point of leaving it on the template.
+    const { resolveFilament } = await import("@/lib/resolveFilament");
+    const variantLean = await Filament.findById(variant._id).lean();
+    const resolved = resolveFilament(variantLean, fresh);
+    expect(resolved.spoolWeight).toBe(250);
+    expect(resolved.netFilamentWeight).toBe(1000);
+    expect(resolved._inherited).toContain("spoolWeight");
+    expect(resolved._inherited).toContain("netFilamentWeight");
   });
 
   it("falls back to — Original (with collision suffix) when the parent has no colorName", async () => {

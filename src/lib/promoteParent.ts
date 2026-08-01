@@ -3,13 +3,21 @@
  *
  * A filament becomes a TEMPLATE the moment it gains its first variant
  * (template-ness is derived — never a schema flag). Templates are colorless
- * and hold no inventory, so a parent that still carries a real primary color
- * and/or its own spools has that state MOVED onto a new sibling variant when
- * it is promoted:
+ * and hold no inventory, so a parent that still carries variant state — a
+ * real primary color, a color name, its own spools, or a legacy inventory
+ * `totalWeight` — has that state MOVED onto a new sibling variant when it
+ * is promoted:
  *
- *   1. copy color / colorName / spools / totalWeight / spoolWeight /
- *      netFilamentWeight onto a freshly created variant, THEN
+ *   1. copy color / colorName / spools / totalWeight onto a freshly created
+ *      variant, THEN
  *   2. clear those fields on the parent.
+ *
+ * `spoolWeight` and `netFilamentWeight` deliberately do NOT move (GH #1048):
+ * they are SPEC — the product line's tare and nominal net weight — not
+ * inventory, and they STAY on the parent template where every variant
+ * inherits them (resolveFilament lists both in INHERITABLE_FIELDS; the
+ * promoted variant leaves its own fields blank so inheritance resolves
+ * them). Only `totalWeight` is inventory and moves.
  *
  * Copy FIRST, clear LAST — there are no transactions available (standalone
  * mongod), so a crash between the steps leaves a parent that still carries
@@ -43,13 +51,25 @@ export interface ParentPromotionState {
  * Does this (would-be) parent still carry state that belongs on a variant?
  * "Real color" is any non-empty stored hex — including the historical
  * #808080 gray default, which the pre-#605 form stamped on every filament;
- * it renders as the filament's color, so it moves like any other.
+ * it renders as the filament's color, so it moves like any other. A
+ * non-empty `colorName` gates too (it names THIS roll's color, exactly the
+ * per-variant identity templates must not carry), as does a non-null
+ * inventory `totalWeight`. The SPEC pair (`spoolWeight` /
+ * `netFilamentWeight`) does NOT gate — spec alone is not "carrying": it
+ * belongs on the template, where variants inherit it (GH #1048).
  */
 export function parentPromotionState(parent: FilamentDoc): ParentPromotionState {
   const parentColor =
     typeof parent.color === "string" && parent.color !== "" ? parent.color : null;
+  const hasColorName =
+    typeof parent.colorName === "string" && parent.colorName.trim() !== "";
   const spoolCount = Array.isArray(parent.spools) ? parent.spools.length : 0;
-  return { needed: parentColor != null || spoolCount > 0, parentColor, spoolCount };
+  return {
+    needed:
+      parentColor != null || hasColorName || spoolCount > 0 || parent.totalWeight != null,
+    parentColor,
+    spoolCount,
+  };
 }
 
 /**
@@ -130,6 +150,9 @@ export async function performParentPromotion(
     alsoTakenNames,
   );
 
+  // spoolWeight / netFilamentWeight are deliberately NOT copied — they are
+  // SPEC, not inventory, and stay on the parent template; the variant's own
+  // fields are left blank so resolveFilament inherits them (GH #1048).
   const variant = await FilamentModel.create({
     name,
     vendor: parent.vendor,
@@ -139,12 +162,11 @@ export async function performParentPromotion(
     color: parent.color ?? null,
     colorName: parent.colorName ?? null,
     totalWeight: parent.totalWeight ?? null,
-    spoolWeight: parent.spoolWeight ?? null,
-    netFilamentWeight: parent.netFilamentWeight ?? null,
     spools: Array.isArray(parent.spools) ? parent.spools.map(spoolForMove) : [],
   });
 
-  // Clear LAST (see module header). `_deletedAt: null` re-filter so a
+  // Clear LAST (see module header) — and clear ONLY the moved fields; the
+  // SPEC pair stays on the parent. `_deletedAt: null` re-filter so a
   // concurrent soft-delete can't be resurrected into a mutated tombstone.
   await FilamentModel.updateOne(
     { _id: parent._id, _deletedAt: null },
@@ -154,8 +176,6 @@ export async function performParentPromotion(
         colorName: null,
         spools: [],
         totalWeight: null,
-        spoolWeight: null,
-        netFilamentWeight: null,
       },
     },
   );

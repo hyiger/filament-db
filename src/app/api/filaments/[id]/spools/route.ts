@@ -4,6 +4,7 @@ import dbConnect from "@/lib/mongodb";
 import Filament, { generateInstanceId, isSpoolInstanceIdTaken } from "@/models/Filament";
 import Location from "@/models/Location";
 import { hasVariants } from "@/lib/resolveFilament";
+import { pushSpoolWithTemplateGuard } from "@/lib/spoolTemplateGuard";
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
@@ -85,23 +86,6 @@ export async function POST(
       return errorResponse("Invalid filament id", 400);
     }
 
-    // GH #605: a filament with ≥1 live variant is a TEMPLATE — inventory
-    // lives on its color variants, never on the template itself. Enforced
-    // forward only: spools a legacy parent already carries stay untouched,
-    // but no NEW spool may land here (same variant-existence check the
-    // DELETE guard uses). Machine-readable `error` code, human `message` —
-    // the shape the other structured rejections use (name_id_mismatch).
-    if (await hasVariants(Filament, id)) {
-      return NextResponse.json(
-        {
-          error: "template_no_spools",
-          message:
-            "This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead.",
-        },
-        { status: 400 },
-      );
-    }
-
     // GH #953: a new spool's locationId must reference an active Location, so a
     // dangling ref can't persist and produce a phantom "no location" group in
     // every location-grouped view.
@@ -142,20 +126,36 @@ export async function POST(
     if (validation.photoDataUrl !== undefined) newSpool.photoDataUrl = validation.photoDataUrl;
     if (validation.retired !== undefined) newSpool.retired = validation.retired;
 
-    const filament = await Filament.findOneAndUpdate(
-      { _id: id, _deletedAt: null },
-      { $push: { spools: newSpool } },
-      { returnDocument: "after" }
-    ).lean();
+    // GH #605: a filament with ≥1 live variant is a TEMPLATE — inventory
+    // lives on its color variants, never on the template itself. Enforced
+    // forward only: spools a legacy parent already carries stay untouched,
+    // but no NEW spool may land here (same variant-existence check the
+    // DELETE guard uses). The check-push-recheck-compensate sequence lives
+    // in pushSpoolWithTemplateGuard so a concurrent first-variant creation
+    // between check and $push can't strand a fresh spool on a template —
+    // the guard re-checks after the push and pulls the spool back out.
+    const result = await pushSpoolWithTemplateGuard(Filament, id, newSpool, hasVariants);
 
-    if (!filament) {
+    if (result.outcome === "template") {
+      // Machine-readable `error` code, human `message` — the shape the
+      // other structured rejections use (name_id_mismatch).
+      return NextResponse.json(
+        {
+          error: "template_no_spools",
+          message:
+            "This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead.",
+        },
+        { status: 400 },
+      );
+    }
+    if (result.outcome === "not_found") {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     // GH #341: align with the other create endpoints (nozzles, printers,
     // bed-types, locations, filaments, print-history) which all return 201
     // on a successful POST. This used to return 200 which violates the
     // documented REST semantics and trips polite HTTP clients.
-    return NextResponse.json(filament, { status: 201 });
+    return NextResponse.json(result.filament, { status: 201 });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to add spool");
   }

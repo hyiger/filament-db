@@ -11,10 +11,12 @@ import { POST as createFilament } from "@/app/api/filaments/route";
  * A filament with ≥1 live variant is a TEMPLATE (template-ness is derived,
  * never a schema flag). Templates hold no inventory:
  *   - POST /spools on a template → 400 `template_no_spools` (standalones 201)
- *   - PUT weight-trio writes (totalWeight / spoolWeight / netFilamentWeight)
- *     on a template are STRIPPED (not rejected — the edit form echoes every
- *     field back), reported via `_strippedTemplateFields`; explicit nulls
- *     (clearing legacy values) still pass through.
+ *   - PUT writes of the INVENTORY weight (totalWeight) on a template are
+ *     STRIPPED (not rejected — the edit form echoes every field back),
+ *     reported via `_strippedTemplateFields`; explicit nulls (clearing
+ *     legacy values) still pass through. The SPEC pair (spoolWeight /
+ *     netFilamentWeight) stays EDITABLE on templates — it describes the
+ *     product line and variants inherit it (GH #1048).
  *
  * Also pins the Phase-1a API contract: POST and PUT accept `color: null`
  * (cleared color) — the schema has allowed it since GH #477; the form can
@@ -122,9 +124,9 @@ describe("GH #605 — template guards + nullable color", () => {
     expect(fresh.spools).toHaveLength(1);
   });
 
-  // ── PUT /api/filaments/[id] — weight-trio strip on templates ────────────
+  // ── PUT /api/filaments/[id] — totalWeight (inventory) strip on templates ─
 
-  it("strips non-null weight-trio writes on a template and reports _strippedTemplateFields", async () => {
+  it("strips a non-null totalWeight on a template but APPLIES the spec pair (spoolWeight/netFilamentWeight)", async () => {
     const { parent } = await seedParentWithVariant();
 
     const res = await putFilament(
@@ -143,26 +145,24 @@ describe("GH #605 — template guards + nullable color", () => {
 
     expect(res.status).toBe(200);
     const body = await res.json();
-    // Non-weight fields still apply; the weight trio does not.
+    // Non-weight fields still apply; the inventory weight does not — but
+    // the SPEC pair is editable on templates (GH #1048: set the tare/net
+    // on the parent so the whole family inherits the denominator).
     expect(body.cost).toBe(24.99);
-    expect(body._strippedTemplateFields).toEqual([
-      "totalWeight",
-      "spoolWeight",
-      "netFilamentWeight",
-    ]);
+    expect(body._strippedTemplateFields).toEqual(["totalWeight"]);
 
     const fresh = await Filament.findById(parent._id).lean();
     expect(fresh.totalWeight ?? null).toBeNull();
-    expect(fresh.spoolWeight ?? null).toBeNull();
-    expect(fresh.netFilamentWeight ?? null).toBeNull();
+    expect(fresh.spoolWeight).toBe(200);
+    expect(fresh.netFilamentWeight).toBe(1000);
   });
 
-  it("allows an explicit null through — clearing a legacy template's weight is cleanup", async () => {
+  it("allows an explicit null through — clearing a legacy template's totalWeight is cleanup", async () => {
     const parent = await Filament.create({
       name: "Legacy Template PLA",
       vendor: "T",
       type: "PLA",
-      spoolWeight: 250,
+      totalWeight: 1200,
     });
     await Filament.create({
       name: "Legacy Template PLA — Blue",
@@ -173,7 +173,7 @@ describe("GH #605 — template guards + nullable color", () => {
     });
 
     const res = await putFilament(
-      jsonReq(`http://localhost/api/filaments/${parent._id}`, { spoolWeight: null }, "PUT"),
+      jsonReq(`http://localhost/api/filaments/${parent._id}`, { totalWeight: null }, "PUT"),
       { params: Promise.resolve({ id: String(parent._id) }) },
     );
 
@@ -181,7 +181,7 @@ describe("GH #605 — template guards + nullable color", () => {
     const body = await res.json();
     expect(body._strippedTemplateFields).toBeUndefined();
     const fresh = await Filament.findById(parent._id).lean();
-    expect(fresh.spoolWeight).toBeNull();
+    expect(fresh.totalWeight).toBeNull();
   });
 
   it("applies weight-trio writes normally on a standalone (no _strippedTemplateFields)", async () => {

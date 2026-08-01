@@ -202,10 +202,12 @@ interface Props {
   onSubmit: (data: Record<string, unknown>) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
   /** GH #605: true when the edited filament currently has ≥1 variant — it is
-   * a TEMPLATE. Templates don't hold inventory, so the Weight Tracking
-   * fields are hidden (the PUT route strips those writes anyway). Derived by
-   * the edit page from the detail GET's `_variants`; template-ness is never
-   * a schema flag. */
+   * a TEMPLATE. Templates don't hold inventory, so the INVENTORY fields
+   * (total weight, low-stock threshold) are hidden — the PUT route strips a
+   * non-null totalWeight anyway. The SPEC pair (spool weight / net filament
+   * weight) stays editable: it describes the product line and every variant
+   * inherits it (GH #1048). Derived by the edit page from the detail GET's
+   * `_variants`; template-ness is never a schema flag. */
   isParent?: boolean;
 }
 
@@ -1710,15 +1712,24 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       </div>
 
       {/* GH #605: a template (filament with variants) doesn't hold inventory —
-          spools and weights live on its color variants, and the PUT route
-          strips these fields for parents. Hide the section rather than offer
-          inputs whose values would silently not persist. */}
-      {!isParent && (
+          spools and the total weight live on its color variants, and the PUT
+          route strips a non-null totalWeight for parents. But the SPEC pair
+          (empty-spool tare + net filament weight) legitimately lives on the
+          template: both are inheritable (resolveFilament), so setting them
+          here gives every variant its remaining-weight denominator (GH
+          #1048). Show the section with only the spec fields for parents;
+          hide the inventory inputs (initial weight, low-stock threshold)
+          whose values wouldn't mean anything / wouldn't persist. */}
       <CollapsibleSection
         id="spool-weight"
         title={t("form.section.spoolWeight")}
         defaultOpen
       >
+        {isParent && (
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+            {t("form.spoolWeight.templateNote")}
+          </p>
+        )}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div>
             <label htmlFor="filament-net-filament" className={labelClass}>{t("form.netFilament")}</label>
@@ -1748,6 +1759,15 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             />
             <p className="text-xs text-gray-400 mt-1">{t("form.emptySpoolHint")}</p>
           </div>
+          {/* Inventory inputs — hidden for templates (see the section
+              comment above): totalWeight is stripped by the PUT route, and
+              the low-stock threshold keys off remaining weight, which a
+              spool-less template doesn't have. The untouched seeded values
+              are still resubmitted verbatim (same posture as the hidden
+              color editor), so a legacy parent's stored value survives an
+              edit until explicitly converted/cleared. */}
+          {!isParent && (
+          <>
           <div>
             <label htmlFor="filament-initial-weight" className={labelClass}>{t("form.initialWeight")}</label>
             <input
@@ -1780,9 +1800,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
             />
             <p className="text-xs text-gray-400 mt-1">{t("form.lowStockThresholdHint")}</p>
           </div>
+          </>
+          )}
         </div>
       </CollapsibleSection>
-      )}
 
       <div>
         <label className={labelClass}>{t("form.tdsUrl")}</label>

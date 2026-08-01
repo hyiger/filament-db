@@ -224,22 +224,25 @@ export async function PUT(
     delete body.spools;
 
     // GH #605: a filament with ≥1 live variant is a TEMPLATE and must not
-    // carry its own inventory weights. STRIP (don't reject) non-null writes
-    // to the weight trio — the edit form echoes every field back on save, so
-    // a 400 would brick parent edits entirely. An explicit null passes
-    // through: clearing a legacy parent's leftover value is legitimate
-    // cleanup, and blocking it would freeze exactly the state we're trying
-    // to migrate away from. The response carries `_strippedTemplateFields`
-    // (response-only, underscore-prefixed like _parent/_variants) so a
-    // client can surface a warning.
+    // carry its own INVENTORY — that is `totalWeight` only. STRIP (don't
+    // reject) a non-null totalWeight write — the edit form echoes every
+    // field back on save, so a 400 would brick parent edits entirely. An
+    // explicit null passes through: clearing a legacy parent's leftover
+    // value is legitimate cleanup, and blocking it would freeze exactly the
+    // state we're trying to migrate away from. The response carries
+    // `_strippedTemplateFields` (response-only, underscore-prefixed like
+    // _parent/_variants) so a client can surface a warning.
+    //
+    // `spoolWeight` / `netFilamentWeight` are deliberately NOT stripped:
+    // they are SPEC — the product line's tare and nominal net weight — and
+    // stay editable on templates, where every variant inherits them
+    // (resolveFilament's INHERITABLE_FIELDS). That is what makes GH #1048's
+    // recommended workaround possible: set the net weight on the parent so
+    // the whole family inherits the remaining-percentage denominator.
     let strippedTemplateFields: string[] = [];
-    {
-      const weightFields = ["totalWeight", "spoolWeight", "netFilamentWeight"];
-      const attempted = weightFields.filter((k) => body[k] != null);
-      if (attempted.length > 0 && (await hasVariants(Filament, id))) {
-        for (const k of attempted) delete body[k];
-        strippedTemplateFields = attempted;
-      }
+    if (body.totalWeight != null && (await hasVariants(Filament, id))) {
+      delete body.totalWeight;
+      strippedTemplateFields = ["totalWeight"];
     }
 
     // Codex P2 on PR #577: the renderer only ever sends a plain field object.

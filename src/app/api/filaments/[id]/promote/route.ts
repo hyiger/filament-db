@@ -11,10 +11,12 @@ import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
  * POST /api/filaments/{id}/promote  (GH #605, Phase 2b)
  *
  * "Convert to template": moves a legacy parent's own color/colorName/spools/
- * weight trio onto a NEW variant (named `<parent> — <colorName|Original>`),
- * then clears them on the parent — the same copy-first/clear-last promotion
- * the first-variant create path runs, at the user's explicit initiative
- * (decision 4 on #605: enforce forward only, no bulk migration).
+ * inventory totalWeight onto a NEW variant (named
+ * `<parent> — <colorName|Original>`), then clears them on the parent — the
+ * same copy-first/clear-last promotion the first-variant create path runs,
+ * at the user's explicit initiative (decision 4 on #605: enforce forward
+ * only, no bulk migration). The spoolWeight/netFilamentWeight SPEC pair
+ * stays on the parent, where variants inherit it (GH #1048).
  *
  * Only a filament that ALREADY has ≥1 live variant qualifies — a standalone
  * becomes a template implicitly via its first variant's creation (which runs
@@ -22,7 +24,9 @@ import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
  *
  * Responses:
  *   400 `not_a_template`     — no live variants (or the target is a variant)
- *   400 `nothing_to_convert` — the parent is already colorless + spool-free
+ *   400 `nothing_to_convert` — the parent carries nothing that moves (no
+ *                              color/colorName/spools/totalWeight; spec
+ *                              fields alone are not "carrying")
  *   200 `{ variant, parent }` — the created variant + the cleared parent
  */
 export async function POST(
@@ -63,7 +67,8 @@ export async function POST(
       return NextResponse.json(
         {
           error: "nothing_to_convert",
-          message: "This template already carries no color and no spools.",
+          message:
+            "This template already carries nothing that belongs on a variant — no color, no color name, no spools, no inventory weight.",
         },
         { status: 400 },
       );

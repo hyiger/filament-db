@@ -24,6 +24,7 @@ import FilamentSwatch from "@/components/FilamentSwatch";
 import FinishChip from "@/components/FinishChip";
 import { deriveFinish } from "@/lib/filamentFinish";
 import { deriveArrangement } from "@/lib/filamentColors";
+import { parentPromotionState } from "@/lib/promoteParent";
 import type { FilamentDetail, FilamentCalibration } from "@/types/filament";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useDateFormat } from "@/hooks/useDateFormat";
@@ -1696,12 +1697,15 @@ function FilamentDetail() {
         // them onto a variant.
         if (isParent) {
           // GH #605 (Phase 2b): a legacy parent that still carries its own
-          // color or spools (predating the template guards) gets the
-          // explicit "Convert to template" action — enforce-forward only,
-          // at the user's initiative (decision 4).
-          const carriesLegacyState =
-            (typeof filament.color === "string" && filament.color !== "") ||
-            (filament.spools?.length ?? 0) > 0;
+          // variant state (predating the template guards) gets the explicit
+          // "Convert to template" action — enforce-forward only, at the
+          // user's initiative (decision 4). The predicate is the SAME one
+          // the server's promotion gate + /promote route use
+          // (parentPromotionState: real color OR colorName OR spools OR
+          // inventory totalWeight; the spoolWeight/netFilamentWeight SPEC
+          // pair never gates), so the button shows exactly when /promote
+          // would do something rather than 400 nothing_to_convert.
+          const carriesLegacyState = parentPromotionState(filament).needed;
           return (
             <div className="mb-8 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
               <h2 className="text-sm font-medium text-gray-500 mb-2">{t("detail.section.spoolTracker")}</h2>

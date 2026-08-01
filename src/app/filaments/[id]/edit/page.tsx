@@ -79,8 +79,10 @@ export default function EditFilament() {
       </div>
       <h1 className="text-2xl font-bold mb-6">{t("edit.title")}</h1>
       {/* GH #605: `_variants` rides the raw GET response — ≥1 live variant
-          makes this filament a template, which hides the Weight Tracking
-          fields in the form (templates hold no inventory). */}
+          makes this filament a template, which hides the INVENTORY inputs
+          (initial weight, low-stock threshold) in the form's Weight Tracking
+          section. The spec pair (spool weight / net filament weight) stays
+          editable there — variants inherit it (GH #1048). */}
       <FilamentForm
         initialData={filament}
         isParent={Array.isArray(filament._variants) && filament._variants.length > 0}

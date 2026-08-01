@@ -474,8 +474,10 @@ export async function POST(request: NextRequest) {
 
   try {
     // GH #605: when this request creates the FIRST variant of a parent that
-    // still carries a real color or its own spools, the parent must be
-    // PROMOTED to a template (color/spools move to a new sibling variant).
+    // still carries variant state (a real color, a color name, its own
+    // spools, or a legacy inventory totalWeight — see parentPromotionState),
+    // the parent must be PROMOTED to a template (that state moves to a new
+    // sibling variant; the spoolWeight/netFilamentWeight SPEC pair stays).
     // The parent doc is captured here; the gate + promotion run right
     // before the create, AFTER every other guard — so an otherwise-invalid
     // request gets its 400 (not a promotion 409 it would only re-hit), and
@@ -594,6 +596,16 @@ export async function POST(request: NextRequest) {
             409,
           );
         }
+        // Same principle for a schema-invalid request (bad color hex,
+        // negative cost, …): the route-level guards above don't run Mongoose
+        // validation, so without this dry run the promotion would
+        // permanently restructure the parent and THEN the create below would
+        // 400 — an error response after an irreversible side effect.
+        // Validate the exact payload the create will use; a ValidationError
+        // propagates to the route's catch, which surfaces it as the same
+        // 400 the failed create would have produced — with the parent
+        // completely untouched.
+        await new Filament(body).validate();
         await performParentPromotion(Filament, variantParent, alsoTaken);
       }
     }
