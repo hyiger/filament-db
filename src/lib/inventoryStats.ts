@@ -90,14 +90,39 @@ export function getRemainingGrams(f: InventoryFilament): number | null {
  * the node-only vitest env can't render. */
 export type RemainingDisplay =
   | { kind: "bar"; pct: number }
-  | { kind: "grams"; grams: number }
+  | { kind: "grams"; grams: number; missing: RemainingPctMissing }
   | { kind: "none" };
+
+/** Which percentage-only input(s) block the bar tier while the grams
+ * tier still renders. `getRemainingGrams` tolerates a null `spoolWeight`
+ * in the spools-array branch (0 g tare fallback, GH #954) but
+ * `getRemainingPct` needs BOTH weights, so the grams tier can be
+ * blocked by the net weight, the tare, or both — the tooltip has to
+ * name the right one(s), not always "set net weight". */
+export type RemainingPctMissing = "net" | "tare" | "both";
 
 export function getRemainingDisplay(f: InventoryFilament): RemainingDisplay {
   const pct = getRemainingPct(f);
   if (pct != null) return { kind: "bar", pct };
   const grams = getRemainingGrams(f);
-  if (grams != null) return { kind: "grams", grams };
+  if (grams != null) {
+    // Derived from getRemainingPct's own guards, per branch:
+    //   spools-array: needs spoolWeight != null AND netFilamentWeight > 0
+    //     (≥1 active weighted spool is already guaranteed here — grams
+    //     being non-null in that branch means one exists, so validCount
+    //     can't be the blocker);
+    //   legacy: needs totalWeight, spoolWeight, netFilamentWeight > 0 —
+    //     and grams non-null in the legacy path already required
+    //     totalWeight AND spoolWeight, so only the net can be missing.
+    // Hence: tare can only be the blocker in the spools-array branch
+    // (the #954 0-tare fallback), and at least one of the two flags is
+    // set whenever this tier is reached.
+    const netMissing = f.netFilamentWeight == null || f.netFilamentWeight <= 0;
+    const tareMissing = f.spoolWeight == null;
+    const missing: RemainingPctMissing =
+      netMissing && tareMissing ? "both" : tareMissing ? "tare" : "net";
+    return { kind: "grams", grams, missing };
+  }
   return { kind: "none" };
 }
 

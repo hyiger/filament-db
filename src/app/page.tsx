@@ -1058,7 +1058,17 @@ export default function Home() {
                 // column doesn't shift between the two tiers.
                 <span
                   className="text-xs text-gray-500 dark:text-gray-400 w-[86px] text-right"
-                  title={t("filaments.remainingGramsOnly")}
+                  title={
+                    // The tooltip names the input(s) the percentage actually
+                    // lacks — grams tolerates a missing tare (#954) but the
+                    // bar needs both weights, so "set net weight" would name
+                    // an already-set field for a tare-less record.
+                    display.missing === "tare"
+                      ? t("filaments.remainingGramsOnlyTare")
+                      : display.missing === "both"
+                        ? t("filaments.remainingGramsOnlyBoth")
+                        : t("filaments.remainingGramsOnly")
+                  }
                 >
                   {formatGrams(display.grams)}g
                 </span>
@@ -1192,7 +1202,15 @@ export default function Home() {
                     // branch's 48+6+32px footprint.
                     <span
                       className="text-xs text-gray-500 dark:text-gray-400 w-[86px] text-right"
-                      title={t("filaments.remainingGramsOnly")}
+                      title={
+                        // Tooltip keyed by the actually-missing input(s) —
+                        // see the renderRow twin.
+                        display.missing === "tare"
+                          ? t("filaments.remainingGramsOnlyTare")
+                          : display.missing === "both"
+                            ? t("filaments.remainingGramsOnlyBoth")
+                            : t("filaments.remainingGramsOnly")
+                      }
                     >
                       {formatGrams(display.grams)}g
                     </span>
