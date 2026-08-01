@@ -428,6 +428,14 @@ export async function PUT(
     // still carries legacy state — exactly the pre-#605 shape the
     // enforce-forward posture already tolerates and "Convert to template"
     // recovers, so the window degrades gracefully instead of corrupting.
+    // Round 11 F2: a soft-DELETE of the TARGET in that same gap is shrunk
+    // from both ends — the gate re-checks the target's liveness inside the
+    // parent lock immediately before promoting (`targetId` below), and the
+    // write section re-checks it again under the target lock. The
+    // microsecond window left between them deliberately stays open: losing
+    // it yields a valid, user-confirmed, COMPLETED promotion with no
+    // adoption (the owner decision: never demote/compensate), and closing
+    // it would need the two-key hold ruled out above.
     // `stored` gating: a PUT addressed to a missing/trashed target 404s at
     // the write — without the target check, a confirmed request could
     // promote the parent and THEN 404, an irreversible side effect on an
@@ -440,6 +448,10 @@ export async function PUT(
     // (parent state change last: an error response, a 404, or the F7 cycle
     // rollback below must leave the parent untouched).
     let clearParentThresholdAfterWrite = false;
+    // Round 11 F2: true once the adoption gate cleared for this request —
+    // gates the write section's target-liveness re-check below (only the
+    // adoption path can have promoted a parent in between).
+    let adoptionGateCleared = false;
     if (stored && body.parentId && reparenting) {
       // Codex round 6, F1: dry-run-validate the target AS IT WOULD BE AFTER
       // this PUT before the gate can promote the parent. The write below
@@ -501,6 +513,14 @@ export async function PUT(
         // Reserve the name this document will carry after the PUT (a rename
         // can ride the same request) so the promotion copy can't squat on it.
         adoptedName: typeof body.name === "string" ? body.name : undefined,
+        // Round 11 F2a: the round-4 target-existence precondition
+        // (dryRunTarget above) runs PRE-lock, so a soft-DELETE of this
+        // target could land before a confirmed promotion restructures the
+        // parent — a completed promotion with no adoption. Passing the
+        // target id makes the gate re-check its liveness INSIDE the
+        // parent's lock at the last responsible moment, immediately before
+        // performParentPromotion.
+        targetId: id,
       });
       if (adoption.outcome === "parent_not_found") {
         // Validated above but vanished (soft-deleted) before the gate —
@@ -513,10 +533,17 @@ export async function PUT(
         // 400 the pre-lock check produces.
         return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
       }
+      if (adoption.outcome === "target_not_found") {
+        // Round 11 F2a: this PUT's own target was soft-deleted after the
+        // pre-lock checks — caught in-lock BEFORE the promotion, so the
+        // parent is untouched. Same 404 the write below would produce.
+        return errorResponse("Not found", 404);
+      }
       if (adoption.outcome === "promotion_required") {
         return NextResponse.json(promotionRequired409Body(adoption), { status: 409 });
       }
       clearParentThresholdAfterWrite = adoption.clearOrphanedThreshold;
+      adoptionGateCleared = true;
     }
 
     // GH #605: a filament with ≥1 live variant is a TEMPLATE and must not
@@ -562,6 +589,22 @@ export async function PUT(
     // keep that mirror in lockstep with the shared list.
     let strippedTemplateFields: string[] = [];
     const filament = await runExclusive(filamentLockKey(id), async () => {
+      // Round 11 F2b: on the adoption path, re-check the target is still
+      // alive under ITS lock before the adoption write. The parent lock
+      // (gate + promotion) was released above, so a soft-DELETE serialized
+      // on this key can win the gap between the two locks; when it did, the
+      // findOneAndUpdate below would refuse anyway (`_deletedAt: null`) —
+      // this explicit precheck pins the posture at the last responsible
+      // moment. DELIBERATE (owner decision): the promotion, if it ran,
+      // STANDS — a user-confirmed, completed promotion is a valid end state,
+      // not corruption (demoting it back would be a destructive migration),
+      // and closing the remaining microsecond window entirely would require
+      // holding the parent and target locks together — a two-key lock order
+      // the AB/BA deadlock note above rules out.
+      if (adoptionGateCleared) {
+        const targetAlive = await Filament.exists({ _id: id, _deletedAt: null });
+        if (!targetAlive) return null;
+      }
       strippedTemplateFields = await stripTemplateFieldsForWrite(Filament, id, body);
       return await Filament.findOneAndUpdate(
         { _id: id, _deletedAt: null },

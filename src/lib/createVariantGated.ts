@@ -118,13 +118,15 @@ export function promotionRequired409Body(
  * while holding `runExclusive(filamentLockKey(parent._id))`, with a `parent`
  * snapshot fetched INSIDE that hold.
  *
- * `beforePromote` (creation only) runs after the gate decides a CONFIRMED
- * promotion is due, immediately before the promotion itself — the fail-fast
- * checks (duplicate-name pre-check, dry-run validation) that must surface
- * BEFORE the irreversible restructuring of the parent. Returning a result
- * aborts with the parent untouched; a throw propagates the same way.
+ * `beforePromote` runs after the gate decides a CONFIRMED promotion is due,
+ * immediately before the promotion itself — the fail-fast checks that must
+ * surface BEFORE the irreversible restructuring of the parent (creation:
+ * duplicate-name pre-check, dry-run validation; adoption: the round-11
+ * target-liveness re-check). Returning a result aborts with the parent
+ * untouched; a throw propagates the same way. Generic over the abort
+ * payload so each caller keeps its own outcome shape.
  */
-async function gateAndPromoteInLock(
+async function gateAndPromoteInLock<TAbort>(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   FilamentModel: any,
   parent: FilamentDoc,
@@ -132,11 +134,11 @@ async function gateAndPromoteInLock(
   alsoTaken: ReadonlySet<string> | undefined,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   checkHasVariants: (FilamentModel: any, id: string) => Promise<boolean>,
-  beforePromote?: () => Promise<{ outcome: "name_taken"; name: string } | null>,
+  beforePromote?: () => Promise<TAbort | null>,
 ): Promise<
   | { kind: "parent_is_variant" }
   | ({ kind: "required" } & PromotionRequiredInfo)
-  | { kind: "aborted"; abort: { outcome: "name_taken"; name: string } }
+  | { kind: "aborted"; abort: TAbort }
   | { kind: "ready"; clearOrphanedThreshold: boolean }
 > {
   // Round 8 F1: re-assert ROOTNESS from the in-lock snapshot, not just
@@ -289,7 +291,9 @@ export async function createVariantGated(
           typeof body.name === "string" &&
           (await FilamentModel.exists({ name: body.name, _deletedAt: null }))
         ) {
-          return { outcome: "name_taken", name: body.name };
+          // `as const` so the inferred TAbort keeps the literal outcome —
+          // gateAndPromoteInLock is generic over the abort payload.
+          return { outcome: "name_taken" as const, name: body.name };
         }
         // Same principle for a schema-invalid request (bad color hex, negative
         // cost, …): the route-level guards don't run Mongoose validation, so
@@ -334,6 +338,12 @@ export type FirstVariantAdoptionResult =
   /** The parent vanished (soft-deleted) between the caller's own pre-lock
    *  validation and the in-lock re-fetch. */
   | { outcome: "parent_not_found" }
+  /** Round 11 F2a: `opts.targetId` was supplied and the ADOPTED document
+   *  vanished (soft-deleted) between the caller's own pre-lock validation
+   *  and the last-responsible-moment in-lock re-check — caught BEFORE the
+   *  confirmed promotion ran, so nothing was restructured. Callers respond
+   *  with the same 404 their own write would produce. */
+  | { outcome: "target_not_found" }
   /** The parent became a VARIANT (a concurrent PUT re-parented it) before
    *  the in-lock re-fetch — adopting under it would nest inheritance
    *  (round 8 F1). Callers respond with the no-nesting 400. */
@@ -376,6 +386,20 @@ export type FirstVariantAdoptionResult =
  * there the two locks are strictly sequential (residual window documented
  * at the call site). `opts.adoptedName` reserves the adopted document's
  * name when naming the promotion copy (the copy must never squat on it).
+ *
+ * `opts.targetId` (round 11 F2a): the id of the EXISTING document being
+ * adopted, when its own write runs OUTSIDE this lock (the PUT path). The
+ * round-4 target-existence precondition runs pre-lock, so a soft-DELETE of
+ * the target landing between it and a CONFIRMED promotion would leave a
+ * completed promotion with no adoption. Supplying the id re-checks the
+ * target is still alive INSIDE the parent's lock, at the last responsible
+ * moment — immediately before performParentPromotion — and aborts with
+ * `target_not_found` (nothing restructured) when it is gone. The residual
+ * gap between this lock's release and the target-lock write is deliberately
+ * NOT closed (it would take a two-key lock order — the AB/BA deadlock
+ * above); the write-side re-check documents that posture at the call site.
+ * The restore path doesn't need this: its adoption write runs in-lock via
+ * `onReady`.
  */
 export async function gateFirstVariantAdoption(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -384,6 +408,7 @@ export async function gateFirstVariantAdoption(
   opts: {
     promoteParent: boolean;
     adoptedName?: unknown;
+    targetId?: unknown;
     onReady?: () => Promise<void>;
     // Injected for unit tests, like createVariantGated's check.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -408,8 +433,17 @@ export async function gateFirstVariantAdoption(
       opts.promoteParent,
       alsoTaken,
       opts.checkHasVariants ?? hasVariants,
-      // No beforePromote: adoption introduces no new document/name — the
-      // adopted doc already exists, and its own write runs after "ready".
+      // beforePromote (round 11 F2a): when the adopted document's own write
+      // runs outside this lock (targetId supplied — the PUT path), re-check
+      // it is still alive immediately before a CONFIRMED promotion
+      // restructures the parent. Adoption introduces no new document/name,
+      // so this is its only fail-fast concern.
+      opts.targetId !== undefined
+        ? async () =>
+            (await FilamentModel.exists({ _id: opts.targetId, _deletedAt: null }))
+              ? null
+              : ({ outcome: "target_not_found" } as const)
+        : undefined,
     );
     if (gate.kind === "parent_is_variant") {
       return { outcome: "parent_is_variant" };
@@ -423,7 +457,9 @@ export async function gateFirstVariantAdoption(
         variantName: gate.variantName,
       };
     }
-    // gate.kind === "aborted" is unreachable without a beforePromote hook.
+    if (gate.kind === "aborted") {
+      return gate.abort;
+    }
     if (opts.onReady) {
       await opts.onReady();
       // Round 7 P2: the adoption write just ran (in-lock), so the first

@@ -1,8 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
-import { PUT as putFilament } from "@/app/api/filaments/[id]/route";
+import {
+  PUT as putFilament,
+  DELETE as deleteFilament,
+} from "@/app/api/filaments/[id]/route";
 import { POST as restoreFilament } from "@/app/api/filaments/[id]/restore/route";
+import { lockedKeyCount, runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * GH #605 (codex round 4) — the ADOPTION paths that can mint a carrying
@@ -974,5 +978,222 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
     expect(res.status).toBe(200);
     const freshParent = await Filament.findById(parent._id).lean();
     expect(freshParent.lowStockThreshold).toBe(175);
+  });
+
+  // ── round 11 F2: soft-DELETE of the reparent TARGET vs the confirmed PUT ──
+  //
+  // The PUT's parent lock (gate + promotion) and target lock (write) are
+  // strictly sequential (AB/BA deadlock — see the route), so a soft-DELETE
+  // of the target can land around them. Round 11 shrinks the window from
+  // both ends: the gate re-checks the target's liveness INSIDE the parent
+  // lock immediately before promoting (F2a), and the write section
+  // re-checks it under the target lock (F2b). The microsecond gap left
+  // between the locks deliberately stays open — losing it yields a valid,
+  // user-confirmed, COMPLETED promotion with no adoption (owner decision:
+  // never demote/compensate).
+
+  for (const deleteFirst of [true, false]) {
+    it(`soft-DELETE of the target vs confirmed reparent PUT (${deleteFirst ? "DELETE" : "PUT"} submitted first): 404 with no promotion, or a consistent completed state (round 11 F2)`, async () => {
+      const base = `Target Delete Race ${deleteFirst ? "A" : "B"}`;
+      const parent = await seedCarryingParent(base);
+      const target = await Filament.create({
+        name: `${base} Standalone`,
+        vendor: "V",
+        type: "PLA",
+        color: "#FF0000",
+      });
+      const tid = String(target._id);
+
+      const put = () =>
+        putFilament(
+          jsonReq(
+            `http://localhost/api/filaments/${tid}`,
+            {
+              name: `${base} Standalone`,
+              color: "#FF0000",
+              parentId: String(parent._id),
+              promoteParent: true,
+            },
+            "PUT",
+          ),
+          { params: Promise.resolve({ id: tid }) },
+        );
+      const del = () =>
+        deleteFilament(
+          new NextRequest(`http://localhost/api/filaments/${tid}`, { method: "DELETE" }),
+          { params: Promise.resolve({ id: tid }) },
+        );
+
+      const [putRes, delRes] = deleteFirst
+        ? await (async () => {
+            const d = del();
+            const p = put();
+            const [rd, rp] = await Promise.all([d, p]);
+            return [rp, rd] as const;
+          })()
+        : await (() => {
+            const p = put();
+            const d = del();
+            return Promise.all([p, d]);
+          })();
+
+      // The soft delete always succeeds — the target is deletable as a
+      // standalone and as a freshly adopted variant alike (it never has
+      // children of its own) — and the target always ends trashed.
+      expect(delRes.status).toBe(200);
+      expect([200, 404]).toContain(putRes.status);
+      const freshTarget = await Filament.findById(target._id).lean();
+      expect(freshTarget._deletedAt).not.toBeNull();
+
+      // THE invariant: the parent is never left half-promoted. Either no
+      // promotion ran (still carrying, byte-for-byte) or it COMPLETED (clean
+      // template + live copy carrying the moved state, marker cleared).
+      const freshParent = await Filament.findById(parent._id).lean();
+      const copy = await Filament.findOne({
+        name: `${base} — Steel Blue`,
+        _deletedAt: null,
+      }).lean();
+      if (copy) {
+        expect(freshParent.color ?? null).toBeNull();
+        expect(freshParent.colorName ?? null).toBeNull();
+        expect(freshParent.spools).toEqual([]);
+        expect(freshParent.promotionInFlight ?? null).toBeNull();
+        expect(copy.spools).toHaveLength(1);
+      } else {
+        // Delete won before the gate: 404, nothing restructured.
+        expect(putRes.status).toBe(404);
+        expect(freshParent.color).toBe("#336699");
+        expect(freshParent.spools).toHaveLength(1);
+        expect(freshParent.promotionInFlight ?? null).toBeNull();
+      }
+      if (putRes.status === 200) {
+        // Clean adoption: the PUT won; the DELETE then trashed the adopted
+        // VARIANT (variants delete freely) — promotion + adoption both stand.
+        expect(copy).toBeTruthy();
+        expect(String(freshTarget.parentId)).toBe(String(parent._id));
+      }
+
+      expect(lockedKeyCount()).toBe(0);
+    });
+  }
+
+  it("round 11 F2a pinned: target trashed while the confirmed PUT queues at the parent gate → 404 BEFORE any promotion (in-lock liveness re-check)", async () => {
+    const parent = await seedCarryingParent("Gate Recheck Parent");
+    const target = await Filament.create({
+      name: "Gate Recheck Standalone",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+    });
+    const pid = String(parent._id);
+
+    // Hold the PARENT's key: the PUT passes every pre-lock check (the
+    // round-4 target-existence precondition still sees the target alive)
+    // and queues at gateFirstVariantAdoption; the soft delete lands while
+    // it waits — the manufactured delete-between-guards state only the
+    // round-11 in-lock re-check can catch.
+    let release!: () => void;
+    const holdUntil = new Promise<void>((r) => (release = r));
+    const holder = runExclusive(filamentLockKey(pid), async () => {
+      await holdUntil;
+    });
+    const put = putFilament(
+      jsonReq(
+        `http://localhost/api/filaments/${target._id}`,
+        { parentId: pid, promoteParent: true },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(target._id) }) },
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    await Filament.updateOne(
+      { _id: target._id },
+      { $set: { _deletedAt: new Date() } },
+    );
+    release();
+    await holder;
+
+    const res = await put;
+    expect(res.status).toBe(404);
+
+    // Caught BEFORE performParentPromotion: nothing restructured — no copy,
+    // no marker, parent still carrying; the target stays trashed, unadopted.
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.color).toBe("#336699");
+    expect(freshParent.colorName).toBe("Steel Blue");
+    expect(freshParent.spools).toHaveLength(1);
+    expect(freshParent.promotionInFlight ?? null).toBeNull();
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+    const freshTarget = await Filament.findById(target._id).lean();
+    expect(freshTarget._deletedAt).not.toBeNull();
+    expect(freshTarget.parentId ?? null).toBeNull();
+    expect(lockedKeyCount()).toBe(0);
+  });
+
+  it("round 11 F2b pinned: target trashed between the parent gate and the target-lock write → 404, and the completed promotion deliberately stands", async () => {
+    const parent = await seedCarryingParent("Interlock Gap Parent");
+    const target = await Filament.create({
+      name: "Interlock Gap Standalone",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+    });
+    const tid = String(target._id);
+
+    // Hold the TARGET's key: the PUT's pre-lock checks and the parent-side
+    // gate (which PROMOTES — the parent's key is free) run to completion,
+    // then the write section queues on the target's key behind this holder.
+    // Trashing the target now manufactures the residual inter-lock gap.
+    let release!: () => void;
+    const holdUntil = new Promise<void>((r) => (release = r));
+    const holder = runExclusive(filamentLockKey(tid), async () => {
+      await holdUntil;
+    });
+    const put = putFilament(
+      jsonReq(
+        `http://localhost/api/filaments/${tid}`,
+        { parentId: String(parent._id), promoteParent: true },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: tid }) },
+    );
+    // Wait until the gate's promotion has provably completed (copy live,
+    // parent cleared) so the trash lands strictly AFTER the parent lock
+    // released and strictly BEFORE the queued target-lock write runs.
+    for (let i = 0; i < 400; i++) {
+      const cleared = await Filament.findOne({
+        _id: parent._id,
+        spools: { $size: 0 },
+      }).lean();
+      if (cleared) break;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    await Filament.updateOne({ _id: target._id }, { $set: { _deletedAt: new Date() } });
+    release();
+    await holder;
+
+    const res = await put;
+    expect(res.status).toBe(404);
+
+    // The promotion STANDS — a valid, user-confirmed, completed promotion
+    // (owner decision: never demote/compensate). Copy live and carrying,
+    // parent a clean template with the marker cleared.
+    const copy = await Filament.findOne({
+      name: "Interlock Gap Parent — Steel Blue",
+      _deletedAt: null,
+    }).lean();
+    expect(copy).toBeTruthy();
+    expect(copy.spools).toHaveLength(1);
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.color ?? null).toBeNull();
+    expect(freshParent.spools).toEqual([]);
+    expect(freshParent.promotionInFlight ?? null).toBeNull();
+
+    // But the adoption never happened: the target stays trashed and
+    // parent-less — the write-side re-check refused it under the lock.
+    const freshTarget = await Filament.findById(target._id).lean();
+    expect(freshTarget._deletedAt).not.toBeNull();
+    expect(freshTarget.parentId ?? null).toBeNull();
+    expect(lockedKeyCount()).toBe(0);
   });
 });
