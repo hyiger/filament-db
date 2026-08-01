@@ -4,6 +4,7 @@ import dbConnect from "@/lib/mongodb";
 import PrintHistory from "@/models/PrintHistory";
 import Filament from "@/models/Filament";
 import Printer from "@/models/Printer";
+import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { errorResponseFromCaught, getErrorMessage, errorResponse, handleVersionError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
@@ -87,28 +88,39 @@ async function backfillLegacyUsageJobIds(
   const jobObjectId = new mongoose.Types.ObjectId(jobId);
   for (const u of usage) {
     if (!u.filamentId || !u.spoolId || typeof u.grams !== "number") continue;
-    const filament = await Filament.findOne({
-      _id: u.filamentId as mongoose.Types.ObjectId,
-      _deletedAt: null,
+    // GH #605 round 12: the jobId stamp is a spool-subdocument write, so the
+    // row's load-mutate-save runs under the filament's key — unserialized, a
+    // just-saved stamp landing inside a promotion's snapshot→clear window
+    // was silently erased (the promoted copy was minted from the pre-stamp
+    // snapshot), quietly resurrecting the #1004 F6 refund miss this backfill
+    // exists to prevent. One key per row, sequentially (no-nested-locks). A
+    // row whose spool a completed promotion has already MOVED simply misses
+    // here (the parent no longer carries it) — the pre-existing legacy-entry
+    // posture, no worse than before the stamp existed.
+    await runExclusive(filamentLockKey(String(u.filamentId)), async () => {
+      const filament = await Filament.findOne({
+        _id: u.filamentId as mongoose.Types.ObjectId,
+        _deletedAt: null,
+      });
+      if (!filament) return;
+      const spool = filament.spools.find((s) => String(s._id) === String(u.spoolId));
+      if (!spool) return;
+      const history = spool.usageHistory || [];
+      const idx = history.findIndex(
+        (h) =>
+          !h.jobId &&
+          (h.source === "job" || h.source === "slicer") &&
+          h.grams === u.grams &&
+          h.date instanceof Date &&
+          h.date.getTime() === oldStartedMs,
+      );
+      if (idx === -1) return;
+      history[idx].jobId = jobObjectId;
+      // A jobId stamp only touches this subdoc — validate modified paths only
+      // so a legacy out-of-range field elsewhere can't block the backfill
+      // (mirrors the DELETE refund's save, GH #905).
+      await filament.save({ validateModifiedOnly: true });
     });
-    if (!filament) continue;
-    const spool = filament.spools.find((s) => String(s._id) === String(u.spoolId));
-    if (!spool) continue;
-    const history = spool.usageHistory || [];
-    const idx = history.findIndex(
-      (h) =>
-        !h.jobId &&
-        (h.source === "job" || h.source === "slicer") &&
-        h.grams === u.grams &&
-        h.date instanceof Date &&
-        h.date.getTime() === oldStartedMs,
-    );
-    if (idx === -1) continue;
-    history[idx].jobId = jobObjectId;
-    // A jobId stamp only touches this subdoc — validate modified paths only
-    // so a legacy out-of-range field elsewhere can't block the backfill
-    // (mirrors the DELETE refund's save, GH #905).
-    await filament.save({ validateModifiedOnly: true });
   }
 }
 
@@ -285,13 +297,52 @@ export async function DELETE(
       return errorResponse("Not found", 404);
     }
 
-    for (const u of entry.usage) {
-      const filament = await Filament.findOne({ _id: u.filamentId, _deletedAt: null });
-      if (!filament) continue;
-      const spool = u.spoolId
-        ? filament.spools.find((s) => String(s._id) === String(u.spoolId))
-        : null;
-      if (!spool) continue;
+    // GH #605 round 12: each row's refund is a SPOOL WRITE, so the whole
+    // load-mutate-save runs under the owning filament's key — the same
+    // per-filament mutex every promotion path holds. Unserialized, a refund
+    // save landing between a promotion's snapshot read and its clearing
+    // write was silently erased (weight refunded + entry removed on the
+    // parent, promoted copy minted from the PRE-refund snapshot, parent
+    // cleared — the 200 "Deleted and refunded" then described a refund that
+    // exists nowhere while the copy still carries the debit).
+    //
+    // The row's spool can also have MOVED before this loop runs: a completed
+    // promotion remaps this row's `filamentId` onto the promoted variant in
+    // the DB (remapExternalSpoolRefs), but the `entry` loaded above may
+    // predate that. So inside each lock hold the row's CURRENT filamentId is
+    // re-read and, on a mismatch, the refund chases the remap — at most one
+    // hop, because a spool moves via promotion exactly once (the copy lands
+    // on a VARIANT, and variants never promote). Holding the current owner's
+    // key pins the row: a parent-side promotion serializes behind the hold,
+    // and a row already remapped onto a variant can't move again.
+    //
+    // One row, one key at a time (the no-nested-locks rule); the
+    // variant-parent spec lookup inside is a plain read, never a second key.
+    for (let rowIdx = 0; rowIdx < entry.usage.length; rowIdx++) {
+      const u = entry.usage[rowIdx];
+      let targetId = String(u.filamentId);
+      for (let hop = 0; hop < 2; hop++) {
+        const remappedTo = await runExclusive(
+          filamentLockKey(targetId),
+          async (): Promise<string | null> => {
+            const freshEntry = await PrintHistory.findById(entry._id)
+              .select("usage")
+              .lean();
+            const freshRowId = freshEntry?.usage?.[rowIdx]?.filamentId;
+            const currentId = freshRowId ? String(freshRowId) : targetId;
+            if (filamentLockKey(currentId) !== filamentLockKey(targetId)) {
+              // A promotion moved this row's spool — retry under the
+              // promoted variant's key (the null-vs-id return is the
+              // "chase" signal, not an error).
+              return currentId;
+            }
+
+            const filament = await Filament.findOne({ _id: targetId, _deletedAt: null });
+            if (!filament) return null;
+            const spool = u.spoolId
+              ? filament.spools.find((s) => String(s._id) === String(u.spoolId))
+              : null;
+            if (!spool) return null;
 
       // GH #621: locate the usageHistory entry this usage row pays back
       // BEFORE touching any weight, and refund only when an entry is
@@ -319,30 +370,30 @@ export async function DELETE(
       //      candidate set to print-history-driven rows and avoids
       //      accidentally clobbering a manual usage log that happens to
       //      share both fields. First match only, as before.
-      const history = spool.usageHistory || [];
-      const matchesJob = (h: (typeof history)[number]) =>
-        Boolean(h.jobId) && String(h.jobId) === String(entry._id);
-      let removeIdx = history.findIndex((h) => matchesJob(h) && h.grams === u.grams);
-      if (removeIdx === -1) {
-        removeIdx = history.findIndex((h) => matchesJob(h));
-      }
-      if (removeIdx === -1) {
-        removeIdx = history.findIndex(
-          (h) =>
-            !h.jobId &&
-            (h.source === "job" || h.source === "slicer") &&
-            h.grams === u.grams &&
-            h.date.getTime() === entry.startedAt.getTime(),
-        );
-      }
-      // No matching entry → this row's debit is no longer (or was never)
-      // represented on the spool: either a prior partial pass already
-      // removed it and refunded the weight, or the spool never carried
-      // it. Either way there is nothing to undo — refunding here is
-      // exactly the double-refund #621 describes.
-      if (removeIdx === -1) continue;
+            const history = spool.usageHistory || [];
+            const matchesJob = (h: (typeof history)[number]) =>
+              Boolean(h.jobId) && String(h.jobId) === String(entry._id);
+            let removeIdx = history.findIndex((h) => matchesJob(h) && h.grams === u.grams);
+            if (removeIdx === -1) {
+              removeIdx = history.findIndex((h) => matchesJob(h));
+            }
+            if (removeIdx === -1) {
+              removeIdx = history.findIndex(
+                (h) =>
+                  !h.jobId &&
+                  (h.source === "job" || h.source === "slicer") &&
+                  h.grams === u.grams &&
+                  h.date.getTime() === entry.startedAt.getTime(),
+              );
+            }
+            // No matching entry → this row's debit is no longer (or was never)
+            // represented on the spool: either a prior partial pass already
+            // removed it and refunded the weight, or the spool never carried
+            // it. Either way there is nothing to undo — refunding here is
+            // exactly the double-refund #621 describes.
+            if (removeIdx === -1) return null;
 
-      spool.usageHistory = history.filter((_, idx) => idx !== removeIdx);
+            spool.usageHistory = history.filter((_, idx) => idx !== removeIdx);
 
       // Refund weight. GH #228 + Codex P1 review on PR #229: clamp at
       // the spool's **gross** full-weight ceiling. `spool.totalWeight`
@@ -359,37 +410,43 @@ export async function DELETE(
       // parent on variants (see src/lib/resolveFilament.ts
       // INHERITABLE_FIELDS), so resolve them via a one-shot parent
       // lookup when either is null on the variant.
-      if (typeof spool.totalWeight === "number") {
-        let tareWeight: number | null = filament.spoolWeight ?? null;
-        let netCapacity: number | null = filament.netFilamentWeight ?? null;
-        if (filament.parentId && (tareWeight == null || netCapacity == null)) {
-          const parent = await Filament.findOne({
-            _id: filament.parentId,
-            _deletedAt: null,
-          })
-            .select("spoolWeight netFilamentWeight")
-            .lean();
-          if (parent) {
-            if (tareWeight == null) tareWeight = (parent.spoolWeight as number | null) ?? null;
-            if (netCapacity == null) netCapacity = (parent.netFilamentWeight as number | null) ?? null;
-          }
-        }
-        const refunded = spool.totalWeight + u.grams;
-        // Only clamp when we have a real net-capacity ceiling. The empty-
-        // spool tare alone isn't a ceiling — a value of "spoolWeight: 200,
-        // netFilamentWeight: null" means we know the tare but not the
-        // filament capacity, so we can't bound the refund. Leaving
-        // `netCapacity` null falls through to the legacy no-clamp behaviour.
-        if (typeof netCapacity === "number" && netCapacity > 0) {
-          const grossCapacity = netCapacity + (tareWeight ?? 0);
-          spool.totalWeight = Math.min(refunded, grossCapacity);
-        } else {
-          spool.totalWeight = refunded;
-        }
+            if (typeof spool.totalWeight === "number") {
+              let tareWeight: number | null = filament.spoolWeight ?? null;
+              let netCapacity: number | null = filament.netFilamentWeight ?? null;
+              if (filament.parentId && (tareWeight == null || netCapacity == null)) {
+                const parent = await Filament.findOne({
+                  _id: filament.parentId,
+                  _deletedAt: null,
+                })
+                  .select("spoolWeight netFilamentWeight")
+                  .lean();
+                if (parent) {
+                  if (tareWeight == null) tareWeight = (parent.spoolWeight as number | null) ?? null;
+                  if (netCapacity == null) netCapacity = (parent.netFilamentWeight as number | null) ?? null;
+                }
+              }
+              const refunded = spool.totalWeight + u.grams;
+              // Only clamp when we have a real net-capacity ceiling. The empty-
+              // spool tare alone isn't a ceiling — a value of "spoolWeight: 200,
+              // netFilamentWeight: null" means we know the tare but not the
+              // filament capacity, so we can't bound the refund. Leaving
+              // `netCapacity` null falls through to the legacy no-clamp behaviour.
+              if (typeof netCapacity === "number" && netCapacity > 0) {
+                const grossCapacity = netCapacity + (tareWeight ?? 0);
+                spool.totalWeight = Math.min(refunded, grossCapacity);
+              } else {
+                spool.totalWeight = refunded;
+              }
+            }
+            // GH #905: a refund only mutates spool weight — validate modified paths
+            // only so a legacy out-of-range field elsewhere can't block the refund.
+            await filament.save({ validateModifiedOnly: true });
+            return null;
+          },
+        );
+        if (remappedTo == null) break;
+        targetId = remappedTo;
       }
-      // GH #905: a refund only mutates spool weight — validate modified paths
-      // only so a legacy out-of-range field elsewhere can't block the refund.
-      await filament.save({ validateModifiedOnly: true });
     }
 
     // Soft-delete by setting _deletedAt. Hard `deleteOne` would let a peer
