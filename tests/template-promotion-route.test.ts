@@ -411,11 +411,47 @@ describe("GH #605 — parent promotion (409 + promoteParent + /promote)", () => 
     expect(body.variant.spools).toHaveLength(2);
     expect(body.parent.color).toBeNull();
     expect(body.parent.spools).toEqual([]);
+    // Round 8 F2: a normal conversion is a FRESH promotion.
+    expect(body.resumed).toBe(false);
 
     const fresh = await Filament.findById(parent._id).lean();
     expect(fresh.color).toBeNull();
     expect(fresh.colorName).toBeNull();
     expect(fresh.spools).toEqual([]);
+  });
+
+  it("promote: RESUMES an interrupted promotion (partial copy holding the parent's spool ids) instead of minting a ' (2)' duplicate — round 8 F2", async () => {
+    // Manufacture the interrupted state directly: the copy was created (same
+    // spool subdoc _ids, verbatim) but the run died before the parent clear.
+    const parent = await seedCarryingParent({ colorName: "Steel Blue" });
+    const parentLean = await Filament.findById(parent._id).lean();
+    await Filament.create({
+      name: "Carrying PLA — Steel Blue",
+      vendor: "V",
+      type: "PLA",
+      parentId: parent._id,
+      color: parentLean.color,
+      colorName: parentLean.colorName,
+      spools: parentLean.spools,
+    });
+
+    // "Convert to template" is the documented recovery path for exactly this
+    // state — it must adopt the partial copy, not duplicate the inventory.
+    const res = await promoteReq(String(parent._id));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.resumed).toBe(true);
+    expect(body.variant.name).toBe("Carrying PLA — Steel Blue");
+    expect(body.parent.spools).toEqual([]);
+    expect(body.parent.color).toBeNull();
+
+    // Exactly ONE copy; the family carries the two rolls once.
+    const copies = await Filament.find({ parentId: parent._id, _deletedAt: null }).lean();
+    expect(copies).toHaveLength(1);
+    expect(copies[0].spools).toHaveLength(2);
+    expect(
+      copies[0].spools.map((s: { _id: unknown }) => String(s._id)),
+    ).toEqual(parentLean.spools.map((s: { _id: unknown }) => String(s._id)));
   });
 
   it("promote: 400 not_a_template for a standalone (no live variants)", async () => {

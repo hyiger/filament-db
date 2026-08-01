@@ -181,10 +181,12 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     });
     const parentLean = await Filament.findById(parent._id).lean();
 
-    const variant = await performParentPromotion(Filament, parentLean, {
+    const { variant, resumed } = await performParentPromotion(Filament, parentLean, {
       externalRefs,
     });
 
+    // A first run is always FRESH (round 8 F2 return shape).
+    expect(resumed).toBe(false);
     // The variant carries the moved state and is named by the colorName rule.
     expect(variant.name).toBe("Legacy PLA — Deep Blue");
     expect(String(variant.parentId)).toBe(String(parent._id));
@@ -258,7 +260,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     // self-gated off on the empty moved set (round 6 F2 moved that gate
     // inside remapExternalSpoolRefs so the Any-spool AMS remap still runs —
     // a no-op here, no printers exist).
-    const variant = await performParentPromotion(
+    const { variant } = await performParentPromotion(
       Filament,
       await Filament.findById(parent._id).lean(),
       { externalRefs },
@@ -272,6 +274,10 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     const calls: string[] = [];
     const mockModel = {
       exists: async () => null,
+      // Round 8 F2: the resume detection probes for a partial copy before
+      // creating — none here (deliberately unrecorded: not part of the
+      // write-ordering contract this test pins).
+      findOne: async () => null,
       create: async (body: Record<string, unknown>) => {
         calls.push("create");
         return { ...body, _id: "variant-1" };
@@ -335,6 +341,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     const calls: string[] = [];
     const mockModel = {
       exists: async () => null,
+      findOne: async () => null,
       create: async (body: Record<string, unknown>) => {
         calls.push("create");
         return { ...body, _id: "variant-1" };
@@ -363,6 +370,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
     const calls: string[] = [];
     const mockModel = {
       exists: async () => null,
+      findOne: async () => null,
       create: async () => {
         throw new Error("boom");
       },
@@ -475,7 +483,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       ],
     });
 
-    const variant = await performParentPromotion(Filament, parentLean, {
+    const { variant } = await performParentPromotion(Filament, parentLean, {
       externalRefs,
     });
 
@@ -524,7 +532,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       amsSlots: [{ slotName: "T1", filamentId: parent._id, spoolId: null }],
     });
 
-    const variant = await performParentPromotion(
+    const { variant } = await performParentPromotion(
       Filament,
       await Filament.findById(parent._id).lean(),
       { externalRefs },
@@ -552,7 +560,7 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
       amsSlots: [{ slotName: "T0", filamentId: parent._id, spoolId }],
     });
 
-    const variant = await performParentPromotion(Filament, parentLean, {
+    const { variant } = await performParentPromotion(Filament, parentLean, {
       externalRefs,
     });
 
@@ -588,5 +596,189 @@ describe("promoteParent (GH #605 Phase 2b)", () => {
         `?spool=${spoolId}`,
       ),
     ).toBe(`/filaments/${variant._id}?spool=${spoolId}`);
+  });
+
+  // ── round 8 F2: interrupted promotions resume instead of duplicating ────
+
+  it("interrupted at the REMAP (spools case): the retry resumes the partial copy by spool-id overlap — one copy, parent clean", async () => {
+    const parent = await Filament.create({
+      name: "Interrupted PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#246810",
+      colorName: "Forest",
+      totalWeight: 1100,
+      spools: [
+        { label: "roll A", totalWeight: 700 },
+        { label: "roll B", totalWeight: 400 },
+      ],
+    });
+    const parentLean = await Filament.findById(parent._id).lean();
+    const spoolIds = parentLean.spools.map((s: { _id: unknown }) => String(s._id));
+    const job = await PrintHistory.create({
+      jobLabel: "ref job",
+      startedAt: new Date(),
+      usage: [{ filamentId: parent._id, spoolId: parentLean.spools[0]._id, grams: 10 }],
+    });
+
+    // External refs whose FIRST remap throws — the crash window between the
+    // create and the clear.
+    let threw = false;
+    const flakyRefs = {
+      printHistory: {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        updateMany: async (...args: any[]) => {
+          if (!threw) {
+            threw = true;
+            throw new Error("interrupted after create");
+          }
+          return PrintHistory.updateMany(...args);
+        },
+      },
+      printer: Printer,
+    };
+
+    await expect(
+      performParentPromotion(Filament, parentLean, { externalRefs: flakyRefs }),
+    ).rejects.toThrow("interrupted after create");
+
+    // The interrupted state: partial copy exists (same spool subdoc ids),
+    // parent still carries, history ref still points at the parent.
+    const midParent = await Filament.findById(parent._id).lean();
+    expect(midParent.spools).toHaveLength(2);
+    expect(await Filament.countDocuments({ parentId: parent._id, _deletedAt: null })).toBe(1);
+
+    // RETRY the same promotion off a fresh in-lock-style snapshot.
+    const { variant, resumed } = await performParentPromotion(
+      Filament,
+      await Filament.findById(parent._id).lean(),
+      { externalRefs: flakyRefs },
+    );
+    expect(resumed).toBe(true);
+
+    // Exactly ONE copy — no " (2)" duplicate holding a second set of rolls.
+    const copies = await Filament.find({ parentId: parent._id, _deletedAt: null }).lean();
+    expect(copies).toHaveLength(1);
+    expect(String(copies[0]._id)).toBe(String(variant._id));
+    expect(copies[0].name).toBe("Interrupted PLA — Forest");
+    expect(copies[0].spools.map((s: { _id: unknown }) => String(s._id))).toEqual(spoolIds);
+    expect(copies[0].totalWeight).toBe(1100);
+
+    // Parent ends clean, and the remap DID run on the retry.
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.color).toBeNull();
+    expect(freshParent.colorName).toBeNull();
+    expect(freshParent.spools).toEqual([]);
+    expect(freshParent.totalWeight).toBeNull();
+    const freshJob = await PrintHistory.findById(job._id).lean();
+    expect(String(freshJob.usage[0].filamentId)).toBe(String(variant._id));
+  });
+
+  it("interrupted at the CLEAR (no-spools case): the retry resumes by name + carried-set equality — no ' (2)' copy", async () => {
+    const parent = await Filament.create({
+      name: "Colorful Interrupted PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#AB34CD",
+      colorName: "Orchid",
+      lowStockThreshold: 150,
+    });
+    const parentLean = await Filament.findById(parent._id).lean();
+
+    // A delegating model whose FIRST updateOne (the clear) throws — the
+    // create and remap already succeeded.
+    let clearThrew = false;
+    const flakyModel = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      exists: (...args: any[]) => Filament.exists(...args),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      findOne: (...args: any[]) => Filament.findOne(...args),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      create: (...args: any[]) => Filament.create(...args),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      updateOne: async (...args: any[]) => {
+        if (!clearThrew) {
+          clearThrew = true;
+          throw new Error("interrupted at clear");
+        }
+        return Filament.updateOne(...args);
+      },
+    };
+
+    await expect(
+      performParentPromotion(flakyModel, parentLean, { externalRefs }),
+    ).rejects.toThrow("interrupted at clear");
+
+    // Partial copy exists; parent still carries its color pair.
+    expect(await Filament.countDocuments({ parentId: parent._id, _deletedAt: null })).toBe(1);
+    const midParent = await Filament.findById(parent._id).lean();
+    expect(midParent.color).toBe("#AB34CD");
+
+    const { variant, resumed } = await performParentPromotion(
+      Filament,
+      await Filament.findById(parent._id).lean(),
+      { externalRefs },
+    );
+    expect(resumed).toBe(true);
+
+    const copies = await Filament.find({ parentId: parent._id, _deletedAt: null }).lean();
+    expect(copies).toHaveLength(1);
+    expect(String(copies[0]._id)).toBe(String(variant._id));
+    expect(copies[0].name).toBe("Colorful Interrupted PLA — Orchid");
+    expect(copies[0].color).toBe("#AB34CD");
+    expect(copies[0].lowStockThreshold).toBe(150);
+
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.color).toBeNull();
+    expect(freshParent.colorName).toBeNull();
+    expect(freshParent.lowStockThreshold).toBeNull();
+  });
+
+  it("a genuine SECOND promotion after a COMPLETED one (parent re-acquired state) still creates a fresh suffixed copy", async () => {
+    const parent = await Filament.create({
+      name: "Twice Promoted PLA",
+      vendor: "V",
+      type: "PLA",
+      color: "#111111",
+      colorName: "Coal",
+      spools: [{ label: "first roll", totalWeight: 900 }],
+    });
+    const first = await performParentPromotion(
+      Filament,
+      await Filament.findById(parent._id).lean(),
+      { externalRefs },
+    );
+    expect(first.resumed).toBe(false);
+    expect(first.variant.name).toBe("Twice Promoted PLA — Coal");
+
+    // The parent re-acquires carrying state (legacy/direct write — NEW spool
+    // subdocs, so the ids don't overlap the completed promotion's copy).
+    await Filament.updateOne(
+      { _id: parent._id },
+      {
+        $set: {
+          color: "#111111",
+          colorName: "Coal",
+          spools: [{ label: "re-acquired roll", totalWeight: 600 }],
+        },
+      },
+    );
+
+    const second = await performParentPromotion(
+      Filament,
+      await Filament.findById(parent._id).lean(),
+      { externalRefs },
+    );
+    // Fresh, not resumed: no spool-id overlap, and the base name is taken.
+    expect(second.resumed).toBe(false);
+    expect(second.variant.name).toBe("Twice Promoted PLA — Coal (2)");
+    expect(String(second.variant._id)).not.toBe(String(first.variant._id));
+
+    // Both copies hold exactly their own inventory; the parent is clean.
+    const copies = await Filament.find({ parentId: parent._id, _deletedAt: null }).lean();
+    expect(copies).toHaveLength(2);
+    const freshParent = await Filament.findById(parent._id).lean();
+    expect(freshParent.spools).toEqual([]);
+    expect(freshParent.color).toBeNull();
   });
 });

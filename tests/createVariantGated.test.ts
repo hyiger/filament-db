@@ -195,6 +195,64 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
     expect(result).toEqual({ outcome: "parent_not_found" });
   });
 
+  // ── round 8 F1: rootness re-asserted in-lock ──────────────────────────
+
+  it("parent became a VARIANT before the lock → parent_is_variant, nothing written (round 8 F1)", async () => {
+    const grandparent = await Filament.create({
+      name: "Nesting Root",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+    });
+    const parent = await seedCarryingParent();
+    // The concurrent reparent (a PUT that won the race) lands between the
+    // caller's pre-lock no-nesting validation and the gate.
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { parentId: grandparent._id } },
+    );
+    // Even a CONFIRMED request must be refused — no grandchild, no
+    // promotion copy hung off a variant.
+    const result = await createVariantGated(Filament, parent._id, variantBody(parent._id), true);
+    expect(result).toEqual({ outcome: "parent_is_variant" });
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#336699");
+    expect(fresh.spools).toHaveLength(2);
+    expect(lockedKeyCount()).toBe(0);
+  });
+
+  it("re-parented WHILE queued behind the parent's lock → the in-lock re-fetch rejects it (round 8 F1)", async () => {
+    const grandparent = await Filament.create({
+      name: "Queued Nesting Root",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+    });
+    const parent = await seedCarryingParent();
+    const key = filamentLockKey(parent._id);
+
+    // Hold the parent's key so the gate queues; the reparent lands while it
+    // waits — the deterministic shape of the pre-validation/lock window.
+    let release!: () => void;
+    const holdUntil = new Promise<void>((r) => (release = r));
+    const holder = runExclusive(key, async () => {
+      await holdUntil;
+    });
+    const gated = createVariantGated(Filament, parent._id, variantBody(parent._id), true);
+    await new Promise((r) => setTimeout(r, 20));
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { parentId: grandparent._id } },
+    );
+    release();
+    await holder;
+
+    expect(await gated).toEqual({ outcome: "parent_is_variant" });
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+    expect(lockedKeyCount()).toBe(0);
+  });
+
   // ── serialization ─────────────────────────────────────────────────────
 
   it("runs inside the parent's keyed mutex (a held lock delays the gate) and drains it", async () => {
@@ -374,6 +432,34 @@ describe("createVariantGated (GH #605, codex round 3)", () => {
     });
     expect(result).toEqual({ outcome: "ready", clearOrphanedThreshold: false });
     // The legacy carrying state stays put — no silent move.
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(fresh.color).toBe("#336699");
+    expect(fresh.spools).toHaveLength(2);
+  });
+
+  it("adoption: parent became a VARIANT before the lock → parent_is_variant (onReady never runs, round 8 F1)", async () => {
+    const grandparent = await Filament.create({
+      name: "Adoption Nesting Root",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+    });
+    const parent = await seedCarryingParent();
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { parentId: grandparent._id } },
+    );
+    let readyRan = false;
+    const result = await gateFirstVariantAdoption(Filament, parent._id, {
+      promoteParent: true,
+      onReady: async () => {
+        readyRan = true;
+      },
+    });
+    expect(result).toEqual({ outcome: "parent_is_variant" });
+    expect(readyRan).toBe(false);
+    // No promotion copy — the parent's carried state is untouched.
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
     const fresh = await Filament.findById(parent._id).lean();
     expect(fresh.color).toBe("#336699");
     expect(fresh.spools).toHaveLength(2);

@@ -74,6 +74,11 @@ export type GatedVariantCreateResult =
   /** The parent vanished (soft-deleted) between the caller's own pre-lock
    *  validation and the in-lock re-fetch. Callers respond 400. */
   | { outcome: "parent_not_found" }
+  /** The parent became a VARIANT (a concurrent PUT re-parented it) between
+   *  the caller's pre-lock no-nesting validation and the in-lock re-fetch —
+   *  creating under it would mint a grandchild (round 8 F1). Callers respond
+   *  with the same no-nesting 400 their pre-lock check produces. */
+  | { outcome: "parent_is_variant" }
   /** First variant of a carrying parent and the caller didn't confirm —
    *  respond 409 with `promotionRequired409Body(info)`. Nothing written. */
   | ({ outcome: "promotion_required" } & PromotionRequiredInfo)
@@ -127,10 +132,22 @@ async function gateAndPromoteInLock(
   checkHasVariants: (FilamentModel: any, id: string) => Promise<boolean>,
   beforePromote?: () => Promise<{ outcome: "name_taken"; name: string } | null>,
 ): Promise<
+  | { kind: "parent_is_variant" }
   | ({ kind: "required" } & PromotionRequiredInfo)
   | { kind: "aborted"; abort: { outcome: "name_taken"; name: string } }
   | { kind: "ready"; clearOrphanedThreshold: boolean }
 > {
+  // Round 8 F1: re-assert ROOTNESS from the in-lock snapshot, not just
+  // existence. The callers' pre-lock validation rejects a parent that is
+  // itself a variant (no nested inheritance), but a concurrent PUT can
+  // re-parent the doc between that check and this lock — the gate would
+  // then mint a GRANDCHILD (and a confirmed promotion would even hang a
+  // promotion copy off a variant). Same posture as the parent_not_found
+  // re-check: the in-lock re-fetch owns the final answer.
+  if (parent.parentId != null) {
+    return { kind: "parent_is_variant" };
+  }
+
   const promoState = parentPromotionState(parent);
   // Round 7 P2: a threshold-ONLY parent (threshold set, nothing that gates)
   // still needs the first-variant check — not to gate (owner decision: no
@@ -188,7 +205,9 @@ async function gateAndPromoteInLock(
  * route) and must carry `parentId`. The caller is expected to have done its
  * own pre-lock validation (parent exists, parent is not itself a variant);
  * this function re-fetches the parent FRESH inside the lock and re-decides
- * from that snapshot — never from anything the caller loaded earlier.
+ * from that snapshot — never from anything the caller loaded earlier. Both
+ * pre-lock facts are re-asserted in-lock: a vanished parent returns
+ * `parent_not_found`, a re-parented one `parent_is_variant` (round 8 F1).
  *
  * Errors from the dry-run `validate()` and from the final `create()`
  * propagate unchanged (the routes' catch blocks map ValidationError → 400
@@ -250,6 +269,9 @@ export async function createVariantGated(
         return null;
       },
     );
+    if (gate.kind === "parent_is_variant") {
+      return { outcome: "parent_is_variant" };
+    }
     if (gate.kind === "required") {
       return {
         outcome: "promotion_required",
@@ -279,6 +301,10 @@ export type FirstVariantAdoptionResult =
   /** The parent vanished (soft-deleted) between the caller's own pre-lock
    *  validation and the in-lock re-fetch. */
   | { outcome: "parent_not_found" }
+  /** The parent became a VARIANT (a concurrent PUT re-parented it) before
+   *  the in-lock re-fetch — adopting under it would nest inheritance
+   *  (round 8 F1). Callers respond with the no-nesting 400. */
+  | { outcome: "parent_is_variant" }
   /** Adopting this document would mint the FIRST live variant of a carrying
    *  parent and the caller didn't confirm — respond 409 with
    *  `promotionRequired409Body(info)`. Nothing written. */
@@ -352,6 +378,9 @@ export async function gateFirstVariantAdoption(
       // No beforePromote: adoption introduces no new document/name — the
       // adopted doc already exists, and its own write runs after "ready".
     );
+    if (gate.kind === "parent_is_variant") {
+      return { outcome: "parent_is_variant" };
+    }
     if (gate.kind === "required") {
       return {
         outcome: "promotion_required",

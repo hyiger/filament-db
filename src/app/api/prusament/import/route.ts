@@ -341,7 +341,10 @@ export async function POST(request: NextRequest) {
     //
     // GH #605 (codex round 3 sweep): this $push needs NO template guard —
     // a trashed doc cannot be a template. Soft-deleting a parent with live
-    // variants is refused (DELETE's hasVariants guard), restoring a variant
+    // variants is refused (DELETE's hasVariants guard — held, since round 8
+    // F3, in the same per-filament mutex as the trash write and the
+    // first-variant gates, so the refusal can't be raced by a mid-flight
+    // first variant), restoring a variant
     // under a trashed parent is refused (restore's parent-active check),
     // and variant creation requires an ACTIVE parent — so no live variant
     // can point at a trashed doc, and the resurrect+push is one atomic

@@ -424,10 +424,13 @@ export async function upsertIniFilament(
   if (existingTrashed) {
     const update = await buildIniUpdate(collapsed, existingTrashed);
     // GH #605: no template strip on the resurrect — a TRASHED doc cannot have
-    // live variants (soft-deleting a parent with variants is refused;
-    // restoring a variant under a trashed parent is refused; variant creation
-    // requires an ACTIVE parent), so the revived row is never a template at
-    // this write. Same reasoning as the atlas importer's resurrect path.
+    // live variants (soft-deleting a parent with variants is refused, in-lock
+    // with the trash write since round 8 F3 — the same per-filament mutex the
+    // first-variant gates lock, so the check can't be raced by a mid-flight
+    // first variant; restoring a variant under a trashed parent is refused;
+    // variant creation requires an ACTIVE parent), so the revived row is never
+    // a template at this write. Same reasoning as the atlas importer's
+    // resurrect path.
     //
     // Splice the tombstone clear into the $set so the resurrect is one atomic
     // write; any $unset for stale variant overrides composes alongside.

@@ -340,7 +340,10 @@ export async function POST(request: NextRequest) {
           if (softDeleted) {
             // GH #605 sweep: no template check needed on the resurrect — a
             // trashed doc cannot have live variants (soft-deleting a parent
-            // with variants is refused; restoring a variant under a trashed
+            // with variants is refused, and since round 8 F3 that refusal
+            // and the trash write hold the SAME per-filament mutex the
+            // first-variant gates lock, so a mid-flight first variant can't
+            // race past the check; restoring a variant under a trashed
             // parent is refused; variant creation requires an ACTIVE
             // parent), so the revived row is never a template at this
             // write. The create below is a fresh doc — same reasoning.

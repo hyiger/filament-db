@@ -612,6 +612,56 @@ describe("GH #605 round 4 — adoption gate (PUT re-parent + restore) and PUT te
     expect(freshParent.color).toBe("#336699");
   });
 
+  it("restoring a variant whose parent became a VARIANT while it sat in the trash → no-nesting 400, stays trashed (round 8 F1)", async () => {
+    // A trashed variant doesn't count toward the PUT's has-children guard,
+    // so the parent can legitimately be re-parented while this doc is in
+    // the trash — reviving it would then nest inheritance.
+    const grandparent = await Filament.create({
+      name: "Restore Nesting Root",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+    });
+    const parent = await Filament.create({
+      name: "Reparented Parent",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+    });
+    const variant = await Filament.create({
+      name: "Reparented Parent — Red",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: parent._id,
+      _deletedAt: new Date(),
+    });
+    await Filament.updateOne(
+      { _id: parent._id },
+      { $set: { parentId: grandparent._id } },
+    );
+
+    // Even a confirmed restore is refused — the gate's in-lock re-fetch
+    // re-asserts rootness (parent_is_variant).
+    const res = await restoreFilament(restoreReq(String(variant._id), { promoteParent: true }), {
+      params: Promise.resolve({ id: String(variant._id) }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe(
+      "Cannot set a variant as parent (no nested inheritance)",
+    );
+
+    // The variant stays in the trash; no grandchild went live.
+    const stillTrashed = await Filament.findOne({
+      _id: variant._id,
+      _deletedAt: { $ne: null },
+    }).lean();
+    expect(stillTrashed).not.toBeNull();
+    expect(
+      await Filament.countDocuments({ parentId: parent._id, _deletedAt: null }),
+    ).toBe(0);
+  });
+
   it("restoring a standalone ignores the gate entirely (with or without a body)", async () => {
     const f = await Filament.create({
       name: "Trashed Standalone",

@@ -124,6 +124,13 @@ export async function POST(
           409,
         );
       }
+      if (adoption.outcome === "parent_is_variant") {
+        // Round 8 F1: the parent got re-parented while this variant sat in
+        // the trash (a trashed variant doesn't count toward the PUT's
+        // has-children guard), so reviving would nest inheritance — the same
+        // no-nesting 400 every parentId-setting path returns.
+        return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
+      }
       if (adoption.outcome === "promotion_required") {
         return NextResponse.json(promotionRequired409Body(adoption), { status: 409 });
       }

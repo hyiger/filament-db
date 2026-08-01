@@ -426,6 +426,14 @@ async function importAsVariant(slugs: string[], parentId: string, promoteParent:
         // Vanished (soft-deleted) between the pre-lock validation above and
         // the lock — same 400 the pre-lock check would have given.
         return NextResponse.json({ error: "Parent filament not found" }, { status: 400 });
+      case "parent_is_variant":
+        // Validated above as a root, but a concurrent PUT re-parented it
+        // before the gate's in-lock re-fetch (round 8 F1) — same no-nesting
+        // 400 the pre-lock check produces.
+        return NextResponse.json(
+          { error: "Cannot set a variant as parent (no nested inheritance)" },
+          { status: 400 },
+        );
       case "promotion_required":
         return NextResponse.json(promotionRequired409Body(result), { status: 409 });
       case "name_taken":

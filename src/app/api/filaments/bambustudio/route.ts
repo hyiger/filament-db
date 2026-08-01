@@ -217,10 +217,12 @@ export async function POST(request: NextRequest) {
       try {
         // GH #605: no template strip on the resurrect — a TRASHED doc cannot
         // have live variants (soft-deleting a parent with variants is
-        // refused; restoring a variant under a trashed parent is refused;
-        // variant creation requires an ACTIVE parent), so the revived row is
-        // never a template at this write. Same reasoning as the atlas
-        // importer's resurrect path.
+        // refused, in-lock with the trash write since round 8 F3 — the same
+        // per-filament mutex the first-variant gates lock, so the check
+        // can't be raced by a mid-flight first variant; restoring a variant
+        // under a trashed parent is refused; variant creation requires an
+        // ACTIVE parent), so the revived row is never a template at this
+        // write. Same reasoning as the atlas importer's resurrect path.
         //
         // Splice `_deletedAt: null` into the $set body so the resurrect
         // atomic also drops the tombstone; $unset (if any) for stale

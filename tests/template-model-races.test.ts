@@ -3,9 +3,9 @@ import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as createFilament } from "@/app/api/filaments/route";
 import { POST as createSpool } from "@/app/api/filaments/[id]/spools/route";
-import { PUT as putFilament } from "@/app/api/filaments/[id]/route";
+import { PUT as putFilament, DELETE as deleteFilament } from "@/app/api/filaments/[id]/route";
 import { POST as promotePOST } from "@/app/api/filaments/[id]/promote/route";
-import { lockedKeyCount } from "@/lib/filamentMutex";
+import { lockedKeyCount, runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
  * GH #605 review round 2 — the check-then-act races, made DETERMINISTIC by
@@ -294,6 +294,130 @@ describe("GH #605 — template-model race serialization", () => {
         expect(promoted.totalWeight ?? null).toBeNull();
       } else {
         expect(promoted.totalWeight).toBe(500);
+      }
+
+      expect(lockedKeyCount()).toBe(0);
+    });
+  }
+
+  // ── round 8 F1: reparent vs first-variant POST ───────────────────────────
+
+  it("a reparent landing between the POST's pre-lock validation and the gate: the in-lock re-fetch refuses the grandchild (round 8 F1)", async () => {
+    const parent = await seedCarryingParent("Nest Race PLA");
+    const grandparent = await Filament.create({
+      name: "Nest Race Root",
+      vendor: "V",
+      type: "PLA",
+      color: null,
+    });
+    const id = String(parent._id);
+
+    // Hold the parent's key so the POST passes its pre-lock validation
+    // (the parent is still a root at that point) and queues at the gate;
+    // the concurrent reparent lands while it waits.
+    let release!: () => void;
+    const holdUntil = new Promise<void>((r) => (release = r));
+    const holder = runExclusive(filamentLockKey(id), async () => {
+      await holdUntil;
+    });
+    const post = variantPost({
+      name: "Nest Race PLA — Red",
+      vendor: "V",
+      type: "PLA",
+      color: "#FF0000",
+      parentId: id,
+      promoteParent: true,
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    await Filament.updateOne({ _id: parent._id }, { $set: { parentId: grandparent._id } });
+    release();
+    await holder;
+
+    // Same no-nesting 400 the pre-lock check produces — whether the POST
+    // was already queued (gate re-fetch, the raced path) or slow enough to
+    // see the reparent pre-lock, the observable is identical.
+    const res = await post;
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe(
+      "Cannot set a variant as parent (no nested inheritance)",
+    );
+
+    // No grandchild, no promotion copy; the (now-variant) parent keeps its
+    // carried state untouched.
+    expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+    const fresh = await Filament.findById(parent._id).lean();
+    expect(String(fresh.parentId)).toBe(String(grandparent._id));
+    expect(fresh.color).toBe("#336699");
+    expect(fresh.spools).toHaveLength(2);
+    expect(lockedKeyCount()).toBe(0);
+  });
+
+  // ── round 8 F3: DELETE vs first-variant POST ─────────────────────────────
+
+  for (const deleteFirst of [true, false]) {
+    it(`soft DELETE vs promoting first-variant POST (${deleteFirst ? "delete" : "variant"} submitted first): never a trashed parent with a live variant`, async () => {
+      const base = `Trash Race PLA ${deleteFirst ? "A" : "B"}`;
+      const parent = await seedCarryingParent(base);
+      const id = String(parent._id);
+
+      const variantBody = {
+        name: `${base} — Red`,
+        vendor: "V",
+        type: "PLA",
+        color: "#FF0000",
+        parentId: id,
+        promoteParent: true,
+      };
+      const del = () =>
+        deleteFilament(
+          new NextRequest(`http://localhost/api/filaments/${id}`, { method: "DELETE" }),
+          { params: Promise.resolve({ id }) },
+        );
+
+      const [delRes, variantRes] = deleteFirst
+        ? await (() => {
+            const d = del();
+            const v = variantPost(variantBody);
+            return Promise.all([d, v]);
+          })()
+        : await (async () => {
+            const v = variantPost(variantBody);
+            const d = del();
+            const [rv, rd] = await Promise.all([v, d]);
+            return [rd, rv] as const;
+          })();
+
+      // Exactly one side wins, and the loser gets its designed refusal.
+      expect([200, 400]).toContain(delRes.status);
+      expect([201, 400]).toContain(variantRes.status);
+      if (delRes.status === 200) {
+        // Delete won: a childless doc went to trash; the POST's parent
+        // vanished (pre-lock or at the gate's in-lock re-fetch) → 400.
+        expect(variantRes.status).toBe(400);
+        // Nothing was minted — not even a promotion copy.
+        expect(await Filament.countDocuments({ parentId: parent._id })).toBe(0);
+      } else {
+        // Create won: the DELETE's in-lock hasVariants re-check refused.
+        expect(variantRes.status).toBe(201);
+        expect((await delRes.json()).error).toMatch(/has color variants/);
+      }
+
+      // THE invariant (what the resurrect exemptions + restore guards rely
+      // on): a trashed doc never has live variants — asserted explicitly,
+      // for whichever side entered the critical section first.
+      const freshParent = await Filament.findById(parent._id).lean();
+      const liveVariants = await Filament.countDocuments({
+        parentId: parent._id,
+        _deletedAt: null,
+      });
+      if (freshParent._deletedAt != null) {
+        expect(liveVariants).toBe(0);
+      } else {
+        // Create won: the promoted template holds its two live variants
+        // (the promotion copy + the requested one) and no inventory.
+        expect(liveVariants).toBe(2);
+        expect(freshParent.spools).toEqual([]);
+        expect(freshParent.color).toBeNull();
       }
 
       expect(lockedKeyCount()).toBe(0);

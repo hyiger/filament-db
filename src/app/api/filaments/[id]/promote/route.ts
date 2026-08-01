@@ -91,12 +91,17 @@ export async function POST(
       // The external-ref models let the promotion remap persisted
       // (filamentId, spoolId) references onto the carrying variant (codex
       // round 4, F1) — history rows and AMS slots follow the moved spools.
-      const variant = await performParentPromotion(Filament, filament, {
+      // Round 8 F2: `resumed: true` reports that this call ADOPTED the
+      // partial copy an interrupted earlier promotion left behind (this
+      // route is the documented recovery path for exactly that state) —
+      // surfaced in the response so clients can tell recovery from a fresh
+      // conversion; the end state is identical.
+      const { variant, resumed } = await performParentPromotion(Filament, filament, {
         externalRefs: { printHistory: PrintHistory, printer: Printer },
       });
       const parent = await Filament.findOne({ _id: id, _deletedAt: null }).lean();
 
-      return NextResponse.json({ variant, parent });
+      return NextResponse.json({ variant, parent, resumed });
     });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to convert to template");

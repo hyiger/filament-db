@@ -568,6 +568,11 @@ export async function POST(request: NextRequest) {
           // The parent was validated above but vanished (soft-deleted)
           // before the lock — same 400 the pre-lock check would have given.
           return errorResponse("Parent filament not found", 400);
+        case "parent_is_variant":
+          // Validated above as a root, but a concurrent PUT re-parented it
+          // before the gate's in-lock re-fetch (round 8 F1) — same no-nesting
+          // 400 the pre-lock check produces.
+          return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
         case "promotion_required":
           return NextResponse.json(promotionRequired409Body(result), { status: 409 });
         case "name_taken":

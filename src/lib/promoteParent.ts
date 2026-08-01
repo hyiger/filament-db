@@ -31,7 +31,10 @@
  * Copy FIRST, clear LAST — there are no transactions available (standalone
  * mongod), so a crash between the steps leaves a parent that still carries
  * its legacy state (recoverable via the "Convert to template" action) rather
- * than data loss.
+ * than data loss. Since round 8 (F2) that recovery is IDEMPOTENT: a retried
+ * promotion detects the interrupted run's partial copy (see
+ * findPartialPromotionVariant) and resumes — re-running only the remap and
+ * clear — instead of minting a second " (N)" copy of the inventory.
  *
  * Two entry points share this module:
  *   - POST /api/filaments (variant creation): the FIRST variant of a
@@ -196,6 +199,17 @@ export interface PerformParentPromotionOptions {
   externalRefs: PromotionExternalRefModels | null;
 }
 
+/** What performParentPromotion did (round 8 F2): `resumed: false` is a fresh
+ *  copy-remap-clear run; `resumed: true` means an INTERRUPTED earlier run's
+ *  partial copy was detected and adopted — the create was skipped and only
+ *  the (idempotent) remap + clear were re-run. Callers may log/report the
+ *  distinction; the end state is identical either way. */
+export interface ParentPromotionOutcome {
+  /** The carrying variant — freshly created, or the adopted partial copy. */
+  variant: FilamentDoc;
+  resumed: boolean;
+}
+
 /**
  * Codex round 4, F1: remap external `(filamentId, spoolId)` references from
  * the parent to the promoted variant. Spool subdocument `_id`s are PRESERVED
@@ -251,9 +265,110 @@ async function remapExternalSpoolRefs(
 }
 
 /**
+ * Round 8 F2: detect the partial copy an INTERRUPTED earlier promotion left
+ * behind, so a retry resumes instead of minting a second copy. The crash
+ * window is create-succeeded-then-remap/clear-threw: the variant exists,
+ * the parent still carries. Without this, a retry's create would land a
+ * `<base> (2)` duplicate holding a SECOND copy of the spools.
+ *
+ * Detection, against the parent's CURRENT in-lock state:
+ *
+ *  (a) spools case — a LIVE variant of this parent holding ANY of the
+ *      parent's current spool subdoc `_id`s IS the partial promotion.
+ *      Unambiguous: subdoc ids are copied verbatim and cleared from the
+ *      parent only in the final step, so parent/variant overlap can only
+ *      mean an interrupted run (no other write path copies spool subdocs
+ *      across documents — a completed promotion leaves the parent with no
+ *      spools, and any re-acquired spools get fresh ids).
+ *
+ *  (b) no-spools case — a LIVE variant of this parent whose name matches
+ *      the deterministic promotionVariantBaseName (or its " (N)" suffixes)
+ *      AND whose stored carried set — color, colorName, totalWeight,
+ *      lowStockThreshold — equals the parent's. A genuine partial copy
+ *      satisfies every one of those (they were copied verbatim from this
+ *      same parent, whose carried fields a template's write paths won't
+ *      have changed since: non-null writes are stripped). Residual
+ *      ambiguity, documented honestly: a USER-created variant could
+ *      coincide on the whole set. We cannot tell those apart — but full
+ *      equality of the carried set makes the resume WRITE-EQUIVALENT to a
+ *      fresh promotion: the variant already holds exactly the values the
+ *      promotion would move, and the parent is cleared of the same values,
+ *      so adopting the lookalike loses nothing either way. A parent that
+ *      re-acquired a DIFFERENT carried set after a completed promotion
+ *      fails the equality and gets its fresh copy (suffixed name) as
+ *      before; the only cost of a near-miss is the pre-round-8 behavior (a
+ *      fresh " (N)" copy), never data loss.
+ */
+async function findPartialPromotionVariant(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: any,
+  parent: FilamentDoc,
+  movedSpools: FilamentDoc[],
+): Promise<FilamentDoc | null> {
+  if (movedSpools.length > 0) {
+    return await FilamentModel.findOne({
+      parentId: parent._id,
+      _deletedAt: null,
+      "spools._id": { $in: movedSpools.map((s) => s._id) },
+    });
+  }
+  const base = promotionVariantBaseName(parent.name, parent.colorName);
+  const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return await FilamentModel.findOne({
+    parentId: parent._id,
+    _deletedAt: null,
+    name: new RegExp(`^${escaped}( \\(\\d+\\))?$`),
+    // The full carried set (null matches null-or-missing) — see (b) above.
+    color: parent.color ?? null,
+    colorName: parent.colorName ?? null,
+    totalWeight: parent.totalWeight ?? null,
+    lowStockThreshold: parent.lowStockThreshold ?? null,
+  });
+}
+
+/**
+ * Clear the moved fields on the parent — the promotion's LAST step (see the
+ * module header's crash posture), shared by the fresh and resumed paths.
+ * Clears ONLY the moved fields; the SPEC pair stays. `_deletedAt: null`
+ * re-filter so a concurrent soft-delete can't be resurrected into a mutated
+ * tombstone.
+ *
+ * `$inc __v` (codex round 3 sweep, verified by repro): overwriting the
+ * spools array via save() would bump the version key (VERSION_INC), so
+ * this raw updateOne must too — otherwise a HYDRATED doc loaded before
+ * the promotion that modified a spool positionally (`spools.0.totalWeight`
+ * — the print-history debit/refund saves, the spool usage route, a CSV
+ * import's update-only bucket) still matches its `__v` in save()'s
+ * VERSION_WHERE filter and re-materializes a phantom spool fragment onto
+ * the freshly-cleared template. With the bump, every such stale save
+ * fails as a VersionError, which those callers already map to their
+ * designed 409-retry / failed-bucket paths.
+ */
+async function clearPromotedParentFields(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: any,
+  parentId: unknown,
+): Promise<void> {
+  await FilamentModel.updateOne(
+    { _id: parentId, _deletedAt: null },
+    {
+      $set: {
+        color: null,
+        colorName: null,
+        spools: [],
+        totalWeight: null,
+        lowStockThreshold: null,
+      },
+      $inc: { __v: 1 },
+    },
+  );
+}
+
+/**
  * Perform the promotion: create the carrying variant, remap external spool
  * references onto it, then clear the moved fields on the parent. Returns the
- * created variant document.
+ * created variant document plus whether the run RESUMED an interrupted
+ * promotion (round 8 F2 — see findPartialPromotionVariant).
  *
  * The variant body is built explicitly (never spread from the parent) so
  * server-owned identity never leaks across documents: the variant gets its
@@ -283,14 +398,33 @@ export async function performParentPromotion(
   FilamentModel: any,
   parent: FilamentDoc,
   opts: PerformParentPromotionOptions,
-): Promise<FilamentDoc> {
+): Promise<ParentPromotionOutcome> {
+  const movedSpools: FilamentDoc[] = Array.isArray(parent.spools) ? parent.spools : [];
+
+  // Round 8 F2: an interrupted earlier run (create succeeded, remap or clear
+  // threw) left its partial copy behind — RESUME it instead of creating a
+  // second one. Skip the create; re-run the remaps (idempotent — updateMany
+  // with filters scoped to refs still pointing at the parent) and the clear
+  // against the adopted copy.
+  const partial = await findPartialPromotionVariant(FilamentModel, parent, movedSpools);
+  if (partial) {
+    if (opts.externalRefs) {
+      await remapExternalSpoolRefs(
+        opts.externalRefs,
+        parent._id,
+        partial._id,
+        movedSpools.map((s) => s._id),
+      );
+    }
+    await clearPromotedParentFields(FilamentModel, parent._id);
+    return { variant: partial, resumed: true };
+  }
+
   const name = await resolvePromotionVariantName(
     FilamentModel,
     promotionVariantBaseName(parent.name, parent.colorName),
     opts.alsoTakenNames,
   );
-
-  const movedSpools: FilamentDoc[] = Array.isArray(parent.spools) ? parent.spools : [];
 
   // spoolWeight / netFilamentWeight are deliberately NOT copied — they are
   // SPEC, not inventory, and stay on the parent template; the variant's own
@@ -327,33 +461,8 @@ export async function performParentPromotion(
     );
   }
 
-  // Clear LAST (see module header) — and clear ONLY the moved fields; the
-  // SPEC pair stays on the parent. `_deletedAt: null` re-filter so a
-  // concurrent soft-delete can't be resurrected into a mutated tombstone.
-  //
-  // `$inc __v` (codex round 3 sweep, verified by repro): overwriting the
-  // spools array via save() would bump the version key (VERSION_INC), so
-  // this raw updateOne must too — otherwise a HYDRATED doc loaded before
-  // the promotion that modified a spool positionally (`spools.0.totalWeight`
-  // — the print-history debit/refund saves, the spool usage route, a CSV
-  // import's update-only bucket) still matches its `__v` in save()'s
-  // VERSION_WHERE filter and re-materializes a phantom spool fragment onto
-  // the freshly-cleared template. With the bump, every such stale save
-  // fails as a VersionError, which those callers already map to their
-  // designed 409-retry / failed-bucket paths.
-  await FilamentModel.updateOne(
-    { _id: parent._id, _deletedAt: null },
-    {
-      $set: {
-        color: null,
-        colorName: null,
-        spools: [],
-        totalWeight: null,
-        lowStockThreshold: null,
-      },
-      $inc: { __v: 1 },
-    },
-  );
+  // Clear LAST (see module header and clearPromotedParentFields).
+  await clearPromotedParentFields(FilamentModel, parent._id);
 
-  return variant;
+  return { variant, resumed: false };
 }

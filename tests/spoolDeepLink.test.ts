@@ -136,7 +136,7 @@ describe("spool deep-link self-heal (round 7 P2)", () => {
       const spoolId = String(parentLean.spools[0]._id);
       const search = labelSearch(String(parent._id), spoolId);
 
-      const variant = await performParentPromotion(Filament, parentLean, {
+      const { variant } = await performParentPromotion(Filament, parentLean, {
         externalRefs,
       });
 

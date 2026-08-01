@@ -461,6 +461,12 @@ export async function PUT(
         // same 400 the pre-lock check would have given.
         return errorResponse("Parent filament not found", 400);
       }
+      if (adoption.outcome === "parent_is_variant") {
+        // Validated above as a root, but a concurrent PUT re-parented it
+        // before the gate's in-lock re-fetch (round 8 F1) — same no-nesting
+        // 400 the pre-lock check produces.
+        return errorResponse("Cannot set a variant as parent (no nested inheritance)", 400);
+      }
       if (adoption.outcome === "promotion_required") {
         return NextResponse.json(promotionRequired409Body(adoption), { status: 409 });
       }
@@ -1421,32 +1427,51 @@ export async function DELETE(
     }
 
     // Soft delete — the default path.
-    if (await hasVariants(Filament, id)) {
-      return errorResponse(
-        "Cannot delete a filament that has color variants. Delete the variants first.",
-        400,
-      );
-    }
+    //
+    // Round 8 F3: the hasVariants refusal AND the soft-delete write run as
+    // ONE section under the per-filament mutex — the same key the
+    // first-variant creation/adoption gates hold (createVariantGated /
+    // gateFirstVariantAdoption lock the PARENT's id, which is this id when
+    // a parent is being trashed). Unserialized, this check-then-act could
+    // interleave with a first-variant POST: the check passes while the
+    // parent is still childless, the gate's promotion then mints a live
+    // variant (and a promotion copy), and the trailing updateOne trashes
+    // the parent — a TRASHED doc with LIVE variants, breaking the exact
+    // invariant the import resurrect exemptions and the restore guards rely
+    // on ("a trashed doc cannot have live variants"). In-lock, both orders
+    // end lawful: delete-first trashes a childless doc and the gate's
+    // in-lock re-fetch answers parent_not_found (the POST 400s);
+    // create-first makes this hasVariants re-check refuse. Single key, no
+    // nested locks — hasVariants, the findOne, and assignSpoolToSlot (via
+    // clearFilamentSpoolsFromSlots) are plain DB calls.
+    return await runExclusive(filamentLockKey(id), async () => {
+      if (await hasVariants(Filament, id)) {
+        return errorResponse(
+          "Cannot delete a filament that has color variants. Delete the variants first.",
+          400,
+        );
+      }
 
-    const filament = await Filament.findOne({ _id: id, _deletedAt: null })
-      .select("_id spools")
-      .lean();
-    if (!filament) {
-      return errorResponse("Not found", 404);
-    }
-    // GH #261/#333: drop this filament's spools from every printer AMS slot
-    // BEFORE the soft-delete write. If slot cleanup fails the filament is
-    // still active and the whole DELETE is retryable; clearing afterwards
-    // would 404 the retry (`_deletedAt: null` no longer matches) and leave
-    // dangling slot refs behind.
-    await clearFilamentSpoolsFromSlots(
-      (filament as { spools?: { _id?: unknown }[] }).spools,
-    );
-    await Filament.updateOne(
-      { _id: id, _deletedAt: null },
-      { _deletedAt: new Date() },
-    );
-    return NextResponse.json({ message: "Deleted" });
+      const filament = await Filament.findOne({ _id: id, _deletedAt: null })
+        .select("_id spools")
+        .lean();
+      if (!filament) {
+        return errorResponse("Not found", 404);
+      }
+      // GH #261/#333: drop this filament's spools from every printer AMS slot
+      // BEFORE the soft-delete write. If slot cleanup fails the filament is
+      // still active and the whole DELETE is retryable; clearing afterwards
+      // would 404 the retry (`_deletedAt: null` no longer matches) and leave
+      // dangling slot refs behind.
+      await clearFilamentSpoolsFromSlots(
+        (filament as { spools?: { _id?: unknown }[] }).spools,
+      );
+      await Filament.updateOne(
+        { _id: id, _deletedAt: null },
+        { _deletedAt: new Date() },
+      );
+      return NextResponse.json({ message: "Deleted" });
+    });
   } catch (err) {
     return errorResponseFromCaught(err, "Failed to delete filament");
   }
