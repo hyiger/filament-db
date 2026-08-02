@@ -2779,6 +2779,16 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid filament or spool id (GH #425), or unrecognized `shape` value (GH #1027)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
           "404": {
             "description": "Filament or spool not found",
             "content": {

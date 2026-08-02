@@ -54,6 +54,13 @@ describe("findSpoolById", () => {
   it("works with plain-string _id values too", () => {
     expect(findSpoolById([{ _id: "x1" }], "x1")?._id).toBe("x1");
   });
+
+  it("matches case-insensitively — the ObjectId cast accepts uppercase hex, so the preceding write commits", () => {
+    // GH #1027 adversarial-review finding: a case-sensitive compare here
+    // 404s a COMMITTED write when the client sent an uppercased 24-hex id.
+    expect(findSpoolById(spools, "BBBBBBBBBBBBBBBBBBBBBBBB")?.label).toBe("B");
+    expect(findSpoolById(spools, "BbBbBbBbBbBbBbBbBbBbBbBb")?.label).toBe("B");
+  });
 });
 
 describe("findSpoolByInstanceId", () => {
@@ -74,5 +81,16 @@ describe("findSpoolByInstanceId", () => {
   it("tolerates an absent spools array", () => {
     expect(findSpoolByInstanceId(undefined, "deadbeef00")).toBeNull();
     expect(findSpoolByInstanceId(null, "deadbeef00")).toBeNull();
+  });
+
+  it("returns the LAST match when a duplicate instanceId exists — $push appends the created spool", () => {
+    // GH #1027 adversarial-review finding: instanceId uniqueness is
+    // best-effort (documented read-then-write race). A first-match scan
+    // would identify the WRONG, pre-existing spool in the create response.
+    const dupes = [
+      { instanceId: "same000000", label: "pre-existing" },
+      { instanceId: "same000000", label: "just created" },
+    ];
+    expect(findSpoolByInstanceId(dupes, "same000000")?.label).toBe("just created");
   });
 });

@@ -16,8 +16,6 @@ import { NextRequest } from "next/server";
 describe("spool mutation routes — ?shape=spool (GH #1027)", () => {
   /* eslint-disable @typescript-eslint/no-explicit-any */
   let Filament: any;
-  let Location: any;
-  let Printer: any;
   /* eslint-enable @typescript-eslint/no-explicit-any */
 
   // A distinctive marker so "the sibling's blob leaked into the response"
@@ -28,12 +26,12 @@ describe("spool mutation routes — ?shape=spool (GH #1027)", () => {
     const filMod = await import("@/models/Filament");
     const locMod = await import("@/models/Location");
     const prtMod = await import("@/models/Printer");
+    // Location + Printer are registered for the routes' side-effect paths
+    // (location guard, AMS slot clears) — no direct handle needed here.
     if (!mongoose.models.Filament) mongoose.model("Filament", filMod.default.schema);
     if (!mongoose.models.Location) mongoose.model("Location", locMod.default.schema);
     if (!mongoose.models.Printer) mongoose.model("Printer", prtMod.default.schema);
     Filament = mongoose.models.Filament;
-    Location = mongoose.models.Location;
-    Printer = mongoose.models.Printer;
   });
 
   /** Filament with a target spool and a blob-carrying sibling spool. */
@@ -106,6 +104,68 @@ describe("spool mutation routes — ?shape=spool (GH #1027)", () => {
       expect(body.name).toBe("Shape PLA");
       // The fat default deliberately still carries the sibling's blob.
       expect(JSON.stringify(body)).toContain(SIBLING_PHOTO);
+    });
+
+    it("?shape=spool works with an UPPERCASED spoolId — the write commits case-insensitively, so the response must too", async () => {
+      // GH #1027 adversarial-review regression: the ObjectId cast on the
+      // "spools._id" filter accepts uppercase hex and COMMITS the $set; a
+      // case-sensitive response lookup then 404'd a committed write.
+      const { id, spoolId } = await createFixture();
+      const upper = spoolId.toUpperCase();
+      const { PUT } = await import("@/app/api/filaments/[id]/spools/[spoolId]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${id}/spools/${upper}?shape=spool`, "PUT", {
+          totalWeight: 640,
+        }),
+        { params: Promise.resolve({ id, spoolId: upper }) },
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.spool.totalWeight).toBe(640);
+      expect(body.spool._id).toBe(spoolId); // canonical lowercase from the doc
+    });
+
+    it("?shape=spool carries the tare-converted GROSS weight on a remainingWeight write (the mobile payload)", async () => {
+      // Mobile's saveWeight sends {remainingWeight} with ?shape=spool and
+      // re-renders from the returned spool, subtracting the tare itself —
+      // so the response's totalWeight must be gross (remaining + tare).
+      const filament = await Filament.create({
+        name: "Tare PLA",
+        vendor: "QA",
+        type: "PLA",
+        diameter: 1.75,
+        spoolWeight: 200,
+        spools: [{ label: "roll", totalWeight: 1000 }],
+      });
+      const id = String(filament._id);
+      const spoolId = String(filament.spools[0]._id);
+      const { PUT } = await import("@/app/api/filaments/[id]/spools/[spoolId]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${id}/spools/${spoolId}?shape=spool`, "PUT", {
+          remainingWeight: 500,
+        }),
+        { params: Promise.resolve({ id, spoolId }) },
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.spool.totalWeight).toBe(700); // 500 remaining + 200 tare
+      expect(body.spools).toBeUndefined();
+    });
+
+    it("?shape=spool carries the freshly-minted instanceId on a regenerate write (the SpoolCard ID editor)", async () => {
+      const { id, spoolId, filament } = await createFixture();
+      const before = filament.spools[0].instanceId;
+      const { PUT } = await import("@/app/api/filaments/[id]/spools/[spoolId]/route");
+      const res = await PUT(
+        jsonReq(`http://localhost/api/filaments/${id}/spools/${spoolId}?shape=spool`, "PUT", {
+          regenerate: true,
+        }),
+        { params: Promise.resolve({ id, spoolId }) },
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.spool.instanceId).toMatch(/^[0-9a-f]{10}$/);
+      expect(body.spool.instanceId).not.toBe(before);
     });
 
     it("unrecognized shape value → 400, before any write", async () => {
