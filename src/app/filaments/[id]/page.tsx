@@ -26,7 +26,7 @@ import { deriveFinish } from "@/lib/filamentFinish";
 import { deriveArrangement } from "@/lib/filamentColors";
 import { parentPromotionState } from "@/lib/promoteParent";
 import { decideSpoolDeepLink, healedSpoolDeepLinkHref } from "@/lib/spoolDeepLink";
-import type { FilamentDetail, FilamentCalibration } from "@/types/filament";
+import type { FilamentDetail, FilamentCalibration, FilamentSpool } from "@/types/filament";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useDateFormat } from "@/hooks/useDateFormat";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
@@ -930,17 +930,39 @@ function FilamentDetail() {
     }
   };
 
+  // GH #1027: the spool-mutation endpoints are called with ?shape=spool, so
+  // the response carries only the AFFECTED spool — merge it into local state
+  // instead of wholesale-replacing the spools array from a full filament doc.
+  // Keeps every sibling spool's photo blob + usage ledger off the wire for a
+  // one-field write (the response side of the #1005 projection sweep).
+  const mergeSpoolIntoState = (spool: FilamentSpool) => {
+    setFilament(prev =>
+      prev
+        ? {
+            ...prev,
+            spools: (prev.spools ?? []).map(s =>
+              s._id.toString() === spool._id.toString() ? spool : s,
+            ),
+          }
+        : prev,
+    );
+  };
+
   const handleAddSpool = async (label = "", totalWeight: number | null = null) => {
     if (!filament) return;
     try {
-      const res = await fetch(`/api/filaments/${filament._id}/spools`, {
+      const res = await fetch(`/api/filaments/${filament._id}/spools?shape=spool`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label, totalWeight }),
       });
       if (res.ok) {
-        const updated = await res.json();
-        setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
+        // shape=spool: the body is the created spool (server-minted _id +
+        // instanceId) — append it rather than replacing the whole array.
+        const created = await res.json();
+        setFilament(prev =>
+          prev ? { ...prev, spools: [...(prev.spools ?? []), created.spool] } : prev,
+        );
         toast(t("detail.spool.added"));
       } else {
         toast(t("detail.spool.addFailed"), "error");
@@ -1015,14 +1037,14 @@ function FilamentDetail() {
     }
 
     try {
-      const res = await fetch(`/api/filaments/${filament._id}/spools/${spoolId}`, {
+      const res = await fetch(`/api/filaments/${filament._id}/spools/${spoolId}?shape=spool`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
       });
       if (res.ok) {
         const updated = await res.json();
-        setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
+        mergeSpoolIntoState(updated.spool);
         // #558: retiring a loaded spool clears it from its printer AMS slot
         // server-side (the PUT handler calls assignSpoolToSlot(..., null)).
         // The card's slot text is derived from `printers`, so refresh it or
@@ -1086,7 +1108,7 @@ function FilamentDetail() {
     if (!filament) return;
     try {
       const res = await fetch(
-        `/api/filaments/${filament._id}/spools/${spoolId}/dry-cycles`,
+        `/api/filaments/${filament._id}/spools/${spoolId}/dry-cycles?shape=spool`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1095,7 +1117,7 @@ function FilamentDetail() {
       );
       if (res.ok) {
         const updated = await res.json();
-        setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
+        mergeSpoolIntoState(updated.spool);
         toast(t("detail.spool.dryLogged"));
       } else {
         toast(t("detail.spool.dryLogFailed"), "error");
@@ -1112,7 +1134,7 @@ function FilamentDetail() {
     if (!filament) return;
     try {
       const res = await fetch(
-        `/api/filaments/${filament._id}/spools/${spoolId}/usage`,
+        `/api/filaments/${filament._id}/spools/${spoolId}/usage?shape=spool`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -1121,7 +1143,7 @@ function FilamentDetail() {
       );
       if (res.ok) {
         const updated = await res.json();
-        setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
+        mergeSpoolIntoState(updated.spool);
         toast(t("detail.spool.usageLogged", { grams: entry.grams }));
       } else {
         toast(t("detail.spool.usageLogFailed"), "error");
@@ -1135,12 +1157,20 @@ function FilamentDetail() {
     if (!filament) return;
     if (!(await confirm({ message: t("detail.spool.confirmRemove"), destructive: true, confirmLabel: t("common.delete") }))) return;
     try {
-      const res = await fetch(`/api/filaments/${filament._id}/spools/${spoolId}`, {
+      const res = await fetch(`/api/filaments/${filament._id}/spools/${spoolId}?shape=spool`, {
         method: "DELETE",
       });
       if (res.ok) {
-        const updated = await res.json();
-        setFilament(prev => prev ? { ...prev, spools: updated.spools } : prev);
+        // shape=spool: the DELETE body is just a deleted-marker — drop the
+        // spool from local state by the id we already hold.
+        setFilament(prev =>
+          prev
+            ? {
+                ...prev,
+                spools: (prev.spools ?? []).filter(s => s._id.toString() !== spoolId),
+              }
+            : prev,
+        );
         toast(t("detail.spool.removed"));
         // Re-focus the document body after confirm() dialog steals focus,
         // so subsequent input fields remain clickable/typeable (#97)
@@ -1197,7 +1227,7 @@ function FilamentDetail() {
     if (!filament || filament.totalWeight == null) return;
     try {
       // Create a spool from the legacy totalWeight
-      const addRes = await fetch(`/api/filaments/${filament._id}/spools`, {
+      const addRes = await fetch(`/api/filaments/${filament._id}/spools?shape=spool`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label: "", totalWeight: filament.totalWeight }),
@@ -1210,8 +1240,16 @@ function FilamentDetail() {
         body: JSON.stringify({ totalWeight: null }),
       });
       if (clearRes.ok) {
+        // Deliberately parsed only after the clear PUT succeeds (existing
+        // partial-failure posture). shape=spool: append the created spool —
+        // a legacy migratable filament has no real spools, so this matches
+        // the old wholesale replace.
         const added = await addRes.json();
-        setFilament(prev => prev ? { ...prev, spools: added.spools, totalWeight: null } : prev);
+        setFilament(prev =>
+          prev
+            ? { ...prev, spools: [...(prev.spools ?? []), added.spool], totalWeight: null }
+            : prev,
+        );
         toast(t("detail.spool.migrated"));
       }
     } catch {

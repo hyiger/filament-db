@@ -2494,6 +2494,9 @@
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
+          },
+          {
+            "$ref": "#/components/parameters/SpoolResponseShape"
           }
         ],
         "requestBody": {
@@ -2554,11 +2557,18 @@
         },
         "responses": {
           "201": {
-            "description": "Updated filament with new spool",
+            "description": "Updated filament with new spool (default), or `{ spool: <the created spool> }` with `?shape=spool` (GH #1027)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Filament"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Filament"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SpoolShapeResponse"
+                    }
+                  ]
                 }
               }
             }
@@ -2613,6 +2623,9 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/SpoolResponseShape"
           }
         ],
         "requestBody": {
@@ -2679,11 +2692,18 @@
         },
         "responses": {
           "200": {
-            "description": "Updated filament",
+            "description": "Updated filament (default), or `{ spool: <the updated spool> }` with `?shape=spool` (GH #1027)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Filament"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Filament"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SpoolShapeResponse"
+                    }
+                  ]
                 }
               }
             }
@@ -2736,15 +2756,25 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "$ref": "#/components/parameters/SpoolResponseShape"
           }
         ],
         "responses": {
           "200": {
-            "description": "Updated filament",
+            "description": "Updated filament (default), or `{ deleted: true, spoolId }` with `?shape=spool` (GH #1027)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Filament"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Filament"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SpoolDeleteShapeResponse"
+                    }
+                  ]
                 }
               }
             }
@@ -4549,6 +4579,9 @@
               "type": "string"
             },
             "description": "Spool ObjectId"
+          },
+          {
+            "$ref": "#/components/parameters/SpoolResponseShape"
           }
         ],
         "requestBody": {
@@ -4582,11 +4615,18 @@
         },
         "responses": {
           "201": {
-            "description": "Updated filament",
+            "description": "Updated filament (default), or `{ spool: <the updated spool> }` with `?shape=spool` (GH #1027)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Filament"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Filament"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SpoolShapeResponse"
+                    }
+                  ]
                 }
               }
             }
@@ -4643,6 +4683,9 @@
               "type": "string"
             },
             "description": "Spool ObjectId"
+          },
+          {
+            "$ref": "#/components/parameters/SpoolResponseShape"
           }
         ],
         "requestBody": {
@@ -4674,11 +4717,18 @@
         },
         "responses": {
           "201": {
-            "description": "Updated filament",
+            "description": "Updated filament (default), or `{ spool: <the updated spool> }` with `?shape=spool` (GH #1027)",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Filament"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Filament"
+                    },
+                    {
+                      "$ref": "#/components/schemas/SpoolShapeResponse"
+                    }
+                  ]
                 }
               }
             }
@@ -6422,6 +6472,18 @@
           "type": "string"
         },
         "description": "MongoDB ObjectId of the printer"
+      },
+      "SpoolResponseShape": {
+        "name": "shape",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "spool"
+          ]
+        },
+        "description": "GH #1027: opt-in slim response. With `shape=spool` the mutation returns only the AFFECTED spool (`{ spool }`; the DELETE returns `{ deleted: true, spoolId }`) instead of the whole filament document carrying every spool's photoDataUrl blob and usageHistory ledger. Omit the parameter for the historical full-document response (shipped clients rely on it). An unrecognized value is rejected with 400 rather than silently falling back to the fat default."
       }
     },
     "schemas": {
@@ -6943,135 +7005,7 @@
           "spools": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "_id": {
-                  "type": "string"
-                },
-                "instanceId": {
-                  "type": "string",
-                  "description": "Per-spool 5-byte hex identity (#732, v1.48+); auto-generated or user-set. The value NFC tags carry, QR labels encode, and tag/QR matching resolves first (ahead of the filament-level instanceId)."
-                },
-                "label": {
-                  "type": "string"
-                },
-                "totalWeight": {
-                  "type": "number",
-                  "nullable": true
-                },
-                "lotNumber": {
-                  "type": "string",
-                  "nullable": true,
-                  "description": "Manufacturer lot or batch number"
-                },
-                "purchaseDate": {
-                  "type": "string",
-                  "format": "date",
-                  "nullable": true,
-                  "description": "Date the spool was purchased"
-                },
-                "openedDate": {
-                  "type": "string",
-                  "format": "date",
-                  "nullable": true,
-                  "description": "Date the spool was opened"
-                },
-                "createdAt": {
-                  "type": "string",
-                  "format": "date-time",
-                  "description": "When this spool entry was created"
-                },
-                "locationId": {
-                  "type": "string",
-                  "nullable": true,
-                  "description": "Location ObjectId — the spool's semi-permanent home (v1.11). Distinct from a printer AMS slot, which is its transient loaded position."
-                },
-                "photoDataUrl": {
-                  "type": "string",
-                  "nullable": true,
-                  "description": "Inline data: URL of a spool photo (v1.11). SVG is rejected on write."
-                },
-                "retired": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "Retired spools are excluded from inventory totals but keep their history (v1.11)."
-                },
-                "dryCycles": {
-                  "type": "array",
-                  "description": "Drying-event log (v1.11)",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "_id": {
-                        "type": "string"
-                      },
-                      "date": {
-                        "type": "string",
-                        "format": "date-time"
-                      },
-                      "tempC": {
-                        "type": "number",
-                        "nullable": true,
-                        "minimum": 0,
-                        "maximum": 300
-                      },
-                      "durationMin": {
-                        "type": "number",
-                        "nullable": true,
-                        "minimum": 0
-                      },
-                      "notes": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "date"
-                    ]
-                  }
-                },
-                "usageHistory": {
-                  "type": "array",
-                  "description": "Per-spool filament-consumption ledger (v1.11). Entries tagged source=job/slicer mirror a PrintHistory record; source=manual/nfc are standalone.",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "_id": {
-                        "type": "string"
-                      },
-                      "grams": {
-                        "type": "number",
-                        "minimum": 0,
-                        "description": "Grams consumed (always positive)"
-                      },
-                      "jobLabel": {
-                        "type": "string"
-                      },
-                      "date": {
-                        "type": "string",
-                        "format": "date-time"
-                      },
-                      "source": {
-                        "type": "string",
-                        "enum": [
-                          "manual",
-                          "slicer",
-                          "job",
-                          "nfc"
-                        ]
-                      },
-                      "jobId": {
-                        "type": "string",
-                        "nullable": true,
-                        "description": "PrintHistory _id for job/slicer entries; null for manual/nfc"
-                      }
-                    },
-                    "required": [
-                      "grams",
-                      "date"
-                    ]
-                  }
-                }
-              }
+              "$ref": "#/components/schemas/Spool"
             },
             "description": "Individual spool entries with weights + v1.11 location/photo/retire/dry-cycle/usage metadata"
           },
@@ -7923,6 +7857,169 @@
             "type": "string"
           }
         }
+      },
+      "Spool": {
+        "type": "object",
+        "properties": {
+          "_id": {
+            "type": "string"
+          },
+          "instanceId": {
+            "type": "string",
+            "description": "Per-spool 5-byte hex identity (#732, v1.48+); auto-generated or user-set. The value NFC tags carry, QR labels encode, and tag/QR matching resolves first (ahead of the filament-level instanceId)."
+          },
+          "label": {
+            "type": "string"
+          },
+          "totalWeight": {
+            "type": "number",
+            "nullable": true
+          },
+          "lotNumber": {
+            "type": "string",
+            "nullable": true,
+            "description": "Manufacturer lot or batch number"
+          },
+          "purchaseDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true,
+            "description": "Date the spool was purchased"
+          },
+          "openedDate": {
+            "type": "string",
+            "format": "date",
+            "nullable": true,
+            "description": "Date the spool was opened"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this spool entry was created"
+          },
+          "locationId": {
+            "type": "string",
+            "nullable": true,
+            "description": "Location ObjectId — the spool's semi-permanent home (v1.11). Distinct from a printer AMS slot, which is its transient loaded position."
+          },
+          "photoDataUrl": {
+            "type": "string",
+            "nullable": true,
+            "description": "Inline data: URL of a spool photo (v1.11). SVG is rejected on write."
+          },
+          "retired": {
+            "type": "boolean",
+            "default": false,
+            "description": "Retired spools are excluded from inventory totals but keep their history (v1.11)."
+          },
+          "dryCycles": {
+            "type": "array",
+            "description": "Drying-event log (v1.11)",
+            "items": {
+              "type": "object",
+              "properties": {
+                "_id": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "tempC": {
+                  "type": "number",
+                  "nullable": true,
+                  "minimum": 0,
+                  "maximum": 300
+                },
+                "durationMin": {
+                  "type": "number",
+                  "nullable": true,
+                  "minimum": 0
+                },
+                "notes": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "date"
+              ]
+            }
+          },
+          "usageHistory": {
+            "type": "array",
+            "description": "Per-spool filament-consumption ledger (v1.11). Entries tagged source=job/slicer mirror a PrintHistory record; source=manual/nfc are standalone.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "_id": {
+                  "type": "string"
+                },
+                "grams": {
+                  "type": "number",
+                  "minimum": 0,
+                  "description": "Grams consumed (always positive)"
+                },
+                "jobLabel": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "manual",
+                    "slicer",
+                    "job",
+                    "nfc"
+                  ]
+                },
+                "jobId": {
+                  "type": "string",
+                  "nullable": true,
+                  "description": "PrintHistory _id for job/slicer entries; null for manual/nfc"
+                }
+              },
+              "required": [
+                "grams",
+                "date"
+              ]
+            }
+          }
+        }
+      },
+      "SpoolShapeResponse": {
+        "type": "object",
+        "description": "GH #1027: the slim `?shape=spool` response of the spool-mutation endpoints — only the affected spool rides the wire, never the sibling spools' photoDataUrl blobs or usageHistory ledgers.",
+        "properties": {
+          "spool": {
+            "$ref": "#/components/schemas/Spool"
+          }
+        },
+        "required": [
+          "spool"
+        ]
+      },
+      "SpoolDeleteShapeResponse": {
+        "type": "object",
+        "description": "GH #1027: the slim `?shape=spool` response of the spool DELETE — the spool no longer exists, so a deletion marker is returned instead of a document.",
+        "properties": {
+          "deleted": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "spoolId": {
+            "type": "string",
+            "description": "The deleted spool's subdocument id."
+          }
+        },
+        "required": [
+          "deleted",
+          "spoolId"
+        ]
       }
     }
   }

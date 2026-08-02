@@ -4,6 +4,11 @@ import Filament from "@/models/Filament";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import {
+  parseSpoolResponseShape,
+  findSpoolById,
+  INVALID_SHAPE_MESSAGE,
+} from "@/lib/spoolResponseShape";
 
 /** GH #304: hard cap on a spool's embedded dryCycles array — same
  * unbounded-growth concern as usageHistory. The `$slice: -N` modifier
@@ -23,6 +28,12 @@ export async function POST(
 ) {
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
+
+  // GH #1027: ?shape=spool slims the 201 to the affected spool only.
+  const shape = parseSpoolResponseShape(request.nextUrl.searchParams);
+  if (shape === null) {
+    return errorResponse(INVALID_SHAPE_MESSAGE, 400);
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: any;
@@ -109,6 +120,16 @@ export async function POST(
       ).lean();
       if (!filament) {
         return errorResponse("Filament or spool not found", 404);
+      }
+      // GH #1027: the $push filter matched `spools._id`, so the spool is
+      // guaranteed present in the post-write doc; the null guard is
+      // unreachable-in-practice defensiveness.
+      if (shape === "spool") {
+        const spool = findSpoolById(filament.spools, spoolId);
+        if (!spool) {
+          return errorResponse("Spool not found", 404);
+        }
+        return NextResponse.json({ spool }, { status: 201 });
       }
       return NextResponse.json(filament, { status: 201 });
     });

@@ -5,6 +5,11 @@ import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { errorResponse, errorResponseFromCaught, handleVersionError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { capUsageHistory, MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
+import {
+  parseSpoolResponseShape,
+  findSpoolById,
+  INVALID_SHAPE_MESSAGE,
+} from "@/lib/spoolResponseShape";
 
 /**
  * POST /api/filaments/{id}/spools/{spoolId}/usage — manually log grams used.
@@ -21,6 +26,12 @@ export async function POST(
 ) {
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
+
+  // GH #1027: ?shape=spool slims the 201 to the affected spool only.
+  const shape = parseSpoolResponseShape(request.nextUrl.searchParams);
+  if (shape === null) {
+    return errorResponse(INVALID_SHAPE_MESSAGE, 400);
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let body: any;
@@ -120,6 +131,20 @@ export async function POST(
       // GH #905: usage logging only mutates this spool — validate modified paths
       // only so a legacy out-of-range field elsewhere can't block the log/debit.
       await filament.save({ validateModifiedOnly: true });
+      // GH #1027: pick the affected spool out of the same toObject()
+      // serialization the default path uses — the in-memory doc reflects the
+      // just-saved state (this route mutates and saves, no re-fetch). The
+      // mobile weight refresh reads `spool.totalWeight` off this — it must
+      // stay the GROSS post-decrement value (tare-inclusive), which it is:
+      // the decrement above writes totalWeight directly. The null guard is
+      // unreachable-in-practice (the subdoc was found above, pre-save).
+      if (shape === "spool") {
+        const spoolObj = findSpoolById(filament.toObject().spools, spoolId);
+        if (!spoolObj) {
+          return errorResponse("Spool not found", 404);
+        }
+        return NextResponse.json({ spool: spoolObj }, { status: 201 });
+      }
       return NextResponse.json(filament.toObject(), { status: 201 });
     });
   } catch (err) {

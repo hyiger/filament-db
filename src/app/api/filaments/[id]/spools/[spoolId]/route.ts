@@ -9,6 +9,11 @@ import { assignSpoolToSlot } from "@/lib/spoolSlots";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
+import {
+  parseSpoolResponseShape,
+  findSpoolById,
+  INVALID_SHAPE_MESSAGE,
+} from "@/lib/spoolResponseShape";
 
 export async function PUT(
   request: NextRequest,
@@ -16,6 +21,13 @@ export async function PUT(
 ) {
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
+
+  // GH #1027: ?shape=spool slims the response to the affected spool; the
+  // default stays the whole filament doc (the contract shipped clients parse).
+  const shape = parseSpoolResponseShape(request.nextUrl.searchParams);
+  if (shape === null) {
+    return errorResponse(INVALID_SHAPE_MESSAGE, 400);
+  }
 
   let body;
   try {
@@ -164,6 +176,16 @@ export async function PUT(
         await assignSpoolToSlot(Printer, spoolId, null);
       }
 
+      // GH #1027: the $set filter matched `spools._id`, so the spool is
+      // guaranteed present in the post-write doc; the null guard is
+      // unreachable-in-practice defensiveness.
+      if (shape === "spool") {
+        const spool = findSpoolById(filament.spools, spoolId);
+        if (!spool) {
+          return errorResponse("Spool not found", 404);
+        }
+        return NextResponse.json({ spool });
+      }
       return NextResponse.json(filament);
     });
   } catch (err) {
@@ -177,6 +199,13 @@ export async function DELETE(
 ) {
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
+
+  // GH #1027: for DELETE, ?shape=spool returns a deleted-marker — the
+  // post-$pull doc no longer contains the spool, so there's nothing to echo.
+  const shape = parseSpoolResponseShape(request.nextUrl.searchParams);
+  if (shape === null) {
+    return errorResponse(INVALID_SHAPE_MESSAGE, 400);
+  }
 
   try {
     await dbConnect();
@@ -246,6 +275,9 @@ export async function DELETE(
       // spool is already gone, so a failure here is harmless (no retry path needed).
       await assignSpoolToSlot(Printer, spoolId, null).catch(() => {});
 
+      if (shape === "spool") {
+        return NextResponse.json({ deleted: true, spoolId });
+      }
       return NextResponse.json(filament);
     });
   } catch (err) {

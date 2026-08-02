@@ -9,6 +9,11 @@ import { pushSpoolWithTemplateGuard, TEMPLATE_NO_SPOOLS_BODY } from "@/lib/spool
 import { validateSpoolBody } from "@/lib/validateSpoolBody";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { errorResponse, errorResponseFromCaught, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
+import {
+  parseSpoolResponseShape,
+  findSpoolByInstanceId,
+  INVALID_SHAPE_MESSAGE,
+} from "@/lib/spoolResponseShape";
 
 export async function POST(
   request: NextRequest,
@@ -16,6 +21,13 @@ export async function POST(
 ) {
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
+
+  // GH #1027: ?shape=spool returns just the created spool (with its
+  // server-minted _id + instanceId) instead of the whole filament doc.
+  const shape = parseSpoolResponseShape(request.nextUrl.searchParams);
+  if (shape === null) {
+    return errorResponse(INVALID_SHAPE_MESSAGE, 400);
+  }
 
   let body: unknown;
   try {
@@ -154,6 +166,24 @@ export async function POST(
     }
     if (result.outcome === "not_found") {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    // GH #1027: locate the created spool by the instanceId this route always
+    // stamps — the fresh subdoc's _id is minted by the $push, so instanceId is
+    // the only pre-known handle (same technique as the guard's own
+    // compensation branch). The null guard is unreachable-in-practice
+    // defensiveness: outcome "created" means the $push landed.
+    if (shape === "spool") {
+      const spool = findSpoolByInstanceId(
+        result.filament.spools,
+        newSpool.instanceId as string,
+      );
+      if (!spool) {
+        return errorResponseFromCaught(
+          new Error("created spool missing from post-push document"),
+          "Failed to add spool",
+        );
+      }
+      return NextResponse.json({ spool }, { status: 201 });
     }
     // GH #341: align with the other create endpoints (nozzles, printers,
     // bed-types, locations, filaments, print-history) which all return 201
