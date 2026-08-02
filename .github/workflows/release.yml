@@ -286,6 +286,20 @@ jobs:
   merge-mac-metadata:
     name: Merge multi-arch latest-mac.yml
     needs: build
+    # GH #1037 (companion): without a condition here, ANY failed build leg —
+    # including a non-mac one — silently SKIPPED this job while the
+    # successful legs' installers still uploaded: the release ended up with
+    # mac zips but no latest-mac.yml, so every Mac's checkForUpdates() 404s
+    # into the amber error banner. `!cancelled()` runs the merge whenever the
+    # run wasn't cancelled: with both mac legs green the mac update channel
+    # ships intact regardless of other legs; with a mac leg failed, the
+    # artifact download / merge script fails LOUDLY here (red, not skipped) —
+    # the release is genuinely broken and the run now says so. The
+    # `needs.build.result != 'skipped'` clause keeps one non-case quiet: when
+    # the GATE fails (e.g. the #1037 tag-version mismatch), build never runs
+    # and there are no artifacts to merge — running here would add a
+    # confusing second red job to an already-failed run.
+    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

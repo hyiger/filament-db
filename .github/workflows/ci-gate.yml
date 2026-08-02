@@ -22,6 +22,33 @@ permissions:
   contents: read
 
 jobs:
+  # GH #1037: a `v*` tag whose version doesn't match package.json builds a
+  # fully GREEN release whose artifacts and update feeds carry the OLD
+  # version — electron-updater then offers existing users nothing (the feed
+  # advertises the version they already run): silent, total auto-update
+  # failure. electron-builder derives artifactName and every feed's
+  # `version:` from package.json ALONE (electron-builder.yml), and no other
+  # step cross-checks the pushed tag. This job closes that hole once per
+  # release/docker run. Tag-only: the `github` context inside a called
+  # workflow is the CALLER's, so release.yml / docker.yml tag pushes see the
+  # tag ref here; branch, PR, and workflow_dispatch runs skip (a skipped job
+  # does not fail the calling gate). Deliberately NOT mirrored into test.yml
+  # despite the keep-in-sync rule above — test.yml never runs on a tag, so
+  # the job would be permanently dead there.
+  tag-version:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches package.json version
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          if [ "$PKG" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json ($PKG). Bump the version before tagging — see CLAUDE.md 'Release Process'."
+            exit 1
+          fi
+          echo "Tag $GITHUB_REF_NAME matches package.json ($PKG)."
+
   test:
     runs-on: ubuntu-latest
 
