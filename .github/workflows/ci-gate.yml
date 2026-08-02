@@ -31,8 +31,12 @@ jobs:
   # step cross-checks the pushed tag. This job closes that hole once per
   # release/docker run. Tag-only: the `github` context inside a called
   # workflow is the CALLER's, so release.yml / docker.yml tag pushes see the
-  # tag ref here; branch, PR, and workflow_dispatch runs skip (a skipped job
-  # does not fail the calling gate). Deliberately NOT mirrored into test.yml
+  # tag ref here; branch, PR, and BRANCH-ref dispatch runs skip (a skipped
+  # job does not fail the calling gate). A TAG-ref dispatch — docker.yml's
+  # #845 re-publish path, `gh workflow run docker.yml --ref vX.Y.Z` — sees
+  # github.ref = refs/tags/vX.Y.Z and re-runs the check: intended, so a
+  # historical tag whose commit mismatches can't be silently re-published
+  # either. Deliberately NOT mirrored into test.yml
   # despite the keep-in-sync rule above — test.yml never runs on a tag, so
   # the job would be permanently dead there.
   tag-version:
