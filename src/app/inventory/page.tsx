@@ -496,7 +496,9 @@ export default function InventoryPage() {
   // across both surfaces.
   const updateSpool = useCallback(
     async (row: SpoolRow, patch: Record<string, unknown>): Promise<boolean> => {
-      const res = await fetch(`/api/filaments/${row.filamentId}/spools/${row._id}`, {
+      // GH #1027: ?shape=spool — success body is never read here (state
+      // refreshes via fetchInventory), so skip the full-doc serialization.
+      const res = await fetch(`/api/filaments/${row.filamentId}/spools/${row._id}?shape=spool`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),

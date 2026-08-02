@@ -637,7 +637,10 @@ export default function Home() {
       const key = `${filamentId}:${spoolId}`;
       setPendingMoves((prev) => new Set(prev).add(key));
       try {
-        const res = await fetch(`/api/filaments/${filamentId}/spools/${spoolId}`, {
+        // GH #1027: ?shape=spool — this caller never reads the success body,
+        // so the slim shape saves the server serializing every sibling
+        // spool's photo blob + usage ledger per move.
+        const res = await fetch(`/api/filaments/${filamentId}/spools/${spoolId}?shape=spool`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ locationId }),

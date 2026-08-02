@@ -5,6 +5,7 @@ import type {
   MatchResult,
   NfcDecodeResponse,
   Spool,
+  SpoolMutationResponse,
 } from './types';
 
 /**
@@ -110,11 +111,15 @@ export function createApi(cfg: ApiConfig) {
         method: 'POST',
         body: JSON.stringify({ tagData, overrides, spoolRemainingGrams }),
       }),
-    /** Update a spool — location, remaining weight, and/or retired (server converts). */
+    /** Update a spool — location, remaining weight, and/or retired (server converts).
+     * GH #1027: ?shape=spool asks for just the affected spool back (~200 bytes
+     * instead of every sibling spool's photo blob + usage ledger); an older
+     * server ignores the param and returns the full filament — see
+     * SpoolMutationResponse. */
     updateSpool: (filamentId: string, spoolId: string, patch: Record<string, unknown>) =>
-      request<Filament>(
+      request<SpoolMutationResponse>(
         cfg,
-        `/api/filaments/${encodeURIComponent(filamentId)}/spools/${encodeURIComponent(spoolId)}`,
+        `/api/filaments/${encodeURIComponent(filamentId)}/spools/${encodeURIComponent(spoolId)}?shape=spool`,
         { method: 'PUT', body: JSON.stringify(patch) },
       ),
     /**
@@ -127,22 +132,24 @@ export function createApi(cfg: ApiConfig) {
         cfg,
         `/api/spools/${encodeURIComponent(spoolId)}`,
       ),
-    /** Log filament usage — decrements the spool's remaining weight by `grams`. */
+    /** Log filament usage — decrements the spool's remaining weight by `grams`.
+     * GH #1027: ?shape=spool — see updateSpool. */
     logUsage: (filamentId: string, spoolId: string, grams: number, jobLabel?: string) =>
-      request<Filament>(
+      request<SpoolMutationResponse>(
         cfg,
-        `/api/filaments/${encodeURIComponent(filamentId)}/spools/${encodeURIComponent(spoolId)}/usage`,
+        `/api/filaments/${encodeURIComponent(filamentId)}/spools/${encodeURIComponent(spoolId)}/usage?shape=spool`,
         { method: 'POST', body: JSON.stringify({ grams, ...(jobLabel ? { jobLabel } : {}) }) },
       ),
-    /** Log a dry-box cycle for a spool (temperature / duration / notes). */
+    /** Log a dry-box cycle for a spool (temperature / duration / notes).
+     * GH #1027: ?shape=spool — see updateSpool. */
     logDryCycle: (
       filamentId: string,
       spoolId: string,
       cycle: { tempC?: number; durationMin?: number; notes?: string },
     ) =>
-      request<Filament>(
+      request<SpoolMutationResponse>(
         cfg,
-        `/api/filaments/${encodeURIComponent(filamentId)}/spools/${encodeURIComponent(spoolId)}/dry-cycles`,
+        `/api/filaments/${encodeURIComponent(filamentId)}/spools/${encodeURIComponent(spoolId)}/dry-cycles?shape=spool`,
         { method: 'POST', body: JSON.stringify(cycle) },
       ),
   };

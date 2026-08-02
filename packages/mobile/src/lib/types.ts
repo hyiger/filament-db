@@ -40,6 +40,20 @@ export interface Spool {
   retired?: boolean;
 }
 
+/**
+ * GH #1027: response of the spool-mutation endpoints, which this client calls
+ * with `?shape=spool`. A #1027+ server answers `{ spool }` (the affected spool
+ * only — no sibling photo blobs / usage ledgers on the wire); an OLDER desktop
+ * server ignores the unknown query param and returns the full filament, whose
+ * `spools` array is what legacy consumers read. Callers must handle both — a
+ * freshly-updated phone routinely talks to a not-yet-updated desktop.
+ */
+export interface SpoolMutationResponse {
+  spool?: Spool;
+  /** Present only when the server predates #1027 (full-filament response). */
+  spools?: Spool[];
+}
+
 /** Resolved temperatures (the detail endpoint runs resolveFilament). All nullable. */
 export interface FilamentTemperatures {
   nozzle?: number | null;

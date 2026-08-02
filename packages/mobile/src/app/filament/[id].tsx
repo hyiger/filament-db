@@ -15,7 +15,7 @@ import {
 import { ApiError, createApi, type Api } from '@/lib/api';
 import { useServerConfig } from '@/lib/serverConfig';
 import { useColors, type ThemeColors } from '@/lib/theme';
-import type { Filament, Location, Spool } from '@/lib/types';
+import type { Filament, Location, Spool, SpoolMutationResponse } from '@/lib/types';
 import {
   flushQueue,
   pendingCount,
@@ -401,14 +401,16 @@ function SpoolRow({
 
   /** Feature C: route every spool mutation through the offline write queue.
    * Returns `{ ok }` — false on a real server error so callers can keep the
-   * user's input to retry — and the server's `filament` when it went through
-   * live (callers refresh from the authoritative state rather than props). */
+   * user's input to retry — and the server's authoritative state when the
+   * write went through live: `spool` from a #1027+ server (?shape=spool),
+   * `filament` from an older server that ignored the param and returned the
+   * full doc. Callers refresh from whichever is present rather than props. */
   async function runWrite(
     saveKey: string,
     label: string,
     write: WriteOp,
     optimisticPatch: Partial<Spool>,
-  ): Promise<{ ok: boolean; filament?: Filament }> {
+  ): Promise<{ ok: boolean; filament?: Filament; spool?: Spool }> {
     setSaving(saveKey);
     try {
       const result = await submitWrite(api, { filamentId, spoolId: spool._id, label, write });
@@ -417,9 +419,25 @@ function SpoolRow({
         Alert.alert('Saved offline', 'This change will sync when the server is reachable.');
         return { ok: true };
       }
-      const f = result.result as Filament;
-      onUpdated(f);
-      return { ok: true, filament: f };
+      // GH #1027: discriminate the two response shapes at runtime — the
+      // request<T> helper never validates, so the payload is whatever the
+      // server actually sent (a version-skewed desktop may be older).
+      const payload = result.result as SpoolMutationResponse | null;
+      if (payload?.spool) {
+        // Slim shape: merge the one affected spool into local state.
+        onLocalPatch(spool._id, payload.spool);
+        return { ok: true, spool: payload.spool };
+      }
+      if (payload?.spools) {
+        // Pre-#1027 server: full filament — legacy wholesale spools swap.
+        const f = payload as unknown as Filament;
+        onUpdated(f);
+        return { ok: true, filament: f };
+      }
+      // Unrecognized body (shouldn't happen against any known server) —
+      // keep the optimistic patch so the UI still reflects the accepted write.
+      onLocalPatch(spool._id, optimisticPatch);
+      return { ok: true };
     } catch (e) {
       Alert.alert('Update failed', (e as Error).message);
       return { ok: false };
@@ -485,8 +503,10 @@ function SpoolRow({
       // spool, not the pre-request value — the weight may have changed
       // server-side since this screen loaded (another device / print history),
       // and a stale value would be written back on a later Save (Codex P2).
-      // Usage is online-only (never queued), so res.filament is present.
-      const updated = res.filament?.spools?.find((sp) => sp._id === spool._id);
+      // Usage is online-only (never queued), so one of the two live shapes is
+      // present: `spool` (#1027+ ?shape=spool) or `filament` (older server).
+      const updated =
+        res.spool ?? res.filament?.spools?.find((sp) => sp._id === spool._id);
       if (updated?.totalWeight != null) {
         setGrams(String(Math.max(0, Math.round(updated.totalWeight - tare))));
       }
