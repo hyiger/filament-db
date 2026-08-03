@@ -286,6 +286,20 @@ jobs:
   merge-mac-metadata:
     name: Merge multi-arch latest-mac.yml
     needs: build
+    # GH #1037 (companion): without a condition here, ANY failed build leg —
+    # including a non-mac one — silently SKIPPED this job while the
+    # successful legs' installers still uploaded: the release ended up with
+    # mac zips but no latest-mac.yml, so every Mac's checkForUpdates() 404s
+    # into the amber error banner. `!cancelled()` runs the merge whenever the
+    # run wasn't cancelled: with both mac legs green the mac update channel
+    # ships intact regardless of other legs; with a mac leg failed, the
+    # artifact download / merge script fails LOUDLY here (red, not skipped) —
+    # the release is genuinely broken and the run now says so. The
+    # `needs.build.result != 'skipped'` clause keeps one non-case quiet: when
+    # the GATE fails (e.g. the #1037 tag-version mismatch), build never runs
+    # and there are no artifacts to merge — running here would add a
+    # confusing second red job to an already-failed run.
+    if: ${{ !cancelled() && needs.build.result != 'skipped' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -312,6 +326,42 @@ jobs:
             > latest-mac.yml
           echo "=== merged latest-mac.yml ==="
           cat latest-mac.yml
+      # GH #1037 review: a mac leg can fail at its FINAL softprops
+      # installer-upload step, AFTER its yml artifact was stashed — the merge
+      # above then succeeds while the feed it built references a .zip that
+      # never reached the release (electron-updater fetches the metadata,
+      # then 404s on the download). And on a RE-RUN over a release that
+      # already holds a same-named zip from an earlier attempt, a mere
+      # name-presence check would pass while the fresh feed's sha512 points
+      # at different bytes — electron-updater downloads the stale zip and
+      # rejects it on checksum (Codex P2 on PR #1058). So: download each zip
+      # the merged feed references and verify its sha512 (the exact digest
+      # electron-updater enforces, base64) BEFORE publishing the feed. A
+      # green merge job then certifies the whole mac update channel —
+      # presence AND content.
+      - name: Verify the referenced mac zips on the release match the feed's sha512
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node -e "
+            const y = require('js-yaml').load(require('fs').readFileSync('latest-mac.yml', 'utf8'));
+            for (const f of y.files.filter((f) => f.url.endsWith('.zip'))) {
+              console.log(f.url + ' ' + f.sha512);
+            }
+          " > expected-zips.txt
+          mkdir -p asset-check
+          while read -r NAME SHA; do
+            if ! gh release download "$GITHUB_REF_NAME" -p "$NAME" -D asset-check; then
+              echo "::error::latest-mac.yml references $NAME but it is not on the $GITHUB_REF_NAME release — a mac leg's installer upload failed. Re-run the failed build jobs, then re-run this job."
+              exit 1
+            fi
+            ACTUAL=$(openssl dgst -sha512 -binary "asset-check/$NAME" | base64 -w 0)
+            if [ "$ACTUAL" != "$SHA" ]; then
+              echo "::error::$NAME on the release does not match latest-mac.yml's sha512 — a stale asset from an earlier run. Re-run the mac build legs so the assets and metadata agree, then re-run this job."
+              exit 1
+            fi
+            echo "$NAME: present on the release, sha512 matches the feed."
+          done < expected-zips.txt
       - name: Upload merged latest-mac.yml to the release
         uses: softprops/action-gh-release@v2
         with:
