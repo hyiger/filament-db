@@ -955,18 +955,26 @@ function FilamentDetail() {
   // Add Spool render sites so the behavior can't drift between them.
   const [nextLabelLoading, setNextLabelLoading] = useState(false);
   const handleSuggestNextLabel = useCallback(async () => {
+    // Snapshot the label at click time: if the fetch is slow and the user
+    // types or pastes meanwhile, the response must NOT clobber their newer
+    // input — the suggestion only fills what the click was aimed at
+    // (PR #1061 review). The field stays enabled during the fetch on
+    // purpose; disabling it would trade the race for input lockout.
+    const labelAtClick = addSpoolForm.label;
     setNextLabelLoading(true);
     try {
       const res = await fetch("/api/spools/next-label");
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const { next } = (await res.json()) as { next: number };
-      setAddSpoolForm((s) => ({ ...s, label: String(next) }));
+      setAddSpoolForm((s) =>
+        s.label === labelAtClick ? { ...s, label: String(next) } : s,
+      );
     } catch {
       toast(t("detail.spool.nextLabelFailed"), "error");
     } finally {
       setNextLabelLoading(false);
     }
-  }, [t, toast]);
+  }, [addSpoolForm.label, t, toast]);
 
   const handleAddSpool = async (label = "", totalWeight: number | null = null) => {
     if (!filament) return;
