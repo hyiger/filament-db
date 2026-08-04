@@ -948,6 +948,26 @@ function FilamentDetail() {
     );
   };
 
+  // GH #1060: "Next #" pre-fills the label with the next roll number —
+  // max(numeric labels across ALL spools, incl. retired + trashed) + 1.
+  // Suggestion only: it writes a normal controlled-input value the user can
+  // freely edit; nothing is reserved. ONE handler shared by both duplicated
+  // Add Spool render sites so the behavior can't drift between them.
+  const [nextLabelLoading, setNextLabelLoading] = useState(false);
+  const handleSuggestNextLabel = useCallback(async () => {
+    setNextLabelLoading(true);
+    try {
+      const res = await fetch("/api/spools/next-label");
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { next } = (await res.json()) as { next: number };
+      setAddSpoolForm((s) => ({ ...s, label: String(next) }));
+    } catch {
+      toast(t("detail.spool.nextLabelFailed"), "error");
+    } finally {
+      setNextLabelLoading(false);
+    }
+  }, [t, toast]);
+
   const handleAddSpool = async (label = "", totalWeight: number | null = null) => {
     if (!filament) return;
     try {
@@ -1970,6 +1990,15 @@ function FilamentDetail() {
                       aria-label={t("detail.spool.addLabelPlaceholder")}
                       className="flex-1 min-w-[10rem] px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
                     />
+                    <button
+                      type="button"
+                      onClick={handleSuggestNextLabel}
+                      disabled={nextLabelLoading}
+                      title={t("detail.spool.nextLabelTitle")}
+                      className="px-2.5 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50"
+                    >
+                      {nextLabelLoading ? "…" : t("detail.spool.nextLabel")}
+                    </button>
                     <input
                       type="number"
                       min="0"
@@ -2059,6 +2088,15 @@ function FilamentDetail() {
                     aria-label={t("detail.spool.addLabelPlaceholder")}
                     className="flex-1 min-w-[10rem] px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
                   />
+                  <button
+                    type="button"
+                    onClick={handleSuggestNextLabel}
+                    disabled={nextLabelLoading}
+                    title={t("detail.spool.nextLabelTitle")}
+                    className="px-2.5 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50"
+                  >
+                    {nextLabelLoading ? "…" : t("detail.spool.nextLabel")}
+                  </button>
                   <input
                     type="number"
                     min="0"

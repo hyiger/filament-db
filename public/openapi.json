@@ -6452,6 +6452,46 @@
           }
         }
       }
+    },
+    "/api/spools/next-label": {
+      "get": {
+        "tags": [
+          "Spools"
+        ],
+        "summary": "Next roll-number suggestion for spool labels",
+        "description": "Returns the highest numeric spool label across the ENTIRE database plus one, for the Add Spool form's 'Next #' pre-fill (GH #1060). Only labels that are all digits after trimming count; leading zeros are ignored ('0042' is 42); digit strings longer than 15 digits are skipped. The scan deliberately includes retired spools and trashed/purged filaments' spools — roll numbers are physical and permanent, so a number is never re-suggested even when its record leaves active inventory. Suggestion-only: nothing is reserved, the client pre-fills an editable field, and two concurrent readers may receive the same value.",
+        "responses": {
+          "200": {
+            "description": "The suggestion.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "next": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "max + 1, or 1 when no numeric label exists."
+                    },
+                    "max": {
+                      "type": "integer",
+                      "nullable": true,
+                      "description": "The highest numeric label found, or null when none parses."
+                    }
+                  },
+                  "required": [
+                    "next",
+                    "max"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Database error."
+          }
+        }
+      }
     }
   },
   "components": {
