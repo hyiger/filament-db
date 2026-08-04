@@ -6459,7 +6459,7 @@
           "Spools"
         ],
         "summary": "Next roll-number suggestion for spool labels",
-        "description": "Returns the highest numeric spool label across the ENTIRE database plus one, for the Add Spool form's 'Next #' pre-fill (GH #1060). Only labels that are all digits after trimming count; leading zeros are ignored ('0042' is 42); digit strings longer than 15 digits are skipped. The scan deliberately includes retired spools and trashed/purged filaments' spools — roll numbers are physical and permanent, so a number is never re-suggested even when its record leaves active inventory. Suggestion-only: nothing is reserved, the client pre-fills an editable field, and two concurrent readers may receive the same value.",
+        "description": "Returns the highest numeric spool label across the ENTIRE database plus one, for the Add Spool form's 'Next #' pre-fill (GH #1060). Only labels that are all digits after trimming count; leading zeros are ignored ('0042' is 42); acceptance is judged by VALUE — any digit string parsing to a safe integer (<= 9007199254740991) counts, and larger values are skipped so an oversized 'number' cannot poison the max. Every suggestion the endpoint emits is therefore re-accepted on the next request; 'next' saturates at the safe-integer maximum. The scan deliberately includes retired spools and trashed/purged filaments' spools — roll numbers are physical and permanent, so a number is never re-suggested even when its record leaves active inventory. Suggestion-only: nothing is reserved, the client pre-fills an editable field, and two concurrent readers may receive the same value.",
         "responses": {
           "200": {
             "description": "The suggestion.",
