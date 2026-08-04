@@ -37,10 +37,10 @@ describe("computeNextSpoolLabel", () => {
     expect(computeNextSpoolLabel(["000"])).toEqual({ next: 1, max: 0 });
   });
 
-  it("skips digit strings past the safe-integer guard, keeping smaller labels in play", () => {
+  it("skips values past the safe-integer range, keeping smaller labels in play", () => {
     // The label field allows 200 characters; a 200-digit "number" must not
     // poison the max or emit a next that can't round-trip through JSON.
-    const huge = "9".repeat(16);
+    const huge = "9".repeat(16); // parses past MAX_SAFE_INTEGER → skipped
     expect(computeNextSpoolLabel([huge, "42"])).toEqual({ next: 43, max: 42 });
     // Zero-padding does not trip the guard — the VALUE is what's measured.
     const padded = "0".repeat(50) + "42";
@@ -48,6 +48,26 @@ describe("computeNextSpoolLabel", () => {
     // Fifteen digits is still accepted exactly.
     const fifteen = "1" + "0".repeat(14);
     expect(computeNextSpoolLabel([fifteen])).toEqual({ next: 10 ** 14 + 1, max: 10 ** 14 });
+  });
+
+  it("every suggestion it emits is re-accepted by its own parser (PR #1061 review)", () => {
+    // The digit-count guard broke this closure at the boundary: max
+    // 999999999999999 suggested the 16-digit 1000000000000000, which the
+    // guard then rejected — so after creating that spool the SAME number was
+    // suggested again, forever. Value-based acceptance closes the loop.
+    const fifteenNines = "9".repeat(15);
+    const first = computeNextSpoolLabel([fifteenNines]);
+    expect(first).toEqual({ next: 10 ** 15, max: 10 ** 15 - 1 });
+    const second = computeNextSpoolLabel([fifteenNines, String(first.next)]);
+    expect(second).toEqual({ next: 10 ** 15 + 1, max: 10 ** 15 });
+  });
+
+  it("saturates at MAX_SAFE_INTEGER rather than suggesting an unrepresentable number", () => {
+    const msi = String(Number.MAX_SAFE_INTEGER);
+    expect(computeNextSpoolLabel([msi])).toEqual({
+      next: Number.MAX_SAFE_INTEGER,
+      max: Number.MAX_SAFE_INTEGER,
+    });
   });
 
   it("tolerates null and undefined entries", () => {

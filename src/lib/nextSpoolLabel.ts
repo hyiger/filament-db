@@ -20,20 +20,25 @@ export interface NextSpoolLabel {
   max: number | null;
 }
 
-/** Digit-count cap on labels considered numeric. Fifteen digits keeps every
- *  accepted value inside Number's exact-integer range — the label field
- *  allows 200 characters, and a 200-digit "number" must not poison the max
- *  (or produce a `next` that no longer round-trips through JSON intact). */
-const MAX_NUMERIC_LABEL_DIGITS = 15;
-
 /**
  * Compute the suggestion from raw label strings.
  *
  * A label counts as numeric only when, after trimming, it is ALL digits
  * (`/^\d+$/`) — so "A12", "12a", "1.5", "-3" and "1e3" are ignored rather
- * than half-parsed. Leading zeros are stripped before both the length guard
- * and the comparison ("0042" is the number 42, and "0…0-padded" zeros must
- * not trip the digit cap).
+ * than half-parsed. Leading zeros are stripped before parsing ("0042" is
+ * the number 42).
+ *
+ * Acceptance is judged by VALUE — `Number.isSafeInteger` — not by digit
+ * count (PR #1061 review). A digit-count cap made the generator and the
+ * parser disagree at the boundary: with max 999999999999999 the suggestion
+ * was the 16-digit 1000000000000000, which the 15-digit guard then REJECTED
+ * on the next request — so after creating that spool the same number was
+ * suggested again, forever. Value-based acceptance means every suggestion
+ * this function emits is re-accepted by this function; a 200-digit "number"
+ * still can't poison the max (it parses past the safe range and is
+ * skipped). `next` is capped at MAX_SAFE_INTEGER — beyond it increments
+ * stop being representable at all, and nine quadrillion spools is a data
+ * problem, not a numbering problem.
  */
 export function computeNextSpoolLabel(
   labels: Iterable<string | null | undefined>,
@@ -43,10 +48,12 @@ export function computeNextSpoolLabel(
     if (typeof raw !== "string") continue;
     const trimmed = raw.trim();
     if (!/^\d+$/.test(trimmed)) continue;
-    const stripped = trimmed.replace(/^0+(?=\d)/, "");
-    if (stripped.length > MAX_NUMERIC_LABEL_DIGITS) continue;
-    const value = Number(stripped);
+    const value = Number(trimmed.replace(/^0+(?=\d)/, ""));
+    if (!Number.isSafeInteger(value)) continue;
     if (max === null || value > max) max = value;
   }
-  return { next: (max ?? 0) + 1, max };
+  return {
+    next: max === null ? 1 : Math.min(max + 1, Number.MAX_SAFE_INTEGER),
+    max,
+  };
 }
