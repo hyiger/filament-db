@@ -15,6 +15,7 @@
 | `DELETE` | `/api/filaments/:id` | Soft-delete a filament (blocked if it has variants). Append `?permanent=true` to hard-delete from the trash. |
 | `GET` | `/api/filaments/trash` | List soft-deleted filaments (powers the `/trash` UI) |
 | `POST` | `/api/filaments/:id/restore` | Restore a soft-deleted filament from the trash (returns 409 on name collision) |
+| `POST` | `/api/filaments/:id/promote` | Convert a filament that already has variants into a template — move its own color/spools onto a new variant |
 | `GET` | `/api/filaments/export` | Download all filaments as a PrusaSlicer INI file |
 | `GET` | `/api/filaments/export-csv` | Download all filaments as a CSV file |
 | `GET` | `/api/filaments/export-xlsx` | Download all filaments as an XLSX spreadsheet |
@@ -49,6 +50,82 @@
 | `PUT` | `/api/filaments/:id/spools/:spoolId` | Update a spool's weight/label/location, or its `instanceId` (`{ regenerate: true }` mints a fresh one) — #732 |
 | `DELETE` | `/api/filaments/:id/spools/:spoolId` | Remove a spool from a filament |
 | `GET` | `/api/spools/:spoolId` | Resolve a spool subdoc id to its (inheritance-resolved) owning filament + the spool — powers the mobile scanner's `?spool=<id>` deep links (v1.43) |
+| `GET` | `/api/spools/next-label` | Suggest the next numeric roll number for a spool label (`{ next, max }`) |
+
+`POST /api/filaments/:id/spools`, `PUT /api/filaments/:id/spools/:spoolId` and `DELETE /api/filaments/:id/spools/:spoolId` — plus `POST /api/filaments/:id/spools/:spoolId/usage` and `POST .../dry-cycles` — accept an optional `?shape=spool` query parameter that slims the response down to the affected spool. See *Spool mutation response shape* below.
+
+### Filament templates
+
+A filament with at least one non-deleted variant is a **template**: the product line, not a roll. Template-ness is *derived* from the live variant count, never stored as a flag, so it appears the moment a first variant is created and disappears again if every variant is trashed. A template carries the spec the whole family inherits (temperatures, density, drying, `spoolWeight`, `netFilamentWeight`, `secondaryColors`, `optTags`); the per-roll fields — `color`, `colorName`, `totalWeight`, `lowStockThreshold` — and the spools themselves belong on the variants.
+
+Three contracts enforce that across the API. Enforcement is **forward-only**: a legacy parent that already carries a color or spools keeps them until it is converted explicitly (see `POST /api/filaments/:id/promote`).
+
+#### `409 parent_promotion_required` — confirming the first variant
+
+Creating the FIRST live variant of a parent that still *carries* per-roll state restructures a **second** document: the parent becomes a template and that state moves onto a newly created sibling variant. A parent counts as carrying when it has a non-empty stored `color` (including the historical `#808080` default), a non-blank `colorName`, at least one spool, or a non-null `totalWeight`. From the second variant on nothing gates: the gate fires only on the FIRST live variant, and enforcement is forward-only — a legacy parent with two or more variants can still be carrying, which is exactly the state `POST /api/filaments/:id/promote` exists to convert.
+
+Rather than restructure silently, the four interactive routes that can mint a first variant refuse with `409` and describe exactly what a confirmation would do:
+
+- `POST /api/filaments` — the body carries `parentId`
+- `PUT /api/filaments/:id` — the body introduces or changes `parentId`
+- `POST /api/filaments/:id/restore` — reviving a trashed variant under a parent that re-acquired carrying state
+- `POST /api/openprinttag/import` in variant mode (`parentId`)
+
+All four return the same body:
+
+```json
+{
+  "error": "parent_promotion_required",
+  "message": "Creating the first variant makes \"Prusament PETG\" a template: its color and 2 spool(s) move to a new variant named \"Prusament PETG — Prusa Galaxy Black\". Repeat the request with promoteParent: true to confirm.",
+  "parentName": "Prusament PETG",
+  "parentColor": "#292929",
+  "spoolCount": 2,
+  "variantName": "Prusament PETG — Prusa Galaxy Black"
+}
+```
+
+To confirm, repeat the **identical** request with `"promoteParent": true` in the body. It's a control flag, never a stored field — the create and update routes delete it from the body before anything else reads it; `restore` historically takes no body at all, so an absent or unparseable one simply means `false`.
+
+The gate runs **last**, after every other validation, so a `409` means "this request would otherwise succeed, but it has a side effect on a second document you must opt into" — and nothing at all is written. A *confirmed* request is dry-run validated (name collision, schema validation) **before** the promotion runs, so an invalid body still fails with the parent completely untouched.
+
+Confirming moves the parent's `color`, `colorName`, `spools` (subdocument `_id`s and per-spool `instanceId`s preserved verbatim), `totalWeight`, and `lowStockThreshold` onto a variant named `"<parent> — <colorName>"` — or `"<parent> — Original"` when the parent has no color name, with `" (2)"`, `" (3)"`, … resolving a name collision — and then clears exactly those five on the parent. `spoolWeight` and `netFilamentWeight` are deliberately **not** moved: they're shared spec, and they stay on the template where every variant inherits them. Persisted `(filamentId, spoolId)` references follow the spools — `PrintHistory.usage[].filamentId` and `Printer.amsSlots[].filamentId` are remapped onto the new variant (including a printer slot dedicated to the parent filament with no specific spool).
+
+One more writer can mint a first variant, and it never returns `409`:
+
+- `POST /api/filaments/import-csv` / `import-xlsx` — a create with a resolved `Parent` column, or a resurrect of a trashed variant. A bulk import can't answer a confirmation prompt, so a row whose parent still holds **inventory** (spools or a non-null `totalWeight`) is skipped with a `skippedRows` reason pointing at "Convert to template" while the rest of the batch runs. Color deliberately does **not** gate here: the schema defaults `color` to `#808080`, so every parent the same batch just created would count as carrying and every parent+variant round-trip would reject. A CSV/XLSX import can therefore mint the first variant of a color-carrying parent with no prompt — the enforce-forward legacy shape `POST /api/filaments/:id/promote` converts.
+
+#### `400 template_no_spools` — a template holds no spools
+
+Every route that attaches a spool refuses when the target is a template:
+
+```json
+{
+  "error": "template_no_spools",
+  "message": "This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead."
+}
+```
+
+- `POST /api/filaments/:id/spools` — returns the body above with `400`
+- `POST /api/prusament/import` — same `400` for the `add-spool` action and for the `create` action's "a filament with this name already exists" fallback
+- `POST /api/spools/import` — per row: the same `message` becomes that row's `error` and the rest of the batch still runs
+
+Spools a legacy parent already carries stay in place, stay counted, and stay editable. The CSV spool importer splits accordingly: a row that would **create** a spool on a template fails, while a row whose `spoolId` matches an existing subdocument (an update) is still applied.
+
+#### `_strippedTemplateFields` — per-variant fields dropped from a write
+
+Writers that `$set` fields onto an *existing* filament **strip** rather than reject `totalWeight`, `color`, `colorName`, and `lowStockThreshold` when the target is a template. A slicer preset — like a stale edit form — echoes a promoted-away color back verbatim on every save, and a 4xx would break the whole sync over a value the user never re-entered. An explicit `null` passes straight through, so clearing a legacy parent's leftover value is still possible.
+
+The strip is reported, never silent. These routes add a `_strippedTemplateFields: string[]` key to their success response naming the fields that were dropped (the key is omitted when nothing was stripped):
+
+- `PUT /api/filaments/:id`
+- `POST /api/filaments/:id` (PrusaSlicer sync-back)
+- `POST /api/filaments/:id/orcaslicer`
+- `POST /api/filaments/:id/bambustudio`
+- `POST /api/filaments/bambustudio`
+
+The bulk importers (INI, CSV/XLSX, Atlas, OpenPrintTag) report the same thing as a per-row sentence in their response's `errors` array instead. The INI, CSV/XLSX and OpenPrintTag importers name the dropped fields comma-joined — `"… skipped color, colorName — the local filament is a template (inventory and color live on its variants)"`. The Atlas importer phrases each dropped field in prose and joins them with `" and "` (`"… skipped 2 spool(s) and a color — the local filament is a template …"`), and it drops one field the shared strip list doesn't carry: an incoming `spools` array.
+
+The strip note itself is never fatal — the rest of the row still applies. But `errors` is a pure notes channel only on the CSV/XLSX importer (whose hard failures land in `skippedRows` instead) and on Atlas (where the strip note is the only thing ever pushed). On both INI importers and the OpenPrintTag bulk import it is a **mixed** channel: a row that throws pushes its failure into the same array (a validation error on any of the three, plus OpenPrintTag's vendor-name collision and lost-write-race skips). A client reading those responses can't treat every entry as non-fatal — a partially-failed import would otherwise report as fully successful.
 
 ### GET /api/filaments
 
@@ -100,6 +177,8 @@ Create a new filament. Send a JSON body with at minimum `name`, `vendor`, and `t
 
 If `totalWeight` is provided but no `spools` array, an initial spool entry is automatically created from the weight value.
 
+When `parentId` is set and this would be that parent's **first** live variant while the parent still carries its own color or spools, the request is refused with `409 parent_promotion_required` and nothing is written; repeat it with `"promoteParent": true` to confirm. See *Filament templates* above for the body shape and what confirming moves.
+
 #### Create from a decoded tag
 
 The route also accepts the mobile scanner's create-from-tag body shape:
@@ -131,6 +210,8 @@ Query parameters:
 ### PUT /api/filaments/:id
 
 Update a filament. Send a JSON body with the fields to update. Supports partial updates. Validates `parentId` changes (prevents circular references, nested inheritance, and self-reference).
+
+A body that **introduces or changes** `parentId` can mint that parent's first live variant, so it runs the same confirmation gate as the create path: `409 parent_promotion_required` until the request is repeated with `"promoteParent": true`. And when the filament being updated is itself a template, non-null writes of `totalWeight` / `color` / `colorName` / `lowStockThreshold` are dropped and named in a `_strippedTemplateFields` array on the response. Both are described under *Filament templates* above.
 
 ### DELETE /api/filaments/:id
 
@@ -181,6 +262,34 @@ Refusal:
   "error": "Cannot restore: another active filament named \"PLA Galaxy Black\" already exists. Rename one of them first."
 }
 ```
+
+Restoring a **variant** can also mint its parent's first live variant — the parent may have picked up a color or spools while this one sat in the trash — so the restore runs the same confirmation gate as the create path and refuses with `409 parent_promotion_required`. The route accepts an optional JSON body for exactly that: repeat the POST with `{ "promoteParent": true }` to confirm. A bare POST (the historic contract) behaves as before in every non-gated case. See *Filament templates* above.
+
+### POST /api/filaments/:id/promote
+
+"Convert to template" — the explicit, user-initiated version of the promotion the first-variant gate runs. Same-origin guarded; takes no request body. Use it on a filament that **already** has variants but still carries its own color, color name, spools, or inventory `totalWeight` (the pre-template shape; conversion is never applied in bulk behind the user's back).
+
+The promotion moves exactly what the gate moves — see *Filament templates* above — and returns the created variant alongside the freshly cleared parent:
+
+```bash
+curl -X POST http://localhost:3456/api/filaments/64a1b2c3d4e5f6a7b8c9d0e1/promote
+```
+
+```json
+{
+  "variant": { "_id": "…", "name": "Prusament PETG — Prusa Galaxy Black", "parentId": "64a1…", "…": "…" },
+  "parent": { "_id": "64a1…", "color": null, "colorName": null, "spools": [], "totalWeight": null, "…": "…" },
+  "resumed": false
+}
+```
+
+`resumed` is `true` when this call **adopted** the partial copy an earlier promotion left behind after being interrupted (app quit, power loss) rather than creating a fresh one — the end state is identical either way, and retrying is always safe.
+
+Refusals:
+- `400` — the `{id}` is not a valid ObjectId.
+- `404` — no active filament with that id.
+- `400 not_a_template` — the target is itself a variant, or it has no live variants: *"Only a filament that already has color variants can be converted — a standalone becomes a template when its first variant is created."*
+- `400 nothing_to_convert` — the target is a template but carries nothing that belongs on a variant: *"This template already carries nothing that belongs on a variant — no color, no color name, no spools, no inventory weight."* Note that `spoolWeight` / `netFilamentWeight` alone don't count — they're shared spec that stays on the template.
 
 ### GET /api/filaments/export
 
@@ -432,6 +541,19 @@ Responses:
 - `{ "linked": false, "found": false, "slug": "…" }` — the slug is no longer in the OpenPrintTag database.
 - `400` — missing or invalid `slug`.
 
+### Spool mutation response shape
+
+The five spool-mutation routes — `POST /api/filaments/:id/spools`, `PUT` and `DELETE /api/filaments/:id/spools/:spoolId`, `POST .../usage`, and `POST .../dry-cycles` — historically answer with the **whole filament document**: every sibling spool's `photoDataUrl` blob and full `usageHistory` ledger, for a write that changed one scalar. Since v1.72 (#1027) they accept an opt-in `shape` query parameter:
+
+- **`?shape=spool`** — the response is `{ "spool": { … } }` carrying just the affected spool, complete (its own photo and ledger stay; what's dropped is the other N−1 spools). `DELETE` instead returns `{ "deleted": true, "spoolId": "…" }`, since the post-`$pull` document no longer contains the spool.
+- **No `shape` parameter** — the full filament document, byte-identical to the pre-v1.72 response. This is the default on purpose: shipped clients (notably the mobile app, which updates out-of-band from the server) read `.spools` off the body.
+- **Any other value** — `400 { "error": "Invalid shape parameter: expected \"spool\"" }`. A typo fails loudly rather than silently returning the multi-megabyte default the caller was trying to avoid.
+
+```bash
+curl -X PUT 'http://localhost:3456/api/filaments/64a1…/spools/65b2…?shape=spool' \
+  -H 'Content-Type: application/json' -d '{"totalWeight": 850}'
+```
+
 ### POST /api/filaments/:id/spools
 
 Add a new spool to a filament. Send a JSON body:
@@ -440,7 +562,13 @@ Add a new spool to a filament. Send a JSON body:
 { "label": "Spool #2", "totalWeight": 1236 }
 ```
 
-The body must include **at least one** meaningful spool field — one of `label`, `totalWeight`, `lotNumber`, `purchaseDate`, `openedDate`, `locationId`, `photoDataUrl`, `retired`, or `instanceId`. An empty body is rejected with `400` (the phantom-spool guard, GH #203) so a placeholder 0 g spool can't be created by accident. Individual fields are otherwise optional (`label` defaults to `""`, `totalWeight` to `null`). On success returns `201` with the updated filament document (the new spool in its `spools` array).
+The body must include **at least one** meaningful spool field — one of `label`, `totalWeight`, `lotNumber`, `purchaseDate`, `openedDate`, `locationId`, `photoDataUrl`, `retired`, or `instanceId`. An empty body is rejected with `400` (the phantom-spool guard, GH #203) so a placeholder 0 g spool can't be created by accident. Individual fields are otherwise optional (`label` defaults to `""`, `totalWeight` to `null`). On success returns `201` with the updated filament document (the new spool in its `spools` array), or `{ "spool": … }` under `?shape=spool`.
+
+Refusals:
+- `400` — the empty-body phantom-spool guard above, an invalid filament id, or an unrecognized `shape`.
+- `400 template_no_spools` — the filament is a template (it has color variants), so it can't hold spools; add the spool to one of its variants. See *Filament templates* above.
+- `404` — no active filament with that id.
+- `409` — an explicit `instanceId` that another spool already uses.
 
 ### PUT /api/filaments/:id/spools/:spoolId
 
@@ -450,11 +578,25 @@ Update a spool's weight or label. Send a JSON body with any combination of:
 { "totalWeight": 850, "label": "Opened 2025-03-15" }
 ```
 
-Returns the updated filament document.
+Returns the updated filament document, or `{ "spool": … }` under `?shape=spool`.
 
 ### DELETE /api/filaments/:id/spools/:spoolId
 
-Remove a spool from a filament. Returns the updated filament document.
+Remove a spool from a filament. Returns the updated filament document, or `{ "deleted": true, "spoolId": "…" }` under `?shape=spool`.
+
+### GET /api/spools/next-label
+
+Returns the next numeric roll number to suggest for a spool label — what the Add Spool form's "Next #" button pre-fills (v1.73, #1060):
+
+```json
+{ "next": 214, "max": 213 }
+```
+
+`max` is the highest label anywhere in the database that is entirely digits after trimming (`"A12"`, `"1.5"` and `"12a"` are ignored; leading zeros are stripped, so `"0042"` counts as 42), or `null` when no label parses as a number — in which case `next` is `1`.
+
+The scan deliberately filters **nothing**: trashed filaments, purged tombstones and retired spools all contribute. Roll numbers are physical and permanent — a number written on a retired spool is still on the shelf, and handing out a trashed filament's number would collide the moment it's restored. Skipping past a number the user thinks is free is the safe direction.
+
+Suggestion-only semantics: nothing is reserved or assigned, the field stays editable, and two concurrent readers can receive the same value.
 
 ---
 
@@ -829,6 +971,8 @@ Materials are mapped to the Filament DB schema (type, vendor, temperatures, dens
 
 The parent must exist, be active, and not itself be a variant. Only the fields that DIFFER from the parent's effective values are written onto the variant (the rest are left to inherit); a name collision with an existing active filament is refused with `409` (it never re-parents another row). Returns the created `filament`. Variant mode requires exactly one slug.
 
+Variant mode runs the same first-variant gate as `POST /api/filaments`: when this would be the parent's first live variant while the parent still carries its own color or spools, the import is refused with `409 parent_promotion_required` until it's repeated with `"promoteParent": true` alongside `slugs` and `parentId`. See *Filament templates* in the Filaments section.
+
 Returns (bulk mode):
 ```json
 {
@@ -899,6 +1043,8 @@ Imports a scraped Prusament spool into the database. Send a JSON body:
 **`action: "create"`** -- Creates a new filament named `"Prusament {material} {colorName}"` with all specs populated (temperatures, density, weights, spool). If a filament with that name already exists, the spool is added to it instead.
 
 **`action: "add-spool"`** -- Adds the spool to an existing filament specified by `filamentId`.
+
+Both actions refuse with `400 template_no_spools` when the target filament is a template — `add-spool` against a template's id, and `create` when the name already belongs to one and the spool would be attached there instead. See *Filament templates* in the Filaments section.
 
 Returns:
 ```json
@@ -1118,7 +1264,9 @@ Extracted fields include: name, vendor, type, density, diameter, temperatures (n
 
 ### GET /api/snapshot
 
-Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones). The snapshot preserves `_id` values, timestamps, and references so it can be restored exactly. Snapshot schema version is `4` as of v1.14.0; older v1/v2/v3 snapshots still restore (missing collections come back as empty).
+Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones). The snapshot preserves `_id` values, timestamps, and references so it can be restored exactly.
+
+Snapshot schema version is `6`. The history: v2 added bed types, v3 locations + print history, v4 shared catalogs (v1.14.0), v5 the top-level `legacyNozzleCleanupComplete` provenance flag, and v6 `Location.desiccantChangedAt`. Older snapshots still restore — collections a v1/v2/v3 file doesn't carry come back as empty. The v5 and v6 bumps exist specifically so an **older** build refuses the file (see the restore guard below) rather than accepting it and silently dropping the field its schema doesn't know about.
 
 Returns a JSON file with `Content-Disposition: attachment` header.
 
@@ -1127,6 +1275,8 @@ Returns a JSON file with `Content-Disposition: attachment` header.
 Restore the database from a previously exported snapshot. This is a destructive operation: all existing snapshot-scoped data is replaced with the snapshot contents.
 
 Upload via `multipart/form-data` with a `file` field containing the snapshot JSON, or send the JSON directly as the request body.
+
+A snapshot whose `version` is **newer** than the running build's is rejected with `400` *before* the destructive wipe — `"This snapshot is from a newer version (v7). Update Filament DB to at least the version that created it before restoring."` Restoring it would drop whatever that version added and still report success, so the handler fails closed instead.
 
 The restore uses **best-effort rollback**: if any part of the restore fails, the handler attempts to re-insert the previous data from an in-memory backup. Concurrent restore requests are rejected with 409. Note: the restore is not truly atomic — concurrent readers may observe partial state during the delete/insert window, and if rollback itself fails the database may be left incomplete. For safety, take a backup before restoring.
 
@@ -1229,9 +1379,12 @@ Locations are where physical spools live — dryboxes, shelves, cabinets, AMS un
   "name": "Drybox #1",
   "kind": "drybox",          // free-form: "drybox", "shelf", "cabinet", "printer"
   "humidity": 35,             // optional %RH (0–100), user-updated
+  "desiccantChangedAt": "2026-07-14T00:00:00.000Z",  // optional; meaningful for dryboxes
   "notes": "Kept in the garage"
 }
 ```
+
+`desiccantChangedAt` records when the desiccant was last changed. It's optional and defaults to `null`; it's meaningful for `kind: "drybox"`, where it drives the "DESICCANT CHANGED" line on a printed dry-box label. POST and PUT accept an ISO date string or `null` — anything else (including an ISO-shaped but impossible date) is rejected with `400 "desiccantChangedAt must be an ISO date string or null"`, because Mongoose would otherwise roll an impossible date over instead of refusing it.
 
 ### GET /api/locations?stats=true
 
@@ -1413,6 +1566,8 @@ Per-spool ledger endpoints. Used by the spool detail UI to log direct weight con
 
 All fields optional. Unspecified numeric fields are stored as `null`.
 
+Both routes return `201` with the updated filament document, and both accept `?shape=spool` to get back just `{ "spool": … }` instead — see *Spool mutation response shape* in the Filaments section.
+
 ---
 
 ## Bulk Spool Import (CSV) (v1.11)
@@ -1452,6 +1607,8 @@ Each row is processed independently; per-row errors are reported in the response
 }
 ```
 
+A row whose target filament is a **template** (it has color variants) fails that row with `"This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead."` — but only when the row would CREATE a spool. A row whose `spoolId` matches an existing subdocument is an update, and a legacy template's own spools stay editable. See *Filament templates* in the Filaments section.
+
 A single request is capped at 10,000 rows by `parseCsv`; beyond that the request is rejected with 400.
 
 Requests larger than **10 MB** are rejected with `413` before any CSV parsing (v1.66.1, #991). All three content types get a `Content-Length` preflight (multipart with a small 64 KB allowance for MIME framing); the raw `text/csv` and JSON paths additionally re-check the buffered byte length (catching a missing or lying `Content-Length`), while the multipart path enforces the exact 10 MB on the uploaded file part after parsing. Matches the 10 MB cap on the sibling import endpoints.
@@ -1474,7 +1631,7 @@ Tracks which printer AMS/MMU slot a spool currently occupies. This is **distinct
 | `PUT` | `/api/spools/:spoolId/assignment` | Assign the spool to a printer slot |
 | `DELETE` | `/api/spools/:spoolId/assignment` | Clear the spool from any slot |
 
-These endpoints write only `Printer.amsSlots[].spoolId`; they never modify the spool's `locationId`.
+These endpoints write `Printer.amsSlots[].spoolId` **and** `.filamentId` — the slot carries two parallel refs (the loaded filament and the tracked spool), and the printer form renders slots keyed on `filamentId`, so a spool-side assignment that set only `spoolId` was present in the data but showed as an empty slot on the printer side (#1041). They never modify the spool's `locationId`.
 
 ### GET /api/spools/:spoolId/assignment
 

@@ -188,11 +188,18 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), an optimistic-concurrency version conflict occurred on a concurrent write, or (parentId set, GH #605) `parent_promotion_required`: this would be the parent's first live variant and the parent still carries its own color/spools/inventory. The promotion gate runs LAST, after every other guard, so an otherwise-invalid request gets its own 400 first.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Error"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ParentPromotionRequired"
+                    }
+                  ]
                 }
               }
             }
@@ -308,7 +315,7 @@
           "Filaments"
         ],
         "summary": "Update filament",
-        "description": "Update filament fields. Validates parentId references to prevent circular or nested inheritance.",
+        "description": "Update filament fields. Validates parentId references to prevent circular or nested inheritance. A body that INTRODUCES or CHANGES `parentId` can mint that parent's first live variant, which runs the GH #605 promotion gate (409 `parent_promotion_required` until confirmed with `promoteParent: true`). When the TARGET is itself a template (it has ≥1 live variant), a non-null write of `totalWeight`, `color`, `colorName` or `lowStockThreshold` is stripped rather than rejected — the edit form echoes every field back on save — and the dropped names come back in `_strippedTemplateFields`. An explicit null still passes through, so a legacy template's leftover value can be cleared.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -319,18 +326,44 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/FilamentInput"
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/FilamentInput"
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "promoteParent": {
+                        "type": "boolean",
+                        "default": false,
+                        "description": "GH #605 confirmation flag, only meaningful on a write that introduces or changes `parentId`. See the 409 response and the identically-named flag on POST /api/filaments. A control flag, never a schema field: it is deleted from the body before any value is written."
+                      }
+                    }
+                  }
+                ]
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Updated filament",
+            "description": "Updated filament. `_strippedTemplateFields` is present only when the target is a template and the write carried per-variant fields that were dropped (GH #605).",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Filament"
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Filament"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "_strippedTemplateFields": {
+                          "$ref": "#/components/schemas/TemplateStrippedFields"
+                        }
+                      }
+                    }
+                  ]
                 }
               }
             }
@@ -356,11 +389,18 @@
             }
           },
           "409": {
-            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), or an optimistic-concurrency version conflict occurred on a concurrent write.",
+            "description": "Conflict — a unique field (typically `name`) collides with another active record (duplicate key), an optimistic-concurrency version conflict occurred on a concurrent write, or (a write that introduces or changes `parentId`, GH #605) `parent_promotion_required`: this would be the parent's first live variant and the parent still carries its own color/spools/inventory. The promotion gate runs LAST, after every other guard including the schema dry-run, so an otherwise-invalid request gets its own 400 first and nothing is restructured.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Error"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ParentPromotionRequired"
+                    }
+                  ]
                 }
               }
             }
@@ -426,7 +466,7 @@
         },
         "responses": {
           "200": {
-            "description": "Sync successful",
+            "description": "Sync successful. When the target is a template (GH #605), per-variant keys the preset carried are dropped and named in `_strippedTemplateFields`; a stripped `color` also drops the `colorName: null` clear this route synthesizes alongside it (#885), so a template holding a legacy color/name pair can't keep the color while losing the name.",
             "content": {
               "application/json": {
                 "schema": {
@@ -452,6 +492,9 @@
                     "matchedName": {
                       "type": "string",
                       "description": "#867: the stored name of the matched filament (so the fork can re-stamp the id into a name-matched preset). A 200 always means the update WAS applied — a name/id mismatch returns 409 without mutating."
+                    },
+                    "_strippedTemplateFields": {
+                      "$ref": "#/components/schemas/TemplateStrippedFields"
                     }
                   }
                 }
@@ -675,12 +718,30 @@
           "Filaments"
         ],
         "summary": "Restore filament from trash",
-        "description": "Un-soft-deletes a trashed filament by clearing _deletedAt. Refuses with 409 if another active filament now uses the same name — the partial unique index on `name` only covers non-deleted documents, so the caller has to rename one or the other before the restore can succeed.",
+        "description": "Un-soft-deletes a trashed filament by clearing _deletedAt. Refuses with 409 if another active filament now uses the same name — the partial unique index on `name` only covers non-deleted documents, so the caller has to rename one or the other before the restore can succeed. Restoring a trashed VARIANT can mint its parent's first live variant (the parent may have re-acquired a color or spools while the variant sat in the trash), so it runs the same GH #605 promotion gate as the create and re-parent paths.",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
           }
         ],
+        "requestBody": {
+          "required": false,
+          "description": "Optional. Restore historically takes no body, and a bare POST (or unparseable JSON) behaves exactly as before.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "promoteParent": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "GH #605 confirmation flag — see the 409 response. Repeating a refused restore with this set converts the carrying parent to a template first, then revives the variant."
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Restored",
@@ -712,7 +773,92 @@
             }
           },
           "409": {
-            "description": "Name conflict — another active filament already uses this name",
+            "description": "Name conflict — another active filament already uses this name. Also returned when the filament is a variant whose parent is still in the trash (restore the parent first), and, with the structured `parent_promotion_required` body (GH #605), when reviving this variant would be its parent's first live variant while that parent still carries its own color/spools/inventory — nothing is written until the request is repeated with `promoteParent: true`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ParentPromotionRequired"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Failed to restore filament",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/filaments/{id}/promote": {
+      "post": {
+        "tags": [
+          "Filaments"
+        ],
+        "summary": "Convert filament to template",
+        "description": "\"Convert to template\" (GH #605). Moves a legacy parent's own `color`, `colorName`, `spools` and inventory `totalWeight` — plus the `lowStockThreshold` that alarms on that inventory — onto a NEW variant named `<parent> — <colorName>` (or `<parent> — Original`), then clears them on the parent. Same copy-first/clear-last promotion the first-variant create path runs behind `promoteParent: true`, here at the user's explicit initiative: enforcement is forward-only, so parents that predate the template model are never migrated in bulk. Only a filament that ALREADY has ≥1 live variant qualifies — a standalone becomes a template implicitly when its first variant is created. The `spoolWeight` / `netFilamentWeight` spec pair stays on the template, where every variant inherits it (GH #1048). Persisted `(filamentId, spoolId)` references follow the moved spools: print-history usage entries and printer AMS slots are remapped, including filament-only \"any spool\" slot dedications. Takes no request body; two overlapping calls serialize, so the second gets 400 `nothing_to_convert` rather than minting a duplicate copy.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/FilamentId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Converted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "variant": {
+                      "$ref": "#/components/schemas/Filament"
+                    },
+                    "parent": {
+                      "$ref": "#/components/schemas/Filament"
+                    },
+                    "resumed": {
+                      "type": "boolean",
+                      "description": "True when this call ADOPTED the partial copy an interrupted earlier promotion left behind and finished the owed remap + clear, rather than running a fresh conversion. The end state is identical; the flag exists so clients can tell recovery from a first-time conversion."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filament id, or a structured refusal (distinguish by `error`). `not_a_template` — the target is itself a variant, or has no live variants yet. `nothing_to_convert` — the template already carries nothing that belongs on a variant: no color, no color name, no spools, no inventory weight (the spec fields it legitimately keeps do not count as carrying).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Cross-origin request rejected by the trusted-origin guard.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Filament not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -722,7 +868,7 @@
             }
           },
           "500": {
-            "description": "Failed to restore filament",
+            "description": "Failed to convert to template",
             "content": {
               "application/json": {
                 "schema": {
@@ -2490,7 +2636,7 @@
           "Spools"
         ],
         "summary": "Add spool to filament",
-        "description": "Adds a new spool subdoc to the filament. At least one of label, totalWeight, lotNumber, purchaseDate, openedDate, locationId, photoDataUrl, instanceId, or retired must be supplied — an empty body returns 400 (GH #203).",
+        "description": "Adds a new spool subdoc to the filament. At least one of label, totalWeight, lotNumber, purchaseDate, openedDate, locationId, photoDataUrl, instanceId, or retired must be supplied — an empty body returns 400 (GH #203). A TEMPLATE (a filament with ≥1 live color variant) holds no inventory and refuses with 400 `template_no_spools` — add the spool to one of its variants instead (GH #605).",
         "parameters": [
           {
             "$ref": "#/components/parameters/FilamentId"
@@ -2574,11 +2720,18 @@
             }
           },
           "400": {
-            "description": "Empty body, invalid field type, or no recognised fields supplied",
+            "description": "Empty body, invalid field type, or no recognised fields supplied; or (GH #605) the structured `template_no_spools` refusal when the filament is a template. The template check is re-run after the atomic push, so a filament that becomes a template mid-request has the just-added spool pulled back out and gets the same refusal.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Error"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TemplateNoSpools"
+                    }
+                  ]
                 }
               }
             }
@@ -3013,7 +3166,7 @@
           "Prusament"
         ],
         "summary": "Import Prusament spool",
-        "description": "Creates a filament from scraped Prusament data or adds a spool to an existing filament.",
+        "description": "Creates a filament from scraped Prusament data or adds a spool to an existing filament. Every path that pushes a spool onto an EXISTING filament refuses a TEMPLATE target (a filament with ≥1 live color variant) with 400 `template_no_spools`, byte-identically to POST /api/filaments/{id}/spools: the `add-spool` action, and the `create` action's two fallbacks — an active filament already carrying the derived name, and the winner of a concurrent-create race (GH #605).",
         "requestBody": {
           "required": true,
           "content": {
@@ -3067,11 +3220,18 @@
             }
           },
           "400": {
-            "description": "Missing spool data",
+            "description": "Missing spool data, or (GH #605) the structured `template_no_spools` refusal when the spool would land on a template.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Error"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/TemplateNoSpools"
+                    }
+                  ]
                 }
               }
             }
@@ -4027,7 +4187,7 @@
           "OrcaSlicer"
         ],
         "summary": "Sync OrcaSlicer profile changes",
-        "description": "Maps known OrcaSlicer fields back to structured filament fields and stores unknown keys in the settings bag.",
+        "description": "Maps known OrcaSlicer fields back to structured filament fields and stores unknown keys in the settings bag. When the target is a template (a filament with ≥1 live color variant), per-variant keys the preset carried are dropped before the write and named in `_strippedTemplateFields` (GH #605); the rest of the sync still applies.",
         "parameters": [
           {
             "name": "id",
@@ -4055,7 +4215,12 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "object",
+                  "properties": {
+                    "_strippedTemplateFields": {
+                      "$ref": "#/components/schemas/TemplateStrippedFields"
+                    }
+                  }
                 }
               }
             }
@@ -4211,7 +4376,7 @@
         },
         "responses": {
           "200": {
-            "description": "Filament synced. Top-level fields, `bedTypeTemps[]`, settings-bag passthrough, and (when resolved) a `calibrations[]` row are all updated atomically.",
+            "description": "Filament synced. Top-level fields, `bedTypeTemps[]`, settings-bag passthrough, and (when resolved) a `calibrations[]` row are all updated atomically. When the target is a template, per-variant keys the preset carried are dropped and named in `_strippedTemplateFields` (GH #605).",
             "content": {
               "application/json": {
                 "schema": {
@@ -4274,6 +4439,9 @@
                         "type": "string"
                       },
                       "description": "Profile keys not mapped to structured fields, preserved in the settings bag for round-trip on next export."
+                    },
+                    "_strippedTemplateFields": {
+                      "$ref": "#/components/schemas/TemplateStrippedFields"
                     }
                   }
                 }
@@ -4358,7 +4526,7 @@
         },
         "responses": {
           "200": {
-            "description": "Filament imported. `created` is true on the create path (or the create→update fallback after an E11000 race), false on update / resurrect.",
+            "description": "Filament imported. `created` is true on the create path (or the create→update fallback after an E11000 race), false on update / resurrect. `_strippedTemplateFields` (GH #605) can only appear on the phases that write to an existing ACTIVE row — the update phase and the E11000-race merge; a resurrected or freshly created row can't be a template.",
             "content": {
               "application/json": {
                 "schema": {
@@ -4411,6 +4579,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "_strippedTemplateFields": {
+                      "$ref": "#/components/schemas/TemplateStrippedFields"
                     }
                   }
                 }
@@ -5631,7 +5802,7 @@
           "Spools"
         ],
         "summary": "Assign a spool to a printer slot",
-        "description": "Assigns the spool to a printer AMS/MMU slot, first clearing it from any other slot — a spool occupies at most one slot at a time. Writes only Printer.amsSlots[].spoolId, never the spool's locationId. Retired spools are rejected.",
+        "description": "Assigns the spool to a printer AMS/MMU slot, first clearing it from any other slot — a spool occupies at most one slot at a time. Writes Printer.amsSlots[].spoolId AND .filamentId (the owning filament — GH #1041; a slot carries both refs and the printer form renders slots keyed on filamentId, so a spool-only write was invisible there), never the spool's locationId. The clearing pass nulls BOTH refs on the losing slot, since the physical spool leaves with the loaded filament; slots dedicated to a filament with no tracked spool (\"any spool\") never match it and keep their dedication. Retired spools are rejected.",
         "parameters": [
           {
             "name": "spoolId",
@@ -5764,7 +5935,7 @@
           "Snapshot"
         ],
         "summary": "Export database snapshot",
-        "description": "Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones). Snapshot schema version is 4 as of v1.14.0; older v1/v2/v3 snapshots still restore (missing collections come back as empty).",
+        "description": "Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones). Snapshot schema version is 6: v4 added shared catalogs, v5 the top-level `legacyNozzleCleanupComplete` provenance flag (GH #1021), v6 `Location.desiccantChangedAt`. Older snapshots still restore (missing collections come back as empty); the v4–v6 bumps exist so a build that predates the addition rejects the file outright instead of accepting it and silently dropping the new data.",
         "responses": {
           "200": {
             "description": "JSON snapshot file",
@@ -5783,7 +5954,7 @@
           "Snapshot"
         ],
         "summary": "Restore database snapshot",
-        "description": "Restores snapshot-scoped data from a snapshot using best-effort rollback. If any part of the restore fails, the handler attempts to re-insert previous data from an in-memory backup. Concurrent restores are rejected with 409. Note: the restore is not truly atomic — concurrent readers may observe partial state during the delete/insert window, and rollback itself may fail.",
+        "description": "Restores snapshot-scoped data from a snapshot using best-effort rollback. If any part of the restore fails, the handler attempts to re-insert previous data from an in-memory backup. A snapshot whose `version` exceeds the running build's current schema version is rejected with 400 BEFORE the destructive wipe (GH #953) — it would carry collections or fields this build doesn't know, which would be dropped while the handler still reported success. Concurrent restores are rejected with 409. Note: the restore is not truly atomic — concurrent readers may observe partial state during the delete/insert window, and rollback itself may fail.",
         "requestBody": {
           "required": true,
           "content": {
@@ -5846,7 +6017,7 @@
             }
           },
           "400": {
-            "description": "Invalid snapshot",
+            "description": "Invalid snapshot — malformed file, no recognised collection, a document that fails validation (checked before the wipe, so the database is left untouched), or a `version` newer than this build's current schema version.",
             "content": {
               "application/json": {
                 "schema": {
@@ -6102,6 +6273,11 @@
                   "parentId": {
                     "type": "string",
                     "description": "Optional. When set, imports exactly one slug as a VARIANT of this filament, pruning fields equal to the parent so they inherit. The parent must exist, be active, and not itself be a variant."
+                  },
+                  "promoteParent": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "GH #605 confirmation flag, variant mode only (`parentId` set) — see the 409 response. Mirrors the identically-named flag on POST /api/filaments: the same gate runs here so a secondary entry point can never mint a carrying parent's first variant without the round-trip."
                   }
                 }
               }
@@ -6130,11 +6306,18 @@
             }
           },
           "409": {
-            "description": "Variant mode: a filament with the imported material's name already exists",
+            "description": "Variant mode: a filament with the imported material's name already exists; or (GH #605) the structured `parent_promotion_required` body when this would be the parent's first live variant and the parent still carries its own color/spools/inventory — nothing is written until the request is repeated with `promoteParent: true`.",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Error"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ParentPromotionRequired"
+                    }
+                  ]
                 }
               }
             }
@@ -6547,6 +6730,68 @@
         "required": [
           "error"
         ]
+      },
+      "ParentPromotionRequired": {
+        "type": "object",
+        "description": "GH #605: the request would mint its parent's FIRST live variant, and that parent still carries variant-level state of its own — a color, a color name, spools, or a legacy inventory `totalWeight`. Nothing was written. Repeat the identical request with `promoteParent: true` to confirm: the parent is then converted to a template, its color, colorName, spools, totalWeight and lowStockThreshold move onto a newly created variant named `variantName`, and the original request proceeds. The `spoolWeight` / `netFilamentWeight` spec pair stays on the template, where every variant inherits it (GH #1048). Returned by POST /api/filaments (with parentId), PUT /api/filaments/{id} (when the body introduces or changes parentId), POST /api/filaments/{id}/restore, and POST /api/openprinttag/import in variant mode — byte-identically, so one client handler covers all four.",
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "parent_promotion_required"
+          },
+          "message": {
+            "type": "string"
+          },
+          "parentName": {
+            "type": "string",
+            "description": "The parent that would become a template."
+          },
+          "parentColor": {
+            "type": "string",
+            "nullable": true,
+            "description": "The parent's own color, which would move to the new variant."
+          },
+          "spoolCount": {
+            "type": "integer",
+            "description": "How many of the parent's spools would move."
+          },
+          "variantName": {
+            "type": "string",
+            "description": "The name the auto-created variant would get: `<parent> — <colorName>`, or `<parent> — Original` when the parent has no color name, de-duplicated with a ` (2)` / ` (3)` suffix when that name is taken. A stored record name, deliberately not translated."
+          }
+        },
+        "required": [
+          "error",
+          "message",
+          "parentName",
+          "parentColor",
+          "spoolCount",
+          "variantName"
+        ]
+      },
+      "TemplateNoSpools": {
+        "type": "object",
+        "description": "GH #605: the target filament is a TEMPLATE — it has at least one live color variant — and templates hold no inventory. Nothing was written; add the spool to one of the variants instead. Spools already sitting on a legacy parent stay editable, so an update that targets an existing spool subdocument is still allowed; only creating a new one is refused.",
+        "properties": {
+          "error": {
+            "type": "string",
+            "example": "template_no_spools"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error",
+          "message"
+        ]
+      },
+      "TemplateStrippedFields": {
+        "type": "array",
+        "description": "GH #605: per-variant fields this write carried that the template guard refused to apply — a subset of `totalWeight`, `color`, `colorName`, `lowStockThreshold`. Present only when at least one field was dropped; the rest of the write still applied, so a client that ignores this key will believe a value landed that was silently discarded. The offending fields are STRIPPED rather than rejected because a slicer preset (like a stale edit form) echoes a promoted-away color back verbatim on every save, and a 4xx would break the whole sync for a value the user never re-entered. An EXPLICIT null passes through, so clearing a legacy template's leftover value is still possible.",
+        "items": {
+          "type": "string"
+        }
       },
       "ScanEventFilament": {
         "type": "object",
@@ -7439,6 +7684,11 @@
             "type": "object",
             "description": "Create-only additions. `spools` is honored ONLY on POST — the PUT handler strips `body.spools` (spool subdocuments are managed via the dedicated /spools endpoints after creation).",
             "properties": {
+              "promoteParent": {
+                "type": "boolean",
+                "default": false,
+                "description": "GH #605 confirmation flag for variant creation (only meaningful together with `parentId`). Creating the FIRST live variant of a parent that still carries its own color/colorName/spools/totalWeight restructures that second document, so the request is refused with 409 `parent_promotion_required` and nothing is written; repeating it with this flag set converts the parent to a template first — its color, colorName, spools, totalWeight and lowStockThreshold move onto a new variant — then creates the requested variant. A control flag, never a schema field: it is deleted from the body before any value is written."
+              },
               "spools": {
                 "type": "array",
                 "description": "Initial spool subdocuments. Each entry is allow-listed to the fields below; everything else (usageHistory, dryCycles, instanceId, createdAt) is stripped or system-assigned. photoDataUrl, the ISO date strings, and locationId are validated with the same contracts as the dedicated spool routes. When omitted, a top-level totalWeight auto-creates one spool.",
