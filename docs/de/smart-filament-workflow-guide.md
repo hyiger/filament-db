@@ -159,21 +159,24 @@ Silicon), die `.exe` für Windows oder die `.AppImage` / `.deb` für Linux.
 
 ![Die GitHub-Releases-Seite für Filament DB](../images/sfw-github-filament-db.png)
 
-**Schritt 7 — Installiere und öffne die App.** Führe den Installer aus. Da es Community-Builds
-sind, warnt dein OS möglicherweise, dass die App von einem nicht identifizierten Entwickler stammt —
-auf macOS klicke beim ersten Mal mit der rechten Maustaste auf die App und wähle **Öffnen**; auf
-Windows wähle **Weitere Informationen → Trotzdem ausführen**.
+**Schritt 7 — Installiere und öffne die App.** Führe den Installer aus. Die macOS-`.dmg`s sind
+mit einer Apple-Developer-ID signiert **und** notarisiert, öffnen sich also ohne
+Gatekeeper-Warnung — der erste Start nach einer frischen Installation kann langsam sein,
+während macOS die App prüft; das ist erwartetes Verhalten und kein Hängenbleiben. (Nur ein
+*unsigniertes* DMG, das du selbst gebaut hast, wird blockiert; entferne dann das Quarantäne-Flag mit
+`xattr -cr "/Applications/Filament DB.app"`.) Die Windows-Installer sind unsigniert, daher warnt
+SmartScreen möglicherweise — wähle **Weitere Informationen → Trotzdem ausführen**.
 
 ![Die Filament-DB-Desktop-App — die Filament-Bibliothek](../images/sfw-filamentdb-library.png)
 
-**Schritt 8 — Filament DB mit deiner Datenbank verbinden.** Öffne in Filament DB die
-**Einstellungen** und scrolle zu **Verbindungsmodus**. Wähle **Atlas (Cloud)** und füge die
-Verbindungszeichenfolge aus Schritt 5 ein (mit eingesetztem echten Passwort). Die drei Modi sind
-Atlas (Cloud), Hybrid (Lokal + Cloud) und Offline (Nur lokal).
+**Schritt 8 — Filament DB mit deiner Datenbank verbinden.** Öffne in Filament DB
+**Einstellungen → Netzwerkeinstellungen** und suche dort **Verbindungsmodus**. Wähle
+**Atlas (Cloud)** und füge die Verbindungszeichenfolge aus Schritt 5 ein (mit eingesetztem echten
+Passwort). Die drei Modi sind Atlas (Cloud), Hybrid (Lokal + Cloud) und Offline (Nur lokal).
 
 ![Filament DB Einstellungen → Verbindungsmodus](../images/sfw-filamentdb-connection-mode.png)
 
-> **Tipp — Schnelltest:** Wähle auf dem Hauptbildschirm **Importieren/Exportieren → Aus Atlas
+> **Tipp — Schnelltest:** Wähle unter **Einstellungen → Import / Export** den Punkt **Aus Atlas
 > importieren** und füge die öffentliche, schreibgeschützte Beispiel-Datenbank-Zeichenfolge des
 > Entwicklers ein (aus dem Forenpost des Projekts), um eine befüllte Bibliothek zu erkunden, bevor
 > du deine eigene anlegst.
@@ -219,9 +222,11 @@ Filament-DB-Verbindung.
 
 **Schritt 13 — PrusaSlicer auf Filament DB zeigen lassen.** Öffne die **Preferences** (macOS:
 *PrusaSlicer → Preferences*; Windows: *Datei → Preferences*), gehe zum Tab **Other** und trage
-die Adresse, unter der Filament DB läuft, in das Feld **Filament DB URL** ein. Für die aktuelle
-Desktop-App ist das `http://localhost:3456`; ältere Builds und der Docker-Container nutzen Port
-`3000`. Speichern und PrusaSlicer neu starten.
+die Adresse, unter der Filament DB läuft, in das Feld **Filament DB URL** ein. Diese Adresse ist
+`http://localhost:3456` — für die Desktop-App *und* für den Docker-Container mit dem empfohlenen
+Port-Mapping `-p 3456:3000` aus Schritt 8: Der Container lauscht intern auf Port `3000`, aber
+`3456` ist der Host-Port, mit dem sich PrusaSlicer verbindet. Speichern und PrusaSlicer neu
+starten.
 
 ![PrusaSlicer Preferences → Other, mit dem Filament-DB-URL-Feld](../images/sfw-prusaslicer-preferences.png)
 
@@ -239,13 +244,13 @@ Filament-Profil mit seinen vollständigen Einstellungen.
 
 ![PrusaSlicer Datei → Export-Menü](../images/sfw-prusaslicer-export-menu.png)
 
-**Schritt 15 — Bundle in Filament DB importieren.** Öffne in Filament DB **Importieren/Exportieren**
+**Schritt 15 — Bundle in Filament DB importieren.** Öffne in Filament DB **Import / Export**
 und wähle den PrusaSlicer-INI-Import. Jedes Profil wird mit Temperaturen, Retraction, Pressure
 Advance, Lüftereinstellungen und anderen Parametern intakt übernommen. Dasselbe Menü kann auch aus
 einem Prusament-QR-Code, aus der Atlas-Filament-Datenbank, aus einer Spulen-CSV importieren oder
 die OpenPrintTag-DB durchsuchen.
 
-![Das Filament-DB-Importieren-/Exportieren-Menü](../images/sfw-filamentdb-library.png)
+![Das Filament-DB-Menü „Import / Export"](../images/sfw-filamentdb-library.png)
 
 **Schritt 16 — Eine OpenPrintTag-Spule lesen.** Lege den Tag einer getaggten Spule auf den
 ACR1552U. Filament DB liest ihn und zeigt einen **„Found in Database"**-Dialog mit jeder auf dem
@@ -281,8 +286,10 @@ injiziert den Pro-Schicht-G-Code automatisch. Du slicest, druckst und liest das 
 
 **Schritt 18 — Ergebnisse in Filament DB eintragen.** Öffne das getestete Filament im Filament-DB-
 Editor und trage deine gemessenen Werte ein — Temperaturen, Retraction, Lüfter und andere
-eingestellte Parameter. Das Seitenpanel hat Abschnitte für Kompatible Düsen und Presets, sodass
-dasselbe Filament unterschiedliche Werte für jede Kombination aus Drucker, Düse und Bett halten kann.
+eingestellte Parameter. Der Editor ist in fünf Tabs aufgeteilt — **Grundlagen**, **Drucken**,
+**Erweitert**, **Kalibrierung** und **Slicer** — mit **Kompatible Düsen** unter Kalibrierung und
+**Voreinstellungen** unter Slicer, sodass dasselbe Filament unterschiedliche Werte für jede
+Kombination aus Drucker, Düse und Bett halten kann.
 
 ![Der Filament-DB-Filament-Editor](../images/sfw-filamentdb-filament-editor.png)
 

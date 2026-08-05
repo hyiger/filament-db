@@ -117,6 +117,8 @@ Unter **Einstellungen → Geräte** (**NFC-Tools**-Karte, nur Electron):
 
 Wenn du den Tag entfernst, bevor du bestätigst, schließt sich die Bestätigung automatisch. Das Löschen eines **Bambu-Lab**-Tags wird mit einer klaren „schreibgeschützt"-Meldung abgelehnt (diese Tags sind RSA-signiert und können nicht gelöscht werden).
 
+> **Das Löschen eines NTAG setzt voraus, dass der Reader die Größenabfrage beantwortet.** Vor dem Löschen fragt die App den Chip nach seiner Größe (`GET_VERSION`), um zu bestätigen, dass wirklich ein NTAG aufliegt — und anders als **NFC schreiben** hat das Löschen keinen „Tag-Typ auswählen"-Ausweg. Verweigert ein Reader diese Abfrage (der ACR1552U antwortet mit `SW 0x6900`), scheitert das Löschen eines NTAG mit der Meldung „Die Größe des NTAG konnte nicht ermittelt werden …". Als #978 erfasst. Du brauchst es selten: Ein Schreibvorgang schreibt den Capability Container des Tags selbst neu, ein von einem früheren Schreibvorgang falsch dimensionierter Tag wird also einfach durch erneutes Beschreiben korrigiert. Das Löschen von OpenPrintTag-Tags (SLIX2) ist davon nicht betroffen.
+
 ### OpenPrintTag-Binärexport
 
 Klicke auf der Detailseite eines Filaments auf **„OPT exportieren"**, um die OpenPrintTag-Binärdaten als `.bin`-Datei herunterzuladen. Diese Datei kann mit externer NFC-Schreibsoftware auf einen Tag geschrieben werden.
