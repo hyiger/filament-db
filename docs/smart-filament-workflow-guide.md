@@ -156,21 +156,23 @@ Apple Silicon builds), the `.exe` for Windows, or the `.AppImage` / `.deb` for L
 
 ![The GitHub Releases page for Filament DB](images/sfw-github-filament-db.png)
 
-**Step 7 — Install and open the app.** Run the installer. Because these are community
-builds, your OS may warn that the app is from an unidentified developer — on macOS,
-right-click the app and choose **Open** the first time; on Windows, choose **More info →
-Run anyway**.
+**Step 7 — Install and open the app.** Run the installer. The macOS `.dmg`s are Developer
+ID-signed **and** notarized, so they open with no Gatekeeper warning — the first launch
+after a fresh install can be slow while macOS verifies the app, which is expected, not a
+hang. (Only an *unsigned* DMG you built yourself is blocked; clear it with
+`xattr -cr "/Applications/Filament DB.app"`.) The Windows installers are unsigned, so
+SmartScreen may warn — choose **More info → Run anyway**.
 
 ![The Filament DB desktop app — the filament library](images/sfw-filamentdb-library.png)
 
-**Step 8 — Connect Filament DB to your database.** Open **Settings** in Filament DB and
-scroll to **Connection Mode**. Choose **Atlas (Cloud)** and paste in the connection string
-from Step 5 (with the real password filled in). The three modes are Atlas (Cloud), Hybrid
-(Local + Cloud), and Offline (Local Only).
+**Step 8 — Connect Filament DB to your database.** Open **Settings → Network Settings** in
+Filament DB and find **Connection Mode**. Choose **Atlas (Cloud)** and paste in the
+connection string from Step 5 (with the real password filled in). The three modes are Atlas
+(Cloud), Hybrid (Local + Cloud), and Offline (Local Only).
 
 ![Filament DB Settings → Connection Mode](images/sfw-filamentdb-connection-mode.png)
 
-> **Tip — Quick test:** On the main screen choose **Import / Export → Import from Atlas**
+> **Tip — Quick test:** In **Settings → Import / Export** choose **Import from Atlas**
 > and paste the developer's public read-only sample database string (from the project's
 > forum post) to explore a populated library before adding your own.
 
@@ -212,9 +214,11 @@ standard PrusaSlicer are the **Calibration** menu and the Filament DB connection
 
 **Step 13 — Point PrusaSlicer at Filament DB.** Open **Preferences** (macOS: *PrusaSlicer →
 Preferences*; Windows: *File → Preferences*), go to the **Other** tab, and enter the
-address Filament DB is serving on in the **Filament DB URL** field. For the current desktop
-app that is `http://localhost:3456`; older builds and the Docker container use port `3000`.
-Save and restart PrusaSlicer.
+address Filament DB is serving on in the **Filament DB URL** field. That address is
+`http://localhost:3456` for the desktop app *and* for the Docker container with the
+recommended `-p 3456:3000` mapping from Step 8 — the container listens on port `3000`
+internally, but `3456` is the host port PrusaSlicer connects to. Save and restart
+PrusaSlicer.
 
 ![PrusaSlicer Preferences → Other, with the Filament DB URL field](images/sfw-prusaslicer-preferences.png)
 
@@ -274,8 +278,10 @@ injects the per-layer G-code automatically. You just slice, print, and read the 
 
 **Step 18 — Record the results in Filament DB.** Open the filament you tested in Filament
 DB's editor and enter your measured values — temperatures, retraction, fan, and other
-dialled-in parameters. The side panel has sections for Compatible Nozzles and Presets, so
-the same filament can hold different values for each printer, nozzle and bed combination.
+dialled-in parameters. The editor is split into five tabs — **Basics**, **Printing**,
+**Advanced**, **Calibration** and **Slicer** — with **Compatible Nozzles** under Calibration
+and **Presets** under Slicer, so the same filament can hold different values for each
+printer, nozzle and bed combination.
 
 ![The Filament DB filament editor](images/sfw-filamentdb-filament-editor.png)
 
