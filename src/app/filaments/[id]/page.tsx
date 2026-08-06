@@ -1509,6 +1509,24 @@ function FilamentDetail() {
                   {t("detail.slicerExport.multiCalibrationNotice")}
                 </p>
               )}
+              {/* GH #1066: a settings-bag printer restriction (usually carried
+                  in from a preset duplicated under another printer's profile)
+                  exports verbatim and hides the preset on every non-matching
+                  printer. Surface it here so "my filament doesn't show up in
+                  PrusaSlicer" has a visible cause; it's editable on the
+                  form's Slicer tab. */}
+              {(() => {
+                const restriction =
+                  filament.settings?.compatible_printers_condition ||
+                  filament.settings?.compatible_printers;
+                return restriction ? (
+                  <p className="px-3 py-2 my-1 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border-y border-amber-200 dark:border-amber-800">
+                    {t("detail.slicerExport.compatRestrictionNotice", {
+                      value: restriction,
+                    })}
+                  </p>
+                ) : null;
+              })()}
               {([
                 ["prusaslicer", t("detail.slicerExport.prusa"), ".ini"],
                 ["orcaslicer", t("detail.slicerExport.orca"), ".json"],
