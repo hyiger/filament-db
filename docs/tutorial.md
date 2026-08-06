@@ -294,7 +294,7 @@ You can also click the **Edit** button directly from the home page table row.
 
 ## Step 10: Create Color Variants
 
-Variants share a parent's settings (temperatures, density, retraction, calibrations) and only store what's different: name, color, and cost.
+Variants share a parent's settings (temperatures, density, retraction, calibrations) and only store what's different: name, color, and cost. A filament that has variants is a **template** — the product line rather than a roll — so it holds no color and no spools of its own; the app asks before it makes one (step 6 below).
 
 There are two affordances on the detail page. They both produce a new variant, but they pre-fill the form differently:
 
@@ -307,7 +307,15 @@ Steps:
 2. Click **"Create variant"** (if available) or **Duplicate**.
 3. The form opens pre-filled per the rules above. The fields that aren't pre-filled (or that you don't override) inherit live from the parent — that's the design from GH #106; placeholder text shows what you'll get.
 4. Edit the **name** (Duplicate only — Create variant leaves it blank for you to type), pick a new **color**, and optionally adjust **colorName**.
-5. Click **Create Filament**. The new filament is registered as a variant of the parent and any future edits to the parent's calibrations / temperatures / settings flow through automatically to fields you didn't explicitly override.
+5. Click **Create Filament**.
+6. **If this is the parent's first variant** and the parent still carries its own color or spools, a confirmation appears before anything is written:
+
+   > **Convert parent to template?**
+   >
+   > This is the first variant of "Prusament PLA", which becomes a template: its color and 2 spool(s) move to a new variant named "Prusament PLA — Galaxy Black".
+
+   Click **Convert and create**. The parent becomes a template — colorless, holding no inventory — and everything it owned personally (color, color name, spools, total weight, low-stock threshold) moves onto a new variant named after its color, or `<name> — Original` when it had no color name. Print history entries, printer AMS slot assignments and already-printed QR labels all follow the spools, so nothing loses its place. Click **Cancel** and nothing is created or changed at all. From the second variant on there's nothing left to move, so no confirmation appears.
+7. The new filament is registered as a variant of the parent and any future edits to the parent's calibrations / temperatures / settings flow through automatically to fields you didn't explicitly override.
 
 > **Design rule**: variants-of-variants are not supported. A parent must be a top-level filament. This is why the "Create variant" button is hidden on variant pages, and why cloning a variant gives you a sibling instead of nesting.
 
@@ -315,7 +323,17 @@ To turn an existing standalone filament into a variant:
 
 1. Click **Edit** on the filament.
 2. Under **Parent Filament**, search for and select the parent.
-3. Click **Update Filament**.
+3. Click **Update Filament**. If this creates the parent's first variant, the same confirmation appears — worded *"Saving makes this filament the first variant of…"* with a **Convert and save** button.
+
+### Convert an Existing Parent to a Template
+
+Parents created before v1.70 keep their own color and spools until you say otherwise — nothing is migrated behind your back.
+
+1. Open the parent's detail page and scroll to **Spool Tracker**. If it still carries its own color or spools you'll see an amber note — *"This template still carries its own color or spools from before it became a template."* — and a **Convert to template** button. (No button means there's nothing to move.)
+2. Click it and confirm: *"Move this filament's own color and 2 spool(s) to a new variant? The template itself keeps no color and no spools."*
+3. A toast reports *"Converted — color and spools moved to a new variant"* and the page reloads.
+
+Afterwards, add new rolls to the color variants — a template refuses them with *"This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead."* Set **Net filament weight** and **Empty spool weight** once on the template and every variant inherits them. See [Filament Templates](usage.md#filament-templates-v170) for the full picture.
 
 ---
 
@@ -432,6 +450,17 @@ If you have a Brother PT-P710BT (P-touch CUBE) connected over USB, you can print
 
 > The **URL** QR mode in the packaged desktop app needs a reachable address — set a **Public URL** in the label-printer settings so phones on your network can open it (the default `localhost` origin isn't reachable from another device). Pairs well with **Share on local network** (see "Share on Your Local Network" below).
 
+### Printing a Dry-Box Label (Desktop App + KNAON Y813BT)
+
+A second, entirely independent label printer prints 4×6 labels for the outside of a drybox. If you have a KNAON Y813BT:
+
+1. On **Locations**, set the box's **Kind** to **Drybox** and fill in **Humidity (%RH)** and **Desiccant changed** — both print on the label.
+2. In **Settings → Devices**, find the **Dry-box label printer (KNAON Y813BT)** card below the Brother one, pick your printer (Y813BT matches are badged), and click **Test print**. The **Public base URL** on the Brother card above is shared by both printers — set it so the label's QR is reachable from a phone.
+3. Print from **Locations** (the **Print label** action on any drybox row — use this one for an empty box) or from **Inventory** (the 🖨 button on a drybox group header while grouping by location).
+4. Review the preview and click **Print**. In the web app the button becomes **Download .prn** instead.
+
+The label carries the box name, humidity, a dated contents manifest, the desiccant-changed date, a Code 128 barcode of the box name, and a QR that opens your Spool Inventory scrolled to that box. See [Dry-Box Labels](usage.md#dry-box-labels-knaon-y813bt-v169) for the full breakdown.
+
 ---
 
 ## Step 14: Sync and Offline Workflow (Desktop App — Hybrid Mode)
@@ -470,7 +499,7 @@ Even in pure **Atlas mode**, if Atlas is unreachable when the app starts, it aut
 Each filament can track multiple physical spools with individual weights.
 
 1. On a filament's detail page, find the **Spool Tracker** section. As of v1.30.3 it always renders — on a brand-new filament with no weight metadata it shows a short "No spools yet" hint above the **"+ Add Spool"** button.
-2. Click **"+ Add Spool"** to add a new spool with an optional label and weight.
+2. Click **"+ Add Spool"** to add a new spool with an optional label and weight. If you number your rolls, **Next #** beside the label field fills in the highest all-digit label anywhere in the database plus one — retired spools and spools on trashed filaments included, so a number written on a physical spool is never reused. Non-numeric labels are ignored, nothing is reserved, and the field stays editable; if the lookup fails a toast asks you to enter it manually.
 3. Each spool shows its label, total weight, and a delete button.
 4. The tracker aggregates stats across all spools (total weight, computed length from density and diameter).
 5. Each spool can also be assigned a **Location** (its storage home) and a **Printer slot** (the AMS/MMU position it is currently loaded in — a spool occupies one slot at a time).
@@ -543,7 +572,7 @@ Before you reach for the spool tracker, it's worth describing where your physica
 
 1. Navigate to **Settings → Locations** → `/locations`
 2. Click **+ Add Location**
-3. Give it a name (e.g. `Drybox #1`), pick a **kind** (shelf / drybox / cabinet / printer), and optionally record the humidity
+3. Give it a name (e.g. `Drybox #1`), pick a **kind** (shelf / drybox / cabinet / printer), and optionally record the **Humidity (%RH)** and the **Desiccant changed** date (both feed the printed dry-box label — see Step 13)
 4. Repeat for every physical container you want to track
 
 Once you have at least one location, every spool you add (or edit) gains a **Location** dropdown. The Locations list view shows live inventory counts — number of spools and total grams on hand per location — so you can tell at a glance which drybox is almost empty.
@@ -648,13 +677,15 @@ A companion Expo/React Native app (in `packages/mobile`) turns your phone into a
 | View filament details | Home > click filament name |
 | Edit filament | Detail page > Edit |
 | Add color variant | Detail page > Create variant |
+| Convert a parent to a template | Detail page > Spool Tracker > Convert to template |
 | Manage nozzles | Settings > Nozzles |
 | Manage printers | Settings > Printers |
 | Browse API docs | Settings > API Documentation (or navigate to `/api-docs`) |
 | Write NFC tag | Detail page > Write NFC (desktop app) |
 | Erase NFC tag | Settings > NFC Tools > Erase Tag (desktop app) |
 | Export NFC binary | Detail page > Export ▾ > Export OPT |
-| Print a label | Detail page > Export ▾ > Print label (desktop app + Brother PT-P710BT) |
+| Print a spool label | Detail page > Export ▾ > Print label (desktop app + Brother PT-P710BT) |
+| Print a dry-box label | Locations > Print label, or Inventory > drybox group 🖨 (desktop app + KNAON Y813BT) |
 | Track spools | Detail page > Spool Tracker > + Add Spool |
 | Hide/show out-of-stock | Home > Show / Hide out of stock toggle |
 | Quick-change a spool's location | Home > expand row (×N) > Location dropdown |

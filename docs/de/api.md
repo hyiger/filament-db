@@ -17,6 +17,7 @@
 | `DELETE` | `/api/filaments/:id` | Soft-Delete eines Filaments (blockiert, wenn es Varianten hat). Hänge `?permanent=true` an, um es endgültig aus dem Papierkorb zu entfernen. |
 | `GET` | `/api/filaments/trash` | Listet soft-gelöschte Filamente auf (versorgt die `/trash`-Oberfläche) |
 | `POST` | `/api/filaments/:id/restore` | Stellt ein soft-gelöschtes Filament aus dem Papierkorb wieder her (liefert 409 bei Namenskonflikt) |
+| `POST` | `/api/filaments/:id/promote` | Wandelt ein Filament, das bereits Varianten hat, in eine Vorlage um — verschiebt dessen eigene Farbe/Spulen auf eine neue Variante |
 | `GET` | `/api/filaments/export` | Lädt alle Filamente als PrusaSlicer-INI-Datei herunter |
 | `GET` | `/api/filaments/export-csv` | Lädt alle Filamente als CSV-Datei herunter |
 | `GET` | `/api/filaments/export-xlsx` | Lädt alle Filamente als XLSX-Tabelle herunter |
@@ -46,6 +47,84 @@
 | `POST` | `/api/filaments/:id/spools` | Fügt einem Filament eine Spule hinzu |
 | `PUT` | `/api/filaments/:id/spools/:spoolId` | Aktualisiert Gewicht oder Bezeichnung einer Spule |
 | `DELETE` | `/api/filaments/:id/spools/:spoolId` | Entfernt eine Spule aus einem Filament |
+| `GET` | `/api/spools/next-label` | Schlägt die nächste numerische Rollennummer für ein Spulen-Label vor (`{ next, max }`) |
+
+`POST /api/filaments/:id/spools`, `PUT /api/filaments/:id/spools/:spoolId` und `DELETE /api/filaments/:id/spools/:spoolId` — plus `POST /api/filaments/:id/spools/:spoolId/usage` und `POST .../dry-cycles` — akzeptieren einen optionalen Query-Parameter `?shape=spool`, der die Antwort auf die betroffene Spule eindampft. Siehe Abschnitt **Antwortform bei Spulen-Mutationen** weiter unten.
+
+### Filament-Vorlagen
+
+Ein Filament mit mindestens einer nicht gelöschten Variante ist eine **Vorlage**: die Produktlinie, nicht eine Rolle. Die Vorlagen-Eigenschaft wird aus der Anzahl lebender Varianten *abgeleitet* und nie als Flag gespeichert — sie entsteht in dem Moment, in dem die erste Variante angelegt wird, und verschwindet wieder, sobald jede Variante im Papierkorb liegt. Eine Vorlage trägt die Spezifikation, die die gesamte Familie erbt (Temperaturen, Dichte, Trocknung, `spoolWeight`, `netFilamentWeight`, `secondaryColors`, `optTags`); die rollenspezifischen Felder — `color`, `colorName`, `totalWeight`, `lowStockThreshold` — und die Spulen selbst gehören auf die Varianten.
+
+Drei Verträge setzen das über die gesamte API durch. Die Durchsetzung wirkt **nur nach vorn**: Ein Alt-Elternfilament, das bereits eine Farbe oder Spulen trägt, behält sie, bis es ausdrücklich umgewandelt wird (siehe `POST /api/filaments/:id/promote`).
+
+#### `409 parent_promotion_required` — die erste Variante bestätigen
+
+Das Anlegen der ERSTEN lebenden Variante eines Elternfilaments, das noch rollenspezifischen Zustand *trägt*, strukturiert ein **zweites** Dokument um: Das Elternfilament wird zur Vorlage, und dieser Zustand wandert auf eine neu angelegte Geschwistervariante. Als tragend gilt ein Elternfilament, wenn es eine nicht-leere gespeicherte `color` hat (einschließlich des historischen Standardwerts `#808080`), einen nicht-leeren `colorName`, mindestens eine Spule oder ein `totalWeight` ungleich null. Ab der zweiten Variante sperrt nichts mehr: Die Sperre greift ausschließlich bei der ERSTEN lebenden Variante, und die Durchsetzung wirkt nur nach vorn — ein Alt-Elternfilament mit zwei oder mehr Varianten kann durchaus noch tragen, und genau für diesen Zustand existiert `POST /api/filaments/:id/promote`.
+
+Statt still umzustrukturieren, lehnen die vier interaktiven Routen, die eine erste Variante erzeugen können, mit `409` ab und beschreiben genau, was eine Bestätigung bewirken würde:
+
+- `POST /api/filaments` — der Body trägt eine `parentId`
+- `PUT /api/filaments/:id` — der Body führt eine `parentId` ein oder ändert sie
+- `POST /api/filaments/:id/restore` — Wiederherstellen einer im Papierkorb liegenden Variante unter einem Elternfilament, das inzwischen wieder tragenden Zustand erworben hat
+- `POST /api/openprinttag/import` im Variantenmodus (`parentId`)
+
+Alle vier liefern denselben Body:
+
+```json
+{
+  "error": "parent_promotion_required",
+  "message": "Creating the first variant makes \"Prusament PETG\" a template: its color and 2 spool(s) move to a new variant named \"Prusament PETG — Prusa Galaxy Black\". Repeat the request with promoteParent: true to confirm.",
+  "parentName": "Prusament PETG",
+  "parentColor": "#292929",
+  "spoolCount": 2,
+  "variantName": "Prusament PETG — Prusa Galaxy Black"
+}
+```
+
+Zum Bestätigen wiederhole die **identische** Anfrage mit `"promoteParent": true` im Body. Es ist ein Steuerflag, nie ein gespeichertes Feld — die Create- und Update-Routen entfernen es aus dem Body, bevor irgendetwas anderes ihn liest; `restore` nimmt historisch überhaupt keinen Body entgegen, ein fehlender oder nicht parsbarer Body bedeutet dort also schlicht `false`.
+
+Die Sperre greift **zuletzt**, nach jeder anderen Validierung. Ein `409` heißt deshalb: „Diese Anfrage wäre sonst erfolgreich, hat aber eine Nebenwirkung auf ein zweites Dokument, der du ausdrücklich zustimmen musst" — und es wird überhaupt nichts geschrieben. Eine *bestätigte* Anfrage wird **vor** der Umwandlung im Trockenlauf validiert (Namenskollision, Schemavalidierung), sodass ein ungültiger Body weiterhin scheitert und das Elternfilament dabei völlig unangetastet bleibt.
+
+Das Bestätigen verschiebt `color`, `colorName`, `spools` (Subdokument-`_id`s und die `instanceId` jeder Spule bleiben wörtlich erhalten), `totalWeight` und `lowStockThreshold` des Elternfilaments auf eine Variante mit dem Namen `"<Elternfilament> — <colorName>"` — oder `"<Elternfilament> — Original"`, wenn das Elternfilament keinen Farbnamen hat, wobei `" (2)"`, `" (3)"`, … eine Namenskollision auflösen — und leert anschließend genau diese fünf Felder auf dem Elternfilament. `spoolWeight` und `netFilamentWeight` werden bewusst **nicht** verschoben: Sie sind gemeinsame Spezifikation und bleiben auf der Vorlage, von der jede Variante sie erbt. Persistierte `(filamentId, spoolId)`-Referenzen folgen den Spulen — `PrintHistory.usage[].filamentId` und `Printer.amsSlots[].filamentId` werden auf die neue Variante umgebogen (einschließlich eines Druckerslots, der ohne konkrete Spule auf das Elternfilament festgelegt ist).
+
+Ein weiterer Schreibpfad kann eine erste Variante erzeugen, und er liefert nie ein `409`:
+
+- `POST /api/filaments/import-csv` / `import-xlsx` — ein Create mit aufgelöster `Parent`-Spalte oder das Wiederherstellen einer im Papierkorb liegenden Variante. Ein Bulk-Import kann keine Rückfrage beantworten, deshalb wird eine Zeile, deren Elternfilament noch **Bestand** hält (Spulen oder ein `totalWeight` ungleich null), mit einem `skippedRows`-Grund übersprungen, der auf `"Convert to template"` verweist, während der Rest des Batches weiterläuft. Die Farbe sperrt hier bewusst **nicht**: Das Schema setzt `color` standardmäßig auf `#808080`, also würde jedes Elternfilament, das derselbe Batch gerade erst angelegt hat, als tragend gelten und jeder Roundtrip aus Elternfilament plus Variante abgelehnt. Ein CSV-/XLSX-Import kann daher ohne Rückfrage die erste Variante eines farbtragenden Elternfilaments erzeugen — genau die nach vorn wirkende Altform, die `POST /api/filaments/:id/promote` umwandelt.
+
+Der zweite Fall ohne Rückfrage — auf jeder dieser Routen — ist ein Elternfilament, das **nur eine Schwelle** trägt. `lowStockThreshold` gilt bewusst nicht als tragend: Eine Schwelle ohne Bestand dahinter verschiebt nichts, was eine Bestätigung wert wäre. Ein Elternfilament, das eine Schwelle speichert, aber weder `color` noch `colorName`, weder Spulen noch ein `totalWeight` hat, erzeugt seine erste Variante daher ohne `409`. Sobald diese Variante existiert, ist die Schwelle tote Konfiguration (der Bestandsalarm würde sonst gegen eine Vorlage ausgewertet) — sie wird deshalb *nach* dem Schreiben der Variante auf dem Elternfilament geleert, und dieses Leeren taucht in keinem Antwortfeld auf. Der Wert wird **nicht** auf die neue Variante kopiert: Wer den Alarm behalten will, muss `lowStockThreshold` selbst auf der Variante mitsenden. Weder ein *tragendes* Elternfilament noch eines, das bereits Varianten hat, ist betroffen — das erste verschiebt seine Schwelle zusammen mit dem Bestand während der oben beschriebenen Umwandlung, das zweite behält seinen Wert nach der nach vorn wirkenden Regel.
+
+#### `400 template_no_spools` — eine Vorlage hält keine Spulen
+
+Jede Route, die eine Spule anhängt, lehnt ab, wenn das Ziel eine Vorlage ist:
+
+```json
+{
+  "error": "template_no_spools",
+  "message": "This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead."
+}
+```
+
+- `POST /api/filaments/:id/spools` — liefert den obigen Body mit `400`
+- `POST /api/prusament/import` — dasselbe `400` für die Aktion `add-spool` und für den „ein Filament mit diesem Namen existiert bereits"-Fallback der Aktion `create`
+- `POST /api/spools/import` — pro Zeile: dieselbe `message` wird zum `error` dieser Zeile, der Rest des Batches läuft weiter
+
+Spulen, die ein Alt-Elternfilament bereits trägt, bleiben liegen, werden weiterhin gezählt und bleiben bearbeitbar. Der CSV-Spulen-Import trennt entsprechend: Eine Zeile, die auf einer Vorlage eine Spule **anlegen** würde, scheitert, während eine Zeile, deren `spoolId` ein vorhandenes Subdokument trifft (also eine Aktualisierung), weiterhin angewendet wird.
+
+#### `_strippedTemplateFields` — variantenspezifische Felder, die ein Schreibvorgang verwirft
+
+Schreibpfade, die Felder per `$set` auf ein *bestehendes* Filament schreiben, **entfernen** `totalWeight`, `color`, `colorName` und `lowStockThreshold`, statt sie abzulehnen, wenn das Ziel eine Vorlage ist. Ein Slicer-Preset — genau wie ein veraltetes Bearbeitungsformular — schickt eine wegverschobene Farbe bei jedem Speichern wörtlich zurück, und ein 4xx würde die gesamte Synchronisation an einem Wert scheitern lassen, den der Nutzer nie erneut eingegeben hat. Ein ausdrückliches `null` geht unverändert durch, sodass sich ein Restwert auf einem Alt-Elternfilament weiterhin löschen lässt.
+
+Das Entfernen wird gemeldet, nie stillschweigend ausgeführt. Diese Routen ergänzen ihre Erfolgsantwort um den Schlüssel `_strippedTemplateFields: string[]`, der die verworfenen Felder benennt (der Schlüssel entfällt, wenn nichts entfernt wurde):
+
+- `PUT /api/filaments/:id`
+- `POST /api/filaments/:id` (PrusaSlicer-Rücksynchronisation)
+- `POST /api/filaments/:id/orcaslicer`
+- `POST /api/filaments/:id/bambustudio`
+- `POST /api/filaments/bambustudio`
+
+Die Bulk-Importer (INI, CSV/XLSX, Atlas, OpenPrintTag) melden dasselbe stattdessen als Satz pro Zeile im `errors`-Array ihrer Antwort. Der INI-, der CSV-/XLSX- und der OpenPrintTag-Importer benennen die verworfenen Felder komma-verkettet — `"… skipped color, colorName — the local filament is a template (inventory and color live on its variants)"`. Der Atlas-Importer formuliert jedes verworfene Feld ausgeschrieben und verkettet sie mit `" and "` (`"… skipped 2 spool(s) and a color — the local filament is a template …"`), und er verwirft ein Feld, das die gemeinsame Strip-Liste nicht führt: ein eingehendes `spools`-Array.
+
+Der Strip-Hinweis selbst ist nie fatal — der Rest der Zeile wird trotzdem angewendet. Ein reiner Hinweiskanal ist `errors` aber nur beim CSV-/XLSX-Importer (dessen harte Fehlschläge stattdessen in `skippedRows` landen) und bei Atlas (wo der Strip-Hinweis das Einzige ist, was je hineingeschrieben wird). Bei beiden INI-Importern und beim OpenPrintTag-Bulk-Import ist `errors` ein **gemischter** Kanal: Eine Zeile, die wirft, schiebt ihren Fehlschlag in dasselbe Array (ein Validierungsfehler bei jedem der drei, dazu bei OpenPrintTag die Herstellernamen-Kollision und übersprungene Lost-Write-Races). Ein Client, der diese Antworten liest, darf deshalb nicht jeden Eintrag als unkritisch behandeln — ein teilweise gescheiterter Import würde sonst als vollständig erfolgreich gemeldet.
 
 ### GET /api/filaments
 
@@ -94,6 +173,8 @@ Legt ein neues Filament an. Sende einen JSON-Body mit mindestens `name`, `vendor
 
 Wenn `totalWeight` angegeben wird, aber kein `spools`-Array, wird automatisch ein initialer Spuleneintrag aus dem Gewichtswert erstellt.
 
+Ist `parentId` gesetzt und wäre dies die **erste** lebende Variante dieses Elternfilaments, während das Elternfilament noch eine eigene Farbe oder eigene Spulen trägt, wird die Anfrage mit `409 parent_promotion_required` abgelehnt und nichts geschrieben; wiederhole sie mit `"promoteParent": true`, um zu bestätigen. Body-Form und Umfang der Verschiebung stehen im Abschnitt **Filament-Vorlagen** weiter oben.
+
 ### GET /api/filaments/:id
 
 Liefert ein einzelnes Filament mit `compatibleNozzles`, `calibrations.nozzle` und `calibrations.printer` als vollständige Dokumente populiert. Enthält außerdem:
@@ -104,6 +185,8 @@ Liefert ein einzelnes Filament mit `compatibleNozzles`, `calibrations.nozzle` un
 ### PUT /api/filaments/:id
 
 Aktualisiert ein Filament. Sende einen JSON-Body mit den zu aktualisierenden Feldern. Unterstützt Teilaktualisierungen. Validiert Änderungen an `parentId` (verhindert zirkuläre Referenzen, verschachtelte Vererbung und Selbstreferenzen).
+
+Ein Body, der eine `parentId` **einführt oder ändert**, kann die erste lebende Variante dieses Elternfilaments erzeugen und durchläuft deshalb dieselbe Bestätigungssperre wie der Create-Pfad: `409 parent_promotion_required`, bis die Anfrage mit `"promoteParent": true` wiederholt wird. Und wenn das aktualisierte Filament selbst eine Vorlage ist, werden Nicht-null-Schreibvorgänge auf `totalWeight` / `color` / `colorName` / `lowStockThreshold` verworfen und in einem `_strippedTemplateFields`-Array der Antwort benannt. Beides ist im Abschnitt **Filament-Vorlagen** weiter oben beschrieben.
 
 ### DELETE /api/filaments/:id
 
@@ -154,6 +237,34 @@ Ablehnung:
   "error": "Cannot restore: another active filament named \"PLA Galaxy Black\" already exists. Rename one of them first."
 }
 ```
+
+Auch das Wiederherstellen einer **Variante** kann die erste lebende Variante ihres Elternfilaments erzeugen — das Elternfilament kann eine Farbe oder Spulen erhalten haben, während die Variante im Papierkorb lag. Deshalb durchläuft der Restore dieselbe Bestätigungssperre wie der Create-Pfad und lehnt mit `409 parent_promotion_required` ab. Genau dafür akzeptiert die Route einen optionalen JSON-Body: Wiederhole den POST mit `{ "promoteParent": true }`, um zu bestätigen. Ein POST ohne Body (der historische Vertrag) verhält sich in jedem nicht gesperrten Fall wie bisher. Siehe Abschnitt **Filament-Vorlagen** weiter oben.
+
+### POST /api/filaments/:id/promote
+
+„In Vorlage umwandeln" — die ausdrückliche, vom Nutzer angestoßene Variante derselben Umwandlung, die die Erste-Variante-Sperre ausführt. Same-Origin-geschützt; nimmt keinen Request-Body entgegen. Nutze sie für ein Filament, das **bereits** Varianten hat, aber weiterhin eine eigene Farbe, einen eigenen Farbnamen, eigene Spulen oder ein eigenes Inventar-`totalWeight` trägt (die Form aus der Zeit vor den Vorlagen; die Umwandlung läuft nie im Bulk hinter dem Rücken des Nutzers).
+
+Die Umwandlung verschiebt genau das, was auch die Sperre verschiebt — siehe Abschnitt **Filament-Vorlagen** weiter oben — und liefert die angelegte Variante zusammen mit dem frisch geleerten Elternfilament:
+
+```bash
+curl -X POST http://localhost:3456/api/filaments/64a1b2c3d4e5f6a7b8c9d0e1/promote
+```
+
+```json
+{
+  "variant": { "_id": "…", "name": "Prusament PETG — Prusa Galaxy Black", "parentId": "64a1…", "…": "…" },
+  "parent": { "_id": "64a1…", "color": null, "colorName": null, "spools": [], "totalWeight": null, "…": "…" },
+  "resumed": false
+}
+```
+
+`resumed` ist `true`, wenn dieser Aufruf die Teilkopie **übernommen** hat, die eine zuvor abgebrochene Umwandlung hinterlassen hatte (App beendet, Stromausfall), statt eine neue anzulegen — der Endzustand ist in beiden Fällen identisch, und ein erneuter Versuch ist immer gefahrlos.
+
+Ablehnungsgründe:
+- `400` — die `{id}` ist keine gültige ObjectId.
+- `404` — kein aktives Filament mit dieser ID.
+- `400 not_a_template` — das Ziel ist selbst eine Variante oder hat keine lebenden Varianten: *„Only a filament that already has color variants can be converted — a standalone becomes a template when its first variant is created."*
+- `400 nothing_to_convert` — das Ziel ist eine Vorlage, trägt aber nichts, was auf eine Variante gehört: *„This template already carries nothing that belongs on a variant — no color, no color name, no spools, no inventory weight."* Beachte: `spoolWeight` / `netFilamentWeight` allein zählen nicht — sie sind gemeinsame Spezifikation und bleiben auf der Vorlage.
 
 ### GET /api/filaments/export
 
@@ -378,6 +489,19 @@ Antworten:
 - `404` mit `{ "linked": false, "found": false, "slug": "…" }` — der Slug existiert nicht mehr in der OpenPrintTag-Datenbank.
 - `400` — fehlender oder ungültiger `slug`.
 
+### Antwortform bei Spulen-Mutationen
+
+Die fünf Spulen-Mutations-Routen — `POST /api/filaments/:id/spools`, `PUT` und `DELETE /api/filaments/:id/spools/:spoolId`, `POST .../usage` und `POST .../dry-cycles` — antworten historisch mit dem **gesamten Filament-Dokument**: jedem `photoDataUrl`-Blob und dem vollständigen `usageHistory`-Ledger jeder Geschwisterspule, für einen Schreibvorgang, der einen einzelnen Skalar geändert hat. Seit v1.72 (#1027) akzeptieren sie einen optionalen Query-Parameter `shape`:
+
+- **`?shape=spool`** — die Antwort ist `{ "spool": { … } }` und trägt nur die betroffene Spule, dafür vollständig (ihr eigenes Foto und ihr eigenes Ledger bleiben erhalten; weg fallen die übrigen N−1 Spulen). `DELETE` liefert stattdessen `{ "deleted": true, "spoolId": "…" }`, da das Dokument nach dem `$pull` die Spule nicht mehr enthält.
+- **Kein `shape`-Parameter** — das vollständige Filament-Dokument, byteidentisch zur Antwort vor v1.72. Das ist der Standard mit Absicht: Ausgelieferte Clients (insbesondere die mobile App, die unabhängig vom Server aktualisiert wird) lesen `.spools` aus dem Body.
+- **Jeder andere Wert** — `400 { "error": "Invalid shape parameter: expected \"spool\"" }`. Ein Tippfehler scheitert damit laut, statt stillschweigend genau die mehrere Megabyte große Standardantwort zu liefern, die der Aufrufer vermeiden wollte.
+
+```bash
+curl -X PUT 'http://localhost:3456/api/filaments/64a1…/spools/65b2…?shape=spool' \
+  -H 'Content-Type: application/json' -d '{"totalWeight": 850}'
+```
+
 ### POST /api/filaments/:id/spools
 
 Fügt einem Filament eine neue Spule hinzu. Sende einen JSON-Body:
@@ -386,7 +510,13 @@ Fügt einem Filament eine neue Spule hinzu. Sende einen JSON-Body:
 { "label": "Spool #2", "totalWeight": 1236 }
 ```
 
-Beide Felder sind optional (`label` ist standardmäßig `""`, `totalWeight` standardmäßig `null`). Liefert das aktualisierte Filament-Dokument mit der neuen Spule im `spools`-Array.
+Der Body muss **mindestens ein** inhaltlich relevantes Spulenfeld enthalten — eines aus `label`, `totalWeight`, `lotNumber`, `purchaseDate`, `openedDate`, `locationId`, `photoDataUrl`, `retired` oder `instanceId`. Ein leerer Body wird mit `400` abgelehnt (die Phantomspulen-Sperre, GH #203), damit nicht versehentlich eine Platzhalter-Spule mit 0 g entsteht. Die einzelnen Felder sind ansonsten optional (`label` ist standardmäßig `""`, `totalWeight` standardmäßig `null`). Bei Erfolg liefert die Route `201` mit dem aktualisierten Filament-Dokument (die neue Spule liegt in dessen `spools`-Array) — oder `{ "spool": … }` unter `?shape=spool`.
+
+Ablehnungsgründe:
+- `400` — die oben genannte Phantomspulen-Sperre bei leerem Body, eine ungültige Filament-ID oder ein nicht erkanntes `shape`.
+- `400 template_no_spools` — das Filament ist eine Vorlage (es hat Farbvarianten) und kann daher keine Spulen halten; füge die Spule einer seiner Varianten hinzu. Siehe Abschnitt **Filament-Vorlagen** weiter oben.
+- `404` — kein aktives Filament mit dieser ID.
+- `409` — eine explizit angegebene `instanceId`, die bereits von einer anderen Spule verwendet wird.
 
 ### PUT /api/filaments/:id/spools/:spoolId
 
@@ -396,11 +526,25 @@ Aktualisiert Gewicht oder Bezeichnung einer Spule. Sende einen JSON-Body mit bel
 { "totalWeight": 850, "label": "Opened 2025-03-15" }
 ```
 
-Liefert das aktualisierte Filament-Dokument.
+Liefert das aktualisierte Filament-Dokument — oder `{ "spool": … }` unter `?shape=spool`.
 
 ### DELETE /api/filaments/:id/spools/:spoolId
 
-Entfernt eine Spule aus einem Filament. Liefert das aktualisierte Filament-Dokument.
+Entfernt eine Spule aus einem Filament. Liefert das aktualisierte Filament-Dokument — oder `{ "deleted": true, "spoolId": "…" }` unter `?shape=spool`.
+
+### GET /api/spools/next-label
+
+Liefert die nächste vorzuschlagende numerische Rollennummer für ein Spulen-Label — genau das, was der „Nächste Nr."-Button im Formular zum Hinzufügen einer Spule vorbelegt (v1.73, #1060):
+
+```json
+{ "next": 214, "max": 213 }
+```
+
+`max` ist das höchste Label in der gesamten Datenbank, das nach dem Trimmen ausschließlich aus Ziffern besteht (`"A12"`, `"1.5"` und `"12a"` werden ignoriert; führende Nullen werden entfernt, `"0042"` zählt also als 42), oder `null`, wenn sich kein Label als Zahl lesen lässt — dann ist `next` gleich `1`.
+
+Die Abfrage filtert bewusst **nichts**: Filamente im Papierkorb, gepurgte Tombstones und ausgemusterte Spulen zählen alle mit. Rollennummern sind physisch und dauerhaft — eine Nummer, die auf einer ausgemusterten Spule steht, liegt weiterhin im Regal, und eine Nummer aus einem Filament im Papierkorb würde in dem Moment kollidieren, in dem dieses wiederhergestellt wird. Eine Nummer zu überspringen, die man für frei halten könnte, ist die sichere Richtung.
+
+Reine Vorschlagssemantik: Es wird nichts reserviert oder zugewiesen, das Feld bleibt editierbar, und zwei gleichzeitige Leser können denselben Wert erhalten.
 
 ---
 
@@ -756,6 +900,8 @@ Importiert ausgewählte OpenPrintTag-Materialien in Filament DB. Sende einen JSO
 
 Materialien werden auf das Filament-DB-Schema gemappt (Typ, Hersteller, Temperaturen, Dichte, Härte, Transmission Distance, Trocknungsdaten, OPT-Tags) und per Name upsertet. Existiert bereits ein Filament mit demselben Namen unter einem anderen Hersteller, wird der Import mit einer aussagekräftigen Fehlermeldung übersprungen (der Unique-Index liegt allein auf `name`).
 
+Im **Variantenmodus** — ein optionales `parentId` im Body, das genau einen Slug als Variante eines bestehenden Filaments importiert (v1.52 / #753) — greift dieselbe Erste-Variante-Sperre wie bei `POST /api/filaments`: Wäre dies die erste lebende Variante des Elternfilaments, während dieses noch eine eigene Farbe oder eigene Spulen trägt, wird der Import mit `409 parent_promotion_required` abgelehnt, bis er mit `"promoteParent": true` neben `slugs` und `parentId` wiederholt wird. Siehe Abschnitt **Filament-Vorlagen** im Filaments-Kapitel.
+
 Liefert:
 ```json
 {
@@ -826,6 +972,8 @@ Importiert eine gescrapte Prusament-Spule in die Datenbank. Sende einen JSON-Bod
 **`action: "create"`** -- Legt ein neues Filament mit dem Namen `"Prusament {material} {colorName}"` und allen ausgefüllten Spezifikationen an (Temperaturen, Dichte, Gewichte, Spule). Existiert bereits ein Filament mit diesem Namen, wird die Spule stattdessen dort hinzugefügt.
 
 **`action: "add-spool"`** -- Fügt die Spule einem bestehenden Filament hinzu, das per `filamentId` angegeben ist.
+
+Beide Aktionen lehnen mit `400 template_no_spools` ab, wenn das Ziel-Filament eine Vorlage ist — `add-spool` bei der ID einer Vorlage, und `create`, wenn der Name bereits zu einer Vorlage gehört und die Spule stattdessen dort angehängt würde. Siehe Abschnitt **Filament-Vorlagen** im Filaments-Kapitel.
 
 Liefert:
 ```json
@@ -1045,7 +1193,9 @@ Extrahierte Felder umfassen: Name, Hersteller, Typ, Dichte, Durchmesser, Tempera
 
 ### GET /api/snapshot
 
-Lädt einen JSON-Snapshot der Kern-App-Daten herunter: Filamente, Düsen, Drucker, Druckbett-Typen, Locations, Druckverlauf und Shared Catalogs (inklusive soft-gelöschter Dokumente und Tombstones). Der Snapshot bewahrt `_id`-Werte, Zeitstempel und Referenzen, damit er exakt wiederhergestellt werden kann. Die Snapshot-Schema-Version ist ab v1.14.0 `4`; ältere v1-/v2-/v3-Snapshots lassen sich weiterhin wiederherstellen (fehlende Collections kommen als leer zurück).
+Lädt einen JSON-Snapshot der Kern-App-Daten herunter: Filamente, Düsen, Drucker, Druckbett-Typen, Locations, Druckverlauf und Shared Catalogs (inklusive soft-gelöschter Dokumente und Tombstones). Der Snapshot bewahrt `_id`-Werte, Zeitstempel und Referenzen, damit er exakt wiederhergestellt werden kann.
+
+Die Snapshot-Schema-Version ist `6`. Die Historie: v2 ergänzte die Druckbett-Typen, v3 Locations + Druckverlauf, v4 die Shared Catalogs (v1.14.0), v5 das Top-Level-Provenance-Flag `legacyNozzleCleanupComplete` und v6 `Location.desiccantChangedAt`. Ältere Snapshots lassen sich weiterhin wiederherstellen — Collections, die eine v1-/v2-/v3-Datei nicht mitführt, kommen als leer zurück. Die Sprünge auf v5 und v6 existieren gerade deshalb, damit ein **älterer** Build die Datei ablehnt (siehe die Restore-Sperre weiter unten), statt sie anzunehmen und stillschweigend das Feld zu verwerfen, das sein Schema nicht kennt.
 
 Liefert eine JSON-Datei mit `Content-Disposition: attachment`-Header.
 
@@ -1054,6 +1204,8 @@ Liefert eine JSON-Datei mit `Content-Disposition: attachment`-Header.
 Stellt die Datenbank aus einem zuvor exportierten Snapshot wieder her. Dies ist eine destruktive Operation: Alle vorhandenen Snapshot-bezogenen Daten werden durch die Snapshot-Inhalte ersetzt.
 
 Upload per `multipart/form-data` mit einem `file`-Feld, das das Snapshot-JSON enthält, oder sende das JSON direkt als Request-Body.
+
+Ein Snapshot, dessen `version` **neuer** ist als die des laufenden Builds, wird mit `400` abgelehnt — *vor* dem destruktiven Leeren: `"This snapshot is from a newer version (v7). Update Filament DB to at least the version that created it before restoring."` Ihn wiederherzustellen würde alles verwerfen, was diese Version ergänzt hat, und trotzdem Erfolg melden; der Handler scheitert daher lieber sofort.
 
 Das Restore verwendet **Best-Effort-Rollback**: Schlägt ein Teil des Restores fehl, versucht der Handler, die vorherigen Daten aus einem In-Memory-Backup erneut einzufügen. Gleichzeitige Restore-Anfragen werden mit 409 abgelehnt. Hinweis: Das Restore ist nicht wirklich atomar — gleichzeitige Leser können während des Delete-/Insert-Fensters partiellen Zustand beobachten, und wenn das Rollback selbst fehlschlägt, kann die Datenbank unvollständig bleiben. Lege aus Sicherheitsgründen vor dem Wiederherstellen ein Backup an.
 
@@ -1156,9 +1308,12 @@ Locations sind Orte, an denen physische Spulen liegen — Dryboxes, Regale, Schr
   "name": "Drybox #1",
   "kind": "drybox",          // free-form: "drybox", "shelf", "cabinet", "printer"
   "humidity": 35,             // optional %RH (0–100), user-updated
+  "desiccantChangedAt": "2026-07-14T00:00:00.000Z",  // optional; für Dryboxes relevant
   "notes": "Kept in the garage"
 }
 ```
+
+`desiccantChangedAt` hält fest, wann das Trockenmittel zuletzt gewechselt wurde. Das Feld ist optional und standardmäßig `null`; relevant ist es bei `kind: "drybox"`, wo es die Zeile „DESICCANT CHANGED" auf einem gedruckten Drybox-Etikett speist. POST und PUT akzeptieren einen ISO-Datums-String oder `null` — alles andere (auch ein ISO-förmiges, aber unmögliches Datum) wird mit `400 "desiccantChangedAt must be an ISO date string or null"` abgelehnt, weil Mongoose ein unmögliches Datum sonst überrollen statt ablehnen würde.
 
 ### GET /api/locations?stats=true
 
@@ -1184,7 +1339,7 @@ Per-Job-Ledger der Druckläufe. Reduziert Spulengewichte, hängt Spulen-Level-`u
 | `POST`   | `/api/print-history`      | Zeichnet einen Druckauftrag auf (siehe Body unten) |
 | `GET`    | `/api/print-history/{id}` | Lädt einen einzelnen Druckauftrag mit denselben populierten Feldern wie die Liste (Druckername + Filament-Name/Vendor/Typ/Farbe je Verbrauchszeile). Tombstoned-Zeilen liefern 404 |
 | `PUT`    | `/api/print-history/{id}` | Aktualisiert nur Job-Metadaten. Akzeptiert fünf Felder: `jobLabel` (getrimmt, max. 200), `notes` (auf 2000 gekürzt), `source` (Enum), `printerId` (oder `null`), `startedAt`. **Unbekannte Felder werden mit 400 abgelehnt** (ein versehentliches `_purged` oder Legacy-`durationSeconds` rutscht nicht durch). Verbrauchszeilen + Spulen-Grammwerte sind hier NICHT änderbar — bei Änderungen mit DELETE + POST neu anlegen |
-| `DELETE` | `/api/print-history/{id}` | Macht einen Druckauftrag rückgängig — erstattet das Spulengewicht, entfernt die passenden `usageHistory`-Einträge, soft-löscht die Zeile |
+| `DELETE` | `/api/print-history/{id}` | Macht einen Druckauftrag rückgängig — erstattet das Spulengewicht, entfernt die passenden `usageHistory`-Einträge, soft-löscht die Zeile. Hänge `?permanent=true` an, um einen bereits soft-gelöschten Eintrag zu purgen |
 
 ### POST /api/print-history
 
@@ -1226,6 +1381,10 @@ Liefert `200 { "message": "Deleted and refunded" }` beim ersten Erfolg, `404` be
 
 Best-Effort: Wurde eine referenzierte Spule mittlerweile gelöscht (oder das Filament soft-gelöscht), wird dieser Eintrag stillschweigend übersprungen — die übrigen Erstattungen werden trotzdem angewendet und das PrintHistory-Dokument trotzdem getombstoned.
 
+#### Endgültiges Löschen: `DELETE /api/print-history/{id}?permanent=true`
+
+Markiert einen bereits soft-gelöschten Eintrag als endgültig entfernt, indem der `_purged`-Sync-Tombstone gesetzt wird (GH #524.5) — analog zum Filament-Pfad für endgültiges Löschen. **Nur erlaubt, wenn der Eintrag bereits soft-gelöscht ist** — ein aktiver Eintrag liefert `404` (`"Not found, or not in trash (permanent delete requires the entry to be soft-deleted first)"`), sodass ein Purge niemals den Erstattungs- und Soft-Delete-Schritt überspringen kann. Hier wird nichts erstattet — das Spulengewicht wurde bereits beim Soft-Delete zurückgebucht. Idempotent: Ein zweiter Purge liefert `404`. Liefert `200 { "message": "Permanently deleted" }`.
+
 ---
 
 ## Analytics (v1.11)
@@ -1265,7 +1424,7 @@ Veröffentlicht einen statischen Snapshot ausgewählter Filamente mit ihren refe
 | `GET`    | `/api/share`            | Listet Catalogs auf, die du veröffentlicht hast (neueste zuerst; soft-gelöschte Catalogs sind ausgeblendet) |
 | `POST`   | `/api/share`            | Veröffentlicht einen neuen Catalog |
 | `GET`    | `/api/share/:slug`      | Öffentlicher Fetch. Inkrementiert `viewCount` atomar. Liefert 404, wenn soft-gelöscht, 410, wenn abgelaufen. |
-| `DELETE` | `/api/share/:slug`      | Veröffentlichung zurückziehen (soft-löschen) |
+| `DELETE` | `/api/share/:slug`      | Veröffentlichung zurückziehen (soft-löschen). Hänge `?permanent=true` an, um einen bereits zurückgezogenen Catalog zu purgen |
 
 ### POST /api/share
 
@@ -1295,6 +1454,10 @@ Soft-löscht den Catalog durch Setzen von `_deletedAt` (statt `deleteOne`). Der 
 Der Slug-Index ist **partiell-unique auf `_deletedAt: null`** (automatisch migriert vom Legacy-plain-unique-Index durch `SharedCatalog.syncIndexes()` im dbConnect-Migrationsblock), sodass ein Slug, der von einer getombstoned Zeile genutzt wurde, durch eine zukünftige Neuveröffentlichung wiederverwendet werden kann, ohne ein E11000 auszulösen.
 
 Liefert `200 { "message": "Unpublished" }` beim ersten Erfolg, `404` bei jedem folgenden Aufruf.
+
+#### Endgültiges Löschen: `DELETE /api/share/:slug?permanent=true`
+
+Markiert einen bereits zurückgezogenen Catalog als endgültig entfernt, indem der `_purged`-Sync-Tombstone gesetzt wird (GH #524.5) — analog zum Filament-Pfad für endgültiges Löschen. **Nur erlaubt, wenn der Catalog bereits zurückgezogen (soft-gelöscht) ist** — andernfalls `404` (`"Not found, or not unpublished (permanent delete requires the catalog to be unpublished first)"`). Idempotent: Ein zweiter Purge liefert `404`. Liefert `200 { "message": "Permanently deleted" }`.
 
 #### SharedCatalog-Schemaerweiterungen (v1.13)
 
@@ -1329,6 +1492,8 @@ Per-Spulen-Ledger-Endpunkte. Werden von der Spulen-Detail-UI genutzt, um direkte
 ```
 
 Alle Felder optional. Nicht angegebene numerische Felder werden als `null` gespeichert.
+
+Beide Routen liefern `201` mit dem aktualisierten Filament-Dokument, und beide akzeptieren `?shape=spool`, um stattdessen nur `{ "spool": … }` zurückzubekommen — siehe Abschnitt **Antwortform bei Spulen-Mutationen** im Filaments-Kapitel.
 
 ---
 
@@ -1365,6 +1530,8 @@ Jede Zeile wird unabhängig verarbeitet; Per-Zeilen-Fehler werden in der Antwort
 }
 ```
 
+Eine Zeile, deren Ziel-Filament eine **Vorlage** ist (es hat Farbvarianten), scheitert mit `"This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead."` — allerdings nur, wenn die Zeile eine Spule ANLEGEN würde. Eine Zeile, deren `spoolId` ein vorhandenes Subdokument trifft, ist eine Aktualisierung, und die eigenen Spulen einer Alt-Vorlage bleiben bearbeitbar. Siehe Abschnitt **Filament-Vorlagen** im Filaments-Kapitel.
+
 Eine einzelne Anfrage ist von `parseCsv` auf 10.000 Zeilen gedeckelt; darüber wird die Anfrage mit 400 abgelehnt.
 
 ### GET /api/spools/export-csv
@@ -1385,7 +1552,7 @@ Verfolgt, welchen AMS-/MMU-Slot eines Druckers eine Spule aktuell belegt. Dies i
 | `PUT` | `/api/spools/:spoolId/assignment` | Weist die Spule einem Drucker-Slot zu |
 | `DELETE` | `/api/spools/:spoolId/assignment` | Entfernt die Spule aus jedem Slot |
 
-Diese Endpunkte schreiben nur in `Printer.amsSlots[].spoolId`; sie ändern niemals die `locationId` der Spule.
+Diese Endpunkte schreiben `Printer.amsSlots[].spoolId` **und** `.filamentId` — ein Slot führt zwei parallele Referenzen (das geladene Filament und die verfolgte Spule), und das Druckerformular rendert Slots anhand von `filamentId`. Eine spulenseitige Zuweisung, die nur `spoolId` setzte, war deshalb zwar in den Daten vorhanden, wurde auf der Druckerseite aber als leerer Slot angezeigt (#1041). Die `locationId` der Spule ändern sie niemals.
 
 ### GET /api/spools/:spoolId/assignment
 

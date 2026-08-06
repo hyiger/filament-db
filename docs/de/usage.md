@@ -62,10 +62,60 @@ Eltern-Filamente, die noch Farbvarianten haben, werden vom Löschen blockiert �
 
 Gehe zu `/trash` (auch über **Einstellungen → Papierkorb** erreichbar). Jede Zeile zeigt, wann das Filament gelöscht wurde, plus zwei Aktionen:
 
-- **Wiederherstellen** — macht das Löschen rückgängig und holt das Filament zurück in die reguläre Liste. Wenn du in der Zwischenzeit ein neues aktives Filament mit demselben Namen angelegt hast, wird die Wiederherstellung mit 409 abgelehnt — benenne eins der beiden zuerst um.
+- **Wiederherstellen** — macht das Löschen rückgängig und holt das Filament zurück in die reguläre Liste. Wenn du in der Zwischenzeit ein neues aktives Filament mit demselben Namen angelegt hast, wird die Wiederherstellung mit 409 abgelehnt — benenne eins der beiden zuerst um. Stellst du eine *Variante* wieder her, deren Eltern-Filament währenddessen eine eigene Farbe oder eigene Spulen bekommen hat, fragt die App zuerst, ob dieses Eltern-Filament in eine Vorlage umgewandelt werden soll (siehe [Filament-Vorlagen](#filament-vorlagen-v170)).
 - **Endgültig löschen** — hard-Delete in MongoDB. Kann nicht rückgängig gemacht werden. Der Button ist nur bei Filamenten verfügbar, die bereits im Papierkorb sind; ein aktives Filament muss als Sicherheitsschritt erst soft-gelöscht werden.
 
 Die Papierkorb-Seite hat zusätzlich eine **Papierkorb leeren**-Aktion, die alles auf einmal endgültig löscht (Varianten werden vor Eltern-Filamenten gepurged, damit die No-Orphan-Refs-Bedingung eingehalten wird).
+
+---
+
+## Filament-Vorlagen *(v1.70)*
+
+Ein Filament mit Farbvarianten ist eine **Vorlage** — die Produktlinie, nicht die einzelne Rolle. Die Vorlage trägt, was die ganze Familie teilt (Temperaturen, Trocknung, Dichte, Leerspulen- und Netto-Filamentgewicht, Sekundärfarben, Tags); jede Farbvariante trägt, was pro Farbe und pro Rolle gilt: ihre Farbe und ihren Farbnamen, ihre Spulen, ihr Gesamtgewicht und ihren Low-Stock-Schwellwert. Ein Filament ohne Varianten ist davon nicht betroffen und verhält sich genau wie bisher.
+
+Vorlage zu sein ist keine Einstellung, die du aktivierst — ein Filament ist genau so lange eine Vorlage, wie es mindestens eine nicht gelöschte Variante hat.
+
+### Umwandlung, sobald die erste Variante entsteht
+
+Es wird nichts hinter deinem Rücken umgebaut. Sobald eine Aktion einem Filament seine **erste** Variante geben würde, während dieses Filament noch eine eigene Farbe, einen eigenen Farbnamen, eigene Spulen oder ein eigenes Gesamtgewicht trägt, hält die App an und fragt:
+
+> **Übergeordnetes Filament in Vorlage umwandeln?**
+>
+> Dies ist die erste Variante von „Prusament PLA" — es wird zur Vorlage: Farbe und 2 Spule(n) werden auf eine neue Variante namens „Prusament PLA — Galaxy Black" verschoben.
+
+Bestätigst du mit **Umwandeln und erstellen**, legt die App diese Variante an, verschiebt Farbe, Farbname, Spulen, Gesamtgewicht und Low-Stock-Schwellwert des Eltern-Filaments dorthin und lässt das Eltern-Filament farblos und ohne Bestand zurück. Brichst du ab, wird überhaupt nichts geschrieben — kein Filament angelegt, keine Daten angefasst.
+
+Dieselbe Bestätigung sichert vier Einstiegspunkte ab, jeweils mit passendem Wortlaut:
+
+- **„Variante erstellen"** oder **Duplizieren** auf der Detailseite sowie `/filaments/new` mit gewähltem Eltern-Filament — *„Dies ist die erste Variante von …"*, **Umwandeln und erstellen**
+- **Bearbeiten → Übergeordnetes Filament** an einem bestehenden Filament — *„Durch das Speichern wird dieses Filament zur ersten Variante von …"*, **Umwandeln und speichern**
+- **Wiederherstellen** aus dem Papierkorb — *„Durch das Wiederherstellen wird dieses Filament zur ersten Variante von …"*, **Umwandeln und wiederherstellen**
+- **„Als Variante importieren"** im OpenPrintTag-Browser (genau ein Material auswählen, unter **Eltern-Filament** statt „Kein Elternteil (eigenständig)" ein Filament wählen — daraufhin wechselt der Import-Button auf diese Beschriftung) — gleicher Wortlaut wie beim Anlegen
+
+Die neue Variante heißt `<Name des Eltern-Filaments> — <Farbname>`, bzw. `<Name des Eltern-Filaments> — Original`, wenn das Eltern-Filament keinen Farbnamen hatte (mit dem Suffix ` (2)` / ` (3)`, falls dieser Name schon vergeben ist). Alles, was auf die verschobenen Spulen zeigte, folgt ihnen: Druckverlaufs-Einträge, AMS-Slot-Zuweisungen an Druckern und bereits gedruckte QR-Etiketten — beim Scannen eines alten Etiketts löst die App den aktuellen Besitzer der Spule auf und bringt dich dorthin.
+
+### Ein altes Eltern-Filament von Hand umwandeln
+
+Eltern-Filamente aus der Zeit vor v1.70 behalten ihre eigene Farbe und ihre Spulen, bis du etwas anderes bestimmst. Öffnest du eines, zeigt der Abschnitt **Spulen-Tracker** einen bernsteinfarbenen Hinweis — *„Diese Vorlage trägt noch eine eigene Farbe oder eigene Spulen aus der Zeit, bevor sie zur Vorlage wurde."* — neben einem **„In Vorlage umwandeln"**-Button. Der Button erscheint nur, wenn es tatsächlich etwas zu verschieben gibt. Er bestätigt mit:
+
+> **In Vorlage umwandeln?**
+>
+> Eigene Farbe und 2 Spule(n) dieses Filaments auf eine neue Variante verschieben? Die Vorlage selbst behält weder Farbe noch Spulen.
+
+Bei Erfolg meldet ein Toast *„Umgewandelt — Farbe und Spulen wurden auf eine neue Variante verschoben"*, und die Seite lädt ihre Daten neu. Wird eine Umwandlung unterbrochen (App beendet, Stromausfall), geht nichts verloren — der Button ist weiterhin da, und ein erneuter Versuch beendet die unterbrochene Verschiebung, statt eine zweite Kopie anzulegen.
+
+### Was eine Vorlage kann und was nicht
+
+- **Spulen liegen bei den Varianten.** Der Abschnitt Spulen-Tracker einer Vorlage wird durch *„Vorlagen führen keinen Bestand — Spulen liegen bei den Farbvarianten."* ersetzt — einen **„+ Spule hinzufügen"**-Button gibt es dort nicht. Jeder Weg, der einer Vorlage eine *neue* Spule anlegen würde, wird mit dem Hinweis abgelehnt, dass dieses Filament eine Vorlage ist (es hat Farbvarianten) und keine Spulen tragen kann — die Spule gehört an eine seiner Varianten: der Spule-hinzufügen-Button, der Prusament-QR-Import und der Bulk-CSV-Spulenimport (bei dem genau diese Zeilen scheitern). Spulen, die noch an einem alten Eltern-Filament hängen, gehen nicht verloren, werden hier aber nicht mehr verwaltet — der Tracker auf der Seite der Vorlage selbst besteht nur aus dieser einen Zeile und sonst nichts. Sie zählen weiterhin in die Spulen- und Restmengen-Summen der Filamentliste, und sie bleiben über das ausklappbare Spulen-Panel der Liste (Standort) sowie über **Spulen-Bestand** (Gewicht, Standort, Ausmustern) bearbeitbar. **„In Vorlage umwandeln"** verschiebt sie endgültig auf eine Variante.
+- **Das Bearbeitungsformular blendet die Felder Farbe und Farbname aus**: *„Vorlagen haben keine Farbe — jede Farbvariante trägt ihre eigene Farbe und ihren eigenen Farbnamen."* Der Mehrfarben-Editor (Sekundärfarben) bleibt, denn diese Farben erbt die ganze Familie.
+- **Der Abschnitt Spulengewicht behält das Kennwert-Paar und blendet die Bestandsfelder aus.** Netto-Filamentgewicht und Leerspulengewicht bleiben — *„Vorlagen führen keinen Bestand — Spulen und Gesamtgewicht liegen bei den Farbvarianten. Die hier gesetzten Werte für Leerspule und Netto-Filament sind gemeinsame Kennwerte, die jede Variante erbt."* Genau dieses einmal an der Vorlage gesetzte Netto-Filamentgewicht gibt jeder Farbvariante ihren Restmengen-Balken. Startgewicht und Low-Stock-Schwellwert sind ausgeblendet.
+- **Importe und Slicer-Syncs überspringen an einer Vorlage vier Felder** — Farbe, Farbname, Gesamtgewicht, Low-Stock-Schwellwert — statt zu scheitern. PrusaSlicer-/OrcaSlicer-/Bambu-Studio-Rücksyncs, INI-Bundles, CSV/XLSX, Atlas- und OpenPrintTag-Importe wenden alles Übrige an und melden in den Ergebnis-Hinweisen, was sie übersprungen haben.
+- **„Auf Updates prüfen" (OpenPrintTag) bietet an einer Vorlage nie die Farbe an**, sodass eine einzige Verknüpfung am Eltern-Filament jede Eigenschaft der ganzen Familie aktualisiert, ohne sie neu einzufärben.
+- **Löschen bleibt blockiert**, solange ein Filament Varianten hat — entferne oder verlagere die Varianten zuerst.
+
+### Farbe entfernen
+
+Leere das Hex-Feld und speichere: Das Filament hat danach gar keine Farbe mehr, und ein erneutes Bearbeiten belässt es dabei. Eine entfernte Farbe wird als schraffierter Platzhalter mit dem Text **„Keine Farbe gesetzt — klicken, um eine auszuwählen"** dargestellt — ein Klick darauf wählt wieder eine Farbe.
 
 ---
 
@@ -187,6 +237,41 @@ Synchronisierte Sammlungen: filaments (mit eingebetteten Spulen), nozzles, print
 ## Sprache
 
 Gehe zu **Einstellungen → UI-Einstellungen** und nutze den **Sprache**-Umschalter, um zwischen Englisch und Deutsch zu wechseln. Die Einstellung wird in der Desktop-App-Konfiguration persistiert (oder im localStorage der Web-App) und greift sofort auf allen Seiten.
+
+---
+
+## Datumsformat *(v1.65)*
+
+Gehe zu **Einstellungen → UI-Einstellungen** und wähle unter **Datumsformat**, wie jedes Datum in der App dargestellt wird:
+
+- **System (Geräteregion)** — folgt der Regionseinstellung deines Geräts bzw. Betriebssystems (Standard)
+- **ISO** — `YYYY-MM-DD`
+- **USA** — `MM/DD/YYYY`
+- **Europäisch** — `DD/MM/YYYY`
+- **Benutzerdefiniert** — dein eigenes Muster aus den Platzhaltern `YYYY` / `YY` (Jahr), `MM` / `M` (Monat) und `DD` / `D` (Tag), z. B. `DD-MM-YY`; alle anderen Zeichen werden als Trennzeichen übernommen
+
+Eine Live-Vorschau zeigt das heutige Datum im gewählten Format. Wie die Sprache wird die Einstellung in der Desktop-App-Konfiguration persistiert (oder im localStorage der Web-App).
+
+---
+
+## Zahlenformat *(v1.66)*
+
+Ebenfalls unter **Einstellungen → UI-Einstellungen** legt **Zahlenformat** die Ziffergruppierung und das Dezimaltrennzeichen für alle angezeigten Zahlen fest — Gewichte, Anzahlen und Preise (Währungsbeträge eingeschlossen):
+
+- **System (Geräteregion)** — folgt der Region deines Geräts (Standard)
+- **US / UK** — `1,234,567.89`
+- **Europäisch** — `1.234.567,89`
+- **Leerzeichen** — `1 234 567,89`
+- **Keine** — keine Gruppierung (`1234567.89`)
+- **Benutzerdefiniert** — eigenes Tausender- und Dezimalzeichen (jeweils ein einzelnes Zeichen, keine Ziffern, und beide müssen sich unterscheiden)
+
+Eine Live-Vorschau zeigt einen Beispielwert im gewählten Format. Maschinenlesbare Ausgaben (CSV/XLSX und Slicer-Exporte) sind davon nicht betroffen — die Einstellung wirkt nur auf die Anzeige in der Oberfläche.
+
+---
+
+## Währung
+
+Der **Währung**-Bereich ganz oben in **Einstellungen → UI-Einstellungen** legt fest, in welcher Währung Kosten und Preise angezeigt werden. Klicke eine der eingebauten Währungen an oder **füge eine eigene hinzu** mit eigenem Code, Symbol und Namen (eigene Einträge lassen sich über ihren ×-Button wieder entfernen).
 
 ---
 
@@ -366,11 +451,13 @@ In der Desktop-App wird der API-Key in der lokal persistierten Konfigurationsdat
 
 ## Spulen-Tracking
 
-Jedes Filament kann mehrere physische Spulen mit individuellen Gewichten verfolgen.
+Jedes Filament kann mehrere physische Spulen mit individuellen Gewichten verfolgen. Filamente mit Farbvarianten sind [Vorlagen](#filament-vorlagen-v170) und führen keinen Bestand — lege Rollen stattdessen an den Farbvarianten an.
 
 ### Spulen hinzufügen
 
-Auf der Detailseite eines Filaments wird der Abschnitt **Spulen-Tracker** immer gerendert (seit v1.30.3 / #380). Wenn es noch keine Spulen und keine Gewichtsmetadaten gibt, zeigt der Abschnitt einen kurzen „Noch keine Spulen"-Hinweis über dem **„+ Spule hinzufügen"**-Button — klicke ihn, um eine neue Spule mit optionalem Label und Gewicht anzulegen.
+Auf der Detailseite eines Filaments wird der Abschnitt **Spulen-Tracker** immer gerendert (seit v1.30.3 / #380). Wenn es noch keine Spulen und keine Gewichtsmetadaten gibt, zeigt der Abschnitt einen kurzen „Noch keine Spulen"-Hinweis über dem **„+ Spule hinzufügen"**-Button — klicke ihn, um eine neue Spule mit optionalem Label und Gewicht anzulegen. An einer Vorlage steht dort stattdessen nur „Vorlagen führen keinen Bestand — Spulen liegen bei den Farbvarianten."
+
+Wenn du deine Rollen durchnummerierst, füllt der Button **„Nächste Nr."** neben dem Label-Feld die nächste Nummer ein: das höchste rein numerische Spulen-Etikett in der gesamten Datenbank plus eins (bzw. `1`, wenn es kein numerisches gibt). Ausgemusterte Spulen und Spulen an gelöschten Filamenten zählen **mit Absicht** mit — eine auf eine physische Spule geschriebene Rollennummer darf nie zweimal vergeben werden, der Vorschlag springt also über alles hinweg, was schon einmal benutzt wurde, auch wenn die App es nicht mehr anzeigt. Etiketten, die nicht ausschließlich aus Ziffern bestehen („Geöffnet 2025-03-15", „A12", „1.5"), werden ignoriert statt halb ausgewertet; führende Nullen fallen weg, „0042" zählt also als 42. Reserviert wird nichts — es ist ein Vorschlag in einem ganz normalen, editierbaren Feld, zwei Personen bekommen beim gleichzeitigen Klick dieselbe Nummer, und Überschreiben ist vorgesehen. Schlägt die Abfrage fehl, erscheint der Toast *„Nächste Spulennummer konnte nicht abgerufen werden — bitte manuell eingeben."* und das Feld bleibt unangetastet.
 
 ### Spulen verwalten
 
@@ -415,7 +502,7 @@ Was du siehst:
 
 - **Kopfzeilen-Statistiken** — Gesamtspulenanzahl, Standortanzahl, aktive Gramm im Bestand
 - **Filterzeile** — Suche nach Filamentname / Etikett / Lot-Nummer (clientseitig), Filter nach Standortart (Regal, Trockenbox, Drucker, …), Filter nach Filamenttyp oder Vendor, „Ausgemusterte einschließen"-Schalter (standardmäßig aus — ausgemusterte Spulen sind nicht im Bestand)
-- **Aufklappbare Gruppe pro Standort** — der Zusammenfassungs-Chip jeder Gruppe zeigt Spulenanzahl und Gesamtgramm. Eine synthetische **„Kein Standort"**-Gruppe fängt jede Spule mit `locationId: null` ab und wird absichtlich an das ENDE der Liste sortiert, damit man Nachzügler als „benötigen Aufmerksamkeit" erkennt statt sie mit dem Hauptbestand zu verwechseln.
+- **Aufklappbare Gruppe pro Standort** — der Zusammenfassungs-Chip jeder Gruppe zeigt Spulenanzahl und Gesamtgramm; der Kopf einer Trockenbox-Gruppe trägt zusätzlich einen 🖨-Button, der ein [Trockenbox-Etikett](#trockenbox-etiketten-knaon-y813bt-v169) druckt. Eine synthetische **„Kein Standort"**-Gruppe fängt jede Spule mit `locationId: null` ab und wird absichtlich an das ENDE der Liste sortiert, damit man Nachzügler als „benötigen Aufmerksamkeit" erkennt statt sie mit dem Hauptbestand zu verwechseln.
 - **Spulen-Zeile** — Farbtupfer, Filamentname, Typ, Vendor, Etikett, **Inline-Gewichtseditor** (klicke den Gramm-Wert zum Bearbeiten, Enter zum Speichern, Esc zum Abbrechen), Rest-Prozentbalken, letztes Trocknungsdatum, **„Verschieben nach"**-Dropdown für den Standort der Spule, **Ausmustern/Reaktivieren**-Schalter (Ausmustern zeigt eine Bestätigung, um das Entfernen aus dem Bestand explizit zu machen).
 
 Alle Bearbeitungen laufen über denselben `PUT /api/filaments/{id}/spools/{spoolId}`-Endpunkt wie die Filament-Detailseite, sodass die Semantik — Ausmustern-bei-Null-Prompts, Gewichtsvalidierung, Sync-Verhalten — identisch zur SpoolCard ist.
@@ -456,7 +543,7 @@ Jedes Filament hat eine eindeutige Instance-ID (5-Byte-Hex-String, z. B. `2acc21
 
 ## Etikettendrucker (nur Desktop-App) *(v1.34)*
 
-Drucke ein Spulen-Etikett (24-mm-Band) direkt von der Filament-Detailseite auf einen **Brother PT-P710BT** (P-touch CUBE). Das Etikett enthält einen (optionalen) QR-Code und konfigurierbaren Text. Zwei QR-Modi, die du pro Druck wählen kannst:
+Drucke ein Spulen-Etikett (24-mm-Band) direkt von der Filament-Detailseite auf einen **Brother PT-P710BT** (P-touch CUBE). Das Etikett enthält einen (optionalen) QR-Code und konfigurierbaren Text. Das ist der Drucker für Spulen-Etiketten; 10×15-cm-Trockenbox-Etiketten laufen über ein separates Gerät mit eigener Einstellung — siehe [Trockenbox-Etiketten](#trockenbox-etiketten-knaon-y813bt-v169). Zwei QR-Modi, die du pro Druck wählen kannst:
 
 - **Filament-Instanz-ID** — die 5-Byte-Hex-ID des Filaments (z. B. `2acc21072a`). Das ist ein Wert auf **Filament-Ebene** (einer pro Filament — *nicht* pro Spule) und entspricht dem, was auf einem NFC-Tag steht. Er wird vom NFC-Reader in der App und von der Slicer-Integration erkannt; eine Handykamera zeigt nur den rohen Hex-Text, mit dem sich nichts anfangen lässt. Nutze diesen Modus für das NFC-/Slicer-Ökosystem, nicht zum Scannen mit dem Handy.
 - **Deep-Link-URL** — eine vollständige URL zur Filament-Detailseite (z. B. `https://meine-instanz.lan/filaments/<id>`). Beim Scannen mit **einem beliebigen Smartphone** öffnet sich die Seite direkt — keine App nötig. Das ist die per Handy scanbare Option. Bei einem Filament mit **mehreren Spulen** erscheint eine Spulenauswahl, sodass der QR eine bestimmte Spule ansteuern kann (`…/filaments/<id>?spool=<spoolId>`); beim Scannen öffnet sich das Filament mit hervorgehobener Spule. *(Spulen-Targeting, v1.35.)*
@@ -488,7 +575,7 @@ Das Format ist **global** — es gilt für jedes gedruckte Etikett (und den Web-
 
 Auf einer beliebigen Filament-Detailseite → **Export ▾** → **Etikett drucken**. Der Dialog rendert eine Live-Vorschau in nativer Druckauflösung (pixelated CSS, damit du siehst was gedruckt wird) mit deinem gespeicherten Format. Wähle den QR-Payload (Filament-Instanz-ID / Deep-Link) — und bei einem Filament mit mehreren Spulen im Deep-Link-Modus, auf welche Spule der QR zeigt —, dann klicke auf **Drucken**.
 
-Wenn du die Web-App statt Electron nutzt, lädt der Drucken-Button stattdessen eine `.bin`-Datei mit dem kodierten Byte-Stream herunter — nützlich zur Inspektion. Lokal mit `npm run label:sim --in <Datei>` decodieren, um zu sehen was gedruckt worden wäre.
+Wenn du die Web-App statt Electron nutzt, lädt der Drucken-Button stattdessen eine `.bin`-Datei mit dem kodierten Byte-Stream herunter — nützlich zur Inspektion. Lokal mit `npm run label:sim -- --in <Datei>` decodieren, um zu sehen was gedruckt worden wäre (das Trennzeichen `--` ist zwingend — ohne es schluckt npm das Flag `--in`, reicht den Pfad aber weiter; das Skript sieht dann ein nacktes Argument und bricht mit `Unknown arg: <Pfad>` ab).
 
 ### Fehlerbehebung
 
@@ -496,6 +583,58 @@ Wenn du die Web-App statt Electron nutzt, lädt der Drucken-Button stattdessen e
 - **Upgrade von einem Build vor v1.34.9**: Wenn du zuvor ein Bluetooth-/Serial-Gerät ausgewählt hattest, wähle deinen Drucker in Einstellungen → Etikettendrucker erneut aus. Die App erkennt die alte Serial-Einstellung und bittet dich um eine neue Auswahl, statt kryptisch fehlzuschlagen.
 - **Etikett wird gespiegelt gedruckt** (Text rückwärts, QR seitenverkehrt): in v1.34.9 behoben — auf die neueste Version aktualisieren.
 - **Nichts gedruckt, obwohl es „erfolgreich" war**: Der PT-P710BT schaltet sich im Leerlauf automatisch ab. Wecke ihn (Power-Taste drücken), prüfe das Band und drucke erneut.
+
+---
+
+## Trockenbox-Etiketten (KNAON Y813BT) *(v1.69)*
+
+Ein zweiter, völlig eigenständiger Etikettendrucker druckt ein 10×15-cm-**Trockenbox-Etikett** (4×6 Zoll) — einen Aufkleber für die Außenseite einer Trockenbox, der die Box benennt, ihren Inhalt auflistet und festhält, wann das Trockenmittel zuletzt gewechselt wurde. Mit den Brother-Spulen-Etiketten oben hat er nichts zu tun; du kannst einen der beiden Drucker besitzen, beide oder keinen. Die Einstellungs-Karte sagt genau das: *„Druckt 10×15-cm-Trockenbox-Etiketten über TSPL. Unabhängig vom Brother-Spulendrucker — die beiden drucken nie dasselbe."*
+
+Gedruckt wird nur aus der Desktop-App. In der Web-App wird aus dem Drucken-Button **„.prn herunterladen"**, und diese Datei ist ein echter Druckauftrag, kein Inspektions-Artefakt — schicke sie mit `lp -o raw -d <queue> <Datei>.prn` an den Drucker.
+
+### Einmalige Einrichtung
+
+1. **Y813BT per USB verbinden** und einschalten.
+2. **Einstellungen → Geräte** → die Karte **Trockenbox-Etikettendrucker (KNAON Y813BT)** unterhalb der Brother-Karte. Drucker, die bereits als System-Warteschlange eingerichtet sind, werden beim Laden der Karte aufgelistet. Fehlt deiner, klicke auf **„Nach USB-Druckern suchen"** (oder **Aktualisieren**) — *„Die Suche nach USB-Druckern kann nach Ihrem Administratorpasswort fragen (macOS)."* Passende Geräte bekommen ein grünes **Y813BT**-Badge. Wähle deines aus.
+3. **Testdruck** sendet ein kleines, bekannt gutes Etikett („FILAMENT DB" / „TSPL test print OK" plus einen Barcode) und bestätigt mit *„Testetikett gesendet — prüfen Sie den Drucker."*
+4. **Öffentliche Basis-URL** auf der **Brother**-Karte direkt darüber setzen — es gibt nur eine URL, und beide Drucker teilen sie sich. Ohne sie kodiert der QR-Code `localhost`, was kein Smartphone öffnen kann; der Druckdialog warnt davor, druckt aber trotzdem, und ein späterer Nachdruck kostet wenig.
+
+Wird der gewählte Drucker später abgezogen oder seine Warteschlange entfernt, zeigt die Karte einen bernsteinfarbenen Hinweis — *„Der ausgewählte Drucker ist nicht mehr verfügbar:"* — mit dem Pfad und einem **„Auswahl aufheben"**-Link. Beide Druckerkarten haben das.
+
+### Luftfeuchtigkeit und Trockenmittel erfassen
+
+Bearbeite auf der **Standorte**-Seite den Standort (oder lege einen neuen an) und setze seine **Art** auf **Trockenbox** — die Druck-Aktion erscheint nur bei Trockenboxen, weil der Wortlaut des Etiketts trockenbox-spezifisch ist. Zwei optionale Felder speisen das Etikett: **Luftfeuchtigkeit (%rF)** und **Trockenmittel gewechselt** (siehe [Locations](#locations-v111)).
+
+### Ein Etikett drucken
+
+Zwei Einstiegspunkte, beide auf Trockenbox-Standorte beschränkt:
+
+- **Standorte** (`/locations`) — eine **„Etikett drucken"**-Aktion in jeder Trockenbox-Zeile. Das ist der Weg, der auch bei einer brandneuen oder gerade geleerten Box funktioniert.
+- **Spulen-Bestand** (`/inventory`) — ein 🖨-Button im Kopf einer Trockenbox-Gruppe, sichtbar solange du nach Standort gruppierst. (Der Spulen-Bestand baut seine Gruppen aus Spulen auf, eine leere Box taucht dort also gar nicht auf.)
+
+Beide öffnen den Dialog **„Trockenbox-Etikett drucken"** mit dem Untertitel *„10×15-cm-Etikett für {Name} — {N} Spule(n) auf der Inhaltsliste"*. Während er den **vollständigen, ungefilterten** Inhalt der Box lädt, zeigt er *„Inhalt der Box wird geladen…"* — eine im Spulen-Bestand noch aktive Suche oder Filterung verkleinert also nicht, was gedruckt wird — und rendert dann eine exakte Vorschau aus demselben Dokument, das der Drucker bekommt. Ausgemusterte Spulen stehen nie auf dem Etikett.
+
+### Was auf dem Etikett steht
+
+- Der **Name der Box** groß in einem Rahmen (lange Namen werden gekürzt), darunter `FILAMENT-TROCKENBOX` sowie `14% RH`, wenn für den Standort eine Luftfeuchtigkeit hinterlegt ist.
+- Ein **QR-Code** oben rechts.
+- `INHALT  (Stand <Datum>)`, gefolgt von einer Zeile je nicht ausgemusterter Spule — das eigene Etikett der Spule, sofern gesetzt, sonst Hersteller + Filamentname + Material. So viele Zeilen wie passen; enthält die Box mehr, lautet die letzte Zeile `+N weitere`, damit das Etikett nie eine vollständige Liste vortäuscht. Eine leere Box druckt `(leer)`.
+- `TROCKENMITTEL GEWECHSELT <Datum>` — oder `nicht erfasst` — und die Erinnerung *„Alle 90 Tage wechseln oder wenn der Indikator rosa wird"*.
+- Ein **Code-128-Barcode** mit dem Namen der Box am unteren Rand (er entfällt automatisch, wenn der Name zu lang für einen scanbaren Barcode ist; der QR identifiziert die Box weiterhin).
+
+Die Inhaltsliste ist eine Momentaufnahme — deshalb trägt sie ein Datum. Die aktuelle Antwort liefert der QR-Code.
+
+### Das Etikett scannen
+
+Der QR öffnet `/inventory?location=<id>` — deinen **Spulen-Bestand**, umgeschaltet auf Gruppierung nach Standort, mit der Gruppe dieser Box ausgeklappt, angesprungen und kurz hervorgehoben. Hat die Box keine aktiven Spulen mehr (oder wurde der Standort gelöscht), bekommst du eine kurze Meldung statt einer Seite, die scheinbar nichts tut: *„Die Box dieses Etiketts enthält derzeit keine aktiven Spulen (oder der Lagerort wurde entfernt) — nichts anzuzeigen."*
+
+### Nicht-englischer Etikettentext
+
+Das Etikett druckt immer in reinem ASCII. Das ist eine Hardware-Grenze, keine Vorliebe: Der Y813BT bricht eine Textzeile beim ersten Nicht-ASCII-Zeichen ab, akzentuierter Text würde also stillschweigend mitten im Wort abgeschnitten. Filament DB transliteriert stattdessen — `Grün` wird zu `Grun`, `Straße` zu `Strasse`, `°` zu `deg`, `€` zu `EUR`. Der QR-Link ist davon nicht betroffen.
+
+### Inbetriebnahme per CLI
+
+`npm run label:tspl -- --demo --printer <queue>` rendert ein Beispiel-Trockenbox-Etikett über die echte Pipeline und druckt es; `--file <Pfad.prn>` schickt stattdessen einen rohen TSPL-Auftrag (dessen Zeilenrahmung vorher geprüft wird). Ohne `--printer` schreibt es den Byte-Stream nach `--out` (Standard `/tmp/label.prn`) und gibt den dekodierten Auftragstext aus. Wie bei `label:sim` ist das Trennzeichen `--` nötig, damit npm die Flags durchreicht.
 
 ---
 
@@ -597,8 +736,11 @@ Low-Stock-Schwellen werden pro Filament auf der Bearbeitungsseite unter **Bestan
 Die **Locations**-Seite unter `/locations` lässt dich beschreiben, wo deine physischen Spulen leben — Dryboxen, Regale, Schränke, AMS-Einheiten usw. Jede Location hat:
 
 - **Name** (eindeutig) und optionale **Art** — freier Text zum Gruppieren von Locations in Auswahllisten (`drybox`, `shelf`, `cabinet`, `printer` usw.)
-- **Luftfeuchtigkeit %rF** — optional, vom Nutzer aktualisiert. Nützlich, um die Bedingungen in einer Drybox zu verfolgen.
+- **Luftfeuchtigkeit %rF** — optional, vom Nutzer aktualisiert. *„Optional. Typisch für Trockenboxen — nach Hygrometer-Ablesung manuell aktualisieren."*
+- **Trockenmittel gewechselt** *(v1.69)* — optionales Datum. *„Optional. Üblicherweise für Trockenboxen — setzen Sie es, wenn Sie das Granulat wechseln oder regenerieren."*
 - **Notizen** — Freitext.
+
+Luftfeuchtigkeit und Trockenmittel-Datum werden beide auf ein [Trockenbox-Etikett](#trockenbox-etiketten-knaon-y813bt-v169) gedruckt; Locations mit der Art **Trockenbox** bekommen in der Liste zusätzlich eine **„Etikett drucken"**-Aktion.
 
 Sobald du mindestens eine Location angelegt hast, bekommt die Spulen-Detailansicht ein **Location**-Dropdown. Weise Spulen dort zu, und die Statistiken in der Listenansicht zeigen Spulenanzahl und Gesamtgramm pro Location.
 
@@ -647,7 +789,7 @@ Die **Analytics**-Seite unter `/analytics` schöpft aus PrintHistory-Records plu
 
 - **Fenster**: 7, 30, 90 oder 365 Tage
 - **Summen**: Gramm, geschätzte Kosten, Aufträge (`+N manuell` wird unter dem Auftragszähler angezeigt, wenn mindestens ein manueller Pro-Spule-Eintrag zu den Summen beiträgt — unterscheidet, ob Inventar via PrintHistory-Aufträge oder via direkten Spulen-UI-Logs abgebaut wurde)
-- **Verbrauch pro Tag**: Balkendiagramm
+- **Verbrauch pro Tag**: Balkendiagramm mit einem Balken pro Tag. Ein **Detailliert**-Schalter neben der Überschrift („Jeden Balken nach Filament aufschlüsseln") stapelt jeden Balken nach Filament, färbt jedes Segment in der Farbe des jeweiligen Filaments — das größte unten — und ergänzt unter dem Diagramm eine Legende: die 10 Filamente mit den meisten Gramm im Zeitraum, der Rest als `+N weitere`. Standardmäßig aus und pro Browser gemerkt. Die Gramm der Segmente ergeben immer genau die Tagessumme, die der einfache Balken zeigt.
 - **Aufschlüsselung**: nach Filament, nach Vendor, nach Drucker
 
 Manuelle Auftragseinträge werden nicht doppelt gezählt: Einträge mit `source: "job"` oder `"slicer"` gehören zu einer PrintHistory-Zeile und sind bereits in der primären Aggregation enthalten. Nur Einträge mit `source: "manual"` (echte direkte Edits) werden aus dem Fallback-Pass hinzugefügt.

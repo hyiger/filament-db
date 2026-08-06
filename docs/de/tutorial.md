@@ -296,7 +296,7 @@ Du kannst den **Bearbeiten**-Button auch direkt in der Zeile auf der Startseite 
 
 ## Schritt 10: Farbvarianten erstellen
 
-Varianten teilen sich die Einstellungen eines Elternfilaments (Temperaturen, Dichte, Retraction, Kalibrierungen) und speichern nur Unterschiede: Name, Farbe und Kosten.
+Varianten teilen sich die Einstellungen eines Elternfilaments (Temperaturen, Dichte, Retraction, Kalibrierungen) und speichern nur Unterschiede: Name, Farbe und Kosten. Ein Filament, das Varianten hat, ist eine **Vorlage** — die Produktlinie, nicht eine einzelne Rolle — und trägt deshalb weder eine eigene Farbe noch eigene Spulen; die App fragt nach, bevor sie eine daraus macht (Schritt 6 unten).
 
 Es gibt zwei Affordances auf der Detailseite. Beide erzeugen eine neue Variante, sie befüllen das Formular aber unterschiedlich:
 
@@ -309,7 +309,15 @@ Schritte:
 2. Klicke auf **„Variante erstellen"** (falls verfügbar) oder **Duplizieren**.
 3. Das Formular öffnet sich nach den obigen Regeln vorbefüllt. Nicht vorbefüllte (bzw. nicht überschriebene) Felder erben live vom Eltern-Filament — das ist das Design aus GH #106; der Platzhalter-Text zeigt, was du bekommst.
 4. Bearbeite den **Namen** (nur bei Duplizieren — Variante erstellen lässt das Feld leer zum selbst-Eingeben), wähle eine neue **Farbe** und passe optional **colorName** an.
-5. Klicke auf **Filament erstellen**. Das neue Filament wird als Variante des Eltern-Filaments registriert; künftige Änderungen an Kalibrierungen / Temperaturen / Einstellungen des Eltern-Filaments fließen automatisch in nicht überschriebene Felder.
+5. Klicke auf **Filament erstellen**.
+6. **Wenn das die erste Variante des Eltern-Filaments ist** und das Eltern-Filament noch eine eigene Farbe oder eigene Spulen trägt, erscheint eine Bestätigung, bevor irgendetwas geschrieben wird:
+
+   > **Übergeordnetes Filament in Vorlage umwandeln?**
+   >
+   > Dies ist die erste Variante von „Prusament PLA" — es wird zur Vorlage: Farbe und 2 Spule(n) werden auf eine neue Variante namens „Prusament PLA — Galaxy Black" verschoben.
+
+   Klicke auf **Umwandeln und erstellen**. Das Eltern-Filament wird zur Vorlage — farblos und ohne Bestand — und alles, was ihm persönlich gehörte (Farbe, Farbname, Spulen, Gesamtgewicht, Mindestbestand), wandert auf eine neue Variante, die nach seiner Farbe benannt wird, bzw. auf `<Name> — Original`, wenn es keinen Farbnamen hatte. Druckverlauf-Einträge, AMS-Slot-Zuweisungen an Druckern und bereits gedruckte QR-Etiketten folgen den Spulen, es verliert also nichts seinen Bezug. Klickst du auf **Abbrechen**, wird nichts erstellt und nichts geändert. Ab der zweiten Variante gibt es nichts mehr zu verschieben — dann erscheint auch keine Bestätigung mehr.
+7. Das neue Filament wird als Variante des Eltern-Filaments registriert; künftige Änderungen an Kalibrierungen / Temperaturen / Einstellungen des Eltern-Filaments fließen automatisch in nicht überschriebene Felder.
 
 > **Designregel**: Varianten von Varianten werden nicht unterstützt. Ein Eltern-Filament muss ein Top-Level-Filament sein. Deshalb ist „Variante erstellen" auf Varianten-Seiten ausgeblendet, und Klonen einer Variante erzeugt eine Schwester statt einer Verschachtelung.
 
@@ -317,7 +325,17 @@ Um ein bestehendes eigenständiges Filament in eine Variante umzuwandeln:
 
 1. Klicke auf **Bearbeiten** beim Filament.
 2. Suche und wähle unter **Eltern-Filament** das Eltern-Filament.
-3. Klicke auf **Filament aktualisieren**.
+3. Klicke auf **Filament aktualisieren**. Entsteht dadurch die erste Variante des Eltern-Filaments, erscheint dieselbe Bestätigung — formuliert als *„Durch das Speichern wird dieses Filament zur ersten Variante von …"* mit dem Button **Umwandeln und speichern**.
+
+### Ein bestehendes Eltern-Filament in eine Vorlage umwandeln
+
+Eltern-Filamente, die vor v1.70 entstanden sind, behalten ihre eigene Farbe und ihre Spulen, bis du etwas anderes entscheidest — es wird nichts hinter deinem Rücken migriert.
+
+1. Öffne die Detailseite des Eltern-Filaments und scrolle zum **Spulen-Tracker**. Trägt es noch eine eigene Farbe oder eigene Spulen, siehst du einen amberfarbenen Hinweis — *„Diese Vorlage trägt noch eine eigene Farbe oder eigene Spulen aus der Zeit, bevor sie zur Vorlage wurde."* — und einen Button **In Vorlage umwandeln**. (Kein Button bedeutet: es gibt nichts zu verschieben.)
+2. Klicke ihn und bestätige: *„Eigene Farbe und 2 Spule(n) dieses Filaments auf eine neue Variante verschieben? Die Vorlage selbst behält weder Farbe noch Spulen."*
+3. Ein Toast meldet *„Umgewandelt — Farbe und Spulen wurden auf eine neue Variante verschoben"*, und die Seite lädt neu.
+
+Danach legst du neue Rollen bei den Farbvarianten an: Auf einer Vorlage ersetzt der Hinweis *„Vorlagen führen keinen Bestand — Spulen liegen bei den Farbvarianten."* den ganzen Spulen-Tracker, und jeder andere Weg wird serverseitig abgewiesen: Der Prusament-QR-Import antwortet mit `400 template_no_spools`; der Spulen-CSV-Import lässt nur die betroffene Zeile scheitern und schreibt dieselbe Begründung im Klartext in deren `error`-Feld — einen Fehlercode gibt es dort nicht. Setze **Netto-Filament (g)** und **Leere Spule (g)** einmal auf der Vorlage — beide sind gemeinsame Kennwerte, die jede Variante erbt. Das vollständige Bild steht unter [Filament-Vorlagen](usage.md#filament-vorlagen-v170).
 
 ---
 
@@ -434,6 +452,17 @@ Wenn ein Brother PT-P710BT (P-touch CUBE) per USB angeschlossen ist, kannst du e
 
 > Der **URL**-QR-Modus braucht in der paketierten Desktop-App eine erreichbare Adresse — setze eine **öffentliche URL** in den Etikettendrucker-Einstellungen, damit Smartphones in deinem Netzwerk sie öffnen können (der Standard-`localhost`-Origin ist von anderen Geräten aus nicht erreichbar). Passt gut zu **Im lokalen Netzwerk freigeben** (siehe „Im lokalen Netzwerk freigeben", Schritt 26).
 
+### Trockenbox-Etikett drucken (Desktop-App + KNAON Y813BT)
+
+Ein zweiter, völlig eigenständiger Etikettendrucker druckt 10×15-cm-Etiketten für die Außenseite einer Trockenbox. Wenn du einen KNAON Y813BT hast:
+
+1. Setze unter **Standorte** die **Art** der Box auf **Trockenbox** und trage **Luftfeuchtigkeit (%rF)** sowie **Trockenmittel gewechselt** ein — beides erscheint auf dem Etikett.
+2. Suche unter **Einstellungen → Geräte** die Karte **Trockenbox-Etikettendrucker (KNAON Y813BT)** unterhalb der Brother-Karte, wähle deinen Drucker (Y813BT-Treffer sind mit Badge markiert) und klicke auf **Testdruck**. Die **öffentliche Basis-URL** auf der Brother-Karte darüber gilt für beide Drucker — setze sie, damit der QR-Code des Etiketts vom Smartphone aus erreichbar ist.
+3. Drucke über **Standorte** (die Aktion **Etikett drucken** in jeder Trockenbox-Zeile — nimm diesen Weg für eine leere Box) oder über **Bestand** (der 🖨-Button in der Kopfzeile einer Trockenbox-Gruppe, solange nach Standort gruppiert wird).
+4. Prüfe die Vorschau und klicke auf **Drucken**. In der Web-App heißt der Button stattdessen **.prn herunterladen**.
+
+Auf dem Etikett stehen Name der Box, Luftfeuchtigkeit, eine datierte Inhaltsliste, das Datum des letzten Trockenmittelwechsels, ein Code-128-Barcode des Box-Namens und ein QR-Code, der deinen **Spulen-Bestand** öffnet und direkt zu dieser Box scrollt. Alle Details stehen unter [Trockenbox-Etiketten](usage.md#trockenbox-etiketten-knaon-y813bt-v169).
+
 ---
 
 ## Schritt 14: Sync- und Offline-Workflow (Desktop-App — Hybrid-Modus)
@@ -472,7 +501,7 @@ Sogar im reinen **Atlas-Modus** startet die App eine lokale Datenbank, wenn Atla
 Jedes Filament kann mehrere physische Spulen mit individuellen Gewichten verfolgen.
 
 1. Suche auf der Detailseite eines Filaments den Abschnitt **Spulen-Tracker**. Seit v1.30.3 wird er immer angezeigt — bei einem brandneuen Filament ohne Gewichtsmetadaten erscheint über dem **„+ Spule hinzufügen"**-Button ein kurzer „Noch keine Spulen"-Hinweis.
-2. Klicke auf **„+ Spule hinzufügen"**, um eine neue Spule mit optionalem Label und Gewicht hinzuzufügen.
+2. Klicke auf **„+ Spule hinzufügen"**, um eine neue Spule mit optionalem Label und Gewicht hinzuzufügen. Wenn du deine Rollen durchnummerierst, trägt **Nächste Nr.** neben dem Label-Feld das höchste rein numerische Label der gesamten Datenbank plus eins ein — ausgemusterte Spulen und Spulen an Filamenten im Papierkorb eingeschlossen, damit eine auf eine physische Spule geschriebene Nummer nie erneut vergeben wird. Nicht-numerische Labels werden ignoriert, es wird nichts reserviert, und das Feld bleibt editierbar; schlägt die Abfrage fehl, bittet dich ein Toast um manuelle Eingabe.
 3. Jede Spule zeigt Label, Gesamtgewicht und einen Lösch-Button.
 4. Der Tracker aggregiert Statistiken über alle Spulen (Gesamtgewicht, berechnete Länge aus Dichte und Durchmesser).
 5. Jede Spule kann zusätzlich einer **Location** (Lagerort) und einem **Drucker-Slot** (AMS/MMU-Position, an der sie aktuell geladen ist — eine Spule belegt einen Slot zu einer Zeit) zugewiesen werden.
@@ -545,7 +574,7 @@ Bevor du zum Spulen-Tracker greifst, lohnt es sich zu beschreiben, wo deine phys
 
 1. Navigiere zu **Einstellungen → Locations** → `/locations`
 2. Klicke auf **+ Location hinzufügen**
-3. Gib einen Namen (z. B. `Drybox #1`), wähle eine **Art** (Regal / Drybox / Schrank / Drucker) und optional die Luftfeuchtigkeit
+3. Gib einen Namen (z. B. `Drybox #1`), wähle eine **Art** (Regal / Trockenbox / Schrank / Drucker) und trage optional die **Luftfeuchtigkeit (%rF)** sowie das Datum **Trockenmittel gewechselt** ein (beides fließt in das gedruckte Trockenbox-Etikett — siehe Schritt 13)
 4. Wiederhole für jeden physischen Container, den du verfolgen möchtest
 
 Sobald mindestens eine Location existiert, bekommt jede Spule, die du hinzufügst (oder bearbeitest), ein **Location**-Dropdown. Die Locations-Listenansicht zeigt Live-Inventarzählungen — Anzahl Spulen und Gesamtgramm pro Location —, sodass du auf einen Blick siehst, welche Drybox fast leer ist.
@@ -650,13 +679,15 @@ Eine Begleit-App auf Expo/React-Native-Basis (in `packages/mobile`) macht dein S
 | Filament-Details ansehen | Startseite > Filament-Namen klicken |
 | Filament bearbeiten | Detailseite > Bearbeiten |
 | Farbvariante hinzufügen | Detailseite > Variante erstellen |
+| Eltern-Filament in Vorlage umwandeln | Detailseite > Spulen-Tracker > In Vorlage umwandeln |
 | Düsen verwalten | Einstellungen > Düsen |
 | Drucker verwalten | Einstellungen > Drucker |
 | API-Dokumentation öffnen | Einstellungen > API-Dokumentation (oder zu `/api-docs` navigieren) |
 | NFC-Tag schreiben | Detailseite > NFC schreiben (Desktop-App) |
 | NFC-Tag löschen | Einstellungen > Geräte > NFC-Tools > Tag löschen (Desktop-App) |
 | NFC-Binärdatei exportieren | Detailseite > Export ▾ > OPT exportieren |
-| Etikett drucken | Detailseite > Export ▾ > Etikett drucken (Desktop-App + Brother PT-P710BT) |
+| Spulen-Etikett drucken | Detailseite > Export ▾ > Etikett drucken (Desktop-App + Brother PT-P710BT) |
+| Trockenbox-Etikett drucken | Standorte > Etikett drucken, oder Bestand > 🖨 in der Trockenbox-Gruppe (Desktop-App + KNAON Y813BT) |
 | Spulen verfolgen | Detailseite > Spulen-Tracker > + Spule hinzufügen |
 | Nicht vorrätige ein-/ausblenden | Startseite > Umschalter „Nicht vorrätige anzeigen/ausblenden" |
 | Standort einer Spule schnell wechseln | Startseite > Zeile aufklappen (×N) > Standort-Dropdown |

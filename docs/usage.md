@@ -62,10 +62,60 @@ Parent filaments that still have color variants are blocked from deletion — re
 
 Visit `/trash` (also reachable from **Settings → Trash**). Each row shows when the filament was deleted, plus two actions:
 
-- **Restore** — un-deletes the filament and brings it back into the regular list. If you've created a new active filament with the same name in the meantime, restore is refused with a 409 explaining the conflict — rename one of them first.
+- **Restore** — un-deletes the filament and brings it back into the regular list. If you've created a new active filament with the same name in the meantime, restore is refused with a 409 explaining the conflict — rename one of them first. Restoring a *variant* whose parent picked up a color or spools while it was in the trash asks to convert that parent to a template first (see [Filament Templates](#filament-templates-v170)).
 - **Delete forever** — hard-deletes from MongoDB. Cannot be undone. The button's only available on filaments already in the trash; an active filament has to be soft-deleted first as a safety step.
 
 The trash page also has an **Empty trash** action that permanently deletes everything in one go (variants are purged before parents to satisfy the no-orphan-refs constraint).
+
+---
+
+## Filament Templates *(v1.70)*
+
+A filament that has color variants is a **template** — the product line rather than a roll. The template carries what the whole family shares (temperatures, drying, density, the empty-spool and net filament weights, secondary colors, tags); each color variant carries what is per-color and per-roll: its color and color name, its spools, its total weight, and its low-stock threshold. A filament with no variants is unaffected and behaves exactly as before.
+
+Being a template isn't a setting you turn on — a filament is a template for exactly as long as it has at least one variant that isn't in the trash.
+
+### Converting a parent when its first variant appears
+
+Nothing is restructured behind your back. When an action would give a filament its **first** variant while that filament still carries its own color, color name, spools, or total weight, the app stops and asks:
+
+> **Convert parent to template?**
+>
+> This is the first variant of "Prusament PLA", which becomes a template: its color and 2 spool(s) move to a new variant named "Prusament PLA — Galaxy Black".
+
+Confirm with **Convert and create** and the app creates that variant, moves the parent's color, color name, spools, total weight and low-stock threshold onto it, and leaves the parent colorless and inventory-free. Cancel and nothing at all is written — no filament is created, no data is touched.
+
+The same confirmation guards four entry points, with the wording matched to the action:
+
+- **"Create variant"** or **Duplicate** on the detail page, and `/filaments/new` with a parent picked — *"This is the first variant of…"*, **Convert and create**
+- **Edit → Parent Filament** on an existing filament — *"Saving makes this filament the first variant of…"*, **Convert and save**
+- **Restore** from the trash — *"Restoring makes this filament the first variant of…"*, **Convert and restore**
+- **Import as variant** in the OpenPrintTag browser (select one material, pick a **Parent filament** instead of "No parent (standalone)", and the import button switches to that label) — same wording as the create flow
+
+The new variant is named `<parent name> — <color name>`, or `<parent name> — Original` when the parent had no color name (with a ` (2)` / ` (3)` suffix if that name is already taken). Everything that pointed at the moved spools follows them: print history entries, printer AMS slot assignments, and already-printed QR labels — scanning an old label resolves the spool's current owner and takes you there.
+
+### Converting a legacy parent by hand
+
+Parents created before v1.70 keep their own color and spools until you say otherwise. Open one and the **Spool Tracker** section shows an amber note — *"This template still carries its own color or spools from before it became a template."* — next to a **Convert to template** button. The button only appears when there's actually something to move. It confirms with:
+
+> **Convert to template?**
+>
+> Move this filament's own color and 2 spool(s) to a new variant? The template itself keeps no color and no spools.
+
+On success a toast reads *"Converted — color and spools moved to a new variant"* and the page reloads its data. If a conversion is interrupted (app quit, power loss) nothing is lost — the button is still there, and retrying finishes the interrupted move rather than creating a second copy.
+
+### What a template will and won't do
+
+- **Spools live on the variants.** The Spool Tracker section on a template is replaced by *"Templates don't hold inventory — spools live on the color variants."* — there's no **+ Add Spool** button. Every path that would add a *new* spool to a template refuses with *"This filament is a template (it has color variants) and cannot hold spools — add the spool to one of its variants instead."*: the Add Spool button, the Prusament QR import, and the bulk spool CSV import (which fails just those rows). Spools already sitting on a legacy parent aren't lost, but they're no longer managed here — the tracker on the template's own page is that one line and nothing else. They still count toward the filament list's spool and remaining totals, and they stay editable from the list's inline spool panel (location) and from **Spool Inventory** (weight, location, retire). **Convert to template** moves them onto a variant for good.
+- **The edit form hides the Color and Color Name fields** on a template: *"Templates are colorless — each color variant carries its own color and color name."* The multi-color (secondary colors) editor stays, because those are inherited by the whole family.
+- **The Spool Weight section keeps the spec pair and hides the inventory inputs.** Net filament weight and empty spool weight remain — *"Templates don't hold inventory — spools and total weight live on the color variants. The empty-spool and net-filament weights set here are shared spec values every variant inherits."* Setting the net filament weight once on the template is what gives every color variant a remaining-percentage bar. Initial weight and low-stock threshold are hidden.
+- **Imports and slicer syncs skip four fields** on a template — color, color name, total weight, low-stock threshold — instead of failing. PrusaSlicer / OrcaSlicer / Bambu Studio sync-backs, INI bundles, CSV / XLSX, Atlas and OpenPrintTag imports apply everything else and report what they skipped in the result notes.
+- **OpenPrintTag "Check for updates" never offers the color** on a template, so one link on the parent updates every property of the whole family without repainting it.
+- **Deletion is still blocked** while a filament has variants — remove or re-parent the variants first.
+
+### Clearing a color
+
+Empty the hex field and save: the filament is left with no color at all, and editing it again keeps it that way. A cleared color renders as a hatched placeholder reading **"No color set — click to pick one"** — click it to pick a color back.
 
 ---
 
@@ -402,11 +452,13 @@ In the desktop app, the API key is stored in the locally persisted config file. 
 
 ## Spool Tracking
 
-Each filament can track multiple physical spools with individual weights.
+Each filament can track multiple physical spools with individual weights. Filaments that have color variants are [templates](#filament-templates-v170) and don't hold inventory — add rolls to the color variants instead.
 
 ### Adding Spools
 
-On a filament's detail page, the **Spool Tracker** section always renders (as of v1.30.3 / #380). When there are no spools and no weight metadata configured yet, the section shows a short "No spools yet" hint above the **"+ Add Spool"** button — click it to add a new spool entry with an optional label and weight.
+On a filament's detail page, the **Spool Tracker** section always renders (as of v1.30.3 / #380). When there are no spools and no weight metadata configured yet, the section shows a short "No spools yet" hint above the **"+ Add Spool"** button — click it to add a new spool entry with an optional label and weight. On a template the section shows only "Templates don't hold inventory — spools live on the color variants." instead.
+
+If you number your rolls, the **Next #** button beside the label field fills it with the next number: the highest all-digit spool label anywhere in the database plus one (or `1` when nothing numeric exists). It counts retired spools and spools on trashed filaments **on purpose** — a roll number written on a physical spool must never be handed out twice, so the suggestion skips past anything already used, even if the app no longer shows it. Labels that aren't purely digits ("Opened 2025-03-15", "A12", "1.5") are ignored rather than half-parsed; leading zeros are stripped, so "0042" counts as 42. Nothing is reserved — it's a suggestion written into a normal editable field, two people clicking it at once get the same number, and typing over it is expected. If the lookup fails you get a *"Couldn't fetch the next spool number — enter it manually."* toast and the field is left alone.
 
 ### Managing Spools
 
@@ -479,7 +531,7 @@ As of v1.48–v1.50 (#732), **each spool also has its own instance ID** — the 
 
 ## Label Printer (Desktop App Only) *(v1.34)*
 
-Print a 24mm-tape spool label directly from the filament detail page to a **Brother PT-P710BT** (P-touch CUBE). The label carries a QR code (optional) and configurable text. Two QR payload modes you can pick per print:
+Print a 24mm-tape spool label directly from the filament detail page to a **Brother PT-P710BT** (P-touch CUBE). The label carries a QR code (optional) and configurable text. This is the spool-label printer; 4×6 drybox labels go to a separate device with its own setting — see [Dry-Box Labels](#dry-box-labels-knaon-y813bt-v169). Two QR payload modes you can pick per print:
 
 - **Instance ID** — a 5-byte hex identifier (e.g. `2acc21072a`). As of #732 this encodes the **selected spool's** instance ID (the spool picker chooses which; it defaults to the first non-retired spool). It encodes the **filament-level** ID instead when you pick the picker's **"Filament only"** option (available even when the filament has spools, for printing a legacy filament-level QR) or when the filament has no spools. It matches what an NFC tag carries and is resolved by the in-app NFC reader and the slicer integration; a phone camera just shows the raw hex with nothing to act on, so use this for the NFC/slicer ecosystem rather than phone scanning.
 - **Deep-link URL** — a full URL to the filament's detail page (e.g. `https://your-instance.lan/filaments/<id>`). Scanned by **any phone** it opens the page directly — no app required. This is the phone-scannable option. For a filament with **multiple spools**, a spool picker appears so the QR can target a specific spool (`…/filaments/<id>?spool=<spoolId>`); scanning it opens the filament with that spool highlighted. *(Spool targeting, v1.35.)*
@@ -511,7 +563,7 @@ The format is **global** — it applies to every label you print (and to the web
 
 From any filament's detail page → **Export ▾** → **Print label**. The dialog renders a live preview at the printer's native dot density (pixelated CSS so what you see is what prints) using your saved format. Choose the QR payload (filament instance ID / deep link) — and, for a multi-spool filament in deep-link mode, which spool the QR points to — then click **Print**.
 
-If you're running in the **web app instead of Electron**, the Print button downloads a `.bin` file containing the encoded byte stream — useful for inspection. Decode it locally with `npm run label:sim --in <file>` to see what would have printed.
+If you're running in the **web app instead of Electron**, the Print button downloads a `.bin` file containing the encoded byte stream — useful for inspection. Decode it locally with `npm run label:sim -- --in <file>` to see what would have printed (the `--` separator is required — without it npm eats the `--in` flag but still forwards the path, so the script sees a bare argument and dies with `Unknown arg: <path>`).
 
 ### Troubleshooting
 
@@ -519,6 +571,58 @@ If you're running in the **web app instead of Electron**, the Print button downl
 - **Upgrading from a pre-v1.34.9 build**: if you'd previously selected a Bluetooth/serial device, re-select your printer in Settings → Devices. The app detects the old serial-style setting and asks you to pick again rather than failing cryptically.
 - **Label prints mirrored** (text backwards, QR reversed): fixed in v1.34.9 — update to the latest version.
 - **Nothing printed even though it "succeeded"**: the PT-P710BT auto-powers-off when idle. Wake it (press its power button), confirm tape is loaded, and print again.
+
+---
+
+## Dry-Box Labels (KNAON Y813BT) *(v1.69)*
+
+A second, entirely independent label printer prints a 4×6 **dry-box label** — a sticker for the outside of a drybox that names the box, lists what's in it, and records when the desiccant was last changed. It has nothing to do with the Brother spool labels above; you can own one printer, both, or neither. The Settings card says as much: *"Prints 4×6 dry-box labels over TSPL. Independent of the Brother spool-label printer — the two never print the same thing."*
+
+Printing is desktop-only. In the web app the Print button becomes **Download .prn**, and that file is a real print job rather than an inspection artefact — send it with `lp -o raw -d <queue> <file>.prn`.
+
+### One-time setup
+
+1. **Connect the Y813BT over USB** and power it on.
+2. **Settings → Devices** → the **Dry-box label printer (KNAON Y813BT)** card, below the Brother one. Printers already installed as system queues are listed when the card loads. If yours isn't there, click **Scan for USB printers** (or **Refresh**) — *"Scanning for USB printers may ask for your administrator password (macOS)."* Matching devices get a green **Y813BT** badge. Select yours.
+3. **Test print** sends a small known-good label ("FILAMENT DB" / "TSPL test print OK" plus a barcode) and confirms with *"Test label sent — check the printer."*
+4. **Set the Public base URL** on the **Brother** label-printer card just above — there's one URL and both printers share it. Without it the QR encodes `localhost`, which no phone can open; the print dialog warns about that but still prints, and reprinting later is cheap.
+
+If the selected printer is later unplugged or its queue removed, the card shows an amber banner — *"The selected printer is no longer available:"* — naming the path, with a **Clear selection** link. Both printer cards have it.
+
+### Recording humidity and desiccant
+
+On the **Locations** page, edit (or create) the location and set its **Kind** to **Drybox** — the print action only appears for dryboxes, since the label's wording is dry-box specific. Two optional fields feed the label: **Humidity (%RH)** and **Desiccant changed** (see [Locations](#locations-v111)).
+
+### Printing a label
+
+Two entry points, both limited to drybox locations:
+
+- **Locations** (`/locations`) — a **Print label** action on every drybox row. This is the one that works for a brand-new or freshly emptied box.
+- **Spool Inventory** (`/inventory`) — a 🖨 button on a drybox group's header, shown while you're grouping by location. (Inventory builds its groups from spools, so an empty box doesn't appear there at all.)
+
+Either opens the **Print dry-box label** dialog, subtitled *"4×6 label for {name} — {N} spool(s) on the manifest"*. It shows *"Loading the box's contents…"* while it fetches the box's **full, unfiltered** contents — a search or filter left active on the Inventory page does not shrink what gets printed — then renders an exact preview built from the same document the printer receives. Retired spools are never on the label.
+
+### What's on the label
+
+- The **box name** in large type inside a border (long names are shortened), and beneath it `FILAMENT DRY BOX`, plus `14% RH` when the location has a humidity value.
+- A **QR code** in the top-right corner.
+- `CONTENTS  (as of <date>)` followed by one line per non-retired spool — the spool's own label when it has one, otherwise vendor + filament name + material. As many rows as fit; if the box holds more, the last line reads `+N more` so the label never claims to be a complete list. An empty box prints `(empty)`.
+- `DESICCANT CHANGED <date>` — or `not recorded` — and the reminder *"Replace every 90 days or when indicator turns pink"*.
+- A **Code 128 barcode** of the box name along the bottom (dropped automatically when the name is too long to print a scannable one; the QR still identifies the box).
+
+The contents list is a point-in-time snapshot, which is why it's dated. The QR is the live answer.
+
+### Scanning the label
+
+The QR opens `/inventory?location=<id>` — your Spool Inventory, switched to grouping by location, with that box's group expanded, scrolled to, and briefly highlighted. If the box has no active spools any more (or the location was deleted) you get a short message rather than a page that appears to do nothing: *"That label's box has no active spools right now (or the location was removed) — nothing to show."*
+
+### Non-English label text
+
+The label always prints in plain ASCII. That's a hardware limit, not a preference: the Y813BT cuts a text line short at the first non-ASCII character, so accented text would be silently truncated mid-word. Filament DB transliterates instead — `Grün` prints as `Grun`, `Straße` as `Strasse`, `°` as `deg`, `€` as `EUR`. The QR link is unaffected.
+
+### Bring-up CLI
+
+`npm run label:tspl -- --demo --printer <queue>` renders a sample dry-box label through the real pipeline and prints it; `--file <path.prn>` sends a raw TSPL job instead (validating its line framing first). Without `--printer` it writes the byte stream to `--out` (default `/tmp/label.prn`) and echoes the decoded job text. As with `label:sim`, the `--` separator is required so npm passes the flags through.
 
 ---
 
@@ -620,8 +724,11 @@ Low-stock thresholds are set per filament on the edit page under **Stock setting
 The **Locations** page at `/locations` lets you describe where your physical spools live — dryboxes, shelves, cabinets, AMS units, and so on. Each location has:
 
 - **Name** (unique) and optional **kind** — free-form label used to group locations in pickers (`drybox`, `shelf`, `cabinet`, `printer`, etc.)
-- **Humidity %RH** — optional, user-updated. Useful for tracking conditions inside a drybox.
+- **Humidity %RH** — optional, user-updated. *"Optional. Typically used for dryboxes — update manually after checking the hygrometer."*
+- **Desiccant changed** *(v1.69)* — optional date. *"Optional. Typically used for dryboxes — set it when you swap or regenerate the beads."*
 - **Notes** — free-form.
+
+Humidity and the desiccant date both print on a [dry-box label](#dry-box-labels-knaon-y813bt-v169); locations whose kind is **Drybox** also get a **Print label** action in the list.
 
 Once you've created at least one location, the spool detail panel gains a **Location** dropdown. Assign spools there and the list view stats show spool counts and total grams per location.
 
@@ -670,7 +777,7 @@ The **Analytics** page at `/analytics` draws from PrintHistory records plus any 
 
 - **Window**: 7, 30, 90, or 365 days
 - **Totals**: grams, estimated cost, jobs (`+N manual` is shown under the jobs counter when at least one manual per-spool entry contributed to the totals — distinguishes inventory drained via PrintHistory jobs from inventory drained via direct spool-UI logs)
-- **Usage by day**: bar chart
+- **Usage by day**: bar chart, one bar per day. A **Detailed** toggle beside the heading ("Break each bar down by filament") stacks each bar by filament, painting every segment in that filament's own color with the largest at the bottom, and adds a legend under the chart — the top 10 filaments by grams in the window, with `+N more` for the rest. Off by default and remembered per browser. Segment grams always add up to the day total the plain bar shows.
 - **Breakdown**: by filament, by vendor, by printer
 
 Manual job entries don't show up twice: entries tagged `source: "job"` or `"slicer"` are owned by a PrintHistory row and already counted in the primary aggregation. Only `source: "manual"` entries (true direct-edit logs) are added from the fallback pass.
@@ -701,7 +808,7 @@ What you see:
 
 - **Header stats** — total spool count, location count, active grams on hand
 - **Filter row** — search by filament name / label / lot number (client-side), filter by location kind (shelf, drybox, printer, …), filter by filament type or vendor, "include retired" toggle (off by default — retired spools are out of inventory)
-- **Collapsible group per location** — each group's summary chip shows spool count and total grams. A synthetic **"No location"** group catches any spool whose `locationId` is null and is intentionally sorted to the END of the list so you spot stragglers as "needs attention" rather than mistaking them for primary inventory.
+- **Collapsible group per location** — each group's summary chip shows spool count and total grams; a drybox group's header also carries a 🖨 button that prints a [dry-box label](#dry-box-labels-knaon-y813bt-v169). A synthetic **"No location"** group catches any spool whose `locationId` is null and is intentionally sorted to the END of the list so you spot stragglers as "needs attention" rather than mistaking them for primary inventory.
 - **Per-spool row** — color swatch, filament name, type, vendor, label, **inline weight editor** (click the gram value to edit, Enter to save, Esc to cancel), remaining-percent bar, last dry date, **move-to** dropdown for the spool's location, **retire/unretire** toggle (retire shows a confirm to make the inventory-removal explicit).
 
 All edits go through the same `PUT /api/filaments/{id}/spools/{spoolId}` endpoint the filament detail page uses, so semantics — retire-on-zero prompts, weight validation, sync behaviour — are identical to the SpoolCard.
