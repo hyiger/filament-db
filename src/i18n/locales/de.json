@@ -943,6 +943,7 @@
   "detail.slicerExport.multiColorNotice": "Slicer-Voreinstellungen unterstützen nur eine Farbe. Die Primärfarbe wird exportiert; Sekundärfarben werden verworfen.",
   "detail.slicerExport.multiCalibrationNotice": "Dieses Filament hat mehr als eine Kalibrierung. Die einzelne Orca-/Bambu-Voreinstellung übernimmt nur die Standardkalibrierung (beliebiger Drucker/beliebiges Bett); die anderen Drucker-, Bett- und Düsen-Abstimmungen werden verworfen.",
   "detail.slicerExport.compatRestrictionNotice": "Diese Voreinstellung ist in PrusaSlicer auf bestimmte Drucker beschränkt: \"{value}\". Andere Drucker zeigen sie nicht in ihrer Filamentliste — bearbeiten oder leeren Sie die Beschränkung im Slicer-Tab des Formulars.",
+  "detail.slicerExport.compatRestrictionNotice.parentHint": "Sind die Felder dieser Variante dort leer, wird die Beschränkung vom Elternfilament geerbt — leeren Sie sie auf dem Elternfilament.",
   "detail.exportMenu": "Export",
   "detail.exportMenu.title": "Dieses Filament exportieren — Etikett drucken, auf NFC schreiben oder Slicer-Voreinstellung herunterladen",
   "detail.exportMenu.slicerSection": "Slicer-Voreinstellungen",

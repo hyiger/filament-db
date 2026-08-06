@@ -1519,11 +1519,18 @@ function FilamentDetail() {
                 const restriction =
                   filament.settings?.compatible_printers_condition ||
                   filament.settings?.compatible_printers;
+                // On a VARIANT the detail doc's settings are parent-resolved,
+                // so the restriction may live in the PARENT's bag — the raw
+                // edit form then can't see or clear it. Point at the parent
+                // too (review P2).
                 return restriction ? (
                   <p className="px-3 py-2 my-1 text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 border-y border-amber-200 dark:border-amber-800">
                     {t("detail.slicerExport.compatRestrictionNotice", {
                       value: restriction,
                     })}
+                    {filament.parentId
+                      ? " " + t("detail.slicerExport.compatRestrictionNotice.parentHint")
+                      : null}
                   </p>
                 ) : null;
               })()}

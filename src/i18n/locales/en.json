@@ -943,6 +943,7 @@
   "detail.slicerExport.multiColorNotice": "Slicer presets only support one color. The primary will be exported; secondaries are dropped.",
   "detail.slicerExport.multiCalibrationNotice": "This filament has more than one calibration. The single Orca/Bambu preset bakes only the default (any-printer/any-bed) one; the other printer, bed-type, and nozzle tuning contexts are dropped.",
   "detail.slicerExport.compatRestrictionNotice": "This preset is restricted to specific printers in PrusaSlicer: \"{value}\". Other printers won't show it in their filament list — edit or clear the restriction on the form's Slicer tab.",
+  "detail.slicerExport.compatRestrictionNotice.parentHint": "If this variant's fields are empty there, the restriction is inherited from the parent filament — clear it on the parent.",
   "detail.exportMenu": "Export",
   "detail.exportMenu.title": "Export this filament — print a label, write to NFC, or download a slicer preset",
   "detail.exportMenu.slicerSection": "Slicer presets",

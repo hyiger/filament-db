@@ -354,7 +354,18 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     notes: getSettingVal(initialData, "filament_notes").replace(/^"|"$/g, ""),
     tdsUrl: initialData?.tdsUrl || "",
     compatibleNozzles: getInitialNozzleIds(),
-    inherits: initialData?.inherits || "",
+    // GH #1066 (review P1): adopt a legacy settings-bag `inherits` shadow
+    // into the editable field when no top-level value masks it — the submit
+    // handler purges the shadow on every save, and without the adopt an
+    // unrelated save would silently drop the exported preset's parent (the
+    // export seed emitted the shadow exactly when the resolved top-level
+    // value was empty). A parent-supplied value masks the shadow the same
+    // way (exports resolve variants), so it blocks the adopt too.
+    inherits:
+      initialData?.inherits ||
+      ((initialData?._parent as { inherits?: string | null } | undefined)?.inherits
+        ? ""
+        : getSettingVal(initialData, "inherits")),
     // GH #1066: surface the PrusaSlicer printer-restriction pair from the
     // settings bag. A preset duplicated in the slicer from another printer's
     // profile carries its source's `compatible_printers_condition` (e.g.

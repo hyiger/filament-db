@@ -13,7 +13,7 @@ import {
 import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest, assertSafeUpdateBody } from "@/lib/requestGuard";
-import { mergeSlicerSettings } from "@/lib/slicerSettings";
+import { mergeSlicerSettings, MAX_SETTING_VALUE_LENGTH } from "@/lib/slicerSettings";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { resolveSyncBackColor, isMachineDerivedPerNozzleCondition } from "@/lib/prusaSlicerBundle";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
@@ -92,11 +92,15 @@ export async function GET(
     //               parent so inherited fields render correctly, then attach
     //               only `{ _id, name }` for the "Up to <parent>" link.
     let resolved: IFilament | ReturnType<typeof resolveFilament> = filament;
-    let parentSummary: { _id: unknown; name?: string; vendor?: string; type?: string; color?: string; cost?: number | null; density?: number | null; diameter?: number | null } | null = null;
+    let parentSummary: { _id: unknown; name?: string; vendor?: string; type?: string; color?: string; cost?: number | null; density?: number | null; diameter?: number | null; inherits?: string | null } | null = null;
     if (filament.parentId) {
       if (raw) {
+        // `inherits` rides the projection for GH #1066: the form adopts a
+        // legacy settings-bag `inherits` shadow into its editable field only
+        // when neither the variant nor the parent supplies a top-level value
+        // (the export masks the shadow whenever the resolved value is truthy).
         parentSummary = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
-          .select("_id name vendor type color secondaryColors cost density diameter")
+          .select("_id name vendor type color secondaryColors cost density diameter inherits")
           .lean()) as typeof parentSummary;
       } else {
         const parentDoc = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
@@ -919,10 +923,20 @@ export async function POST(
     // stale `inherits = <preset> @PRINTER` that could not be removed in-app.
     // Lift it like the bulk import: "nil"/"" → null (parseIni's nilOrVal
     // convention). `inherits` is in INHERITABLE_FIELDS, so the variant split
-    // below treats it like every other structured field.
+    // below treats it like every other structured field. The GH #266 bounded-
+    // write cap still applies (review P3): pre-lift the value rode the bag
+    // merge, which 400s on oversize — a structured write must not become the
+    // one uncapped path on the deliberately unauthenticated local/LAN API.
     if (Object.prototype.hasOwnProperty.call(config, "inherits")) {
       const v = config.inherits;
-      update.inherits = v == null || v === "" || v === "nil" ? null : String(v);
+      const lifted = v == null || v === "" || v === "nil" ? null : String(v);
+      if (lifted !== null && lifted.length > MAX_SETTING_VALUE_LENGTH) {
+        return errorResponse(
+          `inherits value exceeds the ${MAX_SETTING_VALUE_LENGTH}-character limit`,
+          400,
+        );
+      }
+      update.inherits = lifted;
     }
 
     // GH #950: filament_soluble / filament_abrasive are NOT written as structured
@@ -1234,15 +1248,22 @@ export async function POST(
     // the shadow survives every sync and the export seed keeps emitting it.
     // Mirrors the bulk import's staleSettingsShadowUnset — the canonical
     // value lives (only) on the top-level field. When a partial sync omitted
-    // the key AND the top-level field is empty, adopt the shadow's value
-    // top-level first so the purge is a pure storage normalization: the
-    // export emitted the shadow in exactly that case, and dropping it
-    // without the adopt would change the exported preset's parent.
+    // the key AND the EFFECTIVE top-level value is empty, adopt the shadow's
+    // value top-level first so the purge is a pure storage normalization:
+    // the export emitted the shadow in exactly that case, and dropping it
+    // without the adopt would change the exported preset's parent. The gate
+    // must be the RESOLVED value, not the variant's own field (review P2):
+    // exports run resolveFilament, so a parent-supplied `inherits` masked
+    // the shadow — adopting there would PIN the stale shadow as a variant
+    // override and sever GH #106 live inheritance. A ""/"nil" shadow is
+    // purged without adopting (it exported as empty/nil — nothing to keep).
     if (
       typeof merge.settings.inherits === "string" &&
       merge.settings.inherits !== "" &&
+      merge.settings.inherits !== "nil" &&
       !("inherits" in update) &&
-      !filament.inherits
+      !filament.inherits &&
+      !calParent?.inherits
     ) {
       update.inherits = merge.settings.inherits;
     }

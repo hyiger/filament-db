@@ -2116,6 +2116,67 @@ describe("API route correctness", () => {
       expect(fresh.inherits).toBe("Bag Parent @COREONE");
     });
 
+    it("the shadow adopt gates on the EFFECTIVE value: a parent-supplied inherits blocks it (review P2)", async () => {
+      // Exports resolve variants, so a parent's truthy `inherits` MASKED the
+      // variant's bag shadow — adopting it would pin the stale shadow as a
+      // variant override and sever GH #106 live inheritance.
+      const parent = await Filament.create({
+        name: "Adopt Parent PP",
+        vendor: "X",
+        type: "PP",
+        inherits: "Prusament PLA @COREONE",
+      });
+      const variant = await Filament.create({
+        name: "Adopt Variant PP",
+        vendor: "X",
+        type: "PP",
+        parentId: parent._id,
+        settings: { inherits: "Stale Shadow @MK4" },
+      });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Adopt%20Variant%20PP", {
+          config: { cooling: "1" },
+        }),
+        { params: Promise.resolve({ id: "Adopt Variant PP" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings?.inherits).toBeUndefined(); // shadow purged…
+      expect(fresh.inherits ?? null).toBeNull(); // …but NOT adopted — keeps inheriting
+    });
+
+    it('a ""/"nil" shadow is purged without adopting', async () => {
+      const f = await Filament.create({
+        name: "Nil Shadow PP",
+        vendor: "X",
+        type: "PP",
+        settings: { inherits: "nil" },
+      });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Nil%20Shadow%20PP", {
+          config: { cooling: "1" },
+        }),
+        { params: Promise.resolve({ id: "Nil Shadow PP" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.settings?.inherits).toBeUndefined();
+      expect(fresh.inherits ?? null).toBeNull();
+    });
+
+    it("an oversized synced inherits is rejected with 400 (GH #266 posture, review P3)", async () => {
+      const f = await Filament.create({ name: "Big PP", vendor: "X", type: "PP" });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Big%20PP", {
+          config: { inherits: "A".repeat(20_001) },
+        }),
+        { params: Promise.resolve({ id: "Big PP" }) },
+      );
+      expect(res.status).toBe(400);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.inherits ?? null).toBeNull(); // nothing written
+    });
+
     it("a stored bag shadow never overrides an existing top-level value", async () => {
       const f = await Filament.create({
         name: "Both PP",
