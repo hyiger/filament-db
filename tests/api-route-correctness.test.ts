@@ -2057,6 +2057,164 @@ describe("API route correctness", () => {
     });
   });
 
+  describe("#1066 — sync lifts `inherits` top-level; bag shadow purged", () => {
+    it("a synced inherits lands on the top-level field, never in the settings bag", async () => {
+      const f = await Filament.create({ name: "Lift PP", vendor: "X", type: "PP" });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Lift%20PP", {
+          config: { inherits: "FormFutura Centaur PP @COREONE", cooling: "1" },
+        }),
+        { params: Promise.resolve({ id: "Lift PP" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.inherits).toBe("FormFutura Centaur PP @COREONE");
+      expect(fresh.settings?.inherits).toBeUndefined();
+      expect(fresh.settings?.cooling).toBe("1");
+    });
+
+    it('an empty / "nil" synced inherits clears the top-level field', async () => {
+      const f = await Filament.create({
+        name: "Clear PP",
+        vendor: "X",
+        type: "PP",
+        inherits: "Old Parent @COREONE",
+      });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Clear%20PP", {
+          config: { inherits: "" },
+        }),
+        { params: Promise.resolve({ id: "Clear PP" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.inherits ?? null).toBeNull();
+      expect(fresh.settings?.inherits).toBeUndefined();
+    });
+
+    it("a stored pre-lift bag shadow is purged on sync; its value is preserved top-level when the field was empty", async () => {
+      // Pre-#1066 sync code bagged `inherits` verbatim — this doc shape is in
+      // the wild. A sync that OMITS the key must still purge the shadow, but
+      // adopt its value top-level first (the export emitted the shadow when
+      // the top-level field was empty, so a bare purge would change the
+      // exported preset's parent).
+      const f = await Filament.create({
+        name: "Shadow PP",
+        vendor: "X",
+        type: "PP",
+        settings: { inherits: "Bag Parent @COREONE" },
+      });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Shadow%20PP", {
+          config: { cooling: "1" },
+        }),
+        { params: Promise.resolve({ id: "Shadow PP" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.settings?.inherits).toBeUndefined();
+      expect(fresh.inherits).toBe("Bag Parent @COREONE");
+    });
+
+    it("the shadow adopt gates on the EFFECTIVE value: a parent-supplied inherits blocks it (review P2)", async () => {
+      // Exports resolve variants, so a parent's truthy `inherits` MASKED the
+      // variant's bag shadow — adopting it would pin the stale shadow as a
+      // variant override and sever GH #106 live inheritance.
+      const parent = await Filament.create({
+        name: "Adopt Parent PP",
+        vendor: "X",
+        type: "PP",
+        inherits: "Prusament PLA @COREONE",
+      });
+      const variant = await Filament.create({
+        name: "Adopt Variant PP",
+        vendor: "X",
+        type: "PP",
+        parentId: parent._id,
+        settings: { inherits: "Stale Shadow @MK4" },
+      });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Adopt%20Variant%20PP", {
+          config: { cooling: "1" },
+        }),
+        { params: Promise.resolve({ id: "Adopt Variant PP" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings?.inherits).toBeUndefined(); // shadow purged…
+      expect(fresh.inherits ?? null).toBeNull(); // …but NOT adopted — keeps inheriting
+    });
+
+    it('a ""/"nil" shadow is purged without adopting', async () => {
+      const f = await Filament.create({
+        name: "Nil Shadow PP",
+        vendor: "X",
+        type: "PP",
+        settings: { inherits: "nil" },
+      });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Nil%20Shadow%20PP", {
+          config: { cooling: "1" },
+        }),
+        { params: Promise.resolve({ id: "Nil Shadow PP" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.settings?.inherits).toBeUndefined();
+      expect(fresh.inherits ?? null).toBeNull();
+    });
+
+    it("an oversized synced inherits is rejected with 400 (GH #266 posture, review P3)", async () => {
+      const f = await Filament.create({ name: "Big PP", vendor: "X", type: "PP" });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Big%20PP", {
+          config: { inherits: "A".repeat(20_001) },
+        }),
+        { params: Promise.resolve({ id: "Big PP" }) },
+      );
+      expect(res.status).toBe(400);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.inherits ?? null).toBeNull(); // nothing written
+    });
+
+    it("a stored bag shadow never overrides an existing top-level value", async () => {
+      const f = await Filament.create({
+        name: "Both PP",
+        vendor: "X",
+        type: "PP",
+        inherits: "Top Parent @COREONE",
+        settings: { inherits: "Stale Bag Parent @MK4" },
+      });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Both%20PP", {
+          config: { cooling: "1" },
+        }),
+        { params: Promise.resolve({ id: "Both PP" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.settings?.inherits).toBeUndefined();
+      expect(fresh.inherits).toBe("Top Parent @COREONE");
+    });
+
+    it("a user-authored printer_model compatibility pin still round-trips the bag untouched (PR #235 posture)", async () => {
+      // The #1066 companion UI makes this pin EDITABLE; the sync itself must
+      // keep treating it as user-authored passthrough.
+      const cond =
+        "printer_model=~/(COREONE|COREONEL)/ and nozzle_diameter[0]==0.4 and ! single_extruder_multi_material";
+      const f = await Filament.create({ name: "Pin PP", vendor: "X", type: "PP" });
+      const res = await slicerSync(
+        jsonReq("http://localhost/api/filaments/Pin%20PP", {
+          config: { compatible_printers_condition: cond },
+        }),
+        { params: Promise.resolve({ id: "Pin PP" }) },
+      );
+      expect(res.status).toBe(200);
+      const fresh = await Filament.findById(f._id).lean();
+      expect(fresh.settings?.compatible_printers_condition).toBe(cond);
+    });
+  });
+
   describe("#950 — slicer round-trip fidelity + id-first addressing", () => {
     it("950.1 — a per-id sync keeps filament_soluble/abrasive in the settings bag (no dead structured write)", async () => {
       const f = await Filament.create({ name: "PVA", vendor: "X", type: "PVA" });

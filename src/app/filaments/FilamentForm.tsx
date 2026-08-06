@@ -115,6 +115,8 @@ interface FilamentFormData {
   tdsUrl: string;
   compatibleNozzles: string[];
   inherits: string;
+  compatPrinters: string;
+  compatPrintersCondition: string;
   parentId: string;
 }
 
@@ -352,7 +354,26 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     notes: getSettingVal(initialData, "filament_notes").replace(/^"|"$/g, ""),
     tdsUrl: initialData?.tdsUrl || "",
     compatibleNozzles: getInitialNozzleIds(),
-    inherits: initialData?.inherits || "",
+    // GH #1066 (review P1): adopt a legacy settings-bag `inherits` shadow
+    // into the editable field when no top-level value masks it — the submit
+    // handler purges the shadow on every save, and without the adopt an
+    // unrelated save would silently drop the exported preset's parent (the
+    // export seed emitted the shadow exactly when the resolved top-level
+    // value was empty). A parent-supplied value masks the shadow the same
+    // way (exports resolve variants), so it blocks the adopt too.
+    inherits:
+      initialData?.inherits ||
+      ((initialData?._parent as { inherits?: string | null } | undefined)?.inherits
+        ? ""
+        : getSettingVal(initialData, "inherits")),
+    // GH #1066: surface the PrusaSlicer printer-restriction pair from the
+    // settings bag. A preset duplicated in the slicer from another printer's
+    // profile carries its source's `compatible_printers_condition` (e.g.
+    // `printer_model=~/(COREONE|...)/`), which silently hides the synced
+    // preset on every other printer — and, pre-#1066, nothing in the app
+    // showed or cleared it.
+    compatPrinters: getSettingVal(initialData, "compatible_printers"),
+    compatPrintersCondition: getSettingVal(initialData, "compatible_printers_condition"),
     parentId: initialData?.parentId?._id || initialData?.parentId || "",
   });
   const [saving, setSaving] = useState(false);
@@ -794,6 +815,27 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     settings.filament_wipe = form.wipe ? "1" : "0";
     settings.end_filament_gcode = form.endGcode ? `"${form.endGcode}"` : undefined;
     settings.filament_notes = form.notes ? `"${form.notes}"` : undefined;
+
+    // GH #1066: the PrusaSlicer printer-restriction pair. Written only when
+    // EDITED — getSettingVal folds a stored `nil` (null) into "" for display,
+    // so an unconditional write would destroy the nil inheritance marker on
+    // every unrelated save. A cleared field writes an explicit "" ("no
+    // restriction" — PrusaSlicer shows the preset for every printer).
+    if (form.compatPrinters !== getSettingVal(initialData, "compatible_printers")) {
+      settings.compatible_printers = form.compatPrinters || "";
+    }
+    if (
+      form.compatPrintersCondition !==
+      getSettingVal(initialData, "compatible_printers_condition")
+    ) {
+      settings.compatible_printers_condition = form.compatPrintersCondition || "";
+    }
+    // GH #1066: the top-level `inherits` field (form.inherits, sent below) is
+    // canonical — kill a legacy settings-bag shadow so CLEARING the field
+    // actually sticks: the export seeds from the bag and only overrides
+    // `inherits` when the top-level value is truthy, so a surviving shadow
+    // resurfaced the moment the field was cleared.
+    delete settings.inherits;
 
     // Handle start G-code: user-typed text wins; else inject PA-only line; else
     // drop the override entirely so a variant inherits from its parent (GH #113).
@@ -2973,6 +3015,41 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
           />
         </div>
       </div>
+
+      {/* GH #1066: surface the PrusaSlicer printer-restriction pair. A preset
+          duplicated in the slicer from another printer's profile carries its
+          source's compatible_printers_condition, silently hiding the synced
+          preset on every other printer — with no way to see or clear it
+          in-app before this. Empty = visible for every printer. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label htmlFor="compat-printers" className={labelClass}>
+            {t("form.compatPrinters")}
+          </label>
+          <input
+            id="compat-printers"
+            className={inputClass}
+            value={form.compatPrinters}
+            onChange={(e) => setForm({ ...form, compatPrinters: e.target.value })}
+            placeholder={t("form.placeholder.compatPrinters")}
+          />
+        </div>
+        <div>
+          <label htmlFor="compat-printers-condition" className={labelClass}>
+            {t("form.compatPrintersCondition")}
+          </label>
+          <input
+            id="compat-printers-condition"
+            className={inputClass}
+            value={form.compatPrintersCondition}
+            onChange={(e) => setForm({ ...form, compatPrintersCondition: e.target.value })}
+            placeholder={t("form.placeholder.compatPrintersCondition")}
+          />
+        </div>
+      </div>
+      <p className="text-xs text-gray-500 dark:text-gray-400">
+        {t("form.compatPrinters.hint")}
+      </p>
 
       <CollapsibleSection id="gcode" title={t("form.section.gcode")}>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

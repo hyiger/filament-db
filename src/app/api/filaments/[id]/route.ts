@@ -13,7 +13,7 @@ import {
 import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest, assertSafeUpdateBody } from "@/lib/requestGuard";
-import { mergeSlicerSettings } from "@/lib/slicerSettings";
+import { mergeSlicerSettings, MAX_SETTING_VALUE_LENGTH } from "@/lib/slicerSettings";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { resolveSyncBackColor, isMachineDerivedPerNozzleCondition } from "@/lib/prusaSlicerBundle";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
@@ -92,11 +92,15 @@ export async function GET(
     //               parent so inherited fields render correctly, then attach
     //               only `{ _id, name }` for the "Up to <parent>" link.
     let resolved: IFilament | ReturnType<typeof resolveFilament> = filament;
-    let parentSummary: { _id: unknown; name?: string; vendor?: string; type?: string; color?: string; cost?: number | null; density?: number | null; diameter?: number | null } | null = null;
+    let parentSummary: { _id: unknown; name?: string; vendor?: string; type?: string; color?: string; cost?: number | null; density?: number | null; diameter?: number | null; inherits?: string | null } | null = null;
     if (filament.parentId) {
       if (raw) {
+        // `inherits` rides the projection for GH #1066: the form adopts a
+        // legacy settings-bag `inherits` shadow into its editable field only
+        // when neither the variant nor the parent supplies a top-level value
+        // (the export masks the shadow whenever the resolved value is truthy).
         parentSummary = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
-          .select("_id name vendor type color secondaryColors cost density diameter")
+          .select("_id name vendor type color secondaryColors cost density diameter inherits")
           .lean()) as typeof parentSummary;
       } else {
         const parentDoc = (await Filament.findOne({ _id: filament.parentId, _deletedAt: null })
@@ -911,6 +915,30 @@ export async function POST(
     if (config.filament_shrinkage_compensation_xy) { const v = parseFloat(config.filament_shrinkage_compensation_xy); if (!isNaN(v)) update.shrinkageXY = v; }
     if (config.filament_shrinkage_compensation_z) { const v = parseFloat(config.filament_shrinkage_compensation_z); if (!isNaN(v)) update.shrinkageZ = v; }
 
+    // GH #1066: `inherits` is a settings-bag SHADOW of the top-level field
+    // (INI_TOP_LEVEL_SETTING_KEYS — the bulk INI import lifts it and purges
+    // the stored shadow). This sync used to bag it verbatim, so the fork's
+    // whole-preset echo re-created a shadow that the export's settings seed
+    // kept emitting even after the form cleared the top-level value — a
+    // stale `inherits = <preset> @PRINTER` that could not be removed in-app.
+    // Lift it like the bulk import: "nil"/"" → null (parseIni's nilOrVal
+    // convention). `inherits` is in INHERITABLE_FIELDS, so the variant split
+    // below treats it like every other structured field. The GH #266 bounded-
+    // write cap still applies (review P3): pre-lift the value rode the bag
+    // merge, which 400s on oversize — a structured write must not become the
+    // one uncapped path on the deliberately unauthenticated local/LAN API.
+    if (Object.prototype.hasOwnProperty.call(config, "inherits")) {
+      const v = config.inherits;
+      const lifted = v == null || v === "" || v === "nil" ? null : String(v);
+      if (lifted !== null && lifted.length > MAX_SETTING_VALUE_LENGTH) {
+        return errorResponse(
+          `inherits value exceeds the ${MAX_SETTING_VALUE_LENGTH}-character limit`,
+          400,
+        );
+      }
+      update.inherits = lifted;
+    }
+
     // GH #950: filament_soluble / filament_abrasive are NOT written as structured
     // fields (the schema has no such columns — a Mongoose strict write dropped
     // them). They now ride the settings bag (removed from STRUCTURED_KEYS below),
@@ -1147,6 +1175,10 @@ export async function POST(
       // export baked into the preset name) — consumed below to route the
       // calibration to the right nozzle, never stored.
       "filamentdb_nozzle",
+      // GH #1066: lifted to the top-level field above (mirrors the bulk INI
+      // import's INI_TOP_LEVEL_SETTING_KEYS posture) — a bag copy would
+      // shadow a later form-cleared top-level value on export.
+      "inherits",
     ]);
     // #872: a per-nozzle preset's nozzle-specific keys (fan, AND the EM /
     // pressure-advance / retraction that `calFields` always pulls in) must NOT
@@ -1210,6 +1242,32 @@ export async function POST(
         merge.settings["compatible_printers_condition"] = "";
       }
     }
+    // GH #1066: purge a pre-lift `inherits` shadow still stored in the bag
+    // (written by older sync code before "inherits" joined STRUCTURED_KEYS
+    // above). merge.settings is seeded from the STORED bag, so without this
+    // the shadow survives every sync and the export seed keeps emitting it.
+    // Mirrors the bulk import's staleSettingsShadowUnset — the canonical
+    // value lives (only) on the top-level field. When a partial sync omitted
+    // the key AND the EFFECTIVE top-level value is empty, adopt the shadow's
+    // value top-level first so the purge is a pure storage normalization:
+    // the export emitted the shadow in exactly that case, and dropping it
+    // without the adopt would change the exported preset's parent. The gate
+    // must be the RESOLVED value, not the variant's own field (review P2):
+    // exports run resolveFilament, so a parent-supplied `inherits` masked
+    // the shadow — adopting there would PIN the stale shadow as a variant
+    // override and sever GH #106 live inheritance. A ""/"nil" shadow is
+    // purged without adopting (it exported as empty/nil — nothing to keep).
+    if (
+      typeof merge.settings.inherits === "string" &&
+      merge.settings.inherits !== "" &&
+      merge.settings.inherits !== "nil" &&
+      !("inherits" in update) &&
+      !filament.inherits &&
+      !calParent?.inherits
+    ) {
+      update.inherits = merge.settings.inherits;
+    }
+    delete merge.settings.inherits;
     update.settings = merge.settings;
 
     // #867 Phase 2 companion: on the AUTHORITATIVE ObjectId path, honor a renamed
