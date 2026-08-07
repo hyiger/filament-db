@@ -446,10 +446,17 @@ export async function DELETE(
               // netFilamentWeight is known. The finiteness/sign guard covers
               // values that arrived through paths bypassing the POST route
               // (hybrid sync, snapshot restore).
+              // Codex P2 on PR #1092: a genuine clamped debit can never
+              // EXCEED the requested grams, so a debitedGrams > grams (a
+              // corrupt row arriving via snapshot restore / hybrid sync —
+              // the field deliberately has no schema bound) falls back to
+              // the legacy full-`grams` refund instead of crediting an
+              // inflated amount with no capacity ceiling.
               const refundGrams =
                 typeof u.debitedGrams === "number" &&
                 Number.isFinite(u.debitedGrams) &&
-                u.debitedGrams >= 0
+                u.debitedGrams >= 0 &&
+                u.debitedGrams <= u.grams
                   ? u.debitedGrams
                   : u.grams;
               const refunded = spool.totalWeight + refundGrams;

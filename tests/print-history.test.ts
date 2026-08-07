@@ -858,6 +858,35 @@ describe("print-history DELETE (undo)", () => {
     expect(refunded.spools[0].usageHistory).toHaveLength(0);
   });
 
+  it("a debitedGrams larger than grams falls back to the grams refund (Codex P2 — corrupt sync/restore row)", async () => {
+    // debitedGrams deliberately has no schema bound (see the model comment),
+    // so a corrupt row can arrive via snapshot restore / hybrid sync with an
+    // inflated value. A genuine clamped debit can never EXCEED the requested
+    // grams, so the refund must treat debitedGrams > grams as invalid and
+    // fall back to grams — not credit a million grams to a spool with no
+    // configured capacity ceiling (netFilamentWeight null here on purpose).
+    const f = await Filament.create({
+      name: "Inflated Debit",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      spools: [{ label: "", totalWeight: 500 }],
+    });
+    const job = await postJob(f, "corrupt-debit-job", 100);
+    await PrintHistory.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(String(job._id)) },
+      { $set: { "usage.$[].debitedGrams": 1_000_000 } },
+    );
+
+    const delRes = await deletePrintHistory(delReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(delRes.status).toBe(200);
+    const refunded = await Filament.findById(f._id);
+    // 400 (post-debit) + 100 (grams fallback) — NOT 1,000,400.
+    expect(refunded.spools[0].totalWeight).toBe(500);
+  });
+
   it("untracked-weight spool records debitedGrams = grams (#1074)", async () => {
     // totalWeight null → nothing is subtracted at debit time, and the
     // refund path skips the weight write entirely. Recording the full
