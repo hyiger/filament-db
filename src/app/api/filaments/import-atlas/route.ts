@@ -348,12 +348,34 @@ export async function POST(request: NextRequest) {
             // parent), so the revived row is never a template at this
             // write. The create below is a fresh doc — same reasoning.
             preserveLocalSpoolIds(softDeleted.spools);
-            await Filament.updateOne(
-              { _id: softDeleted._id },
+            // GH #1079 item 2 (GH #1004 F1 parity): a permanent delete can
+            // land BETWEEN the findOne above and this write — the import
+            // loop does per-row remote round-trips, so the window is real.
+            // The read-side `_purged: { $ne: true }` filter alone can't
+            // close it: an unguarded update would flip `_deletedAt: null`
+            // on a row whose `_purged: true` was just set, minting the
+            // active-but-purged "zombie" #1004 F1 exists to prevent (it
+            // renders in the app, hybrid sync one-way-propagates the purge,
+            // and a later soft-delete vanishes it from the trash entirely).
+            // Re-assert the tombstone check on the WRITE, mirroring the
+            // resurrect guard in src/lib/importFilaments.ts; a zero-match
+            // falls through to a fresh create instead of incrementing
+            // `updated` against a write that matched nothing.
+            const res = await Filament.updateOne(
+              { _id: softDeleted._id, _purged: { $ne: true } },
               { ...filamentData, _deletedAt: null },
               { runValidators: true, context: "query" },
             );
-            updated++;
+            if (res.matchedCount === 0) {
+              // The tombstone was purged mid-import — mint a fresh doc. The
+              // partial-unique name index permits it because the purged row
+              // keeps `_deletedAt` set (same reasoning as the create branch
+              // below).
+              await Filament.create(filamentData);
+              created++;
+            } else {
+              updated++;
+            }
           } else {
               // The partial-unique index on `name` is filtered to
             // `_deletedAt: null`, and `_purged` rows by definition have
