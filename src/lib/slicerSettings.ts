@@ -121,3 +121,71 @@ export function mergeSlicerSettings(
 
   return { settings, added, removed, error: null };
 }
+
+/**
+ * GH #1072 (item 2): validate a client-supplied whole `settings` bag against
+ * the GH #266 caps. `mergeSlicerSettings` enforces them on the slicer sync
+ * routes, but the generic `POST /api/filaments` and `PUT /api/filaments/{id}`
+ * forward `body.settings` (a `Schema.Types.Mixed` field — `runValidators` is
+ * a no-op for it) straight into create/findOneAndUpdate, so an unbounded bag
+ * persisted and then rode every subsequent read of the filament (list
+ * aggregation, detail page, all three slicer exports, snapshot, hybrid-sync
+ * copies) — exactly the degradation GH #266 closed on the sync family only.
+ *
+ * Returns an error string for the route to 400 with, or `null` when valid.
+ * `null`/`undefined` pass (nothing to validate; `settings: null` clears the
+ * bag). Non-object shapes are rejected — Mixed would happily persist a
+ * string/array bag that every reader expects to be a plain object.
+ */
+export function validateSettingsBag(settings: unknown): string | null {
+  if (settings === undefined || settings === null) return null;
+  if (typeof settings !== "object" || Array.isArray(settings)) {
+    return "settings must be an object";
+  }
+  const entries = Object.entries(settings as Record<string, unknown>);
+  if (entries.length > MAX_SETTINGS_KEYS) {
+    return `settings bag exceeds the ${MAX_SETTINGS_KEYS}-key limit`;
+  }
+  for (const [key, value] of entries) {
+    if (JSON.stringify(value ?? null).length > MAX_SETTING_VALUE_LENGTH) {
+      return `settings.${key} value exceeds the ${MAX_SETTING_VALUE_LENGTH}-character limit`;
+    }
+  }
+  return null;
+}
+
+/**
+ * GH #1072 (items 2+3): the DOTTED companion to {@link validateSettingsBag}.
+ * Mongoose casts `{"settings.blob": …}` as a live nested update path (in
+ * document construction too), so capping only the whole-object form leaves an
+ * equivalent uncapped write shape. Each dotted value gets the same per-value
+ * cap, and the resulting top-level key COUNT is bounded against the union
+ * with `existingKeys` (the stored bag's keys — dotted paths MERGE into the
+ * stored bag rather than replacing it, so repeated requests could otherwise
+ * grow it past MAX_SETTINGS_KEYS incrementally). Pass `[]` for a create
+ * (no stored bag yet).
+ *
+ * Returns an error string or `null`. A body with no `settings.`-prefixed
+ * keys returns `null` immediately.
+ */
+export function validateDottedSettingsPaths(
+  body: Record<string, unknown>,
+  existingKeys: readonly string[],
+): string | null {
+  const dotted = Object.keys(body).filter((k) => k.startsWith("settings."));
+  if (dotted.length === 0) return null;
+  const mergedKeys = new Set(existingKeys);
+  for (const key of dotted) {
+    // The top-level bag key this path lands on ("settings.a.b" → "a").
+    const sub = key.slice("settings.".length);
+    const dot = sub.indexOf(".");
+    mergedKeys.add(dot === -1 ? sub : sub.slice(0, dot));
+    if (JSON.stringify(body[key] ?? null).length > MAX_SETTING_VALUE_LENGTH) {
+      return `${key} value exceeds the ${MAX_SETTING_VALUE_LENGTH}-character limit`;
+    }
+  }
+  if (mergedKeys.size > MAX_SETTINGS_KEYS) {
+    return `settings bag exceeds the ${MAX_SETTINGS_KEYS}-key limit`;
+  }
+  return null;
+}

@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   mergeSlicerSettings,
+  validateSettingsBag,
+  validateDottedSettingsPaths,
   MAX_SETTINGS_KEYS,
   MAX_SETTING_VALUE_LENGTH,
 } from "@/lib/slicerSettings";
@@ -167,5 +169,105 @@ describe("mergeSlicerSettings", () => {
     expect(result.error).toBeNull();
     expect(result.settings.nullable).toBeNull();
     expect("undef" in result.settings).toBe(true);
+  });
+});
+
+/**
+ * GH #1072 (item 2) — the generic-route companions to mergeSlicerSettings.
+ * The generic POST/PUT filament routes forward `body.settings` (Mixed, so
+ * runValidators is a no-op) straight into create/findOneAndUpdate; these
+ * helpers apply the same GH #266 caps there, including the dotted
+ * `settings.<key>` update-path form.
+ */
+describe("validateSettingsBag (#1072)", () => {
+  it("passes undefined (field absent)", () => {
+    expect(validateSettingsBag(undefined)).toBeNull();
+  });
+
+  it("passes null (explicit bag clear)", () => {
+    expect(validateSettingsBag(null)).toBeNull();
+  });
+
+  it("rejects a non-object bag (string)", () => {
+    expect(validateSettingsBag("not-a-bag")).toBe("settings must be an object");
+  });
+
+  it("rejects an array bag", () => {
+    expect(validateSettingsBag(["a", "b"])).toBe("settings must be an object");
+  });
+
+  it("rejects a bag exceeding MAX_SETTINGS_KEYS", () => {
+    const bag: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_SETTINGS_KEYS + 1; i++) bag[`k_${i}`] = i;
+    expect(validateSettingsBag(bag)).toMatch(new RegExp(`${MAX_SETTINGS_KEYS}-key`));
+  });
+
+  it("accepts a bag at exactly MAX_SETTINGS_KEYS", () => {
+    const bag: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_SETTINGS_KEYS; i++) bag[`k_${i}`] = i;
+    expect(validateSettingsBag(bag)).toBeNull();
+  });
+
+  it("rejects a single oversize value, naming the key", () => {
+    const err = validateSettingsBag({ blob: "x".repeat(MAX_SETTING_VALUE_LENGTH + 1) });
+    expect(err).toMatch(/settings\.blob/);
+    expect(err).toMatch(new RegExp(String(MAX_SETTING_VALUE_LENGTH)));
+  });
+
+  it("counts JSON-serialized length and treats undefined values as null", () => {
+    // A nested object's whole JSON counts toward the cap.
+    const nested = { deep: "y".repeat(MAX_SETTING_VALUE_LENGTH) };
+    expect(validateSettingsBag({ nested })).not.toBeNull();
+    // undefined serialises as null (4 chars) rather than throwing.
+    expect(validateSettingsBag({ undef: undefined })).toBeNull();
+  });
+
+  it("accepts a normal slicer-shaped bag", () => {
+    expect(
+      validateSettingsBag({ filament_notes: "PLA", nozzle_temperature: "215", nil_key: null }),
+    ).toBeNull();
+  });
+});
+
+describe("validateDottedSettingsPaths (#1072)", () => {
+  it("returns null when the body carries no dotted settings keys", () => {
+    expect(
+      validateDottedSettingsPaths({ name: "X", settings: { a: 1 } }, ["a"]),
+    ).toBeNull();
+  });
+
+  it("rejects an oversize dotted value, naming the dotted key", () => {
+    const err = validateDottedSettingsPaths(
+      { "settings.blob": "x".repeat(MAX_SETTING_VALUE_LENGTH + 1) },
+      [],
+    );
+    expect(err).toMatch(/settings\.blob/);
+    expect(err).toMatch(new RegExp(String(MAX_SETTING_VALUE_LENGTH)));
+  });
+
+  it("bounds the merged key count against the stored bag's keys", () => {
+    const existing = Array.from({ length: MAX_SETTINGS_KEYS }, (_, i) => `k_${i}`);
+    // A NEW top-level key on a full bag pushes the merge over the cap.
+    expect(
+      validateDottedSettingsPaths({ "settings.newkey": 1 }, existing),
+    ).toMatch(new RegExp(`${MAX_SETTINGS_KEYS}-key`));
+    // Overwriting an EXISTING key does not grow the bag → allowed.
+    expect(validateDottedSettingsPaths({ "settings.k_0": 2 }, existing)).toBeNull();
+  });
+
+  it("counts a nested dotted path against its TOP-LEVEL bag key", () => {
+    const existing = Array.from({ length: MAX_SETTINGS_KEYS }, (_, i) => `k_${i}`);
+    // settings.k_0.sub lands inside existing key k_0 → no new top-level key.
+    expect(
+      validateDottedSettingsPaths({ "settings.k_0.sub": 1 }, existing),
+    ).toBeNull();
+    // settings.new.sub mints top-level key "new" on a full bag → rejected.
+    expect(
+      validateDottedSettingsPaths({ "settings.new.sub": 1 }, existing),
+    ).toMatch(new RegExp(`${MAX_SETTINGS_KEYS}-key`));
+  });
+
+  it("treats an undefined dotted value as null in the length check", () => {
+    expect(validateDottedSettingsPaths({ "settings.a": undefined }, [])).toBeNull();
   });
 });
