@@ -139,16 +139,34 @@ export async function POST(request: NextRequest) {
   if (tooLarge) return tooLarge;
 
   // Belt-and-suspenders: checkContentLength only inspects the Content-Length
-  // header, so a chunked / header-less / lying body slips past it. Re-check
-  // the buffered byte length before parsing (the #991 /api/spools/import
-  // pattern).
-  const raw = await request.text();
-  if (Buffer.byteLength(raw, "utf8") > MAX_PUBLISH_BODY) {
-    return errorResponse(
-      `Request body too large. Maximum is ${(MAX_PUBLISH_BODY / 1024).toFixed(0)} KB.`,
-      413,
-    );
+  // header, so a chunked / header-less / lying body slips past it. Codex P2
+  // round 2 on PR #1090: enforce the cap WHILE READING rather than after
+  // `request.text()` buffers everything — the same-origin guard deliberately
+  // admits header-less non-browser clients, so a lying client could
+  // otherwise stream an arbitrarily large body into memory before the 413.
+  // The reader is cancelled at first overflow so nothing more is pulled.
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  const bodyStream = request.body;
+  if (bodyStream) {
+    const reader = bodyStream.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        received += value.byteLength;
+        if (received > MAX_PUBLISH_BODY) {
+          await reader.cancel().catch(() => {});
+          return errorResponse(
+            `Request body too large. Maximum is ${(MAX_PUBLISH_BODY / 1024).toFixed(0)} KB.`,
+            413,
+          );
+        }
+        chunks.push(value);
+      }
+    }
   }
+  const raw = Buffer.concat(chunks).toString("utf8");
 
   let body: unknown;
   try {
