@@ -255,16 +255,22 @@ describe("validateDottedSettingsPaths (#1072)", () => {
     expect(validateDottedSettingsPaths({ "settings.k_0": 2 }, existing)).toBeNull();
   });
 
-  it("counts a nested dotted path against its TOP-LEVEL bag key", () => {
-    const existing = Array.from({ length: MAX_SETTINGS_KEYS }, (_, i) => `k_${i}`);
-    // settings.k_0.sub lands inside existing key k_0 → no new top-level key.
-    expect(
-      validateDottedSettingsPaths({ "settings.k_0.sub": 1 }, existing),
-    ).toBeNull();
-    // settings.new.sub mints top-level key "new" on a full bag → rejected.
-    expect(
-      validateDottedSettingsPaths({ "settings.new.sub": 1 }, existing),
-    ).toMatch(new RegExp(`${MAX_SETTINGS_KEYS}-key`));
+  it("rejects NESTED dotted paths outright (Codex P1 — the flat-bag contract)", () => {
+    // Counting settings.bucket.k1, .k2, … as one top-level "bucket" key while
+    // each small leaf passes the per-value cap would let repeated merging
+    // requests grow "bucket" into an arbitrarily large object — the exact
+    // document-bloat bypass this validator exists to prevent. The bag is
+    // flat by contract, so any second dot is invalid regardless of bag state.
+    expect(validateDottedSettingsPaths({ "settings.k_0.sub": 1 }, ["k_0"])).toMatch(
+      /nested settings paths/,
+    );
+    expect(validateDottedSettingsPaths({ "settings.new.sub": 1 }, [])).toMatch(
+      /nested settings paths/,
+    );
+    // Deeper nesting is just as invalid.
+    expect(validateDottedSettingsPaths({ "settings.a.b.c": "x" }, [])).toMatch(
+      /nested settings paths/,
+    );
   });
 
   it("treats an undefined dotted value as null in the length check", () => {

@@ -165,6 +165,16 @@ export function validateSettingsBag(settings: unknown): string | null {
  * grow it past MAX_SETTINGS_KEYS incrementally). Pass `[]` for a create
  * (no stored bag yet).
  *
+ * NESTED dotted paths (`settings.<key>.<sub>`) are rejected outright (Codex
+ * P1 on PR #1089): the bag is FLAT by contract (slicer key → scalar value —
+ * every writer, reader, exporter and the detail-page settings table assume
+ * it), and Mongoose MERGES a nested path into the stored value. Counting
+ * `settings.bucket.k1`, `settings.bucket.k2`, … as one `bucket` key while
+ * each small leaf passes the per-value cap would let repeated requests grow
+ * `bucket` into an arbitrarily large object — recreating exactly the
+ * document bloat this validator exists to prevent. No first-party client
+ * ever writes a nested settings path, so rejection breaks nothing.
+ *
  * Returns an error string or `null`. A body with no `settings.`-prefixed
  * keys returns `null` immediately.
  */
@@ -176,10 +186,11 @@ export function validateDottedSettingsPaths(
   if (dotted.length === 0) return null;
   const mergedKeys = new Set(existingKeys);
   for (const key of dotted) {
-    // The top-level bag key this path lands on ("settings.a.b" → "a").
     const sub = key.slice("settings.".length);
-    const dot = sub.indexOf(".");
-    mergedKeys.add(dot === -1 ? sub : sub.slice(0, dot));
+    if (sub.includes(".")) {
+      return `${key}: nested settings paths are not supported — the settings bag is flat`;
+    }
+    mergedKeys.add(sub);
     if (JSON.stringify(body[key] ?? null).length > MAX_SETTING_VALUE_LENGTH) {
       return `${key} value exceeds the ${MAX_SETTING_VALUE_LENGTH}-character limit`;
     }

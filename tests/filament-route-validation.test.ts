@@ -238,6 +238,25 @@ describe("GH #1072 — generic filament route validation", () => {
     expect(stored.settings.k_0).toBe(999);
   });
 
+  it("PUT rejects NESTED dotted settings paths (Codex P1 — flat-bag bypass)", async () => {
+    // settings.bucket.k1 / .k2 / … all count as ONE top-level "bucket" key
+    // while each small leaf passes the per-value cap; because dotted updates
+    // MERGE, repeated requests could grow "bucket" without bound. The bag is
+    // flat by contract, so any second dot 400s and nothing persists.
+    const doc = await Filament.create({
+      name: "Nested-Dotted",
+      vendor: "V",
+      type: "PLA",
+      settings: { keep: "yes" },
+    });
+    const id = String(doc._id);
+    const res = await putRoute(id, { "settings.bucket.k1": "x" });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(/nested settings paths/);
+    const stored = await Filament.findById(id).lean();
+    expect(stored.settings).toEqual({ keep: "yes" });
+  });
+
   it("PUT still accepts an in-cap dotted settings write (non-regression)", async () => {
     const doc = await Filament.create({
       name: "Dotted-Ok",
