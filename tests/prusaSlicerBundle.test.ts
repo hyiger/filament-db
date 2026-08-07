@@ -5,7 +5,7 @@ import {
   collapsePerNozzleImportSections,
   resolveSyncBackColor,
   nozzleSuffix, perNozzleCondition, isMachineDerivedPerNozzleCondition, isAnyMachineDerivedNozzleCondition } from "@/lib/prusaSlicerBundle";
-import { parseIniFilaments } from "@/lib/parseIni";
+import { parseIniFilaments, unwrapIniString } from "@/lib/parseIni";
 
 describe("filamentToSlicerKeys", () => {
   it("maps core structured fields to PrusaSlicer keys", () => {
@@ -1177,8 +1177,12 @@ describe("generatePrusaSlicerBundle", () => {
       // (the fixture has no temperatures, so the key must be absent).
       expect("temperature" in parsed[0].settings).toBe(false);
       expect(parsed[0].temperatures.nozzle).toBeNull();
-      // The full note content survives the round-trip, newlines and all.
-      expect(parsed[0].settings.filament_notes).toBe(
+      // The note survives as the escaped WIRE value (the bag is
+      // wire-canonical — Codex P2s on PR #1086); the form codec restores
+      // the raw content, newlines and all, for display.
+      const wire = parsed[0].settings.filament_notes as string;
+      expect(wire.includes("\n")).toBe(false);
+      expect(unwrapIniString(wire)).toBe(
         "line one\ntemperature = 250 works best\n[filament:Other]\nafter",
       );
     });

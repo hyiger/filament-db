@@ -58,22 +58,28 @@ export const INI_TOP_LEVEL_SETTING_KEYS = [
 
 /**
  * GH #1070: the INI VALUE codec — the ONE boundary where PrusaSlicer's
- * C-style quoted-string escaping is applied/removed. Four entry points:
+ * C-style quoted-string escaping is applied/removed. Three entry points:
  *
  *  - `serializeIniValue` — export emitter (prusaSlicerBundle's writeSection)
- *  - `parseIniValue`     — bulk import (parseIniFilaments below)
  *  - `wrapIniString` / `unwrapIniString` — FilamentForm's gcode/notes textareas
  *
- * Contract: the settings bag stores single-line values in WIRE form (the
- * bytes after `=` in the INI). The fork sync-back stores exactly what
- * PrusaSlicer sends (a multi-line gcode arrives as a quoted string with
- * LITERAL `\n` escape sequences, not raw newlines), and both the form and
- * the export must keep those BYTE-IDENTICAL — an already-escaped
- * `"...\n..."` value must never be double-wrapped/double-escaped. Only
- * content that cannot ride one `key = value` line (raw \r/\n) is
- * transformed at the emit boundary (`serializeIniValue`); the import side
- * (`parseIniValue`) unescapes cleanly-quoted values so a bundle round-trip
- * is faithful and PrusaSlicer's own output parses to the real content.
+ * Contract: the settings bag CANONICALLY stores WIRE form — the single-line
+ * bytes after `=` in the INI. Every writer agrees on that representation:
+ * the fork sync-back stores exactly what PrusaSlicer sends (a multi-line
+ * gcode arrives as a quoted string with LITERAL `\n` escape sequences, not
+ * raw newlines), the form escapes via `wrapIniString` on save, and the bulk
+ * INI import below stores the trimmed wire bytes VERBATIM. That last point
+ * is deliberate (Codex P2s on PR #1086): an earlier revision unescaped
+ * cleanly-quoted values on import, which (a) flipped a literal quoted
+ * `"nil"` into the bare `nil` inheritance marker on the next export,
+ * (b) stripped literal boundary quotes/whitespace the quoting existed to
+ * protect, and (c) broke `splitInheritedImportSet`'s strict-equality
+ * comparison against a parent's form-stored WIRE value — pinning inherited
+ * gcode/notes as variant overrides on an otherwise idempotent re-import.
+ * Wire-canonical storage makes export → import → export byte-identical by
+ * construction. Only content that cannot ride one `key = value` line (raw
+ * \r/\n — legacy form-wrapped values, multi-line top-level notes) is
+ * transformed, at the EMIT boundary (`serializeIniValue`).
  */
 
 /** Escape content C-style, matching PrusaSlicer's escape_string_cstyle. */
@@ -129,49 +135,14 @@ export function wrapIniString(content: string): string {
  * return it verbatim (raw legacy values / never-wrapped keys). Lenient on
  * purpose — pre-#1070 FilamentForm hand-wrapped `"..."` around raw content,
  * so an interior unescaped quote (a quote the user typed) must not defeat
- * the unwrap. Foreign INI input goes through the STRICT `parseIniValue`.
+ * the unwrap. Foreign INI input is never decoded (the bag stores wire form
+ * verbatim — see the codec docblock above), so leniency here can't corrupt
+ * imported data: this only ever runs on the form's own gcode/notes keys.
  */
 export function unwrapIniString(value: string): string {
   if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
     return unescapeIniValueContent(value.slice(1, -1));
   }
-  return value;
-}
-
-/**
- * Is `value` exactly ONE cleanly-quoted string — an opening quote, escaped
- * content, and a closing quote at the very end? Multi-element vector values
- * (`"A";"B"`), expressions that merely start and end with a quote
- * (`"PLA"=="PLA"`), and unterminated strings (`"abc\"`) all return false so
- * the strict import path leaves them verbatim.
- */
-function isCleanQuotedString(value: string): boolean {
-  if (value.length < 2 || value[0] !== '"') return false;
-  for (let i = 1; i < value.length; i++) {
-    const ch = value[i];
-    if (ch === "\\") {
-      i += 1;
-      continue;
-    }
-    if (ch === '"') return i === value.length - 1;
-  }
-  return false;
-}
-
-/**
- * GH #1070: parse one wire value from an INI line (the trimmed bytes after
- * `=`). A cleanly-quoted string is unwrapped + unescaped (what PrusaSlicer
- * itself writes for gcode/notes — the app's bulk import becomes a faithful
- * round-trip); a bare `nil` is PrusaSlicer's inheritance marker → null;
- * everything else is stored verbatim. Note the ORDER: a QUOTED "nil" is the
- * literal string, so the quote check runs first.
- */
-export function parseIniValue(raw: string): string | null {
-  const value = raw.trim();
-  if (isCleanQuotedString(value)) {
-    return unescapeIniValueContent(value.slice(1, -1));
-  }
-  if (value === "nil") return null;
   return value;
 }
 
@@ -289,9 +260,13 @@ export function parseIniFilaments(content: string): FilamentData[] {
       const eqIndex = trimmed.indexOf("=");
       if (eqIndex > 0) {
         const key = trimmed.substring(0, eqIndex).trim();
-        // GH #1070: quoted values are unwrapped + unescaped, `nil` → null,
-        // everything else verbatim — see parseIniValue's docblock.
-        currentSettings[key] = parseIniValue(trimmed.substring(eqIndex + 1));
+        // GH #1070: the wire value is stored VERBATIM (bag = wire form —
+        // see the codec docblock). A bare `nil` is PrusaSlicer's
+        // inheritance marker → null; a QUOTED "nil" is the literal string
+        // and stays verbatim like everything else.
+        let value: string | null = trimmed.substring(eqIndex + 1).trim();
+        if (value === "nil") value = null;
+        currentSettings[key] = value;
       }
     }
   }

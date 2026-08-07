@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   parseIniFilaments,
   INI_TOP_LEVEL_SETTING_KEYS,
-  parseIniValue,
   serializeIniValue,
   wrapIniString,
   unwrapIniString,
@@ -418,70 +417,34 @@ filament_vendor = Acme
     expect("shrinkageZ" in f).toBe(false);
   });
 
-  // --- GH #1070: quoted values are unwrapped + unescaped on import ---
+  // --- GH #1070: the bag stores WIRE form — imported values stay verbatim ---
+  // (Codex P2s on PR #1086 killed an earlier decode-on-import revision: it
+  // flipped a quoted "nil" into the bare nil marker on the next export,
+  // stripped literal boundary quotes, and broke splitInheritedImportSet's
+  // strict-equality comparison against a parent's form-stored wire value.)
 
-  it("GH #1070: unescapes a quoted value's \\n escapes to real newlines", () => {
+  it("GH #1070: stores a quoted escaped value VERBATIM (wire-canonical bag)", () => {
     const ini = `[filament:Escaped]
 filament_type = PLA
 filament_vendor = Acme
 start_filament_gcode = "; setup\\nM572 S0.04\\n; done"
 `;
     const [f] = parseIniFilaments(ini);
-    expect(f.settings.start_filament_gcode).toBe("; setup\nM572 S0.04\n; done");
+    expect(f.settings.start_filament_gcode).toBe('"; setup\\nM572 S0.04\\n; done"');
   });
 
-  it("GH #1070: unescapes quotes and backslashes inside a quoted value", () => {
-    const ini = `[filament:Escaped2]
+  it("GH #1070: a QUOTED \"nil\" stays the literal wire string, never the nil marker", () => {
+    const ini = `[filament:QuotedNil]
 filament_type = PLA
 filament_vendor = Acme
-filament_notes = "say \\"hi\\" with a \\\\ backslash"
+filament_notes = "nil"
 `;
     const [f] = parseIniFilaments(ini);
-    expect(f.settings.filament_notes).toBe('say "hi" with a \\ backslash');
+    expect(f.settings.filament_notes).toBe('"nil"');
   });
 });
 
-describe("parseIniValue / serializeIniValue (GH #1070)", () => {
-  it("parses a plain value verbatim", () => {
-    expect(parseIniValue("G1 X=10 Y=20")).toBe("G1 X=10 Y=20");
-  });
-
-  it("parses bare nil as null", () => {
-    expect(parseIniValue(" nil ")).toBeNull();
-  });
-
-  it('parses a QUOTED "nil" as the literal string, not the nil marker', () => {
-    expect(parseIniValue('"nil"')).toBe("nil");
-  });
-
-  it("unescapes \\r to a carriage return", () => {
-    expect(parseIniValue('"a\\r\\nb"')).toBe("a\r\nb");
-  });
-
-  it("takes an unknown escape's character verbatim (PrusaSlicer's unescape semantics)", () => {
-    expect(parseIniValue('"a\\tb"')).toBe("atb");
-  });
-
-  it("keeps a quoted value ending in an ESCAPED backslash intact", () => {
-    expect(parseIniValue('"path\\\\"')).toBe("path\\");
-  });
-
-  it("leaves a multi-element vector value verbatim (interior unescaped quotes)", () => {
-    expect(parseIniValue('"Printer A";"Printer B"')).toBe('"Printer A";"Printer B"');
-  });
-
-  it("leaves an expression that merely starts and ends with a quote verbatim", () => {
-    expect(parseIniValue('"PLA"=="PLA"')).toBe('"PLA"=="PLA"');
-  });
-
-  it("leaves an unterminated quoted string verbatim", () => {
-    expect(parseIniValue('"abc\\"')).toBe('"abc\\"');
-    expect(parseIniValue('"abc')).toBe('"abc');
-  });
-
-  it("leaves a lone quote character verbatim (too short to be wrapped)", () => {
-    expect(parseIniValue('"')).toBe('"');
-  });
+describe("serializeIniValue (GH #1070)", () => {
 
   it("serializes a single-line value BYTE-IDENTICAL (fast path)", () => {
     // Already-escaped fork-shaped value: literal backslash-n, quoted — the
@@ -508,14 +471,21 @@ describe("parseIniValue / serializeIniValue (GH #1070)", () => {
     );
   });
 
-  it("round-trips: serializeIniValue → parseIniValue restores the raw content", () => {
+  it("round-trips: serializeIniValue output re-imports byte-identically (wire-canonical)", () => {
+    // Whatever the emitter produces is a single-line wire value; a re-import
+    // stores it verbatim and the next export passes it through the fast
+    // path unchanged — export → import → export is stable by construction.
     const raw = 'line one\nkey = value\n[filament:Other]\nsay "hi" \\ end\rcr';
-    expect(parseIniValue(serializeIniValue(raw))).toBe(raw);
+    const wire = serializeIniValue(raw);
+    expect(wire.includes("\n")).toBe(false);
+    expect(serializeIniValue(wire)).toBe(wire);
   });
 
-  it("round-trips: parseIniValue → serializeIniValue restores the wire bytes", () => {
-    const wire = '"; setup\\nM572 S0.04\\n; \\"quoted\\" \\\\ done"';
-    expect(serializeIniValue(parseIniValue(wire) as string)).toBe(wire);
+  it("round-trips: the form codec decodes what the emitter produced", () => {
+    // unwrapIniString is the ONLY decoder (form display); it restores the
+    // raw content the emitter escaped, including the injection payload.
+    const raw = 'line one\nkey = value\n[filament:Other]\nsay "hi" \\ end\rcr';
+    expect(unwrapIniString(serializeIniValue(raw))).toBe(raw);
   });
 });
 
