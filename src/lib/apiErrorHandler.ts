@@ -254,8 +254,15 @@ export function checkContentLength(
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > max) {
     const sizeMB = (declared / (1024 * 1024)).toFixed(1);
+    // Codex P2 on PR #1090: format a sub-megabyte limit in KB — a 64 KB cap
+    // used to render as the nonsensical "Maximum is 0 MB." All pre-existing
+    // callers use MB-scale limits, so their messages are unchanged.
+    const maxLabel =
+      max < 1024 * 1024
+        ? `${Math.round(max / 1024)} KB`
+        : `${(max / (1024 * 1024)).toFixed(0)} MB`;
     return errorResponse(
-      `Request body too large (${sizeMB} MB). Maximum is ${(max / (1024 * 1024)).toFixed(0)} MB.`,
+      `Request body too large (${sizeMB} MB). Maximum is ${maxLabel}.`,
       413,
     );
   }
