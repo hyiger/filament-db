@@ -106,11 +106,14 @@ export default function SpoolCsvImportDialog({ onClose, onImported }: Props) {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      // GH #1081: never close mid-import — the unmount abort only cancels
+      // the CLIENT fetch; the server keeps importing rows, and a reflexive
+      // Escape + re-run would duplicate spools.
+      if (e.key === "Escape" && !submitting) onClose();
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [onClose]);
+  }, [onClose, submitting]);
 
   const handleFile = async (file: File) => {
     const text = await file.text();
@@ -158,7 +161,8 @@ export default function SpoolCsvImportDialog({ onClose, onImported }: Props) {
       aria-labelledby="csv-import-title"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        // GH #1081: backdrop click gets the same mid-import guard as Escape.
+        if (e.target === e.currentTarget && !submitting) onClose();
       }}
     >
       <div
@@ -256,7 +260,10 @@ export default function SpoolCsvImportDialog({ onClose, onImported }: Props) {
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-sm rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800"
+            // GH #1081: every close path is gated while the import is
+            // in flight — this button included.
+            disabled={submitting}
+            className="px-4 py-2 text-sm rounded border border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {t("common.cancel")}
           </button>

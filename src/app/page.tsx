@@ -766,56 +766,71 @@ export default function Home() {
     const errors: string[] = [];
     const succeeded = new Set<string>();
     let aborted = false;
-    for (const id of targets) {
-      // GH #525.2: honour an abort request between rows. In-flight rows
-      // already issued aren't interrupted, but no further deletes start.
-      if (bulkAbortRef.current) {
-        aborted = true;
-        break;
+    try {
+      for (const id of targets) {
+        // GH #525.2: honour an abort request between rows. In-flight rows
+        // already issued aren't interrupted, but no further deletes start.
+        if (bulkAbortRef.current) {
+          aborted = true;
+          break;
+        }
+        // GH #1080: a network-level fetch rejection used to escape the
+        // handler, freezing the bar at a stale "Deleting N/M" forever and
+        // skipping the refetch (list silently disagreeing with the DB).
+        // Record the failure per-row and keep going — same posture as
+        // trash/page.tsx (GH #640).
+        try {
+          const res = await fetch(`/api/filaments/${id}`, { method: "DELETE" });
+          if (res.ok) {
+            deleted++;
+            succeeded.add(id);
+          } else {
+            const body = await res.json().catch(() => null);
+            const name = filaments.find((f) => f._id === id)?.name ?? id;
+            errors.push(body?.error || t("filaments.deleteError", { name }));
+          }
+        } catch {
+          const name = filaments.find((f) => f._id === id)?.name ?? id;
+          errors.push(t("filaments.deleteError", { name }));
+        }
+        setBulkProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
       }
-      const res = await fetch(`/api/filaments/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        deleted++;
-        succeeded.add(id);
-      } else {
-        const body = await res.json().catch(() => null);
-        const name = filaments.find((f) => f._id === id)?.name ?? id;
-        errors.push(body?.error || t("filaments.deleteError", { name }));
+      if (deleted > 0) {
+        toast(
+          aborted
+            ? t("filaments.bulk.abortedCount", { count: deleted })
+            : t("filaments.deletedCount", { count: deleted }),
+        );
       }
-      setBulkProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
-    }
-    if (deleted > 0) {
-      toast(
-        aborted
-          ? t("filaments.bulk.abortedCount", { count: deleted })
-          : t("filaments.deletedCount", { count: deleted }),
-      );
-    }
-    // GH #525.2: aggregate failures into a single scrollable dialog instead
-    // of one ever-growing toast that overflows the screen on a large batch.
-    if (errors.length > 0) {
-      const MAX_SHOWN = 10;
-      const shown = errors.slice(0, MAX_SHOWN);
-      const overflow = errors.length - shown.length;
-      const lines = shown.join("\n") + (overflow > 0 ? "\n" + t("filaments.bulk.errorsOverflow", { count: overflow }) : "");
-      await confirm({
-        title: t("filaments.bulk.errorsTitle", { count: errors.length }),
-        message: lines,
-        confirmLabel: t("common.close"),
-        hideCancel: true,
+      // GH #525.2: aggregate failures into a single scrollable dialog instead
+      // of one ever-growing toast that overflows the screen on a large batch.
+      if (errors.length > 0) {
+        const MAX_SHOWN = 10;
+        const shown = errors.slice(0, MAX_SHOWN);
+        const overflow = errors.length - shown.length;
+        const lines = shown.join("\n") + (overflow > 0 ? "\n" + t("filaments.bulk.errorsOverflow", { count: overflow }) : "");
+        await confirm({
+          title: t("filaments.bulk.errorsTitle", { count: errors.length }),
+          message: lines,
+          confirmLabel: t("common.close"),
+          hideCancel: true,
+        });
+      }
+    } finally {
+      // GH #1080: cleanup lives in a `finally` so no future throw above can
+      // wedge the bar in its disabled "Deleting…" state.
+      setBulkProgress(null);
+      setBulkDeleting(false);
+      // Drop only the rows we actually deleted from the selection so a user
+      // who aborted (or hit per-row failures) keeps the un-processed rows
+      // selected and can retry.
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const id of succeeded) next.delete(id);
+        return next;
       });
+      fetchFilaments();
     }
-    setBulkProgress(null);
-    setBulkDeleting(false);
-    // Drop only the rows we actually deleted from the selection so a user
-    // who aborted (or hit per-row failures) keeps the un-processed rows
-    // selected and can retry.
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const id of succeeded) next.delete(id);
-      return next;
-    });
-    fetchFilaments();
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {

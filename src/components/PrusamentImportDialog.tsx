@@ -83,18 +83,34 @@ export default function PrusamentImportDialog({
     return () => prevFocus?.focus?.();
   }, []);
 
-  // Tab trap + Escape. Re-bound when `onClose` changes — no focus
+  // Tab trap + Escape. Re-bound when `onClose` / `step` changes — no focus
   // side-effects, so a parent re-render is harmless here.
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
     const handleKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        // GH #1081: never close mid-import — the unmount abort only cancels
+        // the CLIENT fetch; the server keeps appending the spool, and a
+        // reflexive Escape + re-run would double-import it.
+        if (step !== "importing") onClose();
+        return;
+      }
       if (e.key !== "Tab") return;
+      // GH #1081: exclude disabled elements — a disabled submit button used
+      // as the trap boundary let Tab escape into the background page while
+      // the modal was still up (same selector as SpoolCsvImportDialog).
       const focusable = dialog.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
       );
-      if (focusable.length === 0) return;
+      if (focusable.length === 0) {
+        // Importing step: nothing focusable remains (the × is disabled),
+        // so park focus on the dialog container instead of letting Tab
+        // walk into the background page.
+        e.preventDefault();
+        dialog.focus();
+        return;
+      }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       if (e.shiftKey) {
@@ -112,7 +128,7 @@ export default function PrusamentImportDialog({
     };
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
-  }, [onClose]);
+  }, [onClose, step]);
 
   // GH #320: move focus into the newly-rendered step on a wizard
   // transition so keyboard / screen-reader users follow the flow.
@@ -121,10 +137,13 @@ export default function PrusamentImportDialog({
   useEffect(() => {
     const root = dialogRef.current;
     if (!root) return;
+    // GH #1081: skip disabled controls (`.focus()` on one is a silent
+    // no-op → focus falls to <body>); the importing step has no enabled
+    // control at all, so fall back to the dialog container.
     const el =
-      root.querySelector<HTMLElement>("input, select, textarea") ??
-      root.querySelector<HTMLElement>("button, [href]");
-    el?.focus();
+      root.querySelector<HTMLElement>("input:not([disabled]), select:not([disabled]), textarea:not([disabled])") ??
+      root.querySelector<HTMLElement>("button:not([disabled]), [href]");
+    (el ?? root).focus();
   }, [step]);
 
   const handleLookup = async () => {
@@ -253,8 +272,10 @@ export default function PrusamentImportDialog({
           <h2 id="prusament-import-title" className="text-lg font-semibold">{t("prusament.import.title")}</h2>
           <button
             onClick={onClose}
+            // GH #1081: same mid-import close guard as the Escape handler.
+            disabled={step === "importing"}
             aria-label={t("common.close")}
-            className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 text-xl leading-none"
+            className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 text-xl leading-none disabled:opacity-40 disabled:cursor-not-allowed"
           >
             &times;
           </button>
