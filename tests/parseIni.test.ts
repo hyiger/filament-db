@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { parseIniFilaments, INI_TOP_LEVEL_SETTING_KEYS } from "@/lib/parseIni";
+import {
+  parseIniFilaments,
+  INI_TOP_LEVEL_SETTING_KEYS,
+  parseIniValue,
+  serializeIniValue,
+  wrapIniString,
+  unwrapIniString,
+} from "@/lib/parseIni";
 
 describe("parseIniFilaments", () => {
   it("returns empty array for empty content", () => {
@@ -409,5 +416,155 @@ filament_vendor = Acme
     expect("spoolWeight" in f).toBe(false);
     expect("shrinkageXY" in f).toBe(false);
     expect("shrinkageZ" in f).toBe(false);
+  });
+
+  // --- GH #1070: quoted values are unwrapped + unescaped on import ---
+
+  it("GH #1070: unescapes a quoted value's \\n escapes to real newlines", () => {
+    const ini = `[filament:Escaped]
+filament_type = PLA
+filament_vendor = Acme
+start_filament_gcode = "; setup\\nM572 S0.04\\n; done"
+`;
+    const [f] = parseIniFilaments(ini);
+    expect(f.settings.start_filament_gcode).toBe("; setup\nM572 S0.04\n; done");
+  });
+
+  it("GH #1070: unescapes quotes and backslashes inside a quoted value", () => {
+    const ini = `[filament:Escaped2]
+filament_type = PLA
+filament_vendor = Acme
+filament_notes = "say \\"hi\\" with a \\\\ backslash"
+`;
+    const [f] = parseIniFilaments(ini);
+    expect(f.settings.filament_notes).toBe('say "hi" with a \\ backslash');
+  });
+});
+
+describe("parseIniValue / serializeIniValue (GH #1070)", () => {
+  it("parses a plain value verbatim", () => {
+    expect(parseIniValue("G1 X=10 Y=20")).toBe("G1 X=10 Y=20");
+  });
+
+  it("parses bare nil as null", () => {
+    expect(parseIniValue(" nil ")).toBeNull();
+  });
+
+  it('parses a QUOTED "nil" as the literal string, not the nil marker', () => {
+    expect(parseIniValue('"nil"')).toBe("nil");
+  });
+
+  it("unescapes \\r to a carriage return", () => {
+    expect(parseIniValue('"a\\r\\nb"')).toBe("a\r\nb");
+  });
+
+  it("takes an unknown escape's character verbatim (PrusaSlicer's unescape semantics)", () => {
+    expect(parseIniValue('"a\\tb"')).toBe("atb");
+  });
+
+  it("keeps a quoted value ending in an ESCAPED backslash intact", () => {
+    expect(parseIniValue('"path\\\\"')).toBe("path\\");
+  });
+
+  it("leaves a multi-element vector value verbatim (interior unescaped quotes)", () => {
+    expect(parseIniValue('"Printer A";"Printer B"')).toBe('"Printer A";"Printer B"');
+  });
+
+  it("leaves an expression that merely starts and ends with a quote verbatim", () => {
+    expect(parseIniValue('"PLA"=="PLA"')).toBe('"PLA"=="PLA"');
+  });
+
+  it("leaves an unterminated quoted string verbatim", () => {
+    expect(parseIniValue('"abc\\"')).toBe('"abc\\"');
+    expect(parseIniValue('"abc')).toBe('"abc');
+  });
+
+  it("leaves a lone quote character verbatim (too short to be wrapped)", () => {
+    expect(parseIniValue('"')).toBe('"');
+  });
+
+  it("serializes a single-line value BYTE-IDENTICAL (fast path)", () => {
+    // Already-escaped fork-shaped value: literal backslash-n, quoted — the
+    // exact bytes PrusaSlicer sends on sync-back. Must never double-escape.
+    expect(serializeIniValue('"; setup\\nM572 S0.04"')).toBe('"; setup\\nM572 S0.04"');
+    // Unquoted single-line values with quotes/backslashes also pass through.
+    expect(serializeIniValue("G1 X=10")).toBe("G1 X=10");
+    expect(serializeIniValue('say "hi" \\ there')).toBe('say "hi" \\ there');
+  });
+
+  it("escapes + wraps a raw multi-line unquoted value", () => {
+    expect(serializeIniValue("line one\nline two")).toBe('"line one\\nline two"');
+  });
+
+  it("escapes a raw carriage return", () => {
+    expect(serializeIniValue("a\rb")).toBe('"a\\rb"');
+  });
+
+  it("unwraps a legacy form-wrapped raw multi-line value before escaping (no literal quote leakage)", () => {
+    // Pre-#1070 FilamentForm stored `"${textarea}"` — outer quotes are the
+    // WRAPPER. Interior raw quotes and backslashes are content and get escaped.
+    expect(serializeIniValue('"line one\nsay "hi"\\done"')).toBe(
+      '"line one\\nsay \\"hi\\"\\\\done"',
+    );
+  });
+
+  it("round-trips: serializeIniValue → parseIniValue restores the raw content", () => {
+    const raw = 'line one\nkey = value\n[filament:Other]\nsay "hi" \\ end\rcr';
+    expect(parseIniValue(serializeIniValue(raw))).toBe(raw);
+  });
+
+  it("round-trips: parseIniValue → serializeIniValue restores the wire bytes", () => {
+    const wire = '"; setup\\nM572 S0.04\\n; \\"quoted\\" \\\\ done"';
+    expect(serializeIniValue(parseIniValue(wire) as string)).toBe(wire);
+  });
+});
+
+describe("wrapIniString / unwrapIniString (GH #1070, FilamentForm codec)", () => {
+  it("wraps raw textarea content into the quoted-escaped wire form", () => {
+    expect(wrapIniString("simple note")).toBe('"simple note"');
+    expect(wrapIniString('line one\nsay "hi"')).toBe('"line one\\nsay \\"hi\\""');
+    expect(wrapIniString("back\\slash\rcr")).toBe('"back\\\\slash\\rcr"');
+  });
+
+  it("unwrap is the inverse of wrap (identity round-trip)", () => {
+    const samples = [
+      "simple",
+      'line one\nline two\nsay "hi"',
+      "back\\slash",
+      "a\rb",
+      'temperature = 250 works best\n[filament:Other]',
+    ];
+    for (const s of samples) {
+      expect(unwrapIniString(wrapIniString(s))).toBe(s);
+    }
+  });
+
+  it("returns an unquoted value verbatim (legacy raw bag values)", () => {
+    expect(unwrapIniString("120 100 6.6 6.8")).toBe("120 100 6.6 6.8");
+    expect(unwrapIniString("")).toBe("");
+  });
+
+  it("leniently unwraps a legacy hand-wrapped value with interior raw quotes", () => {
+    // Pre-#1070 form output for a note containing quotes: `"say "hi""` —
+    // NOT a cleanly-escaped string, but the outer quotes are still the wrapper.
+    expect(unwrapIniString('"say "hi""')).toBe('say "hi"');
+  });
+
+  it("unwraps + unescapes a fork-shaped multi-line gcode for the textarea", () => {
+    expect(unwrapIniString('"; setup\\nM572 S0.04"')).toBe("; setup\nM572 S0.04");
+  });
+
+  it("leaves a lone quote character verbatim (too short to be wrapped)", () => {
+    expect(unwrapIniString('"')).toBe('"');
+  });
+
+  it("preserves a trailing lone backslash when leniently unwrapping malformed content", () => {
+    // `"abc\"` — lenient unwrap slices to `abc\`; the dangling backslash has
+    // nothing to escape and is kept verbatim.
+    expect(unwrapIniString('"abc\\"')).toBe("abc\\");
+  });
+
+  it("serializes a bare newline (shorter than a quoted wrapper) via the unquoted path", () => {
+    expect(serializeIniValue("\n")).toBe('"\\n"');
   });
 });

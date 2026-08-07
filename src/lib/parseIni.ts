@@ -56,6 +56,150 @@ export const INI_TOP_LEVEL_SETTING_KEYS = [
   "filament_shrinkage_compensation_z",
 ] as const;
 
+/**
+ * GH #1070: the INI VALUE codec — the ONE boundary where PrusaSlicer's
+ * C-style quoted-string escaping is applied/removed. Four entry points:
+ *
+ *  - `serializeIniValue` — export emitter (prusaSlicerBundle's writeSection)
+ *  - `parseIniValue`     — bulk import (parseIniFilaments below)
+ *  - `wrapIniString` / `unwrapIniString` — FilamentForm's gcode/notes textareas
+ *
+ * Contract: the settings bag stores single-line values in WIRE form (the
+ * bytes after `=` in the INI). The fork sync-back stores exactly what
+ * PrusaSlicer sends (a multi-line gcode arrives as a quoted string with
+ * LITERAL `\n` escape sequences, not raw newlines), and both the form and
+ * the export must keep those BYTE-IDENTICAL — an already-escaped
+ * `"...\n..."` value must never be double-wrapped/double-escaped. Only
+ * content that cannot ride one `key = value` line (raw \r/\n) is
+ * transformed at the emit boundary (`serializeIniValue`); the import side
+ * (`parseIniValue`) unescapes cleanly-quoted values so a bundle round-trip
+ * is faithful and PrusaSlicer's own output parses to the real content.
+ */
+
+/** Escape content C-style, matching PrusaSlicer's escape_string_cstyle. */
+function escapeIniValueContent(content: string): string {
+  let out = "";
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i];
+    if (ch === "\\") out += "\\\\";
+    else if (ch === '"') out += '\\"';
+    else if (ch === "\n") out += "\\n";
+    else if (ch === "\r") out += "\\r";
+    else out += ch;
+  }
+  return out;
+}
+
+/**
+ * Inverse of `escapeIniValueContent`, matching PrusaSlicer's
+ * unescape_string_cstyle: `\n`/`\r` become the real terminators; any other
+ * escaped character is taken verbatim (`\"` → `"`, `\\` → `\`, `\x` → `x`).
+ * A trailing lone backslash is preserved as-is.
+ */
+function unescapeIniValueContent(content: string): string {
+  let out = "";
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i];
+    if (ch === "\\" && i + 1 < content.length) {
+      const next = content[i + 1];
+      i += 1;
+      if (next === "n") out += "\n";
+      else if (next === "r") out += "\r";
+      else out += next;
+    } else {
+      out += ch;
+    }
+  }
+  return out;
+}
+
+/**
+ * Wrap raw content (e.g. a textarea's text, real newlines and all) into the
+ * quoted-escaped wire form PrusaSlicer expects for string values. Used by
+ * FilamentForm when writing gcode/notes into the settings bag, so the bag
+ * always holds a valid single-line value.
+ */
+export function wrapIniString(content: string): string {
+  return `"${escapeIniValueContent(content)}"`;
+}
+
+/**
+ * Lenient inverse of `wrapIniString` for OUR OWN stored bag values: if the
+ * value is quote-wrapped, strip the outer quotes and unescape; otherwise
+ * return it verbatim (raw legacy values / never-wrapped keys). Lenient on
+ * purpose — pre-#1070 FilamentForm hand-wrapped `"..."` around raw content,
+ * so an interior unescaped quote (a quote the user typed) must not defeat
+ * the unwrap. Foreign INI input goes through the STRICT `parseIniValue`.
+ */
+export function unwrapIniString(value: string): string {
+  if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
+    return unescapeIniValueContent(value.slice(1, -1));
+  }
+  return value;
+}
+
+/**
+ * Is `value` exactly ONE cleanly-quoted string — an opening quote, escaped
+ * content, and a closing quote at the very end? Multi-element vector values
+ * (`"A";"B"`), expressions that merely start and end with a quote
+ * (`"PLA"=="PLA"`), and unterminated strings (`"abc\"`) all return false so
+ * the strict import path leaves them verbatim.
+ */
+function isCleanQuotedString(value: string): boolean {
+  if (value.length < 2 || value[0] !== '"') return false;
+  for (let i = 1; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === "\\") {
+      i += 1;
+      continue;
+    }
+    if (ch === '"') return i === value.length - 1;
+  }
+  return false;
+}
+
+/**
+ * GH #1070: parse one wire value from an INI line (the trimmed bytes after
+ * `=`). A cleanly-quoted string is unwrapped + unescaped (what PrusaSlicer
+ * itself writes for gcode/notes — the app's bulk import becomes a faithful
+ * round-trip); a bare `nil` is PrusaSlicer's inheritance marker → null;
+ * everything else is stored verbatim. Note the ORDER: a QUOTED "nil" is the
+ * literal string, so the quote check runs first.
+ */
+export function parseIniValue(raw: string): string | null {
+  const value = raw.trim();
+  if (isCleanQuotedString(value)) {
+    return unescapeIniValueContent(value.slice(1, -1));
+  }
+  if (value === "nil") return null;
+  return value;
+}
+
+/**
+ * GH #1070: make one settings-bag value safe to emit as a single
+ * `key = value` INI line.
+ *
+ * Values with no raw line terminators pass through BYTE-IDENTICAL — they are
+ * already wire form (fork-synced `"...\n..."` strings with literal
+ * backslash-n escapes, plain numbers, conditions, ...) and re-escaping them
+ * would corrupt every existing preset. Only a value carrying a RAW \r/\n —
+ * a pre-#1070 form-wrapped textarea value, a multi-line top-level
+ * `filament.notes`, or any other path that sneaked raw text into the bag —
+ * is transformed into PrusaSlicer's quoted-escaped form. A raw multi-line
+ * value that is ALREADY quote-wrapped (the legacy FilamentForm shape:
+ * `"line one<NL>line two"`) intends its outer quotes as the WRAPPER, not
+ * content, so they are stripped before escaping — otherwise literal quotes
+ * would leak into the preset's text.
+ */
+export function serializeIniValue(value: string): string {
+  if (!value.includes("\n") && !value.includes("\r")) return value;
+  const content =
+    value.length >= 2 && value.startsWith('"') && value.endsWith('"')
+      ? value.slice(1, -1)
+      : value;
+  return `"${escapeIniValueContent(content)}"`;
+}
+
 export function parseIniFilaments(content: string): FilamentData[] {
   const filaments: FilamentData[] = [];
   const lines = content.split("\n");
@@ -145,9 +289,9 @@ export function parseIniFilaments(content: string): FilamentData[] {
       const eqIndex = trimmed.indexOf("=");
       if (eqIndex > 0) {
         const key = trimmed.substring(0, eqIndex).trim();
-        let value: string | null = trimmed.substring(eqIndex + 1).trim();
-        if (value === "nil") value = null;
-        currentSettings[key] = value;
+        // GH #1070: quoted values are unwrapped + unescaped, `nil` → null,
+        // everything else verbatim — see parseIniValue's docblock.
+        currentSettings[key] = parseIniValue(trimmed.substring(eqIndex + 1));
       }
     }
   }

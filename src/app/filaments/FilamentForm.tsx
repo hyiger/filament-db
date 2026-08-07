@@ -26,6 +26,7 @@ import {
   type ColorArrangement,
 } from "@/lib/filamentColors";
 import { isInvertedNozzleRange } from "@/lib/temperatureRange";
+import { unwrapIniString, wrapIniString } from "@/lib/parseIni";
 
 interface BedTypeTempEntry {
   /** Client-only stable row id for React keys. Stripped before API submission. */
@@ -349,9 +350,14 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     dryingTemperature: initialData?.dryingTemperature?.toString() || "",
     dryingTime: initialData?.dryingTime?.toString() || "",
     transmissionDistance: initialData?.transmissionDistance?.toString() || "",
-    startGcode: getSettingVal(initialData, "start_filament_gcode").replace(/^"|"$/g, ""),
-    endGcode: getSettingVal(initialData, "end_filament_gcode").replace(/^"|"$/g, ""),
-    notes: getSettingVal(initialData, "filament_notes").replace(/^"|"$/g, ""),
+    // GH #1070: unwrap + UNESCAPE via the shared INI value codec — a
+    // fork-synced multi-line gcode is stored as `"...\n..."` (literal
+    // backslash-n escapes), so the textarea shows real newlines instead of
+    // `\n` sequences; the submit handler re-escapes via wrapIniString, so
+    // the round-trip is byte-identical on the wire.
+    startGcode: unwrapIniString(getSettingVal(initialData, "start_filament_gcode")),
+    endGcode: unwrapIniString(getSettingVal(initialData, "end_filament_gcode")),
+    notes: unwrapIniString(getSettingVal(initialData, "filament_notes")),
     tdsUrl: initialData?.tdsUrl || "",
     compatibleNozzles: getInitialNozzleIds(),
     // GH #1066 (review P1): adopt a legacy settings-bag `inherits` shadow
@@ -813,8 +819,13 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     settings.filament_unload_time = form.filamentUnloadTime || undefined;
     settings.filament_ramming_parameters = form.rammingParameters || undefined;
     settings.filament_wipe = form.wipe ? "1" : "0";
-    settings.end_filament_gcode = form.endGcode ? `"${form.endGcode}"` : undefined;
-    settings.filament_notes = form.notes ? `"${form.notes}"` : undefined;
+    // GH #1070: escape + wrap via the shared INI value codec — a raw newline
+    // or quote from the textarea must not reach the settings bag unescaped
+    // (it used to split the exported `key = value` line and corrupt the
+    // whole PrusaSlicer bundle, and a re-import parsed the continuation
+    // lines as INI keys/sections).
+    settings.end_filament_gcode = form.endGcode ? wrapIniString(form.endGcode) : undefined;
+    settings.filament_notes = form.notes ? wrapIniString(form.notes) : undefined;
 
     // GH #1066: the PrusaSlicer printer-restriction pair. Written only when
     // EDITED — getSettingVal folds a stored `nil` (null) into "" for display,
@@ -842,9 +853,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     // Without the trailing `else`, an inherited (or pre-existing) gcode that
     // contained no `M572` line could never be cleared from the form.
     if (form.startGcode) {
-      settings.start_filament_gcode = `"${form.startGcode}"`;
+      settings.start_filament_gcode = wrapIniString(form.startGcode);
     } else if (form.pressureAdvance) {
-      settings.start_filament_gcode = `"M572 S${form.pressureAdvance}"`;
+      settings.start_filament_gcode = wrapIniString(`M572 S${form.pressureAdvance}`);
     } else {
       settings.start_filament_gcode = undefined;
     }

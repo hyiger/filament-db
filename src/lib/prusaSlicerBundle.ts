@@ -20,6 +20,8 @@
  * Filament DB doesn't model (e.g. filament_ramming_parameters, start_filament_gcode).
  */
 
+import { serializeIniValue } from "./parseIni";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FilamentDoc = Record<string, any>;
 
@@ -603,7 +605,14 @@ function writeSection(
       // Preserve nil for settings bag values (means "inherit from parent" in PrusaSlicer)
       lines.push(`${key} = nil`);
     } else if (value !== undefined) {
-      lines.push(`${key} = ${value}`);
+      // GH #1070: a raw \r/\n inside a bag value would split the emitted
+      // `key = value` line — PrusaSlicer rejects the whole bundle over one
+      // in-section line without `=`, and a re-import parses the continuation
+      // lines as INI (key/section injection). serializeIniValue transforms
+      // ONLY such values into PrusaSlicer's quoted-escaped form; every
+      // single-line value — including already-escaped fork-shaped
+      // `"...\n..."` strings — passes through byte-identical.
+      lines.push(`${key} = ${serializeIniValue(String(value))}`);
     }
   }
 
