@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
 import { NextRequest } from "next/server";
 import { POST as postPrintHistory } from "@/app/api/print-history/route";
-import { DELETE as deletePrintHistory } from "@/app/api/print-history/[id]/route";
+import { DELETE as deletePrintHistory, PUT as putPrintHistory } from "@/app/api/print-history/[id]/route";
 import { GET as getAnalytics } from "@/app/api/analytics/route";
 import { MAX_SPOOL_HISTORY, MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
 
@@ -785,6 +785,140 @@ describe("print-history DELETE (undo)", () => {
     const after = await Filament.findById(f._id);
     // No clamp: refund 50 onto 0 → 50.
     expect(after.spools[0].totalWeight).toBe(50);
+  });
+
+  // ─── GH #1074: refund pays back what was actually debited, not what the job requested ───
+
+  it("refunds only the actually-debited grams when the debit was clamped (#1074)", async () => {
+    // The issue's exact repro: a 50g spool consumed by a 100g job. The
+    // debit clamps at 0 and absorbs the 50g shortfall; the refund used to
+    // restore the full 100g, leaving the spool with MORE weight (100g)
+    // than before the job existed (50g) — phantom inventory.
+    const f = await Filament.create({
+      name: "Clamped Debit",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ label: "", totalWeight: 50 }],
+    });
+    const job = await postJob(f, "ran-dry", 100);
+
+    const afterJob = await Filament.findById(f._id);
+    expect(afterJob.spools[0].totalWeight).toBe(0);
+    // grams keeps the REQUESTED amount (analytics contract unchanged);
+    // debitedGrams records what actually came off — on BOTH ledgers.
+    const jobRow = await PrintHistory.findById(job._id);
+    expect(jobRow.usage[0].grams).toBe(100);
+    expect(jobRow.usage[0].debitedGrams).toBe(50);
+    expect(afterJob.spools[0].usageHistory[0].grams).toBe(100);
+    expect(afterJob.spools[0].usageHistory[0].debitedGrams).toBe(50);
+
+    const delRes = await deletePrintHistory(delReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(delRes.status).toBe(200);
+    const refunded = await Filament.findById(f._id);
+    // Pre-fix: 100 (0 + full requested grams). Post-fix: exactly the
+    // pre-job 50g comes back.
+    expect(refunded.spools[0].totalWeight).toBe(50);
+    expect(refunded.spools[0].usageHistory).toHaveLength(0);
+  });
+
+  it("legacy usage rows without debitedGrams keep the full-grams refund (#1074 accepted residual)", async () => {
+    const f = await Filament.create({
+      name: "Legacy Refund",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ label: "", totalWeight: 50 }],
+    });
+    const job = await postJob(f, "pre-1074-job", 100);
+    // Simulate a job recorded before debitedGrams existed: strip the field
+    // from both ledgers at the driver level (bypassing the schema default).
+    await PrintHistory.collection.updateOne(
+      { _id: new mongoose.Types.ObjectId(String(job._id)) },
+      { $unset: { "usage.$[].debitedGrams": "" } },
+    );
+    await Filament.collection.updateOne(
+      { _id: f._id },
+      { $unset: { "spools.$[].usageHistory.$[].debitedGrams": "" } },
+    );
+
+    const delRes = await deletePrintHistory(delReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(delRes.status).toBe(200);
+    const refunded = await Filament.findById(f._id);
+    // Old behavior preserved for legacy rows: the actually-debited amount
+    // is unknowable, so the full requested grams come back (bounded only
+    // by the gross-capacity clamp, 1200g here).
+    expect(refunded.spools[0].totalWeight).toBe(100);
+    expect(refunded.spools[0].usageHistory).toHaveLength(0);
+  });
+
+  it("untracked-weight spool records debitedGrams = grams (#1074)", async () => {
+    // totalWeight null → nothing is subtracted at debit time, and the
+    // refund path skips the weight write entirely. Recording the full
+    // grams preserves the legacy posture for this edge (if weight ever
+    // becomes tracked later, the refund behaves exactly as before #1074).
+    const f = await Filament.create({
+      name: "Untracked Weight",
+      vendor: "Test",
+      type: "PLA",
+      spools: [{ label: "", totalWeight: null }],
+    });
+    const job = await postJob(f, "untracked", 100);
+
+    const afterJob = await Filament.findById(f._id);
+    expect(afterJob.spools[0].totalWeight).toBeNull();
+    const jobRow = await PrintHistory.findById(job._id);
+    expect(jobRow.usage[0].debitedGrams).toBe(100);
+    expect(afterJob.spools[0].usageHistory[0].debitedGrams).toBe(100);
+
+    const delRes = await deletePrintHistory(delReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(delRes.status).toBe(200);
+    const refunded = await Filament.findById(f._id);
+    expect(refunded.spools[0].totalWeight).toBeNull();
+    expect(refunded.spools[0].usageHistory).toHaveLength(0);
+  });
+
+  it("a PUT startedAt edit doesn't disturb the clamped refund (#1074 × #1004 F6)", async () => {
+    // The #1004 F6 backfill walks legacy (jobId-less) entries on a
+    // startedAt edit. Post-#1074 entries always carry a jobId, so the
+    // backfill must leave them (and their debitedGrams) alone, and the
+    // date-independent jobId refund tiers must still pay back the
+    // clamped amount after the edit.
+    const f = await Filament.create({
+      name: "Edited Then Undone",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      netFilamentWeight: 1000,
+      spools: [{ label: "", totalWeight: 50 }],
+    });
+    const job = await postJob(f, "clamped-then-edited", 100, new Date("2026-01-01T00:00:00Z"));
+
+    const putRes = await putPrintHistory(
+      new NextRequest(`http://localhost/api/print-history/${job._id}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ startedAt: "2026-02-01T00:00:00Z" }),
+      }),
+      { params: Promise.resolve({ id: job._id }) },
+    );
+    expect(putRes.status).toBe(200);
+
+    const delRes = await deletePrintHistory(delReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(delRes.status).toBe(200);
+    const refunded = await Filament.findById(f._id);
+    expect(refunded.spools[0].totalWeight).toBe(50); // debited 50, not the requested 100
+    expect(refunded.spools[0].usageHistory).toHaveLength(0);
   });
 
   // ─── GH #621: retry after a partial failure must not double-refund ───

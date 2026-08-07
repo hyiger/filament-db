@@ -79,6 +79,15 @@ const VALID_SOURCES = new Set(["manual", "prusaslicer", "orcaslicer", "bambu", "
  * means an already-stamped entry (now carrying a jobId) is skipped by the
  * `!h.jobId` predicate on the next row, so two rows against the same spool
  * consume distinct entries.
+ *
+ * GH #1074 note: this backfill deliberately does NOT stamp `debitedGrams`
+ * onto the legacy entries it adopts — the actually-debited amount for a
+ * pre-#1074 row is unknowable after the fact, and the DELETE refund reads
+ * `debitedGrams` from the PrintHistory usage row (also null on legacy jobs),
+ * falling back to the full-`grams` refund for exactly these rows. Rows
+ * created after #1074 always carry a jobId, so this matcher never touches
+ * them. The matching tiers themselves key on `grams` (the requested amount,
+ * unchanged by #1074), so the new field doesn't perturb any tier.
  */
 async function backfillLegacyUsageJobIds(
   jobId: string,
@@ -425,7 +434,25 @@ export async function DELETE(
                   if (netCapacity == null) netCapacity = (parent.netFilamentWeight as number | null) ?? null;
                 }
               }
-              const refunded = spool.totalWeight + u.grams;
+              // GH #1074: refund what was ACTUALLY debited, not what the job
+              // requested. The POST clamps the debit at zero and records the
+              // pre-clamp `min(totalWeight, grams)` as `debitedGrams` — so a
+              // job that ran a 50g spool "dry" with a 100g estimate refunds
+              // 50g, not 100g of phantom inventory. Legacy rows created
+              // before the field existed carry null and fall back to the old
+              // full-`grams` refund — an ACCEPTED RESIDUAL: for those rows
+              // the actually-debited amount is unknowable, and the gross-
+              // capacity clamp below still bounds the damage when
+              // netFilamentWeight is known. The finiteness/sign guard covers
+              // values that arrived through paths bypassing the POST route
+              // (hybrid sync, snapshot restore).
+              const refundGrams =
+                typeof u.debitedGrams === "number" &&
+                Number.isFinite(u.debitedGrams) &&
+                u.debitedGrams >= 0
+                  ? u.debitedGrams
+                  : u.grams;
+              const refunded = spool.totalWeight + refundGrams;
               // Only clamp when we have a real net-capacity ceiling. The empty-
               // spool tare alone isn't a ceiling — a value of "spoolWeight: 200,
               // netFilamentWeight: null" means we know the tare but not the
