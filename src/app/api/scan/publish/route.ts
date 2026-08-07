@@ -6,7 +6,11 @@ import {
   type ScanEventFilament,
   type ScanEventSpool,
 } from "@/lib/scanBus";
-import { errorResponse, getErrorMessage } from "@/lib/apiErrorHandler";
+import {
+  checkContentLength,
+  errorResponse,
+  getErrorMessage,
+} from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 
 /**
@@ -20,17 +24,31 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * GH #1076: per-field length bounds, belt-and-braces under the request-body
+ * byte cap below. Every string copied into the event is sliced so no single
+ * field can dominate the retained "last scan" even if the body cap is ever
+ * loosened. `MAX_ID_CHARS` matches the app-wide instanceId bound
+ * (`validateSpoolInstanceId` accepts 1–128 chars, and the /filaments/match
+ * route caps its params at 128 for the same reason) so a legitimate legacy
+ * or custom id is never corrupted; ObjectIds are 24 chars, so this is
+ * generous for `_id`. `MAX_TEXT_CHARS` mirrors the label's pre-existing
+ * 200-char slice with headroom for long decoded material names.
+ */
+const MAX_ID_CHARS = 128;
+const MAX_TEXT_CHARS = 256;
+
 function pickFilament(value: unknown): ScanEventFilament | null {
   if (!isObject(value)) return null;
   const id = value._id;
   const name = value.name;
   if (typeof id !== "string" || typeof name !== "string") return null;
   return {
-    _id: id,
-    name,
-    vendor: typeof value.vendor === "string" ? value.vendor : "",
-    type: typeof value.type === "string" ? value.type : "",
-    color: typeof value.color === "string" ? value.color : "",
+    _id: id.slice(0, MAX_ID_CHARS),
+    name: name.slice(0, MAX_TEXT_CHARS),
+    vendor: typeof value.vendor === "string" ? value.vendor.slice(0, MAX_TEXT_CHARS) : "",
+    type: typeof value.type === "string" ? value.type.slice(0, MAX_TEXT_CHARS) : "",
+    color: typeof value.color === "string" ? value.color.slice(0, MAX_TEXT_CHARS) : "",
   };
 }
 
@@ -40,9 +58,21 @@ function pickFilament(value: unknown): ScanEventFilament | null {
  * so an unauthenticated POST with a multi-megabyte `candidates` array
  * would otherwise be held in memory indefinitely and fanned out to every
  * connection. A real tag match produces a handful of candidates; 25 is a
- * generous bound.
+ * generous bound. GH #1076 completes the mitigation on the BYTE axis:
+ * the whole request body is capped at `MAX_PUBLISH_BODY` (preflight +
+ * post-buffer re-check in the handler) and every copied string field is
+ * length-bounded above, so neither the count nor the bytes of a published
+ * event are attacker-controlled.
  */
 const MAX_CANDIDATES = 25;
+
+/**
+ * GH #1076: request-body byte cap. Real scan events are under 2 KB (a match
+ * plus a handful of candidates); 64 KB is generous. Mirrors the sibling
+ * /api/nfc/decode preflight + the /api/spools/import (#991) post-buffer
+ * re-check for a missing/lying Content-Length.
+ */
+const MAX_PUBLISH_BODY = 64 * 1024;
 
 function pickCandidates(value: unknown): ScanEventFilament[] {
   if (!Array.isArray(value)) return [];
@@ -56,16 +86,17 @@ function pickCandidates(value: unknown): ScanEventFilament[] {
 }
 
 /** #732: validate the matched-spool object (a renderer-supplied, same-origin
- * payload). Requires a string _id + instanceId; label bounded to a sane
- * length. Returns null for anything malformed. */
+ * payload). Requires a string _id + instanceId; all fields length-bounded
+ * (#1076 extended the pre-existing label slice to the id fields). Returns
+ * null for anything malformed. */
 function pickMatchedSpool(value: unknown): ScanEventSpool | null {
   if (!isObject(value)) return null;
   const id = value._id;
   const instanceId = value.instanceId;
   if (typeof id !== "string" || typeof instanceId !== "string") return null;
   return {
-    _id: id,
-    instanceId,
+    _id: id.slice(0, MAX_ID_CHARS),
+    instanceId: instanceId.slice(0, MAX_ID_CHARS),
     label: typeof value.label === "string" ? value.label.slice(0, 200) : "",
   };
 }
@@ -84,7 +115,7 @@ function pickDecoded(value: unknown): ScanEventDecoded {
   for (const key of DECODED_STRING_FIELDS) {
     const v = value[key];
     if (typeof v === "string" && v.length > 0) {
-      out[key] = v;
+      out[key] = v.slice(0, MAX_TEXT_CHARS);
     }
   }
   if (
@@ -101,9 +132,27 @@ export async function POST(request: NextRequest) {
   const guard = assertSameOriginRequest(request);
   if (guard) return guard;
 
+  // GH #1076: cap the request body BEFORE buffering it. The published event
+  // is retained as the last scan and re-serialized to every SSE subscriber,
+  // so an unbounded body would be held + fanned out indefinitely.
+  const tooLarge = checkContentLength(request, MAX_PUBLISH_BODY);
+  if (tooLarge) return tooLarge;
+
+  // Belt-and-suspenders: checkContentLength only inspects the Content-Length
+  // header, so a chunked / header-less / lying body slips past it. Re-check
+  // the buffered byte length before parsing (the #991 /api/spools/import
+  // pattern).
+  const raw = await request.text();
+  if (Buffer.byteLength(raw, "utf8") > MAX_PUBLISH_BODY) {
+    return errorResponse(
+      `Request body too large. Maximum is ${(MAX_PUBLISH_BODY / 1024).toFixed(0)} KB.`,
+      413,
+    );
+  }
+
   let body: unknown;
   try {
-    body = await request.json();
+    body = JSON.parse(raw);
   } catch (err) {
     return errorResponse("Invalid JSON body", 400, getErrorMessage(err));
   }
