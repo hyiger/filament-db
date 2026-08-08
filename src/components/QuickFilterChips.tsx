@@ -42,24 +42,40 @@ export default function QuickFilterChips({ active, onChange, counts, trailing }:
         {FILTERS.map((f) => {
           const isActive = active === f.key;
           const count = counts?.[f.key];
+          // #1117(c): the badge used to be gated on `count > 0`, so a chip
+          // with nothing to show simply lost its badge — "Low stock" looked
+          // like it had no count at all while its neighbours had one. It also
+          // stayed clickable at zero and dead-ended on "no filaments match".
+          // Show the zero and disable the chip instead; "All" is never
+          // disabled, since it is how you get back.
+          const hasCount = count !== undefined;
+          const isEmpty = hasCount && count === 0 && f.key !== "all";
           return (
             <button
               key={f.key}
               type="button"
               role="tab"
               aria-selected={isActive}
+              disabled={isEmpty && !isActive}
+              title={isEmpty ? t("filter.emptyChip") : undefined}
               onClick={() => onChange(f.key)}
               className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
                 isActive
                   ? "bg-blue-600 text-white border-blue-600"
-                  : "bg-transparent text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500"
+                  : isEmpty
+                    ? "bg-transparent text-gray-400 dark:text-gray-600 border-gray-200 dark:border-gray-800 cursor-not-allowed"
+                    : "bg-transparent text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500"
               }`}
             >
               {t(f.labelKey)}
-              {count !== undefined && count > 0 && (
+              {hasCount && (
                 <span
                   className={`ml-1.5 text-[10px] px-1 rounded ${
-                    isActive ? "bg-white/20" : "bg-gray-200 dark:bg-gray-700"
+                    isActive
+                      ? "bg-white/20"
+                      : isEmpty
+                        ? "bg-gray-100 dark:bg-gray-900"
+                        : "bg-gray-200 dark:bg-gray-700"
                   }`}
                 >
                   {count}
