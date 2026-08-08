@@ -6,6 +6,7 @@ import "@/models/Printer";
 import "@/models/BedType";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { errorResponse, errorResponseFromCaught } from "@/lib/apiErrorHandler";
+import { MAX_COMPARE_FILAMENTS } from "@/lib/compareSelection";
 
 /**
  * GET /api/filaments/compare?ids=a,b,c — fetch multiple filaments for the
@@ -30,15 +31,25 @@ export async function GET(request: NextRequest) {
     if (!idsParam) {
       return errorResponse("ids query parameter is required", 400);
     }
-    const ids = idsParam
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    // Dedupe before counting: `?ids=a,a,b` is a 2-filament comparison, and
+    // duplicates used to emit repeated React keys and identical columns
+    // client-side (GH #1109).
+    const ids = Array.from(
+      new Set(
+        idsParam
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
+    );
     if (ids.length === 0) {
       return errorResponse("ids must contain at least one filament id", 400);
     }
-    if (ids.length > 8) {
-      return errorResponse("Comparing more than 8 filaments at once is not supported", 400);
+    if (ids.length > MAX_COMPARE_FILAMENTS) {
+      return errorResponse(
+        `Comparing more than ${MAX_COMPARE_FILAMENTS} filaments at once is not supported`,
+        400,
+      );
     }
 
     const filaments = await Filament.find({ _id: { $in: ids }, _deletedAt: null })

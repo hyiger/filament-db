@@ -6,13 +6,22 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import FilamentPicker from "@/components/FilamentPicker";
+import FilamentSwatch from "@/components/FilamentSwatch";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
+import { MAX_COMPARE_FILAMENTS, parseCompareIds } from "@/lib/compareSelection";
+import { getRemainingGrams } from "@/lib/inventoryStats";
+import { allColors, deriveArrangement, displayColor } from "@/lib/filamentColors";
+import { deriveFinish } from "@/lib/filamentFinish";
 
 interface FilamentOption {
   _id: string;
   name: string;
   vendor: string;
-  color: string;
+  // Nullable since GH #477: a coextruded filament carries no primary colour,
+  // and since v1.70 a template parent is deliberately colourless.
+  color: string | null;
+  secondaryColors?: string[];
+  optTags?: number[];
   type: string;
 }
 
@@ -21,8 +30,14 @@ interface CompareFilament {
   name: string;
   vendor: string;
   type: string;
-  color: string;
+  // See FilamentOption above — `color` is genuinely nullable in the schema
+  // (`src/models/Filament.ts`, OpenPrintTag key 19). Typing it `string` was a
+  // lie that produced the literal text "Ruby (null)" in the colour row and a
+  // transparent header swatch (GH #1120).
+  color: string | null;
   colorName: string | null;
+  secondaryColors?: string[];
+  optTags?: number[];
   cost: number | null;
   density: number | null;
   diameter: number;
@@ -43,6 +58,11 @@ interface CompareFilament {
   maxPrintSpeed: number | null;
   spools: { totalWeight: number | null; retired?: boolean }[];
   spoolWeight: number | null;
+  // Legacy single-spool shape: stock tracked on the filament itself, with no
+  // spools[] subdocuments. Present in the payload all along; the "On hand" row
+  // just never looked at it (GH #1110).
+  totalWeight: number | null;
+  netFilamentWeight: number | null;
 }
 
 export default function ComparePage() {
@@ -63,15 +83,17 @@ function ComparePageInner() {
   const { formatGrams } = useNumberFormat();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialIds = (searchParams.get("ids") || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean);
+  // Parsed ONCE, lazily. The URL-sync effect below rewrites `?ids=` to the
+  // capped list, so deriving this on every render would immediately reset
+  // `dropped` to 0 and the truncation notice would never paint.
+  const [initialSelection] = useState(() => parseCompareIds(searchParams.get("ids")));
 
   const [allFilaments, setAllFilaments] = useState<FilamentOption[]>([]);
-  const [selectedIds, setSelectedIds] = useState<string[]>(initialIds);
+  const [selectedIds, setSelectedIds] = useState<string[]>(initialSelection.ids);
+  const [droppedFromLink, setDroppedFromLink] = useState(initialSelection.dropped);
   const [comparison, setComparison] = useState<CompareFilament[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     const ac = new AbortController();
@@ -92,14 +114,30 @@ function ComparePageInner() {
       // (correctly) ignores that rejection — so without this, `loading` would
       // stay true forever: a stuck spinner with no request behind it.
       setLoading(false);
+      setError(null);
       return;
     }
     const ac = new AbortController();
     setLoading(true);
     fetch(`/api/filaments/compare?ids=${selectedIds.join(",")}`, { signal: ac.signal })
-      .then((r) => (r.ok ? r.json() : []))
+      .then(async (r) => {
+        // GH #1109: this used to be `r.ok ? r.json() : []`, so an API error
+        // became an empty comparison that no render gate matched — a blank
+        // page with no explanation. Surface it instead.
+        if (!r.ok) {
+          // Deliberately NOT rendering the server's text: a hand-edited id
+          // makes the route throw a Mongoose CastError, whose message names
+          // the model and the schema path. The user can't act on that, so it
+          // goes to the console and they get a sentence they can act on.
+          const body = await r.json().catch(() => null);
+          if (body?.error) console.warn("compare request failed:", body.error);
+          throw new Error(t("compare.error.generic"));
+        }
+        return r.json();
+      })
       .then((data) => {
         setComparison(data);
+        setError(null);
         setLoading(false);
       })
       .catch((err) => {
@@ -109,10 +147,12 @@ function ComparePageInner() {
         // mid-fetch and the previous comparison reads as current. Matches
         // every sibling fetch (analytics / inventory / home).
         if ((err as Error)?.name === "AbortError") return;
+        setComparison([]);
+        setError((err as Error)?.message || t("compare.error.generic"));
         setLoading(false);
       });
     return () => ac.abort();
-  }, [selectedIds]);
+  }, [selectedIds, t]);
 
   // Keep the URL in sync so the page is linkable/shareable.
   useEffect(() => {
@@ -121,9 +161,12 @@ function ComparePageInner() {
   }, [selectedIds, router]);
 
   const toggleFilament = (id: string) => {
+    // The link-truncation notice describes the incoming URL, not the current
+    // selection — once the user edits the selection it is stale.
+    setDroppedFromLink(0);
     setSelectedIds((prev) => {
       if (prev.includes(id)) return prev.filter((x) => x !== id);
-      if (prev.length >= 8) return prev; // API limit
+      if (prev.length >= MAX_COMPARE_FILAMENTS) return prev; // API limit
       return [...prev, id];
     });
   };
@@ -137,30 +180,29 @@ function ComparePageInner() {
   // tend to break it. Hoisted into a real binding.
   const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
-  const totalGrams = useMemo(() => {
-    return comparison.map((f) => {
-      // GH #182: subtract the empty-spool weight so the "On hand" row
-      // reports remaining filament, not the gross scale reading. The
-      // pre-fix sum was inflated by one empty-spool mass per tracked
-      // spool — same root cause as the dashboard / locations totals.
-      const spoolMass = typeof f.spoolWeight === "number" ? f.spoolWeight : 0;
-      let grams = 0;
-      for (const s of f.spools || []) {
-        if (s.retired) continue;
-        if (typeof s.totalWeight === "number") {
-          grams += Math.max(0, s.totalWeight - spoolMass);
-        }
-      }
-      return grams;
-    });
-  }, [comparison]);
+  // GH #1110: this was a hand-rolled copy of the spools[] sum that had no
+  // legacy fallback, so a roll tracked via the top-level `totalWeight` (no
+  // spools[] subdocuments) reported "—" here while /inventory and the detail
+  // page both showed its grams. `getRemainingGrams` is the shared helper every
+  // other surface uses — it still subtracts the tare (the GH #182 fix this
+  // replaces) and still skips retired spools, and it handles the legacy shape.
+  // null means "not weight-tracked", which is distinct from a real 0 g.
+  const onHandGrams = useMemo(() => comparison.map(getRemainingGrams), [comparison]);
 
   const rows: { label: string; get: (f: CompareFilament, i: number) => string }[] = [
     { label: t("compare.row.vendor"), get: (f) => f.vendor },
     { label: t("compare.row.type"), get: (f) => f.type },
     {
       label: t("compare.row.color"),
-      get: (f) => (f.colorName ? `${f.colorName} (${f.color})` : f.color),
+      get: (f) => {
+        // GH #1120: interpolating a null `color` printed the literal string
+        // "Ruby (null)", and a coextruded filament with no colourName rendered
+        // an empty cell. `allColors` returns the primary plus every secondary,
+        // so a multi-colour filament lists what it actually is.
+        const hexes = allColors(f);
+        const swatchText = hexes.length > 0 ? hexes.join(" / ") : displayColor(f);
+        return f.colorName ? `${f.colorName} (${swatchText})` : swatchText;
+      },
     },
     {
       // `cost` is stored per-kg (the form labels it "Cost ({symbol}/kg)"), so a
@@ -235,7 +277,12 @@ function ComparePageInner() {
     },
     {
       label: t("compare.row.onHand"),
-      get: (_f, i) => (totalGrams[i] > 0 ? `${formatGrams(totalGrams[i])} g` : "—"),
+      get: (_f, i) => {
+        const g = onHandGrams[i];
+        // Gating on `> 0` (as this did) rendered a genuinely-empty roll as an
+        // unknown. Only a null — not weight-tracked — is an em-dash.
+        return g == null ? "—" : `${formatGrams(g)} g`;
+      },
     },
   ];
 
@@ -247,23 +294,68 @@ function ComparePageInner() {
       {/* Selector */}
       <section className="mb-8">
         <h2 className="text-sm font-medium mb-2">
-          {t("compare.selectPrompt", { count: selectedIds.length, max: 8 })}
+          {t("compare.selectPrompt", {
+            count: selectedIds.length,
+            max: MAX_COMPARE_FILAMENTS,
+          })}
         </h2>
+        {droppedFromLink > 0 && (
+          <p className="text-sm text-amber-700 dark:text-amber-400 mb-2">
+            {t("compare.truncatedLink", {
+              max: MAX_COMPARE_FILAMENTS,
+              dropped: droppedFromLink,
+            })}
+          </p>
+        )}
         <FilamentPicker
           filaments={allFilaments}
           selectedIds={selectedIdSet}
           onToggle={toggleFilament}
-          maxSelections={8}
+          maxSelections={MAX_COMPARE_FILAMENTS}
           ariaLabel={t("compare.pickerAriaLabel")}
         />
       </section>
 
-      {/* Comparison grid */}
+      {/* Comparison grid.
+          GH #1109: these gates used to be "loading && selected>0" and
+          "!loading && empty && selected===0" — leaving the state "filaments
+          are selected but none could be loaded" matched by NOTHING, which is
+          how a 9-id link produced a silent blank page. The third branch below
+          closes that hole for every cause: the over-cap 400, a malformed id,
+          and a bookmarked link whose filaments were since trashed (which
+          returns 200 with an empty array, so error-handling alone wouldn't
+          have covered it). */}
       {loading && selectedIds.length > 0 && (
         <p className="text-sm text-gray-500">{t("common.loading")}</p>
       )}
-      {!loading && comparison.length === 0 && selectedIds.length === 0 && (
+      {!loading && selectedIds.length === 0 && (
         <p className="text-sm text-gray-500">{t("compare.emptyState")}</p>
+      )}
+      {!loading && selectedIds.length > 0 && comparison.length === 0 && (
+        <div className="rounded border border-gray-200 dark:border-gray-800 p-4">
+          <p className="text-sm text-red-600 dark:text-red-400">
+            {error || t("compare.error.noneLoaded")}
+          </p>
+          <button
+            type="button"
+            onClick={() => {
+              setDroppedFromLink(0);
+              setSelectedIds([]);
+            }}
+            className="mt-3 px-3 py-1.5 text-sm rounded bg-gray-200 dark:bg-gray-800 hover:bg-gray-300 dark:hover:bg-gray-700"
+          >
+            {t("compare.clearSelection")}
+          </button>
+        </div>
+      )}
+
+      {comparison.length > 0 && comparison.length < selectedIds.length && (
+        <p className="text-sm text-amber-700 dark:text-amber-400 mb-2">
+          {t("compare.someUnavailable", {
+            shown: comparison.length,
+            requested: selectedIds.length,
+          })}
+        </p>
       )}
 
       {comparison.length > 0 && (
@@ -279,17 +371,26 @@ function ComparePageInner() {
                     key={f._id}
                     className="text-left py-2 px-3 font-medium min-w-[160px]"
                   >
-                    <Link
-                      href={`/filaments/${f._id}`}
-                      className="text-blue-600 hover:underline flex items-center gap-2"
-                    >
-                      <span
-                        className="inline-block w-4 h-4 rounded-full border border-gray-300 flex-shrink-0"
-                        style={{ backgroundColor: f.color }}
-                        aria-hidden="true"
+                    {/* The swatch sits OUTSIDE the Link on purpose:
+                        FilamentSwatch emits role="img" with an aria-label, so
+                        nesting it would prepend the colour to the link's
+                        accessible name ("#ff0000, Prusament PLA"). */}
+                    <span className="flex items-center gap-2">
+                      <FilamentSwatch
+                        color={f.color}
+                        secondaryColors={f.secondaryColors}
+                        arrangement={deriveArrangement(f.optTags)}
+                        finish={deriveFinish(f.optTags)}
+                        size={16}
+                        className="flex-shrink-0"
                       />
-                      <span className="truncate">{f.name}</span>
-                    </Link>
+                      <Link
+                        href={`/filaments/${f._id}`}
+                        className="text-blue-600 hover:underline truncate"
+                      >
+                        {f.name}
+                      </Link>
+                    </span>
                   </th>
                 ))}
               </tr>
