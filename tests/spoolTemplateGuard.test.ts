@@ -99,6 +99,36 @@ describe("pushSpoolWithTemplateGuard (review F3 on GH #605)", () => {
     ]);
   });
 
+  it("GH #1073: compensation with a DUPLICATE instanceId pulls the TAIL (just-pushed) spool, never the older twin", async () => {
+    // instanceId uniqueness is best-effort (the spool POST's
+    // isSpoolInstanceIdTaken pre-check runs outside the per-filament lock,
+    // and snapshot restores / hybrid whole-doc copies carry ids verbatim).
+    // With a pre-existing spool holding the SAME id, a head-first find used
+    // to resolve the OLDER spool — the $pull then destroyed its photo/usage
+    // history while the just-pushed spool stayed on the template. $push
+    // appends, so the just-pushed subdoc is the LAST match: the tail scan
+    // must pin `_id: "fresh"`, not `_id: "old-twin"`.
+    const after = {
+      _id: "f1",
+      spools: [
+        { _id: "old-twin", instanceId: SPOOL.instanceId, label: "pre-existing" },
+        { _id: "other", instanceId: "1122334455", label: "concurrent" },
+        { _id: "fresh", ...SPOOL },
+      ],
+    };
+    const model = mockModel(after);
+    const check = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+
+    const result = await pushSpoolWithTemplateGuard(model, "f1", SPOOL, check);
+
+    expect(result).toEqual({ outcome: "template" });
+    expect(model.calls.map((c) => c.op)).toEqual(["push", "pull"]);
+    expect(model.calls[1].args).toEqual([
+      { _id: "f1" },
+      { $pull: { spools: { _id: "fresh" } } },
+    ]);
+  });
+
   it("compensation is skipped when the pushed spool can't be located (defensive)", async () => {
     // A post-push doc that somehow doesn't contain our instanceId — nothing
     // safe to pull; still refuse as a template.
