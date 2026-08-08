@@ -15,6 +15,9 @@ import {
 } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
+import { firstVariantGateInfo } from "@/lib/firstVariantGate";
+import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
+import { hasVariants } from "@/lib/resolveFilament";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 
 /**
@@ -221,8 +224,17 @@ export async function POST(request: NextRequest) {
         // per-filament mutex the first-variant gates lock, so the check
         // can't be raced by a mid-flight first variant; restoring a variant
         // under a trashed parent is refused; variant creation requires an
-        // ACTIVE parent), so the revived row is never a template at this
-        // write. Same reasoning as the atlas importer's resurrect path.
+        // ACTIVE parent), so the revived row is never a TEMPLATE at this
+        // write. But that only covers one direction — the revived row may
+        // itself be a VARIANT (GH #1073): with it trashed, `hasVariants`
+        // reads false, so its parent may legitimately have re-acquired
+        // spools/inventory as a standalone. Reviving the row would surface
+        // the FIRST live variant of an inventory-carrying parent — the
+        // stranded-inventory state #605 forbids — so the resurrect runs
+        // through the same adoption gate the bulk importers use
+        // (firstVariantGateInfo), inside the parent's mutex; a gated import
+        // fails with a 409 naming the fix instead of resurrecting (a bulk
+        // import can't confirm a promotion).
         //
         // Splice `_deletedAt: null` into the $set body so the resurrect
         // atomic also drops the tombstone; $unset (if any) for stale
@@ -232,15 +244,44 @@ export async function POST(request: NextRequest) {
           ...(resurrectUpdate.$set as Record<string, unknown>),
           _deletedAt: null,
         };
-        const resurrected = await Filament.findOneAndUpdate(
-          {
-            _id: existingTrashed._id,
-            _deletedAt: { $ne: null },
-            _purged: { $ne: true },
-          },
-          resurrectUpdate,
-          { runValidators: true, context: "query", returnDocument: "after" },
-        );
+        const doResurrect = () =>
+          Filament.findOneAndUpdate(
+            {
+              _id: existingTrashed._id,
+              _deletedAt: { $ne: null },
+              _purged: { $ne: true },
+            },
+            resurrectUpdate,
+            { runValidators: true, context: "query", returnDocument: "after" },
+          );
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let resurrected: any;
+        if (existingTrashed.parentId) {
+          const parentKey = String(existingTrashed.parentId);
+          let gateReason: string | null = null;
+          resurrected = await runExclusive(filamentLockKey(parentKey), async () => {
+            const gate = await firstVariantGateInfo(Filament, existingTrashed.parentId);
+            if (gate.reason) {
+              gateReason = gate.reason;
+              return null;
+            }
+            const doc = await doResurrect();
+            // Round 7 P2 parity with the CSV importer: an ungated first
+            // variant of a threshold-ONLY parent just surfaced — clear the
+            // parent's now-dead lowStockThreshold AFTER the write (parent
+            // state change last), still inside the per-parent lock.
+            // Re-checking hasVariants (rather than trusting the pre-write
+            // snapshot) covers a resurrect that missed its filter (purged /
+            // restored mid-window) — no variant surfaced, the threshold stays.
+            if (gate.orphanedThreshold && (await hasVariants(Filament, parentKey))) {
+              await clearOrphanedParentThreshold(Filament, existingTrashed.parentId);
+            }
+            return doc;
+          });
+          if (gateReason) return errorResponse(gateReason, 409);
+        } else {
+          resurrected = await doResurrect();
+        }
         if (resurrected) {
           return importResponse(resurrected, false, payload);
         }

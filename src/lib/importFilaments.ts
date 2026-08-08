@@ -5,10 +5,8 @@ import { unsanitizeCsvCell } from "@/lib/csvWriter";
 import { hasVariants } from "@/lib/resolveFilament";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
-import {
-  orphansThresholdOnFirstVariant,
-  clearOrphanedParentThreshold,
-} from "@/lib/promoteParent";
+import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
+import { firstVariantGateInfo } from "@/lib/firstVariantGate";
 
 export interface ImportRow {
   name?: string;
@@ -583,79 +581,10 @@ export function pruneInheritedCreateDoc(
   return out;
 }
 
-/**
- * GH #605 (codex round 3 sweep): reason a row must be skipped because its
- * write would surface the FIRST live variant of a parent that still holds
- * its own INVENTORY (spools / a legacy totalWeight). The interactive routes
- * resolve this with the 409-confirm-promote round-trip, but a bulk import
- * has no way to confirm a per-parent promotion — and promotion is NEVER
- * silent (owner decision) — so the row rejects with a per-row error
- * instead. Once the user promotes the parent ("Convert to template" on its
- * detail page), a re-import of the same row sails through.
- *
- * DELIBERATELY NARROWER than parentPromotionState: only the inventory
- * fields gate here, NOT color/colorName. The Filament schema defaults
- * `color` to #808080, so every parent this same batch just created from a
- * CSV row without a Color cell "carries" a color it never really had —
- * gating on it would reject the variant rows of every in-batch
- * parent+variant round-trip (the GH #379/#951 export→reimport flows this
- * importer exists for), and a colorless template can't even round-trip
- * (an empty Color cell re-imports as the gray default). A color-carrying
- * parent gaining variants is exactly the legacy pre-#605 shape the app
- * tolerates enforce-forward and surfaces with the "Convert to template"
- * banner; stranded INVENTORY is the state #605 forbids, and spools /
- * totalWeight never enter through this importer, so a true positive here
- * is always pre-existing DB inventory worth stopping for.
- *
- * Returns null when the write is fine: parent missing (dangling ref — the
- * pre-existing posture writes the doc as-is), parent holds no inventory,
- * or parent already a template (≥1 live variant — nothing left to gate).
- *
- * Call INSIDE `runExclusive(filamentLockKey(parentId))` together with the
- * write it protects, so the decision and the create/resurrect serialize
- * with the interactive promotion gate and the spool routes on the same key.
- *
- * Round 7 P2 — `orphanedThreshold`: true when the row's write mints the
- * first variant of a threshold-ONLY parent (`lowStockThreshold` set, nothing
- * that would gate a promotion — see orphansThresholdOnFirstVariant). The row
- * proceeds (nothing to confirm), but the caller must clear the parent's now
- * dead threshold AFTER the write surfaces a live variant. A COLOR-carrying
- * parent reports false on purpose: it stays the enforce-forward legacy shape
- * whose later "Convert to template" promotion MOVES the threshold with the
- * rest — clearing here would lose it.
- */
-async function firstVariantGateInfo(
-  parentId: mongoose.Types.ObjectId | string,
-): Promise<{ reason: string | null; orphanedThreshold: boolean }> {
-  const parent = await Filament.findOne({ _id: parentId, _deletedAt: null })
-    // Only what the inventory + threshold checks read — spools projected to
-    // bare _ids (the count is what matters; photoDataUrl can be MBs).
-    .select("name color colorName totalWeight lowStockThreshold spools._id")
-    .lean();
-  if (!parent) return { reason: null, orphanedThreshold: false };
-  const spoolCount = Array.isArray(parent.spools) ? parent.spools.length : 0;
-  const carriesInventory = spoolCount > 0 || parent.totalWeight != null;
-  const orphansThreshold = orphansThresholdOnFirstVariant(parent);
-  if (!carriesInventory && !orphansThreshold) {
-    return { reason: null, orphanedThreshold: false };
-  }
-  if (await hasVariants(Filament, String(parentId))) {
-    return { reason: null, orphanedThreshold: false };
-  }
-  if (!carriesInventory) {
-    return { reason: null, orphanedThreshold: true };
-  }
-  const inventory =
-    spoolCount > 0 ? `${spoolCount} spool(s)` : "a tracked total weight";
-  return {
-    reason:
-      `Parent "${parent.name}" still holds its own inventory (${inventory}), which would be ` +
-      `stranded on a template by its first variant. Promote the parent first ("Convert to ` +
-      `template" on its detail page) or create the variant in the app to confirm the ` +
-      `promotion, then re-import this row`,
-    orphanedThreshold: false,
-  };
-}
+// GH #605 (codex round 3 sweep) / GH #1073: the first-variant adoption gate
+// lives in src/lib/firstVariantGate.ts — extracted so the INI + Bambu bulk
+// phase-2 resurrect paths share the identical decision (see its docblock for
+// the full rationale, including why color deliberately doesn't gate).
 
 export async function upsertImportRows(
   rows: ImportRow[],
@@ -1167,7 +1096,7 @@ export async function upsertImportRows(
         const gateReason = await runExclusive(
           filamentLockKey(createParentId),
           async (): Promise<string | null> => {
-            const gate = await firstVariantGateInfo(createParentId);
+            const gate = await firstVariantGateInfo(Filament, createParentId);
             if (gate.reason) return gate.reason;
             await performWrite();
             // Round 7 P2: an ungated first variant of a threshold-ONLY
