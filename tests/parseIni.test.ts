@@ -467,9 +467,25 @@ describe("serializeIniValue (GH #1070)", () => {
   it("unwraps a legacy form-wrapped raw multi-line value before escaping (no literal quote leakage)", () => {
     // Pre-#1070 FilamentForm stored `"${textarea}"` — outer quotes are the
     // WRAPPER. Interior raw quotes and backslashes are content and get escaped.
-    expect(serializeIniValue('"line one\nsay "hi"\\done"')).toBe(
+    // The strip is KEY-SCOPED to the three keys the form actually wrote (r9).
+    expect(serializeIniValue('"line one\nsay "hi"\\done"', "filament_notes")).toBe(
       '"line one\\nsay \\"hi\\"\\\\done"',
     );
+    expect(serializeIniValue('"a\nb"', "start_filament_gcode")).toBe('"a\\nb"');
+    expect(serializeIniValue('"a\nb"', "end_filament_gcode")).toBe('"a\\nb"');
+  });
+
+  it("preserves boundary quotes as CONTENT on non-form keys (Codex P2 r9)", () => {
+    // A pre-upgrade generic-API / Bambu-import row could hold raw multi-line
+    // content that genuinely begins and ends with quotes on some OTHER key —
+    // the form never wrote that key, so those quotes can't be a wrapper.
+    expect(serializeIniValue('"first\nlast"', "custom_note")).toBe(
+      '"\\"first\\nlast\\""',
+    );
+    // No key (direct/unknown caller) — same conservative posture.
+    expect(serializeIniValue('"first\nlast"')).toBe('"\\"first\\nlast\\""');
+    // Unquoted raw multi-line on a non-form key still escapes normally.
+    expect(serializeIniValue("a\nb", "custom_note")).toBe('"a\\nb"');
   });
 
   it("round-trips: serializeIniValue output re-imports byte-identically (wire-canonical)", () => {

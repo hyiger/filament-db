@@ -251,15 +251,37 @@ export function decodeMultilineWireValue(value: string): string {
  * `"line one<NL>line two"`) intends its outer quotes as the WRAPPER, not
  * content, so they are stripped before escaping — otherwise literal quotes
  * would leak into the preset's text.
+ *
+ * The wrapper strip is KEY-SCOPED (Codex P2 round 9 on PR #1086): the
+ * pre-#1070 form only ever hand-wrapped {@link LEGACY_FORM_WRAPPED_KEYS},
+ * so a quote-bounded raw multi-line value on any OTHER key can't be a
+ * form wrap — its quotes are genuine content from a pre-upgrade
+ * generic-API / Bambu-import write and survive the escape. Accepted
+ * residue on the three form keys themselves: a pre-upgrade generic write
+ * of quote-bounded multi-line content there is byte-indistinguishable
+ * from a form wrap, and form writes vastly dominate those keys.
  */
-export function serializeIniValue(value: string): string {
+export function serializeIniValue(value: string, key?: string): string {
   if (!value.includes("\n") && !value.includes("\r")) return value;
-  const content =
-    value.length >= 2 && value.startsWith('"') && value.endsWith('"')
-      ? value.slice(1, -1)
-      : value;
+  const stripWrapper =
+    key !== undefined &&
+    LEGACY_FORM_WRAPPED_KEYS.has(key) &&
+    value.length >= 2 &&
+    value.startsWith('"') &&
+    value.endsWith('"');
+  const content = stripWrapper ? value.slice(1, -1) : value;
   return `"${escapeIniValueContent(content)}"`;
 }
+
+/**
+ * The ONLY settings keys the pre-#1070 FilamentForm ever hand-wrapped as
+ * `"${textarea}"` — see serializeIniValue's key-scoped wrapper strip.
+ */
+export const LEGACY_FORM_WRAPPED_KEYS = new Set([
+  "start_filament_gcode",
+  "end_filament_gcode",
+  "filament_notes",
+]);
 
 export function parseIniFilaments(content: string): FilamentData[] {
   const filaments: FilamentData[] = [];

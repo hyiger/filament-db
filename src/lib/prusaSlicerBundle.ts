@@ -612,7 +612,9 @@ function writeSection(
       // ONLY such values into PrusaSlicer's quoted-escaped form; every
       // single-line value — including already-escaped fork-shaped
       // `"...\n..."` strings — passes through byte-identical.
-      lines.push(`${key} = ${serializeIniValue(String(value))}`);
+      // The key scopes the legacy form-wrapper strip to the three keys the
+      // pre-#1070 form actually wrote (Codex P2 r9 — see serializeIniValue).
+      lines.push(`${key} = ${serializeIniValue(String(value), key)}`);
     }
   }
 
