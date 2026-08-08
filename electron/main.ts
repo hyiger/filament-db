@@ -3,7 +3,6 @@ import path from "path";
 import fs from "fs";
 import { execFile } from "child_process";
 import Store from "electron-store";
-import http from "http";
 import { NfcService } from "./nfc-service";
 import {
   listLabelPrinters,
@@ -20,6 +19,7 @@ import { SyncService, SyncStatus, getDbNameFromUri } from "./sync-service";
 import { initAutoUpdater } from "./auto-updater";
 import { assertTrustedSender, validateMongoUri } from "./ipc-security";
 import { shouldApplyAppCsp } from "./csp-scope";
+import { waitForServer } from "./wait-for-server";
 
 // ── Diagnostic log ──
 // Writes lifecycle and crash events to a file in userData so users on
@@ -399,27 +399,6 @@ function createWindow(urlPath = "/") {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
-function waitForServer(port: number, timeoutMs = 30000): Promise<void> {
-  const start = Date.now();
-  return new Promise((resolve, reject) => {
-    function check() {
-      const req = http.get(`http://localhost:${port}/`, (res) => {
-        res.resume();
-        resolve();
-      });
-      req.on("error", () => {
-        if (Date.now() - start > timeoutMs) {
-          reject(new Error("Server startup timed out"));
-        } else {
-          setTimeout(check, 500);
-        }
-      });
-      req.end();
-    }
-    check();
-  });
-}
-
 /**
  * Resolve a mongodb+srv:// URI to a standard mongodb:// URI.
  * The standalone Next.js server's bundled mongodb driver cannot do DNS SRV
@@ -759,16 +738,24 @@ async function resolveMongoUri(): Promise<string | null> {
       syncService = null;
     }
 
-    // Test Atlas connectivity — fall back to local if unreachable
+    // Test Atlas connectivity — fall back to local if unreachable.
+    // GH #1077: the client is hoisted out of the `try` and closed in a
+    // `finally`, matching the sibling probes (test-connection,
+    // resolveSrvUri, SyncService.checkAtlasConnectivity). The old shape
+    // constructed + closed the client inside the `try`, so any throw
+    // between connect() and close() — e.g. the ping failing on a
+    // reachable-but-unauthorized cluster — leaked a connected client
+    // (socket pool, heartbeat timers, topology monitor) for the rest of
+    // the main-process lifetime.
+    let client: import("mongodb").MongoClient | undefined;
     try {
       const { MongoClient } = await import("mongodb");
-      const client = new MongoClient(atlasUri, {
+      client = new MongoClient(atlasUri, {
         serverSelectionTimeoutMS: 5000,
         connectTimeoutMS: 5000,
       });
       await client.connect();
       await client.db(getDbNameFromUri(atlasUri)).command({ ping: 1 });
-      await client.close();
 
       store.set("mongodbUri", atlasUri);
       // GH #1006 F3: pure Atlas doesn't use the embedded mongod — stop one a
@@ -811,6 +798,12 @@ async function resolveMongoUri(): Promise<string | null> {
       }
 
       return localUri;
+    } finally {
+      // Runs on BOTH paths — a `return` inside try/catch still executes
+      // the finally before the value is delivered. close() is a no-op on
+      // a client that never connected; swallow close errors like the
+      // sibling probes do.
+      await client?.close().catch(() => {});
     }
   }
 
