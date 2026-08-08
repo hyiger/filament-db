@@ -138,6 +138,7 @@
   "inventory.stats.spools": "Spools",
   "inventory.stats.locations": "Locations",
   "inventory.stats.totalWeight": "Total weight",
+  "inventory.stats.searchNote": "Totals reflect your current search.",
   "inventory.filter.search": "Search",
   "inventory.filter.searchPlaceholder": "Filament, label, lot…",
   "inventory.filter.kind": "Kind",
