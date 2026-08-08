@@ -32,6 +32,19 @@ export interface IPrintHistory extends Document {
     filamentId: mongoose.Types.ObjectId;
     spoolId: mongoose.Types.ObjectId | null;
     grams: number;
+    /**
+     * GH #1074: grams ACTUALLY removed from the spool at debit time —
+     * `min(spool.totalWeight, grams)` when the spool tracked a weight, else
+     * `grams`. The debit clamps at zero, so when the spool held fewer grams
+     * than the job consumed, the shortfall was silently absorbed; the DELETE
+     * refund used to restore the full requested `grams` and mint phantom
+     * inventory. The refund now pays back this value. `grams` stays the
+     * requested/consumed amount so analytics totals are unchanged. Null on
+     * rows created before the field existed — the refund falls back to
+     * `grams` for those (accepted residual: legacy rows keep the old
+     * full-refund behavior).
+     */
+    debitedGrams?: number | null;
   }[];
   /** When the job was sliced / started. */
   startedAt: Date;
@@ -68,6 +81,14 @@ const PrintHistorySchema = new Schema<IPrintHistory>(
         // remap. All writes funnel through that route.
         spoolId: { type: Schema.Types.ObjectId, default: null },
         grams: { type: Number, required: true, min: 0 },
+        // GH #1074: grams actually removed from the spool (see IPrintHistory).
+        // Declared for real — strict mode would silently strip it from
+        // snapshot-restored rows otherwise (same reasoning as syncId, #361).
+        // No `min: 0`: the value is server-computed, and a schema validator
+        // would brick saves of legacy docs carrying unexpected values that
+        // arrived through paths bypassing the routes (hybrid sync, restore) —
+        // the DELETE refund guards the value at read time instead.
+        debitedGrams: { type: Number, default: null },
       },
     ],
     startedAt: { type: Date, required: true, default: Date.now, index: true },

@@ -92,6 +92,17 @@ export interface IUsageEntry {
    * Always null for `manual`/`nfc` entries (no PrintHistory record exists).
    */
   jobId: mongoose.Types.ObjectId | null;
+  /**
+   * GH #1074: grams ACTUALLY removed from the spool when this entry was
+   * created by `POST /api/print-history` — `min(spool.totalWeight, grams)`
+   * at debit time (the debit clamps at zero, so a job bigger than the
+   * spool's remaining weight absorbs the shortfall silently). Mirrors the
+   * same field on the PrintHistory usage row, which is what the DELETE
+   * refund reads; this copy keeps the per-spool ledger self-describing.
+   * Null for manual/nfc entries and for job entries created before the
+   * field existed.
+   */
+  debitedGrams?: number | null;
 }
 
 export interface ISpool {
@@ -465,6 +476,11 @@ const FilamentSchema = new Schema<IFilament>(
             // Index so the undo path's `usageHistory.jobId === entry._id`
             // filter doesn't full-scan every spool's array.
             jobId: { type: Schema.Types.ObjectId, ref: "PrintHistory", default: null, index: true },
+            // GH #1074: grams actually removed from the spool at debit time
+            // (see IUsageEntry). No `min: 0` on purpose — server-computed,
+            // and a validator would brick later saves of docs that acquired
+            // unexpected values through sync/restore paths.
+            debitedGrams: { type: Number, default: null },
           },
         ],
       },
