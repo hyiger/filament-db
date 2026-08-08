@@ -2,10 +2,12 @@ import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
 import {
   buildStructuredUpdate,
+  prepareBambuUpdate,
   resolveAndApplyCalibration,
   type ExistingFilamentForApply,
 } from "@/lib/bambuStudioApply";
 import type {
+  BambuParseResult,
   CalibrationHints,
   ParsedFilament,
 } from "@/lib/bambuStudioImport";
@@ -21,7 +23,9 @@ import type {
  * The other exports in `bambuStudioApply.ts` (`prepareBambuUpdate`,
  * `resolveAndApplyCalibration`) are async + do mongoose queries; they
  * stay covered by the integration tests in `tests/bambustudio-route.
- * test.ts` where the in-memory DB is available.
+ * test.ts` where the in-memory DB is available — plus the GH #1075
+ * settings-filter cases at the bottom of this file, which drive
+ * `prepareBambuUpdate` down paths that never reach a query.
  */
 function makeParsed(over: Partial<ParsedFilament> = {}): ParsedFilament {
   return {
@@ -1246,5 +1250,155 @@ describe("resolveAndApplyCalibration (DB-backed)", () => {
       null,
     );
     expect(outcome).toEqual({ applied: false, unresolved: true });
+  });
+});
+
+/**
+ * GH #1075 — the settings-bag parent-equality filter in `prepareBambuUpdate`.
+ *
+ * A variant's Bambu/Orca export flattens its settings bag through
+ * resolveFilament's shallow parent-merge, so the exported preset echoes every
+ * passthrough key the variant merely inherits. Pre-fix, `prepareBambuUpdate`
+ * wrote the merged bag verbatim, pinning those echoed keys onto the variant
+ * as local overrides and severing GH #106 live inheritance — the same defect
+ * class #1008 F2 fixed on the Orca/PrusaSlicer per-id syncs. The filter runs
+ * on the FINALIZED bag (post merge/legacy-strip/chamber-fallback) and drops
+ * every key strictly equal to the parent's; because the bag is a whole-object
+ * $set, a STORED parent-equal pin self-heals too (GH #971/#972 posture).
+ *
+ * These cases never touch the DB: no printer hint means the calibration
+ * resolver bails before any query, and no compatible_printers_condition key
+ * means the legacy-condition strip never runs.
+ */
+describe("prepareBambuUpdate settings-bag variant inheritance (GH #1075)", () => {
+  function parseResult(
+    filamentOver: Partial<ParsedFilament> = {},
+    hintsOver: Partial<CalibrationHints> = {},
+  ): BambuParseResult {
+    return {
+      filament: {
+        name: "Bag Filament",
+        temperatures: {},
+        bedTypeTemps: [],
+        settings: {},
+        ...filamentOver,
+      },
+      calibrationHints: { hasAnyHint: false, ...hintsOver },
+    };
+  }
+
+  function variantExisting(
+    over: Partial<ExistingFilamentForApply> = {},
+  ): ExistingFilamentForApply {
+    return {
+      parentId: "507f1f77bcf86cd799439011",
+      parent: { settings: {} },
+      settings: {},
+      ...over,
+    };
+  }
+
+  it("drops an echoed parent-equal key; keeps divergent + variant-only keys", async () => {
+    const existing = variantExisting({
+      settings: { own_key: "x" },
+      parent: { settings: { ram: "parentval", shared: "same" } },
+    });
+    const { update, settingsResult } = await prepareBambuUpdate(
+      parseResult({ settings: { ram: "parentval", shared: "diff" } }),
+      existing,
+    );
+    expect(settingsResult.error).toBeNull();
+    // `ram` equals the parent → dropped (keeps inheriting); `shared` diverges
+    // → genuine override; `own_key` is variant-only → survives the replace.
+    expect(update.settings).toEqual({ own_key: "x", shared: "diff" });
+  });
+
+  it("self-heals a STORED parent-equal pin via the whole-object write", async () => {
+    const existing = variantExisting({
+      settings: { pinned: "same", own_key: "x" },
+      parent: { settings: { pinned: "same" } },
+    });
+    const { update } = await prepareBambuUpdate(
+      parseResult({ settings: { pinned: "same" } }),
+      existing,
+    );
+    // The stored pin rides in via the merge seed, gets filtered out, and the
+    // whole-object $set replaces the bag without it → inheritance resumes.
+    expect(update.settings).toEqual({ own_key: "x" });
+  });
+
+  it("leaves the bag untouched when the sync never writes settings (no passthrough keys)", async () => {
+    const existing = variantExisting({
+      settings: { pinned: "same" },
+      parent: { settings: { pinned: "same" } },
+    });
+    const { update } = await prepareBambuUpdate(parseResult(), existing);
+    // Matches the OrcaSlicer route's added/removed persist-gate: no bag write
+    // → no self-heal on this sync (and no spurious settings $set either).
+    expect(update.settings).toBeUndefined();
+  });
+
+  it("writes the merged bag verbatim on a root filament (no parent)", async () => {
+    const { update } = await prepareBambuUpdate(
+      parseResult({ settings: { key: "v" } }),
+      { settings: {}, parentId: null, parent: null },
+    );
+    expect(update.settings).toEqual({ key: "v" });
+  });
+
+  it("writes verbatim when the parent has no usable settings object", async () => {
+    // Parent doc without a settings field (legacy shape).
+    const missing = await prepareBambuUpdate(
+      parseResult({ settings: { ram: "parentval" } }),
+      variantExisting({ parent: {} }),
+    );
+    expect(missing.update.settings).toEqual({ ram: "parentval" });
+
+    // Malformed (array-shaped) settings — nothing provable, keep the bag.
+    const arrayShaped = await prepareBambuUpdate(
+      parseResult({ settings: { ram: "parentval" } }),
+      variantExisting({ parent: { settings: ["not", "a", "bag"] } }),
+    );
+    expect(arrayShaped.update.settings).toEqual({ ram: "parentval" });
+
+    // Malformed (string-shaped) settings — truthy but not an object.
+    const stringShaped = await prepareBambuUpdate(
+      parseResult({ settings: { ram: "parentval" } }),
+      variantExisting({ parent: { settings: "not a bag" } }),
+    );
+    expect(stringShaped.update.settings).toEqual({ ram: "parentval" });
+  });
+
+  it("chamber-fallback keys need no special-casing — strict equality drops a parent-equal pair", async () => {
+    // No printer hint → matchPrinterNozzle bails before any DB query, so the
+    // chamber value falls back into the settings bag AFTER the merge; the
+    // parent already carries the identical pair, so the filter drops both and
+    // the variant keeps inheriting them.
+    const existing = variantExisting({
+      parent: {
+        settings: { chamber_temperature: "60", activate_chamber_temp_control: "1" },
+      },
+    });
+    const { update, calibrationOutcome } = await prepareBambuUpdate(
+      parseResult({}, { chamberTemp: 60 }),
+      existing,
+    );
+    expect(calibrationOutcome.applied).toBe(false);
+    expect(update.settings).toEqual({});
+  });
+
+  it("keeps a chamber value that DIVERGES from the parent's", async () => {
+    const existing = variantExisting({
+      parent: {
+        settings: { chamber_temperature: "50", activate_chamber_temp_control: "1" },
+      },
+    });
+    const { update } = await prepareBambuUpdate(
+      parseResult({}, { chamberTemp: 60 }),
+      existing,
+    );
+    // chamber_temperature diverges → stored; the activate flag equals the
+    // parent's → dropped (inherited, same effective value).
+    expect(update.settings).toEqual({ chamber_temperature: "60" });
   });
 });
