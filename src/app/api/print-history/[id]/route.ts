@@ -402,6 +402,10 @@ export async function DELETE(
             // exactly the double-refund #621 describes.
             if (removeIdx === -1) return null;
 
+            // Codex P2 round 2 on PR #1092: the refund is computed from the
+            // MATCHED LEDGER ENTRY, not the PrintHistory row — see the
+            // refundGrams comment below.
+            const removedEntry = history[removeIdx];
             spool.usageHistory = history.filter((_, idx) => idx !== removeIdx);
 
       // Refund weight. GH #228 + Codex P1 review on PR #229: clamp at
@@ -446,19 +450,31 @@ export async function DELETE(
               // netFilamentWeight is known. The finiteness/sign guard covers
               // values that arrived through paths bypassing the POST route
               // (hybrid sync, snapshot restore).
-              // Codex P2 on PR #1092: a genuine clamped debit can never
-              // EXCEED the requested grams, so a debitedGrams > grams (a
-              // corrupt row arriving via snapshot restore / hybrid sync —
-              // the field deliberately has no schema bound) falls back to
-              // the legacy full-`grams` refund instead of crediting an
-              // inflated amount with no capacity ceiling.
+              // Codex P2s on PR #1092 (two rounds): the refund reads the
+              // MATCHED LEDGER ENTRY (`removedEntry`), never the PrintHistory
+              // row. Round 2's scenario: two rows against one spool with
+              // identical `grams` but different actual debits (150g spool,
+              // two 100g rows → debits of 100 and 50). If the delete
+              // partially completes (one entry removed + refunded, then a
+              // save failure leaves the job active), the retry's matcher
+              // can't tell the remaining entry apart and would associate it
+              // with the FIRST row again — refunding the row's 100 instead
+              // of the entry's 50 and minting phantom weight. Undoing
+              // exactly what the removed entry recorded makes the total
+              // refund equal the total debit regardless of which row a
+              // retry pairs it with. Round 1's guard stays: a genuine
+              // clamped debit can never EXCEED the entry's requested grams,
+              // so a corrupt debitedGrams (sync/restore — the field has no
+              // schema bound) falls back to the entry's full-`grams` refund
+              // (also the legacy pre-#1074 path for entries without the
+              // field).
               const refundGrams =
-                typeof u.debitedGrams === "number" &&
-                Number.isFinite(u.debitedGrams) &&
-                u.debitedGrams >= 0 &&
-                u.debitedGrams <= u.grams
-                  ? u.debitedGrams
-                  : u.grams;
+                typeof removedEntry.debitedGrams === "number" &&
+                Number.isFinite(removedEntry.debitedGrams) &&
+                removedEntry.debitedGrams >= 0 &&
+                removedEntry.debitedGrams <= removedEntry.grams
+                  ? removedEntry.debitedGrams
+                  : removedEntry.grams;
               const refunded = spool.totalWeight + refundGrams;
               // Only clamp when we have a real net-capacity ceiling. The empty-
               // spool tare alone isn't a ceiling — a value of "spoolWeight: 200,
