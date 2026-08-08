@@ -406,9 +406,18 @@ export function dryBoxGeometry(spec: LabelSpec, qrPayload: string): DryBoxGeomet
   // stock (120x70mm) grow a 287-dot symbol that pushed the header past the
   // footer and turned a printable label into an error; shrinking the symbol
   // to the available height is the more useful outcome.
+  //
+  // The width bound also reserves the header box's RIGHT BORDER INK: `BOX`
+  // draws its stroke inward from (x1, y1), so the right border occupies
+  // [headerRight - thickness, headerRight]. Bounding the footprint at
+  // headerRight alone let a tight fit park the border's 5 dots inside the
+  // QR's right quiet zone (GH #1084) — the same "prints fine, never scans"
+  // failure fitQr exists to prevent. The height bound needs no thickness
+  // term: headerBottom grows to clear the footprint plus the bottom border
+  // (see below), and EDGE_MARGIN > thickness keeps the footer guard intact.
   const qrRegion = Math.min(
     L.qr.maxRegion,
-    widthDots - L.qr.x - EDGE_MARGIN,
+    widthDots - L.qr.x - EDGE_MARGIN - L.headerBox.thickness,
     heightDots - L.footerHeight - L.qr.y - EDGE_MARGIN,
   );
   if (qrRegion < 1) {
@@ -419,9 +428,16 @@ export function dryBoxGeometry(spec: LabelSpec, qrPayload: string): DryBoxGeomet
   }
   const qr = fitQr(qrPayload, qrRegion);
 
-  // Grow the header box to clear the QR's FOOTPRINT, so the border never
-  // lands inside its quiet zone.
-  const headerBottom = Math.max(L.headerBox.minBottom, L.qr.y + qr.footprintDots);
+  // Grow the header box to clear the QR's FOOTPRINT — plus the border's own
+  // INK, so the border never lands inside the quiet zone. `BOX` strokes
+  // inward from (x1, y1): the bottom border spans [y1 - thickness, y1]
+  // (TsplLabelPreview.tsx renders exactly this, and it is hardware-exact).
+  // Setting y1 to the footprint edge alone put those 5 dots INSIDE the
+  // bottom quiet zone on every QR-driven label (GH #1084).
+  const headerBottom = Math.max(
+    L.headerBox.minBottom,
+    L.qr.y + qr.footprintDots + L.headerBox.thickness,
+  );
   const firstRowY = headerBottom + L.rowsOffset;
   const footerTop = heightDots - L.footerHeight;
   // Without this the footer lands at a NEGATIVE y on very short stock (20mm
