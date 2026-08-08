@@ -34,6 +34,36 @@
 export type LeaveMode = "replace" | "push";
 
 /**
+ * Build the state object for our synthetic guard entry, carrying forward
+ * whatever the current entry already holds.
+ *
+ * This matters because of WHEN the guard is pushed. React flushes passive
+ * effects child-first, so on a hard load (direct URL, reload, deep link) this
+ * hook's effect runs BEFORE its ancestor AppRouter's — and AppRouter patches
+ * `window.history.pushState` inside that same late effect. The guard therefore
+ * goes through the UNPATCHED native pushState and lands with only our own key,
+ * missing Next's `__NA` marker and its internals tree.
+ *
+ * Next's own popstate handler treats a state without `__NA` as an entry from
+ * the old `pages` router and responds with a full `window.location.reload()`
+ * (`next/dist/client/components/app-router.js`). So pressing Back from a
+ * hard-loaded form did a hard page reload instead of a client-side restore.
+ *
+ * Copying the current state and adding our marker keeps `__NA` and the
+ * internals tree intact, so Next restores normally. On a client-side
+ * navigation the patched pushState would have merged those keys anyway, which
+ * is why the bug only ever showed on a hard load.
+ */
+export function buildGuardState(currentState: unknown): Record<string, unknown> {
+  const base =
+    typeof currentState === "object" && currentState !== null
+      ? { ...(currentState as Record<string, unknown>) }
+      : {};
+  base.unsavedGuard = true;
+  return base;
+}
+
+/**
  * True when `state` is the synthetic guard entry this hook pushed.
  *
  * Deliberately tolerant of any shape: `history.state` is `unknown` at runtime

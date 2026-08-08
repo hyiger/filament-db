@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { decideLeaveMode, isUnsavedGuardState } from "@/lib/unsavedNavigation";
+import {
+  buildGuardState,
+  decideLeaveMode,
+  isUnsavedGuardState,
+} from "@/lib/unsavedNavigation";
 
 describe("isUnsavedGuardState", () => {
   it("recognizes our synthetic guard entry", () => {
@@ -54,5 +58,44 @@ describe("decideLeaveMode", () => {
 
   it("pushes when neither signal holds", () => {
     expect(decideLeaveMode(false, null)).toBe("push");
+  });
+});
+
+describe("buildGuardState", () => {
+  it("carries Next's markers forward so its popstate handler doesn't hard-reload", () => {
+    // A state without `__NA` makes Next's own popstate handler call
+    // window.location.reload() — it reads as an entry from the pages router.
+    const tree = { tree: ["", {}], renderedSearch: "" };
+    const built = buildGuardState({ __NA: true, __PRIVATE_NEXTJS_INTERNALS_TREE: tree });
+    expect(built).toEqual({
+      __NA: true,
+      __PRIVATE_NEXTJS_INTERNALS_TREE: tree,
+      unsavedGuard: true,
+    });
+  });
+
+  it("does not mutate the state the browser handed us", () => {
+    const original = { __NA: true };
+    const built = buildGuardState(original);
+    expect(original).toEqual({ __NA: true });
+    expect(built).not.toBe(original);
+  });
+
+  it("still marks the guard when there is no prior state", () => {
+    // A hard load starts with history.state === null.
+    expect(buildGuardState(null)).toEqual({ unsavedGuard: true });
+    expect(buildGuardState(undefined)).toEqual({ unsavedGuard: true });
+  });
+
+  it("ignores a primitive state rather than spreading it", () => {
+    // Spreading a string would splat its characters as indexed keys.
+    expect(buildGuardState("pages-router-junk")).toEqual({ unsavedGuard: true });
+    expect(buildGuardState(7)).toEqual({ unsavedGuard: true });
+  });
+
+  it("produces a state its own predicate recognizes", () => {
+    // Round-trip: whatever we push must be what decideLeaveMode later sees.
+    expect(isUnsavedGuardState(buildGuardState({ __NA: true }))).toBe(true);
+    expect(decideLeaveMode(true, buildGuardState(null))).toBe("replace");
   });
 });

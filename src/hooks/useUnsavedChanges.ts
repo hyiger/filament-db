@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { decideLeaveMode, isUnsavedGuardState } from "@/lib/unsavedNavigation";
+import { buildGuardState, decideLeaveMode, isUnsavedGuardState } from "@/lib/unsavedNavigation";
 
 /**
  * Hook to manage unsaved-changes warnings across form pages.
@@ -44,12 +44,25 @@ import { decideLeaveMode, isUnsavedGuardState } from "@/lib/unsavedNavigation";
  * ## How the guard is consumed (GH #1100)
  *
  * #548 consumed it with `history.back()` and completed the navigation with
- * `router.push(dest)` from inside the resulting `popstate` handler. Because
- * the guard shares the form's URL, that `back()` lands on the form's own entry
- * and Next's App Router popstate restore re-renders the form — swallowing our
- * `push`. Every save on the 8 non-filament form pages left the user sitting on
- * a populated form with only a toast to say it had worked, so the obvious
- * reaction was to submit again.
+ * `router.push(dest)` from inside the resulting `popstate` handler. That races
+ * Next's own popstate handling, and loses:
+ *
+ *  - React flushes passive effects child-first, so on a HARD LOAD (direct URL,
+ *    reload, deep link) this hook registers its popstate listener BEFORE its
+ *    ancestor AppRouter registers its own. Ours therefore runs first.
+ *  - Our `router.push` is dispatched first and becomes `actionQueue.pending`.
+ *    Next's handler then dispatches `ACTION_RESTORE` for the same event, and
+ *    `app-router-instance.js` marks any pending action `discarded` because
+ *    "navigations (including back/forward) take priority". Our push is
+ *    silently dropped and the form simply re-renders.
+ *
+ * The save succeeded and the toast fired, so the user's obvious reaction was
+ * to submit again — which produced a duplicate-name 409 for the record they
+ * had just created.
+ *
+ * Note the entry path is what decides it: reaching the form by client-side
+ * navigation registers AppRouter's listener first, so the push survived. That
+ * is why the bug looked page-specific in testing when it never was.
  *
  * `leave()` now consumes the guard with `router.replace(dest)`, which
  * overwrites the guard entry directly. The resulting stack is identical to
@@ -92,15 +105,17 @@ export function useUnsavedChanges(fallbackUrl: string) {
 
   // Intercept browser back/forward when form is dirty.
   useEffect(() => {
-    // Push a duplicate history entry so we can intercept popstate.
+    // Push a duplicate history entry so we can intercept popstate. The state
+    // carries forward whatever the current entry holds (see buildGuardState —
+    // dropping Next's `__NA` makes its popstate handler hard-reload the page).
     const url = window.location.href;
-    window.history.pushState({ unsavedGuard: true }, "", url);
+    window.history.pushState(buildGuardState(window.history.state), "", url);
     guardActiveRef.current = true;
 
     const handlePopState = () => {
       if (dirtyRef.current) {
         // Re-push to cancel the back press, then show the dialog.
-        window.history.pushState({ unsavedGuard: true }, "", url);
+        window.history.pushState(buildGuardState(window.history.state), "", url);
         guardActiveRef.current = true;
         setPendingNav(null); // null = popstate (go back in history)
         setShowUnsavedDialog(true);
