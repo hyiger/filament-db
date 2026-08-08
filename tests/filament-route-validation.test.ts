@@ -238,6 +238,85 @@ describe("GH #1072 — generic filament route validation", () => {
     expect(stored.settings.k_0).toBe(999);
   });
 
+  it("PUT rejects a non-finite legacy totalWeight (Codex P1 r2)", async () => {
+    const doc = await Filament.create({
+      name: "Legacy-TW",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 750,
+    });
+    const id = String(doc._id);
+    // JSON.parse("1e309") === Infinity — satisfied the schema's min:0 and
+    // overflowed the dashboard's GH #777 legacy-branch aggregates to null.
+    // Raw wire shape: JSON.stringify would serialize Infinity as null.
+    const inf = await updateFilament(rawPutReq(id, '{"totalWeight":1e309}'), {
+      params: Promise.resolve({ id }),
+    });
+    expect(inf.status).toBe(400);
+    for (const bad of [-1, "500"]) {
+      const res = await putRoute(id, { totalWeight: bad });
+      expect(res.status).toBe(400);
+    }
+    const stored = await Filament.findById(id).lean();
+    expect(stored.totalWeight).toBe(750);
+    // null stays a legitimate clear.
+    const clear = await putRoute(id, { totalWeight: null });
+    expect(clear.status).toBe(200);
+    expect((await Filament.findById(id).lean()).totalWeight).toBeNull();
+  });
+
+  it("POST counts whole-object AND dotted settings keys together (Codex P1 r2)", async () => {
+    // Filament.create applies dotted assignments INTO the object bag, so an
+    // at-cap whole bag + one dotted extra would store MAX+1 keys with each
+    // helper passing in isolation.
+    const bag: Record<string, number> = {};
+    for (let i = 0; i < MAX_SETTINGS_KEYS; i++) bag[`k_${i}`] = i;
+    const res = await createFilament(postReq({
+      name: "Mixed-Форms",
+      vendor: "V",
+      type: "PLA",
+      settings: bag,
+      "settings.extra": 1,
+    }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toMatch(new RegExp(`${MAX_SETTINGS_KEYS}-key`));
+    expect(await Filament.countDocuments({ name: "Mixed-Форms" })).toBe(0);
+    // Overwriting an existing whole-bag key via the dotted form stays legal.
+    const ok = await createFilament(postReq({
+      name: "Mixed-Overwrite",
+      vendor: "V",
+      type: "PLA",
+      settings: bag,
+      "settings.k_0": 999,
+    }));
+    expect(ok.status).toBe(201);
+  });
+
+  it("CONCURRENT dotted-settings PUTs cannot jointly exceed the key cap (Codex P1 r2)", async () => {
+    // Two PUTs adding distinct keys to a cap-minus-one bag: both used to
+    // pass the pre-lock check against the same stored snapshot, and the
+    // lock serialized only the unvalidated writes. The in-lock
+    // re-validation makes exactly one win.
+    const bag: Record<string, number> = {};
+    for (let i = 0; i < MAX_SETTINGS_KEYS - 1; i++) bag[`k_${i}`] = i;
+    const doc = await Filament.create({
+      name: "Race-Bag",
+      vendor: "V",
+      type: "PLA",
+      settings: bag,
+    });
+    const id = String(doc._id);
+    const [a, b] = await Promise.all([
+      putRoute(id, { "settings.race_a": 1 }),
+      putRoute(id, { "settings.race_b": 2 }),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 400]);
+    const stored = await Filament.findById(id).lean();
+    expect(
+      Object.keys(stored.settings as Record<string, unknown>).length,
+    ).toBe(MAX_SETTINGS_KEYS);
+  });
+
   it("PUT rejects NESTED dotted settings paths (Codex P1 — flat-bag bypass)", async () => {
     // settings.bucket.k1 / .k2 / … all count as ONE top-level "bucket" key
     // while each small leaf passes the per-value cap; because dotted updates

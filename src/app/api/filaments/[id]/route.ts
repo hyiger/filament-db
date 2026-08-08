@@ -270,7 +270,16 @@ export async function PUT(
     // common path pays nothing).
     const bagError = validateSettingsBag(body.settings);
     if (bagError) return errorResponse(bagError, 400);
-    if (Object.keys(body).some((k) => k.startsWith("settings."))) {
+    // Codex P1 round 2 (#1089): this pre-lock pass is a fast-fail courtesy
+    // only — the AUTHORITATIVE dotted-count check re-runs against a fresh
+    // stored-bag read INSIDE the runExclusive critical section below,
+    // because two concurrent PUTs adding distinct settings.<key> paths near
+    // the cap could both observe the same stored key set here and both
+    // pass, with the lock serializing only the (unvalidated) writes.
+    const hasDottedSettings = Object.keys(body).some((k) =>
+      k.startsWith("settings."),
+    );
+    if (hasDottedSettings) {
       const storedBag = await Filament.findOne({ _id: id, _deletedAt: null })
         .select("settings")
         .lean();
@@ -281,6 +290,25 @@ export async function PUT(
         ),
       );
       if (dottedError) return errorResponse(dottedError, 400);
+    }
+
+    // Codex P1 round 2 (#1089): the legacy top-level `totalWeight` (a
+    // pre-spools inventory field the dashboard's GH #777 branch still sums)
+    // reached findOneAndUpdate unvalidated — the schema's `min: 0` accepts
+    // Infinity (`JSON.parse("1e309")`), which overflows aggregates into
+    // JSON null. Mirror the POST paths' validateSpoolBody contract:
+    // finite non-negative number, or null to clear.
+    if (
+      "totalWeight" in body &&
+      body.totalWeight !== null &&
+      (typeof body.totalWeight !== "number" ||
+        !Number.isFinite(body.totalWeight) ||
+        body.totalWeight < 0)
+    ) {
+      return errorResponse(
+        "totalWeight must be a non-negative number or null",
+        400,
+      );
     }
 
     // Validate parentId if provided
@@ -595,6 +623,9 @@ export async function PUT(
     // the same set with their own per-field notes (import-atlas/route.ts) —
     // keep that mirror in lockstep with the shared list.
     let strippedTemplateFields: string[] = [];
+    // Codex P1 round 2 (#1089): set inside the lock when the in-lock dotted
+    // re-validation trips; mapped to a 400 after the critical section.
+    let inLockDottedError: string | null = null;
     const filament = await runExclusive(filamentLockKey(id), async () => {
       // Round 11 F2b: on the adoption path, re-check the target is still
       // alive under ITS lock before the adoption write. The parent lock
@@ -612,6 +643,23 @@ export async function PUT(
         const targetAlive = await Filament.exists({ _id: id, _deletedAt: null });
         if (!targetAlive) return null;
       }
+      // Codex P1 round 2 (#1089): AUTHORITATIVE dotted-settings cap check —
+      // re-read the stored bag under the SAME lock as the write, so two
+      // concurrent PUTs adding distinct keys near the cap serialize through
+      // one validate-then-write section and the second observes the first's
+      // growth. (All same-id settings writers share this lock key.)
+      if (hasDottedSettings) {
+        const lockedBag = await Filament.findOne({ _id: id, _deletedAt: null })
+          .select("settings")
+          .lean();
+        inLockDottedError = validateDottedSettingsPaths(
+          body,
+          Object.keys(
+            (lockedBag?.settings as Record<string, unknown> | undefined) ?? {},
+          ),
+        );
+        if (inLockDottedError) return null;
+      }
       strippedTemplateFields = await stripTemplateFieldsForWrite(Filament, id, body);
       return await Filament.findOneAndUpdate(
         { _id: id, _deletedAt: null },
@@ -619,6 +667,9 @@ export async function PUT(
         { returnDocument: "after", runValidators: true }
       ).lean();
     });
+    if (inLockDottedError) {
+      return errorResponse(inLockDottedError, 400);
+    }
     if (!filament) {
       return errorResponse("Not found", 404);
     }

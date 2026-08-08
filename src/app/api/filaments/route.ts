@@ -411,9 +411,18 @@ export async function POST(request: NextRequest) {
   // Filament.create validates nothing about it — unbounded. Enforce the same
   // caps here, on both the whole-object form and the dotted `settings.<key>`
   // form (a live Mongoose path in document construction as well). A create
-  // has no stored bag, so the dotted check merges against [].
+  // has no stored bag, but the dotted check is seeded with the WHOLE-object
+  // form's keys (Codex P1 round 2, #1089): Filament.create applies dotted
+  // assignments INTO the object bag, so a body carrying an at-cap `settings`
+  // object plus dotted `settings.<key>` extras would otherwise store a
+  // merged bag past MAX_SETTINGS_KEYS with each helper passing in isolation.
+  const wholeBagKeys =
+    body.settings && typeof body.settings === "object" && !Array.isArray(body.settings)
+      ? Object.keys(body.settings as Record<string, unknown>)
+      : [];
   const settingsError =
-    validateSettingsBag(body.settings) ?? validateDottedSettingsPaths(body, []);
+    validateSettingsBag(body.settings) ??
+    validateDottedSettingsPaths(body, wholeBagKeys);
   if (settingsError) return errorResponse(settingsError, 400);
 
   // GH #431: the PUT handler explicitly strips `body.spools` to prevent a
