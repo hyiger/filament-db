@@ -4,7 +4,7 @@ import Filament from "@/models/Filament";
 import PrintHistory from "@/models/PrintHistory";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 import { displayColor } from "@/lib/filamentColors";
-import { MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
+import { safeGrams, sumUsageGrams } from "@/lib/capUsageHistory";
 
 /**
  * GET /api/analytics?days=30 — usage analytics aggregation.
@@ -230,8 +230,8 @@ export async function GET(request: NextRequest) {
 
       if (printerId) {
         const existing = byPrinter.get(printerId);
-        if (existing) existing.grams += sumGrams(entry.usage);
-        else byPrinter.set(printerId, { name: printerName, grams: sumGrams(entry.usage) });
+        if (existing) existing.grams += sumUsageGrams(entry.usage);
+        else byPrinter.set(printerId, { name: printerName, grams: sumUsageGrams(entry.usage) });
       }
     }
 
@@ -357,29 +357,7 @@ export async function GET(request: NextRequest) {
   }
 }
 
-/**
- * GH #1030: clamp one stored `grams` value to a sane, finite, non-negative
- * number before it enters ANY aggregate.
- *
- * The write boundaries now reject `grams > MAX_USAGE_GRAMS`, but rows that
- * predate that cap — or arrive through a path that doesn't go through the
- * routes (snapshot restore, hybrid sync) — can still carry a pathological
- * magnitude. Sanitising at INGESTION rather than at the six emit points keeps
- * every downstream invariant intact by construction: with all inputs finite,
- * `rawDaySum` can no longer overflow, so the Hamilton apportionment's
- * `ideal = (raw / rawDaySum) * dayGrams` can never evaluate `0 * Infinity`
- * → NaN, which used to make EVERY segment of that day — including unrelated,
- * correctly-sized filaments — serialize as JSON `null`.
- *
- * A clamped row renders as MAX_USAGE_GRAMS rather than vanishing, so the
- * corruption stays visible in the UI instead of silently under-reporting; a
- * NaN/negative/missing value contributes 0.
- */
-function safeGrams(value: unknown): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
-  return Math.min(value, MAX_USAGE_GRAMS);
-}
-
-function sumGrams(usage: { grams: number }[] | undefined): number {
-  return (usage || []).reduce((sum, u) => sum + safeGrams(u.grams), 0);
-}
+// GH #1030 ingestion sanitizer (`safeGrams`) + the usage summer now live in
+// `src/lib/capUsageHistory.ts` (GH #1078) so the dashboard route clamps its
+// `recentPrintHistory[].totalGrams` through the SAME code path. See the
+// docblocks there for the overflow/NaN rationale.
