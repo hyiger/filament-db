@@ -281,6 +281,110 @@ describe("Bambu Studio importer routes", () => {
       expect(all[0].vendor).toBe("New Vendor");
     });
 
+    it("GH #1073: gates the resurrect of a trashed VARIANT whose active parent holds inventory — 409, nothing mutated", async () => {
+      // The trashed variant makes hasVariants read false, so its parent
+      // legitimately re-acquired a spool as a standalone. A bare resurrect
+      // would surface the FIRST live variant of an inventory-carrying
+      // parent — stranding the spool on a template with no confirmation.
+      const parent = await Filament.create({
+        name: "Regrown Bambu Parent",
+        vendor: "QA Labs",
+        type: "PLA",
+        color: null,
+        spools: [{ label: "new roll", totalWeight: 900 }],
+      });
+      const variant = await Filament.create({
+        name: "QA Bambu PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        parentId: parent._id,
+      });
+      await Filament.updateOne(
+        { _id: variant._id },
+        { $set: { _deletedAt: new Date() } },
+      );
+
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq("http://localhost/api/filaments/bambustudio", minimalProfile()),
+      );
+      expect(res.status).toBe(409);
+      const body = await res.json();
+      expect(body.error).toMatch(/still holds its own inventory/);
+
+      // The variant stays trashed; the parent is untouched.
+      const freshVariant = await Filament.findById(variant._id);
+      expect(freshVariant._deletedAt).not.toBeNull();
+      const freshParent = await Filament.findById(parent._id);
+      expect(freshParent.spools).toHaveLength(1);
+      expect(freshParent.spools[0].label).toBe("new roll");
+    });
+
+    it("GH #1073: a trashed variant under a NO-inventory parent still resurrects", async () => {
+      const parent = await Filament.create({
+        name: "Clean Bambu Parent",
+        vendor: "QA Labs",
+        type: "PLA",
+        color: null,
+      });
+      const variant = await Filament.create({
+        name: "QA Bambu PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        parentId: parent._id,
+      });
+      await Filament.updateOne(
+        { _id: variant._id },
+        { $set: { _deletedAt: new Date() } },
+      );
+
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq("http://localhost/api/filaments/bambustudio", minimalProfile()),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.updated).toBe(true);
+      expect(body.filamentId).toBe(String(variant._id));
+
+      const freshVariant = await Filament.findById(variant._id);
+      expect(freshVariant._deletedAt).toBeNull();
+      expect(String(freshVariant.parentId)).toBe(String(parent._id));
+    });
+
+    it("GH #1073: resurrecting the first variant of a threshold-ONLY parent clears the dead threshold", async () => {
+      const parent = await Filament.create({
+        name: "Threshold Bambu Parent",
+        vendor: "QA Labs",
+        type: "PLA",
+        color: null,
+        lowStockThreshold: 100,
+      });
+      const variant = await Filament.create({
+        name: "QA Bambu PLA",
+        vendor: "QA Labs",
+        type: "PLA",
+        parentId: parent._id,
+      });
+      await Filament.updateOne(
+        { _id: variant._id },
+        { $set: { _deletedAt: new Date() } },
+      );
+
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq("http://localhost/api/filaments/bambustudio", minimalProfile()),
+      );
+      expect(res.status).toBe(200);
+
+      const freshVariant = await Filament.findById(variant._id);
+      expect(freshVariant._deletedAt).toBeNull();
+      // Parent is a template now — the leftover alarm is dead config, cleared
+      // AFTER the write (round 7 P2 parity with the CSV importer's gate).
+      const freshParent = await Filament.findById(parent._id);
+      expect(freshParent.lowStockThreshold ?? null).toBeNull();
+    });
+
     it("recovers from a concurrent create race by updating the racing winner (Codex P2 #387 r5)", async () => {
       // Simulate the race: phase-1 findOne returns null, but between
       // that and the create() call another request wins and inserts a
