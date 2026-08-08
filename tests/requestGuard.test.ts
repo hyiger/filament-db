@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import { NextRequest } from "next/server";
-import { assertSameOriginRequest, assertSafeUpdateBody } from "@/lib/requestGuard";
+import {
+  assertSameOriginRequest,
+  assertSafeUpdateBody,
+  stripServerOwnedFields,
+  SERVER_OWNED_FILAMENT_FIELDS,
+} from "@/lib/requestGuard";
 
 /**
  * Coverage-focused companion to tests/destructive-route-guard.test.ts.
@@ -204,5 +209,79 @@ describe("assertSafeUpdateBody — prototype-path rejection (GH #1026)", () => {
     const guard = assertSafeUpdateBody(body);
     expect(guard).not.toBeNull();
     expect(guard!.status).toBe(400);
+  });
+});
+
+/**
+ * GH #1072 (item 3) — the generalized server-owned-field strip shared by
+ * POST /api/filaments and PUT /api/filaments/{id}. The old exact-key deletes
+ * were bypassable via dotted update paths (`spools.0.usageHistory`,
+ * `openprinttagSnapshot.color`), which Mongoose casts as live nested paths.
+ */
+describe("stripServerOwnedFields (#1072)", () => {
+  it("strips every server-owned field's exact key in place", () => {
+    const body: Record<string, unknown> = { name: "keep" };
+    for (const f of SERVER_OWNED_FILAMENT_FIELDS) body[f] = "evil";
+    const stripped = stripServerOwnedFields(body);
+    expect(stripped.sort()).toEqual([...SERVER_OWNED_FILAMENT_FIELDS].sort());
+    expect(Object.keys(body)).toEqual(["name"]);
+  });
+
+  it("strips dotted subpaths of server-owned fields", () => {
+    const body: Record<string, unknown> = {
+      name: "keep",
+      "spools.0.usageHistory": [{ grams: 1 }],
+      "spools.0.instanceId": "forged",
+      "openprinttagSnapshot.color": "#123456",
+      "promotionInFlight.token": "t",
+      "promotedByToken.x": 1,
+      "_purged.nested": true,
+    };
+    const stripped = stripServerOwnedFields(body);
+    expect(stripped.sort()).toEqual([
+      "_purged.nested",
+      "openprinttagSnapshot.color",
+      "promotedByToken.x",
+      "promotionInFlight.token",
+      "spools.0.instanceId",
+      "spools.0.usageHistory",
+    ]);
+    expect(Object.keys(body)).toEqual(["name"]);
+  });
+
+  it("allowExact keeps the exact key writable but still sweeps its dotted subpaths", () => {
+    const body: Record<string, unknown> = {
+      spools: [{ label: "legit", totalWeight: 1000 }],
+      "spools.0.usageHistory": [{ grams: 1 }],
+    };
+    const stripped = stripServerOwnedFields(body, { allowExact: ["spools"] });
+    expect(stripped).toEqual(["spools.0.usageHistory"]);
+    expect(Array.isArray(body.spools)).toBe(true);
+  });
+
+  it("matches on the full `<field>.` boundary — prefix-similar fields survive", () => {
+    const body: Record<string, unknown> = {
+      spoolsExtra: "keep",
+      instanceIdHint: "keep",
+      "settings.spools": "keep", // dotted path under a NON-owned root
+    };
+    expect(stripServerOwnedFields(body)).toEqual([]);
+    expect(Object.keys(body).sort()).toEqual([
+      "instanceIdHint",
+      "settings.spools",
+      "spoolsExtra",
+    ]);
+  });
+
+  it("leaves an ordinary edit body untouched and returns an empty list", () => {
+    const body: Record<string, unknown> = {
+      name: "PLA Basic",
+      vendor: "Prusa",
+      parentId: null,
+      "temperatures.nozzle": 215,
+      settings: { compatible_printers: "" },
+    };
+    expect(stripServerOwnedFields(body)).toEqual([]);
+    expect(Object.keys(body)).toHaveLength(5);
   });
 });

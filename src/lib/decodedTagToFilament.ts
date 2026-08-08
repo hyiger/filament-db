@@ -14,6 +14,20 @@ function auxTemp(v: unknown): number | null {
 }
 
 /**
+ * GH #1072 (item 4): coerce a top-level tag string field. Despite the
+ * `DecodedOpenPrintTag` typing, `tagData` is unvalidated client JSON — any of
+ * these fields may arrive as a number, boolean, object, or array. Optional
+ * chaining only guards null/undefined, so `.trim` on a non-string threw out
+ * of the only caller (the create-from-tag branch of `POST /api/filaments`,
+ * OUTSIDE its try/catch) as a 500 where the route contract promises 400.
+ * Same threat model `auxTemp` above already documents; junk coerces to ""
+ * (field absent) so the payload falls back sensibly.
+ */
+function strField(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+/**
  * Map a tag decoded by `POST /api/nfc/decode` (a `DecodedOpenPrintTag`) into a
  * Filament DB creation payload — the server-side mapper behind create-from-scan
  * (mobile Phase 2, plan §4.4). The phone never reproduces this mapping: it
@@ -42,9 +56,9 @@ function auxTemp(v: unknown): number | null {
 export function decodedTagToFilamentPayload(
   decoded: DecodedOpenPrintTag,
 ): Record<string, unknown> {
-  const brand = decoded.brandName?.trim() || "";
-  const material = decoded.materialName?.trim() || "";
-  const type = decoded.materialType?.trim() || "";
+  const brand = strField(decoded.brandName);
+  const material = strField(decoded.materialName);
+  const type = strField(decoded.materialType);
   // NOTE: the tag's spool_uid is deliberately NOT adopted as the new filament's
   // instanceId. instanceId is system-assigned (auto-generated, partial-unique)
   // and the POST handler strips any client-supplied value on purpose — and
@@ -93,12 +107,16 @@ export function decodedTagToFilamentPayload(
     type: type || null,
     // Preserve a null primary for coextruded / multi-color tags (secondaries
     // but no primary) — same posture as mapToFilamentPayload (GH #477). Only
-    // fall back to gray when the tag carries no colors at all.
-    color: decoded.color || (secondaryColors.length > 0 ? null : "#808080"),
+    // fall back to gray when the tag carries no colors at all. GH #1072
+    // (item 4): typeof-guarded so a non-string color (an object, a number)
+    // falls to the fallback instead of riding into the schema validator.
+    color:
+      (typeof decoded.color === "string" && decoded.color) ||
+      (secondaryColors.length > 0 ? null : "#808080"),
     // OpenTag3D carries a plain-text color name (color_name); keep it on create
     // so the saved filament retains the tag's color label (the read dialog shows
     // it). OpenPrintTag tags don't populate this, so it's a no-op for them.
-    colorName: decoded.colorName?.trim() || null,
+    colorName: strField(decoded.colorName) || null,
     secondaryColors,
     density: decoded.density ?? null,
     // Prefer the tag's own diameter — a physical 2.85mm tag is authoritative —
