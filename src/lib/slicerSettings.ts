@@ -11,6 +11,8 @@
  * so a sync write can't degrade the filament.
  */
 
+import { wrapIniString, serializeIniValue } from "./parseIni";
+
 /** Max number of keys allowed in the merged `settings` bag. A real
  * slicer filament preset has on the order of ~100 keys; 400 is generous
  * headroom for forks / future keys without being an amplification sink. */
@@ -97,7 +99,21 @@ export function mergeSlicerSettings(
     // re-derived export value. Keeping them out of BOTH sources makes the
     // never-baggable guarantee hold regardless of the caller's structured set.
     if (structuredKeys.has(key) || NEVER_BAGGED_KEYS.has(key)) continue;
-    const serialized = JSON.stringify(value ?? null);
+    // GH #1070 / Codex P2 round 6 on PR #1086: the settings bag is
+    // WIRE-CANONICAL (src/lib/parseIni.ts codec docblock). A raw multi-line
+    // string can only arrive from a JSON-sourced sync — the Orca per-id
+    // route round-trips decodeMultilineWireValue's real newlines straight
+    // back; INI-sourced bodies are line-based and can't carry one, and the
+    // Bambu parser already wraps at its own ingestion (a wrapped value
+    // holds escapes, not raw terminators, so this never double-wraps).
+    // Wrapping HERE makes the invariant hold at every merge boundary — and
+    // restores splitInheritedImportSet's strict per-key equality against a
+    // parent's stored wire value, so an unchanged Orca sync of an inherited
+    // multi-line setting keeps inheriting instead of pinning a variant
+    // override that severs GH #106 live inheritance.
+    const wireValue =
+      typeof value === "string" && /[\r\n]/.test(value) ? wrapIniString(value) : value;
+    const serialized = JSON.stringify(wireValue ?? null);
     if (serialized.length > MAX_SETTING_VALUE_LENGTH) {
       return {
         settings,
@@ -106,7 +122,7 @@ export function mergeSlicerSettings(
         error: `settings.${key} value exceeds the ${MAX_SETTING_VALUE_LENGTH}-character limit`,
       };
     }
-    settings[key] = value;
+    settings[key] = wireValue;
     added.push(key);
   }
 
@@ -137,6 +153,84 @@ export function mergeSlicerSettings(
  * bag). Non-object shapes are rejected — Mixed would happily persist a
  * string/array bag that every reader expects to be a plain object.
  */
+/**
+ * GH #1070 / Codex P2 round 7 on PR #1086: the generic filament POST/PUT
+ * accept a whole `settings` bag (and dotted `settings.<key>` update paths)
+ * and persist them verbatim — they don't pass through mergeSlicerSettings,
+ * so they were the one remaining writer that could land a NEW raw
+ * multi-line string in the wire-canonical bag. serializeIniValue's emit
+ * heuristic treats any raw multi-line value as a pre-#1070 legacy form
+ * wrap; for a fresh generic write whose content legitimately starts and
+ * ends with quote characters, that stripped genuine content quotes at
+ * export. Normalizing here makes "raw multi-line ⇒ legacy row" true BY
+ * CONSTRUCTION across every post-#1070 writer (slicer syncs →
+ * mergeSlicerSettings, the Bambu parser → ingestion wrap, the form →
+ * wrapIniString, generic API → this helper); the only raw multi-line bag
+ * values left are genuinely legacy rows (or a snapshot restore of them),
+ * exactly what the heuristic exists for.
+ *
+ * Mutates `body` in place. Call BEFORE the validators so the length caps
+ * apply to the WRAPPED value (same posture as mergeSlicerSettings).
+ * Idempotent: a wrapped value holds escapes, not raw terminators.
+ *
+ * Legacy-vs-fresh is decided by STORED-BYTE EQUALITY, not by key alone
+ * (Codex P1 round 10 + P2 round 11): the form's wireOrEdited is the only
+ * writer that deliberately echoes a pre-#1070 raw wrap byte-identically,
+ * and it only ever echoes the CURRENTLY-STORED value — so an incoming
+ * value strictly equal to `storedSettings[key]` is provably an echo and
+ * takes serializeIniValue's key-scoped legacy semantics (the old wrapper
+ * strips; the row heals to canonical wire of the SAME content). Anything
+ * else is FRESH content — a current generic client's quote-bounded
+ * multi-line note keeps its quotes as content, even on the three form
+ * keys. A create passes no stored bag, so it can never strip.
+ * mergeSlicerSettings deliberately does NOT share this path: its input is
+ * always slicer-decoded CONTENT (the fork echoes what the export decoded,
+ * never stored bytes), so quotes there are content on every key.
+ */
+export function normalizeSettingsToWire(
+  body: Record<string, unknown>,
+  storedSettings: Record<string, unknown> | null = null,
+): void {
+  const toWire = (key: string, value: string): string =>
+    storedSettings != null && storedSettings[key] === value
+      ? serializeIniValue(value, key) // stored echo → legacy semantics (heal)
+      : wrapIniString(value); // fresh content → quotes are content
+  const bag = body.settings;
+  if (bag && typeof bag === "object" && !Array.isArray(bag)) {
+    const rec = bag as Record<string, unknown>;
+    for (const [k, v] of Object.entries(rec)) {
+      if (typeof v === "string" && /[\r\n]/.test(v)) {
+        rec[k] = toWire(k, v);
+      }
+    }
+  }
+  for (const [k, v] of Object.entries(body)) {
+    if (k.startsWith("settings.") && typeof v === "string" && /[\r\n]/.test(v)) {
+      body[k] = toWire(k.slice("settings.".length), v);
+    }
+  }
+}
+
+/**
+ * Does `body` carry any settings string (whole-bag or dotted) with a raw
+ * line terminator? Lets the PUT route fetch the stored bag for
+ * normalizeSettingsToWire's echo test only when it could matter.
+ */
+export function bodyHasRawMultilineSettings(body: Record<string, unknown>): boolean {
+  const bag = body.settings;
+  if (bag && typeof bag === "object" && !Array.isArray(bag)) {
+    for (const v of Object.values(bag as Record<string, unknown>)) {
+      if (typeof v === "string" && /[\r\n]/.test(v)) return true;
+    }
+  }
+  for (const [k, v] of Object.entries(body)) {
+    if (k.startsWith("settings.") && typeof v === "string" && /[\r\n]/.test(v)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function validateSettingsBag(settings: unknown): string | null {
   if (settings === undefined || settings === null) return null;
   if (typeof settings !== "object" || Array.isArray(settings)) {

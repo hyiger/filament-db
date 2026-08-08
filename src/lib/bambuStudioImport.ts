@@ -33,6 +33,8 @@
  *     produces (modulo array-wrapping whitespace) the same JSON.
  */
 
+import { wrapIniString } from "./parseIni";
+
 // ── Inverse of the BED_TYPE_KEY_MAP in orcaSlicerBundle.ts ────────────
 // Bambu/Orca use per-plate keys (cool_plate_temp, hot_plate_temp, …)
 // rather than a single bed_temperature. Invert so each plate key tells
@@ -418,7 +420,17 @@ export function parseBambuStudioProfile(raw: unknown): BambuParseResult {
     // keys needs arch-aware serialization in each exporter; tracked on #678.
     const s = unwrap(value);
     if (s == null) continue;
-    filament.settings[key] = s;
+    // GH #1070 / Codex P2 round 2 on PR #1086: the settings bag is
+    // WIRE-CANONICAL (see src/lib/parseIni.ts's codec docblock) — a raw
+    // multi-line string stored here (Orca/Bambu JSON carries real newlines
+    // in e.g. filament_notes) would hit serializeIniValue's legacy-wrapper
+    // heuristic on the next PrusaSlicer export, which strips boundary
+    // quotes that are genuine CONTENT in this profile's note. Escaping at
+    // ingestion removes the ambiguity: with this writer wire-canonical,
+    // that heuristic only ever fires on pre-#1070 form-wrapped DB rows.
+    // Single-line values stay byte-identical so Orca round-trips are
+    // unchanged for the common case.
+    filament.settings[key] = /[\r\n]/.test(s) ? wrapIniString(s) : s;
   }
 
   return { filament, calibrationHints };

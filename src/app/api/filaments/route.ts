@@ -7,7 +7,11 @@ import BedType from "@/models/BedType";
 import Location from "@/models/Location";
 import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest, stripServerOwnedFields } from "@/lib/requestGuard";
-import { validateSettingsBag, validateDottedSettingsPaths } from "@/lib/slicerSettings";
+import {
+  validateSettingsBag,
+  validateDottedSettingsPaths,
+  normalizeSettingsToWire,
+} from "@/lib/slicerSettings";
 import { validateSpoolPhotoDataUrl, isValidIsoDateString } from "@/lib/validateSpoolBody";
 import { decodedTagToFilamentPayload } from "@/lib/decodedTagToFilament";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
@@ -416,6 +420,10 @@ export async function POST(request: NextRequest) {
   // assignments INTO the object bag, so a body carrying an at-cap `settings`
   // object plus dotted `settings.<key>` extras would otherwise store a
   // merged bag past MAX_SETTINGS_KEYS with each helper passing in isolation.
+  // GH #1070 (Codex P2 r7 on PR #1086): wire-normalize raw multi-line
+  // settings strings BEFORE the caps, so the length check applies to the
+  // wrapped value — see normalizeSettingsToWire's docblock.
+  normalizeSettingsToWire(body);
   const wholeBagKeys =
     body.settings && typeof body.settings === "object" && !Array.isArray(body.settings)
       ? Object.keys(body.settings as Record<string, unknown>)

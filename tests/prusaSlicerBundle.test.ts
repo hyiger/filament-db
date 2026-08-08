@@ -5,7 +5,7 @@ import {
   collapsePerNozzleImportSections,
   resolveSyncBackColor,
   nozzleSuffix, perNozzleCondition, isMachineDerivedPerNozzleCondition, isAnyMachineDerivedNozzleCondition } from "@/lib/prusaSlicerBundle";
-import { parseIniFilaments } from "@/lib/parseIni";
+import { parseIniFilaments, unwrapIniString } from "@/lib/parseIni";
 
 describe("filamentToSlicerKeys", () => {
   it("maps core structured fields to PrusaSlicer keys", () => {
@@ -1090,6 +1090,140 @@ describe("generatePrusaSlicerBundle", () => {
 
     // Settings bag gcode is preserved as-is in the base section
     expect(bundle).toContain("start_filament_gcode = ; setup\\nM572 S0.04\\n; done");
+  });
+
+  // --- GH #1070: raw newlines in bag values must not split the emitted line ---
+
+  describe("GH #1070: INI value escaping at the emit boundary", () => {
+    const base = {
+      vendor: "Test",
+      type: "PLA",
+      color: "#808080",
+      diameter: 1.75,
+      temperatures: {},
+    };
+
+    it("passes an already-escaped QUOTED fork-shaped value through byte-identical", () => {
+      const bundle = generatePrusaSlicerBundle([
+        {
+          ...base,
+          name: "Fork",
+          settings: {
+            // Exactly what the PrusaSlicer fork sync-back stores: quoted,
+            // LITERAL backslash-n escapes, single line.
+            start_filament_gcode: '"; setup\\nM572 S0.04"',
+          },
+        },
+      ]);
+      expect(bundle).toContain('start_filament_gcode = "; setup\\nM572 S0.04"');
+    });
+
+    it("escapes a raw multi-line value into ONE quoted line", () => {
+      const bundle = generatePrusaSlicerBundle([
+        {
+          ...base,
+          name: "RawNotes",
+          settings: { filament_notes: "line one\nline two" },
+        },
+      ]);
+      expect(bundle).toContain('filament_notes = "line one\\nline two"');
+      // No orphan continuation line survives.
+      expect(bundle.split("\n")).not.toContain("line two");
+    });
+
+    it("escapes a raw multi-line top-level filament.notes (unquoted source)", () => {
+      const bundle = generatePrusaSlicerBundle([
+        {
+          ...base,
+          name: "TopNotes",
+          notes: "dried at 55C\nworks best slow",
+          settings: {},
+        },
+      ]);
+      expect(bundle).toContain('filament_notes = "dried at 55C\\nworks best slow"');
+    });
+
+    it("unwraps a legacy form-wrapped raw multi-line value before escaping (no quote leakage)", () => {
+      const bundle = generatePrusaSlicerBundle([
+        {
+          ...base,
+          name: "LegacyForm",
+          // Pre-#1070 FilamentForm output: hand-wrapped quotes around RAW
+          // textarea content (real newline, real interior quotes).
+          settings: { filament_notes: '"line one\nsay "hi""' },
+        },
+      ]);
+      expect(bundle).toContain('filament_notes = "line one\\nsay \\"hi\\""');
+      // The escaped content must NOT gain literal wrapper quotes.
+      expect(bundle).not.toContain('filament_notes = "\\"line one');
+    });
+
+    it("re-import cannot inject keys or sections from a multi-line note (the issue's repro)", () => {
+      const bundle = generatePrusaSlicerBundle([
+        {
+          ...base,
+          name: "Injection",
+          settings: {
+            filament_notes:
+              '"line one\ntemperature = 250 works best\n[filament:Other]\nafter"',
+          },
+        },
+      ]);
+      const parsed = parseIniFilaments(bundle);
+      // No [filament:Other] section materialises.
+      expect(parsed).toHaveLength(1);
+      expect(parsed[0].name).toBe("Injection");
+      // The note's `temperature = 250` line did NOT become a settings key
+      // (the fixture has no temperatures, so the key must be absent).
+      expect("temperature" in parsed[0].settings).toBe(false);
+      expect(parsed[0].temperatures.nozzle).toBeNull();
+      // The note survives as the escaped WIRE value (the bag is
+      // wire-canonical — Codex P2s on PR #1086); the form codec restores
+      // the raw content, newlines and all, for display.
+      const wire = parsed[0].settings.filament_notes as string;
+      expect(wire.includes("\n")).toBe(false);
+      expect(unwrapIniString(wire)).toBe(
+        "line one\ntemperature = 250 works best\n[filament:Other]\nafter",
+      );
+    });
+
+    it("generate → parse → generate is stable for escaped values", () => {
+      const gen1 = generatePrusaSlicerBundle([
+        {
+          ...base,
+          name: "Stable",
+          settings: {
+            filament_notes: '"line one\nsay "hi" \\ done"',
+            start_filament_gcode: '"; setup\\nM572 S0.04"',
+          },
+        },
+      ]);
+      const [parsed] = parseIniFilaments(gen1);
+      const gen2 = generatePrusaSlicerBundle([
+        { ...base, name: "Stable", settings: parsed.settings },
+      ]);
+      const notesLine = (bundle: string) =>
+        bundle.split("\n").find((l) => l.startsWith("filament_notes = "));
+      const gcodeLine = (bundle: string) =>
+        bundle.split("\n").find((l) => l.startsWith("start_filament_gcode = "));
+      expect(notesLine(gen1)).toBeDefined();
+      expect(notesLine(gen2)).toBe(notesLine(gen1));
+      expect(gcodeLine(gen2)).toBe(gcodeLine(gen1));
+      // And each is a single valid line.
+      expect(notesLine(gen1)).toBe('filament_notes = "line one\\nsay \\"hi\\" \\\\ done"');
+      expect(gcodeLine(gen1)).toBe('start_filament_gcode = "; setup\\nM572 S0.04"');
+    });
+
+    it("escapes a raw carriage return too", () => {
+      const bundle = generatePrusaSlicerBundle([
+        {
+          ...base,
+          name: "CR",
+          settings: { filament_notes: "a\rb" },
+        },
+      ]);
+      expect(bundle).toContain('filament_notes = "a\\rb"');
+    });
   });
 
   it("sorts keys alphabetically within sections", () => {

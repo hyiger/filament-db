@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { parseIniFilaments, INI_TOP_LEVEL_SETTING_KEYS } from "@/lib/parseIni";
+import {
+  parseIniFilaments,
+  INI_TOP_LEVEL_SETTING_KEYS,
+  serializeIniValue,
+  decodeMultilineWireValue,
+  wrapIniString,
+  unwrapIniString,
+} from "@/lib/parseIni";
 
 describe("parseIniFilaments", () => {
   it("returns empty array for empty content", () => {
@@ -409,5 +416,236 @@ filament_vendor = Acme
     expect("spoolWeight" in f).toBe(false);
     expect("shrinkageXY" in f).toBe(false);
     expect("shrinkageZ" in f).toBe(false);
+  });
+
+  // --- GH #1070: the bag stores WIRE form — imported values stay verbatim ---
+  // (Codex P2s on PR #1086 killed an earlier decode-on-import revision: it
+  // flipped a quoted "nil" into the bare nil marker on the next export,
+  // stripped literal boundary quotes, and broke splitInheritedImportSet's
+  // strict-equality comparison against a parent's form-stored wire value.)
+
+  it("GH #1070: stores a quoted escaped value VERBATIM (wire-canonical bag)", () => {
+    const ini = `[filament:Escaped]
+filament_type = PLA
+filament_vendor = Acme
+start_filament_gcode = "; setup\\nM572 S0.04\\n; done"
+`;
+    const [f] = parseIniFilaments(ini);
+    expect(f.settings.start_filament_gcode).toBe('"; setup\\nM572 S0.04\\n; done"');
+  });
+
+  it("GH #1070: a QUOTED \"nil\" stays the literal wire string, never the nil marker", () => {
+    const ini = `[filament:QuotedNil]
+filament_type = PLA
+filament_vendor = Acme
+filament_notes = "nil"
+`;
+    const [f] = parseIniFilaments(ini);
+    expect(f.settings.filament_notes).toBe('"nil"');
+  });
+});
+
+describe("serializeIniValue (GH #1070)", () => {
+
+  it("serializes a single-line value BYTE-IDENTICAL (fast path)", () => {
+    // Already-escaped fork-shaped value: literal backslash-n, quoted — the
+    // exact bytes PrusaSlicer sends on sync-back. Must never double-escape.
+    expect(serializeIniValue('"; setup\\nM572 S0.04"')).toBe('"; setup\\nM572 S0.04"');
+    // Unquoted single-line values with quotes/backslashes also pass through.
+    expect(serializeIniValue("G1 X=10")).toBe("G1 X=10");
+    expect(serializeIniValue('say "hi" \\ there')).toBe('say "hi" \\ there');
+  });
+
+  it("escapes + wraps a raw multi-line unquoted value", () => {
+    expect(serializeIniValue("line one\nline two")).toBe('"line one\\nline two"');
+  });
+
+  it("escapes a raw carriage return", () => {
+    expect(serializeIniValue("a\rb")).toBe('"a\\rb"');
+  });
+
+  it("unwraps a legacy form-wrapped raw multi-line value before escaping (no literal quote leakage)", () => {
+    // Pre-#1070 FilamentForm stored `"${textarea}"` — outer quotes are the
+    // WRAPPER. Interior raw quotes and backslashes are content and get escaped.
+    // The strip is KEY-SCOPED to the three keys the form actually wrote (r9).
+    expect(serializeIniValue('"line one\nsay "hi"\\done"', "filament_notes")).toBe(
+      '"line one\\nsay \\"hi\\"\\\\done"',
+    );
+    expect(serializeIniValue('"a\nb"', "start_filament_gcode")).toBe('"a\\nb"');
+    expect(serializeIniValue('"a\nb"', "end_filament_gcode")).toBe('"a\\nb"');
+  });
+
+  it("preserves boundary quotes as CONTENT on non-form keys (Codex P2 r9)", () => {
+    // A pre-upgrade generic-API / Bambu-import row could hold raw multi-line
+    // content that genuinely begins and ends with quotes on some OTHER key —
+    // the form never wrote that key, so those quotes can't be a wrapper.
+    expect(serializeIniValue('"first\nlast"', "custom_note")).toBe(
+      '"\\"first\\nlast\\""',
+    );
+    // No key (direct/unknown caller) — same conservative posture.
+    expect(serializeIniValue('"first\nlast"')).toBe('"\\"first\\nlast\\""');
+    // Unquoted raw multi-line on a non-form key still escapes normally.
+    expect(serializeIniValue("a\nb", "custom_note")).toBe('"a\\nb"');
+  });
+
+  it("round-trips: serializeIniValue output re-imports byte-identically (wire-canonical)", () => {
+    // Whatever the emitter produces is a single-line wire value; a re-import
+    // stores it verbatim and the next export passes it through the fast
+    // path unchanged — export → import → export is stable by construction.
+    const raw = 'line one\nkey = value\n[filament:Other]\nsay "hi" \\ end\rcr';
+    const wire = serializeIniValue(raw);
+    expect(wire.includes("\n")).toBe(false);
+    expect(serializeIniValue(wire)).toBe(wire);
+  });
+
+  it("round-trips: the form codec decodes what the emitter produced", () => {
+    // unwrapIniString is the ONLY decoder (form display); it restores the
+    // raw content the emitter escaped, including the injection payload.
+    const raw = 'line one\nkey = value\n[filament:Other]\nsay "hi" \\ end\rcr';
+    expect(unwrapIniString(serializeIniValue(raw))).toBe(raw);
+  });
+});
+
+describe("decodeMultilineWireValue (GH #1070 r3, Orca/Bambu JSON export decode)", () => {
+  it("decodes a clean-quoted multi-line wire value to raw content", () => {
+    expect(decodeMultilineWireValue('"a\\nb"')).toBe("a\nb");
+    expect(decodeMultilineWireValue('"a\\rb"')).toBe("a\rb");
+    expect(decodeMultilineWireValue('"\\"first\\nlast\\""')).toBe('"first\nlast"');
+  });
+
+  it("leaves single-line quoted values verbatim (Orca round-trip byte-identity)", () => {
+    expect(decodeMultilineWireValue('"quoted single line"')).toBe('"quoted single line"');
+    expect(decodeMultilineWireValue('"say \\"hi\\""')).toBe('"say \\"hi\\""');
+  });
+
+  it("leaves non-clean shapes verbatim (vectors, expressions, unterminated, unquoted)", () => {
+    expect(decodeMultilineWireValue('"A";"B"')).toBe('"A";"B"');
+    expect(decodeMultilineWireValue('"PLA"=="PLA"')).toBe('"PLA"=="PLA"');
+    expect(decodeMultilineWireValue('"abc\\"')).toBe('"abc\\"');
+    expect(decodeMultilineWireValue('"abc')).toBe('"abc');
+    expect(decodeMultilineWireValue('"')).toBe('"');
+    expect(decodeMultilineWireValue("plain")).toBe("plain");
+  });
+
+  it("returns a legacy raw wrap with non-canonical escapes VERBATIM (Codex P2 r10)", () => {
+    // Same distinction as unwrapIniString (r5), now on the JSON-export
+    // decode: `\t` proves a pre-#1070 raw wrap whose `\n` is literal
+    // Windows-path content, not an escape — decoding corrupted it.
+    expect(decodeMultilineWireValue('"Use C:\\new\\tool"')).toBe(
+      '"Use C:\\new\\tool"',
+    );
+    // A raw wrap holding BOTH literal backslashes and a real newline.
+    expect(decodeMultilineWireValue('"C:\\temp\nline2"')).toBe(
+      '"C:\\temp\nline2"',
+    );
+  });
+
+  it("ACCEPTED RESIDUE (r8): wire-lookalike literal content decodes as wire", () => {
+    // A JSON value whose LITERAL text is `"a\nb"` (quotes + backslash as
+    // characters) is byte-identical to Prusa wire — no provenance bit can
+    // tell them apart. Wire wins by deliberate bias: every pre-#1070 export
+    // wrote wire into Orca/Bambu JSON verbatim, so wire-shaped strings in
+    // real profiles are overwhelmingly actual wire that MUST decode; see
+    // decodeMultilineWireValue's docblock before "fixing" this.
+    expect(decodeMultilineWireValue('"a\\nb"')).toBe("a\nb");
+  });
+
+  it("never decodes \\t as a tab — verbatim path, matching upstream semantics (r8/r10)", () => {
+    // prusa3d/PrusaSlicer src/libslic3r/Config.cpp special-cases ONLY r/n
+    // and its escaper never produces \t (real tabs ride raw) — so a `\t`
+    // escape can't come from a canonical writer. Since r10 that means the
+    // whole value routes to the VERBATIM branch (a legacy raw wrap) rather
+    // than being unescaped at all; bytes are preserved, never turned into
+    // a tab.
+    expect(decodeMultilineWireValue('"a\\tb\\nc"')).toBe('"a\\tb\\nc"');
+    // A real tab in content survives the wrap round-trip raw + unescaped.
+    expect(wrapIniString("col1\tcol2\nrow2")).toBe('"col1\tcol2\\nrow2"');
+    expect(unwrapIniString('"col1\tcol2\\nrow2"')).toBe("col1\tcol2\nrow2");
+  });
+});
+
+describe("wrapIniString / unwrapIniString (GH #1070, FilamentForm codec)", () => {
+  it("wraps raw textarea content into the quoted-escaped wire form", () => {
+    expect(wrapIniString("simple note")).toBe('"simple note"');
+    expect(wrapIniString('line one\nsay "hi"')).toBe('"line one\\nsay \\"hi\\""');
+    expect(wrapIniString("back\\slash\rcr")).toBe('"back\\\\slash\\rcr"');
+  });
+
+  it("unwrap is the inverse of wrap (identity round-trip)", () => {
+    const samples = [
+      "simple",
+      'line one\nline two\nsay "hi"',
+      "back\\slash",
+      "a\rb",
+      'temperature = 250 works best\n[filament:Other]',
+    ];
+    for (const s of samples) {
+      expect(unwrapIniString(wrapIniString(s))).toBe(s);
+    }
+  });
+
+  it("returns an unquoted value verbatim (legacy raw bag values)", () => {
+    expect(unwrapIniString("120 100 6.6 6.8")).toBe("120 100 6.6 6.8");
+    expect(unwrapIniString("")).toBe("");
+  });
+
+  it("leniently unwraps a legacy hand-wrapped value with interior raw quotes", () => {
+    // Pre-#1070 form output for a note containing quotes: `"say "hi""` —
+    // NOT a cleanly-escaped string, but the outer quotes are still the wrapper.
+    expect(unwrapIniString('"say "hi""')).toBe('say "hi"');
+  });
+
+  it("unwraps + unescapes a fork-shaped multi-line gcode for the textarea", () => {
+    expect(unwrapIniString('"; setup\\nM572 S0.04"')).toBe("; setup\nM572 S0.04");
+  });
+
+  it("leaves a lone quote character verbatim (too short to be wrapped)", () => {
+    expect(unwrapIniString('"')).toBe('"');
+  });
+
+  it("preserves a trailing lone backslash when leniently unwrapping malformed content", () => {
+    // `"abc\"` — lenient unwrap slices to `abc\`; the dangling backslash has
+    // nothing to escape and is kept verbatim.
+    expect(unwrapIniString('"abc\\"')).toBe("abc\\");
+  });
+
+  it("decodes UNQUOTED single-line wire escapes for display (Codex P1 r12)", () => {
+    // The fixture-pinned legal legacy shape: unquoted, literal \n escapes.
+    // PrusaSlicer's unescape processes escapes with or without quotes, so
+    // this IS wire — decoding makes the textarea WYSIWYG and an EDITED
+    // save re-encodes canonically instead of double-escaping \n into \\n
+    // (which merged G-code commands onto one line in the slicer).
+    expect(unwrapIniString("; setup\\nM572 S0.04")).toBe("; setup\nM572 S0.04");
+    // The edited round-trip lands on canonical wire with the SAME slicer
+    // semantics: wrap(display-edited) decodes back to the edited content.
+    const edited = "; setup\nM572 S0.05";
+    expect(unwrapIniString(wrapIniString(edited))).toBe(edited);
+    // Non-canonical escapes stay verbatim (legacy raw content, r5 bias)...
+    expect(unwrapIniString("C:\\tool")).toBe("C:\\tool");
+    // ...as do unquoted values holding RAW newlines (legacy raw content).
+    expect(unwrapIniString("a\nb")).toBe("a\nb");
+    // Escape-free values are untouched (identity decode).
+    expect(unwrapIniString("G1 X=10")).toBe("G1 X=10");
+  });
+
+  it("returns a legacy raw wrap with non-canonical escapes VERBATIM (Codex P2 r5)", () => {
+    // Pre-#1070 form output for a Windows path: `"Use C:\new\tool"` — the
+    // `\t` proves no canonical escaper produced this (they emit only
+    // \\ \" \n \r), so the raw content comes back untouched instead of
+    // `\n` rendering as a newline and `\t` losing its backslash.
+    expect(unwrapIniString('"Use C:\\new\\tool"')).toBe("Use C:\\new\\tool");
+    // ... and a later edit re-encodes CANONICALLY, healing the wire value.
+    expect(wrapIniString("Use C:\\new\\tool")).toBe('"Use C:\\\\new\\\\tool"');
+  });
+
+  it("still decodes canonical-only escapes as wire (the ambiguous case)", () => {
+    // `"C:\new"` raw vs canonical are byte-identical; wire semantics win —
+    // this is exactly what PrusaSlicer's unescape reads from those bytes.
+    expect(unwrapIniString('"C:\\new"')).toBe("C:\new");
+    expect(unwrapIniString('"C:\\\\tool"')).toBe("C:\\tool");
+  });
+
+  it("serializes a bare newline (shorter than a quoted wrapper) via the unquoted path", () => {
+    expect(serializeIniValue("\n")).toBe('"\\n"');
   });
 });

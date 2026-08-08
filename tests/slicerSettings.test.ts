@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   mergeSlicerSettings,
+  normalizeSettingsToWire,
+  bodyHasRawMultilineSettings,
   validateSettingsBag,
   validateDottedSettingsPaths,
   MAX_SETTINGS_KEYS,
@@ -169,6 +171,119 @@ describe("mergeSlicerSettings", () => {
     expect(result.error).toBeNull();
     expect(result.settings.nullable).toBeNull();
     expect("undef" in result.settings).toBe(true);
+  });
+
+  it("wraps a raw multi-line string into wire form at the bag boundary (#1070 r6)", () => {
+    // A JSON-sourced sync (the Orca per-id route) can carry real newlines —
+    // the bag is wire-canonical, so they wrap; single-line strings and
+    // already-wire values (escapes, not raw terminators) stay byte-identical.
+    const result = mergeSlicerSettings(
+      {},
+      {
+        multi: "line one\nline two",
+        cr: "a\rb",
+        single: "one line",
+        wire: '"line one\\nline two"',
+        num: 42,
+      },
+      new Set(),
+    );
+    expect(result.error).toBeNull();
+    expect(result.settings.multi).toBe('"line one\\nline two"');
+    expect(result.settings.cr).toBe('"a\\rb"');
+    expect(result.settings.single).toBe("one line");
+    expect(result.settings.wire).toBe('"line one\\nline two"'); // no double-wrap
+    expect(result.settings.num).toBe(42);
+  });
+
+  it("applies the per-value length cap to the WRAPPED value", () => {
+    const big = "x\n".repeat(10_500); // wraps to > 20k serialized
+    const result = mergeSlicerSettings({}, { big }, new Set());
+    expect(result.error).toContain("settings.big");
+  });
+});
+
+describe("normalizeSettingsToWire (#1070 r7)", () => {
+  it("wraps raw multi-line strings in the whole bag AND dotted paths, in place", () => {
+    const body: Record<string, unknown> = {
+      name: "n",
+      settings: {
+        multi: '"first\nlast"',
+        single: "one line",
+        wire: '"a\\nb"',
+        num: 7,
+      },
+      "settings.dotted": "x\r\ny",
+      "settings.dottedSingle": "plain",
+      notSettings: "a\nb", // non-settings top-level key untouched
+    };
+    normalizeSettingsToWire(body);
+    const bag = body.settings as Record<string, unknown>;
+    expect(bag.multi).toBe('"\\"first\\nlast\\""'); // content quotes escaped, preserved
+    expect(bag.single).toBe("one line");
+    expect(bag.wire).toBe('"a\\nb"'); // already wire — untouched
+    expect(bag.num).toBe(7);
+    expect(body["settings.dotted"]).toBe('"x\\r\\ny"');
+    expect(body["settings.dottedSingle"]).toBe("plain");
+    expect(body.notSettings).toBe("a\nb");
+    // Idempotent: a second pass changes nothing.
+    const snapshot = JSON.stringify(body);
+    normalizeSettingsToWire(body);
+    expect(JSON.stringify(body)).toBe(snapshot);
+  });
+
+  it("heals a STORED-BYTE ECHO on a form key; treats fresh content's quotes as content (r10/r11)", () => {
+    // Echo detection is stored-byte equality: the form's wireOrEdited is
+    // the only writer that echoes stored bytes verbatim, so equality is
+    // proof of a legacy-wrap echo (strip wrapper, heal to canonical wire).
+    const stored = {
+      filament_notes: '"line one\nline two"',
+      start_filament_gcode: '"; start\nM572"',
+    };
+    const body: Record<string, unknown> = {
+      settings: {
+        filament_notes: '"line one\nline two"', // echo → heal
+        end_filament_gcode: '"fresh\ncontent"', // fresh → quotes are content
+      },
+      "settings.start_filament_gcode": '"; start\nM572"', // dotted echo → heal
+    };
+    normalizeSettingsToWire(body, stored);
+    const bag = body.settings as Record<string, unknown>;
+    expect(bag.filament_notes).toBe('"line one\\nline two"');
+    expect(bag.end_filament_gcode).toBe('"\\"fresh\\ncontent\\""');
+    expect(body["settings.start_filament_gcode"]).toBe('"; start\\nM572"');
+  });
+
+  it("without a stored bag (create) NOTHING strips — quotes are always content (r11)", () => {
+    const body: Record<string, unknown> = {
+      settings: { filament_notes: '"first\nlast"' },
+    };
+    normalizeSettingsToWire(body); // no stored bag
+    expect((body.settings as Record<string, unknown>).filament_notes).toBe(
+      '"\\"first\\nlast\\""',
+    );
+  });
+
+  it("bodyHasRawMultilineSettings detects both shapes and nothing else", () => {
+    expect(bodyHasRawMultilineSettings({ settings: { a: "x\ny" } })).toBe(true);
+    expect(bodyHasRawMultilineSettings({ "settings.a": "x\r y" })).toBe(true);
+    expect(bodyHasRawMultilineSettings({ settings: { a: "flat" }, other: "x\ny" })).toBe(
+      false,
+    );
+    expect(bodyHasRawMultilineSettings({ settings: ["x\ny"] })).toBe(false);
+    expect(bodyHasRawMultilineSettings({})).toBe(false);
+  });
+
+  it("tolerates absent / non-object settings", () => {
+    const a: Record<string, unknown> = { name: "n" };
+    normalizeSettingsToWire(a);
+    expect(a).toEqual({ name: "n" });
+    const b: Record<string, unknown> = { settings: "junk" };
+    normalizeSettingsToWire(b);
+    expect(b.settings).toBe("junk"); // validators reject it downstream
+    const c: Record<string, unknown> = { settings: ["arr\nay"] };
+    normalizeSettingsToWire(c);
+    expect(c.settings).toEqual(["arr\nay"]);
   });
 });
 

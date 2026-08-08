@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { unwrapIniString, serializeIniValue } from "@/lib/parseIni";
 import { parseBambuStudioProfile } from "@/lib/bambuStudioImport";
 import {
   generateOrcaSlicerProfiles,
@@ -374,6 +375,48 @@ describe("parseBambuStudioProfile", () => {
     // double-write on round-trip).
     expect(filament.settings.filament_type).toBeUndefined();
     expect(filament.settings.filament_flow_ratio).toBeUndefined();
+  });
+
+  it("wraps a raw multi-line passthrough value into wire form (Codex P2 r2 on GH #1070)", () => {
+    // Orca/Bambu JSON carries REAL newlines in text keys like
+    // filament_notes. Stored raw, a note whose content begins and ends
+    // with quotes would hit serializeIniValue's legacy-wrapper heuristic
+    // on the next PrusaSlicer export and lose those content quotes. The
+    // importer escapes at ingestion (bag = wire form), so the form codec
+    // restores the exact content — boundary quotes included.
+    const note = '"first\nlast"';
+    const { filament } = parseBambuStudioProfile({
+      name: ["X"],
+      filament_type: ["PLA"],
+      filament_notes: [note],
+    });
+    const stored = filament.settings.filament_notes as string;
+    expect(stored.includes("\n")).toBe(false);
+    expect(stored).toBe('"\\"first\\nlast\\""');
+    expect(unwrapIniString(stored)).toBe(note);
+    // A pass through the Prusa emitter is byte-identical (already wire form).
+    expect(serializeIniValue(stored)).toBe(stored);
+    // Single-line passthrough values stay byte-identical (Orca round-trip).
+    const single = parseBambuStudioProfile({
+      name: ["X"],
+      filament_type: ["PLA"],
+      filament_notes: ['"quoted single line"'],
+    });
+    expect(single.filament.settings.filament_notes).toBe('"quoted single line"');
+
+    // Codex P2 r3: the full Bambu import → Orca export round-trip is
+    // LOSSLESS — the JSON exporter decodes the multi-line wire value back
+    // to the original content (JSON carries real newlines natively), and a
+    // second import → export cycle is stable.
+    const [exported] = generateOrcaSlicerProfiles([
+      { name: "X", type: "PLA", vendor: "V", settings: filament.settings },
+    ]);
+    expect(exported.filament_notes).toEqual([note]);
+    const again = parseBambuStudioProfile(exported);
+    const [exported2] = generateOrcaSlicerProfiles([
+      { name: "X", type: "PLA", vendor: "V", settings: again.filament.settings },
+    ]);
+    expect(exported2.filament_notes).toEqual([note]);
   });
 
   it("treats empty arrays / empty strings as undefined", () => {
