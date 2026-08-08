@@ -29,6 +29,9 @@
 import Filament from "@/models/Filament";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
 import { stripTemplateFieldsForWrite } from "@/lib/templateStrip";
+import { firstVariantGateInfo } from "@/lib/firstVariantGate";
+import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
+import { hasVariants } from "@/lib/resolveFilament";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { isDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { INI_TOP_LEVEL_SETTING_KEYS } from "@/lib/parseIni";
@@ -429,8 +432,15 @@ export async function upsertIniFilament(
     // first-variant gates lock, so the check can't be raced by a mid-flight
     // first variant; restoring a variant under a trashed parent is refused;
     // variant creation requires an ACTIVE parent), so the revived row is never
-    // a template at this write. Same reasoning as the atlas importer's
-    // resurrect path.
+    // a TEMPLATE at this write. But that only covers one direction — the
+    // revived row may itself be a VARIANT (GH #1073): with it trashed,
+    // `hasVariants` reads false, so its parent may legitimately have
+    // re-acquired spools/inventory as a standalone. Reviving the row would
+    // surface the FIRST live variant of an inventory-carrying parent — the
+    // stranded-inventory state #605 forbids — so the resurrect runs through
+    // the same adoption gate the CSV importer uses (firstVariantGateInfo),
+    // inside the parent's mutex; a gated section FAILS this row (throw → the
+    // routes' per-row errors[] channel) instead of resurrecting.
     //
     // Splice the tombstone clear into the $set so the resurrect is one atomic
     // write; any $unset for stale variant overrides composes alongside.
@@ -438,12 +448,35 @@ export async function upsertIniFilament(
       ...(update.$set as Record<string, unknown>),
       _deletedAt: null,
     };
-    const resurrected = await Filament.findOneAndUpdate(
-      // `name` re-checked for the same rename-race reason as phase 1.
-      { _id: existingTrashed._id, name, _deletedAt: { $ne: null }, _purged: { $ne: true } },
-      update,
-      { runValidators: true, context: "query", returnDocument: "after" },
-    );
+    const doResurrect = () =>
+      Filament.findOneAndUpdate(
+        // `name` re-checked for the same rename-race reason as phase 1.
+        { _id: existingTrashed._id, name, _deletedAt: { $ne: null }, _purged: { $ne: true } },
+        update,
+        { runValidators: true, context: "query", returnDocument: "after" },
+      );
+    let resurrected;
+    if (existingTrashed.parentId) {
+      const parentKey = String(existingTrashed.parentId);
+      resurrected = await runExclusive(filamentLockKey(parentKey), async () => {
+        const gate = await firstVariantGateInfo(Filament, existingTrashed.parentId);
+        if (gate.reason) throw new Error(gate.reason);
+        const doc = await doResurrect();
+        // Round 7 P2 parity with the CSV importer: an ungated first variant
+        // of a threshold-ONLY parent just surfaced — the parent's
+        // lowStockThreshold is now dead config; clear it AFTER the write
+        // (parent state change last), still inside the per-parent lock.
+        // Re-checking hasVariants (rather than trusting the pre-write
+        // snapshot) covers a resurrect that missed its filter (purged /
+        // renamed mid-window) — no variant surfaced, the threshold stays.
+        if (gate.orphanedThreshold && (await hasVariants(Filament, parentKey))) {
+          await clearOrphanedParentThreshold(Filament, existingTrashed.parentId);
+        }
+        return doc;
+      });
+    } else {
+      resurrected = await doResurrect();
+    }
     if (resurrected) return "updated";
     // Purged/restored/renamed between read and write → fall through to phase 3.
   }

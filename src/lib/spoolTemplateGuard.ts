@@ -26,6 +26,8 @@
  * with a stub that flips from false to true between the two calls.
  */
 
+import { findSpoolByInstanceId } from "@/lib/spoolResponseShape";
+
 // Mirrors the loose doc typing the other model-level helpers use
 // (see src/lib/promoteParent.ts).
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -63,7 +65,9 @@ export const TEMPLATE_NO_SPOOLS_BODY = {
  * validated client value or a fresh `generateInstanceId()`): it is how the
  * just-pushed subdocument is located in the returned document so the
  * compensating `$pull` can match its fresh `_id` exactly, and never a
- * concurrent writer's spool.
+ * concurrent writer's spool. The lookup is a duplicate-tolerant TAIL scan
+ * (`findSpoolByInstanceId`, GH #1073) — see the compensation branch below
+ * for why a head-first find could pull the wrong, pre-existing spool.
  *
  * A push error propagates to the caller unchanged (the route's catch maps
  * it), with nothing to compensate — the failed `$push` wrote nothing.
@@ -103,9 +107,23 @@ export async function pushSpoolWithTemplateGuard(
     // compensate by removing exactly the spool this call added. Match by
     // the fresh subdoc `_id`, located via the instanceId we stamped, so a
     // concurrent spool POST's subdocument can never be pulled by mistake.
-    const added = Array.isArray(filament.spools)
-      ? (filament.spools as FilamentDoc[]).find((s) => s.instanceId === newSpool.instanceId)
-      : undefined;
+    //
+    // GH #1073: the instanceId lookup scans from the TAIL
+    // (findSpoolByInstanceId — shared with the #1027 create-response
+    // lookup): `$push` appends, so the just-pushed subdoc is the LAST
+    // match. instanceId uniqueness is only best-effort — the spool POST's
+    // `isSpoolInstanceIdTaken` pre-check runs OUTSIDE the per-filament
+    // lock (a documented race that can admit a duplicate), and snapshot
+    // restores / hybrid whole-doc copies carry ids verbatim — so a
+    // head-first `find` could resolve an OLDER pre-existing spool with the
+    // same id, and the $pull would then permanently delete that spool
+    // (photo, usageHistory, dryCycles) while the just-pushed one stayed on
+    // the now-template filament. The duplicate-tolerant tail scan pins the
+    // fresh subdoc instead.
+    const added = findSpoolByInstanceId(
+      Array.isArray(filament.spools) ? (filament.spools as FilamentDoc[]) : null,
+      String(newSpool.instanceId),
+    );
     if (added) {
       await FilamentModel.updateOne(
         { _id: id },
