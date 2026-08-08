@@ -7,6 +7,7 @@ import Printer from "@/models/Printer";
 import { runExclusive, filamentLockKey } from "@/lib/filamentMutex";
 import { errorResponseFromCaught, getErrorMessage, errorResponse, handleVersionError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
 
 /**
  * GH #340: GET /api/print-history/{id} — fetch a single job by id,
@@ -468,13 +469,28 @@ export async function DELETE(
               // schema bound) falls back to the entry's full-`grams` refund
               // (also the legacy pre-#1074 path for entries without the
               // field).
+              // Codex P2 round 4: the entry's own `grams` can ALSO be
+              // corrupt (sync/restore — the ledger schema only enforces
+              // min: 0, and snapshot pre-validation accepts any finite
+              // magnitude), and it is both the debitedGrams upper bound
+              // and the legacy fallback here. Validate it against the
+              // app-wide MAX_USAGE_GRAMS sanity cap (#1030) and fall back
+              // to the PrintHistory row's requested grams — which passed
+              // the POST route's cap — when it is invalid.
+              const entryGrams =
+                typeof removedEntry.grams === "number" &&
+                Number.isFinite(removedEntry.grams) &&
+                removedEntry.grams >= 0 &&
+                removedEntry.grams <= MAX_USAGE_GRAMS
+                  ? removedEntry.grams
+                  : u.grams;
               const refundGrams =
                 typeof removedEntry.debitedGrams === "number" &&
                 Number.isFinite(removedEntry.debitedGrams) &&
                 removedEntry.debitedGrams >= 0 &&
-                removedEntry.debitedGrams <= removedEntry.grams
+                removedEntry.debitedGrams <= entryGrams
                   ? removedEntry.debitedGrams
-                  : removedEntry.grams;
+                  : entryGrams;
               const refunded = spool.totalWeight + refundGrams;
               // Only clamp when we have a real net-capacity ceiling. The empty-
               // spool tare alone isn't a ceiling — a value of "spoolWeight: 200,

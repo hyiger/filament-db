@@ -893,6 +893,37 @@ describe("print-history DELETE (undo)", () => {
     expect(refunded.spools[0].totalWeight).toBe(500);
   });
 
+  it("a corrupt ledger grams falls back to the ROW's requested grams (Codex P2 r4)", async () => {
+    // The entry's own grams is both the debitedGrams bound and the legacy
+    // fallback — a sync/restore-corrupted 1e308 there (schema enforces only
+    // min: 0) must not become the refund. Falls back to u.grams, which
+    // passed the POST cap.
+    const f = await Filament.create({
+      name: "Corrupt Ledger Grams",
+      vendor: "Test",
+      type: "PLA",
+      spoolWeight: 200,
+      spools: [{ label: "", totalWeight: 500 }],
+    });
+    const job = await postJob(f, "corrupt-ledger-grams-job", 100);
+    await Filament.collection.updateOne(
+      { _id: f._id },
+      {
+        $set: { "spools.$[].usageHistory.$[].grams": 1e308 },
+        $unset: { "spools.$[].usageHistory.$[].debitedGrams": "" },
+      },
+    );
+
+    const delRes = await deletePrintHistory(delReq(job._id), {
+      params: Promise.resolve({ id: job._id }),
+    });
+    expect(delRes.status).toBe(200);
+    const refunded = await Filament.findById(f._id);
+    // 400 (post-debit) + 100 (row-grams fallback) — NOT 400 + 1e308.
+    expect(refunded.spools[0].totalWeight).toBe(500);
+    expect(refunded.spools[0].usageHistory).toHaveLength(0);
+  });
+
   it("a retried partial refund undoes the MATCHED ledger entry, not the row (Codex P2 r2)", async () => {
     // Two rows against one spool with identical requested grams but
     // different actual debits: 150g spool, two 100g rows → debits 100 + 50.
