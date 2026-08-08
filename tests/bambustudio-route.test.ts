@@ -158,6 +158,42 @@ describe("Bambu Studio importer routes", () => {
       expect(stored.notes).toBeUndefined();
     });
 
+    it("GH #1075 — a bulk name-matched update does not pin parent-inherited settings keys onto a variant", async () => {
+      // Phase 1 of the bulk upsert hits a name-matched VARIANT; the same
+      // parent-equality filter as the per-id sync must apply (the phases all
+      // funnel through prepareBambuUpdate with the parent populated).
+      const parent = await Filament.create({
+        name: "QA Bag Bulk Parent",
+        vendor: "QA Labs",
+        type: "PLA",
+        diameter: 1.75,
+        settings: { ram: "parentval" },
+      });
+      await Filament.create({
+        name: "QA Bambu PLA", // matches minimalProfile's filament_settings_id
+        vendor: "QA Labs",
+        type: "PLA",
+        diameter: 1.75,
+        color: "#112233",
+        parentId: parent._id,
+      });
+
+      const { POST } = await import("@/app/api/filaments/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          "http://localhost/api/filaments/bambustudio",
+          minimalProfile({ ram: ["parentval"], own2: ["y"] }),
+        ),
+      );
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.updated).toBe(true);
+
+      const fresh = await Filament.findOne({ name: "QA Bambu PLA" }).lean();
+      expect(fresh.settings.ram).toBeUndefined(); // inherited echo not pinned
+      expect(fresh.settings.own2).toBe("y"); // genuinely new key stored
+    });
+
     it("requires filament_type AND filament_vendor on create", async () => {
       const { POST } = await import("@/app/api/filaments/bambustudio/route");
       const noType = await POST(
@@ -1175,6 +1211,57 @@ describe("Bambu Studio importer routes", () => {
       // Optional `density` got cleared so it now inherits from parent.
       const afterDensity = (after as { density?: number | null }).density;
       expect(afterDensity == null).toBe(true);
+    });
+
+    it("GH #1075 — does not pin parent-inherited settings keys on a variant; self-heals a stored parent-equal pin", async () => {
+      // resolveFilament merges settings as { ...parent, ...variant }, so the
+      // variant's export echoes every inherited passthrough key. Pre-fix the
+      // sync-back stored that echo verbatim, severing GH #106 live
+      // inheritance for the settings bag — the last slicer path without the
+      // parent-equality filter (#1008 F2 fixed Orca/PrusaSlicer).
+      const parent = await Filament.create({
+        name: "QA Bag Parent",
+        vendor: "QA Labs",
+        type: "PLA",
+        diameter: 1.75,
+        settings: { ram: "parentval", pinned: "same", div: "old" },
+      });
+      const variant = await Filament.create({
+        name: "QA Bag Variant",
+        vendor: "QA Labs",
+        type: "PLA",
+        diameter: 1.75,
+        color: "#00FF00",
+        parentId: parent._id,
+        settings: { pinned: "same", own: "x" }, // pinned = stored parent-equal pin
+      });
+
+      const { POST } = await import("@/app/api/filaments/[id]/bambustudio/route");
+      const res = await POST(
+        jsonReq(
+          `http://localhost/api/filaments/${variant._id}/bambustudio`,
+          minimalProfile({
+            filament_settings_id: ["QA Bag Variant"],
+            ram: ["parentval"], // export echo of an inherited key → must NOT store
+            pinned: ["same"], // echo of the stored parent-equal pin → must self-heal
+            div: ["new"], // genuine divergence from the parent → must store
+          }),
+        ),
+        { params: Promise.resolve({ id: String(variant._id) }) },
+      );
+      expect(res.status).toBe(200);
+
+      const fresh = await Filament.findById(variant._id).lean();
+      expect(fresh.settings.ram).toBeUndefined(); // still inheriting
+      expect(fresh.settings.pinned).toBeUndefined(); // pin healed → inherits again
+      expect(fresh.settings.div).toBe("new"); // divergent override written
+      expect(fresh.settings.own).toBe("x"); // variant-only key survives the whole-object replace
+
+      // GH #106 intact: a later parent edit propagates through the shallow merge.
+      await Filament.updateOne({ _id: parent._id }, { $set: { "settings.ram": "v2" } });
+      const { resolveFilament } = await import("@/lib/resolveFilament");
+      const freshParent = await Filament.findById(parent._id).lean();
+      expect(resolveFilament(fresh, freshParent).settings.ram).toBe("v2");
     });
   });
 });
