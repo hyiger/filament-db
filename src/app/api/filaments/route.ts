@@ -6,7 +6,8 @@ import Printer from "@/models/Printer";
 import BedType from "@/models/BedType";
 import Location from "@/models/Location";
 import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError, assertActiveRefs, assertActiveSpoolLocation } from "@/lib/apiErrorHandler";
-import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { assertSameOriginRequest, stripServerOwnedFields } from "@/lib/requestGuard";
+import { validateSettingsBag, validateDottedSettingsPaths } from "@/lib/slicerSettings";
 import { validateSpoolPhotoDataUrl, isValidIsoDateString } from "@/lib/validateSpoolBody";
 import { decodedTagToFilamentPayload } from "@/lib/decodedTagToFilament";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
@@ -360,8 +361,16 @@ export async function POST(request: NextRequest) {
     // (the mapped spoolWeight) — the phone never does this math (design rule #1).
     // Omitting `spoolRemainingGrams` (e.g. a catalog-only or API caller) creates
     // no spool, so the field is the opt-in the scanner defaults on.
+    // GH #1072 (item 1): `Number.isFinite` joins the guard — the value becomes
+    // the auto-created spool's gross totalWeight below, and
+    // `JSON.parse("1e309") === Infinity` satisfies both the typeof check and
+    // `>= 0`. A non-finite value follows the same shipped posture as a
+    // negative one ("no spool rather than a bad one"); the finite-check on
+    // the auto-create path below is the belt-and-braces backstop.
     const spoolRemaining =
-      typeof body.spoolRemainingGrams === "number" && body.spoolRemainingGrams >= 0
+      typeof body.spoolRemainingGrams === "number" &&
+      Number.isFinite(body.spoolRemainingGrams) &&
+      body.spoolRemainingGrams >= 0
         ? body.spoolRemainingGrams
         : null;
     body = { ...mapped, ...overrides };
@@ -382,40 +391,39 @@ export async function POST(request: NextRequest) {
   const promoteParent = body?.promoteParent === true;
   delete body.promoteParent;
 
-  delete body._id;
-  delete body._deletedAt;
-  // GH #222: parallel of the PUT-handler fix. `_purged` is a sync-engine
-  // tombstone signal — never client-writable. A POST that creates a doc
-  // with `_purged: true` would immediately be ignored by every list / get
-  // endpoint and trigger cross-peer purge on the next sync cycle.
-  delete body._purged;
-  delete body.createdAt;
-  delete body.updatedAt;
-  delete body.__v;
-  delete body.instanceId;
-  delete body.syncId;
-  // GH #619: the OpenPrintTag provenance snapshot is server-owned — it
-  // records what upstream last offered for every OPT-managed field and is
-  // what decides adopt-vs-conflict in diffOptFields (src/lib/optResync.ts).
-  // A client-supplied snapshot could forge `snapshot === current` and flip
-  // user-edited fields to silently auto-adopt on the next re-sync. Only the
-  // OPT import/sync routes may write it.
-  delete body.openprinttagSnapshot;
-  // GH #605 round 10: the durable promotion-marker pair is server-owned —
-  // `promotionInFlight` (parent side) + `promotedByToken` (copy side) are
-  // the PROOF a promotion resume requires; a client-forged pair could trick
-  // a later gate pass into "completing" a promotion that never ran, clearing
-  // a parent's inventory fields with nothing receiving them. Only
-  // src/lib/promoteParent.ts writes them. The dotted sweep also drops
-  // subpath keys (`promotionInFlight.token`), which Mongoose treats as live
-  // paths and which the exact-key deletes above would miss.
-  delete body.promotionInFlight;
-  delete body.promotedByToken;
-  for (const key of Object.keys(body)) {
-    if (key.startsWith("promotionInFlight.") || key.startsWith("promotedByToken.")) {
-      delete body[key];
-    }
-  }
+  // GH #222 / #619 / #605 / #1072: one generalized pass dropping every
+  // SERVER-OWNED field — the exact key AND any dotted subpath
+  // (`spools.0.usageHistory`, `openprinttagSnapshot.color`,
+  // `promotionInFlight.token`, …). Mongoose treats dotted keys as live
+  // nested paths in Filament.create too, so the old exact-key deletes were
+  // bypassable via the dotted form (GH #1072 item 3 — the pre-fix sweep
+  // covered only the promotion-marker pair). The shared field list + the
+  // per-field rationale live in SERVER_OWNED_FILAMENT_FIELDS
+  // (src/lib/requestGuard.ts) so this strip and the PUT handler's can't
+  // drift. `spools` stays allowed as an EXACT key on the create path — the
+  // embedded-spool allowlist + validation loop below is the create-path
+  // spool contract (GH #431) — but its dotted subpaths are still swept.
+  stripServerOwnedFields(body, { allowExact: ["spools"] });
+
+  // GH #1072 (item 2): the GH #266 settings-bag caps were only reachable
+  // through mergeSlicerSettings (the slicer sync routes); the generic create
+  // path forwarded `body.settings` — a Schema.Types.Mixed field, so
+  // Filament.create validates nothing about it — unbounded. Enforce the same
+  // caps here, on both the whole-object form and the dotted `settings.<key>`
+  // form (a live Mongoose path in document construction as well). A create
+  // has no stored bag, but the dotted check is seeded with the WHOLE-object
+  // form's keys (Codex P1 round 2, #1089): Filament.create applies dotted
+  // assignments INTO the object bag, so a body carrying an at-cap `settings`
+  // object plus dotted `settings.<key>` extras would otherwise store a
+  // merged bag past MAX_SETTINGS_KEYS with each helper passing in isolation.
+  const wholeBagKeys =
+    body.settings && typeof body.settings === "object" && !Array.isArray(body.settings)
+      ? Object.keys(body.settings as Record<string, unknown>)
+      : [];
+  const settingsError =
+    validateSettingsBag(body.settings) ??
+    validateDottedSettingsPaths(body, wholeBagKeys);
+  if (settingsError) return errorResponse(settingsError, 400);
 
   // GH #431: the PUT handler explicitly strips `body.spools` to prevent a
   // bulk rewrite of a spool's `usageHistory` ledger. The POST handler
@@ -450,10 +458,31 @@ export async function POST(request: NextRequest) {
     //     while every other spool write path 400s them.
     //   - GH #953 (finding 2): locationId must reference an active Location, so
     //     a dangling ref can't persist and produce a phantom "no location" group.
+    //   - GH #1072 (item 1): totalWeight must be a finite non-negative number
+    //     or null — the schema's only guard is `min: 0`, which Infinity
+    //     satisfies (`JSON.parse("1e309") === Infinity`), and a non-finite
+    //     gross weight then blanks the /api/spools/by-location $sum (and the
+    //     /inventory active-grams header) because JSON.stringify renders
+    //     Infinity as null. Same rules + messages as validateSpoolBody.
     //   (label/lotNumber length is backstopped by the schema maxlength, which
     //    Filament.create validates — a >200-char value 400s as a ValidationError.)
     for (let i = 0; i < body.spools.length; i++) {
       const spool = body.spools[i];
+
+      if (spool.totalWeight !== undefined && spool.totalWeight !== null) {
+        if (
+          typeof spool.totalWeight !== "number" ||
+          !Number.isFinite(spool.totalWeight)
+        ) {
+          return errorResponse(
+            `spools[${i}]: totalWeight must be a finite number or null`,
+            400,
+          );
+        }
+        if (spool.totalWeight < 0) {
+          return errorResponse(`spools[${i}]: totalWeight must be non-negative`, 400);
+        }
+      }
 
       const photo = validateSpoolPhotoDataUrl(spool.photoDataUrl);
       if (!photo.ok) {
@@ -475,6 +504,21 @@ export async function POST(request: NextRequest) {
 
       const locGuard = await assertActiveSpoolLocation(Location, spool.locationId);
       if (locGuard) return locGuard;
+    }
+  }
+
+  // GH #1072 (item 1): finite-check the top-level totalWeight BEFORE it can
+  // become a spool below (or persist as the legacy top-level inventory
+  // field). Same validateSpoolBody contract as the embedded-spool loop —
+  // the schema's `min: 0` is the only model-level guard and Infinity
+  // satisfies it. This also backstops the create-from-tag path above, whose
+  // computed `spoolRemaining + tare` sum lands here.
+  if (body.totalWeight !== undefined && body.totalWeight !== null) {
+    if (typeof body.totalWeight !== "number" || !Number.isFinite(body.totalWeight)) {
+      return errorResponse("totalWeight must be a finite number or null", 400);
+    }
+    if (body.totalWeight < 0) {
+      return errorResponse("totalWeight must be non-negative", 400);
     }
   }
 
