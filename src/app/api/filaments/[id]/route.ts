@@ -23,6 +23,7 @@ import {
   validateSettingsBag,
   validateDottedSettingsPaths,
   normalizeSettingsToWire,
+  bodyHasRawMultilineSettings,
 } from "@/lib/slicerSettings";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { resolveSyncBackColor, isMachineDerivedPerNozzleCondition } from "@/lib/prusaSlicerBundle";
@@ -269,10 +270,21 @@ export async function PUT(
     // than replacing it, so their key count is bounded against the stored
     // bag's keys — fetched only when a dotted settings key is present (the
     // common path pays nothing).
-    // GH #1070 (Codex P2 r7 on PR #1086): wire-normalize raw multi-line
+    // GH #1070 (Codex P2 r7/r11 on PR #1086): wire-normalize raw multi-line
     // settings strings BEFORE the caps — covers both the whole-object and
-    // dotted `settings.<key>` shapes; see normalizeSettingsToWire's docblock.
-    normalizeSettingsToWire(body);
+    // dotted `settings.<key>` shapes. The stored bag feeds the echo test
+    // (an incoming value byte-equal to the stored one is the form's
+    // deliberate legacy-wrap echo and heals; anything else is fresh content
+    // whose boundary quotes survive) — fetched only when a raw multi-line
+    // settings string is actually present, so the common path pays nothing.
+    const storedForWire = bodyHasRawMultilineSettings(body)
+      ? (((
+          await Filament.findOne({ _id: id, _deletedAt: null })
+            .select("settings")
+            .lean()
+        )?.settings as Record<string, unknown> | undefined) ?? null)
+      : null;
+    normalizeSettingsToWire(body, storedForWire);
     const bagError = validateSettingsBag(body.settings);
     if (bagError) return errorResponse(bagError, 400);
     // Codex P1 round 2 (#1089): this pre-lock pass is a fast-fail courtesy

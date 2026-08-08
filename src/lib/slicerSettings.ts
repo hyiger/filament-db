@@ -173,34 +173,62 @@ export function mergeSlicerSettings(
  * apply to the WRAPPED value (same posture as mergeSlicerSettings).
  * Idempotent: a wrapped value holds escapes, not raw terminators.
  *
- * Canonicalization DELEGATES to serializeIniValue with the bag key (Codex
- * P1 round 10): this route's input can be ECHOED STORED BYTES — the form's
- * wireOrEdited deliberately returns a pre-#1070 raw wrap byte-identical
- * (`"line one<NL>line two"`), and blind whole-value wrapping turned the
- * old wrapper quotes into literal content on an untouched save. The
- * key-scoped strip heals such a value to canonical wire of the SAME
- * content on the three legacy form keys, while every other key keeps its
- * boundary quotes as content (the round-9 export semantics, applied
- * symmetrically at the write boundary). mergeSlicerSettings deliberately
- * does NOT delegate: its input is always slicer-decoded CONTENT (the fork
- * echoes what the export decoded, never stored bytes), so quotes there
- * are content on every key.
+ * Legacy-vs-fresh is decided by STORED-BYTE EQUALITY, not by key alone
+ * (Codex P1 round 10 + P2 round 11): the form's wireOrEdited is the only
+ * writer that deliberately echoes a pre-#1070 raw wrap byte-identically,
+ * and it only ever echoes the CURRENTLY-STORED value — so an incoming
+ * value strictly equal to `storedSettings[key]` is provably an echo and
+ * takes serializeIniValue's key-scoped legacy semantics (the old wrapper
+ * strips; the row heals to canonical wire of the SAME content). Anything
+ * else is FRESH content — a current generic client's quote-bounded
+ * multi-line note keeps its quotes as content, even on the three form
+ * keys. A create passes no stored bag, so it can never strip.
+ * mergeSlicerSettings deliberately does NOT share this path: its input is
+ * always slicer-decoded CONTENT (the fork echoes what the export decoded,
+ * never stored bytes), so quotes there are content on every key.
  */
-export function normalizeSettingsToWire(body: Record<string, unknown>): void {
+export function normalizeSettingsToWire(
+  body: Record<string, unknown>,
+  storedSettings: Record<string, unknown> | null = null,
+): void {
+  const toWire = (key: string, value: string): string =>
+    storedSettings != null && storedSettings[key] === value
+      ? serializeIniValue(value, key) // stored echo → legacy semantics (heal)
+      : wrapIniString(value); // fresh content → quotes are content
   const bag = body.settings;
   if (bag && typeof bag === "object" && !Array.isArray(bag)) {
     const rec = bag as Record<string, unknown>;
     for (const [k, v] of Object.entries(rec)) {
       if (typeof v === "string" && /[\r\n]/.test(v)) {
-        rec[k] = serializeIniValue(v, k);
+        rec[k] = toWire(k, v);
       }
     }
   }
   for (const [k, v] of Object.entries(body)) {
     if (k.startsWith("settings.") && typeof v === "string" && /[\r\n]/.test(v)) {
-      body[k] = serializeIniValue(v, k.slice("settings.".length));
+      body[k] = toWire(k.slice("settings.".length), v);
     }
   }
+}
+
+/**
+ * Does `body` carry any settings string (whole-bag or dotted) with a raw
+ * line terminator? Lets the PUT route fetch the stored bag for
+ * normalizeSettingsToWire's echo test only when it could matter.
+ */
+export function bodyHasRawMultilineSettings(body: Record<string, unknown>): boolean {
+  const bag = body.settings;
+  if (bag && typeof bag === "object" && !Array.isArray(bag)) {
+    for (const v of Object.values(bag as Record<string, unknown>)) {
+      if (typeof v === "string" && /[\r\n]/.test(v)) return true;
+    }
+  }
+  for (const [k, v] of Object.entries(body)) {
+    if (k.startsWith("settings.") && typeof v === "string" && /[\r\n]/.test(v)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function validateSettingsBag(settings: unknown): string | null {

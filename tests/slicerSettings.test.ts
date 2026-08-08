@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   mergeSlicerSettings,
   normalizeSettingsToWire,
+  bodyHasRawMultilineSettings,
   validateSettingsBag,
   validateDottedSettingsPaths,
   MAX_SETTINGS_KEYS,
@@ -231,22 +232,46 @@ describe("normalizeSettingsToWire (#1070 r7)", () => {
     expect(JSON.stringify(body)).toBe(snapshot);
   });
 
-  it("strips the legacy wrapper on the three form keys before canonicalizing (P1 r10)", () => {
-    // A form save echoes a pre-#1070 raw wrap byte-identically; the
-    // key-scoped delegation to serializeIniValue heals it to canonical wire
-    // of the SAME content instead of quoting the old wrapper as content.
+  it("heals a STORED-BYTE ECHO on a form key; treats fresh content's quotes as content (r10/r11)", () => {
+    // Echo detection is stored-byte equality: the form's wireOrEdited is
+    // the only writer that echoes stored bytes verbatim, so equality is
+    // proof of a legacy-wrap echo (strip wrapper, heal to canonical wire).
+    const stored = {
+      filament_notes: '"line one\nline two"',
+      start_filament_gcode: '"; start\nM572"',
+    };
     const body: Record<string, unknown> = {
       settings: {
-        filament_notes: '"line one\nline two"',
-        end_filament_gcode: '"; end\nM104 S0"',
+        filament_notes: '"line one\nline two"', // echo → heal
+        end_filament_gcode: '"fresh\ncontent"', // fresh → quotes are content
       },
-      "settings.start_filament_gcode": '"; start\nM572"',
+      "settings.start_filament_gcode": '"; start\nM572"', // dotted echo → heal
     };
-    normalizeSettingsToWire(body);
+    normalizeSettingsToWire(body, stored);
     const bag = body.settings as Record<string, unknown>;
     expect(bag.filament_notes).toBe('"line one\\nline two"');
-    expect(bag.end_filament_gcode).toBe('"; end\\nM104 S0"');
+    expect(bag.end_filament_gcode).toBe('"\\"fresh\\ncontent\\""');
     expect(body["settings.start_filament_gcode"]).toBe('"; start\\nM572"');
+  });
+
+  it("without a stored bag (create) NOTHING strips — quotes are always content (r11)", () => {
+    const body: Record<string, unknown> = {
+      settings: { filament_notes: '"first\nlast"' },
+    };
+    normalizeSettingsToWire(body); // no stored bag
+    expect((body.settings as Record<string, unknown>).filament_notes).toBe(
+      '"\\"first\\nlast\\""',
+    );
+  });
+
+  it("bodyHasRawMultilineSettings detects both shapes and nothing else", () => {
+    expect(bodyHasRawMultilineSettings({ settings: { a: "x\ny" } })).toBe(true);
+    expect(bodyHasRawMultilineSettings({ "settings.a": "x\r y" })).toBe(true);
+    expect(bodyHasRawMultilineSettings({ settings: { a: "flat" }, other: "x\ny" })).toBe(
+      false,
+    );
+    expect(bodyHasRawMultilineSettings({ settings: ["x\ny"] })).toBe(false);
+    expect(bodyHasRawMultilineSettings({})).toBe(false);
   });
 
   it("tolerates absent / non-object settings", () => {

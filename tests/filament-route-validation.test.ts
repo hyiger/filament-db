@@ -246,25 +246,48 @@ describe("GH #1072 — generic filament route validation", () => {
       name: "Legacy-Wrap-Heal",
       vendor: "V",
       type: "PLA",
-      settings: { filament_notes: '"line one\nline two"' },
+      settings: {
+        filament_notes: '"line one\nline two"',
+        start_filament_gcode: '"; a\nM104"',
+      },
     });
     const id = String(doc._id);
     const res = await putRoute(id, {
-      settings: { filament_notes: '"line one\nline two"' }, // untouched echo
+      settings: {
+        filament_notes: '"line one\nline two"', // untouched echo → heals
+        start_filament_gcode: '"; a\nM104"', // echo → heals
+      },
     });
     expect(res.status).toBe(200);
     const after = await Filament.findById(id).lean();
-    expect(after.settings.filament_notes).toBe('"line one\\nline two"'); // healed
+    expect(after.settings.filament_notes).toBe('"line one\\nline two"');
+    expect(after.settings.start_filament_gcode).toBe('"; a\\nM104"');
 
-    // Dotted form-key shape (separate write — mixing whole-bag + dotted
-    // paths in one update is a MongoDB path conflict).
-    const dotted = await putRoute(id, {
-      "settings.start_filament_gcode": '"; a\nM104"',
+    // Dotted-shape echo (separate write — mixing whole-bag + dotted paths
+    // in one update is a MongoDB path conflict). Note the doc now stores
+    // the HEALED value, so echo the healed bytes... which are wire
+    // (no raw terminators) and pass through untouched — pin instead that a
+    // FRESH quote-bounded write on a form key keeps its quotes as content.
+    const fresh = await putRoute(id, {
+      "settings.filament_notes": '"brand new\nnote"', // ≠ stored → content
     });
-    expect(dotted.status).toBe(200);
+    expect(fresh.status).toBe(200);
     const after2 = await Filament.findById(id).lean();
-    expect(after2.settings.start_filament_gcode).toBe('"; a\\nM104"');
-    expect(after2.settings.filament_notes).toBe('"line one\\nline two"');
+    expect(after2.settings.filament_notes).toBe('"\\"brand new\\nnote\\""');
+  });
+
+  it("POST never strips quotes — a create has no stored bytes to echo (#1070 r11)", async () => {
+    const res = await createFilament(
+      postReq({
+        name: "Fresh-Quoted-Notes",
+        vendor: "V",
+        type: "PLA",
+        settings: { filament_notes: '"first\nlast"' }, // quotes are content
+      }),
+    );
+    expect(res.status).toBe(201);
+    const doc = await Filament.findOne({ name: "Fresh-Quoted-Notes" }).lean();
+    expect(doc.settings.filament_notes).toBe('"\\"first\\nlast\\""');
   });
 
   it("PUT rejects an oversize settings value — whole-object AND dotted forms", async () => {
