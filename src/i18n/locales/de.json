@@ -140,6 +140,7 @@
   "inventory.stats.spools": "Spulen",
   "inventory.stats.locations": "Standorte",
   "inventory.stats.totalWeight": "Gesamtgewicht",
+  "inventory.stats.searchNote": "Die Summen beziehen sich auf Ihre aktuelle Suche.",
   "inventory.filter.search": "Suchen",
   "inventory.filter.searchPlaceholder": "Filament, Bezeichnung, Charge…",
   "inventory.filter.kind": "Art",
