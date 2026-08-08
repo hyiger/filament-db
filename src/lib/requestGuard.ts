@@ -156,6 +156,81 @@ const UNSAFE_UPDATE_PATH_RE = /(^|\.)(__proto__|constructor|prototype)(\.|$)/;
  * casts. Returns a 400 `NextResponse` to short-circuit the handler, or `null`
  * when the body may proceed.
  */
+/**
+ * GH #1072 (item 3): the SERVER-OWNED Filament fields a client body must
+ * never write — directly or via a dotted update path. One list shared by
+ * `POST /api/filaments` and `PUT /api/filaments/{id}` so the two strips
+ * cannot drift, and so a future server-owned field added here is swept from
+ * both routes (exact key AND dotted subpaths) by construction.
+ *
+ * Why each is here:
+ *   - `_id` / `createdAt` / `updatedAt` / `__v` — Mongo/Mongoose bookkeeping.
+ *   - `_deletedAt` — the trash flag; only the DELETE/restore routes set it.
+ *   - `_purged` — the sync-engine tombstone (GH #222): client-set it would
+ *     permanent-delete the row across hybrid-sync peers with no UI undo.
+ *   - `instanceId` / `syncId` — system-assigned identities.
+ *   - `spools` — dedicated, validated CRUD routes own spool writes
+ *     (GH #260/#431): a raw write could rewrite a spool's `usageHistory`
+ *     ledger, its `instanceId`, or inject an unvalidated `photoDataUrl`.
+ *   - `openprinttagSnapshot` — OPT provenance (GH #619): a forged snapshot
+ *     flips a user-edited field from `conflict` to auto-`adopt` on re-sync.
+ *   - `promotionInFlight` / `promotedByToken` — the durable promotion-marker
+ *     pair (GH #605 round 10): a forged pair could make a later gate pass
+ *     "resume" a promotion that never ran and clear a parent's inventory.
+ */
+export const SERVER_OWNED_FILAMENT_FIELDS = [
+  "_id",
+  "_deletedAt",
+  "_purged",
+  "createdAt",
+  "updatedAt",
+  "__v",
+  "instanceId",
+  "syncId",
+  "spools",
+  "openprinttagSnapshot",
+  "promotionInFlight",
+  "promotedByToken",
+] as const;
+
+/**
+ * GH #1072 (item 3): strip every {@link SERVER_OWNED_FILAMENT_FIELDS} entry
+ * from a client body IN PLACE — the exact key and any `<field>.`-prefixed
+ * dotted path. Mongoose treats dotted keys as live update paths in BOTH
+ * `findOneAndUpdate` casting and document construction, so exact-key deletes
+ * alone were bypassable via `spools.0.usageHistory` /
+ * `openprinttagSnapshot.color` (the pre-#1072 code swept dotted paths only
+ * for the promotion-marker pair).
+ *
+ * `allowExact` keeps a field's EXACT key writable while still sweeping its
+ * dotted subpaths — the POST create path passes `["spools"]` because embedded
+ * spools on create are legitimate and go through their own allowlist +
+ * validateSpoolBody-contract loop in the route.
+ *
+ * Prefix matching is on the full `<field>.` boundary, so a field that merely
+ * starts with a listed name (e.g. `spoolsExtra`) is untouched.
+ *
+ * Returns the stripped keys (for tests/diagnostics).
+ */
+export function stripServerOwnedFields(
+  body: Record<string, unknown>,
+  options: { allowExact?: readonly string[] } = {},
+): string[] {
+  const allowExact = options.allowExact ?? [];
+  const stripped: string[] = [];
+  for (const key of Object.keys(body)) {
+    for (const field of SERVER_OWNED_FILAMENT_FIELDS) {
+      const exactHit = key === field && !allowExact.includes(field);
+      if (exactHit || key.startsWith(`${field}.`)) {
+        delete body[key];
+        stripped.push(key);
+        break;
+      }
+    }
+  }
+  return stripped;
+}
+
 export function assertSafeUpdateBody(body: unknown): NextResponse | null {
   if (body === null || typeof body !== "object" || Array.isArray(body)) {
     // Not an object update document — the caller's own shape checks own this;
