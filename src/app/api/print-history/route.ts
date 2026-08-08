@@ -273,6 +273,7 @@ export async function POST(request: NextRequest) {
         filamentId: mongoose.Types.ObjectId;
         spoolId: mongoose.Types.ObjectId | null;
         grams: number;
+        debitedGrams?: number;
       }[] = [];
       // GH #954 finding #6: collect the spools this job appends to so each can be
       // trimmed exactly ONCE after every usage row is applied. Trimming inside
@@ -310,6 +311,22 @@ export async function POST(request: NextRequest) {
         }
 
         if (spool) {
+          // GH #1074: record the grams ACTUALLY removed BEFORE the clamp.
+          // The debit clamps at zero, so a job bigger than the spool's
+          // remaining weight silently absorbs the shortfall — and the
+          // DELETE refund used to restore the full requested `grams`,
+          // leaving the spool with MORE weight than before the job existed
+          // (unbounded when netFilamentWeight is null). The refund now pays
+          // back `debitedGrams`; `grams` stays the requested/consumed
+          // amount so analytics totals are unchanged. When totalWeight is
+          // untracked (null) nothing is subtracted here, and recording the
+          // full amount preserves the legacy refund behavior for that edge.
+          // The outer Math.max(0, ...) guards a legacy negative totalWeight
+          // that predates the route-level >= 0 validation.
+          const debited =
+            typeof spool.totalWeight === "number"
+              ? Math.max(0, Math.min(spool.totalWeight, u.grams))
+              : u.grams;
           if (typeof spool.totalWeight === "number") {
             spool.totalWeight = Math.max(0, spool.totalWeight - u.grams);
           }
@@ -323,12 +340,14 @@ export async function POST(request: NextRequest) {
             // double-counted against the aggregated PrintHistory pass.
             source: "job",
             jobId: historyId,
+            debitedGrams: debited,
           });
           touchedSpools.add(spool);
           resolved.push({
             filamentId: filament._id,
             spoolId: spool._id,
             grams: u.grams,
+            debitedGrams: debited,
           });
         } else {
           resolved.push({

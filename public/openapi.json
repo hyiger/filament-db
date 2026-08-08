@@ -8279,6 +8279,11 @@
                   "type": "string",
                   "nullable": true,
                   "description": "PrintHistory _id for job/slicer entries; null for manual/nfc"
+                },
+                "debitedGrams": {
+                  "type": "number",
+                  "nullable": true,
+                  "description": "GH #1074: grams actually removed from the spool at debit time — min(spool remaining weight, grams) when the debit was clamped at zero. The print-history delete refund pays back this value; null on manual/nfc entries and on job entries created before the field existed (those refund the full grams)."
                 }
               },
               "required": [

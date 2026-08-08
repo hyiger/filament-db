@@ -1101,6 +1101,30 @@ describe("Filament Model — v1.11 spool fields", () => {
     ]);
   });
 
+  it("defaults usageHistory.debitedGrams to null and persists a provided value (#1074)", async () => {
+    const filament = await Filament.create({
+      name: "Debited Grams",
+      vendor: "Test",
+      type: "PLA",
+      spools: [
+        {
+          label: "",
+          totalWeight: 800,
+          usageHistory: [
+            // Legacy shape: no debitedGrams → schema default null (the
+            // refund's full-grams fallback keys on exactly this).
+            { grams: 50, jobLabel: "legacy", date: new Date(), source: "job" },
+            // Clamped-debit shape written by POST /api/print-history.
+            { grams: 100, jobLabel: "clamped", date: new Date(), source: "job", debitedGrams: 40 },
+          ],
+        },
+      ],
+    });
+    const fresh = await Filament.findById(filament._id);
+    expect(fresh.spools[0].usageHistory[0].debitedGrams).toBeNull();
+    expect(fresh.spools[0].usageHistory[1].debitedGrams).toBe(40);
+  });
+
   it("rejects usageHistory.source values outside the enum", async () => {
     await expect(
       Filament.create({

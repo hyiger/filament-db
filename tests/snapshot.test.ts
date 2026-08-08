@@ -104,7 +104,8 @@ describe("snapshot route — bedTypes round-trip", () => {
     expect(body.legacyNozzleCleanupComplete).toBe(false);
     // r13: v5 — provenance-carrying snapshots must be REJECTED by pre-#1022
     // builds (their #953 guard), which would otherwise drop the flag.
-    expect(body.version).toBe(6);
+    // v7: debitedGrams on both usage ledgers (GH #1074 / PR #1092 r3).
+    expect(body.version).toBe(7);
 
     await mongoose.connection.db!.collection("_migrations").insertOne({
       _id: "legacyNozzleConditions" as never,
