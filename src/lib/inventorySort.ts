@@ -228,3 +228,42 @@ export function groupAndSortInventory<R extends InventoryRow>(
 
   return out;
 }
+
+/** Header totals for the Spool Inventory page. */
+export interface InventorySummary {
+  spoolCount: number;
+  locationCount: number;
+  totalGrams: number;
+}
+
+/**
+ * Summarise the groups the user can actually see (#1117 f).
+ *
+ * The page's stat cards used to read straight off the server response, so they
+ * tracked the four server-side filters (kind / type / vendor / includeRetired)
+ * but not the client-side text search: searching down to one spool still
+ * headlined "SPOOLS 74 · TOTAL WEIGHT 50.65 kg". That was inconsistent one
+ * level down too — the GROUP headers have recomputed under search since PR
+ * #391 round 2, so search-aware group headers sat under search-blind page
+ * totals.
+ *
+ * Deriving from the already-filtered groups covers both filter kinds with no
+ * new math. With an empty search the caller passes the server groups verbatim,
+ * so the unsearched numbers are unchanged.
+ *
+ * `locationCount` counts every bucket on screen INCLUDING the synthetic "no
+ * location" one — #575.5: counting only real locations rendered "LOCATIONS 0"
+ * while spools sat under "No location". Empty buckets are never emitted, so
+ * this is exactly the number of groups rendered.
+ */
+export function summarizeInventoryGroups(
+  groups: readonly InventorySourceGroup[],
+): InventorySummary {
+  let spoolCount = 0;
+  let totalGrams = 0;
+  for (const g of groups) {
+    spoolCount += g.count;
+    totalGrams += g.totalGrams;
+  }
+  return { spoolCount, locationCount: groups.length, totalGrams };
+}

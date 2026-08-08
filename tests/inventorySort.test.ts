@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   groupAndSortInventory,
   inventoryRemainingGrams,
+  summarizeInventoryGroups,
   INVENTORY_NO_GROUP_KEY,
   INVENTORY_ALL_KEY,
   type InventoryRow,
@@ -315,5 +316,58 @@ describe("groupAndSortInventory — group ordering edge cases", () => {
     const out = groupAndSortInventory(source, "type", "name", "asc");
     // ABS before TPU (label localeCompare at the group comparator's last arm)
     expect(out.map((g) => g.label)).toEqual(["ABS", "TPU"]);
+  });
+});
+
+describe("summarizeInventoryGroups (#1117 f)", () => {
+  const group = (
+    locationId: string | null,
+    count: number,
+    totalGrams: number,
+  ): InventorySourceGroup => ({
+    locationId,
+    location: null,
+    spools: [],
+    count,
+    totalGrams,
+  });
+
+  it("sums counts and grams across every group", () => {
+    expect(summarizeInventoryGroups([group("a", 3, 1500), group("b", 2, 900)])).toEqual({
+      spoolCount: 5,
+      locationCount: 2,
+      totalGrams: 2400,
+    });
+  });
+
+  it("counts the synthetic no-location bucket as a location (#575.5)", () => {
+    // Counting only real locations rendered "LOCATIONS 0" while spools sat
+    // under "No location".
+    expect(summarizeInventoryGroups([group(null, 13, 6000)]).locationCount).toBe(1);
+  });
+
+  it("returns zeros for an empty result rather than throwing", () => {
+    expect(summarizeInventoryGroups([])).toEqual({
+      spoolCount: 0,
+      locationCount: 0,
+      totalGrams: 0,
+    });
+  });
+
+  it("reads the group's own count, not spools.length", () => {
+    // The search path rebuilds groups with a recomputed `count`; the summary
+    // must follow that, which is the whole point of #1117(f).
+    const searched: InventorySourceGroup = {
+      locationId: "a",
+      location: null,
+      spools: [],
+      count: 1,
+      totalGrams: 420,
+    };
+    expect(summarizeInventoryGroups([searched])).toEqual({
+      spoolCount: 1,
+      locationCount: 1,
+      totalGrams: 420,
+    });
   });
 });
