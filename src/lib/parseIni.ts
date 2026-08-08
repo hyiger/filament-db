@@ -141,9 +141,36 @@ export function wrapIniString(content: string): string {
  */
 export function unwrapIniString(value: string): string {
   if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
-    return unescapeIniValueContent(value.slice(1, -1));
+    const inner = value.slice(1, -1);
+    // Codex P2 round 5: pre-#1070 the form wrapped `"${raw}"` WITHOUT
+    // escaping, so a legacy value may hold literal backslashes (a Windows
+    // path in a note). A backslash starting a NON-canonical sequence
+    // (`\t`, a trailing lone `\`) can only come from such a raw wrap —
+    // every canonical writer (wrapIniString, the fork's escape_string_
+    // cstyle) emits only `\\ \" \n \r` — so return the raw content
+    // verbatim: unescaping would render `\n` as a newline and an edit
+    // would re-encode the mangled display permanently, while the verbatim
+    // seed + a later edit re-encodes CANONICALLY and heals the legacy
+    // value. A value whose escapes are all canonical stays ambiguous
+    // (`"C:\new"` raw vs wire are byte-identical) and decodes as wire —
+    // matching what PrusaSlicer itself reads from those bytes.
+    return hasOnlyCanonicalEscapes(inner) ? unescapeIniValueContent(inner) : inner;
   }
   return value;
+}
+
+/** Every backslash in `content` begins a canonical escape (`\\ \" \n \r`). */
+function hasOnlyCanonicalEscapes(content: string): boolean {
+  for (let i = 0; i < content.length; i++) {
+    if (content[i] === "\\") {
+      const next = content[i + 1];
+      if (next !== "\\" && next !== '"' && next !== "n" && next !== "r") {
+        return false;
+      }
+      i += 1;
+    }
+  }
+  return true;
 }
 
 /**

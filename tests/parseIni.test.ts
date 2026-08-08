@@ -557,6 +557,23 @@ describe("wrapIniString / unwrapIniString (GH #1070, FilamentForm codec)", () =>
     expect(unwrapIniString('"abc\\"')).toBe("abc\\");
   });
 
+  it("returns a legacy raw wrap with non-canonical escapes VERBATIM (Codex P2 r5)", () => {
+    // Pre-#1070 form output for a Windows path: `"Use C:\new\tool"` — the
+    // `\t` proves no canonical escaper produced this (they emit only
+    // \\ \" \n \r), so the raw content comes back untouched instead of
+    // `\n` rendering as a newline and `\t` losing its backslash.
+    expect(unwrapIniString('"Use C:\\new\\tool"')).toBe("Use C:\\new\\tool");
+    // ... and a later edit re-encodes CANONICALLY, healing the wire value.
+    expect(wrapIniString("Use C:\\new\\tool")).toBe('"Use C:\\\\new\\\\tool"');
+  });
+
+  it("still decodes canonical-only escapes as wire (the ambiguous case)", () => {
+    // `"C:\new"` raw vs canonical are byte-identical; wire semantics win —
+    // this is exactly what PrusaSlicer's unescape reads from those bytes.
+    expect(unwrapIniString('"C:\\new"')).toBe("C:\new");
+    expect(unwrapIniString('"C:\\\\tool"')).toBe("C:\\tool");
+  });
+
   it("serializes a bare newline (shorter than a quoted wrapper) via the unquoted path", () => {
     expect(serializeIniValue("\n")).toBe('"\\n"');
   });
