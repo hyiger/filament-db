@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   mergeSlicerSettings,
+  normalizeSettingsToWire,
   validateSettingsBag,
   validateDottedSettingsPaths,
   MAX_SETTINGS_KEYS,
@@ -198,6 +199,48 @@ describe("mergeSlicerSettings", () => {
     const big = "x\n".repeat(10_500); // wraps to > 20k serialized
     const result = mergeSlicerSettings({}, { big }, new Set());
     expect(result.error).toContain("settings.big");
+  });
+});
+
+describe("normalizeSettingsToWire (#1070 r7)", () => {
+  it("wraps raw multi-line strings in the whole bag AND dotted paths, in place", () => {
+    const body: Record<string, unknown> = {
+      name: "n",
+      settings: {
+        multi: '"first\nlast"',
+        single: "one line",
+        wire: '"a\\nb"',
+        num: 7,
+      },
+      "settings.dotted": "x\r\ny",
+      "settings.dottedSingle": "plain",
+      notSettings: "a\nb", // non-settings top-level key untouched
+    };
+    normalizeSettingsToWire(body);
+    const bag = body.settings as Record<string, unknown>;
+    expect(bag.multi).toBe('"\\"first\\nlast\\""'); // content quotes escaped, preserved
+    expect(bag.single).toBe("one line");
+    expect(bag.wire).toBe('"a\\nb"'); // already wire — untouched
+    expect(bag.num).toBe(7);
+    expect(body["settings.dotted"]).toBe('"x\\r\\ny"');
+    expect(body["settings.dottedSingle"]).toBe("plain");
+    expect(body.notSettings).toBe("a\nb");
+    // Idempotent: a second pass changes nothing.
+    const snapshot = JSON.stringify(body);
+    normalizeSettingsToWire(body);
+    expect(JSON.stringify(body)).toBe(snapshot);
+  });
+
+  it("tolerates absent / non-object settings", () => {
+    const a: Record<string, unknown> = { name: "n" };
+    normalizeSettingsToWire(a);
+    expect(a).toEqual({ name: "n" });
+    const b: Record<string, unknown> = { settings: "junk" };
+    normalizeSettingsToWire(b);
+    expect(b.settings).toBe("junk"); // validators reject it downstream
+    const c: Record<string, unknown> = { settings: ["arr\nay"] };
+    normalizeSettingsToWire(c);
+    expect(c.settings).toEqual(["arr\nay"]);
   });
 });
 

@@ -195,6 +195,45 @@ describe("GH #1072 — generic filament route validation", () => {
     expect(doc.settings).toMatchObject({ filament_notes: "smooth", custom: "1" });
   });
 
+  it("POST/PUT wire-normalize raw multi-line settings strings (#1070 r7)", async () => {
+    // Codex P2 round 7 on PR #1086: the generic routes bypass
+    // mergeSlicerSettings, so a raw multi-line value whose content is
+    // quote-bounded used to persist verbatim — and serializeIniValue's
+    // legacy-wrapper heuristic then stripped the GENUINE content quotes at
+    // export. Both routes now wrap to wire form before the caps.
+    const rawQuoted = '"first\nlast"'; // content starts+ends with real quotes
+    const wire = '"\\"first\\nlast\\""';
+    const res = await createFilament(
+      postReq({
+        name: "Wire-Normalized",
+        vendor: "V",
+        type: "PLA",
+        settings: { filament_notes: rawQuoted, single: "one line" },
+      }),
+    );
+    expect(res.status).toBe(201);
+    const doc = await Filament.findOne({ name: "Wire-Normalized" }).lean();
+    expect(doc.settings.filament_notes).toBe(wire);
+    expect(doc.settings.single).toBe("one line"); // single-line untouched
+
+    // PUT — whole-object form
+    const id = String(doc._id);
+    const putWhole = await putRoute(id, {
+      settings: { filament_notes: "a\nb", keep: "1" },
+    });
+    expect(putWhole.status).toBe(200);
+    const afterWhole = await Filament.findById(id).lean();
+    expect(afterWhole.settings.filament_notes).toBe('"a\\nb"');
+
+    // PUT — dotted form
+    const putDotted = await putRoute(id, { "settings.dotted_note": "x\r\ny" });
+    expect(putDotted.status).toBe(200);
+    const afterDotted = await Filament.findById(id).lean();
+    expect(afterDotted.settings.dotted_note).toBe('"x\\r\\ny"');
+    // An already-wire value is untouched (idempotent — no double-wrap).
+    expect(afterDotted.settings.filament_notes).toBe('"a\\nb"');
+  });
+
   it("PUT rejects an oversize settings value — whole-object AND dotted forms", async () => {
     const doc = await Filament.create({ name: "Put-Settings", vendor: "V", type: "PLA" });
     const id = String(doc._id);

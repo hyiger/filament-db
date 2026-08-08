@@ -153,6 +153,41 @@ export function mergeSlicerSettings(
  * bag). Non-object shapes are rejected — Mixed would happily persist a
  * string/array bag that every reader expects to be a plain object.
  */
+/**
+ * GH #1070 / Codex P2 round 7 on PR #1086: the generic filament POST/PUT
+ * accept a whole `settings` bag (and dotted `settings.<key>` update paths)
+ * and persist them verbatim — they don't pass through mergeSlicerSettings,
+ * so they were the one remaining writer that could land a NEW raw
+ * multi-line string in the wire-canonical bag. serializeIniValue's emit
+ * heuristic treats any raw multi-line value as a pre-#1070 legacy form
+ * wrap; for a fresh generic write whose content legitimately starts and
+ * ends with quote characters, that stripped genuine content quotes at
+ * export. Normalizing here makes "raw multi-line ⇒ legacy row" true BY
+ * CONSTRUCTION across every post-#1070 writer (slicer syncs →
+ * mergeSlicerSettings, the Bambu parser → ingestion wrap, the form →
+ * wrapIniString, generic API → this helper); the only raw multi-line bag
+ * values left are genuinely legacy rows (or a snapshot restore of them),
+ * exactly what the heuristic exists for.
+ *
+ * Mutates `body` in place. Call BEFORE the validators so the length caps
+ * apply to the WRAPPED value (same posture as mergeSlicerSettings).
+ * Idempotent: a wrapped value holds escapes, not raw terminators.
+ */
+export function normalizeSettingsToWire(body: Record<string, unknown>): void {
+  const bag = body.settings;
+  if (bag && typeof bag === "object" && !Array.isArray(bag)) {
+    const rec = bag as Record<string, unknown>;
+    for (const [k, v] of Object.entries(rec)) {
+      if (typeof v === "string" && /[\r\n]/.test(v)) rec[k] = wrapIniString(v);
+    }
+  }
+  for (const [k, v] of Object.entries(body)) {
+    if (k.startsWith("settings.") && typeof v === "string" && /[\r\n]/.test(v)) {
+      body[k] = wrapIniString(v);
+    }
+  }
+}
+
 export function validateSettingsBag(settings: unknown): string | null {
   if (settings === undefined || settings === null) return null;
   if (typeof settings !== "object" || Array.isArray(settings)) {
