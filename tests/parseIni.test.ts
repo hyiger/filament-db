@@ -3,6 +3,7 @@ import {
   parseIniFilaments,
   INI_TOP_LEVEL_SETTING_KEYS,
   serializeIniValue,
+  decodeMultilineWireValue,
   wrapIniString,
   unwrapIniString,
 } from "@/lib/parseIni";
@@ -486,6 +487,28 @@ describe("serializeIniValue (GH #1070)", () => {
     // raw content the emitter escaped, including the injection payload.
     const raw = 'line one\nkey = value\n[filament:Other]\nsay "hi" \\ end\rcr';
     expect(unwrapIniString(serializeIniValue(raw))).toBe(raw);
+  });
+});
+
+describe("decodeMultilineWireValue (GH #1070 r3, Orca/Bambu JSON export decode)", () => {
+  it("decodes a clean-quoted multi-line wire value to raw content", () => {
+    expect(decodeMultilineWireValue('"a\\nb"')).toBe("a\nb");
+    expect(decodeMultilineWireValue('"a\\rb"')).toBe("a\rb");
+    expect(decodeMultilineWireValue('"\\"first\\nlast\\""')).toBe('"first\nlast"');
+  });
+
+  it("leaves single-line quoted values verbatim (Orca round-trip byte-identity)", () => {
+    expect(decodeMultilineWireValue('"quoted single line"')).toBe('"quoted single line"');
+    expect(decodeMultilineWireValue('"say \\"hi\\""')).toBe('"say \\"hi\\""');
+  });
+
+  it("leaves non-clean shapes verbatim (vectors, expressions, unterminated, unquoted)", () => {
+    expect(decodeMultilineWireValue('"A";"B"')).toBe('"A";"B"');
+    expect(decodeMultilineWireValue('"PLA"=="PLA"')).toBe('"PLA"=="PLA"');
+    expect(decodeMultilineWireValue('"abc\\"')).toBe('"abc\\"');
+    expect(decodeMultilineWireValue('"abc')).toBe('"abc');
+    expect(decodeMultilineWireValue('"')).toBe('"');
+    expect(decodeMultilineWireValue("plain")).toBe("plain");
   });
 });
 

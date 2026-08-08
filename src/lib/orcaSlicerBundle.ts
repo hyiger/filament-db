@@ -16,6 +16,8 @@
  * when the printer/nozzle/plate context changes — they are NOT baked into the profiles.
  */
 
+import { decodeMultilineWireValue } from "./parseIni";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FilamentDoc = Record<string, any>;
 
@@ -72,10 +74,18 @@ export function filamentToOrcaSlicerKeys(
 
   // Pull in settings bag first (passthrough for OrcaSlicer-specific keys).
   // Settings bag values may be plain strings or already arrays.
+  // GH #1070 / Codex P2 r3: the bag is WIRE-CANONICAL (Prusa INI escaping),
+  // but JSON carries real newlines natively — decode multi-line wire values
+  // (narrowly: clean-quoted + decoded content has a line terminator) so a
+  // Bambu/Orca import → export round-trip restores the original multiline
+  // content instead of leaking wrapper quotes and backslash escapes.
+  // Single-line values pass through byte-identical.
   const settings = filament.settings || {};
   for (const [key, value] of Object.entries(settings)) {
     if (value == null) continue;
-    keys[key] = Array.isArray(value) ? value.map(String) : [String(value)];
+    keys[key] = Array.isArray(value)
+      ? value.map(String)
+      : [decodeMultilineWireValue(String(value))];
   }
 
   // Helper: set a key only if value is non-null. Structured fields override settings bag.

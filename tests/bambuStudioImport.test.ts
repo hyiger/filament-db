@@ -403,6 +403,20 @@ describe("parseBambuStudioProfile", () => {
       filament_notes: ['"quoted single line"'],
     });
     expect(single.filament.settings.filament_notes).toBe('"quoted single line"');
+
+    // Codex P2 r3: the full Bambu import → Orca export round-trip is
+    // LOSSLESS — the JSON exporter decodes the multi-line wire value back
+    // to the original content (JSON carries real newlines natively), and a
+    // second import → export cycle is stable.
+    const [exported] = generateOrcaSlicerProfiles([
+      { name: "X", type: "PLA", vendor: "V", settings: filament.settings },
+    ]);
+    expect(exported.filament_notes).toEqual([note]);
+    const again = parseBambuStudioProfile(exported);
+    const [exported2] = generateOrcaSlicerProfiles([
+      { name: "X", type: "PLA", vendor: "V", settings: again.filament.settings },
+    ]);
+    expect(exported2.filament_notes).toEqual([note]);
   });
 
   it("treats empty arrays / empty strings as undefined", () => {

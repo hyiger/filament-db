@@ -147,6 +147,44 @@ export function unwrapIniString(value: string): string {
 }
 
 /**
+ * Is `value` exactly ONE cleanly-quoted string — an opening quote, escaped
+ * content, and a closing quote at the very end? Multi-element vector values
+ * (`"A";"B"`), expressions that merely start and end with a quote
+ * (`"PLA"=="PLA"`), and unterminated strings (`"abc\"`) all return false.
+ */
+function isCleanQuotedString(value: string): boolean {
+  if (value.length < 2 || value[0] !== '"') return false;
+  for (let i = 1; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === "\\") {
+      i += 1;
+      continue;
+    }
+    if (ch === '"') return i === value.length - 1;
+  }
+  return false;
+}
+
+/**
+ * GH #1070 / Codex P2 round 3 on PR #1086: decode ONE bag value for the
+ * Orca/Bambu JSON exporters. The bag is wire-canonical (see the codec
+ * docblock above), but JSON carries real newlines natively — emitting Prusa
+ * INI wire syntax there hands Orca literal wrapper quotes and backslash
+ * escapes, breaking the previously-lossless Bambu import → export
+ * round-trip for multi-line values (and, pre-existing on main, garbling
+ * fork-synced multi-line gcode the same way). Decoding is deliberately
+ * NARROW: only a cleanly-quoted string (per isCleanQuotedString — vectors
+ * and quote-bracketed expressions fail the scan) whose decoded content
+ * actually contains a line terminator. Single-line quoted values stay
+ * verbatim, so their Orca round-trip remains byte-identical to main.
+ */
+export function decodeMultilineWireValue(value: string): string {
+  if (!isCleanQuotedString(value)) return value;
+  const decoded = unescapeIniValueContent(value.slice(1, -1));
+  return /[\r\n]/.test(decoded) ? decoded : value;
+}
+
+/**
  * GH #1070: make one settings-bag value safe to emit as a single
  * `key = value` INI line.
  *
