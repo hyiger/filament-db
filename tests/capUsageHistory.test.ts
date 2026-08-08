@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { capUsageHistory, MAX_SPOOL_HISTORY } from "@/lib/capUsageHistory";
+import {
+  capUsageHistory,
+  safeGrams,
+  sumUsageGrams,
+  MAX_SPOOL_HISTORY,
+  MAX_USAGE_GRAMS,
+} from "@/lib/capUsageHistory";
 
 /**
  * Pure-helper coverage for the undo-aware usageHistory cap (GH #954 finding #6).
@@ -119,5 +125,66 @@ describe("capUsageHistory", () => {
   it("returns a non-array input untouched (defensive)", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(capUsageHistory(undefined as any, 10)).toBeUndefined();
+  });
+});
+
+/**
+ * GH #1030 / GH #1078: the ingestion sanitizer moved here from the analytics
+ * route so the dashboard clamps `recentPrintHistory[].totalGrams` through the
+ * SAME code path. Pin every branch: non-number, non-finite, non-positive → 0;
+ * in-range → identity; over-cap → MAX_USAGE_GRAMS.
+ */
+describe("safeGrams (GH #1030/#1078)", () => {
+  it("exports the shared magnitude cap", () => {
+    expect(MAX_USAGE_GRAMS).toBe(1_000_000);
+  });
+
+  it("returns 0 for non-number inputs", () => {
+    expect(safeGrams("50")).toBe(0);
+    expect(safeGrams(null)).toBe(0);
+    expect(safeGrams(undefined)).toBe(0);
+    expect(safeGrams({})).toBe(0);
+  });
+
+  it("returns 0 for non-finite numbers (NaN / ±Infinity)", () => {
+    expect(safeGrams(Number.NaN)).toBe(0);
+    expect(safeGrams(Infinity)).toBe(0);
+    expect(safeGrams(-Infinity)).toBe(0);
+  });
+
+  it("returns 0 for zero and negative values", () => {
+    expect(safeGrams(0)).toBe(0);
+    expect(safeGrams(-42)).toBe(0);
+  });
+
+  it("passes an in-range value through unchanged", () => {
+    expect(safeGrams(37.5)).toBe(37.5);
+    expect(safeGrams(MAX_USAGE_GRAMS)).toBe(MAX_USAGE_GRAMS);
+  });
+
+  it("clamps a pathological magnitude AT the cap (visible, not vanished)", () => {
+    expect(safeGrams(1e308)).toBe(MAX_USAGE_GRAMS);
+    expect(safeGrams(MAX_USAGE_GRAMS + 1)).toBe(MAX_USAGE_GRAMS);
+  });
+});
+
+describe("sumUsageGrams (GH #1078)", () => {
+  it("returns 0 for a missing usage array (legacy rows)", () => {
+    expect(sumUsageGrams(undefined)).toBe(0);
+    expect(sumUsageGrams([])).toBe(0);
+  });
+
+  it("sums entries with each value clamped through safeGrams", () => {
+    expect(
+      sumUsageGrams([{ grams: 10 }, { grams: -5 }, { grams: Number.NaN }, { grams: 2.5 }]),
+    ).toBe(12.5);
+  });
+
+  it("two 1e308 entries sum to a FINITE total (2 × cap), not Infinity", () => {
+    // Raw doubles: 1e308 + 1e308 = Infinity → JSON.stringify → null. The
+    // per-entry clamp makes overflow structurally unreachable.
+    const total = sumUsageGrams([{ grams: 1e308 }, { grams: 1e308 }]);
+    expect(Number.isFinite(total)).toBe(true);
+    expect(total).toBe(2 * MAX_USAGE_GRAMS);
   });
 });
