@@ -1339,6 +1339,52 @@ describe("API route correctness", () => {
     expect(resolved.temperatures?.nozzle).toBe(230);
   });
 
+  it("#1070 r6 — an unchanged Orca echo of an inherited multi-line setting keeps inheriting", async () => {
+    // The Orca export decodes the parent's wire `"a\nb"` into a REAL newline
+    // for JSON (decodeMultilineWireValue); the fork echoes that raw value
+    // back on sync. mergeSlicerSettings now re-wraps it to wire form at the
+    // bag boundary, so splitInheritedImportSet's strict per-key equality
+    // sees parent-equal and the variant keeps inheriting — pre-fix the raw
+    // vs wire mismatch pinned a variant-local override on every sync.
+    const parent = await Filament.create({
+      name: "Orca Multiline PLA",
+      vendor: "Acme",
+      type: "PLA",
+      settings: { filament_notes: '"line one\\nline two"' },
+    });
+    const variant = await Filament.create({
+      name: "Orca Multiline PLA — Blue",
+      vendor: "Acme",
+      type: "PLA",
+      color: "#0000FF",
+      parentId: parent._id,
+    });
+
+    const res = await orcaSync(
+      jsonReq(`http://localhost/api/filaments/${variant._id}/orcaslicer`, {
+        // what the fork received from the export: decoded, real newline
+        filament_notes: "line one\nline two",
+      }),
+      { params: Promise.resolve({ id: String(variant._id) }) },
+    );
+    expect(res.status).toBe(200);
+
+    const fresh = await Filament.findById(variant._id).lean();
+    // Parent-equal after wire normalization → NOT pinned on the variant.
+    expect(fresh.settings?.filament_notes).toBeUndefined();
+
+    // A DIVERGENT multi-line value still writes — as wire form.
+    const res2 = await orcaSync(
+      jsonReq(`http://localhost/api/filaments/${variant._id}/orcaslicer`, {
+        filament_notes: "line one\nline THREE",
+      }),
+      { params: Promise.resolve({ id: String(variant._id) }) },
+    );
+    expect(res2.status).toBe(200);
+    const diverged = await Filament.findById(variant._id).lean();
+    expect(diverged.settings?.filament_notes).toBe('"line one\\nline THREE"');
+  });
+
   it("#1008 F2 — orca sync $unsets a stale parent-equal local override and still writes divergent values", async () => {
     const parent = await Filament.create({
       name: "Orca Sync PETG",

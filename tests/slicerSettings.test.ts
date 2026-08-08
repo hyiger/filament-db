@@ -170,6 +170,35 @@ describe("mergeSlicerSettings", () => {
     expect(result.settings.nullable).toBeNull();
     expect("undef" in result.settings).toBe(true);
   });
+
+  it("wraps a raw multi-line string into wire form at the bag boundary (#1070 r6)", () => {
+    // A JSON-sourced sync (the Orca per-id route) can carry real newlines —
+    // the bag is wire-canonical, so they wrap; single-line strings and
+    // already-wire values (escapes, not raw terminators) stay byte-identical.
+    const result = mergeSlicerSettings(
+      {},
+      {
+        multi: "line one\nline two",
+        cr: "a\rb",
+        single: "one line",
+        wire: '"line one\\nline two"',
+        num: 42,
+      },
+      new Set(),
+    );
+    expect(result.error).toBeNull();
+    expect(result.settings.multi).toBe('"line one\\nline two"');
+    expect(result.settings.cr).toBe('"a\\rb"');
+    expect(result.settings.single).toBe("one line");
+    expect(result.settings.wire).toBe('"line one\\nline two"'); // no double-wrap
+    expect(result.settings.num).toBe(42);
+  });
+
+  it("applies the per-value length cap to the WRAPPED value", () => {
+    const big = "x\n".repeat(10_500); // wraps to > 20k serialized
+    const result = mergeSlicerSettings({}, { big }, new Set());
+    expect(result.error).toContain("settings.big");
+  });
 });
 
 /**

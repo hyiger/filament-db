@@ -11,6 +11,8 @@
  * so a sync write can't degrade the filament.
  */
 
+import { wrapIniString } from "./parseIni";
+
 /** Max number of keys allowed in the merged `settings` bag. A real
  * slicer filament preset has on the order of ~100 keys; 400 is generous
  * headroom for forks / future keys without being an amplification sink. */
@@ -97,7 +99,21 @@ export function mergeSlicerSettings(
     // re-derived export value. Keeping them out of BOTH sources makes the
     // never-baggable guarantee hold regardless of the caller's structured set.
     if (structuredKeys.has(key) || NEVER_BAGGED_KEYS.has(key)) continue;
-    const serialized = JSON.stringify(value ?? null);
+    // GH #1070 / Codex P2 round 6 on PR #1086: the settings bag is
+    // WIRE-CANONICAL (src/lib/parseIni.ts codec docblock). A raw multi-line
+    // string can only arrive from a JSON-sourced sync — the Orca per-id
+    // route round-trips decodeMultilineWireValue's real newlines straight
+    // back; INI-sourced bodies are line-based and can't carry one, and the
+    // Bambu parser already wraps at its own ingestion (a wrapped value
+    // holds escapes, not raw terminators, so this never double-wraps).
+    // Wrapping HERE makes the invariant hold at every merge boundary — and
+    // restores splitInheritedImportSet's strict per-key equality against a
+    // parent's stored wire value, so an unchanged Orca sync of an inherited
+    // multi-line setting keeps inheriting instead of pinning a variant
+    // override that severs GH #106 live inheritance.
+    const wireValue =
+      typeof value === "string" && /[\r\n]/.test(value) ? wrapIniString(value) : value;
+    const serialized = JSON.stringify(wireValue ?? null);
     if (serialized.length > MAX_SETTING_VALUE_LENGTH) {
       return {
         settings,
@@ -106,7 +122,7 @@ export function mergeSlicerSettings(
         error: `settings.${key} value exceeds the ${MAX_SETTING_VALUE_LENGTH}-character limit`,
       };
     }
-    settings[key] = value;
+    settings[key] = wireValue;
     added.push(key);
   }
 
