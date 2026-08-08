@@ -824,8 +824,25 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     // (it used to split the exported `key = value` line and corrupt the
     // whole PrusaSlicer bundle, and a re-import parsed the continuation
     // lines as INI keys/sections).
-    settings.end_filament_gcode = form.endGcode ? wrapIniString(form.endGcode) : undefined;
-    settings.filament_notes = form.notes ? wrapIniString(form.notes) : undefined;
+    //
+    // Codex P1 round 4 on PR #1086: an UNCHANGED field writes back the
+    // ORIGINAL stored wire bytes, never a re-encode. The bag legally holds
+    // UNQUOTED wire values with literal `\n` escapes (a long-supported
+    // shape — see tests/prusaSlicerBundle.test.ts's unquoted gcode
+    // fixtures); unwrapIniString leaves those verbatim for display, so
+    // re-encoding them on save would escape each backslash (`\n` → `\\n`)
+    // and hand PrusaSlicer literal backslash-n text instead of line breaks.
+    // Only a field the user actually EDITED goes through wrapIniString —
+    // WYSIWYG: the stored content is exactly the textarea's text.
+    const wireOrEdited = (storedKey: string, content: string) => {
+      if (!content) return undefined;
+      const stored = getSettingVal(initialData, storedKey);
+      return stored && unwrapIniString(stored) === content
+        ? stored
+        : wrapIniString(content);
+    };
+    settings.end_filament_gcode = wireOrEdited("end_filament_gcode", form.endGcode);
+    settings.filament_notes = wireOrEdited("filament_notes", form.notes);
 
     // GH #1066: the PrusaSlicer printer-restriction pair. Written only when
     // EDITED — getSettingVal folds a stored `nil` (null) into "" for display,
@@ -853,7 +870,10 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     // Without the trailing `else`, an inherited (or pre-existing) gcode that
     // contained no `M572` line could never be cleared from the form.
     if (form.startGcode) {
-      settings.start_filament_gcode = wrapIniString(form.startGcode);
+      settings.start_filament_gcode = wireOrEdited(
+        "start_filament_gcode",
+        form.startGcode,
+      );
     } else if (form.pressureAdvance) {
       settings.start_filament_gcode = wrapIniString(`M572 S${form.pressureAdvance}`);
     } else {
