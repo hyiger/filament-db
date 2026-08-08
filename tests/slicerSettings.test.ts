@@ -231,6 +231,24 @@ describe("normalizeSettingsToWire (#1070 r7)", () => {
     expect(JSON.stringify(body)).toBe(snapshot);
   });
 
+  it("strips the legacy wrapper on the three form keys before canonicalizing (P1 r10)", () => {
+    // A form save echoes a pre-#1070 raw wrap byte-identically; the
+    // key-scoped delegation to serializeIniValue heals it to canonical wire
+    // of the SAME content instead of quoting the old wrapper as content.
+    const body: Record<string, unknown> = {
+      settings: {
+        filament_notes: '"line one\nline two"',
+        end_filament_gcode: '"; end\nM104 S0"',
+      },
+      "settings.start_filament_gcode": '"; start\nM572"',
+    };
+    normalizeSettingsToWire(body);
+    const bag = body.settings as Record<string, unknown>;
+    expect(bag.filament_notes).toBe('"line one\\nline two"');
+    expect(bag.end_filament_gcode).toBe('"; end\\nM104 S0"');
+    expect(body["settings.start_filament_gcode"]).toBe('"; start\\nM572"');
+  });
+
   it("tolerates absent / non-object settings", () => {
     const a: Record<string, unknown> = { name: "n" };
     normalizeSettingsToWire(a);

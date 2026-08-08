@@ -232,7 +232,16 @@ function isCleanQuotedString(value: string): boolean {
  */
 export function decodeMultilineWireValue(value: string): string {
   if (!isCleanQuotedString(value)) return value;
-  const decoded = unescapeIniValueContent(value.slice(1, -1));
+  const inner = value.slice(1, -1);
+  // Codex P2 round 10: the same legacy-vs-canonical distinction the form's
+  // unwrapIniString applies (round 5). A backslash starting a non-canonical
+  // sequence proves a pre-#1070 raw wrap — its `\n` is literal content
+  // (`C:\new\tool`), not an escape — so decoding would corrupt it exactly
+  // the way the form display used to. Return the bytes verbatim; the
+  // Prusa emit path preserves the content via serializeIniValue's
+  // key-scoped handling.
+  if (!hasOnlyCanonicalEscapes(inner)) return value;
+  const decoded = unescapeIniValueContent(inner);
   return /[\r\n]/.test(decoded) ? decoded : value;
 }
 

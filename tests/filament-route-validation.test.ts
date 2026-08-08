@@ -208,22 +208,24 @@ describe("GH #1072 — generic filament route validation", () => {
         name: "Wire-Normalized",
         vendor: "V",
         type: "PLA",
-        settings: { filament_notes: rawQuoted, single: "one line" },
+        // custom_note is NOT a legacy form key — its boundary quotes are
+        // CONTENT and must survive (r7/r9 semantics).
+        settings: { custom_note: rawQuoted, single: "one line" },
       }),
     );
     expect(res.status).toBe(201);
     const doc = await Filament.findOne({ name: "Wire-Normalized" }).lean();
-    expect(doc.settings.filament_notes).toBe(wire);
+    expect(doc.settings.custom_note).toBe(wire);
     expect(doc.settings.single).toBe("one line"); // single-line untouched
 
     // PUT — whole-object form
     const id = String(doc._id);
     const putWhole = await putRoute(id, {
-      settings: { filament_notes: "a\nb", keep: "1" },
+      settings: { custom_note: "a\nb", keep: "1" },
     });
     expect(putWhole.status).toBe(200);
     const afterWhole = await Filament.findById(id).lean();
-    expect(afterWhole.settings.filament_notes).toBe('"a\\nb"');
+    expect(afterWhole.settings.custom_note).toBe('"a\\nb"');
 
     // PUT — dotted form
     const putDotted = await putRoute(id, { "settings.dotted_note": "x\r\ny" });
@@ -231,7 +233,38 @@ describe("GH #1072 — generic filament route validation", () => {
     const afterDotted = await Filament.findById(id).lean();
     expect(afterDotted.settings.dotted_note).toBe('"x\\r\\ny"');
     // An already-wire value is untouched (idempotent — no double-wrap).
-    expect(afterDotted.settings.filament_notes).toBe('"a\\nb"');
+    expect(afterDotted.settings.custom_note).toBe('"a\\nb"');
+  });
+
+  it("PUT heals a form-echoed legacy raw wrap instead of re-wrapping it (#1070 P1 r10)", async () => {
+    // The form's wireOrEdited byte-preserves a pre-#1070 raw wrap
+    // (`"line one<NL>line two"`) on an untouched save. Blind whole-value
+    // wrapping turned the old WRAPPER quotes into literal content; the
+    // key-scoped normalization strips the wrapper on the three legacy form
+    // keys and re-encodes the SAME content canonically.
+    const doc = await Filament.create({
+      name: "Legacy-Wrap-Heal",
+      vendor: "V",
+      type: "PLA",
+      settings: { filament_notes: '"line one\nline two"' },
+    });
+    const id = String(doc._id);
+    const res = await putRoute(id, {
+      settings: { filament_notes: '"line one\nline two"' }, // untouched echo
+    });
+    expect(res.status).toBe(200);
+    const after = await Filament.findById(id).lean();
+    expect(after.settings.filament_notes).toBe('"line one\\nline two"'); // healed
+
+    // Dotted form-key shape (separate write — mixing whole-bag + dotted
+    // paths in one update is a MongoDB path conflict).
+    const dotted = await putRoute(id, {
+      "settings.start_filament_gcode": '"; a\nM104"',
+    });
+    expect(dotted.status).toBe(200);
+    const after2 = await Filament.findById(id).lean();
+    expect(after2.settings.start_filament_gcode).toBe('"; a\\nM104"');
+    expect(after2.settings.filament_notes).toBe('"line one\\nline two"');
   });
 
   it("PUT rejects an oversize settings value — whole-object AND dotted forms", async () => {

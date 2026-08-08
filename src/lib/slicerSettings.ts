@@ -11,7 +11,7 @@
  * so a sync write can't degrade the filament.
  */
 
-import { wrapIniString } from "./parseIni";
+import { wrapIniString, serializeIniValue } from "./parseIni";
 
 /** Max number of keys allowed in the merged `settings` bag. A real
  * slicer filament preset has on the order of ~100 keys; 400 is generous
@@ -172,18 +172,33 @@ export function mergeSlicerSettings(
  * Mutates `body` in place. Call BEFORE the validators so the length caps
  * apply to the WRAPPED value (same posture as mergeSlicerSettings).
  * Idempotent: a wrapped value holds escapes, not raw terminators.
+ *
+ * Canonicalization DELEGATES to serializeIniValue with the bag key (Codex
+ * P1 round 10): this route's input can be ECHOED STORED BYTES — the form's
+ * wireOrEdited deliberately returns a pre-#1070 raw wrap byte-identical
+ * (`"line one<NL>line two"`), and blind whole-value wrapping turned the
+ * old wrapper quotes into literal content on an untouched save. The
+ * key-scoped strip heals such a value to canonical wire of the SAME
+ * content on the three legacy form keys, while every other key keeps its
+ * boundary quotes as content (the round-9 export semantics, applied
+ * symmetrically at the write boundary). mergeSlicerSettings deliberately
+ * does NOT delegate: its input is always slicer-decoded CONTENT (the fork
+ * echoes what the export decoded, never stored bytes), so quotes there
+ * are content on every key.
  */
 export function normalizeSettingsToWire(body: Record<string, unknown>): void {
   const bag = body.settings;
   if (bag && typeof bag === "object" && !Array.isArray(bag)) {
     const rec = bag as Record<string, unknown>;
     for (const [k, v] of Object.entries(rec)) {
-      if (typeof v === "string" && /[\r\n]/.test(v)) rec[k] = wrapIniString(v);
+      if (typeof v === "string" && /[\r\n]/.test(v)) {
+        rec[k] = serializeIniValue(v, k);
+      }
     }
   }
   for (const [k, v] of Object.entries(body)) {
     if (k.startsWith("settings.") && typeof v === "string" && /[\r\n]/.test(v)) {
-      body[k] = wrapIniString(v);
+      body[k] = serializeIniValue(v, k.slice("settings.".length));
     }
   }
 }

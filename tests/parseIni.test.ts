@@ -527,6 +527,19 @@ describe("decodeMultilineWireValue (GH #1070 r3, Orca/Bambu JSON export decode)"
     expect(decodeMultilineWireValue("plain")).toBe("plain");
   });
 
+  it("returns a legacy raw wrap with non-canonical escapes VERBATIM (Codex P2 r10)", () => {
+    // Same distinction as unwrapIniString (r5), now on the JSON-export
+    // decode: `\t` proves a pre-#1070 raw wrap whose `\n` is literal
+    // Windows-path content, not an escape — decoding corrupted it.
+    expect(decodeMultilineWireValue('"Use C:\\new\\tool"')).toBe(
+      '"Use C:\\new\\tool"',
+    );
+    // A raw wrap holding BOTH literal backslashes and a real newline.
+    expect(decodeMultilineWireValue('"C:\\temp\nline2"')).toBe(
+      '"C:\\temp\nline2"',
+    );
+  });
+
   it("ACCEPTED RESIDUE (r8): wire-lookalike literal content decodes as wire", () => {
     // A JSON value whose LITERAL text is `"a\nb"` (quotes + backslash as
     // characters) is byte-identical to Prusa wire — no provenance bit can
@@ -537,12 +550,14 @@ describe("decodeMultilineWireValue (GH #1070 r3, Orca/Bambu JSON export decode)"
     expect(decodeMultilineWireValue('"a\\nb"')).toBe("a\nb");
   });
 
-  it("matches upstream unescape_string_cstyle on \\t: letter t, not a tab (r8)", () => {
-    // prusa3d/PrusaSlicer src/libslic3r/Config.cpp special-cases ONLY
-    // r/n; every other escaped char is verbatim, and the escaper never
-    // produces \t (real tabs ride raw). Decoding \t as a tab would
-    // diverge from what the slicer reads from the same bytes.
-    expect(decodeMultilineWireValue('"a\\tb\\nc"')).toBe("atb\nc");
+  it("never decodes \\t as a tab — verbatim path, matching upstream semantics (r8/r10)", () => {
+    // prusa3d/PrusaSlicer src/libslic3r/Config.cpp special-cases ONLY r/n
+    // and its escaper never produces \t (real tabs ride raw) — so a `\t`
+    // escape can't come from a canonical writer. Since r10 that means the
+    // whole value routes to the VERBATIM branch (a legacy raw wrap) rather
+    // than being unescaped at all; bytes are preserved, never turned into
+    // a tab.
+    expect(decodeMultilineWireValue('"a\\tb\\nc"')).toBe('"a\\tb\\nc"');
     // A real tab in content survives the wrap round-trip raw + unescaped.
     expect(wrapIniString("col1\tcol2\nrow2")).toBe('"col1\tcol2\\nrow2"');
     expect(unwrapIniString('"col1\tcol2\\nrow2"')).toBe("col1\tcol2\nrow2");
