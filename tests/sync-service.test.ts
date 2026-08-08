@@ -55,6 +55,29 @@ describe("getDbNameFromUri", () => {
       "my-db_v2.prod"
     );
   });
+
+  // GH #1071: a multi-host authority (self-hosted replica set, or
+  // Atlas's non-SRV form) contains a comma, which made the old
+  // `new URL()`-based parse THROW — so hybrid sync silently fell back
+  // to "filament-db" and targeted the wrong database on the cluster.
+  // The driver's own ConnectionString parser handles it.
+  it("extracts db name from a multi-host replica-set URI (GH #1071)", () => {
+    expect(
+      getDbNameFromUri("mongodb://u:p@h1:27017,h2:27017/mydb?replicaSet=rs0")
+    ).toBe("mydb");
+  });
+
+  it("extracts db name from a three-host URI without credentials", () => {
+    expect(
+      getDbNameFromUri("mongodb://h1:27017,h2:27017,h3:27017/prod-db")
+    ).toBe("prod-db");
+  });
+
+  it("falls back to filament-db for a multi-host URI with no db path", () => {
+    expect(getDbNameFromUri("mongodb://h1:27017,h2:27017")).toBe(
+      "filament-db"
+    );
+  });
 });
 
 describe("wrapSyncErrorMessage", () => {

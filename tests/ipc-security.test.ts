@@ -238,5 +238,80 @@ describe("validateMongoUri", () => {
         validateMongoUri("mongodb://tlscafile_lookalike:pw@host/db"),
       ).toBeNull();
     });
+
+    describe("percent-encoded parameter names (GH #1071)", () => {
+      // The MongoDB driver percent-decodes query-parameter NAMES (its
+      // ConnectionString is backed by WHATWG URLSearchParams), so
+      // `tlsCAFil%65` reaches the driver as `tlsCAFile`. The raw
+      // substring check alone never saw these — a full bypass of the
+      // GH #300 arbitrary-file-read guard.
+      it("rejects tlsCAFil%65 (encoded final character)", () => {
+        const r = validateMongoUri(
+          "mongodb://localhost/db?tlsCAFil%65=/etc/passwd",
+        );
+        expect(r).toMatch(/option "tlscafile".*not allowed/);
+      });
+
+      it("rejects %74lsCertificateKeyFile (encoded first character)", () => {
+        const r = validateMongoUri(
+          "mongodb://localhost/db?%74lsCertificateKeyFile=/etc/ssl/key.pem",
+        );
+        expect(r).toMatch(/option "tlscertificatekeyfile".*not allowed/);
+      });
+
+      it("rejects mixed case plus encoding (TlsC%41File)", () => {
+        const r = validateMongoUri("mongodb://localhost/db?TlsC%41File=/foo");
+        expect(r).toMatch(/option "tlscafile".*not allowed/);
+      });
+
+      it("rejects an encoded name in non-first query position", () => {
+        const r = validateMongoUri(
+          "mongodb://localhost/db?replicaSet=rs0&tlsCAFil%65=/etc/ca.pem&authSource=admin",
+        );
+        expect(r).toMatch(/option "tlscafile".*not allowed/);
+      });
+
+      it("rejects a fully percent-encoded option name", () => {
+        // Every character encoded — nothing for the substring pass to
+        // match; only the decoded pass can catch it.
+        const encoded = "sslKey"
+          .split("")
+          .map((c) => `%${c.charCodeAt(0).toString(16).padStart(2, "0")}`)
+          .join("");
+        const r = validateMongoUri(`mongodb://localhost/db?${encoded}=/k.pem`);
+        expect(r).toMatch(/option "sslkey".*not allowed/);
+      });
+
+      it("does NOT reject a benign percent-encoded parameter name", () => {
+        // appNam%65 decodes to appName — not a filesystem option.
+        expect(
+          validateMongoUri("mongodb://localhost/db?appNam%65=my-app&tls=true"),
+        ).toBeNull();
+      });
+
+      it("does NOT crash on malformed percent-encoding (decodeURIComponent throws)", () => {
+        // `%ZZ` is invalid — the decoded pass keeps the raw name and the
+        // substring pass still runs; a benign name stays accepted.
+        expect(
+          validateMongoUri("mongodb://localhost/db?foo%ZZ=bar"),
+        ).toBeNull();
+      });
+
+      it("still rejects when malformed encoding accompanies a plain forbidden option", () => {
+        const r = validateMongoUri(
+          "mongodb://localhost/db?foo%ZZ=bar&tlsCRLFile=/crl.pem",
+        );
+        expect(r).toMatch(/option "tlscrlfile".*not allowed/);
+      });
+
+      it("does NOT reject an encoded name that only decodes to a lookalike with extra characters", () => {
+        // `tls%2BCAFile` decodes to `tls+CAFile` → `+` becomes a space in
+        // URLSearchParams name handling only when literal `+`; here it is
+        // percent-encoded, so the name is `tls+cafile` — not the option.
+        expect(
+          validateMongoUri("mongodb://localhost/db?tls%2BCAFile=/x"),
+        ).toBeNull();
+      });
+    });
   });
 });

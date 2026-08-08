@@ -71,6 +71,15 @@ const FILESYSTEM_URI_OPTIONS = [
  * The scheme check is a regex rather than `new URL()` because a valid
  * multi-host mongodb URI (`mongodb://h1,h2,h3/db`) doesn't always
  * round-trip through the WHATWG URL parser.
+ *
+ * GH #1071: the filesystem-option check runs in TWO passes. The MongoDB
+ * driver percent-decodes query-parameter NAMES (its ConnectionString is
+ * backed by WHATWG URLSearchParams), so `?tlsCAFil%65=/etc/passwd`
+ * reaches the driver as `tlsCAFile` while a raw substring match never
+ * sees it — a full bypass of the GH #300 file-read guard. Pass 1 parses
+ * the query string and compares each DECODED (and `+`-as-space, per
+ * URLSearchParams) parameter name; pass 2 keeps the original raw
+ * substring loop as belt-and-braces for anything the hand parse misses.
  */
 export function validateMongoUri(uri: unknown): string | null {
   if (typeof uri !== "string" || uri.trim() === "") {
@@ -80,6 +89,30 @@ export function validateMongoUri(uri: unknown): string | null {
   if (!/^mongodb(\+srv)?:\/\//i.test(trimmed)) {
     return "MongoDB URI must start with mongodb:// or mongodb+srv://";
   }
+
+  // Pass 1: decoded query-parameter names (GH #1071). The driver treats
+  // the first `?` as the start of the options; anything after a `#` is
+  // never a parameter name.
+  const q = trimmed.indexOf("?");
+  if (q !== -1) {
+    for (const pair of trimmed.slice(q + 1).split("#")[0].split("&")) {
+      if (!pair) continue;
+      let name = pair.split("=")[0];
+      try {
+        // URLSearchParams decodes `+` as space before percent-decoding.
+        name = decodeURIComponent(name.replace(/\+/g, " "));
+      } catch {
+        // Malformed percent-encoding — keep the raw name; the substring
+        // pass below still sees the original bytes.
+      }
+      const canonical = name.trim().toLowerCase();
+      if (FILESYSTEM_URI_OPTIONS.includes(canonical)) {
+        return `MongoDB URI option "${canonical}" is not allowed — it can reference a local file`;
+      }
+    }
+  }
+
+  // Pass 2: raw substring match (the original GH #300 check).
   const lower = trimmed.toLowerCase();
   for (const opt of FILESYSTEM_URI_OPTIONS) {
     if (lower.includes(`${opt}=`)) {
