@@ -118,3 +118,40 @@ export function capUsageHistory<T extends CappableEntry>(
 
   return entries.filter((_, i) => !drop.has(i));
 }
+
+/**
+ * GH #1030: clamp one stored `grams` value to a sane, finite, non-negative
+ * number before it enters ANY aggregate.
+ *
+ * The write boundaries reject `grams > MAX_USAGE_GRAMS`, but rows that
+ * predate that cap — or arrive through a path that doesn't go through the
+ * routes (snapshot restore, hybrid sync) — can still carry a pathological
+ * magnitude. Sanitising at INGESTION rather than at each emit point keeps
+ * every downstream invariant intact by construction: with all inputs finite
+ * a summed total can no longer overflow to `Infinity` (which `JSON.stringify`
+ * renders as `null`, violating the numeric response contract
+ * `public/openapi.json` declares — and in analytics used to cascade the
+ * Hamilton apportionment's `0 * Infinity` → NaN across every segment of the
+ * affected day).
+ *
+ * A clamped row renders as MAX_USAGE_GRAMS rather than vanishing, so the
+ * corruption stays visible in the UI instead of silently under-reporting; a
+ * NaN/negative/missing value contributes 0.
+ *
+ * GH #1078: extracted from `src/app/api/analytics/route.ts` so the dashboard
+ * route clamps `recentPrintHistory[].totalGrams` through the SAME sanitizer —
+ * pre-fix the dashboard summed raw usage grams and could serialize `null` for
+ * a job analytics reported sanely.
+ */
+export function safeGrams(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
+  return Math.min(value, MAX_USAGE_GRAMS);
+}
+
+/**
+ * Sum a job's per-filament usage entries with each value clamped through
+ * `safeGrams` (GH #1030/#1078). Tolerates a missing array (legacy rows).
+ */
+export function sumUsageGrams(usage: { grams: number }[] | undefined): number {
+  return (usage || []).reduce((sum, u) => sum + safeGrams(u.grams), 0);
+}

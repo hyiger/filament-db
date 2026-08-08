@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import mongoose from "mongoose";
 import { GET as getDashboard } from "@/app/api/dashboard/route";
+import { getRemainingGrams } from "@/lib/inventoryStats";
+import { MAX_USAGE_GRAMS } from "@/lib/capUsageHistory";
 
 /**
  * GH #133 regression guard.
@@ -388,5 +390,311 @@ describe("/api/dashboard — totalGrams + low-stock subtract empty-spool mass (G
     const body = await res.json();
     const ids = (body.lowStock as { _id: string }[]).map((x) => x._id);
     expect(ids).toContain(String(variant._id));
+  });
+});
+
+/**
+ * GH #1078 item 1: the low-stock check must mirror `getRemainingGrams`'s
+ * "any weight datum seen" gate (src/lib/inventoryStats.ts). Pre-fix the
+ * dashboard seeded `remaining = 0` and never recorded whether ANY weight
+ * datum existed, so a filament with a threshold and only unweighed (or only
+ * retired) spools was reported as low stock with a fabricated
+ * `remainingGrams: 0` — while the home list's `isLowStock` (which treats
+ * `getRemainingGrams === null` as "not weight-tracked") showed nothing.
+ */
+describe("/api/dashboard — low-stock requires a weight datum (GH #1078)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    const filamentMod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) {
+      mongoose.model("Filament", filamentMod.default.schema);
+    }
+    Filament = mongoose.models.Filament;
+  });
+
+  it("threshold + one spool with NO totalWeight → NOT in lowStock (same verdict as getRemainingGrams → null)", async () => {
+    const f = await Filament.create({
+      name: "Galaxy Black PLA",
+      vendor: "Test",
+      type: "PLA",
+      lowStockThreshold: 200,
+      // The issue's exact repro: Add Spool with a blank weight box sends
+      // totalWeight: null (the GH #203 phantom guard passes on `label`).
+      spools: [{ label: "roll-1" }],
+    });
+
+    // The shared helper this gate mirrors returns null for the same shape.
+    expect(
+      getRemainingGrams({
+        spools: [{ totalWeight: null }],
+        spoolWeight: null,
+        netFilamentWeight: null,
+        totalWeight: null,
+      }),
+    ).toBeNull();
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const ids = (body.lowStock as { _id: string }[]).map((x) => x._id);
+    expect(ids).not.toContain(String(f._id));
+  });
+
+  it("threshold + only RETIRED (weighed) spools → NOT in lowStock", async () => {
+    const f = await Filament.create({
+      name: "Retired-only PLA",
+      vendor: "Test",
+      type: "PLA",
+      lowStockThreshold: 200,
+      spools: [{ label: "old", totalWeight: 100, retired: true }],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const ids = (body.lowStock as { _id: string }[]).map((x) => x._id);
+    expect(ids).not.toContain(String(f._id));
+  });
+
+  it("threshold + no spools at all (and no legacy totalWeight) → NOT in lowStock", async () => {
+    const f = await Filament.create({
+      name: "Catalog-only PLA",
+      vendor: "Test",
+      type: "PLA",
+      lowStockThreshold: 200,
+      spools: [],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const ids = (body.lowStock as { _id: string }[]).map((x) => x._id);
+    expect(ids).not.toContain(String(f._id));
+  });
+
+  it("a REAL 0 g reading still trips low stock (weight datum exists, remaining genuinely 0)", async () => {
+    const f = await Filament.create({
+      name: "Truly Empty PLA",
+      vendor: "Test",
+      type: "PLA",
+      lowStockThreshold: 200,
+      spools: [{ label: "empty", totalWeight: 0 }],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const entry = (body.lowStock as { _id: string; remainingGrams: number }[]).find(
+      (x) => x._id === String(f._id),
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.remainingGrams).toBe(0);
+  });
+
+  it("the legacy GH #777 branch (empty spools[] + top-level totalWeight) counts as weighed", async () => {
+    const f = await Filament.create({
+      name: "Legacy Low PETG",
+      vendor: "Test",
+      type: "PETG",
+      lowStockThreshold: 200,
+      spoolWeight: 50,
+      spools: [],
+      totalWeight: 150, // 150 - 50 = 100 remaining < 200
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const entry = (body.lowStock as { _id: string; remainingGrams: number }[]).find(
+      (x) => x._id === String(f._id),
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.remainingGrams).toBe(100);
+  });
+});
+
+/**
+ * GH #1078 item 2: `recentPrintHistory[].totalGrams` must go through the
+ * shared #1030 `safeGrams` clamp. Pre-fix the dashboard summed raw usage
+ * grams, so a legacy / sync-fed row carrying 1e308 twice overflowed the sum
+ * to Infinity — which JSON.stringify serializes as `null` — while
+ * /api/analytics reported the identical PrintHistory row sanely.
+ */
+describe("/api/dashboard — recentPrintHistory totalGrams clamps via safeGrams (GH #1078)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let PrintHistory: any;
+
+  beforeEach(async () => {
+    const filamentMod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) {
+      mongoose.model("Filament", filamentMod.default.schema);
+    }
+    const phMod = await import("@/models/PrintHistory");
+    if (!mongoose.models.PrintHistory) {
+      mongoose.model("PrintHistory", phMod.default.schema);
+    }
+    PrintHistory = mongoose.models.PrintHistory;
+    // The route `.populate("printerId", "name")`s — with real PrintHistory
+    // rows present, mongoose resolves the ref model at query time, so the
+    // wiped "Printer" registration must be restored (tests/setup.ts caveat).
+    const printerMod = await import("@/models/Printer");
+    if (!mongoose.models.Printer) {
+      mongoose.model("Printer", printerMod.default.schema);
+    }
+  });
+
+  it("two 1e308-gram usage entries yield a FINITE totalGrams (2 × cap), not null", async () => {
+    await PrintHistory.create({
+      jobLabel: "corrupted-magnitude.3mf",
+      usage: [
+        { filamentId: new mongoose.Types.ObjectId(), spoolId: null, grams: 1e308 },
+        { filamentId: new mongoose.Types.ObjectId(), spoolId: null, grams: 1e308 },
+      ],
+      startedAt: new Date(),
+      source: "manual",
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    expect(body.recentPrintHistory).toHaveLength(1);
+    const total = body.recentPrintHistory[0].totalGrams;
+    // Raw doubles would overflow to Infinity → JSON `null`.
+    expect(total).not.toBeNull();
+    expect(Number.isFinite(total)).toBe(true);
+    expect(total).toBe(2 * MAX_USAGE_GRAMS);
+  });
+
+  it("a sane job's totalGrams is unchanged by the clamp", async () => {
+    await PrintHistory.create({
+      jobLabel: "benchy.3mf",
+      usage: [
+        { filamentId: new mongoose.Types.ObjectId(), spoolId: null, grams: 12.5 },
+        { filamentId: new mongoose.Types.ObjectId(), spoolId: null, grams: 7.5 },
+      ],
+      startedAt: new Date(),
+      source: "manual",
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    expect(body.recentPrintHistory[0].totalGrams).toBe(20);
+  });
+});
+
+/**
+ * GH #1078 item 3 (the divergence tracked in CLAUDE.md since v1.60.1/#936):
+ * the low-stock swatch color must match `resolveFilament` / the analytics
+ * `resolveColor` semantics — a variant with `color: null` does NOT inherit
+ * the parent's primary (`color` is in VARIANT_ONLY_FIELDS); it only inherits
+ * the parent's `secondaryColors` whole-array (GH #477), so the swatch falls
+ * through to `secondaryColors[0]`. Pre-fix the dashboard used bare
+ * `displayColor(f)`, which never looked at the parent and painted the
+ * `#808080` sentinel.
+ */
+describe("/api/dashboard — low-stock swatch color matches resolveFilament semantics (GH #1078)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  beforeEach(async () => {
+    const filamentMod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) {
+      mongoose.model("Filament", filamentMod.default.schema);
+    }
+    Filament = mongoose.models.Filament;
+  });
+
+  it("blank-primary variant inherits the parent's secondaryColors[0] (array-fallback), never the parent primary", async () => {
+    const parent = await Filament.create({
+      name: "Rainbow Parent PLA",
+      vendor: "Test",
+      type: "PLA",
+      color: "#FF0000", // must NOT leak into the variant's swatch
+      secondaryColors: ["#112233", "#445566"],
+    });
+    const variant = await Filament.create({
+      name: "Rainbow Variant PLA",
+      vendor: "Test",
+      type: "PLA",
+      color: null,
+      parentId: parent._id,
+      lowStockThreshold: 200,
+      spools: [{ label: "low", totalWeight: 100 }],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const entry = (body.lowStock as { _id: string; color: string }[]).find(
+      (x) => x._id === String(variant._id),
+    );
+    expect(entry).toBeDefined();
+    expect(entry?.color).toBe("#112233");
+  });
+
+  it("blank-primary variant whose parent has NO secondaryColors → #808080 sentinel (parent primary NOT inherited)", async () => {
+    const parent = await Filament.create({
+      name: "Solid Parent PLA",
+      vendor: "Test",
+      type: "PLA",
+      color: "#ABCDEF",
+    });
+    const variant = await Filament.create({
+      name: "Blank Variant PLA",
+      vendor: "Test",
+      type: "PLA",
+      color: null,
+      parentId: parent._id,
+      lowStockThreshold: 200,
+      spools: [{ label: "low", totalWeight: 100 }],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const entry = (body.lowStock as { _id: string; color: string }[]).find(
+      (x) => x._id === String(variant._id),
+    );
+    expect(entry).toBeDefined();
+    // Matches analytics resolveColor + every list/detail/export path.
+    expect(entry?.color).toBe("#808080");
+  });
+
+  it("a variant's OWN secondaryColors beat the parent's (short-circuit before the parent lookup)", async () => {
+    const parent = await Filament.create({
+      name: "Multi Parent PLA",
+      vendor: "Test",
+      type: "PLA",
+      secondaryColors: ["#999999", "#AAAAAA"],
+    });
+    const variant = await Filament.create({
+      name: "Coextruded Variant PLA",
+      vendor: "Test",
+      type: "PLA",
+      color: null,
+      secondaryColors: ["#112233"],
+      parentId: parent._id,
+      lowStockThreshold: 200,
+      spools: [{ label: "low", totalWeight: 100 }],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const entry = (body.lowStock as { _id: string; color: string }[]).find(
+      (x) => x._id === String(variant._id),
+    );
+    expect(entry?.color).toBe("#112233");
+  });
+
+  it("a standalone filament with its own primary keeps it (baseline unchanged)", async () => {
+    const f = await Filament.create({
+      name: "Plain Red PLA",
+      vendor: "Test",
+      type: "PLA",
+      color: "#FF0000",
+      lowStockThreshold: 200,
+      spools: [{ label: "low", totalWeight: 100 }],
+    });
+
+    const res = await getDashboard();
+    const body = await res.json();
+    const entry = (body.lowStock as { _id: string; color: string }[]).find(
+      (x) => x._id === String(f._id),
+    );
+    expect(entry?.color).toBe("#FF0000");
   });
 });
