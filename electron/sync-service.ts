@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import { createHash, randomBytes, randomUUID } from "crypto";
 import { MongoClient, ObjectId, Document, type Db } from "mongodb";
+import { ConnectionString } from "mongodb-connection-string-url";
 import {
   clearLegacyNozzleConditionsOnce,
   deriveLegacyNozzleCondition,
@@ -61,13 +62,22 @@ export function isDuplicateKeyError(err: unknown): boolean {
  * Falls back to "filament-db" if the URI has no explicit DB path, matching
  * the app's historical default so upgrading users keep working against the
  * same database.
+ *
+ * GH #1071: parse with the driver's own `ConnectionString` (from
+ * `mongodb-connection-string-url`, a direct dependency of `mongodb`),
+ * NOT `new URL()` on a scheme-swapped string. A standard multi-host URI
+ * (`mongodb://u:p@h1:27017,h2:27017/mydb?replicaSet=rs0` — a self-hosted
+ * replica set, or Atlas's non-SRV form) has a comma in the authority,
+ * which made the WHATWG URL parser throw — so the old implementation
+ * silently fell back to "filament-db" and hybrid sync targeted the WRONG
+ * database (the connectivity check is db-agnostic, so it still reported
+ * success). ConnectionString handles multi-host, SRV, percent-encoded
+ * credentials and query strings identically to MongoClient. The
+ * try/catch stays for genuinely malformed URIs.
  */
 export function getDbNameFromUri(uri: string): string {
   try {
-    // Normalise scheme so the URL parser accepts mongodb[+srv]:// URIs
-    const normalised = uri.replace(/^mongodb(\+srv)?:\/\//, "http://");
-    const url = new URL(normalised);
-    const db = url.pathname.replace(/^\//, "");
+    const db = new ConnectionString(uri).pathname.replace(/^\//, "");
     return db || "filament-db";
   } catch {
     return "filament-db";
