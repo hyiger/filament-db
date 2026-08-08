@@ -117,8 +117,18 @@ export default function ConfirmProvider({ children }: { children: ReactNode }) {
   // after the two buttons, focus escapes to background page controls
   // while the overlay is still up. Cycle Tab/Shift+Tab between the two
   // buttons so focus stays inside the dialog until it's dismissed.
+  //
+  // GH #1081: capture the invoking element BEFORE focusing the confirm
+  // button and restore it on cleanup — every other modal in the codebase
+  // does this (GH #320), but this one dropped focus to <body> on close,
+  // sending keyboard/SR users back to the top of the document after the
+  // app's most common interaction. The `document.contains` guard covers
+  // the confirm path where the triggering control was removed (a deleted
+  // row) — restoring focus to a detached node is a silent no-op that
+  // still leaves focus on <body>, so we only restore when it's live.
   useEffect(() => {
     if (!pending) return;
+    const prevFocus = document.activeElement as HTMLElement | null;
     confirmBtnRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -146,7 +156,10 @@ export default function ConfirmProvider({ children }: { children: ReactNode }) {
       }
     };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if (prevFocus && document.contains(prevFocus)) prevFocus.focus?.();
+    };
   }, [pending, decide]);
 
   return (

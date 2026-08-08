@@ -91,14 +91,20 @@ export default function LocationsPage() {
 
   const handleDelete = async (id: string, name: string) => {
     if (!(await confirm({ message: t("locations.deleteConfirm", { name }), destructive: true, confirmLabel: t("common.delete") }))) return;
-    const res = await fetch(`/api/locations/${id}`, { method: "DELETE" });
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      toast(body?.error || t("locations.deleteError"), "error");
-      return;
+    // GH #1080: a network-level fetch rejection used to escape the handler
+    // with no toast at all — the row just silently stayed.
+    try {
+      const res = await fetch(`/api/locations/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast(body?.error || t("locations.deleteError"), "error");
+        return;
+      }
+      toast(t("locations.deleted", { name }));
+      fetchLocations();
+    } catch {
+      toast(t("locations.deleteError"), "error");
     }
-    toast(t("locations.deleted", { name }));
-    fetchLocations();
   };
 
   const handleBulkDelete = async () => {
@@ -107,20 +113,31 @@ export default function LocationsPage() {
     setBulkDeleting(true);
     let deleted = 0;
     const errors: string[] = [];
-    for (const id of selected) {
-      const res = await fetch(`/api/locations/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        deleted++;
-      } else {
-        const body = await res.json().catch(() => null);
-        const name = locations.find((l) => l._id === id)?.name ?? id;
-        errors.push(body?.error || t("locations.deleteErrorNamed", { name }));
+    try {
+      for (const id of selected) {
+        // GH #1080: a mid-loop network failure used to throw out of the
+        // handler, leaving the delete button disabled forever and skipping
+        // the refetch. Record the failure and keep going (GH #640 pattern).
+        try {
+          const res = await fetch(`/api/locations/${id}`, { method: "DELETE" });
+          if (res.ok) {
+            deleted++;
+          } else {
+            const body = await res.json().catch(() => null);
+            const name = locations.find((l) => l._id === id)?.name ?? id;
+            errors.push(body?.error || t("locations.deleteErrorNamed", { name }));
+          }
+        } catch {
+          const name = locations.find((l) => l._id === id)?.name ?? id;
+          errors.push(t("locations.deleteErrorNamed", { name }));
+        }
       }
+      if (deleted > 0) toast(t("locations.bulkDeleted", { count: deleted }));
+      if (errors.length > 0) toast(errors.join("; "), "error");
+    } finally {
+      setBulkDeleting(false);
+      fetchLocations();
     }
-    if (deleted > 0) toast(t("locations.bulkDeleted", { count: deleted }));
-    if (errors.length > 0) toast(errors.join("; "), "error");
-    setBulkDeleting(false);
-    fetchLocations();
   };
 
   return (

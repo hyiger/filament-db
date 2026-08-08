@@ -976,8 +976,11 @@ function FilamentDetail() {
     }
   }, [addSpoolForm.label, t, toast]);
 
-  const handleAddSpool = async (label = "", totalWeight: number | null = null) => {
-    if (!filament) return;
+  // GH #1080: returns whether the create succeeded so the caller can gate
+  // the form reset on it — a failed create must NOT close the form and
+  // discard the typed label/weight.
+  const handleAddSpool = async (label = "", totalWeight: number | null = null): Promise<boolean> => {
+    if (!filament) return false;
     try {
       const res = await fetch(`/api/filaments/${filament._id}/spools?shape=spool`, {
         method: "POST",
@@ -992,11 +995,32 @@ function FilamentDetail() {
           prev ? { ...prev, spools: [...(prev.spools ?? []), created.spool] } : prev,
         );
         toast(t("detail.spool.added"));
-      } else {
-        toast(t("detail.spool.addFailed"), "error");
+        return true;
       }
+      toast(t("detail.spool.addFailed"), "error");
+      return false;
     } catch {
       toast(t("detail.spool.addFailed"), "error");
+      return false;
+    }
+  };
+
+  // GH #1080: ONE submit handler shared by BOTH duplicated Add Spool render
+  // sites (the regular flow and the first-spool fallback) so the
+  // success-gated reset can't drift between them. On failure the form stays
+  // open with the typed input intact for a retry; the error toast already
+  // fired inside handleAddSpool.
+  const handleAddSpoolSubmit = async () => {
+    if (addSpoolSubmitting) return;
+    const weight = addSpoolForm.totalWeight
+      ? Number(addSpoolForm.totalWeight)
+      : null;
+    setAddSpoolSubmitting(true);
+    try {
+      const ok = await handleAddSpool(addSpoolForm.label.trim(), weight);
+      if (ok) setAddSpoolForm({ open: false, label: "", totalWeight: "" });
+    } finally {
+      setAddSpoolSubmitting(false);
     }
   };
 
@@ -2044,19 +2068,7 @@ function FilamentDetail() {
                     />
                     <button
                       disabled={addSpoolSubmitting}
-                      onClick={async () => {
-                        if (addSpoolSubmitting) return;
-                        const weight = addSpoolForm.totalWeight
-                          ? Number(addSpoolForm.totalWeight)
-                          : null;
-                        setAddSpoolSubmitting(true);
-                        try {
-                          await handleAddSpool(addSpoolForm.label.trim(), weight);
-                          setAddSpoolForm({ open: false, label: "", totalWeight: "" });
-                        } finally {
-                          setAddSpoolSubmitting(false);
-                        }
-                      }}
+                      onClick={handleAddSpoolSubmit}
                       className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {t("detail.spool.addCreate")}
@@ -2142,19 +2154,7 @@ function FilamentDetail() {
                   />
                   <button
                     disabled={addSpoolSubmitting}
-                    onClick={async () => {
-                      if (addSpoolSubmitting) return;
-                      const weight = addSpoolForm.totalWeight
-                        ? Number(addSpoolForm.totalWeight)
-                        : null;
-                      setAddSpoolSubmitting(true);
-                      try {
-                        await handleAddSpool(addSpoolForm.label.trim(), weight);
-                        setAddSpoolForm({ open: false, label: "", totalWeight: "" });
-                      } finally {
-                        setAddSpoolSubmitting(false);
-                      }
-                    }}
+                    onClick={handleAddSpoolSubmit}
                     className="px-4 py-1.5 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {t("detail.spool.addCreate")}
