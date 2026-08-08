@@ -47,18 +47,35 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
     return () => prevFocus?.focus?.();
   }, []);
 
-  // Tab trap + Escape. Re-bound when `onClose` changes — cheap, and with
-  // no focus side-effects so a parent re-render is harmless here.
+  // Tab trap + Escape. Re-bound when `onClose` / `step` changes — cheap,
+  // and with no focus side-effects so a parent re-render is harmless here.
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return;
     const handleTab = (e: KeyboardEvent) => {
-      if (e.key === "Escape") { onClose(); return; }
+      if (e.key === "Escape") {
+        // GH #1081: never close mid-import — the backdrop click is already
+        // gated on this state; Escape gets the same guard. The unmount
+        // abort only cancels the CLIENT fetch, the server-side import
+        // keeps running, and a reflexive Escape + re-run would duplicate.
+        if (step !== "importing") onClose();
+        return;
+      }
       if (e.key !== "Tab") return;
+      // GH #1081: exclude disabled elements — the connect step's disabled
+      // Connect button used to be the trap boundary, so Tab from Cancel
+      // escaped into the background page (same selector as
+      // SpoolCsvImportDialog).
       const focusable = dialog.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
       );
-      if (focusable.length === 0) return;
+      if (focusable.length === 0) {
+        // Importing step renders no focusable controls — park focus on the
+        // dialog container instead of letting Tab walk the background page.
+        e.preventDefault();
+        dialog.focus();
+        return;
+      }
       const first = focusable[0];
       const last = focusable[focusable.length - 1];
       if (e.shiftKey) {
@@ -75,15 +92,20 @@ export default function ImportAtlasDialog({ onClose, onImported }: Props) {
     };
     document.addEventListener("keydown", handleTab);
     return () => document.removeEventListener("keydown", handleTab);
-  }, [onClose]);
+  }, [onClose, step]);
 
   // GH #320: move focus into the newly-rendered step on a wizard
   // transition so keyboard / screen-reader users follow the flow.
+  // GH #1081: skip disabled controls (`.focus()` on one is a silent no-op
+  // → focus falls to <body>); the importing step has no focusable control
+  // at all, so fall back to the dialog container.
   useEffect(() => {
-    const el = dialogRef.current?.querySelector<HTMLElement>(
-      'input, select, textarea, button, [href]',
+    const root = dialogRef.current;
+    if (!root) return;
+    const el = root.querySelector<HTMLElement>(
+      'input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), [href]',
     );
-    el?.focus();
+    (el ?? root).focus();
   }, [step]);
 
   const handleConnect = async () => {

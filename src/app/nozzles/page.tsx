@@ -71,14 +71,20 @@ export default function NozzlesPage() {
 
   const handleDelete = async (id: string, name: string) => {
     if (!(await confirm({ message: t("nozzles.deleteConfirm", { name }), destructive: true, confirmLabel: t("common.delete") }))) return;
-    const res = await fetch(`/api/nozzles/${id}`, { method: "DELETE" });
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      toast(body?.error || t("nozzles.deleteError"), "error");
-      return;
+    // GH #1080: a network-level fetch rejection used to escape the handler
+    // with no toast at all — the row just silently stayed.
+    try {
+      const res = await fetch(`/api/nozzles/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast(body?.error || t("nozzles.deleteError"), "error");
+        return;
+      }
+      toast(t("nozzles.deleted", { name }));
+      fetchNozzles();
+    } catch {
+      toast(t("nozzles.deleteError"), "error");
     }
-    toast(t("nozzles.deleted", { name }));
-    fetchNozzles();
   };
 
   const handleBulkDelete = async () => {
@@ -87,20 +93,31 @@ export default function NozzlesPage() {
     setBulkDeleting(true);
     let deleted = 0;
     const errors: string[] = [];
-    for (const id of selected) {
-      const res = await fetch(`/api/nozzles/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        deleted++;
-      } else {
-        const body = await res.json().catch(() => null);
-        const name = nozzles.find((n) => n._id === id)?.name ?? id;
-        errors.push(body?.error || t("nozzles.deleteErrorNamed", { name }));
+    try {
+      for (const id of selected) {
+        // GH #1080: a mid-loop network failure used to throw out of the
+        // handler, leaving the delete button disabled forever and skipping
+        // the refetch. Record the failure and keep going (GH #640 pattern).
+        try {
+          const res = await fetch(`/api/nozzles/${id}`, { method: "DELETE" });
+          if (res.ok) {
+            deleted++;
+          } else {
+            const body = await res.json().catch(() => null);
+            const name = nozzles.find((n) => n._id === id)?.name ?? id;
+            errors.push(body?.error || t("nozzles.deleteErrorNamed", { name }));
+          }
+        } catch {
+          const name = nozzles.find((n) => n._id === id)?.name ?? id;
+          errors.push(t("nozzles.deleteErrorNamed", { name }));
+        }
       }
+      if (deleted > 0) toast(t("nozzles.bulkDeleted", { count: deleted }));
+      if (errors.length > 0) toast(errors.join("; "), "error");
+    } finally {
+      setBulkDeleting(false);
+      fetchNozzles();
     }
-    if (deleted > 0) toast(t("nozzles.bulkDeleted", { count: deleted }));
-    if (errors.length > 0) toast(errors.join("; "), "error");
-    setBulkDeleting(false);
-    fetchNozzles();
   };
 
   return (
