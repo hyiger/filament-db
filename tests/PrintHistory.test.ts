@@ -95,6 +95,30 @@ describe("PrintHistory Model", () => {
     expect(entry.usage[0].spoolId.toString()).toBe(sid.toString());
   });
 
+  it("defaults usage.debitedGrams to null and persists a provided value (#1074)", async () => {
+    // Legacy shape: rows created before the field existed carry no
+    // debitedGrams — the schema default (null) is what the DELETE refund's
+    // full-grams fallback keys on.
+    const legacy = await PrintHistory.create({
+      jobLabel: "legacy-row",
+      usage: [{ filamentId: new mongoose.Types.ObjectId(), grams: 100 }],
+    });
+    expect(legacy.usage[0].debitedGrams).toBeNull();
+
+    // Clamped-debit shape written by POST /api/print-history: grams stays
+    // the requested amount, debitedGrams records what actually came off.
+    const clamped = await PrintHistory.create({
+      jobLabel: "clamped-row",
+      usage: [
+        { filamentId: new mongoose.Types.ObjectId(), grams: 100, debitedGrams: 50 },
+      ],
+    });
+    expect(clamped.usage[0].grams).toBe(100);
+    expect(clamped.usage[0].debitedGrams).toBe(50);
+    const reloaded = await PrintHistory.findById(clamped._id).lean();
+    expect(reloaded.usage[0].debitedGrams).toBe(50);
+  });
+
   it("records timestamps automatically", async () => {
     const entry = await PrintHistory.create({
       jobLabel: "ts-check",

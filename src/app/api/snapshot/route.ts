@@ -28,8 +28,17 @@ let restoreInProgress = false;
  * build restoring a v5 file would silently DROP that provenance, and the
  * post-upgrade migration would then re-judge (and could erase) a
  * byte-identical post-cleanup user pin; the #953 version guard in those
- * builds rejects v5 instead. */
-const CURRENT_SNAPSHOT_VERSION = 6;
+ * builds rejects v5 instead.
+ *
+ * v7 (GH #1074, Codex P1 r3 on PR #1092): usage entries on BOTH ledgers
+ * (PrintHistory.usage[] + spool usageHistory[]) carry `debitedGrams`. A
+ * pre-#1074 build restoring a v7 file would ACCEPT it while its strict
+ * schemas silently strip the field — a "successful" restore that quietly
+ * loses the very data preventing the clamped-debit over-refund; the #953
+ * guard in those builds rejects v7 instead (same argument as v6's
+ * `desiccantChangedAt`: a refused restore is recoverable, a silent
+ * partial one isn't). */
+const CURRENT_SNAPSHOT_VERSION = 7;
 
 /** The collection keys a v≤4 snapshot carries. Restore requires at least one to
  * be present so a wrong-shape / newer file 400s instead of silently wiping the
