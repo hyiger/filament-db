@@ -239,4 +239,50 @@ describe("decodedTagToFilamentPayload", () => {
     expect(temps.nozzle).toBe(230);
     expect(temps.bed).toBe(70);
   });
+
+  // GH #1072 (item 4): tagData is unvalidated client JSON despite the typing —
+  // a non-string in any of the top-level string fields used to throw
+  // (`.trim` resolved to undefined) out of the only caller (the
+  // create-from-tag branch of POST /api/filaments) as a 500. strField
+  // coerces junk to "" (field absent) instead.
+  it("#1072: junk-typed string fields coerce to absent instead of throwing", () => {
+    const junk = tag({
+      brandName: 123 as unknown as string,
+      materialName: { nested: true } as unknown as string,
+      materialType: [1, 2] as unknown as string,
+      colorName: true as unknown as string,
+    });
+    const p = decodedTagToFilamentPayload(junk); // must not throw
+    expect(p.name).toBe("Scanned filament"); // nothing usable → default name
+    expect(p.vendor).toBeNull();
+    expect(p.type).toBeNull();
+    expect(p.colorName).toBeNull();
+  });
+
+  it("#1072: still trims genuine string fields (whitespace-only → absent)", () => {
+    const p = decodedTagToFilamentPayload(
+      tag({ brandName: "  Prusament  ", materialName: "   ", materialType: " PLA " }),
+    );
+    expect(p.vendor).toBe("Prusament");
+    expect(p.type).toBe("PLA");
+    expect(p.name).toBe("Prusament"); // material was whitespace-only → brand wins
+  });
+
+  it("#1072: a non-string color falls back instead of riding into the schema validator", () => {
+    // No secondaries → gray fallback.
+    const noSecondaries = decodedTagToFilamentPayload(
+      tag({ color: { r: 255 } as unknown as string }),
+    );
+    expect(noSecondaries.color).toBe("#808080");
+    // With secondaries → null primary (coextruded posture, GH #477).
+    const withSecondaries = decodedTagToFilamentPayload(
+      tag({
+        color: 42 as unknown as string,
+        secondaryColors: ["#112233", "#445566"],
+      }),
+    );
+    expect(withSecondaries.color).toBeNull();
+    // An empty-string color also falls to the fallback.
+    expect(decodedTagToFilamentPayload(tag({ color: "" })).color).toBe("#808080");
+  });
 });

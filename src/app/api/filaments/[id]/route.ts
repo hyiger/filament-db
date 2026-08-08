@@ -12,8 +12,17 @@ import {
 } from "@/lib/createVariantGated";
 import { clearOrphanedParentThreshold } from "@/lib/promoteParent";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError, isDuplicateKeyError, assertActiveRefs } from "@/lib/apiErrorHandler";
-import { assertSameOriginRequest, assertSafeUpdateBody } from "@/lib/requestGuard";
-import { mergeSlicerSettings, MAX_SETTING_VALUE_LENGTH } from "@/lib/slicerSettings";
+import {
+  assertSameOriginRequest,
+  assertSafeUpdateBody,
+  stripServerOwnedFields,
+} from "@/lib/requestGuard";
+import {
+  mergeSlicerSettings,
+  MAX_SETTING_VALUE_LENGTH,
+  validateSettingsBag,
+  validateDottedSettingsPaths,
+} from "@/lib/slicerSettings";
 import { stripLegacyMachineCondition } from "@/lib/stripLegacyNozzleCondition";
 import { resolveSyncBackColor, isMachineDerivedPerNozzleCondition } from "@/lib/prusaSlicerBundle";
 import { splitInheritedImportSet } from "@/lib/importFilaments";
@@ -202,43 +211,19 @@ export async function PUT(
     // handler's flag).
     const promoteParent = body?.promoteParent === true;
     delete body.promoteParent;
-    delete body._id;
-    delete body._deletedAt;
-    // GH #222 (P1 security): `_purged` is a sync-engine tombstone signal,
-    // not a client-writable field. Omitting this strip lets a caller send
-    // `{ "_purged": true }` in a regular PUT body, which persists the flag
-    // on an active (non-trashed) document. On the next hybrid-sync cycle
-    // the engine propagates the purge to the peer DB, effectively
-    // permanent-deleting the filament across both sides without going
-    // through the trash → permanent-delete UI gate that's supposed to
-    // require `_deletedAt != null` first. Repro: see the issue body.
-    delete body._purged;
-    delete body.createdAt;
-    delete body.updatedAt;
-    delete body.__v;
-    delete body.instanceId;
-    delete body.syncId;
-    // GH #619: server-owned OPT provenance — see the parallel strip in the
-    // POST handler. The edit form fetches `?raw=true` and receives this
-    // field, so an innocent client echo-back would rewrite provenance; a
-    // malicious body could forge `snapshot === current` to flip a user-
-    // edited field from `conflict` to pre-checked `adopt` in the re-sync
-    // dialog. Only the OPT import/sync routes may write it.
-    delete body.openprinttagSnapshot;
-    // GH #605 round 10: the durable promotion-marker pair is server-owned —
-    // see the parallel strip in the POST handler. A forged
-    // `promotionInFlight`/`promotedByToken` pair could make a later gate
-    // pass "resume" a promotion that never ran and clear the parent's
-    // inventory fields. The dotted sweep matters here especially: this body
-    // feeds findOneAndUpdate, where `promotionInFlight.token` is a live
-    // update path the exact-key deletes would miss.
-    delete body.promotionInFlight;
-    delete body.promotedByToken;
-    for (const key of Object.keys(body)) {
-      if (key.startsWith("promotionInFlight.") || key.startsWith("promotedByToken.")) {
-        delete body[key];
-      }
-    }
+    // GH #222 / #260 / #619 / #605 / #1072: one generalized pass dropping
+    // every SERVER-OWNED field — exact keys AND dotted subpaths. This body
+    // feeds findOneAndUpdate, where a dotted key (`spools.0.usageHistory`,
+    // `spools.0.instanceId`, `openprinttagSnapshot.color`,
+    // `promotionInFlight.token`, …) is a live update path the old exact-key
+    // deletes missed — the pre-#1072 dotted sweep covered only the
+    // promotion-marker pair, so the GH #260 "hard guarantee" that spool
+    // writes go through validateSpoolBody was bypassable via
+    // `spools.0.<field>`. The shared field list + per-field rationale live
+    // in SERVER_OWNED_FILAMENT_FIELDS (src/lib/requestGuard.ts) so this
+    // strip and the POST handler's can't drift; a future server-owned field
+    // added there is swept here by construction.
+    stripServerOwnedFields(body);
     // Server-side response-only fields that clients may echo back (e.g. the
     // edit page fetches with ?raw=true and receives _parent / _variants /
     // _inherited). Strip so they don't become persisted document fields.
@@ -246,13 +231,6 @@ export async function PUT(
     delete body._variants;
     delete body._inherited;
     delete body._strippedTemplateFields;
-    // GH #260: `spools` is NOT editable through the filament PUT. Spools
-    // have dedicated CRUD endpoints (POST/PUT/DELETE /spools/...) that
-    // validate via validateSpoolBody — a bulk PUT of the whole `spools`
-    // array would bypass that and let a client rewrite a spool's
-    // usageHistory ledger, inject a non-numeric totalWeight, etc. The
-    // edit form never sends `spools`; strip it as a hard guarantee.
-    delete body.spools;
 
     // Codex P2 on PR #577: the renderer only ever sends a plain field object.
     // A Mongo update OPERATOR ($set / $inc / $rename / …) in the body would be
@@ -279,6 +257,59 @@ export async function PUT(
     // lockfile or an upstream regression from silently reopening it.
     const unsafePath = assertSafeUpdateBody(body);
     if (unsafePath) return unsafePath;
+
+    // GH #1072 (item 2): enforce the GH #266 settings-bag caps on the generic
+    // PUT — `settings` is Schema.Types.Mixed, so `runValidators: true` below
+    // is a no-op for it and an unbounded bag would persist and bloat every
+    // subsequent read (list aggregation, detail page, slicer exports,
+    // snapshot, hybrid-sync copies). Both write shapes are covered: the
+    // whole-object form and the dotted `settings.<key>` form (a live
+    // Mongoose update path). Dotted paths MERGE into the stored bag rather
+    // than replacing it, so their key count is bounded against the stored
+    // bag's keys — fetched only when a dotted settings key is present (the
+    // common path pays nothing).
+    const bagError = validateSettingsBag(body.settings);
+    if (bagError) return errorResponse(bagError, 400);
+    // Codex P1 round 2 (#1089): this pre-lock pass is a fast-fail courtesy
+    // only — the AUTHORITATIVE dotted-count check re-runs against a fresh
+    // stored-bag read INSIDE the runExclusive critical section below,
+    // because two concurrent PUTs adding distinct settings.<key> paths near
+    // the cap could both observe the same stored key set here and both
+    // pass, with the lock serializing only the (unvalidated) writes.
+    const hasDottedSettings = Object.keys(body).some((k) =>
+      k.startsWith("settings."),
+    );
+    if (hasDottedSettings) {
+      const storedBag = await Filament.findOne({ _id: id, _deletedAt: null })
+        .select("settings")
+        .lean();
+      const dottedError = validateDottedSettingsPaths(
+        body,
+        Object.keys(
+          (storedBag?.settings as Record<string, unknown> | undefined) ?? {},
+        ),
+      );
+      if (dottedError) return errorResponse(dottedError, 400);
+    }
+
+    // Codex P1 round 2 (#1089): the legacy top-level `totalWeight` (a
+    // pre-spools inventory field the dashboard's GH #777 branch still sums)
+    // reached findOneAndUpdate unvalidated — the schema's `min: 0` accepts
+    // Infinity (`JSON.parse("1e309")`), which overflows aggregates into
+    // JSON null. Mirror the POST paths' validateSpoolBody contract:
+    // finite non-negative number, or null to clear.
+    if (
+      "totalWeight" in body &&
+      body.totalWeight !== null &&
+      (typeof body.totalWeight !== "number" ||
+        !Number.isFinite(body.totalWeight) ||
+        body.totalWeight < 0)
+    ) {
+      return errorResponse(
+        "totalWeight must be a non-negative number or null",
+        400,
+      );
+    }
 
     // Validate parentId if provided
     if (body.parentId) {
@@ -592,6 +623,9 @@ export async function PUT(
     // the same set with their own per-field notes (import-atlas/route.ts) —
     // keep that mirror in lockstep with the shared list.
     let strippedTemplateFields: string[] = [];
+    // Codex P1 round 2 (#1089): set inside the lock when the in-lock dotted
+    // re-validation trips; mapped to a 400 after the critical section.
+    let inLockDottedError: string | null = null;
     const filament = await runExclusive(filamentLockKey(id), async () => {
       // Round 11 F2b: on the adoption path, re-check the target is still
       // alive under ITS lock before the adoption write. The parent lock
@@ -609,6 +643,23 @@ export async function PUT(
         const targetAlive = await Filament.exists({ _id: id, _deletedAt: null });
         if (!targetAlive) return null;
       }
+      // Codex P1 round 2 (#1089): AUTHORITATIVE dotted-settings cap check —
+      // re-read the stored bag under the SAME lock as the write, so two
+      // concurrent PUTs adding distinct keys near the cap serialize through
+      // one validate-then-write section and the second observes the first's
+      // growth. (All same-id settings writers share this lock key.)
+      if (hasDottedSettings) {
+        const lockedBag = await Filament.findOne({ _id: id, _deletedAt: null })
+          .select("settings")
+          .lean();
+        inLockDottedError = validateDottedSettingsPaths(
+          body,
+          Object.keys(
+            (lockedBag?.settings as Record<string, unknown> | undefined) ?? {},
+          ),
+        );
+        if (inLockDottedError) return null;
+      }
       strippedTemplateFields = await stripTemplateFieldsForWrite(Filament, id, body);
       return await Filament.findOneAndUpdate(
         { _id: id, _deletedAt: null },
@@ -616,6 +667,9 @@ export async function PUT(
         { returnDocument: "after", runValidators: true }
       ).lean();
     });
+    if (inLockDottedError) {
+      return errorResponse(inLockDottedError, 400);
+    }
     if (!filament) {
       return errorResponse("Not found", 404);
     }
