@@ -10,7 +10,7 @@ import FilamentSwatch from "@/components/FilamentSwatch";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { MAX_COMPARE_FILAMENTS, parseCompareIds } from "@/lib/compareSelection";
 import { getRemainingGrams } from "@/lib/inventoryStats";
-import { allColors, deriveArrangement, displayColor } from "@/lib/filamentColors";
+import { allColors, deriveArrangement } from "@/lib/filamentColors";
 import { deriveFinish } from "@/lib/filamentFinish";
 
 interface FilamentOption {
@@ -200,8 +200,13 @@ function ComparePageInner() {
         // an empty cell. `allColors` returns the primary plus every secondary,
         // so a multi-colour filament lists what it actually is.
         const hexes = allColors(f);
-        const swatchText = hexes.length > 0 ? hexes.join(" / ") : displayColor(f);
-        return f.colorName ? `${f.colorName} (${swatchText})` : swatchText;
+        // No stored colour at all — a v1.70 template is deliberately
+        // colourless. Report that as unknown rather than reaching for
+        // displayColor's #808080 fallback, which would assert a grey the user
+        // never picked as though it were stored data.
+        if (hexes.length === 0) return f.colorName || "—";
+        const joined = hexes.join(" / ");
+        return f.colorName ? `${f.colorName} (${joined})` : joined;
       },
     },
     {
