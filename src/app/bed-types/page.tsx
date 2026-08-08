@@ -69,14 +69,20 @@ export default function BedTypesPage() {
 
   const handleDelete = async (id: string, name: string) => {
     if (!(await confirm({ message: t("bedTypes.deleteConfirm", { name }), destructive: true, confirmLabel: t("common.delete") }))) return;
-    const res = await fetch(`/api/bed-types/${id}`, { method: "DELETE" });
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      toast(body?.error || t("bedTypes.deleteError"), "error");
-      return;
+    // GH #1080: a network-level fetch rejection used to escape the handler
+    // with no toast at all — the row just silently stayed.
+    try {
+      const res = await fetch(`/api/bed-types/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast(body?.error || t("bedTypes.deleteError"), "error");
+        return;
+      }
+      toast(t("bedTypes.deleted", { name }));
+      fetchBedTypes();
+    } catch {
+      toast(t("bedTypes.deleteError"), "error");
     }
-    toast(t("bedTypes.deleted", { name }));
-    fetchBedTypes();
   };
 
   const handleBulkDelete = async () => {
@@ -85,20 +91,31 @@ export default function BedTypesPage() {
     setBulkDeleting(true);
     let deleted = 0;
     const errors: string[] = [];
-    for (const id of selected) {
-      const res = await fetch(`/api/bed-types/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        deleted++;
-      } else {
-        const body = await res.json().catch(() => null);
-        const name = bedTypes.find((b) => b._id === id)?.name ?? id;
-        errors.push(body?.error || t("bedTypes.deleteErrorNamed", { name }));
+    try {
+      for (const id of selected) {
+        // GH #1080: a mid-loop network failure used to throw out of the
+        // handler, leaving the delete button disabled forever and skipping
+        // the refetch. Record the failure and keep going (GH #640 pattern).
+        try {
+          const res = await fetch(`/api/bed-types/${id}`, { method: "DELETE" });
+          if (res.ok) {
+            deleted++;
+          } else {
+            const body = await res.json().catch(() => null);
+            const name = bedTypes.find((b) => b._id === id)?.name ?? id;
+            errors.push(body?.error || t("bedTypes.deleteErrorNamed", { name }));
+          }
+        } catch {
+          const name = bedTypes.find((b) => b._id === id)?.name ?? id;
+          errors.push(t("bedTypes.deleteErrorNamed", { name }));
+        }
       }
+      if (deleted > 0) toast(t("bedTypes.bulkDeleted", { count: deleted }));
+      if (errors.length > 0) toast(errors.join("; "), "error");
+    } finally {
+      setBulkDeleting(false);
+      fetchBedTypes();
     }
-    if (deleted > 0) toast(t("bedTypes.bulkDeleted", { count: deleted }));
-    if (errors.length > 0) toast(errors.join("; "), "error");
-    setBulkDeleting(false);
-    fetchBedTypes();
   };
 
   return (
