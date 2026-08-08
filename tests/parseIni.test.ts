@@ -510,6 +510,27 @@ describe("decodeMultilineWireValue (GH #1070 r3, Orca/Bambu JSON export decode)"
     expect(decodeMultilineWireValue('"')).toBe('"');
     expect(decodeMultilineWireValue("plain")).toBe("plain");
   });
+
+  it("ACCEPTED RESIDUE (r8): wire-lookalike literal content decodes as wire", () => {
+    // A JSON value whose LITERAL text is `"a\nb"` (quotes + backslash as
+    // characters) is byte-identical to Prusa wire — no provenance bit can
+    // tell them apart. Wire wins by deliberate bias: every pre-#1070 export
+    // wrote wire into Orca/Bambu JSON verbatim, so wire-shaped strings in
+    // real profiles are overwhelmingly actual wire that MUST decode; see
+    // decodeMultilineWireValue's docblock before "fixing" this.
+    expect(decodeMultilineWireValue('"a\\nb"')).toBe("a\nb");
+  });
+
+  it("matches upstream unescape_string_cstyle on \\t: letter t, not a tab (r8)", () => {
+    // prusa3d/PrusaSlicer src/libslic3r/Config.cpp special-cases ONLY
+    // r/n; every other escaped char is verbatim, and the escaper never
+    // produces \t (real tabs ride raw). Decoding \t as a tab would
+    // diverge from what the slicer reads from the same bytes.
+    expect(decodeMultilineWireValue('"a\\tb\\nc"')).toBe("atb\nc");
+    // A real tab in content survives the wrap round-trip raw + unescaped.
+    expect(wrapIniString("col1\tcol2\nrow2")).toBe('"col1\tcol2\\nrow2"');
+    expect(unwrapIniString('"col1\tcol2\\nrow2"')).toBe("col1\tcol2\nrow2");
+  });
 });
 
 describe("wrapIniString / unwrapIniString (GH #1070, FilamentForm codec)", () => {

@@ -101,6 +101,17 @@ function escapeIniValueContent(content: string): string {
  * unescape_string_cstyle: `\n`/`\r` become the real terminators; any other
  * escaped character is taken verbatim (`\"` → `"`, `\\` → `\`, `\x` → `x`).
  * A trailing lone backslash is preserved as-is.
+ *
+ * `\t` is deliberately NOT decoded as a tab (Codex P2 round 8 suggested
+ * it): upstream's unescape_string_cstyle (prusa3d/PrusaSlicer,
+ * src/libslic3r/Config.cpp) special-cases ONLY `r` and `n` — every other
+ * escaped char is emitted verbatim, so PrusaSlicer itself reads `\t` as
+ * the letter `t` — and escape_string_cstyle never PRODUCES `\t` (a real
+ * tab rides raw, unescaped, exactly as ours does). Decoding `\t` here
+ * would diverge from what the slicer reads from the same bytes. The same
+ * fact is why `\t` is not in hasOnlyCanonicalEscapes: no canonical writer
+ * emits it, so its presence proves a legacy raw wrap (see
+ * unwrapIniString).
  */
 function unescapeIniValueContent(content: string): string {
   let out = "";
@@ -204,6 +215,20 @@ function isCleanQuotedString(value: string): boolean {
  * and quote-bracketed expressions fail the scan) whose decoded content
  * actually contains a line terminator. Single-line quoted values stay
  * verbatim, so their Orca round-trip remains byte-identical to main.
+ *
+ * ACCEPTED RESIDUE (Codex P2 round 8, stated in both directions): a JSON
+ * profile whose value is the LITERAL text `"a\nb"` — boundary quotes and
+ * backslash as visible characters — is byte-identical to Prusa wire and
+ * decodes as wire here, losing those characters on the JSON export. The
+ * bag carries no provenance bit, so the two readings are structurally
+ * indistinguishable; wire wins because wire-shaped JSON strings are
+ * overwhelmingly ACTUAL wire — every pre-#1070 export wrote bag values
+ * into Orca/Bambu JSON verbatim, so real users' exported files carry wire
+ * multi-line gcode/notes that MUST decode (the bug this function fixes) —
+ * while wire-lookalike literal content is contrived. Wrapping such
+ * strings at JSON ingestion instead was considered and REJECTED: it would
+ * misread every re-imported pre-#1070 export (real, common) to preserve
+ * the lookalike (hypothetical), inverting the bias the wrong way.
  */
 export function decodeMultilineWireValue(value: string): string {
   if (!isCleanQuotedString(value)) return value;
