@@ -8,6 +8,35 @@ import PrintHistory from "@/models/PrintHistory";
 import { getErrorMessage, errorResponse } from "@/lib/apiErrorHandler";
 import { resolveFilament } from "@/lib/resolveFilament";
 import { displayColor } from "@/lib/filamentColors";
+import { sumUsageGrams } from "@/lib/capUsageHistory";
+
+/**
+ * GH #1078 (closing the divergence tracked since v1.60.1/#936): the low-stock
+ * swatch color must follow `resolveFilament`'s contract, exactly like the
+ * analytics route's `resolveColor` — a variant's `color` is VARIANT-ONLY and
+ * is never inherited from its parent; only `secondaryColors` inherits, via
+ * the whole-array fallback rule (GH #477). Pre-fix this was a bare
+ * `displayColor(f)`, which painted the gray sentinel for a blank-primary
+ * variant whose parent carries `secondaryColors`.
+ */
+function lowStockSwatchColor(
+  own: { color?: string | null; secondaryColors?: string[] | null },
+  parent: { secondaryColors?: string[] | null } | undefined,
+): string {
+  const ownHasPrimary = own.color != null && own.color !== "";
+  const ownHasSecondary =
+    Array.isArray(own.secondaryColors) && own.secondaryColors.length > 0;
+  if (
+    !ownHasPrimary &&
+    !ownHasSecondary &&
+    parent &&
+    Array.isArray(parent.secondaryColors) &&
+    parent.secondaryColors.length > 0
+  ) {
+    return displayColor({ color: null, secondaryColors: parent.secondaryColors });
+  }
+  return displayColor(own);
+}
 
 /**
  * GET /api/dashboard — aggregate summary for the dashboard page.
@@ -92,6 +121,14 @@ export async function GET() {
 
     for (const f of filaments) {
       let remaining = 0;
+      // GH #1078: mirror `getRemainingGrams`'s "any weight datum seen" gate
+      // (src/lib/inventoryStats.ts). Without it, a filament whose spools carry
+      // no `totalWeight` reads as 0 g remaining and trips a permanent false
+      // low-stock alert with a fabricated figure — while the home list's
+      // `isLowStock` (via `getRemainingGrams` → null) shows nothing. `weighed`
+      // flips alongside every `remaining +=`; `totalGrams` is untouched
+      // (an unweighed spool contributes 0 there either way).
+      let weighed = false;
       // Subtracting the empty-spool weight is the bit GH #182 was about:
       // `spool.totalWeight` is the live scale reading (filament + empty
       // spool), not remaining filament. Pre-fix the dashboard summed the
@@ -113,6 +150,7 @@ export async function GET() {
         spoolCount++;
         if (typeof s.totalWeight === "number") {
           remaining += Math.max(0, s.totalWeight - spoolMass);
+          weighed = true;
         }
       }
       // GH #777: a legacy single-spool row (no spools[] subdocs but a top-level
@@ -124,9 +162,11 @@ export async function GET() {
       if ((f.spools?.length ?? 0) === 0 && typeof f.totalWeight === "number") {
         spoolCount++;
         remaining += Math.max(0, f.totalWeight - spoolMass);
+        weighed = true;
       }
       totalGrams += remaining;
       if (
+        weighed &&
         typeof f.lowStockThreshold === "number" &&
         f.lowStockThreshold > 0 &&
         remaining < f.lowStockThreshold
@@ -138,10 +178,11 @@ export async function GET() {
           // GH #477 (Codex P2 on PR #482): primary `color` is nullable
           // per OpenPrintTag spec. For coextruded / rainbow filaments
           // the primary IS null and the user's intended representative
-          // color lives in `secondaryColors[0]`. Use `displayColor()`
-          // so the dashboard swatch shows secondaryColors[0] in that
-          // case instead of a misleading gray dot.
-          color: displayColor(f),
+          // color lives in `secondaryColors[0]` — with the variant→parent
+          // array-fallback applied by `lowStockSwatchColor` (GH #1078)
+          // so the swatch matches every other render path instead of a
+          // misleading gray dot.
+          color: lowStockSwatchColor(f, parent),
           remainingGrams: remaining,
           threshold: f.lowStockThreshold,
         });
@@ -230,10 +271,12 @@ export async function GET() {
             ? h.startedAt.toISOString()
             : String(h.startedAt),
         source: h.source,
-        totalGrams: (h.usage || []).reduce(
-          (sum: number, u: { grams: number }) => sum + u.grams,
-          0,
-        ),
+        // GH #1078: clamp through the shared #1030 sanitizer — a legacy /
+        // sync-fed row carrying a pathological magnitude (e.g. 1e308) used
+        // to overflow this raw sum to Infinity, which JSON.stringify
+        // serializes as `null` while /api/analytics reported the same job
+        // sanely via safeGrams.
+        totalGrams: sumUsageGrams(h.usage),
       })),
     });
   } catch (err) {
