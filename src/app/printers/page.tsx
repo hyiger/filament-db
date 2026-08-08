@@ -83,14 +83,20 @@ export default function PrintersPage() {
 
   const handleDelete = async (id: string, name: string) => {
     if (!(await confirm({ message: t("printers.deleteConfirm", { name }), destructive: true, confirmLabel: t("common.delete") }))) return;
-    const res = await fetch(`/api/printers/${id}`, { method: "DELETE" });
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      toast(body?.error || t("printers.deleteError"), "error");
-      return;
+    // GH #1080: a network-level fetch rejection used to escape the handler
+    // with no toast at all — the row just silently stayed.
+    try {
+      const res = await fetch(`/api/printers/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast(body?.error || t("printers.deleteError"), "error");
+        return;
+      }
+      toast(t("printers.deleted", { name }));
+      fetchPrinters();
+    } catch {
+      toast(t("printers.deleteError"), "error");
     }
-    toast(t("printers.deleted", { name }));
-    fetchPrinters();
   };
 
   const handleBulkDelete = async () => {
@@ -99,20 +105,31 @@ export default function PrintersPage() {
     setBulkDeleting(true);
     let deleted = 0;
     const errors: string[] = [];
-    for (const id of selected) {
-      const res = await fetch(`/api/printers/${id}`, { method: "DELETE" });
-      if (res.ok) {
-        deleted++;
-      } else {
-        const body = await res.json().catch(() => null);
-        const name = printers.find((p) => p._id === id)?.name ?? id;
-        errors.push(body?.error || t("printers.deleteErrorNamed", { name }));
+    try {
+      for (const id of selected) {
+        // GH #1080: a mid-loop network failure used to throw out of the
+        // handler, leaving the delete button disabled forever and skipping
+        // the refetch. Record the failure and keep going (GH #640 pattern).
+        try {
+          const res = await fetch(`/api/printers/${id}`, { method: "DELETE" });
+          if (res.ok) {
+            deleted++;
+          } else {
+            const body = await res.json().catch(() => null);
+            const name = printers.find((p) => p._id === id)?.name ?? id;
+            errors.push(body?.error || t("printers.deleteErrorNamed", { name }));
+          }
+        } catch {
+          const name = printers.find((p) => p._id === id)?.name ?? id;
+          errors.push(t("printers.deleteErrorNamed", { name }));
+        }
       }
+      if (deleted > 0) toast(t("printers.bulkDeleted", { count: deleted }));
+      if (errors.length > 0) toast(errors.join("; "), "error");
+    } finally {
+      setBulkDeleting(false);
+      fetchPrinters();
     }
-    if (deleted > 0) toast(t("printers.bulkDeleted", { count: deleted }));
-    if (errors.length > 0) toast(errors.join("; "), "error");
-    setBulkDeleting(false);
-    fetchPrinters();
   };
 
   return (
