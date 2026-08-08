@@ -308,8 +308,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      # --ignore-scripts: only js-yaml (pure JS) is needed for the merge; skip
-      # the native-module postinstall (pcsclite) that needs PC/SC headers.
+      # --ignore-scripts: only the declared `yaml` dependency (pure JS) is
+      # needed for the merge + verify steps; skip the native-module postinstall
+      # (pcsclite) that needs PC/SC headers.
       - run: npm ci --ignore-scripts
       - name: Download both arches' latest-mac.yml
         uses: actions/download-artifact@v4
@@ -343,8 +344,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Parse with the DECLARED `yaml` dependency — the same package
+          # scripts/merge-mac-latest-yml.mjs uses. js-yaml is NOT declared
+          # (its overrides entry only pins a version where the tree already
+          # requires it); depending on the transitive hoist meant a routine
+          # dependency bump could drop it and crash this step mid-release,
+          # shipping mac installers with no update feed (GH #1082).
           node -e "
-            const y = require('js-yaml').load(require('fs').readFileSync('latest-mac.yml', 'utf8'));
+            const y = require('yaml').parse(require('fs').readFileSync('latest-mac.yml', 'utf8'));
             for (const f of y.files.filter((f) => f.url.endsWith('.zip'))) {
               console.log(f.url + ' ' + f.sha512);
             }
