@@ -10,6 +10,7 @@ import { useDateFormat } from "@/hooks/useDateFormat";
 import { Skeleton, SkeletonRegion } from "@/components/Skeleton";
 import {
   groupAndSortInventory,
+  summarizeInventoryGroups,
   INVENTORY_NO_GROUP_KEY,
   type InventoryGroupBy,
   type InventorySortKey,
@@ -17,6 +18,7 @@ import {
 } from "@/lib/inventorySort";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { isKnownLocationKind } from "@/lib/locationKind";
+import { parseWeightInput, type WeightInputProblem } from "@/lib/parseWeightInput";
 import FilamentSwatch from "@/components/FilamentSwatch";
 import { deriveArrangement } from "@/lib/filamentColors";
 import { deriveFinish } from "@/lib/filamentFinish";
@@ -462,23 +464,14 @@ export default function InventoryPage() {
       .filter((g) => g.spools.length > 0);
   }, [data, debouncedSearch]);
 
-  // Stats for the header — derived from the SERVER groups so they
-  // reflect the active server filters, not the client-side text search
-  // (which is a "find within results" rather than a true filter).
-  const stats = useMemo(() => {
-    if (!data) return { spoolCount: 0, locationCount: 0, totalGrams: 0 };
-    return {
-      spoolCount: data.totalSpools,
-      // #575.5: count every group the inventory is spread across, including
-      // the synthetic "no location" bucket when it holds spools. Counting
-      // only real locations rendered "LOCATIONS 0" while 13 spools sat under
-      // "No location" — confusing, and out of step with the groups actually
-      // shown on the page. (Empty groups are never emitted by the
-      // aggregation, so this is exactly the number of buckets on screen.)
-      locationCount: data.groups.length,
-      totalGrams: data.groups.reduce((s, g) => s + g.totalGrams, 0),
-    };
-  }, [data]);
+  // Stats for the header. #1117(f): these used to read straight off the
+  // server response, so they tracked the server-side filters but NOT the
+  // client-side text search — searching down to one spool still headlined
+  // "SPOOLS 74 · TOTAL WEIGHT 50.65 kg". Deriving from `filteredGroups`
+  // covers both, and matches the group headers, which have recomputed under
+  // search since PR #391 round 2. With an empty search `filteredGroups` IS
+  // `data.groups` verbatim, so the unsearched numbers are unchanged.
+  const stats = useMemo(() => summarizeInventoryGroups(filteredGroups), [filteredGroups]);
 
   // GH #795: regroup (location / type / vendor / none) + sort within each
   // group. Pure transform over the already-search-filtered rows — the
@@ -628,6 +621,13 @@ export default function InventoryPage() {
         <StatCard label={t("inventory.stats.locations")} value={stats.locationCount.toString()} />
         <StatCard label={t("inventory.stats.totalWeight")} value={`${formatNumber(stats.totalGrams / 1000, { minDecimals: 2, maxDecimals: 2, trimTrailingZeros: false })} kg`} />
       </div>
+      {/* Now that the cards follow the search, say so — a shrunken total
+          should read as "filtered", never as data loss. */}
+      {debouncedSearch.trim() !== "" && (
+        <p className="-mt-4 mb-6 text-xs text-gray-500 dark:text-gray-400">
+          {t("inventory.stats.searchNote")}
+        </p>
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap items-end gap-3 mb-6 p-3 bg-gray-50 dark:bg-gray-900/40 border border-gray-200 dark:border-gray-800 rounded-lg">
@@ -1048,6 +1048,7 @@ function SpoolEditRow({
   const [editingWeight, setEditingWeight] = useState(false);
   const [weightDraft, setWeightDraft] = useState(row.totalWeight?.toString() ?? "");
   const [saving, setSaving] = useState(false);
+  const [weightError, setWeightError] = useState<WeightInputProblem | null>(null);
 
   const saveWeight = async () => {
     // GH #509: short-circuit re-entry while a save is in flight. The
@@ -1057,14 +1058,43 @@ function SpoolEditRow({
     // raced a second PUT against the refresh. Mirrors the
     // movePending / retirePending guards added for #404.
     if (saving) return;
-    const n = Number(weightDraft);
-    if (!Number.isFinite(n) || n < 0) return;
+    // GH #1105: this used to be `Number(weightDraft)` behind a
+    // `!Number.isFinite(n) || n < 0` guard, which an EMPTY field passes —
+    // Number("") is 0. Clearing the box and saving silently wrote 0 g and
+    // took the spool's weight out of the location and library totals.
+    const parsed = parseWeightInput(weightDraft);
+    if (!parsed.ok) {
+      setWeightError(parsed.reason);
+      return;
+    }
+    setWeightError(null);
+    const patch: Record<string, unknown> = { totalWeight: parsed.grams };
+    // Set `saving` BEFORE the confirm below, so the Enter-key re-entry guard
+    // above covers the dialog's whole lifetime.
     setSaving(true);
-    const ok = await updateSpool(row, { totalWeight: n });
-    setSaving(false);
-    if (ok) {
-      setEditingWeight(false);
-      onChanged();
+    try {
+      // GH #381: zeroing the remaining weight is the canonical "I finished
+      // this spool" moment, and the detail page has prompted to retire on it
+      // since v1.30.4. This path skipped the prompt entirely. Same skips as
+      // the detail page: never when already retired, never when the prior
+      // weight was already 0 (no real transition). A null prior weight is
+      // `!== 0`, so it prompts — matching the detail page exactly.
+      if (parsed.grams === 0 && !row.retired && row.totalWeight !== 0) {
+        const alsoRetire = await confirmRetire({
+          message: t("detail.spool.confirmRetireOnZero"),
+          confirmLabel: t("inventory.retire"),
+        });
+        if (alsoRetire) patch.retired = true;
+      }
+      const ok = await updateSpool(row, patch);
+      if (ok) {
+        setEditingWeight(false);
+        onChanged();
+      }
+    } finally {
+      // try/finally because of the await above: a throw inside the confirm
+      // would otherwise strand this row disabled with no way back.
+      setSaving(false);
     }
   };
 
@@ -1223,44 +1253,62 @@ function SpoolEditRow({
       </td>
       <td className="py-2 px-3 text-right">
         {editingWeight ? (
-          <span className="inline-flex items-center gap-1">
-            <input
-              type="number"
-              min="0"
-              step="1"
-              autoFocus
-              value={weightDraft}
-              onChange={(e) => setWeightDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") saveWeight();
-                if (e.key === "Escape") {
+          <span className="inline-flex flex-col items-end gap-0.5">
+            <span className="inline-flex items-center gap-1">
+              <input
+                type="number"
+                min="0"
+                step="1"
+                autoFocus
+                value={weightDraft}
+                onChange={(e) => {
+                  setWeightDraft(e.target.value);
+                  setWeightError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveWeight();
+                  if (e.key === "Escape") {
+                    setWeightDraft(row.totalWeight?.toString() ?? "");
+                    setWeightError(null);
+                    setEditingWeight(false);
+                  }
+                }}
+                aria-label={t("inventory.updateWeight")}
+                aria-invalid={weightError != null}
+                className="w-20 px-2 py-0.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
+              />
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={saveWeight}
+                // GH #1105: also disabled while the field is empty, matching
+                // the detail page's editor.
+                disabled={saving || weightDraft.trim() === ""}
+                className="px-2 py-0.5 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 disabled:opacity-50"
+              >
+                {saving ? "…" : t("common.save")}
+              </button>
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
                   setWeightDraft(row.totalWeight?.toString() ?? "");
+                  setWeightError(null);
                   setEditingWeight(false);
-                }
-              }}
-              aria-label={t("inventory.updateWeight")}
-              className="w-20 px-2 py-0.5 border border-gray-300 dark:border-gray-600 rounded text-sm bg-transparent"
-            />
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={saveWeight}
-              disabled={saving}
-              className="px-2 py-0.5 bg-blue-600 text-white rounded text-xs hover:bg-blue-700 disabled:opacity-50"
-            >
-              {saving ? "…" : t("common.save")}
-            </button>
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                setWeightDraft(row.totalWeight?.toString() ?? "");
-                setEditingWeight(false);
-              }}
-              className="px-2 py-0.5 border border-gray-300 dark:border-gray-700 rounded text-xs hover:bg-gray-100 dark:hover:bg-gray-800"
-            >
-              {t("common.cancel")}
-            </button>
+                }}
+                className="px-2 py-0.5 border border-gray-300 dark:border-gray-700 rounded text-xs hover:bg-gray-100 dark:hover:bg-gray-800"
+              >
+                {t("common.cancel")}
+              </button>
+            </span>
+            {/* This editor is pre-seeded with the current value, so a silent
+                no-op on Enter reads as "the app is broken" more than it would
+                on the detail page's blank "new reading" field. */}
+            {weightError && (
+              <span role="alert" className="text-xs text-amber-600 dark:text-amber-400">
+                {t("detail.weight.invalidInput")}
+              </span>
+            )}
           </span>
         ) : (
           // GH #445: visible affordance for the inline weight editor.
@@ -1280,6 +1328,7 @@ function SpoolEditRow({
               // would write the old weight back. Mirrors the GH #263
               // SpoolCard label-edit fix.
               setWeightDraft(row.totalWeight?.toString() ?? "");
+              setWeightError(null);
               setEditingWeight(true);
             }}
             className="inline-flex items-center gap-1 border-b border-dashed border-gray-400 dark:border-gray-600 hover:text-blue-600 hover:border-blue-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 transition-colors"
