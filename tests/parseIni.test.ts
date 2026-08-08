@@ -609,6 +609,25 @@ describe("wrapIniString / unwrapIniString (GH #1070, FilamentForm codec)", () =>
     expect(unwrapIniString('"abc\\"')).toBe("abc\\");
   });
 
+  it("decodes UNQUOTED single-line wire escapes for display (Codex P1 r12)", () => {
+    // The fixture-pinned legal legacy shape: unquoted, literal \n escapes.
+    // PrusaSlicer's unescape processes escapes with or without quotes, so
+    // this IS wire — decoding makes the textarea WYSIWYG and an EDITED
+    // save re-encodes canonically instead of double-escaping \n into \\n
+    // (which merged G-code commands onto one line in the slicer).
+    expect(unwrapIniString("; setup\\nM572 S0.04")).toBe("; setup\nM572 S0.04");
+    // The edited round-trip lands on canonical wire with the SAME slicer
+    // semantics: wrap(display-edited) decodes back to the edited content.
+    const edited = "; setup\nM572 S0.05";
+    expect(unwrapIniString(wrapIniString(edited))).toBe(edited);
+    // Non-canonical escapes stay verbatim (legacy raw content, r5 bias)...
+    expect(unwrapIniString("C:\\tool")).toBe("C:\\tool");
+    // ...as do unquoted values holding RAW newlines (legacy raw content).
+    expect(unwrapIniString("a\nb")).toBe("a\nb");
+    // Escape-free values are untouched (identity decode).
+    expect(unwrapIniString("G1 X=10")).toBe("G1 X=10");
+  });
+
   it("returns a legacy raw wrap with non-canonical escapes VERBATIM (Codex P2 r5)", () => {
     // Pre-#1070 form output for a Windows path: `"Use C:\new\tool"` — the
     // `\t` proves no canonical escaper produced this (they emit only

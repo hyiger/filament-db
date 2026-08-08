@@ -142,13 +142,16 @@ export function wrapIniString(content: string): string {
 
 /**
  * Lenient inverse of `wrapIniString` for OUR OWN stored bag values: if the
- * value is quote-wrapped, strip the outer quotes and unescape; otherwise
- * return it verbatim (raw legacy values / never-wrapped keys). Lenient on
- * purpose — pre-#1070 FilamentForm hand-wrapped `"..."` around raw content,
- * so an interior unescaped quote (a quote the user typed) must not defeat
- * the unwrap. Foreign INI input is never decoded (the bag stores wire form
- * verbatim — see the codec docblock above), so leniency here can't corrupt
- * imported data: this only ever runs on the form's own gcode/notes keys.
+ * value is quote-wrapped, strip the outer quotes and unescape; an UNQUOTED
+ * single-line value with canonical escapes decodes too (r12 — it is wire,
+ * and PrusaSlicer reads its escapes with or without quotes); everything
+ * else returns verbatim (raw legacy values / non-canonical escapes).
+ * Lenient on purpose — pre-#1070 FilamentForm hand-wrapped `"..."` around
+ * raw content, so an interior unescaped quote (a quote the user typed)
+ * must not defeat the unwrap. Foreign INI input is never decoded (the bag
+ * stores wire form verbatim — see the codec docblock above), so leniency
+ * here can't corrupt imported data: this only ever runs on the form's own
+ * gcode/notes keys.
  */
 export function unwrapIniString(value: string): string {
   if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
@@ -166,6 +169,21 @@ export function unwrapIniString(value: string): string {
     // (`"C:\new"` raw vs wire are byte-identical) and decodes as wire —
     // matching what PrusaSlicer itself reads from those bytes.
     return hasOnlyCanonicalEscapes(inner) ? unescapeIniValueContent(inner) : inner;
+  }
+  // Codex P1 round 12: an UNQUOTED single-line value with canonical escapes
+  // is wire too — PrusaSlicer's unescape_string_cstyle processes escapes
+  // with or without surrounding quotes, so `; setup\nM572 S0.04` reads as
+  // two commands in the slicer. Decode it for display (WYSIWYG) so an
+  // EDITED save re-encodes canonically via wrapIniString instead of
+  // double-escaping the visible `\n` into `\\n` (which merged G-code
+  // commands onto one line — a regression vs main, whose unescaped legacy
+  // wrap left the escape's wire meaning intact). The untouched-save path is
+  // unaffected: wireOrEdited's equality check still byte-preserves the
+  // stored value. Raw multi-line values and non-canonical escapes (legacy
+  // raw content like `C:\tool`) stay verbatim — the same bias as the
+  // quoted path above.
+  if (!/[\r\n]/.test(value) && hasOnlyCanonicalEscapes(value)) {
+    return unescapeIniValueContent(value);
   }
   return value;
 }
