@@ -239,6 +239,43 @@ export async function prepareBambuUpdate(
     }
   }
 
+  // GH #1075: a variant's Bambu/Orca export flattens its settings bag through
+  // resolveFilament's shallow parent-merge (`{ ...parentSettings,
+  // ...variantSettings }`), so the exported preset echoes every passthrough
+  // key the variant merely INHERITS. Persisting the merged bag verbatim would
+  // copy those echoed keys onto the variant as local overrides and silently
+  // sever GH #106 live inheritance — the same defect class #1008 F2 fixed for
+  // the Orca/PrusaSlicer per-id syncs via `splitInheritedImportSet`'s settings
+  // branch (importFilaments.ts). Apply the SAME rule to the FINALIZED bag —
+  // after mergeSlicerSettings, the legacy-condition strip, and the chamber
+  // fallback above, so those keys need no special-casing (strict equality
+  // handles them): drop every key whose value strictly equals the parent's.
+  // Because `update.settings` is a whole-object $set, the filtered write also
+  // self-heals a STORED parent-equal pin (the GH #971/#972-locked posture);
+  // variant-only keys differ from the parent by construction and survive the
+  // replace. Gated on the bag actually being written (`update.settings`
+  // assigned above) — a sync that never touches the bag keeps today's
+  // no-write behaviour, matching the OrcaSlicer route's added/removed
+  // persist-gate. A missing or malformed parent settings object proves
+  // nothing, so the bag writes verbatim (same fallback as
+  // splitInheritedImportSet's settings branch).
+  const parentSettings =
+    existing?.parentId && existing.parent ? existing.parent.settings : null;
+  if (
+    update.settings &&
+    parentSettings &&
+    typeof parentSettings === "object" &&
+    !Array.isArray(parentSettings)
+  ) {
+    const bag = update.settings as Record<string, unknown>;
+    const parentBag = parentSettings as Record<string, unknown>;
+    const filtered: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(bag)) {
+      if (parentBag[key] !== value) filtered[key] = value;
+    }
+    update.settings = filtered;
+  }
+
   // GH #892: reject an inverted nozzle range, mirroring the OrcaSlicer sync
   // route. `update.temperatures` is a full replace (built from existing +
   // parsed), so it IS the effective own range; the variant inherits any null
