@@ -600,4 +600,120 @@ describe("upsertIniFilament — create-race recovery (GH #951)", () => {
       expect(fresh.inherits ?? null).toBeNull();
     });
   });
+
+  // ── GH #1073: the phase-2 resurrect runs the shared first-variant adoption
+  //    gate. A trashed VARIANT makes hasVariants read false, so its parent may
+  //    legitimately have re-acquired inventory as a standalone — a bare
+  //    resurrect would strand that inventory on a template with no
+  //    confirmation. ───────────────────────────────────────────────────────
+  describe("phase-2 resurrect adoption gate (GH #1073)", () => {
+    /** Parent + trashed variant fixture. The variant is created live (direct
+     *  model write — no route gate involved) and then soft-deleted. */
+    async function trashedVariant(
+      parentDoc: Record<string, unknown>,
+      variantName: string,
+    ) {
+      const parent = await Filament.create(parentDoc);
+      const variant = await Filament.create({
+        name: variantName,
+        vendor: "Acme",
+        type: "PLA",
+        parentId: parent._id,
+      });
+      await Filament.updateOne(
+        { _id: variant._id },
+        { $set: { _deletedAt: new Date() } },
+      );
+      return { parent, variant };
+    }
+
+    it("gates the resurrect of a trashed variant whose active parent holds a spool — row errors, nothing mutated", async () => {
+      const { parent, variant } = await trashedVariant(
+        {
+          name: "Regrown INI Parent",
+          vendor: "Acme",
+          type: "PLA",
+          color: null,
+          spools: [{ label: "new roll", totalWeight: 900 }],
+        },
+        "Trashed INI Variant",
+      );
+
+      await expect(upsertIniFilament(section("Trashed INI Variant"))).rejects.toThrow(
+        /still holds its own inventory/,
+      );
+
+      // The variant stays trashed; the parent is untouched (spools intact,
+      // still no live variants).
+      const freshVariant = await Filament.findById(variant._id).lean();
+      expect(freshVariant._deletedAt).not.toBeNull();
+      const freshParent = await Filament.findById(parent._id).lean();
+      expect(freshParent.spools).toHaveLength(1);
+      expect(freshParent.spools[0].label).toBe("new roll");
+    });
+
+    it("a no-inventory parent lets the resurrect proceed", async () => {
+      const { parent, variant } = await trashedVariant(
+        {
+          name: "Clean INI Parent",
+          vendor: "Acme",
+          type: "PLA",
+          color: null,
+        },
+        "Revivable INI Variant",
+      );
+
+      expect(await upsertIniFilament(section("Revivable INI Variant"))).toBe("updated");
+
+      const freshVariant = await Filament.findById(variant._id).lean();
+      expect(freshVariant._deletedAt ?? null).toBeNull();
+      expect(String(freshVariant.parentId)).toBe(String(parent._id));
+    });
+
+    it("resurrecting the first variant of a threshold-ONLY parent clears the dead threshold (after the write)", async () => {
+      const { parent, variant } = await trashedVariant(
+        {
+          name: "Threshold INI Parent",
+          vendor: "Acme",
+          type: "PLA",
+          color: null,
+          lowStockThreshold: 100,
+        },
+        "Threshold INI Variant",
+      );
+
+      expect(await upsertIniFilament(section("Threshold INI Variant"))).toBe("updated");
+
+      const freshVariant = await Filament.findById(variant._id).lean();
+      expect(freshVariant._deletedAt ?? null).toBeNull();
+      // The parent is a template now — the leftover alarm is dead config and
+      // was cleared AFTER the write (round 7 P2 parity with the CSV importer).
+      const freshParent = await Filament.findById(parent._id).lean();
+      expect(freshParent.lowStockThreshold ?? null).toBeNull();
+    });
+
+    it("a SECOND variant's resurrect under a spool-holding legacy template proceeds (nothing left to gate)", async () => {
+      const { parent, variant } = await trashedVariant(
+        {
+          name: "Legacy INI Template",
+          vendor: "Acme",
+          type: "PLA",
+          spools: [{ label: "legacy roll", totalWeight: 500 }],
+        },
+        "Second INI Variant",
+      );
+      // A sibling variant is still LIVE, so the parent is already a template —
+      // the enforce-forward legacy shape stays untouched and nothing gates.
+      await Filament.create({
+        name: "Live INI Sibling",
+        vendor: "Acme",
+        type: "PLA",
+        parentId: parent._id,
+      });
+
+      expect(await upsertIniFilament(section("Second INI Variant"))).toBe("updated");
+      const freshVariant = await Filament.findById(variant._id).lean();
+      expect(freshVariant._deletedAt ?? null).toBeNull();
+    });
+  });
 });
