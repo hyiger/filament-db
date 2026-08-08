@@ -4,6 +4,7 @@ import Nozzle from "@/models/Nozzle";
 import Printer from "@/models/Printer";
 import { getErrorMessage, errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
+import { validateNozzlePrinterAssignment } from "@/lib/nozzlePrinterAssignment";
 
 export async function GET(request: NextRequest) {
   try {
@@ -72,17 +73,30 @@ export async function POST(request: NextRequest) {
     delete body.syncId;
     // Pull `printerIds` out — it's not a Nozzle field; we use it to update
     // the reverse Printer.installedNozzles relationship after creation.
-    const printerIds: string[] | undefined = Array.isArray(body.printerIds)
-      ? body.printerIds
-      : undefined;
+    const rawPrinterIds: unknown = body.printerIds;
     delete body.printerIds;
     delete body.printers;
 
+    // GH #1083: validate the assignment BEFORE Nozzle.create — mirrors the
+    // PUT route's #897/#912 posture via the shared helper (dedupe → at most
+    // one printer → valid ObjectId → live target). Pre-fix, a rejected or
+    // malformed assignment left a committed nozzle behind (CastError → 500,
+    // missing printer → silent no-op) and a multi-printer array bypassed the
+    // one-printer-per-nozzle invariant (#232) every other write path enforces.
+    const assignment = await validateNozzlePrinterAssignment(
+      rawPrinterIds,
+      (targetId) =>
+        Printer.findOne({ _id: targetId, _deletedAt: null }, { _id: 1 }).lean(),
+    );
+    if (!assignment.ok) {
+      return errorResponse(assignment.message, 400);
+    }
+
     const nozzle = await Nozzle.create(body);
 
-    if (printerIds && printerIds.length > 0) {
+    if (assignment.targetId) {
       await Printer.updateMany(
-        { _id: { $in: printerIds }, _deletedAt: null },
+        { _id: assignment.targetId, _deletedAt: null },
         { $addToSet: { installedNozzles: nozzle._id } }
       );
     }
