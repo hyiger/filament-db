@@ -570,8 +570,13 @@ describe("PR #1042 review round 4", () => {
   it("derives header box and rules from the stock width", () => {
     // The fixture's fixed x1=796 header box and 740-dot rules overflow 90mm
     // stock, which is only 719 dots wide.
+    //
+    // A short payload: since GH #1084 reserved the right border's ink, the
+    // 46-char default link no longer reaches the cell-4 floor on 90mm stock
+    // (the #1084 block pins that refusal). This test's subject is decoration
+    // width, which is payload-independent.
     for (const widthMm of [90, 100, 120]) {
-      const doc = dryBoxLabel(input({ spec: { widthMm } }));
+      const doc = dryBoxLabel(input({ qrPayload: "fdb://box/B7", spec: { widthMm } }));
       const dots = mmToDots(widthMm, DRY_BOX_SPEC.dpi);
       const box = doc.commands.find((c): c is Extract<TsplCommand, { kind: "box" }> => c.kind === "box")!;
       expect(box.x1).toBeLessThanOrEqual(dots);
@@ -582,9 +587,13 @@ describe("PR #1042 review round 4", () => {
   });
 
   it("emits no negative coordinates on any supported stock", () => {
+    // Short payload for the same reason as the previous test: 90mm stock
+    // refuses the 46-char link now the border ink is reserved (GH #1084).
     for (const widthMm of [90, 100, 120]) {
       for (const heightMm of [70, 100, 150, 200]) {
-        const doc = dryBoxLabel(input({ items: [{ filamentName: "PLA" }], spec: { widthMm, heightMm } }));
+        const doc = dryBoxLabel(
+          input({ items: [{ filamentName: "PLA" }], qrPayload: "fdb://box/B7", spec: { widthMm, heightMm } }),
+        );
         for (const c of doc.commands) {
           for (const v of [
             (c as { x?: number }).x,
@@ -612,16 +621,24 @@ describe("PR #1042 review round 5 — QR quiet zone", () => {
     // A QR with an intruded quiet zone is the same failure class as one
     // clipped at the edge: it prints, it looks correct, and it never scans.
     // src/lib/labelBitmap.ts already reserves this via `margin: 4`.
+    //
+    // Tightened for GH #1084: the clearance is measured to the border INK,
+    // not the box coordinate. `BOX` strokes inward from both corners, so the
+    // bottom/right ink spans [y1 - thickness, y1] / [x1 - thickness, x1] and
+    // the top/left ink spans [y0, y0 + thickness] / [x0, x0 + thickness].
+    // The coordinate-based version of this test passed while the bottom
+    // border's 5 dots sat inside the quiet zone of every QR-driven label.
+    const T = DRY_BOX_LAYOUT.headerBox.thickness;
     for (const widthMm of [100, 120]) {
       for (const heightMm of [100, 150, 200]) {
         const spec = { ...DRY_BOX_SPEC, widthMm, heightMm };
         const { g, x, y, right, bottom } = symbolBox(spec);
         const q = g.qr.quietDots;
         expect(q).toBe(4 * g.qr.cell);
-        expect(g.headerBottom - bottom).toBeGreaterThanOrEqual(q);
-        expect(g.headerRight - right).toBeGreaterThanOrEqual(q);
-        expect(y - DRY_BOX_LAYOUT.headerBox.y0).toBeGreaterThanOrEqual(q);
-        expect(x - DRY_BOX_LAYOUT.headerBox.x0).toBeGreaterThanOrEqual(q);
+        expect(g.headerBottom - T - bottom).toBeGreaterThanOrEqual(q);
+        expect(g.headerRight - T - right).toBeGreaterThanOrEqual(q);
+        expect(y - (DRY_BOX_LAYOUT.headerBox.y0 + T)).toBeGreaterThanOrEqual(q);
+        expect(x - (DRY_BOX_LAYOUT.headerBox.x0 + T)).toBeGreaterThanOrEqual(q);
       }
     }
   });
@@ -651,6 +668,68 @@ describe("PR #1042 review round 5 — QR quiet zone", () => {
   });
 });
 
+describe("GH #1084 — header border ink stays out of the QR quiet zone", () => {
+  const T = DRY_BOX_LAYOUT.headerBox.thickness;
+  // A realistic long deep link (~90 chars): public hostname + /inventory +
+  // a 24-hex location id. Long enough that the QR — not minBottom — drives
+  // the header height, which is exactly when the pre-fix bottom border
+  // landed inside the quiet zone.
+  const LONG = "https://filament-db.myhomelab.example.com/inventory?location=507f1f77bcf86cd799439011";
+
+  it("keeps >= 4 clear modules between the symbol and the nearest border ink on bottom AND right", () => {
+    const g = dryBoxGeometry(DRY_BOX_SPEC, LONG);
+    // The invariant the docblock claims: the border never lands inside the
+    // quiet zone. The ink's inner edges are headerBottom - thickness and
+    // headerRight - thickness (BOX strokes inward from x1/y1), so the whole
+    // FOOTPRINT — symbol plus quiet zone — must clear them.
+    expect(g.headerBottom - T).toBeGreaterThanOrEqual(DRY_BOX_LAYOUT.qr.y + g.qr.footprintDots);
+    expect(g.headerRight - T).toBeGreaterThanOrEqual(DRY_BOX_LAYOUT.qr.x + g.qr.footprintDots);
+    // Equivalent, phrased as the spec phrases it: >= 4 modules (16 dots at
+    // the cell-4 floor) of clear space between the symbol edge and the ink.
+    const symbolBottom = DRY_BOX_LAYOUT.qr.y + g.qr.quietDots + g.qr.sizeDots;
+    const symbolRight = DRY_BOX_LAYOUT.qr.x + g.qr.quietDots + g.qr.sizeDots;
+    expect(g.qr.cell).toBeGreaterThanOrEqual(4);
+    expect(g.qr.quietDots).toBe(4 * g.qr.cell);
+    expect(g.headerBottom - T - symbolBottom).toBeGreaterThanOrEqual(g.qr.quietDots);
+    expect(g.headerRight - T - symbolRight).toBeGreaterThanOrEqual(g.qr.quietDots);
+  });
+
+  it("pins the QR-driven case: the ink's inner edge sits exactly on the footprint edge", () => {
+    const g = dryBoxGeometry(DRY_BOX_SPEC, LONG);
+    // The QR must actually be driving the header height here, otherwise the
+    // test would silently degrade into the minBottom case and prove nothing.
+    expect(g.headerBottom).toBeGreaterThan(DRY_BOX_LAYOUT.headerBox.minBottom);
+    // Tightest legal placement: border ink begins exactly where the
+    // footprint (which already includes the quiet zone) ends.
+    expect(g.headerBottom - T).toBe(DRY_BOX_LAYOUT.qr.y + g.qr.footprintDots);
+  });
+
+  it("refuses 90mm stock it previously served by parking border ink in the quiet zone", () => {
+    // Deliberate behaviour change pinned: pre-fix, the 46-char default link
+    // on 90mm stock "fit" at ECC L / cell 4 only because its footprint was
+    // allowed to run under the right border's ink (right edge 708 against an
+    // ink inner edge of 706 — 2 dots of intrusion). With the 5 ink dots
+    // reserved the payload no longer reaches the cell-4 floor there, and the
+    // module's documented posture is to throw rather than print a symbol
+    // that looks fine and scans unreliably.
+    expect(() => dryBoxGeometry({ ...DRY_BOX_SPEC, widthMm: 90 }, QR)).toThrow(/too long to print legibly/);
+    // A box-id-sized payload still prints on 90mm stock.
+    expect(() => dryBoxGeometry({ ...DRY_BOX_SPEC, widthMm: 90 }, "fdb://box/B7")).not.toThrow();
+  });
+
+  it("holds in the emitted document, not just the geometry", () => {
+    const doc = dryBoxLabel(input({ qrPayload: LONG }));
+    const box = doc.commands.find((c): c is Extract<TsplCommand, { kind: "box" }> => c.kind === "box")!;
+    const qr = doc.commands.find((c): c is Extract<TsplCommand, { kind: "qrcode" }> => c.kind === "qrcode")!;
+    // The preview and the printer both derive the symbol size from the
+    // payload; measure the same way rather than trusting the geometry.
+    const size = qrModuleCount(qr.content, qr.ecc)! * qr.cell;
+    const quiet = 4 * qr.cell;
+    expect(box.y1 - box.thickness - (qr.y + size)).toBeGreaterThanOrEqual(quiet);
+    expect(box.x1 - box.thickness - (qr.x + size)).toBeGreaterThanOrEqual(quiet);
+  });
+});
+
 describe("PR #1042 review round 6 — Code 128 quiet zone", () => {
   const CODE128_QUIET_MODULES = 10;
   const modulesFor = (payload: string) => 11 * payload.length + 35;
@@ -667,9 +746,13 @@ describe("PR #1042 review round 6 — Code 128 quiet zone", () => {
   });
 
   it("keeps both quiet zones on the sheet for every stock width", () => {
+    // Short QR payload: 90mm stock refuses the 46-char link now the header
+    // border's ink is reserved (GH #1084); the barcode is the subject here.
     for (const widthMm of [90, 100, 120]) {
       for (const nameLen of [1, 6, 20, 27, 40]) {
-        const doc = dryBoxLabel(input({ location: { name: "X".repeat(nameLen) }, spec: { widthMm } }));
+        const doc = dryBoxLabel(
+          input({ location: { name: "X".repeat(nameLen) }, qrPayload: "fdb://box/B7", spec: { widthMm } }),
+        );
         const bc = doc.commands.find((c): c is Extract<TsplCommand, { kind: "barcode" }> => c.kind === "barcode");
         if (!bc) continue; // omitted rather than clipped — also valid
         const quiet = CODE128_QUIET_MODULES * bc.narrow;
