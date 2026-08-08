@@ -228,6 +228,122 @@ describe("/api/nozzles", () => {
       const res = await createNozzle(req);
       expect(res.status).toBe(400);
     });
+
+    it("#1083: rejects multi-printer printerIds with 400 and creates NO nozzle", async () => {
+      const a = await Printer.create({ name: "PA", manufacturer: "X", printerModel: "1" });
+      const b = await Printer.create({ name: "PB", manufacturer: "X", printerModel: "2" });
+      const res = await createNozzle(
+        jsonReq("http://localhost/api/nozzles", {
+          name: "Two-timer",
+          diameter: 0.4,
+          type: "Brass",
+          printerIds: [String(a._id), String(b._id)],
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/at most one printer/i);
+      // Validation runs BEFORE the create — nothing committed.
+      expect(await Nozzle.countDocuments({})).toBe(0);
+      expect((await Printer.findById(a._id)).installedNozzles).toHaveLength(0);
+      expect((await Printer.findById(b._id)).installedNozzles).toHaveLength(0);
+    });
+
+    it("#1083: rejects a malformed printer id with 400 — no committed nozzle, no 500", async () => {
+      // Pre-fix this created the nozzle, then the install updateMany threw a
+      // CastError → 500 with an orphan nozzle left behind.
+      const res = await createNozzle(
+        jsonReq("http://localhost/api/nozzles", {
+          name: "Orphan bait",
+          diameter: 0.4,
+          type: "Brass",
+          printerIds: ["not-an-id"],
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/valid printer id/i);
+      expect(await Nozzle.countDocuments({})).toBe(0);
+    });
+
+    it("#1083: rejects a printer id that matches no live printer, with no nozzle created", async () => {
+      const res = await createNozzle(
+        jsonReq("http://localhost/api/nozzles", {
+          name: "Ghost install",
+          diameter: 0.4,
+          type: "Brass",
+          printerIds: [new mongoose.Types.ObjectId().toString()],
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toMatch(/not found/i);
+      expect(await Nozzle.countDocuments({})).toBe(0);
+    });
+
+    it("#1083: a soft-deleted printer is not a valid install target", async () => {
+      const dead = await Printer.create({
+        name: "Dead",
+        manufacturer: "X",
+        printerModel: "1",
+        _deletedAt: new Date(),
+      });
+      const res = await createNozzle(
+        jsonReq("http://localhost/api/nozzles", {
+          name: "Necro install",
+          diameter: 0.4,
+          type: "Brass",
+          printerIds: [String(dead._id)],
+        }),
+      );
+      expect(res.status).toBe(400);
+      expect(await Nozzle.countDocuments({})).toBe(0);
+    });
+
+    it("#1083: happy path — a single live printer still gets the nozzle installed", async () => {
+      const a = await Printer.create({ name: "PA", manufacturer: "X", printerModel: "1" });
+      const res = await createNozzle(
+        jsonReq("http://localhost/api/nozzles", {
+          name: "0.4 HF",
+          diameter: 0.4,
+          type: "Brass",
+          highFlow: true,
+          printerIds: [String(a._id)],
+        }),
+      );
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect((await Printer.findById(a._id)).installedNozzles.map(String)).toContain(
+        String(body._id),
+      );
+    });
+
+    it("#1083: a duplicated single printer in printerIds is deduped, not rejected (mirrors #912)", async () => {
+      const a = await Printer.create({ name: "PDup", manufacturer: "X", printerModel: "1" });
+      const res = await createNozzle(
+        jsonReq("http://localhost/api/nozzles", {
+          name: "Dup create",
+          diameter: 0.4,
+          type: "Brass",
+          printerIds: [String(a._id), String(a._id)],
+        }),
+      );
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      const installed = (await Printer.findById(a._id)).installedNozzles.map(String);
+      expect(installed).toEqual([String(body._id)]);
+    });
+
+    it("#1083: an empty printerIds array creates the nozzle with no install", async () => {
+      const a = await Printer.create({ name: "PA", manufacturer: "X", printerModel: "1" });
+      const res = await createNozzle(
+        jsonReq("http://localhost/api/nozzles", {
+          name: "Loose nozzle",
+          diameter: 0.4,
+          type: "Brass",
+          printerIds: [],
+        }),
+      );
+      expect(res.status).toBe(201);
+      expect((await Printer.findById(a._id)).installedNozzles).toHaveLength(0);
+    });
   });
 
   describe("DELETE /api/nozzles/{id}", () => {
