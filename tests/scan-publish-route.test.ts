@@ -134,6 +134,23 @@ describe("POST /api/scan/publish", () => {
     expect(res.status).toBe(400);
   });
 
+  it("accepts a UTF-8 BOM-prefixed JSON body (Codex P2 r3 — request.json() parity)", async () => {
+    // Fetch's json() strips the BOM during decode; the streaming reader must
+    // too, or integrations posting files saved by BOM-emitting editors newly 400.
+    const req = new NextRequest("http://localhost/api/scan/publish", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "﻿" + JSON.stringify({
+        filament: { _id: "bom", name: "BOM PLA" },
+        candidates: [],
+        decoded: {},
+      }),
+    });
+    const res = await publish(req);
+    expect(res.status).toBe(202);
+    expect(getLastScan()?.filament?.name).toBe("BOM PLA");
+  });
+
   it("#1076: rejects a body whose declared Content-Length exceeds 64 KB (413)", async () => {
     const req = new NextRequest("http://localhost/api/scan/publish", {
       method: "POST",

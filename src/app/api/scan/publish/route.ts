@@ -166,7 +166,12 @@ export async function POST(request: NextRequest) {
       }
     }
   }
-  const raw = Buffer.concat(chunks).toString("utf8");
+  // Codex P2 round 3 on PR #1090: Fetch's request.json() strips a UTF-8 BOM
+  // during decoding, but Buffer.toString("utf8") preserves it as U+FEFF —
+  // which would newly 400 a BOM-prefixed payload (files saved by
+  // BOM-emitting editors) that the pre-streaming path accepted.
+  let raw = Buffer.concat(chunks).toString("utf8");
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
 
   let body: unknown;
   try {
