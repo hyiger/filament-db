@@ -269,3 +269,42 @@ describe("parseCsv", () => {
     expect(rows).toHaveLength(50);
   });
 });
+
+describe("parseCsv — record start lines (#1115)", () => {
+  it("reports the physical start line of each record", () => {
+    const lines: number[] = [];
+    parseCsv("a\nb\nc\n", { header: false, recordLines: lines });
+    expect(lines).toEqual([1, 2, 3]);
+  });
+
+  it("advances past newlines embedded in a quoted field", () => {
+    // A record is not a line. The app's own export quotes newline-containing
+    // values, so deriving a line number from the array index would report
+    // everything after a multi-line field too low.
+    const lines: number[] = [];
+    const rows = parseCsv('h\n"two\nline",x\nlast\n', {
+      header: false,
+      recordLines: lines,
+    }) as string[][];
+    expect(rows).toHaveLength(3);
+    expect(rows[1][0]).toBe("two\nline");
+    // record 2 starts on line 2 and spans 2-3, so record 3 starts on line 4.
+    expect(lines).toEqual([1, 2, 4]);
+  });
+
+  it("handles CRLF line endings", () => {
+    const lines: number[] = [];
+    parseCsv("a\r\nb\r\nc", { header: false, recordLines: lines });
+    expect(lines).toEqual([1, 2, 3]);
+  });
+
+  it("counts blank lines, so a following record's line is still physical", () => {
+    const lines: number[] = [];
+    parseCsv("a\n\n\nb\n", { header: false, recordLines: lines });
+    expect(lines).toEqual([1, 2, 3, 4]);
+  });
+
+  it("is optional — omitting it changes nothing", () => {
+    expect(parseCsv("a\nb\n", { header: false })).toEqual([["a"], ["b"]]);
+  });
+});

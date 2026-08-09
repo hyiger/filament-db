@@ -851,10 +851,15 @@ export default function Home() {
       overflow: (count) => t("filaments.import.skippedOverflow", { count }),
     });
     if (!report) return;
+    // A template that imported fine but had a field stripped produces a NOTE
+    // with zero skipped rows — titling that "0 row(s) were not imported" would
+    // contradict the note right below it.
+    const skippedCount = data.skipped ?? data.skippedRows?.length ?? 0;
     await confirm({
-      title: t("filaments.import.skippedTitle", {
-        count: data.skipped ?? data.skippedRows?.length ?? 0,
-      }),
+      title:
+        skippedCount > 0
+          ? t("filaments.import.skippedTitle", { count: skippedCount })
+          : t("filaments.import.notesTitle"),
       message: report,
       confirmLabel: t("common.close"),
       hideCancel: true,

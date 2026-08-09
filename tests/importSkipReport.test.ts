@@ -82,3 +82,32 @@ describe("formatSkipReport", () => {
     expect(formatSkipReport([], ["Row 3: a note"], strings)).toBe("Row 3: a note");
   });
 });
+
+describe("formatSkipReport — note capping (Codex P2)", () => {
+  it("caps notes on the SAME budget as skipped rows", () => {
+    // "At most a handful" was wrong: a bulk update touching many templates
+    // emits one note per row, up to the route's 10,000-row limit — and
+    // ConfirmDialog's body neither scrolls nor bounds its height, so an
+    // uncapped list would push Close off-screen.
+    const notes = Array.from({ length: 30 }, (_, i) => `note ${i}`);
+    const out = formatSkipReport([], notes, strings)!.split("\n");
+    expect(out).toHaveLength(MAX_SHOWN_SKIPPED + 1);
+    expect(out[out.length - 1]).toBe(`…and ${30 - MAX_SHOWN_SKIPPED} more`);
+  });
+
+  it("shares one budget across rows and notes", () => {
+    // The dialog must be bounded overall, not per-section.
+    const rows = Array.from({ length: 6 }, (_, i) => skip(i + 2));
+    const notes = Array.from({ length: 20 }, (_, i) => `note ${i}`);
+    const out = formatSkipReport(rows, notes, strings)!.split("\n");
+    // 6 rows + 4 notes fills the budget, then one overflow line.
+    expect(out).toHaveLength(MAX_SHOWN_SKIPPED + 1);
+    expect(out[out.length - 1]).toBe("…and 16 more");
+  });
+
+  it("adds no overflow line when the notes fit", () => {
+    const out = formatSkipReport([skip(2)], ["one note"], strings)!.split("\n");
+    expect(out).toHaveLength(2);
+    expect(out[1]).toBe("one note");
+  });
+});

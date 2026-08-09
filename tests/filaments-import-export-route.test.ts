@@ -1029,6 +1029,23 @@ filamentdb_nozzle = 0.6 Brass
       expect(body.skippedRows[0].reason).toMatch(/Missing required field/);
     });
 
+    it("counts a quoted embedded newline as the lines it really spans (#1115)", async () => {
+      // A record is not a line. This app's own export quotes newline-containing
+      // values, so re-importing one would have mis-numbered every later row.
+      // Here the good record spans physical lines 2-3, so the bad one is on 4.
+      const csv =
+        "name,vendor,type\n" +
+        '"Multi\nLine",V,PLA\n' +
+        "Bad Row,,\n";
+      const file = new File([csv], "filaments.csv", { type: "text/csv" });
+      const res = await importCsv(
+        multipartReq("http://localhost/api/filaments/import-csv", file),
+      );
+      const body = await res.json();
+      expect(body.skippedRows).toHaveLength(1);
+      expect(body.skippedRows[0].row).toBe(4);
+    });
+
     it("reports what was imported, not the total row count (#1115)", async () => {
       // created + updated + skipped === total always, so the old headline
       // claimed the skipped rows had been imported too.

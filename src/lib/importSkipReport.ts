@@ -70,9 +70,17 @@ export function formatSkipReport(
     lines.push(strings.overflow(rows.length - MAX_SHOWN_SKIPPED));
   }
 
-  // Notes are appended whole: there are at most a handful, and unlike skip
-  // reasons they already read as complete sentences.
-  lines.push(...extra);
+  // Notes are capped on the same budget. "At most a handful" was wrong: a bulk
+  // update touching many templates emits one note PER ROW, up to the route's
+  // 10,000-row limit — and ConfirmDialog's body neither scrolls nor bounds its
+  // height, so an uncapped list would push the Close button off-screen (Codex
+  // P2). The two lists share one budget so the dialog is bounded overall, not
+  // per-section.
+  const noteBudget = Math.max(0, MAX_SHOWN_SKIPPED - lines.length);
+  lines.push(...extra.slice(0, noteBudget));
+  if (extra.length > noteBudget) {
+    lines.push(strings.overflow(extra.length - noteBudget));
+  }
 
   return lines.join("\n");
 }

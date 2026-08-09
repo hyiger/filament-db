@@ -54,6 +54,7 @@
   "filaments.deletedCount": "Deleted {count} filament(s)",
   "filaments.importFailed": "Import failed: {error}",
   "filaments.import.skippedTitle": "{count} row(s) were not imported",
+  "filaments.import.notesTitle": "Import notes",
   "filaments.import.skippedRow": "row {row} \u2014 {name}: {reason}",
   "filaments.import.skippedRowUnnamed": "row {row}: {reason}",
   "filaments.import.skippedOverflow": "\u2026and {count} more",

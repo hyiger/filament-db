@@ -46,9 +46,15 @@ export async function POST(request: NextRequest) {
     // cap itself (the old local parser bypassed parseCsv's maxRows). header:false
     // → positional string[][]; row 0 is the header. Positional mode also sidesteps
     // the object-key __proto__ vector (keys come from `mapping`, not the file).
+    /** Physical start line of each parsed record (GH #1115). */
+    const recordLines: number[] = [];
     let parsedRaw: string[][];
     try {
-      parsedRaw = parseCsv(content, { header: false, maxRows: MAX_PHYSICAL_ROWS }) as string[][];
+      parsedRaw = parseCsv(content, {
+        header: false,
+        maxRows: MAX_PHYSICAL_ROWS,
+        recordLines,
+      }) as string[][];
     } catch (err) {
       if (err instanceof CsvRowLimitExceededError) {
         return errorResponse(`Import too large: exceeds the ${MAX_IMPORT_ROWS} row limit.`, 400);
@@ -63,8 +69,13 @@ export async function POST(request: NextRequest) {
     // blanks before indexing meant every reported "row N" was short by the
     // number of blank lines above it — so the row a user was told to fix was
     // not the row that failed.
+    //
+    // The line comes from the PARSER, not the array index: a quoted field may
+    // contain newlines (this app's own export quotes them), so one record can
+    // span several physical lines and an index-derived number would drift
+    // low for everything after it.
     const parsedWithLines = parsedRaw
-      .map((r, i) => ({ values: r, line: i + 1 }))
+      .map((r, i) => ({ values: r, line: recordLines[i] ?? i + 1 }))
       .filter(({ values }) => values.some((v) => v.trim() !== ""));
     const parsed = parsedWithLines.map((p) => p.values);
 

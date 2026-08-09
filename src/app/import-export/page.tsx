@@ -101,10 +101,14 @@ export default function ImportExportPage() {
           overflow: (count) => t("filaments.import.skippedOverflow", { count }),
         });
         if (report) {
+          // See the note on the filaments page: a notes-only report must not
+          // be titled "0 row(s) were not imported".
+          const skippedCount = data.skipped ?? data.skippedRows?.length ?? 0;
           await confirm({
-            title: t("filaments.import.skippedTitle", {
-              count: data.skipped ?? data.skippedRows?.length ?? 0,
-            }),
+            title:
+              skippedCount > 0
+                ? t("filaments.import.skippedTitle", { count: skippedCount })
+                : t("filaments.import.notesTitle"),
             message: report,
             confirmLabel: t("common.close"),
             hideCancel: true,
