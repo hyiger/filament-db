@@ -684,8 +684,22 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       ),
       relevantPrinterIds: relevantPrinters.map((p) => p._id),
       bedTypeIds: bedTypes.map((b) => b._id),
+      // Explicit, not inferred from array length: zero printers is a
+      // legitimate state in which a printer-scoped row really IS orphaned.
+      nozzlesLoaded: !nozzlesLoading,
+      printersLoaded: !printersLoading,
+      bedTypesLoaded: !bedTypesLoading,
     }).orphanKeys;
-  }, [calibrations, form.compatibleNozzles, nozzles, relevantPrinters, bedTypes]);
+  }, [
+    calibrations,
+    form.compatibleNozzles,
+    nozzles,
+    relevantPrinters,
+    bedTypes,
+    nozzlesLoading,
+    printersLoading,
+    bedTypesLoading,
+  ]);
 
   // #872: an abrasive filament needs a hardened nozzle, so the compatible-nozzle
   // picker hard-filters to hardened ones when abrasive. The abrasive marker can

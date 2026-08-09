@@ -82,14 +82,25 @@ export function hasCalibrationData(values: object): boolean {
 export interface CalibrationGridContext {
   /** `form.compatibleNozzles` — the ticked list. */
   compatibleNozzleIds: readonly string[];
-  /** Nozzle id → the printer ids that physically own it. A MISSING key means
-   *  the catalog hasn't loaded (or the nozzle is gone); see the fail-open note
-   *  on `isCalibrationRowReachable`. */
+  /** Nozzle id → the printer ids that physically own it. A MISSING key from a
+   *  LOADED catalog means the nozzle is gone. */
   nozzleOwnership: ReadonlyMap<string, readonly string[]>;
   /** Printer ids that get a tab. */
   relevantPrinterIds: readonly string[];
   /** Bed type ids that get a tab (the "any" tab is always present). */
   bedTypeIds: readonly string[];
+  /**
+   * Whether each catalog has finished loading.
+   *
+   * These MUST be explicit rather than inferred from an empty array: a user
+   * can legitimately own zero printers, in which case a printer-scoped row
+   * really is orphaned — indistinguishable from "the fetch hasn't landed yet"
+   * if you only look at the length. The three fetches are independent, so
+   * /api/nozzles routinely resolves first (Codex P2 on PR #1130).
+   */
+  nozzlesLoaded: boolean;
+  printersLoaded: boolean;
+  bedTypesLoaded: boolean;
 }
 
 /**
@@ -103,10 +114,11 @@ export interface CalibrationGridContext {
  *    own the nozzle (the tab's own filter);
  *  - a bed-scoped row needs a tab for that bed type.
  *
- * Fail-open on unknown ownership is deliberate and load-bearing (PR #358
- * round 2): `/api/nozzles` is fetched async, so during load — or after a failed
- * fetch — the map is empty. Treating that as "unreachable" would dump every
- * valid per-printer row into the orphan list and invite the user to delete it.
+ * Fail-open while a catalog is still loading is deliberate and load-bearing
+ * (PR #358 round 2, extended per Codex P2 on PR #1130): all three catalogs are
+ * fetched async and independently. Judging a row against one that hasn't
+ * landed would dump valid rows into the orphan list — where they carry an
+ * active Remove button — so each clause is skipped until ITS catalog is ready.
  */
 export function isCalibrationRowReachable(
   key: string,
@@ -114,13 +126,22 @@ export function isCalibrationRowReachable(
 ): boolean {
   const { printerId, nozzleId, bedTypeId } = parseCalibrationKey(key);
   if (!ctx.compatibleNozzleIds.includes(nozzleId)) return false;
+
+  // Fail open PER CATALOG, and only for the clauses that catalog decides. The
+  // three fetches are independent, so judging a printer- or bed-scoped row
+  // against a catalog that hasn't landed would put a valid calibration in the
+  // orphan list with an ACTIVE Remove button — one click from real data loss.
+  if (!ctx.nozzlesLoaded) return true;
   const owners = ctx.nozzleOwnership.get(nozzleId);
-  // Catalog not loaded at all → we can't judge anything; assume reachable.
-  if (ctx.nozzleOwnership.size === 0) return true;
   // Nozzle absent from a LOADED catalog → the card loop would `return null`.
   if (owners === undefined) return false;
-  if (bedTypeId !== null && !ctx.bedTypeIds.includes(bedTypeId)) return false;
+
+  if (bedTypeId !== null) {
+    if (!ctx.bedTypesLoaded) return true;
+    if (!ctx.bedTypeIds.includes(bedTypeId)) return false;
+  }
   if (printerId === null) return true;
+  if (!ctx.printersLoaded) return true;
   if (!ctx.relevantPrinterIds.includes(printerId)) return false;
   return owners.includes(printerId);
 }

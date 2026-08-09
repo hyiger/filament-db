@@ -21,6 +21,9 @@ const ctx = (over: Partial<CalibrationGridContext> = {}): CalibrationGridContext
   nozzleOwnership: new Map([[N1, [P1]]]),
   relevantPrinterIds: [P1],
   bedTypeIds: [B1],
+  nozzlesLoaded: true,
+  printersLoaded: true,
+  bedTypesLoaded: true,
   ...over,
 });
 
@@ -103,8 +106,55 @@ describe("isCalibrationRowReachable", () => {
     // "unreachable" would dump every valid per-printer row into the orphan
     // list and invite the user to delete it.
     expect(
-      isCalibrationRowReachable(calibrationKey(P1, N1, null), ctx({ nozzleOwnership: new Map() })),
+      isCalibrationRowReachable(
+        calibrationKey(P1, N1, null),
+        ctx({ nozzleOwnership: new Map(), nozzlesLoaded: false }),
+      ),
     ).toBe(true);
+  });
+
+  it("fails OPEN for a printer-scoped row while /api/printers is still loading", () => {
+    // Codex P2 on PR #1130: the three catalogs load independently, so nozzles
+    // routinely resolves first. Judging a printer-scoped row against an empty
+    // printer list would put valid data in the orphan list WITH an active
+    // Remove button — one click from real loss.
+    expect(
+      isCalibrationRowReachable(
+        calibrationKey(P1, N1, null),
+        ctx({ relevantPrinterIds: [], printersLoaded: false }),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails OPEN for a bed-scoped row while /api/bed-types is still loading", () => {
+    expect(
+      isCalibrationRowReachable(
+        calibrationKey(null, N1, B1),
+        ctx({ bedTypeIds: [], bedTypesLoaded: false }),
+      ),
+    ).toBe(true);
+  });
+
+  it("still orphans a printer-scoped row once the LOADED printer list is empty", () => {
+    // Zero printers is a legitimate state — the row really is unreachable
+    // then. This is why the flags are explicit rather than inferred from the
+    // array being empty.
+    expect(
+      isCalibrationRowReachable(
+        calibrationKey(P1, N1, null),
+        ctx({ relevantPrinterIds: [], printersLoaded: true }),
+      ),
+    ).toBe(false);
+  });
+
+  it("a still-loading printer catalog does not rescue a row failing another clause", () => {
+    // The fail-open is per-clause: an unticked nozzle is still unreachable.
+    expect(
+      isCalibrationRowReachable(
+        calibrationKey(P1, "untickedNozzle", null),
+        ctx({ printersLoaded: false }),
+      ),
+    ).toBe(false);
   });
 
   it("does not reach a printer-scoped row whose printer has no tab", () => {
