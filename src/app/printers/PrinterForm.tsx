@@ -281,7 +281,13 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
     if (filamentOptions.length > 0) return;
     const ac = new AbortController();
     fetch("/api/filaments", { signal: ac.signal })
-      .then((r) => (r.ok ? r.json() : []))
+      // GH #1114 (Codex P1): distinguish a real empty catalog from a FAILED
+      // load. This chain used to fold every non-2xx into `[]`, and the repair
+      // below treats an id absent from the options as deleted — so one
+      // transient 500 would have cleared every AMS assignment in form state,
+      // and a save while the user was editing an unrelated field would have
+      // persisted them all as null.
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("filament options failed"))))
       .then((options: FilamentOption[]) => {
         setFilamentOptions(options);
         // GH #1041 belt-and-braces: a legacy slot may track a spool with no
@@ -321,6 +327,10 @@ export default function PrinterForm({ initialData, onSubmit, onDirtyChange }: Pr
           return changed ? { ...prev, amsSlots } : prev;
         });
       })
+      // Swallowed deliberately: a failed options load leaves the slots exactly
+      // as loaded. The selects fall back to rendering the stored ids, and no
+      // repair runs — which is the point, since the repair cannot tell
+      // "deleted" from "not fetched".
       .catch(() => {});
     return () => ac.abort();
   }, [form.amsSlots.length, filamentOptions.length]);
