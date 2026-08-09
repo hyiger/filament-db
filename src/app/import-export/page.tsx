@@ -7,6 +7,8 @@ import ImportAtlasDialog from "@/components/ImportAtlasDialog";
 import PrusamentImportDialog from "@/components/PrusamentImportDialog";
 import SpoolCsvImportDialog from "@/components/SpoolCsvImportDialog";
 import { useTranslation } from "@/i18n/TranslationProvider";
+import { useConfirm } from "@/components/ConfirmDialog";
+import { formatSkipReport } from "@/lib/importSkipReport";
 
 /**
  * A dedicated page that mirrors the Import / Export dropdown on the filament
@@ -22,6 +24,7 @@ import { useTranslation } from "@/i18n/TranslationProvider";
 export default function ImportExportPage() {
   const { t } = useTranslation();
   const { toast } = useToast();
+  const confirm = useConfirm();
   const [showAtlas, setShowAtlas] = useState(false);
   const [showPrusament, setShowPrusament] = useState(false);
   const [showSpoolCsv, setShowSpoolCsv] = useState(false);
@@ -88,6 +91,25 @@ export default function ImportExportPage() {
       const data = await res.json();
       if (res.ok) {
         toast(data.message || t("importExport.fileImported"));
+        // GH #1115: same per-row report as the filaments page — the reasons
+        // were computed and returned all along, just never shown.
+        const report = formatSkipReport(data.skippedRows, data.errors, {
+          row: ({ row, name, reason }) =>
+            name
+              ? t("filaments.import.skippedRow", { row, name, reason })
+              : t("filaments.import.skippedRowUnnamed", { row, reason }),
+          overflow: (count) => t("filaments.import.skippedOverflow", { count }),
+        });
+        if (report) {
+          await confirm({
+            title: t("filaments.import.skippedTitle", {
+              count: data.skipped ?? data.skippedRows?.length ?? 0,
+            }),
+            message: report,
+            confirmLabel: t("common.close"),
+            hideCancel: true,
+          });
+        }
       } else {
         toast(t("filaments.importFailed", { error: data.error }), "error");
       }

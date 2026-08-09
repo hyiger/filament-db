@@ -8086,6 +8086,23 @@
           },
           "skipped": {
             "type": "integer"
+          },
+          "skippedRows": {
+            "type": "array",
+            "description": "Per-row reasons for every row the import refused (GH #1115). `row` is the PHYSICAL source line — the CSV line number or the XLSX sheet row — not an index into the surviving rows.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "row": { "type": "integer" },
+                "name": { "type": "string", "nullable": true, "description": "The row's Name cell, absent when the row failed before a name was known." },
+                "reason": { "type": "string" }
+              }
+            }
+          },
+          "errors": {
+            "type": "array",
+            "description": "Non-fatal per-row notes for rows that DID import but had something adjusted — e.g. a template target whose echoed color the update stripped (GH #605). Present only when non-empty.",
+            "items": { "type": "string" }
           }
         }
       },

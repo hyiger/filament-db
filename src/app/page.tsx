@@ -17,6 +17,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { useTranslation } from "@/i18n/TranslationProvider";
 import type { FilamentSummary } from "@/types/filament";
 import { getRemainingDisplay, getRemainingGrams, getSpoolCount } from "@/lib/inventoryStats";
+import { formatSkipReport } from "@/lib/importSkipReport";
 import { useNumberFormat } from "@/hooks/useNumberFormat";
 import { compareFilaments, nextSortState, earliestSpoolDate, type SortKey, type SortDir } from "@/lib/sortFilamentList";
 import { useDateFormat } from "@/hooks/useDateFormat";
@@ -833,6 +834,33 @@ export default function Home() {
     }
   };
 
+  /**
+   * Surface a filament import's per-row skip reasons + notes (GH #1115).
+   * Shared by both file inputs on this page.
+   */
+  const showImportReport = async (data: {
+    skipped?: number;
+    skippedRows?: { row: number; name?: string | null; reason: string }[];
+    errors?: string[];
+  }) => {
+    const report = formatSkipReport(data.skippedRows, data.errors, {
+      row: ({ row, name, reason }) =>
+        name
+          ? t("filaments.import.skippedRow", { row, name, reason })
+          : t("filaments.import.skippedRowUnnamed", { row, reason }),
+      overflow: (count) => t("filaments.import.skippedOverflow", { count }),
+    });
+    if (!report) return;
+    await confirm({
+      title: t("filaments.import.skippedTitle", {
+        count: data.skipped ?? data.skippedRows?.length ?? 0,
+      }),
+      message: report,
+      confirmLabel: t("common.close"),
+      hideCancel: true,
+    });
+  };
+
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -856,6 +884,12 @@ export default function Home() {
         toast(data.message);
         fetchFilaments();
         refreshFilterOptions();
+        // GH #1115: the importer has always returned per-row skip reasons and
+        // per-row notes; nothing ever showed them, so the user got a count and
+        // no way to learn WHICH rows failed. Same acknowledge-only dialog the
+        // bulk-delete failures use above — a toast is string-only, length-
+        // capped and auto-dismissing, which a 12-row list can't survive.
+        await showImportReport(data);
       } else {
         toast(t("filaments.importFailed", { error: data.error }), "error");
       }

@@ -59,7 +59,14 @@ export async function POST(request: NextRequest) {
     // (only header mode discards them). Drop blanks so a trailing newline /
     // separator line doesn't become a junk data row (the old parser filtered
     // `l.trim() !== ""`).
-    const parsed = parsedRaw.filter((r) => r.some((v) => v.trim() !== ""));
+    // GH #1115: keep each surviving row's PHYSICAL line number. Filtering
+    // blanks before indexing meant every reported "row N" was short by the
+    // number of blank lines above it — so the row a user was told to fix was
+    // not the row that failed.
+    const parsedWithLines = parsedRaw
+      .map((r, i) => ({ values: r, line: i + 1 }))
+      .filter(({ values }) => values.some((v) => v.trim() !== ""));
+    const parsed = parsedWithLines.map((p) => p.values);
 
     if (parsed.length < 2) {
       return errorResponse(
@@ -86,15 +93,19 @@ export async function POST(request: NextRequest) {
     }
 
     const rows = parsed.slice(1).map((values) => rowToImport(values, mapping));
+    const sourceLines = parsedWithLines.slice(1).map((p) => p.line);
 
-    const result = await upsertImportRows(rows);
+    const result = await upsertImportRows(rows, sourceLines);
 
     return NextResponse.json({
       // GH #605: `result.errors` (present only when non-empty) carries
       // per-row non-fatal notes — e.g. a template target whose echoed
       // color/colorName the update stripped. Surfaced in the toast via the
       // note count, same wording as the atlas importer.
-      message: `Imported ${result.total} filaments (${result.created} new, ${result.updated} updated${result.skipped ? `, ${result.skipped} skipped` : ""})${result.errors ? `. ${result.errors.length} note(s).` : ""}`,
+      // GH #1115: report what was actually imported. `total` is every data row,
+      // and created + updated + skipped === total always, so the old headline
+      // claimed the skipped rows had been imported too.
+      message: `Imported ${result.created + result.updated} of ${result.total} filaments (${result.created} new, ${result.updated} updated${result.skipped ? `, ${result.skipped} skipped` : ""})${result.errors ? `. ${result.errors.length} note(s).` : ""}`,
       ...result,
     });
   } catch (err) {
