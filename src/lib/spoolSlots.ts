@@ -161,6 +161,50 @@ export async function assignSpoolToSlot(
  * slot ref is valid. Non-array input (legacy bodies without amsSlots, or
  * an explicit null) passes through — the schema handles shape errors.
  */
+/**
+ * GH #1114 (Codex P2): validate each slot's `filamentId` against an ACTIVE
+ * filament.
+ *
+ * The delete-side cleanup alone can't hold the invariant. A PrinterForm opened
+ * before a filament was deleted still holds the old `{ filamentId, spoolId:
+ * null }` pair, and the printer PUT persists the whole `amsSlots` array — so
+ * saving that stale form re-creates the dangling dedication the delete just
+ * cleared. `findInvalidSlotSpoolRef` only ever looked at non-null `spoolId`s,
+ * which is exactly the shape that leaks through.
+ *
+ * Kept separate from the spool check because the two are independent: a slot
+ * may legitimately carry a filament with no spool ("Any spool"), and the spool
+ * check has its own one-spool-per-slot rule that does not apply here — the
+ * same filament in two slots is fine.
+ */
+export async function findInvalidSlotFilamentRef(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  FilamentModel: Model<any>,
+  amsSlots: unknown,
+): Promise<string | null> {
+  if (!Array.isArray(amsSlots)) return null;
+  for (let i = 0; i < amsSlots.length; i++) {
+    const slot = amsSlots[i] as
+      | { slotName?: unknown; filamentId?: unknown }
+      | null
+      | undefined;
+    const filamentId = slot?.filamentId;
+    if (filamentId == null) continue; // empty slot — nothing to validate
+    const slotLabel =
+      typeof slot?.slotName === "string" && slot.slotName
+        ? `"${slot.slotName}"`
+        : `#${i + 1}`;
+    if (!mongoose.isValidObjectId(filamentId)) {
+      return `Slot ${slotLabel}: filamentId is not a valid id`;
+    }
+    const exists = await FilamentModel.exists({ _id: filamentId, _deletedAt: null });
+    if (!exists) {
+      return `Slot ${slotLabel}: filament not found`;
+    }
+  }
+  return null;
+}
+
 export async function findInvalidSlotSpoolRef(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   FilamentModel: Model<any>,

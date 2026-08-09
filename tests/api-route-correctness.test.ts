@@ -10,6 +10,7 @@ import { PUT as putSpool } from "@/app/api/filaments/[id]/spools/[spoolId]/route
 import { POST as postPrintHistory } from "@/app/api/print-history/route";
 import { POST as scanPublish } from "@/app/api/scan/publish/route";
 import { POST as slicerSync, DELETE as deleteFilament } from "@/app/api/filaments/[id]/route";
+import { PUT as putPrinter } from "@/app/api/printers/[id]/route";
 import { POST as createFilament } from "@/app/api/filaments/route";
 import { POST as orcaSync } from "@/app/api/filaments/[id]/orcaslicer/route";
 import { GET as orcaBulkExport } from "@/app/api/filaments/orcaslicer/route";
@@ -155,6 +156,37 @@ describe("API route correctness", () => {
     const fresh = await Printer.findById(printer._id);
     expect(String(fresh.amsSlots[0].filamentId)).toBe(String(keep._id));
     expect(fresh.amsSlots[1].filamentId).toBeNull();
+  });
+
+  it("#1114 — a printer save cannot re-create a deleted filament's dedication", async () => {
+    // The delete-side cleanup alone doesn't hold the invariant: a PrinterForm
+    // opened BEFORE the delete still holds the old pair, and the printer PUT
+    // persists the whole amsSlots array. The spool-ref validator only ever
+    // looked at non-null spoolIds, which is exactly the shape that leaked.
+    const f = await Filament.create({ name: "Deleted Ref", vendor: "T", type: "PLA" });
+    const printer = await Printer.create({
+      name: "MK4 Stale",
+      manufacturer: "Prusa",
+      printerModel: "MK4",
+      amsSlots: [{ slotName: "A", filamentId: null, spoolId: null }],
+    });
+    const staleId = String(f._id);
+    await Filament.updateOne({ _id: f._id }, { _deletedAt: new Date() });
+
+    const res = await putPrinter(
+      jsonReq(
+        `http://localhost/api/printers/${printer._id}`,
+        { amsSlots: [{ slotName: "A", filamentId: staleId, spoolId: null }] },
+        "PUT",
+      ),
+      { params: Promise.resolve({ id: String(printer._id) }) },
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/filament not found/i);
+
+    const fresh = await Printer.findById(printer._id);
+    expect(fresh.amsSlots[0].filamentId).toBeNull();
   });
 
   // ── #269: analytics survives a malformed usageHistory date ─────────
