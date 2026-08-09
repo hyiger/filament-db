@@ -93,6 +93,19 @@ function ComparePageInner() {
   const [droppedFromLink, setDroppedFromLink] = useState(initialSelection.dropped);
   const [comparison, setComparison] = useState<CompareFilament[]>([]);
   const [loading, setLoading] = useState(false);
+  /**
+   * The selection the current `comparison` actually describes, as a stable
+   * key — `null` until the first request settles.
+   *
+   * The "none could be loaded" panel can't just check `!loading`: on the very
+   * first paint of a `?ids=` link (and on the first pick from the empty state)
+   * `selectedIds` is already non-empty while `loading` is still its initial
+   * `false` and the effect hasn't run, so the panel flashed a failure for a
+   * request that hadn't started. Comparing against the CURRENT selection at
+   * render time is timing-independent, unlike seeding `loading` at each entry
+   * point and hoping none is missed.
+   */
+  const [settledKey, setSettledKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -115,9 +128,11 @@ function ComparePageInner() {
       // stay true forever: a stuck spinner with no request behind it.
       setLoading(false);
       setError(null);
+      setSettledKey("");
       return;
     }
     const ac = new AbortController();
+    const key = selectedIds.join(",");
     setLoading(true);
     fetch(`/api/filaments/compare?ids=${selectedIds.join(",")}`, { signal: ac.signal })
       .then(async (r) => {
@@ -138,6 +153,7 @@ function ComparePageInner() {
       .then((data) => {
         setComparison(data);
         setError(null);
+        setSettledKey(key);
         setLoading(false);
       })
       .catch((err) => {
@@ -149,6 +165,8 @@ function ComparePageInner() {
         if ((err as Error)?.name === "AbortError") return;
         setComparison([]);
         setError((err as Error)?.message || t("compare.error.generic"));
+        // Settled, just unsuccessfully — the panel below should say so.
+        setSettledKey(key);
         setLoading(false);
       });
     return () => ac.abort();
@@ -330,13 +348,19 @@ function ComparePageInner() {
           and a bookmarked link whose filaments were since trashed (which
           returns 200 with an empty array, so error-handling alone wouldn't
           have covered it). */}
-      {loading && selectedIds.length > 0 && (
+      {/* "Not settled for THIS selection" rather than just `loading`, so the
+          frame before the fetch effect runs shows the loading cue instead of
+          nothing (or, before settledKey existed, a false failure). */}
+      {selectedIds.length > 0 && (loading || settledKey !== selectedIds.join(",")) && (
         <p className="text-sm text-gray-500">{t("common.loading")}</p>
       )}
       {!loading && selectedIds.length === 0 && (
         <p className="text-sm text-gray-500">{t("compare.emptyState")}</p>
       )}
-      {!loading && selectedIds.length > 0 && comparison.length === 0 && (
+      {!loading &&
+        selectedIds.length > 0 &&
+        comparison.length === 0 &&
+        settledKey === selectedIds.join(",") && (
         <div className="rounded border border-gray-200 dark:border-gray-800 p-4">
           <p className="text-sm text-red-600 dark:text-red-400">
             {error || t("compare.error.noneLoaded")}
