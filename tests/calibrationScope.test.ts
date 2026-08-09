@@ -147,6 +147,25 @@ describe("isCalibrationRowReachable", () => {
     ).toBe(false);
   });
 
+  it("treats a FAILED catalog like a pending one", () => {
+    // Codex P2 (round 2) on PR #1130: the form's `finally` clears each loading
+    // flag on failure too, so "settled" is not "loaded". The caller derives
+    // these flags from success, and this pins the semantics the lib relies on:
+    // a false flag must fail open regardless of WHY it is false.
+    expect(
+      isCalibrationRowReachable(
+        calibrationKey(P1, N1, null),
+        ctx({ relevantPrinterIds: [], printersLoaded: false }),
+      ),
+    ).toBe(true);
+    expect(
+      isCalibrationRowReachable(
+        calibrationKey(null, N1, null),
+        ctx({ nozzleOwnership: new Map(), nozzlesLoaded: false }),
+      ),
+    ).toBe(true);
+  });
+
   it("a still-loading printer catalog does not rescue a row failing another clause", () => {
     // The fail-open is per-clause: an unticked nozzle is still unreachable.
     expect(

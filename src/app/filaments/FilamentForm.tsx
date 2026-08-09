@@ -684,11 +684,16 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
       ),
       relevantPrinterIds: relevantPrinters.map((p) => p._id),
       bedTypeIds: bedTypes.map((b) => b._id),
-      // Explicit, not inferred from array length: zero printers is a
-      // legitimate state in which a printer-scoped row really IS orphaned.
-      nozzlesLoaded: !nozzlesLoading,
-      printersLoaded: !printersLoading,
-      bedTypesLoaded: !bedTypesLoading,
+      // "Loaded" means the fetch SUCCEEDED, not merely that it settled. The
+      // `finally` that clears each loading flag runs on failure too, so a 500
+      // from /api/printers would otherwise present an empty array as
+      // authoritative and list valid rows as orphans with an active Remove
+      // button (Codex P2 on PR #1130). Explicit rather than inferred from
+      // array length, because zero printers is a legitimate state in which a
+      // printer-scoped row really IS orphaned.
+      nozzlesLoaded: !nozzlesLoading && !fetchErrors.includes("nozzles"),
+      printersLoaded: !printersLoading && !fetchErrors.includes("printers"),
+      bedTypesLoaded: !bedTypesLoading && !fetchErrors.includes("bed types"),
     }).orphanKeys;
   }, [
     calibrations,
@@ -699,6 +704,7 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     nozzlesLoading,
     printersLoading,
     bedTypesLoading,
+    fetchErrors,
   ]);
 
   // #872: an abrasive filament needs a hardened nozzle, so the compatible-nozzle
