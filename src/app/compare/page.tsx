@@ -354,7 +354,11 @@ function ComparePageInner() {
         </div>
       )}
 
-      {comparison.length > 0 && comparison.length < selectedIds.length && (
+      {/* Gated on !loading: adding a filament grows `selectedIds` immediately
+          while `comparison` still holds the PREVIOUS response, so without this
+          the page announces the just-selected filament as "no longer
+          available" for the whole request. Only describe a completed one. */}
+      {!loading && comparison.length > 0 && comparison.length < selectedIds.length && (
         <p className="text-sm text-amber-700 dark:text-amber-400 mb-2">
           {t("compare.someUnavailable", {
             shown: comparison.length,
