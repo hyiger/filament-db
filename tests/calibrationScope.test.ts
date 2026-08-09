@@ -166,6 +166,26 @@ describe("isCalibrationRowReachable", () => {
     ).toBe(true);
   });
 
+  it("an unknown bed catalog does not short-circuit the printer checks", () => {
+    // Codex P2 (round 3) on PR #1130: a blanket `return true` for an unloaded
+    // bed catalog hid rows whose PRINTER scope is independently known to be
+    // unreachable — invisible AND without the Remove action, for as long as
+    // /api/bed-types stayed broken.
+    expect(
+      isCalibrationRowReachable(
+        calibrationKey(P1, N1, B1),
+        ctx({ bedTypesLoaded: false, relevantPrinterIds: [] }),
+      ),
+    ).toBe(false);
+    // ...while a bed-scoped row with an otherwise-fine printer still fails open.
+    expect(
+      isCalibrationRowReachable(
+        calibrationKey(P1, N1, "unknownBed"),
+        ctx({ bedTypesLoaded: false }),
+      ),
+    ).toBe(true);
+  });
+
   it("a still-loading printer catalog does not rescue a row failing another clause", () => {
     // The fail-open is per-clause: an unticked nozzle is still unreachable.
     expect(

@@ -136,9 +136,13 @@ export function isCalibrationRowReachable(
   // Nozzle absent from a LOADED catalog → the card loop would `return null`.
   if (owners === undefined) return false;
 
-  if (bedTypeId !== null) {
-    if (!ctx.bedTypesLoaded) return true;
-    if (!ctx.bedTypeIds.includes(bedTypeId)) return false;
+  // Each clause fails open INDEPENDENTLY — an unknown bed catalog must not
+  // short-circuit the printer checks. Returning true here would hide a row
+  // whose printer has no tab (or no longer owns the nozzle) from the orphan
+  // list for as long as /api/bed-types stays broken, leaving it invisible AND
+  // without the Remove action, which is the state this list exists to end.
+  if (bedTypeId !== null && ctx.bedTypesLoaded && !ctx.bedTypeIds.includes(bedTypeId)) {
+    return false;
   }
   if (printerId === null) return true;
   if (!ctx.printersLoaded) return true;
