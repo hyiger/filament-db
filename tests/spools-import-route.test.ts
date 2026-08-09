@@ -1295,3 +1295,78 @@ describe("/api/spools/import", () => {
     });
   });
 });
+
+/**
+ * GH #1111 (Codex P2) — importing a spool row against a LEGACY single-spool
+ * filament IS the migration to a real spool, so it must clear the now-stale
+ * filament-level `totalWeight`. Otherwise the two coexist and every helper's
+ * `spools.length === 0` fallback waits to resurrect the old roll the moment
+ * the imported spool is deleted.
+ */
+describe("/api/spools/import — legacy roll migration (#1111)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let Filament: any;
+
+  // Local copy: the outer suite's helper is scoped to that describe.
+  function csvRequest(csv: string) {
+    return new NextRequest("http://localhost/api/spools/import", {
+      method: "POST",
+      headers: { "content-type": "text/csv" },
+      body: csv,
+    });
+  }
+
+  beforeEach(async () => {
+    const mod = await import("@/models/Filament");
+    if (!mongoose.models.Filament) mongoose.model("Filament", mod.default.schema);
+    Filament = mongoose.models.Filament;
+  });
+
+  it("clears the filament-level totalWeight when the first spool is created", async () => {
+    const f = await Filament.create({
+      name: "Legacy Import",
+      vendor: "V",
+      type: "PLA",
+      spoolWeight: 200,
+      totalWeight: 900,
+      spools: [],
+    });
+    const res = await importSpools(
+      csvRequest("filament,totalWeight\nLegacy Import,900\n"),
+    );
+    const body = await res.json();
+    expect(body.created).toBe(1);
+
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.spools[0].totalWeight).toBe(900);
+    // The whole point: no stale duplicate left behind.
+    expect(fresh.totalWeight).toBeNull();
+  });
+
+  it("leaves totalWeight alone when the filament already has spools", async () => {
+    // Only the FIRST spool is a migration. A filament already carrying spools
+    // plus a residual totalWeight (the pre-existing tolerated shape) must not
+    // have that field rewritten by an unrelated import.
+    const f = await Filament.create({
+      name: "Already Spooled",
+      vendor: "V",
+      type: "PLA",
+      totalWeight: 900,
+      spools: [{ label: "first", totalWeight: 850 }],
+    });
+    await importSpools(csvRequest("filament,totalWeight\nAlready Spooled,700\n"));
+
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(2);
+    expect(fresh.totalWeight).toBe(900);
+  });
+
+  it("does not disturb a filament that never had a top-level weight", async () => {
+    const f = await Filament.create({ name: "No Weight", vendor: "V", type: "PLA", spools: [] });
+    await importSpools(csvRequest("filament,totalWeight\nNo Weight,700\n"));
+    const fresh = await Filament.findById(f._id);
+    expect(fresh.spools).toHaveLength(1);
+    expect(fresh.totalWeight).toBeNull();
+  });
+});

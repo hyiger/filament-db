@@ -570,11 +570,28 @@ export async function POST(request: NextRequest) {
         }
       }
       if (action === "created") {
+        // GH #1111 (Codex P2): appending the FIRST spool to a filament whose
+        // stock still lives on its own top-level `totalWeight` IS the legacy
+        // migration, and it has to clear that field — otherwise the two
+        // records coexist and every helper's `spools.length === 0` fallback
+        // sits there waiting: delete the imported spool later and the old
+        // roll silently reappears with its pre-migration weight.
+        //
+        // The detail page's Add Spool flow already clears it client-side; this
+        // path didn't, which mattered little while legacy rolls were never
+        // exported and matters now that they are. Keyed on the SHAPE rather
+        // than on the export's `legacyRoll` marker, so a hand-written CSV gets
+        // the same treatment — the marker is export-only and the importer
+        // ignores unknown columns by design.
+        const isFirstSpool = filament.spools.length === 0;
         // Mongoose's subdocument type doesn't include our added fields until
         // the outer Filament schema is re-inferred — cast to unknown first
         // to avoid the direct `any` eslint rule while still satisfying the
         // push signature.
         filament.spools.push(newSpoolFields as unknown as Parameters<typeof filament.spools.push>[0]);
+        if (isFirstSpool && filament.totalWeight != null) {
+          filament.totalWeight = null;
+        }
       }
       // GH #525.1: don't save() per row. Register this row's outcome against
       // its filament (bucket resolved above); the doc is saved once after all
