@@ -101,14 +101,19 @@ export default function ImportExportPage() {
           overflow: (count) => t("filaments.import.skippedOverflow", { count }),
         });
         if (report) {
-          // See the note on the filaments page: a notes-only report must not
-          // be titled "0 row(s) were not imported".
+          // See the note on the filaments page — three shapes, three titles.
+          // The INI importer reports per-profile WRITE FAILURES in `errors`
+          // with no row accounting at all, and those are not "notes".
           const skippedCount = data.skipped ?? data.skippedRows?.length ?? 0;
+          const noRowAccounting =
+            data.skipped === undefined && data.skippedRows === undefined;
           await confirm({
             title:
               skippedCount > 0
                 ? t("filaments.import.skippedTitle", { count: skippedCount })
-                : t("filaments.import.notesTitle"),
+                : noRowAccounting
+                  ? t("filaments.import.problemsTitle", { count: data.errors?.length ?? 0 })
+                  : t("filaments.import.notesTitle"),
             message: report,
             confirmLabel: t("common.close"),
             hideCancel: true,

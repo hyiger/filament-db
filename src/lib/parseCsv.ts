@@ -145,7 +145,15 @@ export function parseCsv(
         i++;
         continue;
       }
-      if (ch === "\n") physicalLine++;
+      // Count line breaks inside the quoted field too, or every later record
+      // reports a start line that is too low. Bare CR counts (this parser
+      // supports CR-only endings); CRLF must not be counted twice, so the LF
+      // that follows a CR is skipped here (Codex P2).
+      if (ch === "\r") {
+        physicalLine++;
+      } else if (ch === "\n" && input[i - 1] !== "\r") {
+        physicalLine++;
+      }
       field += ch;
       i++;
       continue;

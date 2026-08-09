@@ -308,3 +308,31 @@ describe("parseCsv — record start lines (#1115)", () => {
     expect(parseCsv("a\nb\n", { header: false })).toEqual([["a"], ["b"]]);
   });
 });
+
+describe("parseCsv — line breaks inside quoted fields (#1115, Codex P2)", () => {
+  it("counts a bare CR inside a quoted field", () => {
+    const lines: number[] = [];
+    const rows = parseCsv('a\n"two\rline"\nlast\n', {
+      header: false,
+      recordLines: lines,
+    }) as string[][];
+    expect(rows[1][0]).toBe("two\rline");
+    expect(lines).toEqual([1, 2, 4]);
+  });
+
+  it("counts a CRLF inside a quoted field exactly once", () => {
+    const lines: number[] = [];
+    const rows = parseCsv('a\n"two\r\nline"\nlast\n', {
+      header: false,
+      recordLines: lines,
+    }) as string[][];
+    expect(rows[1][0]).toBe("two\r\nline");
+    expect(lines).toEqual([1, 2, 4]);
+  });
+
+  it("counts several embedded breaks", () => {
+    const lines: number[] = [];
+    parseCsv('a\n"one\ntwo\nthree"\nlast\n', { header: false, recordLines: lines });
+    expect(lines).toEqual([1, 2, 5]);
+  });
+});

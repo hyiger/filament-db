@@ -851,15 +851,23 @@ export default function Home() {
       overflow: (count) => t("filaments.import.skippedOverflow", { count }),
     });
     if (!report) return;
-    // A template that imported fine but had a field stripped produces a NOTE
-    // with zero skipped rows — titling that "0 row(s) were not imported" would
-    // contradict the note right below it.
+    // Three shapes reach here and they must not share a title:
+    //   - rows were refused          → "N row(s) were not imported"
+    //   - a template imported with a field stripped (zero skipped, a note)
+    //                                → "Import notes"
+    //   - the INI importer, which reports per-profile WRITE FAILURES in
+    //     `errors` and returns no `skipped`/`skippedRows` at all — those are
+    //     real profiles that did not import, so calling them notes would
+    //     understate them (Codex P2).
     const skippedCount = data.skipped ?? data.skippedRows?.length ?? 0;
+    const noRowAccounting = data.skipped === undefined && data.skippedRows === undefined;
     await confirm({
       title:
         skippedCount > 0
           ? t("filaments.import.skippedTitle", { count: skippedCount })
-          : t("filaments.import.notesTitle"),
+          : noRowAccounting
+            ? t("filaments.import.problemsTitle", { count: data.errors?.length ?? 0 })
+            : t("filaments.import.notesTitle"),
       message: report,
       confirmLabel: t("common.close"),
       hideCancel: true,
