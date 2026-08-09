@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
+import mongoose from "mongoose";
 import dbConnect from "@/lib/mongodb";
 import Location from "@/models/Location";
 import Filament from "@/models/Filament";
+import {
+  summarizeLocationBlockers,
+  locationBlockerMessage,
+  type LocationBlockerDoc,
+} from "@/lib/locationDeleteBlockers";
 import { errorResponse, errorResponseFromCaught, handleDuplicateKeyError } from "@/lib/apiErrorHandler";
 import { assertSameOriginRequest } from "@/lib/requestGuard";
 import { isValidIsoDateString } from "@/lib/validateSpoolBody";
@@ -96,14 +102,79 @@ export async function DELETE(
     // restored, which would resurrect a dangling locationId ref if the
     // location were deleted in the meantime. Only `_purged` tombstones are
     // gone forever and don't block.
-    const referencingCount = await Filament.countDocuments({
-      _purged: { $ne: true },
-      "spools.locationId": id,
-    });
-    if (referencingCount > 0) {
-      return errorResponse(
-        `Cannot delete this location — it is referenced by spools in ${referencingCount} filament${referencingCount !== 1 ? "s" : ""}, possibly including filaments in the trash. Reassign those spools to another location (or permanently delete the trashed filaments) first.`,
-        400,
+    //
+    // GH #1106: the blocking PREDICATE below is byte-identical to the old
+    // countDocuments — excluding retired spools would delete the location out
+    // from under them and leave a dangling locationId. What changed is the
+    // REPORTING: the old message said "N filaments, possibly including
+    // filaments in the trash", which is unactionable when the /locations row
+    // beside the button reads "Spools 0" (it counted only non-retired spools
+    // on active filaments). Now the response names the filaments and splits
+    // the counts, so the UI can say which bucket is holding the location.
+    //
+    // TRAP: aggregate() performs NO query casting, unlike the countDocuments
+    // this replaces. Passing the raw `id` string against an ObjectId-typed
+    // `spools.locationId` matches NOTHING, and the delete would silently
+    // succeed. The explicit ObjectId construction is load-bearing — and it
+    // needs the isValidObjectId guard above it, because a malformed id throws
+    // a BSONError here rather than the Mongoose CastError the old path
+    // produced.
+    if (!mongoose.isValidObjectId(id)) {
+      return errorResponse("Invalid location id", 400);
+    }
+    const locationOid = new mongoose.Types.ObjectId(id);
+    const blockerRows = await Filament.aggregate([
+      { $match: { _purged: { $ne: true }, "spools.locationId": locationOid } },
+      {
+        $project: {
+          name: 1,
+          // CLAUDE.md quirk: { $eq: ["$missingField", null] } is FALSE in
+          // aggregation — missing is its own BSON type. Wrap in $ifNull first.
+          trashed: { $ne: [{ $ifNull: ["$_deletedAt", null] }, null] },
+          activeSpoolsHere: {
+            $size: {
+              $filter: {
+                input: { $ifNull: ["$spools", []] },
+                as: "s",
+                cond: {
+                  $and: [
+                    { $eq: ["$$s.locationId", locationOid] },
+                    { $ne: ["$$s.retired", true] },
+                  ],
+                },
+              },
+            },
+          },
+          retiredSpoolsHere: {
+            $size: {
+              $filter: {
+                input: { $ifNull: ["$spools", []] },
+                as: "s",
+                cond: {
+                  $and: [
+                    { $eq: ["$$s.locationId", locationOid] },
+                    { $eq: ["$$s.retired", true] },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      },
+      // Deterministic sampling for the names we surface.
+      { $sort: { name: 1 } },
+    ]);
+
+    const blockers = summarizeLocationBlockers(blockerRows as LocationBlockerDoc[]);
+    if (blockers.blocked) {
+      return NextResponse.json(
+        {
+          error: locationBlockerMessage(blockers),
+          code: "location_in_use",
+          locationId: id,
+          ...blockers,
+        },
+        { status: 400 },
       );
     }
 

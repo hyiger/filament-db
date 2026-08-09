@@ -25,7 +25,26 @@ interface Location {
   desiccantChangedAt: string | null;
   notes: string;
   spoolCount: number;
+  /** GH #1106: retired spools still HOLD the location (they block delete), but
+   *  `spoolCount` excludes them — so a location with only retired spools read
+   *  "Spools 0" and then refused to delete. */
+  retiredSpoolCount: number;
   totalGrams: number;
+}
+
+/** Structured body of the 400 the DELETE route returns while a location is
+ *  still in use (GH #1106) — lets the page explain WHICH spools are holding
+ *  it rather than repeating an unactionable sentence. */
+interface LocationInUse {
+  locationId: string;
+  activeSpools: number;
+  retiredSpools: number;
+  trashedSpools: number;
+  activeFilaments: number;
+  trashedFilaments: number;
+  filamentNames: string[];
+  trashedFilamentNames: string[];
+  moreFilaments: number;
 }
 
 export default function LocationsPage() {
@@ -33,6 +52,9 @@ export default function LocationsPage() {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  /** The last "location is still in use" refusal, rendered as a persistent
+   *  panel rather than a toast (GH #1106). */
+  const [inUse, setInUse] = useState<LocationInUse | null>(null);
   const { toast } = useToast();
   const confirm = useConfirm();
   const { t } = useTranslation();
@@ -97,9 +119,17 @@ export default function LocationsPage() {
       const res = await fetch(`/api/locations/${id}`, { method: "DELETE" });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
+        // GH #1106: an in-use refusal needs to persist and to name names —
+        // `toast()` takes a plain string and auto-dismisses, so it can't
+        // carry the filament list or a link. Render it in the page instead.
+        if (body?.code === "location_in_use") {
+          setInUse(body as LocationInUse);
+          return;
+        }
         toast(body?.error || t("locations.deleteError"), "error");
         return;
       }
+      setInUse(null);
       toast(t("locations.deleted", { name }));
       fetchLocations();
     } catch {
@@ -161,6 +191,67 @@ export default function LocationsPage() {
           {t("locations.addNew")}
         </Link>
       </div>
+
+      {/* GH #1106: a location holding only retired spools, or spools on
+          trashed filaments, refused to delete while the row beside the button
+          read "Spools 0" — and the toast told the user to reassign spools the
+          page insisted didn't exist. Name the filaments, split the counts by
+          why they're hidden, and link somewhere that can actually show them. */}
+      {inUse && (
+        <div
+          role="alert"
+          className="mb-4 px-3 py-2 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg text-sm"
+        >
+          <p className="font-medium text-amber-800 dark:text-amber-200">
+            {t("locations.inUse.title")}
+          </p>
+          <ul className="mt-1 list-disc list-inside text-amber-700 dark:text-amber-300 space-y-0.5">
+            {inUse.activeSpools > 0 && (
+              <li>{t("locations.inUse.active", { count: inUse.activeSpools })}</li>
+            )}
+            {inUse.retiredSpools > 0 && (
+              <li>{t("locations.inUse.retired", { count: inUse.retiredSpools })}</li>
+            )}
+            {inUse.trashedSpools > 0 && (
+              <li>
+                {t("locations.inUse.trashed", {
+                  spools: inUse.trashedSpools,
+                  filaments: inUse.trashedFilaments,
+                })}
+              </li>
+            )}
+          </ul>
+          {(inUse.filamentNames.length > 0 || inUse.trashedFilamentNames.length > 0) && (
+            <p className="mt-1 text-amber-700 dark:text-amber-300">
+              {t("locations.inUse.filaments", {
+                names: [...inUse.filamentNames, ...inUse.trashedFilamentNames].join(", "),
+              })}
+              {inUse.moreFilaments > 0 &&
+                ` ${t("locations.inUse.andMore", { count: inUse.moreFilaments })}`}
+            </p>
+          )}
+          <div className="mt-2 flex items-center gap-3">
+            <Link
+              href={`/inventory?location=${encodeURIComponent(inUse.locationId)}&includeRetired=1`}
+              className="text-blue-600 hover:underline"
+            >
+              {t("locations.inUse.viewSpools")}
+            </Link>
+            {inUse.trashedFilaments > 0 && (
+              <Link href="/trash" className="text-blue-600 hover:underline">
+                {t("locations.inUse.viewTrash")}
+              </Link>
+            )}
+            <button
+              type="button"
+              onClick={() => setInUse(null)}
+              className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+            >
+              {t("common.dismiss")}
+            </button>
+          </div>
+        </div>
+      )}
 
       {selected.size > 0 && (
         <div className="mb-4 flex items-center gap-3 px-3 py-2 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 rounded-lg">
@@ -254,7 +345,22 @@ export default function LocationsPage() {
                   <td className="py-2 px-2 text-right text-xs">
                     {l.humidity != null ? `${l.humidity}%` : "—"}
                   </td>
-                  <td className="py-2 px-2 text-right text-xs">{l.spoolCount}</td>
+                  <td className="py-2 px-2 text-right text-xs">
+                    {l.spoolCount}
+                    {/* GH #1106: retired spools are excluded from the count
+                        but still block deletion. Surfacing them here is what
+                        stops the row contradicting the Delete button. */}
+                    {l.retiredSpoolCount > 0 && (
+                      <span
+                        title={t("locations.table.retiredChipTitle", {
+                          count: l.retiredSpoolCount,
+                        })}
+                        className="ml-1.5 px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-[10px]"
+                      >
+                        {t("locations.table.retiredChip", { count: l.retiredSpoolCount })}
+                      </span>
+                    )}
+                  </td>
                   <td className="py-2 px-2 text-right text-xs text-gray-500">
                     {l.totalGrams > 0 ? `${formatGrams(l.totalGrams)}g` : "—"}
                   </td>
