@@ -5935,7 +5935,7 @@
           "Snapshot"
         ],
         "summary": "Export database snapshot",
-        "description": "Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones). Snapshot schema version is 6: v4 added shared catalogs, v5 the top-level `legacyNozzleCleanupComplete` provenance flag (GH #1021), v6 `Location.desiccantChangedAt`. Older snapshots still restore (missing collections come back as empty); the v4–v6 bumps exist so a build that predates the addition rejects the file outright instead of accepting it and silently dropping the new data.",
+        "description": "Downloads a JSON snapshot of core app data: filaments, nozzles, printers, bed types, locations, print history, and shared catalogs (including soft-deleted documents and tombstones). Snapshot schema version is 7: v4 added shared catalogs, v5 the top-level `legacyNozzleCleanupComplete` provenance flag (GH #1021), v6 `Location.desiccantChangedAt`, v7 `debitedGrams` on both usage ledgers (GH #1074). Older snapshots still restore, and as of GH #1104 the collections they OMIT are left untouched rather than wiped — the response's `skipped` array names them. A collection carried as an explicit empty array is still emptied. The v4–v7 bumps exist so a build that predates the addition rejects the file outright instead of accepting it and silently dropping the new data.",
         "responses": {
           "200": {
             "description": "JSON snapshot file",
@@ -5954,7 +5954,7 @@
           "Snapshot"
         ],
         "summary": "Restore database snapshot",
-        "description": "Restores snapshot-scoped data from a snapshot using best-effort rollback. If any part of the restore fails, the handler attempts to re-insert previous data from an in-memory backup. A snapshot whose `version` exceeds the running build's current schema version is rejected with 400 BEFORE the destructive wipe (GH #953) — it would carry collections or fields this build doesn't know, which would be dropped while the handler still reported success. Concurrent restores are rejected with 409. Note: the restore is not truly atomic — concurrent readers may observe partial state during the delete/insert window, and rollback itself may fail.",
+        "description": "Restores snapshot-scoped data from a snapshot using best-effort rollback. Only the collections the file actually carries are wiped and replaced (GH #1104); omitted ones are left as they are and listed in the response's `skipped` array. If any part of the restore fails, the handler attempts to re-insert previous data from an in-memory backup. A snapshot whose `version` exceeds the running build's current schema version is rejected with 400 BEFORE the destructive wipe (GH #953) — it would carry collections or fields this build doesn't know, which would be dropped while the handler still reported success. Concurrent restores are rejected with 409. Note: the restore is not truly atomic — concurrent readers may observe partial state during the delete/insert window, and rollback itself may fail.",
         "requestBody": {
           "required": true,
           "content": {
@@ -6009,6 +6009,22 @@
                         "sharedCatalogs": {
                           "type": "integer"
                         }
+                      }
+                    },
+                    "skipped": {
+                      "type": "array",
+                      "description": "Collections the snapshot did not carry, and which were therefore left untouched rather than wiped (GH #1104). A collection present in the file as an explicit empty array is replaced (emptied) and does NOT appear here.",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "filaments",
+                          "nozzles",
+                          "printers",
+                          "bedTypes",
+                          "locations",
+                          "printHistory",
+                          "sharedCatalogs"
+                        ]
                       }
                     }
                   }
