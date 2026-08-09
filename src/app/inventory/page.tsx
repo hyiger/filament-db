@@ -395,7 +395,16 @@ export default function InventoryPage() {
     setGroupBy(p.groupBy); // eslint-disable-line react-hooks/set-state-in-effect -- persisted prefs
     setSortKey(p.sortKey);
     setSortDir(p.sortDir);
-    setIncludeRetired(p.includeRetired);
+    // GH #1106: `?includeRetired=1` overrides the persisted pref for this
+    // visit. The /locations "location is still in use" panel links here to
+    // show the retired spools that are blocking a delete — without this the
+    // link lands with the pref off, the aggregation returns no group for that
+    // location, and the deep-link handler below toasts "no active spools",
+    // i.e. the escape hatch would tell the user the spools don't exist. The
+    // persist effect writes it back like any manual toggle, which is right:
+    // the user followed a link asking to see them.
+    const wantRetired = new URLSearchParams(window.location.search).get("includeRetired");
+    setIncludeRetired(wantRetired === "1" || p.includeRetired);
     prefsLoaded.current = true;
   }, []);
 

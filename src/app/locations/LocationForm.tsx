@@ -105,8 +105,11 @@ export default function LocationForm({ initialData, onSubmit, onDirtyChange }: P
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className={labelClass}>{t("locations.form.name")} *</label>
+        <label className={labelClass} htmlFor="location-name">
+          {t("locations.form.name")} *
+        </label>
         <input
+          id="location-name"
           className={inputClass}
           value={form.name}
           onChange={(e) => updateForm({ name: e.target.value })}
@@ -116,8 +119,11 @@ export default function LocationForm({ initialData, onSubmit, onDirtyChange }: P
       </div>
 
       <div>
-        <label className={labelClass}>{t("locations.form.kind")}</label>
+        <label className={labelClass} htmlFor="location-kind">
+          {t("locations.form.kind")}
+        </label>
         <select
+          id="location-kind"
           className={selectClass}
           value={form.kind}
           onChange={(e) => updateForm({ kind: e.target.value })}
@@ -163,8 +169,11 @@ export default function LocationForm({ initialData, onSubmit, onDirtyChange }: P
       </div>
 
       <div>
-        <label className={labelClass}>{t("locations.form.notes")}</label>
+        <label className={labelClass} htmlFor="location-notes">
+          {t("locations.form.notes")}
+        </label>
         <textarea
+          id="location-notes"
           className={inputClass}
           rows={3}
           value={form.notes}
