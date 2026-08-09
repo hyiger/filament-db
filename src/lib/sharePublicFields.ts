@@ -34,6 +34,31 @@
  * sensitive — and dropping them would silently flatten every variant.
  */
 
+import { NEVER_BAGGED_KEYS } from "@/lib/slicerSettings";
+import { INI_TOP_LEVEL_SETTING_KEYS } from "@/lib/parseIni";
+
+/**
+ * Settings-bag keys that must never be published, even though the bag itself
+ * is (GH #1122, Codex P1).
+ *
+ * The bag is arbitrary passthrough, so an allow-list on top-level fields alone
+ * isn't enough: a filament imported by older INI code can still carry a
+ * `filament_cost` SHADOW of the top-level field. `src/lib/iniImportApply.ts`
+ * documents that those legacy shadows survive until a later import purges
+ * them — so dropping top-level `cost` while copying the bag verbatim would
+ * publish the purchase price anyway, exactly the leak this change is for.
+ *
+ * Reuses the two exported sets that already define "this key is a shadow of a
+ * structured field" and "this key is a routing/id hint", so the strip can't
+ * drift from the import side that creates them. Every shadow is redundant with
+ * a top-level field we have already decided about, and every hint is
+ * source-instance-specific, so nothing of value is lost.
+ */
+export const SHARED_SETTINGS_KEY_DENYLIST: ReadonlySet<string> = new Set<string>([
+  ...NEVER_BAGGED_KEYS,
+  ...INI_TOP_LEVEL_SETTING_KEYS,
+]);
+
 /**
  * Filament fields a published catalog may carry.
  *
@@ -97,6 +122,25 @@ export function pickSharedFilamentFields(
   const out: Record<string, unknown> = {};
   for (const field of SHARED_FILAMENT_FIELDS) {
     if (Object.prototype.hasOwnProperty.call(doc, field)) out[field] = doc[field];
+  }
+  if (out.settings) out.settings = sanitizeSharedSettings(out.settings);
+  return out;
+}
+
+/**
+ * Drop the deny-listed keys from a settings bag.
+ *
+ * Returns the value untouched when it isn't a plain object — the bag is
+ * passthrough and a malformed one shouldn't throw on the publish path.
+ */
+export function sanitizeSharedSettings(settings: unknown): unknown {
+  if (typeof settings !== "object" || settings === null || Array.isArray(settings)) {
+    return settings;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(settings as Record<string, unknown>)) {
+    if (SHARED_SETTINGS_KEY_DENYLIST.has(k)) continue;
+    out[k] = v;
   }
   return out;
 }

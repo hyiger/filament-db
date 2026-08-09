@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   SHARED_FILAMENT_FIELDS,
+  SHARED_SETTINGS_KEY_DENYLIST,
   pickSharedFilamentFields,
+  sanitizeSharedSettings,
 } from "@/lib/sharePublicFields";
 
 describe("pickSharedFilamentFields", () => {
@@ -92,5 +94,56 @@ describe("pickSharedFilamentFields", () => {
     for (const denied of ["spools", "lowStockThreshold", "instanceId", "totalWeight"]) {
       expect(SHARED_FILAMENT_FIELDS).not.toContain(denied);
     }
+  });
+});
+
+describe("settings-bag sanitising (Codex P1)", () => {
+  it("drops the legacy filament_cost shadow", () => {
+    // An allow-list on top-level fields alone isn't enough: a filament
+    // imported by older INI code carries a `filament_cost` shadow in the
+    // passthrough bag, so dropping top-level `cost` while copying the bag
+    // verbatim would publish the purchase price anyway.
+    const out = pickSharedFilamentFields({
+      name: "PLA",
+      cost: 24.99,
+      settings: { filament_cost: "24.99", filament_notes: "keep me" },
+    });
+    expect(out).toEqual({ name: "PLA", settings: { filament_notes: "keep me" } });
+  });
+
+  it("drops the routing/id hints", () => {
+    expect(
+      sanitizeSharedSettings({
+        filamentdb_id: "6a00",
+        filamentdb_nozzle: "0.4 Brass",
+        filament_settings_id: "x",
+        compatible_printers_condition: "keep",
+      }),
+    ).toEqual({ compatible_printers_condition: "keep" });
+  });
+
+  it("drops every top-level shadow, not just cost", () => {
+    const bag: Record<string, string> = {};
+    for (const k of SHARED_SETTINGS_KEY_DENYLIST) bag[k] = "x";
+    bag.filament_notes = "keep";
+    expect(sanitizeSharedSettings(bag)).toEqual({ filament_notes: "keep" });
+  });
+
+  it("leaves an ordinary passthrough bag alone", () => {
+    const bag = { filament_notes: "n", some_future_slicer_key: "v" };
+    expect(sanitizeSharedSettings(bag)).toEqual(bag);
+  });
+
+  it("does not throw on a malformed bag", () => {
+    // The bag is arbitrary passthrough; a publish must not 500 on a bad shape.
+    expect(sanitizeSharedSettings(null)).toBeNull();
+    expect(sanitizeSharedSettings("nope")).toBe("nope");
+    expect(sanitizeSharedSettings([1, 2])).toEqual([1, 2]);
+  });
+
+  it("does not mutate the stored bag", () => {
+    const doc = { name: "PLA", settings: { filament_cost: "9", filament_notes: "n" } };
+    pickSharedFilamentFields(doc);
+    expect(doc.settings).toEqual({ filament_cost: "9", filament_notes: "n" });
   });
 });
