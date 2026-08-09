@@ -153,13 +153,44 @@ describe("inventoryStats", () => {
       ).toBe(851);
     });
 
-    it("returns null in the legacy path when totalWeight or spoolWeight is missing", () => {
+    it("returns null in the legacy path only when totalWeight is missing", () => {
       expect(
         getRemainingGrams({ ...baseTracked, totalWeight: null, spools: [] }),
       ).toBeNull();
+    });
+
+    it("falls back to a 0g tare in the legacy path, like the spools branch (#1118)", () => {
+      // This previously returned null. GH #954 gave the spools branch a 0-tare
+      // fallback to match by-location / dashboard / locations, and never
+      // revisited its sibling — so the dashboard raised a low-stock alert with
+      // a gram figure the home list refused to render at all.
       expect(
         getRemainingGrams({ spoolWeight: null, netFilamentWeight: 800, totalWeight: 700, spools: [] }),
-      ).toBeNull();
+      ).toBe(700);
+    });
+
+    it("legacy and spools branches agree for equivalent inputs (#1118)", () => {
+      // The whole point of the alignment: one roll expressed either way must
+      // produce the same number.
+      const legacy = { spoolWeight: null, netFilamentWeight: 800, totalWeight: 700, spools: [] };
+      const asSpool = {
+        spoolWeight: null,
+        netFilamentWeight: 800,
+        totalWeight: null,
+        spools: [{ totalWeight: 700 }],
+      };
+      expect(getRemainingGrams(legacy)).toBe(getRemainingGrams(asSpool));
+    });
+
+    it("a tare-less legacy roll reaches the grams tier flagged as missing both (#1118)", () => {
+      expect(
+        getRemainingDisplay({
+          spoolWeight: null,
+          netFilamentWeight: null,
+          totalWeight: 700,
+          spools: [],
+        }),
+      ).toEqual({ kind: "grams", grams: 700, missing: "both" });
     });
   });
 

@@ -67,8 +67,15 @@ export function getRemainingGrams(f: InventoryFilament): number | null {
   // null as "not low") never lights up the badge for a pre-migration
   // filament with a top-level `totalWeight`, even though the same row's
   // remaining-% bar renders correctly via getRemainingPct's legacy path.
-  if (f.totalWeight == null || f.spoolWeight == null) return null;
-  return Math.max(0, f.totalWeight - f.spoolWeight);
+  // GH #1118: 0-tare fallback, matching the spools branch above. GH #954
+  // aligned that branch to "the 0-tare posture by-location / dashboard /
+  // locations already use" and never revisited this sibling four lines below,
+  // leaving the legacy path the lone surface that returns null without a tare.
+  // The dashboard's own legacy branch computes `totalWeight - 0` and raises a
+  // low-stock alert with a gram figure the home list then refused to render at
+  // all — that divergence is this line, not the dashboard.
+  if (f.totalWeight == null) return null;
+  return Math.max(0, f.totalWeight - (f.spoolWeight ?? 0));
 }
 
 /** Three-tier decision for a "remaining" table cell (GH #1048).
@@ -111,12 +118,13 @@ export function getRemainingDisplay(f: InventoryFilament): RemainingDisplay {
     //     (≥1 active weighted spool is already guaranteed here — grams
     //     being non-null in that branch means one exists, so validCount
     //     can't be the blocker);
-    //   legacy: needs totalWeight, spoolWeight, netFilamentWeight > 0 —
-    //     and grams non-null in the legacy path already required
-    //     totalWeight AND spoolWeight, so only the net can be missing.
-    // Hence: tare can only be the blocker in the spools-array branch
-    // (the #954 0-tare fallback), and at least one of the two flags is
-    // set whenever this tier is reached.
+    //   legacy: getRemainingPct still needs BOTH weights, but since GH #1118
+    //     getRemainingGrams tolerates a null tare here too (0-tare fallback),
+    //     so the legacy path can now reach this tier with the tare missing —
+    //     exactly like the spools branch. The flags below read the raw fields,
+    //     so they were already correct for that case.
+    // Hence at least one of the two flags is set whenever this tier is
+    // reached, in either branch.
     const netMissing = f.netFilamentWeight == null || f.netFilamentWeight <= 0;
     const tareMissing = f.spoolWeight == null;
     const missing: RemainingPctMissing =
