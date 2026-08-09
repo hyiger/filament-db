@@ -25,6 +25,13 @@ import {
   submittedColorValue,
   type ColorArrangement,
 } from "@/lib/filamentColors";
+import {
+  calibrationKey,
+  hasCalibrationData,
+  keepCalibrationEntries,
+  parseCalibrationKey,
+  partitionCalibrationKeys,
+} from "@/lib/calibrationScope";
 import { isInvertedNozzleRange } from "@/lib/temperatureRange";
 import { unwrapIniString, wrapIniString } from "@/lib/parseIni";
 
@@ -550,8 +557,9 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [form.vendor]);
 
-  const calKey = (printerId: string | null, nozzleId: string, bedTypeId: string | null = null) =>
-    `${printerId || "default"}:${nozzleId}:${bedTypeId || "any"}`;
+  // Encoding lives in @/lib/calibrationScope so the save path, the grid and
+  // the orphan list can't drift apart on it (GH #1101).
+  const calKey = calibrationKey;
 
   const emptyCalibrationEntry: CalibrationEntry = {
     extrusionMultiplier: "",
@@ -656,6 +664,28 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
     }
     return printers.filter((p) => relevantIds.has(p._id));
   }, [printers, nozzles, form.compatibleNozzles]);
+
+  /**
+   * Stored calibration rows the grid below cannot reach — so they can be seen
+   * and removed deliberately instead of being deleted behind the user's back
+   * (GH #1101, preserving PR #358's goal).
+   *
+   * Reads `calibrations` (live state), so a row the user blanks disappears
+   * from the list as soon as it stops carrying data.
+   */
+  const orphanCalibrationKeys = useMemo(() => {
+    const withData = Object.entries(calibrations)
+      .filter(([, cal]) => hasCalibrationData(cal))
+      .map(([key]) => key);
+    return partitionCalibrationKeys(withData, {
+      compatibleNozzleIds: form.compatibleNozzles,
+      nozzleOwnership: new Map(
+        nozzles.map((n) => [n._id, (n.printers ?? []).map((p) => p._id)]),
+      ),
+      relevantPrinterIds: relevantPrinters.map((p) => p._id),
+      bedTypeIds: bedTypes.map((b) => b._id),
+    }).orphanKeys;
+  }, [calibrations, form.compatibleNozzles, nozzles, relevantPrinters, bedTypes]);
 
   // #872: an abrasive filament needs a hardened nozzle, so the compatible-nozzle
   // picker hard-filters to hardened ones when abrasive. The abrasive marker can
@@ -932,38 +962,23 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         minPrintSpeed: parseNum(form.minPrintSpeed),
         maxPrintSpeed: parseNum(form.maxPrintSpeed),
         compatibleNozzles: form.compatibleNozzles,
-        calibrations: Object.entries(calibrations)
-          .filter(([, cal]) => Object.values(cal).some((v) => v !== ""))
-          .filter(([key]) => {
-            const [printerId, nozzleId] = key.split(":");
-            // Drop calibrations whose nozzle is no longer compatible.
-            if (!form.compatibleNozzles.includes(nozzleId)) return false;
-            // Drop printer-specific calibrations whose printer no longer
-            // owns this nozzle. The Calibrations UI hides those tabs (see
-            // `relevantPrinters` above), so the user has no way to view
-            // or clear them through the form — without this prune-on-save
-            // the entries would persist in the DB indefinitely as
-            // orphans. Codex round-1 P2 on PR #358. The "default" scope
-            // (printerId === "default") is always kept — it's the
-            // baseline that applies regardless of which printer has
-            // the nozzle at the moment.
-            //
-            // FAIL-OPEN when ownership data isn't available (codex
-            // round-2 P1 on PR #358). The catalog is fetched async via
-            // `/api/nozzles`; if the user saves while it's still
-            // loading — or if the fetch failed — `nozzles` is empty,
-            // the lookup returns `undefined`, and a strict predicate
-            // would silently delete every valid per-printer
-            // calibration. Treat absence of ownership data as
-            // "uncertain" and keep the entry; only drop when we have
-            // positive evidence (catalog loaded, nozzle found,
-            // printers populated, and the printer is not in the
-            // installed list).
-            if (printerId === "default") return true;
-            const nozzle = nozzles.find((n) => n._id === nozzleId);
-            if (!nozzle || !nozzle.printers) return true;
-            return nozzle.printers.some((p) => p._id === printerId);
-          })
+        // GH #1101: `hasCalibrationData` is now the ONLY filter. This block
+        // used to also drop rows whose nozzle wasn't in
+        // `form.compatibleNozzles` and printer-scoped rows whose printer no
+        // longer owned the nozzle. `[].includes(x)` is always false, so an
+        // EMPTY tick list deleted EVERY calibration — and empty is exactly
+        // what the slicer sync-back leaves behind (the #859 fallback resolves
+        // a nozzle from the global catalog and never writes compatibleNozzles).
+        // The rows were loaded into state, never rendered, and destroyed on the
+        // next save of any field; on a template, every inheriting variant lost
+        // them at once.
+        //
+        // PR #358's goal — that a row the UI can't show mustn't become an
+        // undeletable orphan — is preserved by making such rows VISIBLE (the
+        // "not shown above" list below) instead of deleting them. Blanking a
+        // card is still the delete gesture, and still the only one that runs
+        // implicitly.
+        calibrations: keepCalibrationEntries(Object.entries(calibrations))
           .map(([key, cal]) => {
             const [printerId, nozzleId, bedTypeId] = key.split(":");
             return {
@@ -2594,7 +2609,11 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
         )}
       </CollapsibleSection>
 
-      {form.compatibleNozzles.length > 0 && (
+      {/* GH #1101/#1102: also open when rows EXIST. Gating purely on the
+          tick list hid the whole section for exactly the filaments a slicer
+          had just synced a calibration into — the user was told "Calibration
+          applied" and then shown nothing. */}
+      {(form.compatibleNozzles.length > 0 || orphanCalibrationKeys.length > 0) && (
         <CollapsibleSection
           id="calibrations"
           title={t("form.section.calibrations")}
@@ -2910,6 +2929,57 @@ export default function FilamentForm({ initialData, onSubmit, onDirtyChange, isP
               );
             })}
           </div>
+
+          {/* GH #1101: rows the grid above can't reach — a nozzle that isn't
+              ticked (the slicer sync-back case), one no longer in the catalog,
+              or a printer/bed scope with no tab. These used to be DELETED on
+              the next save to stop them becoming invisible orphans (PR #358);
+              showing them achieves the same goal without destroying data. */}
+          {orphanCalibrationKeys.length > 0 && (
+            <div className="mt-6 border-t border-gray-200 dark:border-gray-700 pt-4">
+              <h4 className="text-sm font-medium text-amber-700 dark:text-amber-400">
+                {t("form.cal.orphanTitle", { count: orphanCalibrationKeys.length })}
+              </h4>
+              <p className="text-xs text-gray-500 mt-1 mb-3">{t("form.cal.orphanHint")}</p>
+              <ul className="space-y-2">
+                {orphanCalibrationKeys.map((key) => {
+                  const scope = parseCalibrationKey(key);
+                  // Fall back to the raw id: the whole point of this list is
+                  // to surface rows whose nozzle/printer is NOT in the
+                  // catalog, so a name lookup will often miss.
+                  const nozzleName =
+                    nozzles.find((n) => n._id === scope.nozzleId)?.name ?? scope.nozzleId;
+                  const printerName = scope.printerId
+                    ? (printers.find((p) => p._id === scope.printerId)?.name ?? scope.printerId)
+                    : t("form.defaultAnyPrinter");
+                  const bedName = scope.bedTypeId
+                    ? (bedTypes.find((b) => b._id === scope.bedTypeId)?.name ?? scope.bedTypeId)
+                    : t("form.cal.anyBed");
+                  return (
+                    <li
+                      key={key}
+                      className="flex items-center justify-between gap-3 px-3 py-2 rounded border border-amber-200 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 text-sm"
+                    >
+                      <span className="text-gray-700 dark:text-gray-300 truncate">
+                        {nozzleName} · {printerName} · {bedName}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setCalibrations((prev) => {
+                          const next = { ...prev };
+                          delete next[key];
+                          return next;
+                        })}
+                        className="shrink-0 px-2 py-0.5 text-xs rounded border border-red-300 dark:border-red-800 text-red-700 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-950/40"
+                      >
+                        {t("common.remove")}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
         </CollapsibleSection>
       )}
       </div>

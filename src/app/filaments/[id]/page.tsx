@@ -1358,6 +1358,11 @@ function FilamentDetail() {
   // Mirrors droppedCalibrationCount in src/lib/orcaSlicerBundle.ts (kept inline to
   // avoid pulling the export lib into the client bundle).
   const droppedCalibrations = Math.max(0, (filament.calibrations?.length ?? 0) - 1);
+  // GH #1102: the Calibrations section must appear whenever there are rows to
+  // show, not only when the tick list is non-empty.
+  const calibrationSectionVisible =
+    (filament.compatibleNozzles?.length ?? 0) > 0 ||
+    (filament.calibrations?.length ?? 0) > 0;
   // Parents are finish-agnostic — only variants/standalones carry a
   // texture treatment + chip. resolveFilament() doesn't inherit optTags,
   // so a variant only shows a finish when its own optTags include one
@@ -1808,13 +1813,14 @@ function FilamentDetail() {
         {/* #872 / Codex P2: Max Vol. Speed is kept OUT of the top tiles because it's
             nozzle-specific (shown per-nozzle in the Calibrations table). But show it
             here as a fallback whenever the value isn't ACTUALLY visible in that table
-            — i.e. unless the Calibrations section is rendered (gated on
-            compatibleNozzles, line ~1746) AND a calibration carries a maxVol. So a
-            filament with a top-level-only value, or with calibrations but no
-            compatible nozzles (the global-nozzle-fallback sync case), still shows it. */}
+            — i.e. unless the Calibrations section is rendered AND a calibration
+            carries a maxVol. GH #1102: that gate is now `calibrationSectionVisible`,
+            not `compatibleNozzles` — since the section renders whenever rows exist,
+            keying off the tick list would double-render the value in the tile AND
+            the table for exactly the filaments #1102 unhides. */}
         {filament.maxVolumetricSpeed != null &&
           !(
-            (filament.compatibleNozzles?.length ?? 0) > 0 &&
+            calibrationSectionVisible &&
             filament.calibrations?.some(
               (c) => (c as FilamentCalibration).maxVolumetricSpeed != null,
             )
@@ -2181,13 +2187,21 @@ function FilamentDetail() {
         );
       })()}
 
-      {filament.compatibleNozzles && filament.compatibleNozzles.length > 0 && (
+      {/* GH #1102: also render when calibrations EXIST. Gating purely on
+          compatibleNozzles hid the whole section in exactly the state a
+          slicer sync-back produces (the #859 fallback resolves a nozzle from
+          the global catalog and never writes the tick list) — the page
+          toasted "Calibration applied" and then showed nothing, while
+          /api/filaments correctly reported hasCalibrations: true. */}
+      {calibrationSectionVisible && (
         <div className="mb-6">
           <h2 className="text-sm font-medium text-gray-500 mb-2">
             {filament.calibrations?.length > 0
               ? t("detail.section.nozzleCalibrations")
               : t("detail.section.compatibleNozzles")}
-            {inherited.has("compatibleNozzles") && (
+            {inherited.has(
+              filament.calibrations?.length > 0 ? "calibrations" : "compatibleNozzles",
+            ) && (
               <span className="ml-1 text-xs text-blue-500">({t("detail.inherited")})</span>
             )}
           </h2>
