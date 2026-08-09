@@ -231,12 +231,20 @@ export default function LocationsPage() {
             </p>
           )}
           <div className="mt-2 flex items-center gap-3">
-            <Link
-              href={`/inventory?location=${encodeURIComponent(inUse.locationId)}&includeRetired=1`}
-              className="text-blue-600 hover:underline"
-            >
-              {t("locations.inUse.viewSpools")}
-            </Link>
+            {/* Only offer Inventory when it can actually show something. Its
+                aggregation matches `_deletedAt: null` unconditionally, so
+                `includeRetired=1` still can't surface spools on TRASHED
+                filaments — linking there for a trash-only blocker would land
+                on an empty group and toast "no active spools", recreating the
+                exact contradiction this panel exists to resolve. */}
+            {inUse.activeFilaments > 0 && (
+              <Link
+                href={`/inventory?location=${encodeURIComponent(inUse.locationId)}&includeRetired=1`}
+                className="text-blue-600 hover:underline"
+              >
+                {t("locations.inUse.viewSpools")}
+              </Link>
+            )}
             {inUse.trashedFilaments > 0 && (
               <Link href="/trash" className="text-blue-600 hover:underline">
                 {t("locations.inUse.viewTrash")}
